@@ -28,6 +28,8 @@ export interface SlackFile {
   title?: string;
   url_private?: string;
   url_private_download?: string;
+  /** Byte size when Slack includes it — used to cap voice-note downloads. */
+  size?: number;
   subtype?: string;
   media_display_type?: string;
 }
@@ -36,7 +38,7 @@ export interface SlackFile {
 export interface SlackAppMentionEvent {
   type: 'app_mention';
   user: string;
-  text?: string;
+  text: string;
   channel: string;
   ts: string;
   thread_ts?: string;

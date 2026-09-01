@@ -38,6 +38,11 @@ export interface ConvertedSignalMessage {
     groupId?: string;
     /** True when the message arrived in a group chat */
     isGroup: boolean;
+    /**
+     * Sender ACI (Signal UUID). Used as `getAttachment` recipient fallback when
+     * `sourceNumber` is empty (username / ACI-only senders).
+     */
+    sourceUuid?: string;
     attachments?: SignalAttachment[];
   };
 }
@@ -131,6 +136,7 @@ export function convertSignalEnvelope(
       signalTimestamp: envelope.timestamp,
       groupId: groupInfo?.groupId,
       isGroup,
+      sourceUuid: envelope.sourceUuid || undefined,
       attachments: data.attachments?.length ? data.attachments : undefined,
     },
   };

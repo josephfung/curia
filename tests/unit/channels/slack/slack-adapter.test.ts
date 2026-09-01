@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { EventBus } from '../../../../src/bus/bus.js';
 import { SlackAdapter } from '../../../../src/channels/slack/slack-adapter.js';
 import type { SlackClient } from '../../../../src/channels/slack/slack-client.js';
+import { SlackFileDownloadError } from '../../../../src/channels/slack/slack-client.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { SlackInboundEvent, SlackInboundKind } from '../../../../src/channels/slack/types.js';
@@ -300,7 +301,7 @@ describe('SlackAdapter', () => {
       expect(event.payload.content).toContain("couldn't make that out");
     });
 
-    it('surfaces transcription error type and message instead of dropping', async () => {
+    it('surfaces transcription failure in metadata with a user-safe body', async () => {
       const stt = new FakeSttProvider({
         fileError: new SttHttpError(503, 'Deepgram STT request failed with HTTP 503'),
       });
@@ -315,11 +316,85 @@ describe('SlackAdapter', () => {
       const event = published[0] as {
         payload: { content: string; metadata: Record<string, unknown> };
       };
-      expect(event.payload.content).toContain('PROVIDER_ERROR');
-      expect(event.payload.content).toContain('503');
+      expect(event.payload.content).toContain("couldn't process that voice note");
+      expect(event.payload.content).not.toContain('PROVIDER_ERROR');
+      expect(event.payload.content).not.toContain('Deepgram');
       expect(event.payload.metadata.transcriptionError).toEqual(
         expect.objectContaining({ type: 'PROVIDER_ERROR', retryable: true }),
       );
+    });
+
+    it('retries once on 404 then transcribes', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: 'after transcode' } });
+      client.downloadFile
+        .mockRejectedValueOnce(new SlackFileDownloadError(404))
+        .mockResolvedValueOnce(AUDIO);
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      client.simulateEvent(makeVoiceDm(), 'dm');
+      await vi.waitFor(() => expect(published).toHaveLength(1), { timeout: 3_000 });
+      expect(client.downloadFile).toHaveBeenCalledTimes(2);
+      expect((published[0] as { payload: { content: string } }).payload.content).toContain('after transcode');
+    });
+
+    it('records transcriptionError when the file has no download URL', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: 'unused' } });
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      client.simulateEvent(
+        {
+          type: 'message',
+          user: 'U_ALICE',
+          text: '',
+          channel: 'D123',
+          ts: '1710000000.000901',
+          channel_type: 'im',
+          files: [{ id: 'F_VOICE', mimetype: 'audio/webm' }],
+        },
+        'dm',
+      );
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+      const event = published[0] as {
+        payload: { content: string; metadata: Record<string, unknown> };
+      };
+      expect(event.payload.content).toContain("couldn't process that voice note");
+      expect(event.payload.metadata.transcriptionError).toEqual(
+        expect.objectContaining({ message: 'Slack audio file is missing a download URL' }),
+      );
+      expect(client.downloadFile).not.toHaveBeenCalled();
+    });
+
+    it('rejects oversized Slack voice notes before download', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: 'nope' } });
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      client.simulateEvent(
+        {
+          type: 'message',
+          user: 'U_ALICE',
+          text: '',
+          channel: 'D123',
+          ts: '1710000000.000902',
+          channel_type: 'im',
+          files: [{
+            id: 'F_HUGE',
+            mimetype: 'audio/webm',
+            url_private_download: FILE_URL,
+            size: 6 * 1024 * 1024,
+          }],
+        },
+        'dm',
+      );
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+      expect(client.downloadFile).not.toHaveBeenCalled();
+      expect((published[0] as { payload: { content: string } }).payload.content)
+        .toContain('voice note too long to transcribe');
     });
 
     it('degrades to existing text behavior when speechMediaService is unset', async () => {

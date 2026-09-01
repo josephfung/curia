@@ -201,11 +201,11 @@ describe('convertSlackEvent', () => {
     expect(result).not.toBeNull();
   });
 
-  it('ignores file_share of a non-audio file with empty text', () => {
+  it('ignores file_share of a non-audio file even when a caption is present', () => {
     expect(
       convertSlackEvent(
         makeDm({
-          text: '',
+          text: 'see attached',
           subtype: 'file_share',
           files: [{ id: 'Fpdf', mimetype: 'application/pdf' }],
         }),

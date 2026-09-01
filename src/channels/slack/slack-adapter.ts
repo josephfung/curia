@@ -14,13 +14,16 @@ import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
 import type { SpeechMediaService } from '../../speech/index.js';
 import {
+  countSlackAudioFiles,
   findFirstSlackAudioFile,
+  isVoiceNoteOversize,
   resolveVoiceNoteInbound,
   slackFileContentType,
   slackFileDownloadUrl,
   voiceNoteDownloadFailure,
+  voiceNoteTooLarge,
 } from '../inbound-voice-note.js';
-import { SlackClient } from './slack-client.js';
+import { SlackClient, SlackFileDownloadError } from './slack-client.js';
 import {
   convertSlackEvent,
   convertSlackReaction,
@@ -395,6 +398,7 @@ export class SlackAdapter implements Channel {
     const metadata: typeof converted.metadata & Record<string, unknown> = {
       ...converted.metadata,
     };
+    const skippedAudioCount = Math.max(0, countSlackAudioFiles(converted.metadata.files) - 1);
 
     if (!audio || !speech) {
       if (!converted.content) {
@@ -403,36 +407,94 @@ export class SlackAdapter implements Channel {
       return { content: converted.content, metadata };
     }
 
+    if (skippedAudioCount > 0) {
+      this.log.info(
+        { fileId: audio.id, skippedAudioCount, senderId: converted.senderId },
+        'Slack voice note: extra audio files not transcribed',
+      );
+    }
+
+    const stamp = (resolved: ReturnType<typeof voiceNoteDownloadFailure>) => {
+      metadata.transcribedFromAudio = true;
+      if (resolved.transcriptionError) {
+        metadata.transcriptionError = resolved.transcriptionError;
+      }
+      return { content: resolved.content, metadata };
+    };
+
+    if (isVoiceNoteOversize(audio.size)) {
+      this.log.warn(
+        { fileId: audio.id, size: audio.size, senderId: converted.senderId },
+        'Slack voice note exceeds size cap — skipping download',
+      );
+      return stamp(voiceNoteTooLarge(converted.content, audio.size, skippedAudioCount));
+    }
+
     const url = slackFileDownloadUrl(audio);
     if (!url) {
-      const resolved = voiceNoteDownloadFailure(
+      return stamp(voiceNoteDownloadFailure(
         converted.content,
         new Error('Slack audio file is missing a download URL'),
-      );
-      metadata.transcribedFromAudio = true;
-      return { content: resolved.content, metadata };
+        skippedAudioCount,
+      ));
     }
 
     let resolved;
     try {
-      const bytes = await this.config.client.downloadFile(url);
+      const bytes = await this.downloadSlackAudio(url);
       const result = await speech.transcribe({
         audio: bytes,
         contentType: slackFileContentType(audio),
       });
-      resolved = resolveVoiceNoteInbound({ originalText: converted.content, result });
+      if (!result.ok) {
+        this.log.error(
+          {
+            errorType: result.error.type,
+            retryable: result.error.retryable,
+            status: result.error.context.status,
+            senderId: converted.senderId,
+          },
+          'Slack voice note transcription failed',
+        );
+      }
+      resolved = resolveVoiceNoteInbound({
+        originalText: converted.content,
+        result,
+        skippedAudioCount,
+      });
     } catch (err) {
       this.log.warn(
         { err, fileId: audio.id, senderId: converted.senderId },
         'Slack voice note download failed',
       );
-      resolved = voiceNoteDownloadFailure(converted.content, err);
+      resolved = voiceNoteDownloadFailure(converted.content, err, skippedAudioCount);
     }
 
-    metadata.transcribedFromAudio = true;
-    if (resolved.transcriptionError) {
-      metadata.transcriptionError = resolved.transcriptionError;
-    }
-    return { content: resolved.content, metadata };
+    return stamp(resolved);
   }
+
+  /**
+   * Slack audio clips can 404/403 for a brief window while the file is still
+   * transcoding. One retry with a short backoff absorbs that without treating
+   * a good voice memo as a download failure.
+   */
+  private async downloadSlackAudio(url: string): Promise<Uint8Array> {
+    try {
+      return await this.config.client.downloadFile(url);
+    } catch (err) {
+      if (!isSlackTranscodeMiss(err)) throw err;
+      this.log.debug(
+        { err },
+        'Slack voice note download 403/404 — retrying once (possible transcode window)',
+      );
+      await new Promise((r) => setTimeout(r, SLACK_TRANSCODE_RETRY_MS));
+      return await this.config.client.downloadFile(url);
+    }
+  }
+}
+
+const SLACK_TRANSCODE_RETRY_MS = 750;
+
+function isSlackTranscodeMiss(err: unknown): boolean {
+  return err instanceof SlackFileDownloadError && (err.status === 404 || err.status === 403);
 }

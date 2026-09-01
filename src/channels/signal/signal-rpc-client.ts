@@ -204,6 +204,11 @@ export class SignalRpcClient extends EventEmitter {
    * voice-note transcription (#1600).
    *
    * `recipient` (1:1 sender) or `groupId` must be set — signal-cli requires one.
+   *
+   * Callers must reject oversized attachments **before** invoking this: the result
+   * is a single JSON-RPC line accumulated in `handleData`, and this method rides
+   * the shared `REQUEST_TIMEOUT_MS` (10s) budget — fine for a local-socket disk
+   * read of a few MB, not for a 100 MB Signal attachment.
    */
   async getAttachment(opts: {
     id: string;
