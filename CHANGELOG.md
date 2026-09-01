@@ -27,9 +27,14 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Slack/SMS/Voice health probes** — `/api/health` reports each when enabled. (#1567)
 - **Model registry** — `streaming`/`tools` capabilities; voice boot gates on them. (#1553)
 - **Outbound queue** — durable Signal/Slack/SMS/email sends while down; Channel capability. (#1380)
+- **`contact_dedup_exclusions`** — dedup exclusions get a table; migration 084 backfills KG facts. (#1625)
+- **ADR-039 (Accepted)** — decisions belong in the relational ledger, learned knowledge in the KG. (#1625)
 
 ### Changed
 
+- **`contact-dedup-exclude`** — writes the exclusions table; outputs `created`, no `entityMemory` capability. (#1625)
+- **`contact-find-duplicates`** — loads exclusions in one query; `entityMemory` capability dropped. (#1625)
+- **Contact merge** — re-points and renormalizes exclusion rows onto the survivor. (#1625)
 - **markdown-it** — upgraded to v15; coerce `attrGet('href')` to string, drop redundant `@types/markdown-it`. (#1640)
 - **`AgentRuntime`** — text tool loop delegates to `runStreamingToolLoop` via chat adapter. (#1563)
 - **Voice** — composes `VOICE_ASYNC_OFFRAMP_GUIDANCE` now that real handoff exists. (#1614)
@@ -48,6 +53,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **MCP `callTool`** — a timed-out skill now aborts the underlying MCP request instead of stranding it. (#1666)
 - **LLM provider streaming** — every provider releases its SDK stream on abort/error/early-exit, preventing a heap leak. (#1648, #1651)
 - **`classifyError`** — `AbortSignal.timeout` / abort DOMExceptions map to `TIMEOUT`. (#1597)
+- **Dedup exclusions for same-name contacts** — excluding a pair with no KG node on either side now works. (#1625)
 - **`contact-dedup-exclude`** — multi-valued exclusions coexist; agent leaves task open on write failure. (#1623)
 - **`delegate`** — calendar briefs must match same-turn date-resolve output. (#1612)
 - **Coordinator** — ambient bullpen mentions no longer bleed into scheduler jobs and leak to the principal. (#1609)
