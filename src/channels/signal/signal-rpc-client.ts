@@ -199,6 +199,31 @@ export class SignalRpcClient extends EventEmitter {
   }
 
   /**
+   * Fetch a previously-downloaded attachment's raw bytes via signal-cli `getAttachment`.
+   * The JSON-RPC result is base64 (`{ data }` or a raw string). Used for inbound
+   * voice-note transcription (#1600).
+   *
+   * `recipient` (1:1 sender) or `groupId` must be set — signal-cli requires one.
+   */
+  async getAttachment(opts: {
+    id: string;
+    recipient?: string;
+    groupId?: string;
+  }): Promise<Uint8Array> {
+    const params: Record<string, unknown> = {
+      account: this.config.accountNumber,
+      id: opts.id,
+    };
+    if (opts.groupId) {
+      params.groupId = opts.groupId;
+    } else if (opts.recipient) {
+      params.recipient = opts.recipient;
+    }
+    const result = await this.call('getAttachment', params);
+    return decodeSignalAttachmentResult(result);
+  }
+
+  /**
    * Enable (or disable) voice-call event delivery. When enabled, the client
    * sends `subscribeCallEvents` now (if connected) and after every reconnect —
    * signal-cli silently ignores incoming calls unless a live subscription exists,
@@ -500,6 +525,29 @@ export class SignalRpcClient extends EventEmitter {
 
     this.emit('message', envelope);
   }
+}
+
+/**
+ * Decode signal-cli `getAttachment` JSON-RPC result into raw bytes.
+ * Exported for unit tests.
+ */
+export function decodeSignalAttachmentResult(result: unknown): Uint8Array {
+  let encoded: string | undefined;
+  if (typeof result === 'string') {
+    encoded = result;
+  } else if (result && typeof result === 'object' && !Array.isArray(result)) {
+    const obj = result as Record<string, unknown>;
+    if (typeof obj.data === 'string') encoded = obj.data;
+    else if (typeof obj.dataBase64 === 'string') encoded = obj.dataBase64;
+  }
+  if (!encoded?.trim()) {
+    throw new Error('signal-cli getAttachment: response missing attachment data');
+  }
+  const bytes = Buffer.from(encoded, 'base64');
+  if (bytes.byteLength === 0) {
+    throw new Error('signal-cli getAttachment: decoded attachment is empty');
+  }
+  return new Uint8Array(bytes);
 }
 
 /**

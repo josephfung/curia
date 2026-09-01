@@ -920,8 +920,9 @@ async function main(): Promise<void> {
   // (LiveKit only for the console transport) is a possible follow-up.
   let voiceRuntimeRef: VoiceRuntime | undefined;
   // Batch STT/TTS for text-channel voice notes (#1597). Needs Deepgram + Cartesia
-  // (+ voice id) only — not LiveKit. Channel adapters (#1600/#1601) consume this
-  // without importing VoiceRuntime.
+  // (+ voice id) only — not LiveKit. Signal/Slack inbound (#1600) injects this
+  // into the adapters; outbound voice notes (#1601) will too. Streaming voice
+  // still builds its own STT/TTS providers below.
   let speechMediaService: SpeechMediaService | undefined;
   if (config.smsApiKey && config.smsFromNumber && config.smsWebhookPublicKey) {
     smsClient = new SmsClient({
@@ -948,9 +949,6 @@ async function main(): Promise<void> {
       + 'Set Deepgram and Cartesia (including voice ID) under Settings → Channels → Voice.',
     );
   }
-  // Retained for #1600/#1601 (Signal/Slack voice-note DI). Streaming voice
-  // still builds its own STT/TTS providers below.
-  void speechMediaService;
 
   if (
     config.voiceLivekitUrl &&
@@ -1821,6 +1819,7 @@ async function main(): Promise<void> {
       outboundGateway,
       contactService,
       phoneNumber: config.signalPhoneNumber,
+      speechMediaService,
     });
   } else if (outboundGateway && channelShouldStart.has('signal') && (!signalRpcClient || !config.signalPhoneNumber)) {
     // Divergence guard (#964): same silent-no-op class as the email block above — the gate
@@ -1839,6 +1838,7 @@ async function main(): Promise<void> {
       outboundGateway,
       contactService,
       allowedChannelIds: yamlConfig.channels?.slack?.allowed_channel_ids,
+      speechMediaService,
     });
   } else if (outboundGateway && channelShouldStart.has('slack') && !slackClient) {
     logger.warn('channel slack is enabled + resolvable but its runtime client/credentials are missing (bot token or app token); no Slack adapter constructed — check vault/env credentials and restart');

@@ -9,6 +9,11 @@ import type { SlackInboundEvent, SlackInboundKind } from '../../../../src/channe
 import type { OutboundMessageEvent } from '../../../../src/bus/events.js';
 import { createLogger } from '../../../../src/logger.js';
 import pino from 'pino';
+import { SpeechMediaService } from '../../../../src/speech/media-service.js';
+import { FakeSttProvider } from '../../../../src/speech/fake-stt.js';
+import { FakeTtsProvider } from '../../../../src/speech/fake-tts.js';
+import { SttHttpError } from '../../../../src/speech/types.js';
+import { TRANSCRIBED_FROM_AUDIO_TAG } from '../../../../src/channels/inbound-voice-note.js';
 
 function makeSilentLogger() {
   return pino({ level: 'silent' });
@@ -21,6 +26,7 @@ function makeMockClient() {
     getBotIdentity: ReturnType<typeof vi.fn>;
     lookupUser: ReturnType<typeof vi.fn>;
     postMessage: ReturnType<typeof vi.fn>;
+    downloadFile: ReturnType<typeof vi.fn>;
     simulateEvent: (event: SlackInboundEvent, kind: SlackInboundKind) => void;
   };
   emitter.connect = vi.fn().mockResolvedValue(undefined);
@@ -28,6 +34,7 @@ function makeMockClient() {
   emitter.getBotIdentity = vi.fn().mockReturnValue({ botUserId: 'U_BOT', botName: 'nathan' });
   emitter.lookupUser = vi.fn().mockResolvedValue({ id: 'U_ALICE', displayName: 'Alice' });
   emitter.postMessage = vi.fn().mockResolvedValue({ ok: true, ts: '1.1' });
+  emitter.downloadFile = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]));
   emitter.simulateEvent = (event, kind) => emitter.emit('event', event, kind);
   return emitter as unknown as SlackClient & {
     connect: ReturnType<typeof vi.fn>;
@@ -35,6 +42,7 @@ function makeMockClient() {
     getBotIdentity: ReturnType<typeof vi.fn>;
     lookupUser: ReturnType<typeof vi.fn>;
     simulateEvent: (event: SlackInboundEvent, kind: SlackInboundKind) => void;
+    downloadFile: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -217,5 +225,127 @@ describe('SlackAdapter', () => {
     );
     await new Promise((r) => setTimeout(r, 30));
     expect(published).toHaveLength(0);
+  });
+
+  describe('inbound voice notes (#1600)', () => {
+    const AUDIO = new Uint8Array([4, 5, 6]);
+    const FILE_URL = 'https://files.slack.com/files-pri/T1/F_VOICE/download';
+
+    function makeVoiceDm() {
+      return {
+        type: 'message' as const,
+        user: 'U_ALICE',
+        text: '',
+        channel: 'D123',
+        ts: '1710000000.000900',
+        channel_type: 'im',
+        files: [{
+          id: 'F_VOICE',
+          mimetype: 'audio/webm',
+          filetype: 'webm',
+          url_private_download: FILE_URL,
+        }],
+      };
+    }
+
+    async function startWithSpeech(stt: FakeSttProvider): Promise<void> {
+      await adapter.stop();
+      adapter = new SlackAdapter({
+        bus,
+        logger,
+        client,
+        outboundGateway: gateway,
+        contactService,
+        speechMediaService: new SpeechMediaService({
+          stt,
+          tts: new FakeTtsProvider(),
+          logger,
+        }),
+      });
+      await adapter.start();
+    }
+
+    it('publishes a transcribed inbound message tagged transcribed-from-audio', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: 'ship it' } });
+      client.downloadFile.mockResolvedValue(AUDIO);
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      client.simulateEvent(makeVoiceDm(), 'dm');
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+
+      const event = published[0] as {
+        payload: { content: string; metadata: Record<string, unknown> };
+      };
+      expect(event.payload.content).toBe(`${TRANSCRIBED_FROM_AUDIO_TAG}\nship it`);
+      expect(event.payload.metadata.transcribedFromAudio).toBe(true);
+      expect(stt.fileRequests[0]?.contentType).toBe('audio/webm');
+      expect(stt.fileRequests[0]?.audio).toEqual(AUDIO);
+      expect(client.downloadFile).toHaveBeenCalledWith(FILE_URL);
+    });
+
+    it('does not publish empty content when the transcript is empty', async () => {
+      const stt = new FakeSttProvider({ fileTranscript: { text: '' } });
+      client.downloadFile.mockResolvedValue(AUDIO);
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      client.simulateEvent(makeVoiceDm(), 'dm');
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+
+      const event = published[0] as { payload: { content: string } };
+      expect(event.payload.content.length).toBeGreaterThan(0);
+      expect(event.payload.content).toContain("couldn't make that out");
+    });
+
+    it('surfaces transcription error type and message instead of dropping', async () => {
+      const stt = new FakeSttProvider({
+        fileError: new SttHttpError(503, 'Deepgram STT request failed with HTTP 503'),
+      });
+      client.downloadFile.mockResolvedValue(AUDIO);
+      await startWithSpeech(stt);
+
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+      client.simulateEvent(makeVoiceDm(), 'dm');
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+
+      const event = published[0] as {
+        payload: { content: string; metadata: Record<string, unknown> };
+      };
+      expect(event.payload.content).toContain('PROVIDER_ERROR');
+      expect(event.payload.content).toContain('503');
+      expect(event.payload.metadata.transcriptionError).toEqual(
+        expect.objectContaining({ type: 'PROVIDER_ERROR', retryable: true }),
+      );
+    });
+
+    it('degrades to existing text behavior when speechMediaService is unset', async () => {
+      const published: unknown[] = [];
+      bus.subscribe('inbound.message', 'dispatch', (e) => { published.push(e); });
+
+      client.simulateEvent(
+        {
+          type: 'message',
+          user: 'U_ALICE',
+          text: 'Hello',
+          channel: 'D123',
+          ts: '1710000000.001000',
+          channel_type: 'im',
+        },
+        'dm',
+      );
+      await vi.waitFor(() => expect(published).toHaveLength(1));
+      expect((published[0] as { payload: { content: string } }).payload.content).toBe('Hello');
+      expect(client.downloadFile).not.toHaveBeenCalled();
+
+      published.length = 0;
+      client.simulateEvent(makeVoiceDm(), 'dm');
+      await new Promise((r) => setTimeout(r, 30));
+      expect(published).toHaveLength(0);
+      expect(client.downloadFile).not.toHaveBeenCalled();
+    });
   });
 });

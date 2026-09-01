@@ -12,6 +12,14 @@ import type { OutboundMessageEvent } from '../../bus/events.js';
 import { createInboundMessage, createInboundReaction, createChannelDisconnected, createChannelReconnect } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
+import type { SpeechMediaService } from '../../speech/index.js';
+import {
+  findFirstSlackAudioFile,
+  resolveVoiceNoteInbound,
+  slackFileContentType,
+  slackFileDownloadUrl,
+  voiceNoteDownloadFailure,
+} from '../inbound-voice-note.js';
 import { SlackClient } from './slack-client.js';
 import {
   convertSlackEvent,
@@ -31,6 +39,11 @@ export interface SlackAdapterConfig {
   contactService: ContactService;
   /** Optional allowlist of Slack channel ids (C…) for @mentions / thread replies. */
   allowedChannelIds?: string[];
+  /**
+   * Batch STT for inbound voice notes (#1600). Undefined when Deepgram/Cartesia
+   * creds are absent — voice notes then degrade to existing text handling.
+   */
+  speechMediaService?: SpeechMediaService;
 }
 
 export class SlackAdapter implements Channel {
@@ -180,7 +193,7 @@ export class SlackAdapter implements Channel {
       return;
     }
 
-    const { conversationId, senderId, content, metadata } = converted;
+    const { conversationId, senderId, metadata } = converted;
 
     // Remember DM peer U… so outbound principal checks can resolve D… → U….
     // Ephemeral: lost on restart; reply path prefers dispatcher recipientId (U…).
@@ -195,14 +208,24 @@ export class SlackAdapter implements Channel {
 
     await this.ensureSlackContact(senderId);
 
-    const sanitizedContent = sanitizeOutput(content, { maxLength: 10_000 });
+    const { content: inboundContent, metadata: inboundMetadata } =
+      await this.resolveInboundContent(converted);
+    if (inboundContent === null) {
+      this.log.debug(
+        { senderId, hasFiles: !!metadata.files?.length },
+        'Slack adapter: skipping empty inbound after voice-note handling',
+      );
+      return;
+    }
+
+    const sanitizedContent = sanitizeOutput(inboundContent, { maxLength: 10_000 });
 
     const inbound = createInboundMessage({
       conversationId,
       channelId: 'slack',
       senderId,
       content: sanitizedContent,
-      metadata: metadata as unknown as Record<string, unknown>,
+      metadata: inboundMetadata as unknown as Record<string, unknown>,
     });
 
     await this.config.bus.publish('channel', inbound);
@@ -355,5 +378,61 @@ export class SlackAdapter implements Channel {
     if (this.recentDedupeKeys.has(dedupeKey)) return true;
     this.recentDedupeKeys.set(dedupeKey, true);
     return false;
+  }
+
+  /**
+   * Transcribe a Slack audio file when SpeechMediaService is configured.
+   * Returns null content when there is nothing to publish (audio-only + STT off).
+   */
+  private async resolveInboundContent(
+    converted: NonNullable<ReturnType<typeof convertSlackEvent>>,
+  ): Promise<{
+    content: string | null;
+    metadata: typeof converted.metadata & Record<string, unknown>;
+  }> {
+    const audio = findFirstSlackAudioFile(converted.metadata.files);
+    const speech = this.config.speechMediaService;
+    const metadata: typeof converted.metadata & Record<string, unknown> = {
+      ...converted.metadata,
+    };
+
+    if (!audio || !speech) {
+      if (!converted.content) {
+        return { content: null, metadata };
+      }
+      return { content: converted.content, metadata };
+    }
+
+    const url = slackFileDownloadUrl(audio);
+    if (!url) {
+      const resolved = voiceNoteDownloadFailure(
+        converted.content,
+        new Error('Slack audio file is missing a download URL'),
+      );
+      metadata.transcribedFromAudio = true;
+      return { content: resolved.content, metadata };
+    }
+
+    let resolved;
+    try {
+      const bytes = await this.config.client.downloadFile(url);
+      const result = await speech.transcribe({
+        audio: bytes,
+        contentType: slackFileContentType(audio),
+      });
+      resolved = resolveVoiceNoteInbound({ originalText: converted.content, result });
+    } catch (err) {
+      this.log.warn(
+        { err, fileId: audio.id, senderId: converted.senderId },
+        'Slack voice note download failed',
+      );
+      resolved = voiceNoteDownloadFailure(converted.content, err);
+    }
+
+    metadata.transcribedFromAudio = true;
+    if (resolved.transcriptionError) {
+      metadata.transcriptionError = resolved.transcriptionError;
+    }
+    return { content: resolved.content, metadata };
   }
 }

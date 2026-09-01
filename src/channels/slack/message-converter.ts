@@ -1,8 +1,8 @@
 // src/channels/slack/message-converter.ts
 //
 // Converts Slack Events API payloads into a normalized inbound shape for the
-// SlackAdapter. Returns null for noise: bots, subtypes, edits, empty text,
-// and channel messages outside an active Curia thread.
+// SlackAdapter. Returns null for noise: bots, subtypes (except file_share), edits,
+// empty text with no audio file, and channel messages outside an active Curia thread.
 
 import type {
   SlackInboundEvent,
@@ -10,8 +10,10 @@ import type {
   SlackAppMentionEvent,
   SlackReactionAddedEvent,
   SlackInboundKind,
+  SlackFile,
 } from './types.js';
 import { decodeSlackText } from './slack-entities.js';
+import { findFirstSlackAudioFile } from '../inbound-voice-note.js';
 
 export interface ConvertedSlackMessage {
   conversationId: string;
@@ -27,6 +29,7 @@ export interface ConvertedSlackMessage {
     eventType: 'message' | 'app_mention' | 'thread_reply';
     /** Dedup key: channel + ts — absorbs Slack redelivery-on-missed-ack. */
     dedupeKey: string;
+    files?: SlackFile[];
   };
 }
 
@@ -105,9 +108,17 @@ function isIgnorableMessage(event: SlackMessageEvent): boolean {
   // Bot messages / automation — never treat as human inbound.
   if (event.bot_id || event.bot_profile) return true;
   // Subtypes: message_changed, message_deleted, channel_join, bot_message, etc.
-  // Only plain user messages (no subtype) are accepted.
-  if (event.subtype) return true;
+  // Plain user messages (no subtype) and file_share (voice notes, #1600) are accepted.
+  if (event.subtype && event.subtype !== 'file_share') return true;
   return false;
+}
+
+function hasSlackAudio(files: SlackFile[] | undefined): boolean {
+  return !!findFirstSlackAudioFile(files);
+}
+
+function copyFiles(files: SlackFile[] | undefined): SlackFile[] | undefined {
+  return files?.length ? files : undefined;
 }
 
 /**
@@ -136,8 +147,8 @@ export function convertSlackEvent(
     if (!msg.user || (botUserId && msg.user === botUserId)) return null;
 
     const rawContent = msg.text?.trim() ?? '';
-    if (!rawContent) return null;
-    const content = decodeSlackText(rawContent);
+    if (!rawContent && !hasSlackAudio(msg.files)) return null;
+    const content = rawContent ? decodeSlackText(rawContent) : '';
 
     const conversationId = buildSlackConversationId(msg.channel, msg.thread_ts, true);
     return {
@@ -152,6 +163,7 @@ export function convertSlackEvent(
         isDm: true,
         eventType: 'message',
         dedupeKey: `${msg.channel}:${msg.ts}`,
+        files: copyFiles(msg.files),
       },
     };
   }
@@ -180,8 +192,8 @@ export function convertSlackEvent(
     if (botUserId && msg.text?.includes(`<@${botUserId}>`)) return null;
 
     const rawContent = msg.text?.trim() ?? '';
-    if (!rawContent) return null;
-    const content = decodeSlackText(rawContent);
+    if (!rawContent && !hasSlackAudio(msg.files)) return null;
+    const content = rawContent ? decodeSlackText(rawContent) : '';
 
     const conversationId = buildSlackConversationId(msg.channel, threadTs, false);
     return {
@@ -196,6 +208,7 @@ export function convertSlackEvent(
         isDm: false,
         eventType: 'thread_reply',
         dedupeKey: `${msg.channel}:${msg.ts}`,
+        files: copyFiles(msg.files),
       },
     };
   }
@@ -207,8 +220,8 @@ export function convertSlackEvent(
   if (!mention.user || (botUserId && mention.user === botUserId)) return null;
 
   const rawContent = mention.text?.trim() ?? '';
-  if (!rawContent) return null;
-  const content = decodeSlackText(rawContent, { botUserId });
+  if (!rawContent && !hasSlackAudio(mention.files)) return null;
+  const content = rawContent ? decodeSlackText(rawContent, { botUserId }) : '';
 
   // Reply in the existing thread, or start a thread on this mention.
   const threadTs = mention.thread_ts ?? mention.ts;
@@ -226,6 +239,7 @@ export function convertSlackEvent(
       isDm: false,
       eventType: 'app_mention',
       dedupeKey: `${mention.channel}:${mention.ts}`,
+      files: copyFiles(mention.files),
     },
   };
 }

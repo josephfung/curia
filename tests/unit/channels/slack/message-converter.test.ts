@@ -170,6 +170,51 @@ describe('convertSlackEvent', () => {
     expect(convertSlackEvent(makeDm({ text: '   ' }), BOT, 'dm')).toBeNull();
   });
 
+  it('converts an audio-only DM voice note with empty text', () => {
+    const result = convertSlackEvent(
+      makeDm({
+        text: '',
+        files: [{
+          id: 'F_VOICE',
+          mimetype: 'audio/webm',
+          url_private_download: 'https://files.slack.com/f',
+        }],
+      }),
+      BOT,
+      'dm',
+    );
+    expect(result).not.toBeNull();
+    expect(result!.content).toBe('');
+    expect(result!.metadata.files?.[0]?.id).toBe('F_VOICE');
+  });
+
+  it('accepts file_share subtype when the file is audio', () => {
+    const result = convertSlackEvent(
+      makeDm({
+        text: '',
+        subtype: 'file_share',
+        files: [{ id: 'F1', mimetype: 'audio/mp4', url_private_download: 'https://files.slack.com/f' }],
+      }),
+      BOT,
+      'dm',
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it('ignores file_share of a non-audio file with empty text', () => {
+    expect(
+      convertSlackEvent(
+        makeDm({
+          text: '',
+          subtype: 'file_share',
+          files: [{ id: 'Fpdf', mimetype: 'application/pdf' }],
+        }),
+        BOT,
+        'dm',
+      ),
+    ).toBeNull();
+  });
+
   it('decodes Slack entities in content', () => {
     const result = convertSlackEvent(
       makeDm({ text: 'see <https://example.com|docs> &amp; <@U9|bob>' }),

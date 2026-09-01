@@ -18,6 +18,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Signal voice calls** — anyone can Signal-call Curia; live conversation via VoiceRuntime, config-gated off. (#1672)
 - **`MemorySampler`** — periodic `process.memoryUsage()` logging to diagnose heap growth in prod. (#1650)
 - **Speech media service** — top-level `src/speech/` batch STT/TTS for voice notes. (#1597)
+- **Inbound voice notes** — Signal and Slack audio attachments transcribe to inbound messages. (#1600)
 - **Voice opening greeting** — Curia speaks first on inbound console calls. (#1596)
 - **`async-offramp`** — voice hands heavyweight asks to async coordinator for principal callback. (#1614)
 - **ADR-038 (Accepted)** — shared-hardening; voice off-ramp shipped; text→streaming (#1563) unblocked. (#1595)
