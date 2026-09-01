@@ -1,6 +1,16 @@
+// Unit tests for the contact-dedup-exclude tool.
+//
+// Since #1625 the tool writes a row to contact_dedup_exclusions via ContactService
+// instead of a pair of KG facts. The behaviour that matters here: it works for
+// contacts with no KG node (the null-node population from #1623), it is idempotent,
+// and a persistence failure is reported as failure so the contacts agent leaves the
+// review task open (the #1624 prompt gate depends on `success`).
+
 import { describe, it, expect, vi } from 'vitest';
 import { ContactDedupExcludeHandler } from '../../../skills/contacts/tools/contact-dedup-exclude/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
+import { InvalidExclusionPairError } from '../../../src/contacts/dedup-exclusions.js';
+import { ContactNotFoundError } from '../../../src/contacts/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -10,7 +20,7 @@ const UUID_B = '550e8400-e29b-41d4-a716-446655440001';
 function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
   return {
     toolName: 'contact-dedup-exclude',
-    toolVersion: '0.1.0',
+    toolVersion: '0.2.0',
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
@@ -18,8 +28,15 @@ function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext
   };
 }
 
+/** Minimal ContactService stub exposing only addDedupExclusion. */
+function makeContactService(addDedupExclusion: unknown): ToolContext['contactService'] {
+  return { addDedupExclusion } as unknown as ToolContext['contactService'];
+}
+
 describe('ContactDedupExcludeHandler', () => {
   const handler = new ContactDedupExcludeHandler();
+
+  // -- Input validation --
 
   it('fails when contact_a_id is missing', async () => {
     const result = await handler.execute(makeCtx({ contact_b_id: UUID_B }));
@@ -45,241 +62,140 @@ describe('ContactDedupExcludeHandler', () => {
     if (!result.success) expect(result.error).toContain('different');
   });
 
+  it('fails when both IDs are the same but differ only in casing', async () => {
+    const result = await handler.execute(
+      makeCtx({ contact_a_id: UUID_A, contact_b_id: UUID_A.toUpperCase() }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('different');
+  });
+
   it('fails when contactService is not available', async () => {
     const result = await handler.execute(makeCtx({ contact_a_id: UUID_A, contact_b_id: UUID_B }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('contactService');
   });
 
-  it('fails when entityMemory is not available', async () => {
-    const contactService = { getContact: vi.fn() } as unknown as ToolContext['contactService'];
+  // -- Happy path --
+
+  it('records the exclusion and reports created: true', async () => {
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: true,
+    });
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService: makeContactService(addDedupExclusion) },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'contacts-dedup');
+    if (result.success) {
+      expect(result.data).toEqual({
+        contact_a_id: UUID_A,
+        contact_b_id: UUID_B,
+        created: true,
+      });
+    }
+  });
+
+  it('succeeds for a pair where BOTH contacts have no KG node (#1623 regression)', async () => {
+    // The whole point of #1625: the handler no longer consults kg_node_id at all,
+    // so it cannot fail on the same-display-name null-node population.
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: true,
+    });
+    const contactService = makeContactService(addDedupExclusion);
+    // A getContact stub deliberately not provided — the handler must not need it.
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
       { contactService },
     ));
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('entityMemory');
+
+    expect(result.success).toBe(true);
   });
 
-  it('fails when contact A is not found', async () => {
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) =>
-        id === UUID_B ? { id: UUID_B, kgNodeId: 'kg-b' } : undefined,
-      ),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = { storeFact: vi.fn() } as unknown as ToolContext['entityMemory'];
-
+  it('is idempotent — re-excluding an already-excluded pair still succeeds', async () => {
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: false,
+    });
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
+      { contactService: makeContactService(addDedupExclusion) },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as { created: boolean }).created).toBe(false);
+    }
+  });
+
+  it('passes the pair through in the caller-supplied order (service normalizes)', async () => {
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: true,
+    });
+    await handler.execute(makeCtx(
+      { contact_a_id: UUID_B, contact_b_id: UUID_A },
+      { contactService: makeContactService(addDedupExclusion) },
+    ));
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_B, UUID_A, 'contacts-dedup');
+  });
+
+  it('uses ctx.memoryWriteSource as decided_by provenance when available', async () => {
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: true,
+    });
+    await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      {
+        contactService: makeContactService(addDedupExclusion),
+        memoryWriteSource: 'agent:contacts/task:t1/channel:signal',
+      },
+    ));
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'agent:contacts/task:t1/channel:signal');
+  });
+
+  // -- Failure reporting (the #1624 prompt gate depends on this) --
+
+  it('reports failure when the exclusion write throws', async () => {
+    const addDedupExclusion = vi.fn().mockRejectedValue(new Error('connection terminated'));
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService: makeContactService(addDedupExclusion) },
     ));
 
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain(UUID_A);
+    if (!result.success) {
+      expect(result.error).toContain('Failed to record dedup exclusion');
+      expect(result.error).toContain('connection terminated');
+    }
   });
 
-  it('fails when contact B is not found', async () => {
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) =>
-        id === UUID_A ? { id: UUID_A, kgNodeId: 'kg-a' } : undefined,
-      ),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = { storeFact: vi.fn() } as unknown as ToolContext['entityMemory'];
-
+  it('reports a missing contact as failure', async () => {
+    const addDedupExclusion = vi.fn().mockRejectedValue(new ContactNotFoundError(UUID_B));
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
+      { contactService: makeContactService(addDedupExclusion) },
     ));
 
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain(UUID_B);
   });
 
-  it('writes exclusion facts on both KG nodes when both contacts have KG nodes', async () => {
-    const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) => ({
-        id,
-        kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
-        displayName: id === UUID_A ? 'Alice' : 'Bob',
-      })),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
-
+  it('labels an invalid pair distinctly from an infrastructure failure', async () => {
+    const addDedupExclusion = vi.fn().mockRejectedValue(
+      new InvalidExclusionPairError('a contact cannot be excluded against itself'),
+    );
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
-    ));
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      const data = result.data as { contact_a_excluded: boolean; contact_b_excluded: boolean };
-      expect(data.contact_a_excluded).toBe(true);
-      expect(data.contact_b_excluded).toBe(true);
-    }
-    expect(storeFactMock).toHaveBeenCalledTimes(2);
-
-    // A's node names B
-    const callA = storeFactMock.mock.calls[0]![0] as Record<string, unknown>;
-    expect(callA.entityNodeId).toBe('kg-a');
-    expect((callA.properties as Record<string, unknown>).value).toBe(UUID_B);
-
-    // B's node names A
-    const callB = storeFactMock.mock.calls[1]![0] as Record<string, unknown>;
-    expect(callB.entityNodeId).toBe('kg-b');
-    expect((callB.properties as Record<string, unknown>).value).toBe(UUID_A);
-  });
-
-  it('skips writing on a contact with no KG node', async () => {
-    const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) => ({
-        id,
-        kgNodeId: id === UUID_A ? 'kg-a' : null, // B has no KG node
-      })),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
-
-    const result = await handler.execute(makeCtx(
-      { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
-    ));
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      const data = result.data as { contact_a_excluded: boolean; contact_b_excluded: boolean };
-      expect(data.contact_a_excluded).toBe(true);
-      expect(data.contact_b_excluded).toBe(false);
-    }
-    // Only one write — B has no KG node to attach a fact to
-    expect(storeFactMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('returns failure when getContact throws', async () => {
-    const contactService = {
-      getContact: vi.fn().mockRejectedValue(new Error('DB connection refused')),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = { storeFact: vi.fn() } as unknown as ToolContext['entityMemory'];
-
-    const result = await handler.execute(makeCtx(
-      { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
+      { contactService: makeContactService(addDedupExclusion) },
     ));
 
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('DB connection refused');
-  });
-
-  it('returns failure when storeFact throws on both sides', async () => {
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) => ({
-        id,
-        kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
-      })),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = {
-      storeFact: vi.fn().mockRejectedValue(new Error('KG write failed')),
-    } as unknown as ToolContext['entityMemory'];
-
-    const result = await handler.execute(makeCtx(
-      { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
-    ));
-
-    // Each write is attempted independently; when both fail the handler returns failure
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('dedup exclusion');
-  });
-
-  it('returns success when only one write succeeds (partial exclusion is valid)', async () => {
-    // hasExclusion is bidirectional, so one side is enough to block re-surfacing
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) => ({
-        id,
-        kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
-      })),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = {
-      storeFact: vi.fn()
-        // First call (A-side) conflicts; second call (B-side) succeeds
-        .mockResolvedValueOnce({ stored: false, action: 'conflict', conflict: 'existing exclusion' })
-        .mockResolvedValue({ stored: true, action: 'created' }),
-    } as unknown as ToolContext['entityMemory'];
-
-    const result = await handler.execute(makeCtx(
-      { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
-    ));
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      const data = result.data as { contact_a_excluded: boolean; contact_b_excluded: boolean };
-      expect(data.contact_a_excluded).toBe(false);
-      expect(data.contact_b_excluded).toBe(true);
-    }
-  });
-
-  it('returns failure when storeFact returns stored: false (second exclusion silent-drop)', async () => {
-    // Validates the critical path where EntityMemory contradiction detection fires for
-    // a contact that already has a dedup_exclusion for a different pair. Before the fix,
-    // writeExclusion ignored the return value and the handler falsely returned success.
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) => ({
-        id,
-        kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
-      })),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = {
-      storeFact: vi.fn().mockResolvedValue({
-        stored: false,
-        action: 'conflict',
-        conflict: 'Contradicts existing dedup_exclusion fact for a different pair',
-      }),
-    } as unknown as ToolContext['entityMemory'];
-
-    const result = await handler.execute(makeCtx(
-      { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
-    ));
-
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('dedup exclusion');
-  });
-
-  it('returns failure with a clear message when neither contact has a KG node', async () => {
-    const storeFactMock = vi.fn();
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) => ({ id, kgNodeId: null })),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
-
-    const result = await handler.execute(makeCtx(
-      { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory },
-    ));
-
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('no KG node');
-    // No facts should be written when there's nowhere to attach them
-    expect(storeFactMock).not.toHaveBeenCalled();
-  });
-
-  it('uses ctx.memoryWriteSource as the storeFact source', async () => {
-    const storeFactMock = vi.fn().mockResolvedValue({ stored: true, action: 'created' });
-    const contactService = {
-      getContact: vi.fn().mockImplementation(async (id: string) => ({
-        id,
-        kgNodeId: id === UUID_A ? 'kg-a' : 'kg-b',
-      })),
-    } as unknown as ToolContext['contactService'];
-    const entityMemory = { storeFact: storeFactMock } as unknown as ToolContext['entityMemory'];
-
-    await handler.execute(makeCtx(
-      { contact_a_id: UUID_A, contact_b_id: UUID_B },
-      { contactService, entityMemory, memoryWriteSource: 'agent:contacts/task:t1/channel:cli' },
-    ));
-
-    const call = storeFactMock.mock.calls[0]![0] as Record<string, unknown>;
-    expect(call.source).toBe('agent:contacts/task:t1/channel:cli');
+    if (!result.success) expect(result.error).toContain('Invalid contact pair');
   });
 });

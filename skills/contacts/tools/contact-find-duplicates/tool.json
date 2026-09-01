@@ -1,7 +1,7 @@
 {
   "name": "contact-find-duplicates",
-  "description": "Scan all contacts for duplicate pairs above a score threshold, file Curia-owned review tasks for new pairs, and return a summary. Idempotent: pairs that already have an open 'dedup' task (matched by structured dedup-pair tag or description IDs) or a dedup_exclusion KG fact are skipped. Use this for the weekly scheduled scan — it files tasks rather than returning a raw list, so it never floods the agent context.",
-  "version": "2.1.0",
+  "description": "Scan all contacts for duplicate pairs above a score threshold, file Curia-owned review tasks for new pairs, and return a summary. Idempotent: pairs that already have an open 'dedup' task (matched by structured dedup-pair tag or description IDs) or a recorded dedup exclusion are skipped. Use this for the weekly scheduled scan — it files tasks rather than returning a raw list, so it never floods the agent context.",
+  "version": "2.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -16,7 +16,7 @@
     "failed": "number",
     "total_scanned": "number"
   },
-  "capabilities": ["taskRepo", "entityMemory"],
+  "capabilities": ["taskRepo"],
   "permissions": [],
   "secrets": [],
   "timeout": 60000

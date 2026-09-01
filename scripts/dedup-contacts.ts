@@ -8,7 +8,7 @@
 //   - Structural pair (shared channel identity / same kg_node_id / exact name) → auto-merge
 //     UNLESS either contact is the principal (system_role='principal') → task instead.
 //   - Fuzzy pair (name/JW similarity) → Curia-owned task (never auto-merge).
-//   - Excluded pair (dedup_exclusion KG fact) → skip entirely.
+//   - Excluded pair (row in contact_dedup_exclusions) → skip entirely.
 //
 // Dry-run mode (--dry-run flag): reports what would happen without writing anything.
 //
@@ -18,13 +18,6 @@ import pg from 'pg';
 import { createLogger } from '../src/logger.js';
 import { classifyPair, type PairClassification } from '../src/contacts/dedup-classifier.js';
 import type { Contact, ChannelIdentity, ContactKind } from '../src/contacts/types.js';
-import type { KgNode } from '../src/memory/types.js';
-import {
-  writeExclusion,
-  hasExclusion,
-  type WriteExclusionOptions,
-  type HasExclusionOptions,
-} from '../src/contacts/dedup-exclusions.js';
 import {
   canonicalPairKey,
   dedupPairTag,
@@ -59,7 +52,7 @@ export interface DedupRunResult {
   mergedCount: number;
   /** Number of fuzzy pairs that had tasks created (0 in dry-run). */
   taskCount: number;
-  /** Number of pairs skipped due to dedup_exclusion facts. */
+  /** Number of pairs skipped due to a recorded dedup exclusion. */
   skippedExcludedCount: number;
   /** Number of pairs skipped because an open dedup review task already exists. */
   skippedExistingCount: number;
@@ -121,14 +114,16 @@ export interface DedupRunOptions {
   }) => Promise<unknown>;
   /** Open dedup review tasks for idempotency checks. Omit in unit tests that don't need it. */
   listOpenDedupTasks?: () => Promise<Array<{ tags?: string[]; description?: string | null }>>;
-  // storeFact is NOT included here: the sweep never writes exclusion facts.
-  // Decline→exclusion writes go through the contacts agent calling contact-dedup-exclude.
-  /** Calls EntityMemory.getFacts for a KG node — returns fact nodes. */
-  getFacts: (kgNodeId: string) => Promise<KgNode[]>;
+  /**
+   * Every recorded exclusion as a canonical pair key (ContactService.listDedupExclusionPairKeys).
+   * Loaded once per run, before the O(n²) pair loop — one query instead of a lookup per pair.
+   *
+   * The sweep never WRITES exclusions: decline→exclude goes through the contacts agent
+   * calling contact-dedup-exclude. A failure here aborts the whole sweep (fail closed) —
+   * proceeding with an empty set would auto-merge pairs the CEO ruled apart.
+   */
+  listExclusionPairKeys: () => Promise<Set<string>>;
 }
-
-// Re-export shared helpers so existing test imports from this module keep working.
-export { writeExclusion, hasExclusion, type WriteExclusionOptions, type HasExclusionOptions };
 
 // ---------------------------------------------------------------------------
 // Core sweep logic (exported for tests)
@@ -150,21 +145,7 @@ export async function runDedup(
   identityMap: Map<string, ChannelIdentity[]>,
   opts: DedupRunOptions,
 ): Promise<DedupRunResult> {
-  const { dryRun, mergeContacts, createTask, getFacts, minScore, maxScore, maxTasks, noTasks, listOpenDedupTasks } = opts;
-
-  // Memoize getFacts per KG node for the duration of the sweep. The exclusion check
-  // runs inside the O(n²) pair loop, and a contact that appears in many candidate
-  // pairs would otherwise re-fetch its KG facts each time. Exclusion facts are static
-  // within a run (the sweep never writes them — that's the agent's decline path), so
-  // caching is safe. Keyed by kg_node_id; contacts without a node are never looked up.
-  const factsCache = new Map<string, KgNode[]>();
-  const cachedGetFacts = async (kgNodeId: string): Promise<KgNode[]> => {
-    const hit = factsCache.get(kgNodeId);
-    if (hit !== undefined) return hit;
-    const facts = await getFacts(kgNodeId);
-    factsCache.set(kgNodeId, facts);
-    return facts;
-  };
+  const { dryRun, mergeContacts, createTask, listExclusionPairKeys, minScore, maxScore, maxTasks, noTasks, listOpenDedupTasks } = opts;
 
   const result: DedupRunResult = {
     dryRun,
@@ -182,6 +163,12 @@ export async function runDedup(
   };
 
   if (contacts.length < 2) return result;
+
+  // Load exclusions before any pair is classified. Exclusions are static within a run
+  // (the sweep never writes them), so one bulk read covers the entire O(n²) loop.
+  // An error propagates and aborts the sweep — see listExclusionPairKeys' doc comment.
+  const excludedPairKeys = await listExclusionPairKeys();
+  logger.debug({ exclusions: excludedPairKeys.size }, 'dedup: loaded recorded exclusions');
 
   const existingPairKeys = new Set<string>();
   if (listOpenDedupTasks) {
@@ -223,41 +210,29 @@ export async function runDedup(
       const aIdentities = identityMap.get(a.id) ?? [];
       const bIdentities = identityMap.get(b.id) ?? [];
 
-      // F4: Wrap the exclusion check and classification in a try-catch so that
-      // a transient DB error (e.g. getFacts throws) does not abort the entire
-      // sweep. On error we FAIL CLOSED: the pair is skipped (never merged)
-      // and errorCount is incremented so the operator knows something went wrong.
+      // F4: Wrap classification in a try-catch so that an error on one pair does not
+      // abort the entire sweep. On error we FAIL CLOSED: the pair is skipped (never
+      // merged) and errorCount is incremented so the operator knows something went wrong.
       let classification: PairClassification | null;
-      let excluded: boolean;
       try {
         // Classify the pair: structural, fuzzy, or null (below threshold)
         classification = classifyPair(a, aIdentities, b, bIdentities);
-        if (classification === null) continue;
-
-        // ------------------------------------------------------------------
-        // Check for a prior dedup_exclusion in either direction
-        // ------------------------------------------------------------------
-        // We check regardless of classification type — exclusions apply to all matches.
-        excluded = await hasExclusion({
-          contactAId: a.id,
-          contactBId: b.id,
-          kgNodeIdA: a.kgNodeId,
-          kgNodeIdB: b.kgNodeId,
-          getFacts: cachedGetFacts,
-        });
       } catch (err) {
-        // Fail closed: any error during classification or exclusion check means
-        // we DO NOT proceed to merge. Log and move on to the next pair.
         logger.error(
           { err, contactAId: a.id, contactBId: b.id },
-          'dedup: error during classification/exclusion check — skipping pair (fail closed)',
+          'dedup: error during classification — skipping pair (fail closed)',
         );
         result.errorCount++;
         continue;
       }
+      if (classification === null) continue;
 
-      if (excluded) {
-        logger.debug({ contactAId: a.id, contactBId: b.id }, 'dedup: skipped — dedup_exclusion fact present');
+      // ------------------------------------------------------------------
+      // Check for a prior exclusion (order-independent)
+      // ------------------------------------------------------------------
+      // We check regardless of classification type — exclusions apply to all matches.
+      if (excludedPairKeys.has(key)) {
+        logger.debug({ contactAId: a.id, contactBId: b.id }, 'dedup: skipped — pair has a recorded exclusion');
         result.skippedExcludedCount++;
         continue;
       }
@@ -677,18 +652,16 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       logger.info({ contactCount: contacts.length }, 'dedup-contacts: loaded contacts');
 
       // Wire the real service stack — mirrors the construction order in src/index.ts.
-      // All four hand-rolled callbacks (mergeContacts, createTask, storeFact, getFacts)
-      // are replaced with delegates to real services so that:
+      // Every injected callback delegates to a real service, no hand-rolled SQL:
       //   - mergeContacts: uses ContactService.mergeContacts(), which is transactional,
-      //     repoints kg_node_id and contact_calendars, and fires the contact.merged bus
-      //     event (audit-logged by the write-ahead hook in EventBus).
+      //     repoints kg_node_id, contact_calendars and dedup exclusions, and fires the
+      //     contact.merged bus event (audit-logged by the write-ahead hook in EventBus).
       //   - createTask: uses TaskRepo.createTask(), which publishes task.created events.
-      //   - storeFact/getFacts: use EntityMemory, which embeds labels and validates facts.
+      //   - listExclusionPairKeys: reads contact_dedup_exclusions via ContactService.
       // A real sweep merges KG entity nodes (entityMemory.mergeEntities), which embeds fact
-      // labels and therefore needs OpenAI credentials. A dry-run only READS facts
-      // (getFacts → KG node reads, no embedding), so it can run with a fake embedding backend
-      // and no API key — keeping the preview usable in CI / minimal environments. Fail fast
-      // only for a real run.
+      // labels and therefore needs OpenAI credentials. A dry-run never embeds, so it can run
+      // with a fake embedding backend and no API key — keeping the preview usable in CI /
+      // minimal environments. Fail fast only for a real run.
       const openaiApiKey = process.env['OPENAI_API_KEY'];
       if (!dryRun && !openaiApiKey) {
         logger.error('dedup-contacts: OPENAI_API_KEY is required for a real sweep (KG entity merge embeds fact labels). Re-run with --dry-run to preview without it.');
@@ -781,11 +754,9 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
           return tasks;
         },
 
-        // storeFact is NOT included in DedupRunOptions — the sweep never writes exclusion
-        // facts directly. See writeExclusion() and its doc comment for the intended call site.
-
-        // EntityMemory.getFacts returns fact nodes linked to the KG entity node.
-        getFacts: (kgNodeId) => entityMemory.getFacts(kgNodeId),
+        // Read-only: the sweep never records exclusions. Decline→exclude goes through the
+        // contacts agent calling contact-dedup-exclude (#1625).
+        listExclusionPairKeys: () => contactService.listDedupExclusionPairKeys(),
       };
 
       const result = await runDedup(contacts, identityMap, opts);
