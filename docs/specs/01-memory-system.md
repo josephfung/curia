@@ -121,7 +121,7 @@ Before creating a new fact node, check for existing nodes with:
 ### Contradiction Detection
 Before writing a fact that updates an entity attribute (e.g., "the CEO lives in Toronto" when "the CEO lives in Kitchener" exists):
 - Check for existing facts on the same entity with the same attribute type
-- **Multi-valued facts** (`StoreFactOptions.multiValued: true`, e.g. `dedup_exclusion`): same attribute with different `value` properties are independent facts, not contradictions. Same attribute + same value still deduplicates normally. Callers persist `properties.multi_valued: true` so subsequent unrelated writes cannot silently merge into them.
+- **Multi-valued facts** (`StoreFactOptions.multiValued: true`, e.g. a person's several email addresses): same attribute with different `value` properties are independent facts, not contradictions. Same attribute + same value still deduplicates normally. Callers persist `properties.multi_valued: true` so subsequent unrelated writes cannot silently merge into them. (Introduced for `dedup_exclusion` in #1623; exclusions moved to the `contact_dedup_exclusions` table in #1625 — see ADR-039 for the ledger-vs-KG boundary rule — but the flag remains a general primitive.)
 - If contradicting fact exists with higher confidence: reject the write, log the conflict
 - If contradicting fact exists with lower confidence: update the existing fact, preserve the old value in `properties.previous_values` for audit
 - If contradicting fact exists with equal confidence: flag for human review via the alert channel
