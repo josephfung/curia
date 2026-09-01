@@ -149,6 +149,19 @@ describeIf('contact_dedup_exclusions (migration 084)', () => {
     ).rejects.toThrow(/contact_dedup_exclusions_ordered_pair/);
   });
 
+  it('rejects blank provenance', async () => {
+    // decided_by is the only audit trail a row carries; NOT NULL alone would let '' through.
+    const a = await makeContact('Blank A');
+    const b = await makeContact('Blank B');
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    await expect(
+      pool.query(
+        `INSERT INTO contact_dedup_exclusions (contact_a_id, contact_b_id, decided_by) VALUES ($1, $2, '')`,
+        [lo, hi],
+      ),
+    ).rejects.toThrow(/decided_by/);
+  });
+
   it('rejects an exclusion naming a contact that does not exist', async () => {
     const a = await makeContact('Real Contact');
     const ghost = '00000000-0000-4000-8000-000000000000';

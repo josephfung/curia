@@ -164,11 +164,38 @@ export async function runDedup(
 
   if (contacts.length < 2) return result;
 
-  // Load exclusions before any pair is classified. Exclusions are static within a run
-  // (the sweep never writes them), so one bulk read covers the entire O(n²) loop.
-  // An error propagates and aborts the sweep — see listExclusionPairKeys' doc comment.
+  // Load exclusions before any pair is classified. The sweep never WRITES exclusions,
+  // so one bulk read covers the entire O(n²) loop. An error propagates and aborts the
+  // sweep — see listExclusionPairKeys' doc comment.
   const excludedPairKeys = await listExclusionPairKeys();
   logger.debug({ exclusions: excludedPairKeys.size }, 'dedup: loaded recorded exclusions');
+
+  /**
+   * Mirror ContactService.reattachDedupExclusions onto the in-memory snapshot after a
+   * merge. The sweep does not write exclusions, but it does MERGE, and a merge re-points
+   * the secondary's exclusion rows onto the survivor. Without this the snapshot goes
+   * stale mid-run and a transitively-inherited exclusion is invisible to later pairs:
+   *
+   *   c1, c2, c3 all named "Seth Berman"; the CEO ruled c2 ≠ c3.
+   *   (c1, c2) merges structurally on exact name → the DB row becomes (c1, c3).
+   *   (c1, c3) is then checked against a snapshot that still says (c2, c3) → miss →
+   *   auto-merged, silently overriding the CEO's ruling.
+   *
+   * Applied in dry-run too, so the preview reports what a real run would actually do.
+   */
+  function reattachExclusionsInSnapshot(primaryId: string, secondaryId: string): void {
+    for (const excludedKey of [...excludedPairKeys]) {
+      const [x, y] = excludedKey.split(':') as [string, string];
+      if (x !== secondaryId && y !== secondaryId) continue;
+
+      excludedPairKeys.delete(excludedKey);
+      const other = x === secondaryId ? y : x;
+      // The exclusion between the two merged contacts is superseded by the merge
+      // itself — the DB drops it for the same reason.
+      if (other === primaryId) continue;
+      excludedPairKeys.add(canonicalPairKey(primaryId, other));
+    }
+  }
 
   const existingPairKeys = new Set<string>();
   if (listOpenDedupTasks) {
@@ -271,6 +298,7 @@ export async function runDedup(
           // dry-run counts and recommendations accurate (no double-counting a
           // contact that a real run would already have removed).
           mergedAwayIds.add(secondaryId!);
+          reattachExclusionsInSnapshot(primaryId!, secondaryId!);
           continue;
         }
 
@@ -292,6 +320,10 @@ export async function runDedup(
           ];
           identityMap.set(primaryId!, mergedIdentities);
           identityMap.delete(secondaryId!);
+          // Same reasoning as identityMap above, for exclusions: mergeContacts has just
+          // re-pointed the secondary's exclusion rows onto the primary in the DB, so the
+          // snapshot the remaining pairs are checked against must follow.
+          reattachExclusionsInSnapshot(primaryId!, secondaryId!);
           logger.info({ primaryId, secondaryId }, 'dedup: merge complete');
         } catch (err) {
           logger.error({ err, primaryId, secondaryId }, 'dedup: merge failed — continuing');
@@ -653,9 +685,11 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
 
       // Wire the real service stack — mirrors the construction order in src/index.ts.
       // Every injected callback delegates to a real service, no hand-rolled SQL:
-      //   - mergeContacts: uses ContactService.mergeContacts(), which is transactional,
-      //     repoints kg_node_id, contact_calendars and dedup exclusions, and fires the
-      //     contact.merged bus event (audit-logged by the write-ahead hook in EventBus).
+      //   - mergeContacts: uses ContactService.mergeContacts(), which repoints kg_node_id,
+      //     contact_calendars and dedup exclusions, and fires the contact.merged bus event
+      //     (audit-logged by the write-ahead hook in EventBus). NOTE: it sequences those
+      //     writes and rethrows on failure — it is NOT transactional (see the partial-state
+      //     warning it logs, and #1695).
       //   - createTask: uses TaskRepo.createTask(), which publishes task.created events.
       //   - listExclusionPairKeys: reads contact_dedup_exclusions via ContactService.
       // A real sweep merges KG entity nodes (entityMemory.mergeEntities), which embeds fact

@@ -149,6 +149,10 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
 
       // canonicalPairKey matches the order-independent key listDedupExclusionPairKeys
       // returns, so a pair excluded in either direction is caught here.
+      //
+      // Unlike the dedup sweep, this snapshot needs no mid-run maintenance: this handler
+      // only FILES tasks, it never merges, so nothing it does re-points an exclusion row.
+      // The worst case from a concurrent exclusion is one re-filed review task.
       if (excludedPairKeys.has(key)) {
         skippedExcluded++;
         continue;

@@ -9,6 +9,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { InvalidExclusionPairError } from '../../../../src/contacts/dedup-exclusions.js';
+import { ContactNotFoundError } from '../../../../src/contacts/types.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -32,11 +33,19 @@ export class ContactDedupExcludeHandler implements ToolHandler {
     }
 
     try {
-      // decided_by is provenance for the ruling. memoryWriteSource identifies the
-      // agent/task/channel that recorded it; the sweep-script default keeps manual
-      // and script-driven excludes distinguishable from agent ones.
-      const decidedBy = ctx.memoryWriteSource ?? 'contacts-dedup';
-      const { created } = await ctx.contactService.addDedupExclusion(contactAId, contactBId, decidedBy);
+      // decided_by is provenance for the ruling — memoryWriteSource identifies the
+      // agent/task/channel that recorded it. It is the only audit trail the row carries,
+      // and the row is written once and never revisited, so a missing or blank source is
+      // worth a warning: it means the execution layer did not populate the context.
+      const writeSource = ctx.memoryWriteSource?.trim();
+      if (!writeSource) {
+        ctx.log.warn(
+          { contactAId, contactBId },
+          'contact-dedup-exclude: ctx.memoryWriteSource absent — recording exclusion with generic provenance',
+        );
+      }
+      const decidedBy = writeSource || 'contacts-dedup';
+      const { pair, created } = await ctx.contactService.addDedupExclusion(contactAId, contactBId, decidedBy);
 
       ctx.log.info(
         { contactAId, contactBId, created },
@@ -48,8 +57,9 @@ export class ContactDedupExcludeHandler implements ToolHandler {
       return {
         success: true,
         data: {
-          contact_a_id: contactAId,
-          contact_b_id: contactBId,
+          // Echo the normalized (lowercase) ids so tool output matches the stored row.
+          contact_a_id: pair.contactAId,
+          contact_b_id: pair.contactBId,
           // false means the pair was already excluded. Still a success — the CEO's
           // decision is persisted either way, and the agent should close the task.
           created,
@@ -57,13 +67,31 @@ export class ContactDedupExcludeHandler implements ToolHandler {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // InvalidExclusionPairError is a caller mistake the validation above should
-      // already have caught; surface it as-is rather than as an infrastructure error.
-      const prefix = err instanceof InvalidExclusionPairError
-        ? 'Invalid contact pair'
-        : 'Failed to record dedup exclusion';
       ctx.log.error({ err, contactAId, contactBId }, 'contact-dedup-exclude: exclusion write failed');
-      return { success: false, error: `${prefix}: ${message}` };
+
+      // One of the contacts is gone — the agent should re-look-up, not retry blindly.
+      if (err instanceof ContactNotFoundError) {
+        return {
+          success: false,
+          error: `${message}. One of these contacts no longer exists — re-run contact-lookup before excluding.`,
+        };
+      }
+      // A caller mistake the validation above should already have caught.
+      if (err instanceof InvalidExclusionPairError) {
+        return { success: false, error: `Invalid contact pair: ${message}` };
+      }
+      // Deployment faults, not transient ones: the exclusions table is missing (migration
+      // 084 not applied — possible when the app image leads the DB) or contactService
+      // predates this tool. Both look exactly like a DB blip in a generic message, and the
+      // agent prompt tells the agent to retry — which would loop forever. Say so instead.
+      const tableMissing = /relation "contact_dedup_exclusions" does not exist/i.test(message);
+      if (tableMissing || err instanceof TypeError) {
+        return {
+          success: false,
+          error: `Dedup exclusions are unavailable in this deployment (${message}). This will not resolve on retry — an operator must confirm migration 084 has been applied. Leave the review task open.`,
+        };
+      }
+      return { success: false, error: `Failed to record dedup exclusion: ${message}` };
     }
   }
 }

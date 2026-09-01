@@ -186,6 +186,91 @@ describe('ContactDedupExcludeHandler', () => {
     if (!result.success) expect(result.error).toContain(UUID_B);
   });
 
+  it('tells the agent not to retry when the exclusions table is missing', async () => {
+    // Migration 084 not applied (the app image can lead the DB on a GHCR deploy). A
+    // generic "failed to record" reads like a transient blip and the prompt says retry,
+    // which would loop forever.
+    const addDedupExclusion = vi.fn().mockRejectedValue(
+      new Error('relation "contact_dedup_exclusions" does not exist'),
+    );
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService: makeContactService(addDedupExclusion) },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('will not resolve on retry');
+      expect(result.error).toContain('migration 084');
+      expect(result.error).toContain('Leave the review task open');
+    }
+  });
+
+  it('tells the agent not to retry when contactService predates the tool', async () => {
+    const addDedupExclusion = vi.fn().mockRejectedValue(
+      new TypeError('ctx.contactService.addDedupExclusion is not a function'),
+    );
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService: makeContactService(addDedupExclusion) },
+    ));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('will not resolve on retry');
+  });
+
+  it('warns but still records when memoryWriteSource is missing', async () => {
+    // decided_by is the row's only audit trail, and the row is never revisited.
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: true,
+    });
+    const warn = vi.fn();
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      {
+        contactService: makeContactService(addDedupExclusion),
+        log: { ...logger, warn, error: vi.fn(), info: vi.fn() } as never,
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(warn).toHaveBeenCalled();
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'contacts-dedup');
+  });
+
+  it('treats a blank memoryWriteSource as missing rather than storing empty provenance', async () => {
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: true,
+    });
+    await handler.execute(makeCtx(
+      { contact_a_id: UUID_A, contact_b_id: UUID_B },
+      { contactService: makeContactService(addDedupExclusion), memoryWriteSource: '   ' },
+    ));
+    // The column is NOT NULL CHECK (decided_by <> ''), so a blank would be rejected by
+    // Postgres — fall back before it gets there.
+    expect(addDedupExclusion).toHaveBeenCalledWith(UUID_A, UUID_B, 'contacts-dedup');
+  });
+
+  it('echoes the normalized (lowercase) ids so output matches the stored row', async () => {
+    const addDedupExclusion = vi.fn().mockResolvedValue({
+      pair: { contactAId: UUID_A, contactBId: UUID_B },
+      created: true,
+    });
+    const result = await handler.execute(makeCtx(
+      { contact_a_id: UUID_A.toUpperCase(), contact_b_id: UUID_B.toUpperCase() },
+      { contactService: makeContactService(addDedupExclusion) },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { contact_a_id: string; contact_b_id: string };
+      expect(data.contact_a_id).toBe(UUID_A);
+      expect(data.contact_b_id).toBe(UUID_B);
+    }
+  });
+
   it('labels an invalid pair distinctly from an infrastructure failure', async () => {
     const addDedupExclusion = vi.fn().mockRejectedValue(
       new InvalidExclusionPairError('a contact cannot be excluded against itself'),
