@@ -688,9 +688,11 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       // Every injected callback delegates to a real service, no hand-rolled SQL:
       //   - mergeContacts: uses ContactService.mergeContacts(), which repoints kg_node_id,
       //     contact_calendars and dedup exclusions, and fires the contact.merged bus event
-      //     (audit-logged by the write-ahead hook in EventBus). NOTE: it sequences those
-      //     writes and rethrows on failure — it is NOT transactional (see the partial-state
-      //     warning it logs, and #1695).
+      //     (audit-logged by the write-ahead hook in EventBus). Its contact writes run in
+      //     one transaction (#1695), so a failed merge rolls back whole and rethrows — the
+      //     sweep can treat it as "this pair did not merge", with no partial state to
+      //     reconcile. The KG node merge it attempts first is best-effort and outside that
+      //     transaction.
       //   - createTask: uses TaskRepo.createTask(), which publishes task.created events.
       //   - listExclusionPairKeys: reads contact_dedup_exclusions via ContactService.
       // A real sweep merges KG entity nodes (entityMemory.mergeEntities), which embeds fact
