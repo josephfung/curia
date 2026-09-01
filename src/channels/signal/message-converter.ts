@@ -8,10 +8,12 @@
 //   - reaction: handled separately via convertSignalReaction → inbound.reaction
 //   - viewOnce: self-destructing message — skip (we don't want LLM context on ephemeral content)
 //   - null/empty message: attachment-only or other non-text envelope
+//     (audio attachments are an exception — the adapter transcribes them, #1600)
 //   - group management events (UPDATE/QUIT): not displayable content
 // All ignored cases return null so the adapter can skip them cleanly.
 
 import type { SignalEnvelope, SignalAttachment } from './types.js';
+import { findFirstAudioAttachment } from '../inbound-voice-note.js';
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -71,7 +73,7 @@ export interface ConvertedSignalReaction {
  *   - reaction (emoji reaction — no text content)
  *   - viewOnce (ephemeral content)
  *   - no dataMessage
- *   - null or empty message text
+ *   - null or empty message text with no audio attachment
  *   - group management events (type !== 'DELIVER')
  */
 export function convertSignalEnvelope(
@@ -97,9 +99,11 @@ export function convertSignalEnvelope(
   const groupInfo = data.groupInfo;
   if (groupInfo && groupInfo.type !== 'DELIVER') return null;
 
-  // Empty or whitespace-only messages have no content worth routing to the LLM.
+  // Empty or whitespace-only messages have no content worth routing to the LLM
+  // unless they carry audio (voice note) — the adapter transcribes those (#1600).
   const rawContent = data.message?.trim() ?? '';
-  if (!rawContent) return null;
+  const hasAudio = !!findFirstAudioAttachment(data.attachments);
+  if (!rawContent && !hasAudio) return null;
 
   // Build conversation ID.
   // Group: signal:group=<base64GroupId>  — stable across all members

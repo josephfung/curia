@@ -171,6 +171,26 @@ describe('convertSignalEnvelope', () => {
     expect(result).toBeNull();
   });
 
+  it('converts an audio-only voice note with empty text', () => {
+    const result = convertSignalEnvelope(makeEnvelope({
+      dataMessage: {
+        timestamp: 1700000000000,
+        message: null,
+        expiresInSeconds: 0,
+        viewOnce: false,
+        attachments: [{
+          id: 'att-voice',
+          contentType: 'audio/ogg',
+          size: 12,
+          isVoiceNote: true,
+        }],
+      },
+    }));
+    expect(result).not.toBeNull();
+    expect(result!.content).toBe('');
+    expect(result!.metadata.attachments).toHaveLength(1);
+  });
+
   it('returns null for a group UPDATE event (management, not a message)', () => {
     const result = convertSignalEnvelope(makeEnvelope({
       dataMessage: {

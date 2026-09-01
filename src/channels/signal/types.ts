@@ -87,6 +87,8 @@ export interface SignalAttachment {
   contentType: string;
   filename?: string;
   size: number;
+  /** True when the sender recorded this as a Signal voice note (JsonAttachment.isVoiceNote). */
+  isVoiceNote?: boolean;
 }
 
 /**

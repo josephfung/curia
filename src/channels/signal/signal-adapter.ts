@@ -24,6 +24,12 @@ import { checkGroupMemberTrust } from './group-trust.js';
 import { createInboundMessage, createInboundReaction, createChannelDisconnected, createChannelReconnect } from '../../bus/events.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import type { Channel } from '../channel.js';
+import type { SpeechMediaService } from '../../speech/index.js';
+import {
+  findFirstAudioAttachment,
+  resolveVoiceNoteInbound,
+  voiceNoteDownloadFailure,
+} from '../inbound-voice-note.js';
 
 export interface SignalAdapterConfig {
   bus: EventBus;
@@ -44,6 +50,11 @@ export interface SignalAdapterConfig {
   contactService: ContactService;
   /** Curia's E.164 phone number — the Signal account that receives messages */
   phoneNumber: string;
+  /**
+   * Batch STT for inbound voice notes (#1600). Undefined when Deepgram/Cartesia
+   * creds are absent — voice notes then degrade to existing text handling.
+   */
+  speechMediaService?: SpeechMediaService;
 }
 
 export class SignalAdapter implements Channel {
@@ -151,7 +162,7 @@ export class SignalAdapter implements Channel {
       return;
     }
 
-    const { conversationId, senderId, content, metadata } = converted;
+    const { conversationId, senderId, metadata } = converted;
 
     // ------------------------------------------------------------------
     // Step 0: Group trust check
@@ -223,12 +234,27 @@ export class SignalAdapter implements Channel {
     }
 
     // ------------------------------------------------------------------
-    // Step 3: Sanitize and publish
+    // Step 3: Voice-note transcription (#1600)
+    // ------------------------------------------------------------------
+    // Audio attachments are downloaded and transcribed into ordinary inbound
+    // content. STT unavailable → existing text path (audio-only messages drop).
+    const { content: inboundContent, metadata: inboundMetadata } =
+      await this.resolveInboundContent(converted);
+    if (inboundContent === null) {
+      this.log.debug(
+        { senderId, hasAttachments: !!metadata.attachments?.length },
+        'Signal adapter: skipping empty inbound after voice-note handling',
+      );
+      return;
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4: Sanitize and publish
     // ------------------------------------------------------------------
     // Sanitize content to mitigate prompt injection from external senders.
     // Signal messages are shorter than emails but carry the same injection risk —
     // a malicious sender could craft a message that looks like system instructions.
-    const sanitizedContent = sanitizeOutput(content, {
+    const sanitizedContent = sanitizeOutput(inboundContent, {
       maxLength: 10_000,
     });
 
@@ -237,7 +263,7 @@ export class SignalAdapter implements Channel {
       channelId: 'signal',
       senderId,
       content: sanitizedContent,
-      metadata: metadata as unknown as Record<string, unknown>,
+      metadata: inboundMetadata as unknown as Record<string, unknown>,
     });
 
     await this.config.bus.publish('channel', event);
@@ -427,6 +453,56 @@ export class SignalAdapter implements Channel {
     }
 
     return true; // all members verified — proceed
+  }
+
+  /**
+   * Transcribe a Signal audio attachment when SpeechMediaService is configured.
+   * Returns null content when there is nothing to publish (audio-only + STT off).
+   */
+  private async resolveInboundContent(
+    converted: NonNullable<ReturnType<typeof convertSignalEnvelope>>,
+  ): Promise<{
+    content: string | null;
+    metadata: typeof converted.metadata & Record<string, unknown>;
+  }> {
+    const audio = findFirstAudioAttachment(converted.metadata.attachments);
+    const speech = this.config.speechMediaService;
+    const metadata: typeof converted.metadata & Record<string, unknown> = {
+      ...converted.metadata,
+    };
+
+    if (!audio || !speech) {
+      if (!converted.content) {
+        return { content: null, metadata };
+      }
+      return { content: converted.content, metadata };
+    }
+
+    let resolved;
+    try {
+      const bytes = await this.config.rpcClient.getAttachment({
+        id: audio.id,
+        recipient: converted.metadata.isGroup ? undefined : converted.senderId,
+        groupId: converted.metadata.groupId,
+      });
+      const result = await speech.transcribe({
+        audio: bytes,
+        contentType: audio.contentType,
+      });
+      resolved = resolveVoiceNoteInbound({ originalText: converted.content, result });
+    } catch (err) {
+      this.log.warn(
+        { err, attachmentId: audio.id, senderId: converted.senderId },
+        'Signal voice note download failed',
+      );
+      resolved = voiceNoteDownloadFailure(converted.content, err);
+    }
+
+    metadata.transcribedFromAudio = true;
+    if (resolved.transcriptionError) {
+      metadata.transcriptionError = resolved.transcriptionError;
+    }
+    return { content: resolved.content, metadata };
   }
 
 }

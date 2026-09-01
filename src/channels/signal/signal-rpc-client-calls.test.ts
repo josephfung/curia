@@ -10,7 +10,7 @@ import * as net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SignalRpcClient } from './signal-rpc-client.js';
+import { SignalRpcClient, decodeSignalAttachmentResult } from './signal-rpc-client.js';
 import type { SignalCallEvent } from './call-types.js';
 import { createSilentLogger } from '../../logger.js';
 
@@ -105,5 +105,37 @@ describe('SignalRpcClient call support', () => {
     const line = received.find(l => l.includes('acceptCall'))!;
     expect(line).toContain('"callId":-7828393543136742976');
     expect(line).toContain(`"account":"${ACCOUNT}"`);
+  });
+
+  it('getAttachment sends id + recipient and decodes { data } base64', async () => {
+    server = await listen(socketPath, (line, sock) => {
+      received.push(line);
+      const req = JSON.parse(line) as { id: string };
+      sock.write(
+        JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { data: Buffer.from('ogg-bytes').toString('base64') } }) + '\n',
+      );
+    });
+    client = new SignalRpcClient({ socketPath, accountNumber: ACCOUNT, logger: createSilentLogger() });
+    client.connect();
+    await new Promise<void>(r => client.once('connected', () => r()));
+    const bytes = await client.getAttachment({ id: 'att-1', recipient: '+15551212' });
+    expect(Buffer.from(bytes).toString('utf8')).toBe('ogg-bytes');
+    const line = received.find(l => l.includes('getAttachment'))!;
+    expect(line).toContain('"id":"att-1"');
+    expect(line).toContain('"recipient":"+15551212"');
+    expect(line).toContain(`"account":"${ACCOUNT}"`);
+  });
+});
+
+describe('decodeSignalAttachmentResult', () => {
+  it('decodes { data } and raw base64 strings', () => {
+    const payload = Buffer.from('hello').toString('base64');
+    expect(Buffer.from(decodeSignalAttachmentResult({ data: payload })).toString()).toBe('hello');
+    expect(Buffer.from(decodeSignalAttachmentResult(payload)).toString()).toBe('hello');
+  });
+
+  it('throws when data is missing or empty', () => {
+    expect(() => decodeSignalAttachmentResult({})).toThrow('missing attachment data');
+    expect(() => decodeSignalAttachmentResult({ data: '' })).toThrow('missing attachment data');
   });
 });

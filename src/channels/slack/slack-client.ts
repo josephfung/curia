@@ -35,6 +35,7 @@ export class SlackClient extends EventEmitter {
   private readonly web: WebClient;
   private readonly socket: SocketModeClient;
   private readonly log: Logger;
+  private readonly botToken: string;
   private stopping = false;
   private identity: SlackAuthIdentity | undefined;
   private started = false;
@@ -44,6 +45,7 @@ export class SlackClient extends EventEmitter {
   constructor(config: SlackClientConfig) {
     super();
     this.log = config.logger.child({ component: 'slack-client' });
+    this.botToken = config.botToken;
     this.web = new WebClient(config.botToken);
     this.socket = new SocketModeClient({ appToken: config.appToken });
     // Register socket handlers exactly once, tied to the SocketModeClient's own
@@ -232,5 +234,28 @@ export class SlackClient extends EventEmitter {
       this.log.warn({ err, userId }, 'Slack users.info failed');
       return null;
     }
+  }
+
+  /**
+   * Download a Slack-hosted file. Private URLs require the bot token as a
+   * Bearer Authorization header — they are not publicly fetchable (#1600).
+   */
+  async downloadFile(url: string): Promise<Uint8Array> {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.botToken}` },
+    });
+    if (!response.ok) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Best-effort drain so undici does not pin the socket on error paths.
+      }
+      throw new Error(`Slack file download failed with HTTP ${response.status}`);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0) {
+      throw new Error('Slack file download returned empty body');
+    }
+    return bytes;
   }
 }

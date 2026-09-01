@@ -15,17 +15,33 @@ export interface SlackMessageEvent {
   bot_id?: string;
   /** True when Slack marks the message as from a bot user. */
   bot_profile?: unknown;
+  /** Hosted files (voice notes, uploads). */
+  files?: SlackFile[];
+}
+
+/** Hosted Slack file metadata (voice notes use audio mimetypes). */
+export interface SlackFile {
+  id: string;
+  mimetype?: string;
+  filetype?: string;
+  name?: string;
+  title?: string;
+  url_private?: string;
+  url_private_download?: string;
+  subtype?: string;
+  media_display_type?: string;
 }
 
 /** app_mention event payload. */
 export interface SlackAppMentionEvent {
   type: 'app_mention';
   user: string;
-  text: string;
+  text?: string;
   channel: string;
   ts: string;
   thread_ts?: string;
   bot_id?: string;
+  files?: SlackFile[];
 }
 
 /** reaction_added event payload (emoji → intent is NOT decided here). */
