@@ -35,6 +35,54 @@ export interface SlackClientEvents {
 /** Timeout for Slack private-file downloads — STT's 60s bound does not cover this hop. */
 const FILE_DOWNLOAD_TIMEOUT_MS = 15_000;
 
+const BODY_OVERSIZE_ERROR = 'Slack file download refused: body exceeds voice-note cap';
+
+/**
+ * Read a fetch body incrementally and abort as soon as it exceeds `maxBytes`.
+ * Chunked responses have no Content-Length, so buffering via `arrayBuffer()`
+ * would otherwise hold the full payload before the size check could fire.
+ */
+async function readBodyCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const body = response.body;
+  if (!body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) {
+      throw new Error(BODY_OVERSIZE_ERROR);
+    }
+    return bytes;
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new Error(BODY_OVERSIZE_ERROR);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // Stream may already be closed or cancelled.
+    }
+  }
+
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
 export class SlackFileDownloadError extends Error {
   readonly status: number;
 
@@ -300,12 +348,9 @@ export class SlackClient extends EventEmitter {
         throw new Error('Slack file download refused: content-length exceeds voice-note cap');
       }
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await readBodyCapped(response, MAX_VOICE_NOTE_BYTES);
     if (bytes.byteLength === 0) {
       throw new Error('Slack file download returned empty body');
-    }
-    if (bytes.byteLength > MAX_VOICE_NOTE_BYTES) {
-      throw new Error('Slack file download refused: body exceeds voice-note cap');
     }
     return bytes;
   }

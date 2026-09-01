@@ -22,6 +22,7 @@ import {
   slackFileDownloadUrl,
   voiceNoteDownloadFailure,
   voiceNoteTooLarge,
+  type VoiceNotePublish,
 } from '../inbound-voice-note.js';
 import { SlackClient, SlackFileDownloadError } from './slack-client.js';
 import {
@@ -439,7 +440,7 @@ export class SlackAdapter implements Channel {
       ));
     }
 
-    let resolved;
+    let resolved: VoiceNotePublish;
     try {
       const bytes = await this.downloadSlackAudio(url);
       const result = await speech.transcribe({
