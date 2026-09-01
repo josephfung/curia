@@ -22,7 +22,7 @@ import { findFirstAudioAttachment } from '../inbound-voice-note.js';
 export interface ConvertedSignalMessage {
   conversationId: string;
   channelId: 'signal';
-  /** E.164 sender phone number — used as the bus senderId */
+  /** E.164 number, or ACI UUID when `sourceNumber` is empty. */
   senderId: string;
   content: string;
   metadata: {
@@ -64,6 +64,22 @@ export interface ConvertedSignalReaction {
     isRemove: boolean;
     signalTimestamp: number;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefer E.164 `sourceNumber`; fall back to ACI `sourceUuid` for username /
+ * ACI-only senders. Returns undefined when neither is usable.
+ */
+export function signalSenderIdentity(envelope: SignalEnvelope): string | undefined {
+  const number = envelope.sourceNumber?.trim() ?? '';
+  if (number.length > 0) return number;
+  const uuid = envelope.sourceUuid?.trim() ?? '';
+  if (uuid.length > 0) return uuid;
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +128,8 @@ export function convertSignalEnvelope(
 
   // Build conversation ID.
   // Group: signal:group=<base64GroupId>  — stable across all members
-  // 1:1:   signal:<E.164 number>         — the sender's phone number
+  // 1:1:   signal:<sender identity>      — E.164, or ACI UUID when the number
+  //                                        is empty (username / ACI-only senders)
   // The `group=` prefix prevents collisions between a group ID that happens to
   // look like a phone number and an actual 1:1 conversation.
   //
@@ -121,15 +138,18 @@ export function convertSignalEnvelope(
   // (signal-cli always sets groupId for group messages), but be defensive.
   if (groupInfo && !groupInfo.groupId) return null;
 
+  const senderId = signalSenderIdentity(envelope);
+  if (!senderId) return null;
+
   const isGroup = !!groupInfo;
   const conversationId = isGroup
     ? `signal:group=${groupInfo.groupId}`
-    : `signal:${envelope.sourceNumber}`;
+    : `signal:${senderId}`;
 
   return {
     conversationId,
     channelId: 'signal',
-    senderId: envelope.sourceNumber,
+    senderId,
     content: rawContent,
     metadata: {
       sourceName: envelope.sourceName,
@@ -161,14 +181,15 @@ export function convertSignalReaction(
   if (typeof reaction.targetTimestamp !== 'number' || !Number.isFinite(reaction.targetTimestamp)) {
     return null;
   }
-  if (!envelope.sourceNumber) return null;
+  const senderId = signalSenderIdentity(envelope);
+  if (!senderId) return null;
 
   // Best-effort conversation key (1:1 with the reactor). Approval correlation
   // keys on targetMessageId ↔ outbound.delivered.messageId, not conversationId.
   return {
-    conversationId: `signal:${envelope.sourceNumber}`,
+    conversationId: `signal:${senderId}`,
     channelId: 'signal',
-    senderId: envelope.sourceNumber,
+    senderId,
     emoji,
     targetMessageId: String(reaction.targetTimestamp),
     metadata: {

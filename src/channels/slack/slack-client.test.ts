@@ -11,11 +11,25 @@ describe('SlackClient.downloadFile', () => {
     vi.restoreAllMocks();
   });
 
+  function bytesStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+    let sent = false;
+    return new ReadableStream({
+      pull(controller) {
+        if (sent) {
+          controller.close();
+          return;
+        }
+        sent = true;
+        controller.enqueue(bytes);
+      },
+    });
+  }
+
   function mockOkFetch(audio: Uint8Array, contentLength?: string) {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       headers: { get: (name: string) => (name.toLowerCase() === 'content-length' ? contentLength ?? null : null) },
-      arrayBuffer: async () => audio.buffer,
+      body: bytesStream(audio),
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     return fetchMock;
@@ -85,6 +99,33 @@ describe('SlackClient.downloadFile', () => {
     });
     await expect(client.downloadFile('https://files.slack.com/x'))
       .rejects.toThrow('content-length exceeds voice-note cap');
+    await client.disconnect();
+  });
+
+  it('aborts a chunked body that exceeds the voice-note cap', async () => {
+    const chunk = new Uint8Array(64 * 1024);
+    let cancelled = false;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+    }) as unknown as typeof fetch;
+
+    const client = new SlackClient({
+      botToken: 'xoxb-test-token',
+      appToken: 'xapp-test-token',
+      logger: createSilentLogger(),
+    });
+    await expect(client.downloadFile('https://files.slack.com/x'))
+      .rejects.toThrow('body exceeds voice-note cap');
+    expect(cancelled).toBe(true);
     await client.disconnect();
   });
 });

@@ -708,6 +708,12 @@ describe('SignalAdapter', () => {
         },
       }));
       await vi.waitFor(() => expect(published).toHaveLength(1));
+      const event = published[0] as {
+        payload: { senderId: string; conversationId: string; content: string };
+      };
+      expect(event.payload.senderId).toBe('aci-uuid-1');
+      expect(event.payload.conversationId).toBe('signal:aci-uuid-1');
+      expect(event.payload.content).toContain('aci sender');
       expect(rpcClient.getAttachment).toHaveBeenCalledWith({
         id: 'att-voice',
         recipient: 'aci-uuid-1',

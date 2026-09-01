@@ -252,6 +252,43 @@ describe('convertSignalEnvelope', () => {
     const result = convertSignalEnvelope(makeEnvelope({ sourceNumber: '+14155559999' }));
     expect(result!.conversationId).toBe('signal:+14155559999');
   });
+
+  it('falls back to sourceUuid for ACI-only 1:1 senders', () => {
+    const result = convertSignalEnvelope(makeEnvelope({
+      source: '',
+      sourceNumber: '',
+      sourceUuid: 'aci-uuid-1',
+    }));
+    expect(result).not.toBeNull();
+    expect(result!.senderId).toBe('aci-uuid-1');
+    expect(result!.conversationId).toBe('signal:aci-uuid-1');
+  });
+
+  it('uses sourceUuid as senderId for ACI-only group messages', () => {
+    const result = convertSignalEnvelope(makeEnvelope({
+      source: '',
+      sourceNumber: '',
+      sourceUuid: 'aci-uuid-1',
+      dataMessage: {
+        timestamp: 1700000000000,
+        message: 'Team meeting at 3pm',
+        expiresInSeconds: 0,
+        viewOnce: false,
+        groupInfo: { groupId: 'abc123==', type: 'DELIVER' },
+      },
+    }));
+    expect(result).not.toBeNull();
+    expect(result!.senderId).toBe('aci-uuid-1');
+    expect(result!.conversationId).toBe('signal:group=abc123==');
+  });
+
+  it('returns null when both sourceNumber and sourceUuid are empty', () => {
+    expect(convertSignalEnvelope(makeEnvelope({
+      source: '',
+      sourceNumber: '',
+      sourceUuid: '',
+    }))).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -310,5 +347,27 @@ describe('convertSignalReaction', () => {
 
   it('returns null for non-reaction envelopes', () => {
     expect(convertSignalReaction(makeEnvelope())).toBeNull();
+  });
+
+  it('falls back to sourceUuid for ACI-only reactors', () => {
+    const result = convertSignalReaction(makeEnvelope({
+      source: '',
+      sourceNumber: '',
+      sourceUuid: 'aci-uuid-1',
+      dataMessage: {
+        timestamp: 1700000000000,
+        message: null,
+        expiresInSeconds: 0,
+        viewOnce: false,
+        reaction: {
+          emoji: '👍',
+          targetAuthor: '+14155559999',
+          targetTimestamp: 1699999999999,
+          isRemove: false,
+        },
+      },
+    }));
+    expect(result?.senderId).toBe('aci-uuid-1');
+    expect(result?.conversationId).toBe('signal:aci-uuid-1');
   });
 });
