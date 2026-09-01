@@ -1,109 +1,56 @@
-import type { StoreFactOptions } from '../memory/types.js';
-import type { KgNode } from '../memory/types.js';
+// Contact dedup exclusions — ordered-pair normalization.
+//
+// An exclusion records a decision ("the CEO ruled these two contacts are not the
+// same person"), which lives in the relational ledger, not the knowledge graph.
+// It is persisted as one row per unordered pair in contact_dedup_exclusions,
+// under CHECK (contact_a_id < contact_b_id). See ADR-039 for why exclusions moved
+// off KG fact nodes (#1625).
+//
+// This module is the single normalization chokepoint: every read and write of an
+// exclusion goes through normalizeExclusionPair() so a pair passed in either order
+// or either casing always resolves to the same row.
 
-// Minimal structural return type for storeFact — matches StoreFactResult in entity-memory.ts
-// without creating a cross-module dependency. action values are the full union from that type.
-export interface StoreFactSummary {
-  stored: boolean;
-  action: 'created' | 'updated' | 'conflict' | 'auto_rejected' | 'auto_resolved' | 'entity_not_found' | 'rate_limited';
-  conflict?: string;
-}
-
-export interface WriteExclusionOptions {
-  /** The other contact's ID that this node is excluding. */
-  contactBId: string;
-  /** The KG node on which to record the exclusion fact (belongs to the other contact, A). */
-  kgNodeId: string;
-  storeFact: (options: StoreFactOptions) => Promise<StoreFactSummary>;
-  /** Source key for the storeFact call. Skills should pass ctx.memoryWriteSource.
-   *  Defaults to 'contacts-dedup' for backward compatibility with the sweep script. */
-  source?: string;
-}
-
-/**
- * Record a dedup_exclusion KG fact on kgNodeId naming contactBId.
- *
- * Uses permanent decay so the exclusion survives the normal decay schedule.
- * Format: label "dedup_exclusion: <contactBId>", properties.attribute = 'dedup_exclusion',
- * properties.value = contactBId — matching what hasExclusion() queries for.
- *
- * Throws if the fact was not stored (action: 'conflict' | 'auto_rejected' | ...).
- * Multiple exclusions per entity are supported via StoreFactOptions.multiValued —
- * different `value` properties do not trigger contradiction or dedup-merge (#1623).
- */
-export async function writeExclusion(opts: WriteExclusionOptions): Promise<void> {
-  const { contactBId: rawContactBId, kgNodeId, storeFact, source = 'contacts-dedup' } = opts;
-  // Normalize to lowercase so writes and reads are always comparable regardless of
-  // input casing (the UUID validator accepts uppercase; the DB always returns lowercase).
-  const contactBId = rawContactBId.toLowerCase();
-  const result = await storeFact({
-    entityNodeId: kgNodeId,
-    label: `dedup_exclusion: ${contactBId}`,
-    // multi_valued in properties so subsequent unrelated writes can detect this
-    // fact as multi-valued on the existing side (guard asymmetry fix, #1623).
-    properties: { attribute: 'dedup_exclusion', value: contactBId, multi_valued: true },
-    // Permanent decay — exclusion decisions must not quietly expire
-    decayClass: 'permanent',
-    confidence: 1.0,
-    source,
-    sensitivity: 'internal',
-    multiValued: true,
-  });
-  if (!result.stored) {
-    throw new Error(
-      `dedup_exclusion fact for ${contactBId} was not stored (action: ${result.action}${result.conflict ? `, reason: ${result.conflict}` : ''})`,
-    );
-  }
-}
-
-export interface HasExclusionOptions {
+/** A contact pair in canonical stored order: contactAId < contactBId, both lowercase. */
+export interface ExclusionPair {
   contactAId: string;
   contactBId: string;
-  kgNodeIdA: string | null;
-  kgNodeIdB: string | null;
-  /** getFacts errors propagate to the caller — callers must decide their own failure policy. */
-  getFacts: (kgNodeId: string) => Promise<KgNode[]>;
 }
 
+/** Thrown when a pair cannot be normalized into a storable exclusion row. */
+export class InvalidExclusionPairError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidExclusionPairError';
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * Check whether either contact has a dedup_exclusion fact naming the other.
- * Returns true if an exclusion exists in either direction (A→B or B→A).
- * Short-circuits immediately when neither contact has a KG node.
+ * Normalize a contact pair into the canonical order the table stores.
  *
- * Any error thrown by getFacts propagates to the caller unchanged — this function
- * has no internal retry or fallback. Callers that treat a getFacts error as "no
- * exclusion" would silently re-file tasks for previously-rejected pairs; callers
- * should treat the error as "unknown" and skip the pair rather than proceeding.
+ * Lowercases both IDs (callers accept uppercase UUIDs; Postgres always returns
+ * lowercase) and sorts them ascending so a pair is one row, not two.
+ *
+ * Throws InvalidExclusionPairError when either ID is not a UUID, or when both
+ * sides are the same contact — either would otherwise be rejected by the table's
+ * FK / CHECK constraints as an opaque database error at write time, and would
+ * silently match nothing at read time.
  */
-export async function hasExclusion(opts: HasExclusionOptions): Promise<boolean> {
-  const { contactAId: rawContactAId, contactBId: rawContactBId, kgNodeIdA, kgNodeIdB, getFacts } = opts;
-  const contactAId = rawContactAId.toLowerCase();
-  const contactBId = rawContactBId.toLowerCase();
-
-  // Short-circuit: no KG nodes means no facts can exist
-  if (kgNodeIdA === null && kgNodeIdB === null) return false;
-
-  // Check A's node for an exclusion naming B
-  if (kgNodeIdA !== null) {
-    const factsA = await getFacts(kgNodeIdA);
-    for (const fact of factsA) {
-      const props = fact.properties as Record<string, unknown>;
-      if (props.attribute === 'dedup_exclusion' && props.value === contactBId) {
-        return true;
-      }
-    }
+export function normalizeExclusionPair(aId: string, bId: string): ExclusionPair {
+  if (!UUID_RE.test(aId)) {
+    throw new InvalidExclusionPairError(`contact id is not a valid UUID: "${aId}"`);
+  }
+  if (!UUID_RE.test(bId)) {
+    throw new InvalidExclusionPairError(`contact id is not a valid UUID: "${bId}"`);
   }
 
-  // Check B's node for an exclusion naming A
-  if (kgNodeIdB !== null) {
-    const factsB = await getFacts(kgNodeIdB);
-    for (const fact of factsB) {
-      const props = fact.properties as Record<string, unknown>;
-      if (props.attribute === 'dedup_exclusion' && props.value === contactAId) {
-        return true;
-      }
-    }
+  const a = aId.toLowerCase();
+  const b = bId.toLowerCase();
+
+  if (a === b) {
+    throw new InvalidExclusionPairError(`a contact cannot be excluded against itself: ${a}`);
   }
 
-  return false;
+  return a < b ? { contactAId: a, contactBId: b } : { contactAId: b, contactBId: a };
 }

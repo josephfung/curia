@@ -2,6 +2,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import type { Contact } from '../../../src/contacts/types.js';
+import { ContactNotFoundError } from '../../../src/contacts/types.js';
+import { InvalidExclusionPairError } from '../../../src/contacts/dedup-exclusions.js';
+import { canonicalPairKey } from '../../../src/contacts/dedup-pair-key.js';
 import { DedupService } from '../../../src/contacts/dedup-service.js';
 import { KnowledgeGraphStore } from '../../../src/memory/knowledge-graph.js';
 import { EmbeddingService } from '../../../src/memory/embedding.js';
@@ -1319,6 +1322,137 @@ describe('ContactService', () => {
       expect(onContactElevated).not.toHaveBeenCalled();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Dedup exclusions (#1625, ADR-039)
+  // -------------------------------------------------------------------------
+
+  describe('dedup exclusions', () => {
+    it('records an exclusion and reports it in both argument orders', async () => {
+      const a = await service.createContact({ displayName: 'Seth Berman', source: 'test' });
+      const b = await service.createContact({ displayName: 'Seth Berman', source: 'test' });
+
+      const { created } = await service.addDedupExclusion(a.id, b.id, 'ceo');
+      expect(created).toBe(true);
+
+      expect(await service.hasDedupExclusion(a.id, b.id)).toBe(true);
+      expect(await service.hasDedupExclusion(b.id, a.id)).toBe(true);
+    });
+
+    it('works when BOTH contacts have kg_node_id = NULL (#1623 regression)', async () => {
+      // Two contacts sharing a display name: createContact drops the KG link on the
+      // second one because of idx_contacts_kg_node_unique. That pair could not hold a
+      // KG-fact exclusion at all — the whole reason exclusions moved to a table.
+      const a = await service.createContact({ displayName: 'Seth Berman', source: 'test' });
+      const b = await service.createContact({ displayName: 'Seth Berman', source: 'test' });
+      expect(b.kgNodeId).toBeNull();
+
+      // Force the null-node case on both sides.
+      await service.saveContact({ ...a, kgNodeId: null });
+
+      const { created } = await service.addDedupExclusion(a.id, b.id, 'ceo');
+      expect(created).toBe(true);
+      expect(await service.hasDedupExclusion(a.id, b.id)).toBe(true);
+    });
+
+    it('normalizes the stored pair into ascending order regardless of call order', async () => {
+      const a = await service.createContact({ displayName: 'Ann One', source: 'test' });
+      const b = await service.createContact({ displayName: 'Bea Two', source: 'test' });
+      const [lo, hi] = a.id < b.id ? [a.id, b.id] : [b.id, a.id];
+
+      const { pair } = await service.addDedupExclusion(hi, lo, 'ceo');
+      expect(pair).toEqual({ contactAId: lo, contactBId: hi });
+    });
+
+    it('is idempotent — re-excluding returns created: false and stores one row', async () => {
+      const a = await service.createContact({ displayName: 'Ann One', source: 'test' });
+      const b = await service.createContact({ displayName: 'Bea Two', source: 'test' });
+
+      expect((await service.addDedupExclusion(a.id, b.id, 'ceo')).created).toBe(true);
+      // Reversed order must hit the same row, not create a second one.
+      expect((await service.addDedupExclusion(b.id, a.id, 'ceo')).created).toBe(false);
+
+      const keys = await service.listDedupExclusionPairKeys();
+      expect(keys.size).toBe(1);
+    });
+
+    it('rejects excluding a contact against itself', async () => {
+      const a = await service.createContact({ displayName: 'Ann One', source: 'test' });
+      await expect(service.addDedupExclusion(a.id, a.id, 'ceo')).rejects.toThrow(InvalidExclusionPairError);
+    });
+
+    it('rejects an unknown contact rather than writing a dangling row', async () => {
+      const a = await service.createContact({ displayName: 'Ann One', source: 'test' });
+      const ghost = '00000000-0000-4000-8000-000000000000';
+      await expect(service.addDedupExclusion(a.id, ghost, 'ceo')).rejects.toThrow(ContactNotFoundError);
+      expect(await service.hasDedupExclusion(a.id, ghost)).toBe(false);
+    });
+
+    it('exposes exclusions as canonical pair keys', async () => {
+      const a = await service.createContact({ displayName: 'Ann One', source: 'test' });
+      const b = await service.createContact({ displayName: 'Bea Two', source: 'test' });
+      await service.addDedupExclusion(a.id, b.id, 'ceo');
+
+      const keys = await service.listDedupExclusionPairKeys();
+      expect(keys.has(canonicalPairKey(a.id, b.id))).toBe(true);
+      expect(keys.has(canonicalPairKey(b.id, a.id))).toBe(true); // same key either way
+    });
+
+    it('drops exclusion rows when a contact is deleted (ON DELETE CASCADE)', async () => {
+      const a = await service.createContact({ displayName: 'Ann One', source: 'test' });
+      const b = await service.createContact({ displayName: 'Bea Two', source: 'test' });
+      await service.addDedupExclusion(a.id, b.id, 'ceo');
+
+      await service.deleteContact(b.id);
+
+      expect((await service.listDedupExclusionPairKeys()).size).toBe(0);
+    });
+
+    it('re-points the loser\'s exclusions onto the survivor on merge', async () => {
+      const primary = await service.createContact({ displayName: 'Alice Smith', source: 'test' });
+      const secondary = await service.createContact({ displayName: 'Alice Smith', source: 'test' });
+      const other = await service.createContact({ displayName: 'Carol Jones', source: 'test' });
+
+      // The secondary was ruled "not the same person" as `other`.
+      await service.addDedupExclusion(secondary.id, other.id, 'ceo');
+
+      await service.mergeContacts(primary.id, secondary.id, false);
+
+      // The ruling survives, now anchored on the survivor.
+      expect(await service.hasDedupExclusion(primary.id, other.id)).toBe(true);
+      expect((await service.listDedupExclusionPairKeys()).size).toBe(1);
+    });
+
+    it('drops the exclusion between the two contacts being merged', async () => {
+      const primary = await service.createContact({ displayName: 'Alice Smith', source: 'test' });
+      const secondary = await service.createContact({ displayName: 'Alice Smith', source: 'test' });
+
+      // An earlier ruling said they were different people; the merge overrides it.
+      await service.addDedupExclusion(primary.id, secondary.id, 'ceo');
+
+      await service.mergeContacts(primary.id, secondary.id, false);
+
+      expect((await service.listDedupExclusionPairKeys()).size).toBe(0);
+    });
+
+    it('collapses duplicate exclusions when both sides excluded the same contact', async () => {
+      const primary = await service.createContact({ displayName: 'Alice Smith', source: 'test' });
+      const secondary = await service.createContact({ displayName: 'Alice Smith', source: 'test' });
+      const other = await service.createContact({ displayName: 'Carol Jones', source: 'test' });
+
+      await service.addDedupExclusion(primary.id, other.id, 'ceo');
+      await service.addDedupExclusion(secondary.id, other.id, 'ceo');
+      expect((await service.listDedupExclusionPairKeys()).size).toBe(2);
+
+      await service.mergeContacts(primary.id, secondary.id, false);
+
+      // One surviving row, not a PK violation and not a stale duplicate.
+      const keys = await service.listDedupExclusionPairKeys();
+      expect(keys.size).toBe(1);
+      expect(keys.has(canonicalPairKey(primary.id, other.id))).toBe(true);
+    });
+  });
+
 });
 
 describe('EntityMemory.mergeEntities', () => {

@@ -39,6 +39,8 @@ import type {
 } from './types.js';
 import type { DedupService } from './dedup-service.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
+import { normalizeExclusionPair, type ExclusionPair } from './dedup-exclusions.js';
+import { canonicalPairKey } from './dedup-pair-key.js';
 
 /** Thrown when a caller provides invalid data for a contact field (e.g., primaryEmail not in CCI). */
 export class ContactValidationError extends Error {
@@ -197,6 +199,29 @@ interface ContactServiceBackend {
    * If primary already has an override for the same permission, secondary's is discarded.
    */
   reattachAuthOverrides(fromContactId: string, toContactId: string): Promise<void>;
+
+  // -- Dedup exclusions (#1625, ADR-039) --
+
+  /**
+   * Record a dedup exclusion for an already-normalized ordered pair
+   * (contactAId < contactBId, both lowercase — see normalizeExclusionPair).
+   * Idempotent: returns false when the pair was already excluded.
+   */
+  addDedupExclusion(pair: ExclusionPair, decidedBy: string): Promise<boolean>;
+
+  /** True when the normalized pair has an exclusion row. */
+  hasDedupExclusion(pair: ExclusionPair): Promise<boolean>;
+
+  /** Every exclusion row, in stored (normalized) order. */
+  listDedupExclusions(): Promise<ExclusionPair[]>;
+
+  /**
+   * Re-point exclusion rows from fromContactId → toContactId during a merge,
+   * renormalizing each pair into stored order. Rows that would become a self-pair
+   * (the two merged contacts excluded against each other) or that would duplicate
+   * an exclusion the survivor already holds are dropped.
+   */
+  reattachDedupExclusions(fromContactId: string, toContactId: string): Promise<void>;
 
   /**
    * Delete a contact by ID. Call only after FK-referenced rows have been re-pointed.
@@ -1428,6 +1453,10 @@ export class ContactService {
     try {
       await this.backend.reattachIdentities(secondaryId, primaryId);
       await this.backend.reattachAuthOverrides(secondaryId, primaryId);
+      // Exclusions the secondary held move to the survivor, renormalized into stored
+      // pair order. The exclusion between the merging pair itself (if any) is dropped:
+      // merging is the decision that they ARE the same person (#1625, ADR-039).
+      await this.backend.reattachDedupExclusions(secondaryId, primaryId);
 
       // Write the golden record fields onto the primary contact. The surviving tier
       // is computed by computeGoldenRecord (blocked-on-either-side wins; else higher
@@ -1478,6 +1507,70 @@ export class ContactService {
       dryRun: false,
       mergedAt,
     };
+  }
+
+  // -- Dedup exclusions (#1625, ADR-039) --
+
+  /**
+   * Record that two contacts are NOT the same person, so dedup sweeps stop
+   * proposing the pair. Order-independent and idempotent: re-excluding an
+   * already-excluded pair returns `created: false` rather than failing.
+   *
+   * Unlike the KG-fact implementation this replaces, this works for contacts with
+   * `kg_node_id = NULL` — which is exactly the same-display-name population that
+   * generates the most duplicate proposals (#1623).
+   *
+   * @param decidedBy Provenance for the decision — an agent memory-write source key,
+   *                  or an operator/CEO identifier for manual excludes.
+   * @throws InvalidExclusionPairError when either ID is not a UUID or both are the same contact.
+   * @throws ContactNotFoundError when either contact does not exist.
+   */
+  async addDedupExclusion(
+    contactAId: string,
+    contactBId: string,
+    decidedBy: string,
+  ): Promise<{ pair: ExclusionPair; created: boolean }> {
+    const pair = normalizeExclusionPair(contactAId, contactBId);
+
+    // Check existence up front so callers get ContactNotFoundError rather than an
+    // opaque FK violation from Postgres.
+    const [a, b] = await Promise.all([
+      this.backend.getContact(pair.contactAId),
+      this.backend.getContact(pair.contactBId),
+    ]);
+    if (!a) throw new ContactNotFoundError(pair.contactAId);
+    if (!b) throw new ContactNotFoundError(pair.contactBId);
+
+    const created = await this.backend.addDedupExclusion(pair, decidedBy);
+    this.logger?.info(
+      { contactAId: pair.contactAId, contactBId: pair.contactBId, decidedBy, created },
+      created ? 'contacts: dedup exclusion recorded' : 'contacts: dedup exclusion already present',
+    );
+    return { pair, created };
+  }
+
+  /**
+   * True when the pair has been ruled "not the same person". Order-independent.
+   *
+   * Errors propagate — a caller that treated a DB failure as "not excluded" would
+   * re-file review tasks for pairs the CEO already ruled on.
+   */
+  async hasDedupExclusion(contactAId: string, contactBId: string): Promise<boolean> {
+    return this.backend.hasDedupExclusion(normalizeExclusionPair(contactAId, contactBId));
+  }
+
+  /**
+   * Every exclusion as a canonical pair key (`canonicalPairKey` format), for sweeps
+   * that check many pairs in one run. One query instead of one lookup per pair.
+   *
+   * Deliberately unpaginated: the table holds one row per pair a human has ruled on,
+   * so it is bounded by review throughput, not by contact count. If that ever stops
+   * being true, the fix is a per-pair `hasDedupExclusion` in the sweep loop, not a
+   * silently truncated set — a partial set would re-file pairs already ruled on.
+   */
+  async listDedupExclusionPairKeys(): Promise<Set<string>> {
+    const rows = await this.backend.listDedupExclusions();
+    return new Set(rows.map(pair => canonicalPairKey(pair.contactAId, pair.contactBId)));
   }
 
   /**
@@ -2305,6 +2398,74 @@ class PostgresContactBackend implements ContactServiceBackend {
     );
   }
 
+  async addDedupExclusion(pair: ExclusionPair, decidedBy: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `INSERT INTO contact_dedup_exclusions (contact_a_id, contact_b_id, decided_by)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (contact_a_id, contact_b_id) DO NOTHING
+       RETURNING contact_a_id`,
+      [pair.contactAId, pair.contactBId, decidedBy],
+    );
+    // rowCount 0 means ON CONFLICT swallowed the insert — the pair was already
+    // excluded. That is a successful no-op, not a failure: re-excluding a pair the
+    // CEO already ruled on must stay idempotent.
+    return result.rows.length > 0;
+  }
+
+  async hasDedupExclusion(pair: ExclusionPair): Promise<boolean> {
+    const result = await this.pool.query(
+      `SELECT 1 FROM contact_dedup_exclusions
+       WHERE contact_a_id = $1 AND contact_b_id = $2`,
+      [pair.contactAId, pair.contactBId],
+    );
+    return result.rows.length > 0;
+  }
+
+  async listDedupExclusions(): Promise<ExclusionPair[]> {
+    const result = await this.pool.query(
+      `SELECT contact_a_id, contact_b_id FROM contact_dedup_exclusions`,
+    );
+    return result.rows.map((row: { contact_a_id: string; contact_b_id: string }) => ({
+      contactAId: row.contact_a_id,
+      contactBId: row.contact_b_id,
+    }));
+  }
+
+  async reattachDedupExclusions(fromContactId: string, toContactId: string): Promise<void> {
+    // Copy the loser's exclusions onto the survivor, renormalizing each pair with
+    // LEAST/GREATEST so the ordered-pair CHECK still holds after the swap.
+    //
+    // WHERE other <> $1 drops the exclusion between the two contacts being merged:
+    // merging them is a decision that they ARE the same person, which supersedes the
+    // earlier "not the same person" ruling. Keeping it would produce a self-pair.
+    //
+    // ON CONFLICT DO NOTHING drops rows the survivor already holds for the same
+    // counterparty; the survivor's own decided_at / decided_by provenance wins.
+    await this.pool.query(
+      `INSERT INTO contact_dedup_exclusions (contact_a_id, contact_b_id, decided_at, decided_by)
+       SELECT LEAST($1::uuid, other), GREATEST($1::uuid, other), decided_at, decided_by
+       FROM (
+         SELECT CASE WHEN contact_a_id = $2::uuid THEN contact_b_id ELSE contact_a_id END AS other,
+                decided_at,
+                decided_by
+         FROM contact_dedup_exclusions
+         WHERE contact_a_id = $2::uuid OR contact_b_id = $2::uuid
+       ) AS loser_pairs
+       WHERE other <> $1::uuid
+       ON CONFLICT (contact_a_id, contact_b_id) DO NOTHING`,
+      [toContactId, fromContactId],
+    );
+
+    // Delete the loser's rows explicitly rather than relying on the FK cascade that
+    // fires when the secondary contact row is deleted — reattach must leave a
+    // consistent table even when called outside the merge write sequence.
+    await this.pool.query(
+      `DELETE FROM contact_dedup_exclusions
+       WHERE contact_a_id = $1::uuid OR contact_b_id = $1::uuid`,
+      [fromContactId],
+    );
+  }
+
   async deleteContact(id: string): Promise<void> {
     this.logger.debug({ contactId: id }, 'contacts: deleting contact');
     await this.pool.query(`DELETE FROM contacts WHERE id = $1`, [id]);
@@ -2441,6 +2602,9 @@ class InMemoryContactBackend implements ContactServiceBackend {
   private identities = new Map<string, ChannelIdentity>();
   private overrides = new Map<string, AuthOverride>();
   private calendars = new Map<string, ContactCalendar>();
+  /** Keyed "<contactAId>:<contactBId>" in normalized order — the in-memory analogue
+   *  of the contact_dedup_exclusions primary key + ordered-pair CHECK. */
+  private dedupExclusions = new Map<string, { pair: ExclusionPair; decidedAt: Date; decidedBy: string }>();
 
   async createContact(contact: Contact): Promise<void> {
     // Enforce the partial unique index idx_contacts_kg_node_unique to match Postgres.
@@ -2823,6 +2987,44 @@ class InMemoryContactBackend implements ContactServiceBackend {
     }
   }
 
+  private static exclusionKey(pair: ExclusionPair): string {
+    return `${pair.contactAId}:${pair.contactBId}`;
+  }
+
+  async addDedupExclusion(pair: ExclusionPair, decidedBy: string): Promise<boolean> {
+    const key = InMemoryContactBackend.exclusionKey(pair);
+    if (this.dedupExclusions.has(key)) return false;
+    this.dedupExclusions.set(key, { pair, decidedAt: new Date(), decidedBy });
+    return true;
+  }
+
+  async hasDedupExclusion(pair: ExclusionPair): Promise<boolean> {
+    return this.dedupExclusions.has(InMemoryContactBackend.exclusionKey(pair));
+  }
+
+  async listDedupExclusions(): Promise<ExclusionPair[]> {
+    return [...this.dedupExclusions.values()].map(row => row.pair);
+  }
+
+  async reattachDedupExclusions(fromContactId: string, toContactId: string): Promise<void> {
+    for (const [key, row] of this.dedupExclusions) {
+      const { contactAId, contactBId } = row.pair;
+      if (contactAId !== fromContactId && contactBId !== fromContactId) continue;
+
+      this.dedupExclusions.delete(key);
+
+      const other = contactAId === fromContactId ? contactBId : contactAId;
+      // The exclusion between the two merged contacts is superseded by the merge.
+      if (other === toContactId) continue;
+
+      const renormalized = normalizeExclusionPair(toContactId, other);
+      const newKey = InMemoryContactBackend.exclusionKey(renormalized);
+      // The survivor's own row wins when both sides excluded the same counterparty.
+      if (this.dedupExclusions.has(newKey)) continue;
+      this.dedupExclusions.set(newKey, { ...row, pair: renormalized });
+    }
+  }
+
   async deleteContact(id: string): Promise<void> {
     this.contacts.delete(id);
     // Cascade-delete related rows, matching Postgres ON DELETE CASCADE behavior.
@@ -2836,6 +3038,9 @@ class InMemoryContactBackend implements ContactServiceBackend {
     }
     for (const [rk, rec] of this.recommendations) {
       if (rec.contactId === id) this.recommendations.delete(rk);
+    }
+    for (const [ek, row] of this.dedupExclusions) {
+      if (row.pair.contactAId === id || row.pair.contactBId === id) this.dedupExclusions.delete(ek);
     }
   }
 

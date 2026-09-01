@@ -105,8 +105,9 @@ export interface StoreFactOptions {
    * When true, this fact is multi-valued: multiple facts with the same
    * `properties.attribute` but different `properties.value` may coexist on one
    * entity. Contradiction detection and embedding dedup-merge skip when values
-   * differ. Callers that write multi-valued facts (e.g. `writeExclusion`) must
-   * set this flag — the validator stays domain-agnostic (#1623).
+   * differ. Callers that write a genuinely multi-valued attribute (e.g. a person's
+   * several email addresses) must set this flag — the validator stays
+   * domain-agnostic (#1623).
    */
   multiValued?: boolean;
 }
