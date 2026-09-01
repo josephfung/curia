@@ -45,31 +45,47 @@ CREATE INDEX idx_contact_dedup_exclusions_b
 -- contact, unparseable value) is dropped rather than backfilled. Old fact nodes
 -- are intentionally left in place — this is a single cutover, not a dual write,
 -- and keeping them preserves an audit trail of the pre-migration decisions.
+WITH exclusion_facts AS MATERIALIZED (
+  -- Resolve properties.value to a uuid ONLY for rows that pass the regex guard.
+  -- This must be its own MATERIALIZED CTE: in a single flat query the planner is
+  -- free to evaluate a cast in a join condition before the WHERE filter that guards
+  -- it, so one malformed legacy value would abort the migration — and migrations run
+  -- at process boot, so that takes the whole service down (cf. migration 070).
+  -- Within a single scan, quals are applied before the target list, and MATERIALIZED
+  -- stops the CTE being inlined back into the outer joins.
+  SELECT
+    fact.id                             AS fact_id,
+    fact.created_at                     AS created_at,
+    (fact.properties ->> 'value')::uuid AS other_contact_id
+  FROM kg_nodes AS fact
+  WHERE fact.type = 'fact'
+    AND fact.properties ->> 'attribute' = 'dedup_exclusion'
+    AND fact.properties ->> 'value' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+)
 INSERT INTO contact_dedup_exclusions (contact_a_id, contact_b_id, decided_at, decided_by)
 SELECT
   LEAST(holder.id, other.id)    AS contact_a_id,
   GREATEST(holder.id, other.id) AS contact_b_id,
-  MIN(fact.created_at)          AS decided_at,
+  MIN(ef.created_at)            AS decided_at,
   'migration-084-backfill'      AS decided_by
-FROM kg_nodes AS fact
+FROM exclusion_facts AS ef
 JOIN kg_edges AS edge
-  ON edge.source_node_id = fact.id OR edge.target_node_id = fact.id
+  ON edge.source_node_id = ef.fact_id OR edge.target_node_id = ef.fact_id
 JOIN kg_nodes AS entity
-  ON entity.id = CASE WHEN edge.source_node_id = fact.id
+  ON entity.id = CASE WHEN edge.source_node_id = ef.fact_id
                       THEN edge.target_node_id
                       ELSE edge.source_node_id END
+  -- The node on the other end of the edge must be the entity, not another fact.
+  AND entity.type <> 'fact'
 JOIN contacts AS holder
   ON holder.kg_node_id = entity.id
 JOIN contacts AS other
-  ON other.id = (fact.properties ->> 'value')::uuid
-WHERE fact.type = 'fact'
-  AND fact.properties ->> 'attribute' = 'dedup_exclusion'
-  -- Guard the ::uuid cast — a malformed value would abort the whole migration.
-  AND fact.properties ->> 'value' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-  AND entity.type <> 'fact'
-  -- A self-referential exclusion (contact excluded against itself) is corrupt data
-  -- and would violate the ordered-pair CHECK.
-  AND holder.id <> other.id
+  ON other.id = ef.other_contact_id
+-- A self-referential exclusion (contact excluded against itself) is corrupt data
+-- and would violate the ordered-pair CHECK.
+WHERE holder.id <> other.id
+-- Both mirrored facts of one pair (the old writeExclusion wrote one per side)
+-- collapse into a single row; the earliest fact dates the decision.
 GROUP BY LEAST(holder.id, other.id), GREATEST(holder.id, other.id)
 ON CONFLICT (contact_a_id, contact_b_id) DO NOTHING;
 -- <<< END BACKFILL
