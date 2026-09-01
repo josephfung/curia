@@ -190,8 +190,10 @@ describe('ContactDedupExcludeHandler', () => {
     // Migration 084 not applied (the app image can lead the DB on a GHCR deploy). A
     // generic "failed to record" reads like a transient blip and the prompt says retry,
     // which would loop forever.
+    // Detected by SQLSTATE 42P01, not by the message text — pg messages are localised
+    // and version-dependent.
     const addDedupExclusion = vi.fn().mockRejectedValue(
-      new Error('relation "contact_dedup_exclusions" does not exist'),
+      Object.assign(new Error('relation "contact_dedup_exclusions" does not exist'), { code: '42P01' }),
     );
     const result = await handler.execute(makeCtx(
       { contact_a_id: UUID_A, contact_b_id: UUID_B },

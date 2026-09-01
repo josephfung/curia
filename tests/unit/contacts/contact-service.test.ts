@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import type { Contact } from '../../../src/contacts/types.js';
 import { ContactNotFoundError } from '../../../src/contacts/types.js';
+import { ContactValidationError } from '../../../src/contacts/contact-service.js';
 import { InvalidExclusionPairError } from '../../../src/contacts/dedup-exclusions.js';
 import { canonicalPairKey } from '../../../src/contacts/dedup-pair-key.js';
 import { DedupService } from '../../../src/contacts/dedup-service.js';
@@ -1379,6 +1380,18 @@ describe('ContactService', () => {
     it('rejects excluding a contact against itself', async () => {
       const a = await service.createContact({ displayName: 'Ann One', source: 'test' });
       await expect(service.addDedupExclusion(a.id, a.id, 'ceo')).rejects.toThrow(InvalidExclusionPairError);
+    });
+
+    it('rejects blank provenance, including whitespace-only', async () => {
+      // decided_by is the row's only audit trail and the row is never revisited, so a
+      // blank source must fail at the service boundary with a named error rather than as
+      // a raw CHECK violation from Postgres.
+      const a = await service.createContact({ displayName: 'Prov A', source: 'test' });
+      const b = await service.createContact({ displayName: 'Prov B', source: 'test' });
+
+      await expect(service.addDedupExclusion(a.id, b.id, '')).rejects.toThrow(ContactValidationError);
+      await expect(service.addDedupExclusion(a.id, b.id, '   ')).rejects.toThrow(ContactValidationError);
+      expect((await service.listDedupExclusionPairKeys()).size).toBe(0);
     });
 
     it('rejects an unknown contact rather than writing a dangling row', async () => {

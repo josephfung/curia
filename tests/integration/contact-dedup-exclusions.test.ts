@@ -162,6 +162,30 @@ describeIf('contact_dedup_exclusions (migration 084)', () => {
     ).rejects.toThrow(/decided_by/);
   });
 
+  it('rejects whitespace-only provenance', async () => {
+    // A bare <> '' check would let '   ' through — still unusable as an audit trail.
+    const a = await makeContact('Blank C');
+    const b = await makeContact('Blank D');
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    await expect(
+      pool.query(
+        `INSERT INTO contact_dedup_exclusions (contact_a_id, contact_b_id, decided_by) VALUES ($1, $2, '   ')`,
+        [lo, hi],
+      ),
+    ).rejects.toThrow(/decided_by/);
+  });
+
+  it('stores provenance trimmed so padded and bare sources are one value', async () => {
+    const a = await makeContact('Trim A');
+    const b = await makeContact('Trim B');
+
+    await contactService.addDedupExclusion(a, b, '  ops-1625  ');
+
+    const rows = await exclusionRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.decidedBy).toBe('ops-1625');
+  });
+
   it('rejects an exclusion naming a contact that does not exist', async () => {
     const a = await makeContact('Real Contact');
     const ghost = '00000000-0000-4000-8000-000000000000';
