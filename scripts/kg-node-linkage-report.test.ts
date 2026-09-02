@@ -61,6 +61,14 @@ describe('runLinkageReport', () => {
     expect(report.byKind).toEqual([]);
   });
 
+  it('throws when the grouping column is not a usable kind', async () => {
+    // String(undefined) would print "undefined" in the by-kind table, which reads
+    // like a real contact kind rather than a broken query.
+    const pool = makePool([{ total: '10', nodeless: '3', org_arm: '0', shadowed: '0' }]);
+
+    await expect(runLinkageReport(pool as never)).rejects.toThrow(/"kind"/);
+  });
+
   it('throws rather than reporting zero when an aggregate column is missing', async () => {
     // A count(*) column cannot legitimately be absent. Coercing it to 0 would print
     // "arm B (mint a node) 0" — indistinguishable from a clean database, and enough

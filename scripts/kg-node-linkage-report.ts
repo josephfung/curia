@@ -62,15 +62,20 @@ export interface LinkageReport {
 // only job is to be an accurate number.
 //
 // The arm-A predicate mirrors ContactService.resolveOrCreateOrgNode's resolution
-// order rather than guessing at it, because arm A is defined as "the node the
-// original collision denied this contact". That resolver tries, in order:
+// order rather than guessing at it, since arm A asks the same question that resolver
+// does: is there already an organization node for this contact? It tries, in order:
 //   1. findEntities(domain)   → label or alias matches the email domain
 //   2. findEntities(name)     → label or alias matches the display name
 //   3. createEntity(...)      → mints a node carrying properties.domain
 // Matching only properties->>'domain' would miss every org node created by any other
 // path — notably EntityMemory.resolveOrCreate, used by memory-store and extract-facts,
-// which creates nodes with empty properties. Each such miss silently moves a contact
-// from arm A to arm B and inflates the migration's insert count.
+// which creates nodes with empty properties.
+//
+// Every miss here is expensive in one direction only: it moves a contact from arm A
+// to arm B, and arm B mints. So a false negative makes migration 085 create a second
+// node for an organization that already has one — the label-keyed fragmentation
+// ADR-040 is trying to avoid. That asymmetry is why the predicate is deliberately
+// generous rather than exactly reproducing the historical collision path.
 const REPORT_SQL = `
   SELECT
     c.kind,
@@ -79,18 +84,29 @@ const REPORT_SQL = `
     count(*) FILTER (
       WHERE c.kg_node_id IS NULL
         AND c.kind = 'organization'
-        AND c.primary_email IS NOT NULL
         AND EXISTS (
           SELECT 1
           FROM kg_nodes n
           WHERE n.type = 'organization'
             AND n.archived_at IS NULL
             AND (
-              lower(n.label) = lower(split_part(c.primary_email, '@', 2))
-              OR n.aliases @> ARRAY[lower(split_part(c.primary_email, '@', 2))]
-              OR lower(n.label) = lower(c.display_name)
+              -- Name-based resolution needs no email. An org contact can be created
+              -- with kind='organization' and no address at all (POST /api/kg/contacts
+              -- takes kind directly), and migration 056 set the kind from the linked
+              -- node's type. Gating the whole predicate on primary_email would push
+              -- those into arm B and have 085 mint a second node for an organization
+              -- that already has one.
+              lower(n.label) = lower(c.display_name)
               OR n.aliases @> ARRAY[lower(c.display_name)]
-              OR lower(n.properties->>'domain') = lower(split_part(c.primary_email, '@', 2))
+              -- Domain-based resolution obviously does need one.
+              OR (
+                c.primary_email IS NOT NULL
+                AND (
+                  lower(n.label) = lower(split_part(c.primary_email, '@', 2))
+                  OR n.aliases @> ARRAY[lower(split_part(c.primary_email, '@', 2))]
+                  OR lower(n.properties->>'domain') = lower(split_part(c.primary_email, '@', 2))
+                )
+              )
             )
         )
     ) AS org_arm,
@@ -131,11 +147,21 @@ export async function runLinkageReport(pool: PoolLike): Promise<LinkageReport> {
   const result = await pool.query(REPORT_SQL);
   const rows = result.rows as Array<Record<string, unknown>>;
 
-  const byKind: KindBreakdown[] = rows.map(row => ({
-    kind: String(row['kind']),
-    total: requireCount(row, 'total'),
-    nodeless: requireCount(row, 'nodeless'),
-  }));
+  const byKind: KindBreakdown[] = rows.map(row => {
+    // Same reasoning as requireCount: a missing `kind` would render as the literal
+    // string "undefined" in the report, which reads like a real contact kind.
+    const kind = row['kind'];
+    if (typeof kind !== 'string' || kind === '') {
+      throw new Error(
+        `kg-node-linkage-report: grouping column "kind" was ${JSON.stringify(kind)}, not a non-empty string`,
+      );
+    }
+    return {
+      kind,
+      total: requireCount(row, 'total'),
+      nodeless: requireCount(row, 'nodeless'),
+    };
+  });
 
   const totalContacts = byKind.reduce((sum, k) => sum + k.total, 0);
   const totalNodeless = byKind.reduce((sum, k) => sum + k.nodeless, 0);
@@ -205,7 +231,16 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       logger.error({ err }, 'kg-node-linkage-report: fatal error');
       process.exitCode = 1;
     } finally {
-      await pool.end();
+      // pool.end() can reject (e.g. a client erroring during shutdown). Left
+      // unguarded it would reject main() itself — an unhandled rejection at the
+      // top-level await, after the report has already been printed. Surface it and
+      // fail the exit code instead of losing a successful run to a teardown error.
+      try {
+        await pool.end();
+      } catch (endErr) {
+        logger.error({ err: endErr }, 'kg-node-linkage-report: failed to close the pool');
+        process.exitCode = 1;
+      }
     }
     // Deliberately no process.exit(): stdout is asynchronous when piped (which the
     // documented `docker exec ... | tee` invocation is), and exiting here would
