@@ -20,12 +20,14 @@
 // signature from #1623 — the collision that produced the NULL in the first place.
 //
 // Run locally:  pnpm run report:kg-linkage
-// Run on prod:  export the deploy .env's DATABASE_URL, then forward it into the
-//               container, which runs .ts through tsx (not node's type stripping —
-//               see the Dockerfile's note on dynamic .ts handler imports):
+// Run on prod:  DATABASE_URL is already present in the app container's environment, so
+//               nothing needs forwarding. The container runs .ts through tsx, not node's
+//               type stripping (see the Dockerfile's note on dynamic .ts handler imports):
 //
-//                 ssh <host> 'docker exec -e DATABASE_URL="$DATABASE_URL" \
-//                   curia-curia-1 ./node_modules/.bin/tsx scripts/kg-node-linkage-report.ts'
+//                 ssh <host> 'docker exec curia-curia-1 \
+//                   ./node_modules/.bin/tsx scripts/kg-node-linkage-report.ts'
+//
+//               Verified against production 2026-09-02.
 //
 // Safety: one statement, and it is a SELECT. This script writes nothing.
 
