@@ -1610,8 +1610,12 @@ export class ExecutionLayer {
           // Nodeless contacts get their own line rather than joining `unresolved`.
           // They are a different operational signal: the contact is real and was
           // addressed by a skill, but it holds no KG node, so it ran with no context
-          // at all and no retry will change that (#1694 / ADR-040). This log is the
-          // only passive record of that happening in production.
+          // at all and no retry will change that (#1694 / ADR-040).
+          //
+          // No tool.json currently declares entity_enrichment, so this branch is
+          // dormant. It is kept because the assembler's own warn covers the live
+          // paths, and any future manifest that opts into pre-enrichment should
+          // report the gap with the skill name attached rather than silently.
           if (enrichmentResult.nodeless.length > 0) {
             skillLogger.warn(
               { toolName, contactIds: enrichmentResult.nodeless.map(n => n.contactId) },

@@ -8,10 +8,10 @@
 // count, and it exists to size migration 085 before that migration is written:
 // ADR-040's backfill has two arms, and the work in each is very different.
 //
-//   Arm A (org)    — a nodeless contact with kind='organization' whose primary_email
-//                    domain matches an existing organization node's properties->>'domain'.
-//                    These get re-linked to that node, which is only legal once the
-//                    relaxed idx_contacts_kg_node_unique lands. No new nodes.
+//   Arm A (org)    — a nodeless contact with kind='organization' for which an existing
+//                    organization node is already findable. These get re-linked to that
+//                    node, which is only legal once the relaxed idx_contacts_kg_node_unique
+//                    lands. No new nodes.
 //   Arm B (person) — everything else. Each gets a freshly minted anchored node, so
 //                    this count is exactly how many rows migration 085 inserts.
 //
@@ -20,11 +20,14 @@
 // signature from #1623 — the collision that produced the NULL in the first place.
 //
 // Run locally:  pnpm run report:kg-linkage
-// Run on prod:  docker exec curia-curia-1 node --experimental-strip-types \
-//                 scripts/kg-node-linkage-report.ts
-//               (forward DATABASE_URL from the deploy .env)
+// Run on prod:  export the deploy .env's DATABASE_URL, then forward it into the
+//               container, which runs .ts through tsx (not node's type stripping —
+//               see the Dockerfile's note on dynamic .ts handler imports):
 //
-// Safety: every statement is a SELECT. This script writes nothing.
+//                 ssh <host> 'docker exec -e DATABASE_URL="$DATABASE_URL" \
+//                   curia-curia-1 ./node_modules/.bin/tsx scripts/kg-node-linkage-report.ts'
+//
+// Safety: one statement, and it is a SELECT. This script writes nothing.
 
 import pg from 'pg';
 import pino from 'pino';
@@ -45,7 +48,7 @@ export interface LinkageReport {
   totalContacts: number;
   totalNodeless: number;
   byKind: KindBreakdown[];
-  /** Arm A: nodeless org contacts re-linkable to an existing org node by email domain. */
+  /** Arm A: nodeless org contacts re-linkable to an organization node that already exists. */
   orgArmEligible: number;
   /** Arm B: nodeless contacts needing a freshly minted node — the insert count for 085. */
   personArmMints: number;
@@ -53,72 +56,103 @@ export interface LinkageReport {
   sameNameShadowed: number;
 }
 
+// Everything is counted in ONE statement so every number comes from a single MVCC
+// snapshot. Split across separate queries, contact ingestion running concurrently
+// could produce a report whose arms do not sum to its own total — and this report's
+// only job is to be an accurate number.
+//
+// The arm-A predicate mirrors ContactService.resolveOrCreateOrgNode's resolution
+// order rather than guessing at it, because arm A is defined as "the node the
+// original collision denied this contact". That resolver tries, in order:
+//   1. findEntities(domain)   → label or alias matches the email domain
+//   2. findEntities(name)     → label or alias matches the display name
+//   3. createEntity(...)      → mints a node carrying properties.domain
+// Matching only properties->>'domain' would miss every org node created by any other
+// path — notably EntityMemory.resolveOrCreate, used by memory-store and extract-facts,
+// which creates nodes with empty properties. Each such miss silently moves a contact
+// from arm A to arm B and inflates the migration's insert count.
+const REPORT_SQL = `
+  SELECT
+    c.kind,
+    count(*)                                     AS total,
+    count(*) FILTER (WHERE c.kg_node_id IS NULL) AS nodeless,
+    count(*) FILTER (
+      WHERE c.kg_node_id IS NULL
+        AND c.kind = 'organization'
+        AND c.primary_email IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM kg_nodes n
+          WHERE n.type = 'organization'
+            AND n.archived_at IS NULL
+            AND (
+              lower(n.label) = lower(split_part(c.primary_email, '@', 2))
+              OR n.aliases @> ARRAY[lower(split_part(c.primary_email, '@', 2))]
+              OR lower(n.label) = lower(c.display_name)
+              OR n.aliases @> ARRAY[lower(c.display_name)]
+              OR lower(n.properties->>'domain') = lower(split_part(c.primary_email, '@', 2))
+            )
+        )
+    ) AS org_arm,
+    count(*) FILTER (
+      WHERE c.kg_node_id IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM contacts o
+          WHERE o.id <> c.id
+            AND lower(o.display_name) = lower(c.display_name)
+            AND o.kg_node_id IS NOT NULL
+        )
+    ) AS shadowed
+  FROM contacts c
+  GROUP BY c.kind
+  ORDER BY c.kind
+`;
+
 // Postgres count(*) comes back as a string (int8 exceeds JS safe-integer range, so
-// node-postgres declines to narrow it). Parse explicitly; a missing or unparseable
-// value becomes 0 rather than NaN, which would silently poison every derived total.
-function toCount(value: unknown): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
+// node-postgres declines to narrow it). Throw rather than defaulting: an aggregate
+// column that is absent or unparseable means the query and this code have drifted
+// apart, and coercing that to 0 would report "no work to do" — indistinguishable
+// from a genuinely clean database, and precisely the silent failure that would size
+// migration 085 at zero and leave the whole nodeless population context-free.
+function requireCount(row: Record<string, unknown>, column: string): number {
+  const raw = row[column];
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    throw new Error(
+      `kg-node-linkage-report: aggregate column "${column}" was ${JSON.stringify(raw)}, not a number — `
+      + 'the query and the reader have drifted apart; refusing to report a fabricated count',
+    );
+  }
+  return n;
 }
 
 export async function runLinkageReport(pool: PoolLike): Promise<LinkageReport> {
-  // 1. Totals and nodeless counts per contact kind.
-  const kindResult = await pool.query(
-    `SELECT kind,
-            count(*)                                    AS total,
-            count(*) FILTER (WHERE kg_node_id IS NULL)  AS nodeless
-     FROM contacts
-     GROUP BY kind
-     ORDER BY kind`,
-  );
+  const result = await pool.query(REPORT_SQL);
+  const rows = result.rows as Array<Record<string, unknown>>;
 
-  const byKind: KindBreakdown[] = (kindResult.rows as Array<Record<string, unknown>>).map(row => ({
+  const byKind: KindBreakdown[] = rows.map(row => ({
     kind: String(row['kind']),
-    total: toCount(row['total']),
-    nodeless: toCount(row['nodeless']),
+    total: requireCount(row, 'total'),
+    nodeless: requireCount(row, 'nodeless'),
   }));
 
   const totalContacts = byKind.reduce((sum, k) => sum + k.total, 0);
   const totalNodeless = byKind.reduce((sum, k) => sum + k.nodeless, 0);
+  const orgArmEligible = rows.reduce((sum, row) => sum + requireCount(row, 'org_arm'), 0);
+  const sameNameShadowed = rows.reduce((sum, row) => sum + requireCount(row, 'shadowed'), 0);
 
-  // 2. Arm A — nodeless org contacts whose email domain matches an existing org node.
-  //    Mirrors resolveOrCreateOrgNode's domain lookup: that is the node the original
-  //    collision denied them, and the node 085 re-links them to.
-  const orgResult = await pool.query(
-    `SELECT count(*) AS eligible
-     FROM contacts c
-     WHERE c.kg_node_id IS NULL
-       AND c.kind = 'organization'
-       AND c.primary_email IS NOT NULL
-       AND EXISTS (
-         SELECT 1
-         FROM kg_nodes n
-         WHERE n.type = 'organization'
-           AND n.archived_at IS NULL
-           AND lower(n.properties->>'domain') = lower(split_part(c.primary_email, '@', 2))
-       )`,
-  );
-  const orgArmEligible = toCount((orgResult.rows[0] as Record<string, unknown> | undefined)?.['eligible']);
-
-  // 3. Nodeless contacts shadowed by a same-display-name contact that does hold a node.
-  const shadowResult = await pool.query(
-    `SELECT count(*) AS shadowed
-     FROM contacts c
-     WHERE c.kg_node_id IS NULL
-       AND EXISTS (
-         SELECT 1
-         FROM contacts o
-         WHERE o.id <> c.id
-           AND lower(o.display_name) = lower(c.display_name)
-           AND o.kg_node_id IS NOT NULL
-       )`,
-  );
-  const sameNameShadowed = toCount((shadowResult.rows[0] as Record<string, unknown> | undefined)?.['shadowed']);
-
-  // Arm B is the remainder by construction: every nodeless contact that arm A cannot
-  // re-link needs a node minted. Deriving it rather than querying it separately keeps
-  // the two arms guaranteed to sum to the total.
-  const personArmMints = Math.max(0, totalNodeless - orgArmEligible);
+  // Arm B is the remainder by construction: every nodeless contact arm A cannot
+  // re-link needs a node minted. Because all four counts come from one statement,
+  // arm A can never exceed the total — if it somehow does, the query is wrong and
+  // clamping would hide that behind a plausible-looking number.
+  if (orgArmEligible > totalNodeless) {
+    throw new Error(
+      `kg-node-linkage-report: arm A (${orgArmEligible}) exceeds the nodeless total (${totalNodeless}) — `
+      + 'the report is internally inconsistent and must not be used to size a migration',
+    );
+  }
+  const personArmMints = totalNodeless - orgArmEligible;
 
   return {
     totalContacts,
@@ -152,28 +186,31 @@ export function formatReport(report: LinkageReport): string {
 
 // CLI entry point — only runs when executed directly (not when imported by tests)
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  const databaseUrl = process.env['DATABASE_URL'];
-  if (!databaseUrl) {
-    logger.error('kg-node-linkage-report: DATABASE_URL is not set');
-    process.exit(1);
-  }
   const main = async (): Promise<void> => {
+    const databaseUrl = process.env['DATABASE_URL'];
+    if (!databaseUrl) {
+      logger.error('kg-node-linkage-report: DATABASE_URL is not set');
+      process.exitCode = 1;
+      return;
+    }
     const pool = new Pool({ connectionString: databaseUrl });
-    let exitCode = 0;
     try {
       const report = await runLinkageReport(pool);
-      // Printed rather than logged: this is the artifact a human reads off the
+      // Written rather than logged: this is the artifact a human reads off the
       // terminal, and pino's JSON would bury it. The structured line follows so the
       // same run is greppable when it is captured in container logs.
       process.stdout.write(`${formatReport(report)}\n`);
       logger.info(report, 'kg-node-linkage-report: done');
     } catch (err) {
       logger.error({ err }, 'kg-node-linkage-report: fatal error');
-      exitCode = 1;
+      process.exitCode = 1;
     } finally {
       await pool.end();
     }
-    process.exit(exitCode);
+    // Deliberately no process.exit(): stdout is asynchronous when piped (which the
+    // documented `docker exec ... | tee` invocation is), and exiting here would
+    // discard buffered output mid-report. Setting exitCode and returning lets the
+    // event loop drain the write first.
   };
   await main();
 }

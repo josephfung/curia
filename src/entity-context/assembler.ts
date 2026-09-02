@@ -130,9 +130,15 @@ export class EntityContextAssembler {
           // Deliberately not cached: a backfill or a contact merge can give this
           // contact a node at any time, and a cached verdict would keep it
           // context-free for the rest of the TTL.
-          this.logger.debug(
+          //
+          // warn, not debug: prod runs at LOG_LEVEL=info, so a debug line here would
+          // never fire and this whole diagnostic would be invisible in the one place
+          // it matters. Same reasoning already applied to the 22P02 branch below —
+          // operators need a searchable signal. This is the standing production
+          // record that a real contact was addressed with no context available.
+          this.logger.warn(
             { contactId: outcome.entry.contactId },
-            'entity-context: contact resolved but holds no KG node — cannot carry facts, relationships, or context',
+            'entity-context: contact holds no KG node — cannot carry facts, relationships, or context',
           );
           nodeless.push(outcome.entry);
         } else {
@@ -186,7 +192,16 @@ export class EntityContextAssembler {
 
       // Step 2: Load the KG node
       const nodeRow = await this.getKgNode(kgNodeId);
-      if (!nodeRow) return { kind: 'unknown' };
+      if (!nodeRow) {
+        // contacts.kg_node_id carries an FK, so a set pointer with no target row
+        // should be unreachable. If it happens, a real contact is being reported as
+        // unknown — log loudly rather than letting it look like an ordinary miss.
+        this.logger.warn(
+          { entityId: id, kgNodeId },
+          'entity-context: kg_node_id points at a missing node — referential integrity issue',
+        );
+        return { kind: 'unknown' };
+      }
 
       // Steps 3-6: Run assembly pipeline in parallel where safe.
       // Contact lookup + connected accounts depend on each other (need contactId),
