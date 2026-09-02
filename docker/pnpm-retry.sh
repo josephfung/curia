@@ -38,7 +38,14 @@
 # deterministic ones like ERR_PNPM_OUTDATED_LOCKFILE. Distinguishing them reliably
 # would mean parsing pnpm's output, which is its own fragility. Instead the messages
 # stay honest about what is and is not known: nothing here claims a failure was
-# transient. If every attempt fails identically, it almost certainly was not.
+# transient, and nothing here claims one was not.
+#
+# In particular, do NOT read meaning into repeated *equal* exit statuses. pnpm exits 1
+# for very nearly everything, and so does Node on an uncaught exception — the incident
+# above (unhandled 'error' on a Readable) and an outdated lockfile both exit 1. A
+# sustained registry outage therefore produces three identical exit 1s, which is the
+# flagship case for retrying, not evidence against it. Equal statuses carry no signal;
+# only *differing* ones do, and only in the narrow sense noted above.
 #
 # POSIX sh (not bash): this runs in `node:24-slim` Docker layers via /bin/sh.
 #
@@ -67,6 +74,19 @@ esac
 case "$base_delay" in
   ''|*[!0-9]*) echo "pnpm-retry: PNPM_RETRY_DELAY must be a non-negative integer (got '$base_delay')" >&2; exit 2 ;;
 esac
+# Strip leading zeros before the value ever reaches `$(( ))`. POSIX arithmetic follows
+# C integer-constant rules, so a leading zero means OCTAL: `010` would silently become 8,
+# and `08` is not a valid octal constant at all — it aborts the shell under `set -e`,
+# replacing the wrapped command's exit code with the shell's. That is the same
+# silent-substitution hazard the validation above exists to prevent, so normalize rather
+# than reject: a leading zero is a sloppy spelling of a decimal, not a request for octal.
+# `test -ge` (used for $attempts) parses decimal and needs no such treatment.
+while :; do
+  case "$base_delay" in
+    0[0-9]*) base_delay="${base_delay#0}" ;;
+    *) break ;;
+  esac
+done
 
 attempt=1
 first_status=""
@@ -92,9 +112,10 @@ while :; do
     # (non-transient) failure still fails the build rather than being masked.
     echo "pnpm-retry: '$*' failed after ${attempts} attempt(s); giving up (exit ${status})" >&2
     if [ "$first_status" = "$status" ]; then
-      # Same failure every time — a registry blip does not reproduce this reliably.
-      # Say so, so nobody burns time looking for a network fault that isn't there.
-      echo "pnpm-retry: every attempt failed identically (exit ${status}); this is very likely a real, deterministic failure (e.g. an outdated lockfile), NOT a transient network fault — read the pnpm error above rather than re-running." >&2
+      # Equal statuses are NOT evidence of a deterministic failure: pnpm and Node both
+      # exit 1 for nearly everything, so a sustained outage looks exactly like a bad
+      # lockfile here. Report the observation and refuse to guess at the cause.
+      echo "pnpm-retry: every attempt exited ${status}; the wrapper cannot tell transient from deterministic (pnpm exits 1 for nearly everything) — read the pnpm error above." >&2
     else
       # The retry changed the failure mode: attempt 1 is the cause, the rest are derived.
       echo "pnpm-retry: first attempt exited ${first_status} but the last exited ${status} — the retry changed the failure mode, so the FIRST error above is the real cause." >&2
