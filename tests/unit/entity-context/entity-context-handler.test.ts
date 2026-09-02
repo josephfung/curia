@@ -228,6 +228,55 @@ describe('EntityContextHandler', () => {
     expect(result.error).toMatch(/not evidence/i);
   });
 
+  it('does not claim all failures were transient when retryability is mixed', async () => {
+    const ctx = makeCtx(
+      { contactIds: ['contact-1', 'contact-2'] },
+      {
+        failed: [
+          { inputId: 'contact-1', retryable: true },
+          { inputId: 'contact-2', retryable: false },
+        ],
+      },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
+    expect(result.error).toMatch(/some failures may be transient/i);
+    expect(result.error).toMatch(/do not retry those/i);
+    expect(result.error).not.toMatch(/due to transient errors\. Retry/i);
+  });
+
+  it('returns success true when failed is mixed with unresolved', async () => {
+    const ctx = makeCtx(
+      { contactIds: ['contact-1', 'ghost-id'] },
+      { failed: [{ inputId: 'contact-1', retryable: true }], unresolved: ['ghost-id'] },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+    const data = expectData(result) as unknown as { failed: unknown[]; unresolved: string[] };
+
+    expect(data.failed).toHaveLength(1);
+    expect(data.unresolved).toEqual(['ghost-id']);
+  });
+
+  it('returns success true when failed is mixed with nodeless', async () => {
+    const ctx = makeCtx(
+      { contactIds: ['contact-1', 'contact-2'] },
+      {
+        failed: [{ inputId: 'contact-1', retryable: true }],
+        nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' }],
+      },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+    const data = expectData(result) as unknown as { failed: unknown[]; nodeless: unknown[] };
+
+    expect(data.failed).toHaveLength(1);
+    expect(data.nodeless).toHaveLength(1);
+  });
+
   it('warns when some lookups failed without logging raw input IDs', async () => {
     const warn = vi.fn();
     const spyLogger = { ...logger, warn, child: () => spyLogger } as unknown as typeof logger;

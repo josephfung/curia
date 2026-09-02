@@ -214,7 +214,7 @@ A new skill that assembles the full context payload for one or more entities. Av
 
 Diagnostic buckets (`nodeless`, `failed`, `unresolved`) are emitted before `entities` in the skill result so head-slice output truncation sacrifices bulk entity data rather than the warnings.
 
-When every requested ID lands in `failed` and `entities` is empty, the skill returns `success: false` (not a success-shaped empty result with retry hints) so the agent does not loop against a hard-down database.
+When every requested ID lands in `failed` and `entities`, `unresolved`, and `nodeless` are all empty, the skill returns `success: false` (not a success-shaped empty result with retry hints) so the agent does not loop against a hard-down database. Batches mixing `failed` with `unresolved` or `nodeless` still return `success: true` with all diagnostic buckets.
 
 **Resolution priority for each ID:**
 1. If the ID matches a `contacts.id` with a non-null `kg_node_id` → assemble from that KG node
