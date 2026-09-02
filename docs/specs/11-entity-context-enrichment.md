@@ -197,7 +197,7 @@ A new skill that assembles the full context payload for one or more entities. Av
   "outputs": {
     "entities": "EntityContext[]",
     "unresolved": "string[] (IDs that matched no contact and no KG node)",
-    "nodeless": "{inputId, contactId, displayName, reason}[]? (contacts that exist but have no stored profile — cannot hold facts; not evidence of absence)",
+    "nodeless": "{inputId, contactId, displayName, cause, reason}[]? (contacts that exist but cannot hold facts: cause `missing` = never had a stored profile, cause `archived` = profile was retired; not evidence of absence)",
     "failed": "{inputId, reason}[]? (lookups that errored — retry may succeed; not evidence of absence)"
   }
 }
@@ -209,7 +209,7 @@ A new skill that assembles the full context payload for one or more entities. Av
 |---|---|---|
 | `entities` | Full `EntityContext` assembled | Use the payload |
 | `unresolved` | ID matched no contact and no KG node | Treat as genuinely unknown |
-| `nodeless` | Contact exists but holds no KG node (#1694) | Report capability gap; do not store facts or infer absence |
+| `nodeless` | Contact exists but cannot hold a KG node — never had one, or the linked node is archived (#1694, #1707) | Report capability gap; do not store facts or infer absence |
 | `failed` | Assembly threw (#1702) | If reason says retryable: retry. If not: report failure. **Not** evidence the contact is unknown |
 
 Diagnostic buckets (`nodeless`, `failed`, `unresolved`) are emitted before `entities` in the skill result so head-slice output truncation sacrifices bulk entity data rather than the warnings.
@@ -217,21 +217,23 @@ Diagnostic buckets (`nodeless`, `failed`, `unresolved`) are emitted before `enti
 When every requested ID lands in `failed` and `entities`, `unresolved`, and `nodeless` are all empty, the skill returns `success: false` (not a success-shaped empty result with retry hints) so the agent does not loop against a hard-down database. Batches mixing `failed` with `unresolved` or `nodeless` still return `success: true` with all diagnostic buckets.
 
 **Resolution priority for each ID:**
-1. If the ID matches a `contacts.id` with a non-null `kg_node_id` → assemble from that KG node
-2. If the ID matches a `contacts.id` with a null `kg_node_id` → include in `nodeless` (contact exists but cannot hold knowledge)
-3. If the ID matches a `kg_nodes.id` directly → assemble from that KG node
-4. Special values: `"caller"` → resolve to `ctx.caller.contactId`, `"agent"` → resolve to the agent's contactId
-5. If no match → include in the `unresolved` array (not a hard error)
-6. If assembly throws → include in `failed` with a retry classification (not `unresolved`)
+1. If the ID matches a `contacts.id` with a non-null `kg_node_id` pointing at a live (`archived_at IS NULL`) KG node → assemble from that KG node
+2. If the ID matches a `contacts.id` with a null `kg_node_id` → include in `nodeless` with `cause: "missing"` (contact exists but never had a stored profile)
+3. If the ID matches a `contacts.id` whose `kg_node_id` points at an archived node → include in `nodeless` with `cause: "archived"` (the profile was retired; not silently assembled)
+4. If the ID matches a live `kg_nodes.id` directly → assemble from that KG node
+5. Special values: `"caller"` → resolve to `ctx.caller.contactId`, `"agent"` → resolve to the agent's contactId
+6. If no match (including a direct lookup of an archived node ID) → include in the `unresolved` array (not a hard error)
+7. If assembly throws → include in `failed` with a retry classification (not `unresolved`)
 
 ### Assembly Pipeline
 
 For each resolved entity:
 
 ```
-KG node lookup
+KG node lookup (live rows only — `archived_at IS NULL`)
     │
     ├─→ Extract facts (kg_nodes where type='fact', linked via kg_edges)
+    │     Skip archived fact nodes and archived edges
     │     Group by category, include confidence + freshness
     │
     ├─→ Contact record lookup (contacts table, via kg_node_id)
@@ -243,6 +245,7 @@ KG node lookup
     │     contact_integrations (future)
     │
     ├─→ First-degree relationships (kg_edges, depth=1)
+    │     Skip archived edges and archived related nodes
     │     Include related entity label + type
     │
     └─→ Compose EntityContext payload

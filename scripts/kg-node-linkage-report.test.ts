@@ -10,7 +10,7 @@
 // report refuses to produce a plausible-looking answer rather than guessing.
 
 import { describe, it, expect, vi } from 'vitest';
-import { runLinkageReport } from './kg-node-linkage-report.js';
+import { runLinkageReport, formatReport } from './kg-node-linkage-report.js';
 
 type MockPool = { query: ReturnType<typeof vi.fn> };
 
@@ -39,6 +39,7 @@ describe('runLinkageReport', () => {
     expect(report.orgArmEligible).toBe(4);
     expect(report.personArmMints).toBe(11);
     expect(report.sameNameShadowed).toBe(7);
+    expect(report.archivedLink).toBe(0);
   });
 
   it('reports a clean database as zero work, not as an error', async () => {
@@ -49,6 +50,7 @@ describe('runLinkageReport', () => {
     const report = await runLinkageReport(pool as never);
 
     expect(report.totalNodeless).toBe(0);
+    expect(report.archivedLink).toBe(0);
     expect(report.orgArmEligible).toBe(0);
     expect(report.personArmMints).toBe(0);
   });
@@ -58,6 +60,7 @@ describe('runLinkageReport', () => {
 
     expect(report.totalContacts).toBe(0);
     expect(report.totalNodeless).toBe(0);
+    expect(report.archivedLink).toBe(0);
     expect(report.byKind).toEqual([]);
   });
 
@@ -108,6 +111,43 @@ describe('runLinkageReport', () => {
     await runLinkageReport(pool as never);
 
     expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts contacts pointing at an archived node separately from nodeless', async () => {
+    // Folding these into nodeless would inflate the 085 mint count: they already
+    // have a node, it is just retired. The entity-context read path still treats
+    // them as context-free (#1707), so archivedLink has to show the number.
+    const pool = makePool([
+      { kind: 'person', total: '50', nodeless: '3', org_arm: '0', shadowed: '0', archived_link: '2', anchored_orphans: '0' },
+      { kind: 'organization', total: '10', nodeless: '1', org_arm: '1', shadowed: '0', archived_link: '1', anchored_orphans: '0' },
+    ]);
+
+    const report = await runLinkageReport(pool as never);
+
+    expect(report.totalNodeless).toBe(4);
+    expect(report.archivedLink).toBe(3);
+    expect(report.personArmMints).toBe(3);
+    expect(formatReport(report)).toMatch(/linked to an ARCHIVED node\s+3/);
+  });
+
+  it('throws rather than reporting zero when the archived-link column is missing', async () => {
+    const pool = makePool([
+      { kind: 'person', total: '10', nodeless: '3', org_arm: '0', shadowed: '0', anchored_orphans: '0' },
+    ]);
+
+    await expect(runLinkageReport(pool as never)).rejects.toThrow(/archived_link.*not a number/s);
+  });
+
+  it('counts archived-node contacts in the same statement as nodeless', async () => {
+    const pool = makePool([
+      { kind: 'person', total: '1', nodeless: '0', org_arm: '0', shadowed: '0', archived_link: '0', anchored_orphans: '0' },
+    ]);
+
+    await runLinkageReport(pool as never);
+
+    const sql = String(pool.query.mock.calls[0]![0]);
+    expect(sql).toMatch(/archived_at IS NOT NULL/);
+    expect(sql).toMatch(/AS archived_link/);
   });
 
   it('never issues a write', async () => {

@@ -1618,7 +1618,11 @@ export class ExecutionLayer {
           // report the gap with the skill name attached rather than silently.
           if (enrichmentResult.nodeless.length > 0) {
             skillLogger.warn(
-              { toolName, contactIds: enrichmentResult.nodeless.map(n => n.contactId) },
+              {
+                toolName,
+                contactIds: enrichmentResult.nodeless.map(n => n.contactId),
+                causes: enrichmentResult.nodeless.map(n => n.cause),
+              },
               'entity_enrichment: contacts have no KG node — skill ran without their context',
             );
           }

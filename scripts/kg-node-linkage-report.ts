@@ -8,6 +8,12 @@
 // count, and it exists to size migration 085 before that migration is written:
 // ADR-040's backfill has two arms, and the work in each is very different.
 //
+// A second population is context-free for a different reason (#1707): the contact
+// *has* a kg_node_id, but the node is archived. Entity-context treats those the
+// same as NULL (they cannot assemble). They are counted as `archivedLink` below —
+// not folded into `nodeless` / the 085 mint arms, because they already have a node,
+// it is just retired. Migration 085 step 2a repairs them.
+//
 //   Arm A (org)    — a nodeless contact with kind='organization' for which an existing
 //                    organization node is already findable. These get re-linked to that
 //                    node, which is only legal once the relaxed idx_contacts_kg_node_unique
