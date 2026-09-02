@@ -541,6 +541,29 @@ describe('ExtractFactsHandler', () => {
       });
     });
 
+    it('never logs the raw subject name on the ambiguous path (PII guard)', async () => {
+      // `subject` is an LLM-extracted entity name from a transcript — usually a person's
+      // name — and the pino redact list covers senderId/email/phoneNumber, not this.
+      // The handler already states the rule for malformed facts ("never the raw values");
+      // the ambiguity path has to hold to it too.
+      const { mem, store } = makeMemoryWithStore();
+      await seedTwoSeths(store);
+
+      const warn = vi.fn();
+      const ctx = makeCtx(mem, { text: 'Seth lives in Toronto.', source: 'test' }, makeMockInfraLlm(['yes', SETH_FACT]));
+      (ctx as unknown as { log: Record<string, unknown> }).log = {
+        warn, info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: vi.fn(),
+      };
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const ambiguityWarn = warn.mock.calls.find(c => /ambiguous subject entity/.test(String(c[1])));
+      expect(ambiguityWarn).toBeDefined();
+      expect(JSON.stringify(ambiguityWarn![0])).not.toContain('Seth Berman');
+      // The node ids are the non-PII substitute, and identify the same entities.
+      expect(ambiguityWarn![0]).toHaveProperty('candidateIds');
+    });
+
     it('leaves the unambiguous path untouched', async () => {
       const { mem, store } = makeMemoryWithStore();
       const only = await store.createNode({ type: 'person', label: 'Seth Berman', properties: {}, source: 'test' });

@@ -249,7 +249,12 @@ ${text}`,
               ambiguous++;
               ctx.log.warn(
                 {
-                  subject,
+                  // Deliberately not `subject`: it is an LLM-extracted entity name lifted
+                  // from a transcript, so it is usually a person's name, and the pino
+                  // redact list covers senderId/email/phoneNumber but not this. The node
+                  // ids identify the same entities without the PII, and are strictly more
+                  // useful for diagnosis — an operator can look each one up.
+                  candidateIds: resolved.candidates.map(n => n.id),
                   candidateCount: resolved.candidates.length,
                   hadContactHint: subject_contact_id !== undefined,
                   hintResolvedToNode: hinted !== undefined,
@@ -261,7 +266,8 @@ ${text}`,
 
             entityNode = match;
             ctx.log.debug(
-              { subject, chosenId: match.id, candidateCount: resolved.candidates.length },
+              // Same reasoning as the warn above — chosenId identifies the entity.
+              { chosenId: match.id, candidateCount: resolved.candidates.length },
               'extract-facts: ambiguous subject resolved via subject_contact_id',
             );
           } else {
