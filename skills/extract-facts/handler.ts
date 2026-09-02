@@ -35,7 +35,12 @@ const DECAY_CLASSES_LIST = DECAY_CLASSES.join(', ');
 
 export class ExtractFactsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { text, source, max_stored } = ctx.input as { text?: string; source?: string; max_stored?: number };
+    const { text, source, max_stored, subject_contact_id } = ctx.input as {
+      text?: string;
+      source?: string;
+      max_stored?: number;
+      subject_contact_id?: string;
+    };
 
     if (!text || typeof text !== 'string') {
       // Log only safe metadata — never log ctx.input directly (contains full transcript)
@@ -64,7 +69,7 @@ export class ExtractFactsHandler implements ToolHandler {
 
       if (maxStored === 0) {
         ctx.log.info({ stored: 0, redirected: 0, failed: 0 }, 'extract-facts: complete');
-        return { success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 0 } };
+        return { success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 0, ambiguous: 0 } };
       }
 
       // -- Step 1: Classifier gate --
@@ -83,7 +88,7 @@ export class ExtractFactsHandler implements ToolHandler {
 
       if (!classifierAnswer.startsWith('yes')) {
         ctx.log.debug({ textPreview: text.slice(0, 80) }, 'extract-facts: classifier gate — no facts, skipping');
-        return { success: true, data: { stored: 0, redirected: 0, skipped: true, failed: 0 } };
+        return { success: true, data: { stored: 0, redirected: 0, skipped: true, failed: 0, ambiguous: 0 } };
       }
 
       // -- Step 2: Extraction prompt --
@@ -148,6 +153,11 @@ ${text}`,
       // Contradictions (action:'conflict') are NOT counted as failed — they are expected
       // semantic outcomes logged at warn.
       let failed = 0;
+      // ambiguous counts facts dropped because the subject label matched several
+      // entity nodes of the same type and nothing could break the tie. Deliberately
+      // separate from `failed`: nothing malfunctioned, and the caller's remedy is to
+      // supply subject_contact_id (or disambiguate the entities), not to retry. (#1694)
+      let ambiguous = 0;
 
       // Entity node types (fact nodes themselves are excluded as subjects —
       // we look up or create entity nodes, then attach facts to them).
@@ -210,20 +220,49 @@ ${text}`,
             : 0.7;
 
           // Resolve entity node — finds or auto-creates via resolveOrCreate().
-          // Ambiguous case (2+ nodes, no type match) takes candidates[0] rather than
-          // stalling the background batch job with a disambiguation loop.
+          //
+          // On ambiguity this used to take candidates[0] "to avoid stalling a batch
+          // job". Under ADR-040 two contacts named "Seth Berman" each hold their own
+          // person node, so that is a coin flip that writes the fact onto whichever
+          // node sorted first. A dropped fact can be re-extracted; a fact silently
+          // attached to the wrong person cannot be found again to correct. (#1694)
           const resolved = await ctx.entityMemory.resolveOrCreate({
             label: subject,
             type: subjectType,
             source,
             confidence: 0.6,
           });
+
           let entityNode;
           if (resolved.kind === 'ambiguous') {
-            entityNode = resolved.candidates[0]!;
-            ctx.log.warn(
-              { subject, candidateCount: resolved.candidates.length, chosenId: entityNode.id },
-              'extract-facts: ambiguous subject entity — taking first candidate',
+            // The only admissible tiebreaker is the caller's subject-contact hint, and
+            // only when one candidate IS that contact's node. The hint identifies the
+            // conversation's counterpart, which is not a claim that every fact in the
+            // transcript is about them — so a hint that matches nothing tells us
+            // nothing, and must not be used to pick.
+            const hinted = await this.resolveHintedNodeId(ctx, subject_contact_id);
+            const match = hinted
+              ? resolved.candidates.find(n => n.id === hinted)
+              : undefined;
+
+            if (!match) {
+              ambiguous++;
+              ctx.log.warn(
+                {
+                  subject,
+                  candidateCount: resolved.candidates.length,
+                  hadContactHint: subject_contact_id !== undefined,
+                  hintResolvedToNode: hinted !== undefined,
+                },
+                'extract-facts: ambiguous subject entity — skipping fact rather than guessing',
+              );
+              continue;
+            }
+
+            entityNode = match;
+            ctx.log.debug(
+              { subject, chosenId: match.id, candidateCount: resolved.candidates.length },
+              'extract-facts: ambiguous subject resolved via subject_contact_id',
             );
           } else {
             entityNode = resolved.node;
@@ -373,8 +412,8 @@ ${text}`,
         }
       }
 
-      ctx.log.info({ stored, redirected, failed }, 'extract-facts: complete');
-      return { success: true, data: { stored, redirected, skipped: false, failed } };
+      ctx.log.info({ stored, redirected, failed, ambiguous }, 'extract-facts: complete');
+      return { success: true, data: { stored, redirected, skipped: false, failed, ambiguous } };
     } catch (err) {
       // Two categories of errors reach here:
       // 1. LLMProvider errors (rate limits, auth, timeouts, 5xx) — these are returned as
@@ -384,6 +423,47 @@ ${text}`,
       //    re-thrown from the per-fact loop — indicate bugs in this handler, not infra issues.
       ctx.log.error({ err }, 'extract-facts: unexpected error');
       return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Resolve `subject_contact_id` to the KG node that contact holds, or undefined.
+   *
+   * Undefined for every "we cannot tell" case, and they are deliberately not
+   * distinguished here: no hint supplied, no ContactService wired, the contact does
+   * not exist, the contact holds no node (#1694's population), or the lookup failed.
+   * All of them mean the same thing to the caller — there is no tiebreaker — and the
+   * caller's response is identical: skip the fact rather than guess.
+   *
+   * Never throws. A contacts-table hiccup must not fail a whole extraction batch;
+   * it degrades to "no hint available", which is the safe direction.
+   */
+  private async resolveHintedNodeId(
+    ctx: ToolContext,
+    subjectContactId: string | undefined,
+  ): Promise<string | undefined> {
+    if (!subjectContactId || !ctx.contactService) return undefined;
+
+    try {
+      const contact = await ctx.contactService.getContact(subjectContactId);
+      if (!contact) {
+        ctx.log.debug({ subjectContactId }, 'extract-facts: subject_contact_id matched no contact');
+        return undefined;
+      }
+      if (!contact.kgNodeId) {
+        ctx.log.debug(
+          { subjectContactId },
+          'extract-facts: subject contact holds no KG node — cannot disambiguate',
+        );
+        return undefined;
+      }
+      return contact.kgNodeId;
+    } catch (err) {
+      ctx.log.warn(
+        { err, subjectContactId },
+        'extract-facts: subject contact lookup failed — proceeding without a tiebreaker',
+      );
+      return undefined;
     }
   }
 }

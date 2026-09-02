@@ -26,21 +26,35 @@ export function isExternalContactOriginator(originator: TaskOriginator): boolean
 /** Sentinel returned when no external originator appears in the conversation audit trail. */
 export type NoExternalOriginator = 'none';
 
+/** The first external originator of a conversation, as far as the audit trail records it. */
+export interface FirstExternalOriginator {
+  /** Contact tier at task initiation. Null for rows stamped before #950. */
+  tier: ContactTier | null;
+  /** Contact id of that originator. Null when the audit row predates the field. */
+  contactId: string | null;
+}
+
 /**
- * Load the tier of the first external contact who originated an agent.task in this
- * conversation. Returns 'none' when every task is principal/system/agent-originated.
+ * Load the first external contact who originated an agent.task in this conversation.
+ * Returns 'none' when every task is principal/system/agent-originated.
  *
  * Spec 10 maps every `agent.task` row's structured initiator to `system`/`dispatch`
  * (originator detail stays in `payload.metadata.originator`). So this query always
  * uses the payload path for Phase 1 + pre-hardening rows — there is no structured
  * `initiator_type = 'human'` shortcut for agent.task. Uses idx_audit_conversation.
+ *
+ * `contactId` is read for a second purpose beyond the trust gate: it is the
+ * conversation's counterpart, and checkpoint extraction passes it to extract-facts as
+ * a tiebreaker for ambiguous subject names (#1694). Both consumers come from this one
+ * row, so there is no extra query.
  */
-export async function loadFirstExternalOriginatorTier(
+export async function loadFirstExternalOriginator(
   pool: DbPool,
   conversationId: string,
-): Promise<ContactTier | null | NoExternalOriginator> {
-  const result = await pool.query<{ tier: string | null }>(
-    `SELECT payload->'metadata'->'originator'->>'tier' AS tier
+): Promise<FirstExternalOriginator | NoExternalOriginator> {
+  const result = await pool.query<{ tier: string | null; contact_id: string | null }>(
+    `SELECT payload->'metadata'->'originator'->>'tier'      AS tier,
+            payload->'metadata'->'originator'->>'contactId' AS contact_id
      FROM audit_log
      WHERE conversation_id = $1
        AND event_type = 'agent.task'
@@ -57,7 +71,22 @@ export async function loadFirstExternalOriginatorTier(
 
   const row = result.rows[0];
   if (!row) return 'none';
-  return (row.tier as ContactTier | null) ?? null;
+  return {
+    tier: (row.tier as ContactTier | null) ?? null,
+    contactId: row.contact_id ?? null,
+  };
+}
+
+/**
+ * Tier-only view of {@link loadFirstExternalOriginator}, kept as the shape the trust
+ * gate reasons about.
+ */
+export async function loadFirstExternalOriginatorTier(
+  pool: DbPool,
+  conversationId: string,
+): Promise<ContactTier | null | NoExternalOriginator> {
+  const originator = await loadFirstExternalOriginator(pool, conversationId);
+  return originator === 'none' ? 'none' : originator.tier;
 }
 
 export function resolveChannelTrust(

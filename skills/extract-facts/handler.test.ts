@@ -45,6 +45,7 @@ function makeCtx(
   entityMemory: EntityMemory,
   input: Record<string, unknown>,
   infraLlm: InfraLlm,
+  contactService?: unknown,
 ): ToolContext {
   return {
     input,
@@ -52,6 +53,7 @@ function makeCtx(
     log: pino({ level: 'silent' }),
     entityMemory,
     infraLlm,
+    contactService,
   } as unknown as ToolContext;
 }
 
@@ -69,7 +71,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: true, failed: 0 } });
+    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: true, failed: 0, ambiguous: 0 } });
     // Classifier was called; extraction was not
     expect(infraLlm.classify).toHaveBeenCalledTimes(1);
     expect(infraLlm.extract).not.toHaveBeenCalled();
@@ -89,7 +91,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0 } });
+    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0, ambiguous: 0 } });
 
     // Fact node exists in the KG
     const josephNodes = await entityMemory.findEntities('Jane Doe');
@@ -173,14 +175,14 @@ describe('ExtractFactsHandler', () => {
     const handler1 = new ExtractFactsHandler();
     const ctx1 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm1);
     const result1 = await handler1.execute(ctx1);
-    expect(result1).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0 } });
+    expect(result1).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0, ambiguous: 0 } });
 
     // Second invocation with semantically identical fact — storeFact deduplicates internally
     const infraLlm2 = makeMockInfraLlm(['yes', facts]);
     const handler2 = new ExtractFactsHandler();
     const ctx2 = makeCtx(entityMemory, { text: 'Bob lives in Toronto.', source: 'test' }, infraLlm2);
     const result2 = await handler2.execute(ctx2);
-    expect(result2).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0 } });
+    expect(result2).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0, ambiguous: 0 } });
 
     // Only one fact node should exist — storeFact merged the second call into the first
     const josephNodes = await entityMemory.findEntities('Jane Doe');
@@ -234,7 +236,7 @@ describe('ExtractFactsHandler', () => {
     const result = await handler.execute(ctx);
 
     // conflict is a semantic outcome — not counted as failed
-    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 0 } });
+    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 0, ambiguous: 0 } });
     expect(storeFact).toHaveBeenCalledOnce();
   });
 
@@ -260,7 +262,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0 } });
+    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 0, ambiguous: 0 } });
     // storeFact should use memoryWriteSource (task-scoped), not the LLM-provided 'agent:ceo-inbox'
     expect(storeFact.mock.calls[0]![0].source).toBe(memoryWriteSource);
   });
@@ -284,7 +286,7 @@ describe('ExtractFactsHandler', () => {
     const result = await handler.execute(ctx);
 
     // first fact stored, rate-limit counted as failed, loop stopped before fact 3
-    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 1 } });
+    expect(result).toEqual({ success: true, data: { stored: 1, redirected: 0, skipped: false, failed: 1, ambiguous: 0 } });
     expect(storeFact).toHaveBeenCalledTimes(2);
   });
 
@@ -320,7 +322,7 @@ describe('ExtractFactsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 1 } });
+    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 1, ambiguous: 0 } });
 
     const malformedCall = warnSpy.mock.calls.find(
       (args) => typeof args[args.length - 1] === 'string' && (args[args.length - 1] as string).includes('skipping malformed fact'),
@@ -347,7 +349,7 @@ describe('ExtractFactsHandler', () => {
     const ctx = makeCtx(entityMemory, { text: 'Jane Doe lives in Toronto.', source: 'test' }, infraLlm);
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 1 } });
+    expect(result).toEqual({ success: true, data: { stored: 0, redirected: 0, skipped: false, failed: 1, ambiguous: 0 } });
     expect(storeFact).toHaveBeenCalledTimes(1);
   });
 
@@ -393,5 +395,165 @@ describe('ExtractFactsHandler', () => {
     const result = await handler.execute(ctx);
 
     expect(result).toEqual({ success: false, error: 'Extraction LLM call failed: Context window exceeded' });
+  });
+
+  // -- Ambiguous subject resolution (#1694 / ADR-040) --
+  //
+  // This path used to take candidates[0] "to avoid stalling a batch job". Once two
+  // contacts named "Seth Berman" each hold their own person node, that is a coin flip
+  // that writes the fact onto whichever node sorted first. A dropped fact can be
+  // re-extracted later; one silently attached to the wrong person cannot be found
+  // again to correct. The only admissible tiebreaker is subject_contact_id, and only
+  // when one candidate IS that contact's node — the hint identifies the conversation's
+  // counterpart, not the subject of every sentence in it.
+  describe('ambiguous subject', () => {
+    // Needs the store as well as the memory wrapper, to seed colliding nodes directly
+    // (upsertNode would merge them).
+    function makeMemoryWithStore() {
+      const embeddingService = EmbeddingService.createForTesting();
+      const store = KnowledgeGraphStore.createInMemory(embeddingService);
+      const validator = new MemoryValidator(store, embeddingService);
+      return {
+        mem: new EntityMemory(store, validator, embeddingService, createSilentLogger()),
+        store,
+      };
+    }
+
+    const SETH_FACT = JSON.stringify([
+      { subject: 'Seth Berman', subjectType: 'person', attribute: 'home_city', value: 'Toronto', confidence: 0.9, decayClass: 'slow_decay' },
+    ]);
+
+    function makeContactService(contactsById: Record<string, { id: string; kgNodeId: string | null }>) {
+      return {
+        getContact: vi.fn(async (id: string) => contactsById[id]),
+        findContactByKgNodeId: vi.fn(async () => undefined),
+        updateContactFields: vi.fn(),
+      };
+    }
+
+    async function seedTwoSeths(store: KnowledgeGraphStore) {
+      const a = await store.createNode({ type: 'person', label: 'Seth Berman', properties: {}, source: 'test' });
+      const b = await store.createNode({ type: 'person', label: 'Seth Berman', properties: {}, source: 'test' });
+      return { a, b };
+    }
+
+    it('skips and counts the fact when ambiguous and no contact hint is given', async () => {
+      const { mem, store } = makeMemoryWithStore();
+      await seedTwoSeths(store);
+
+      const result = await new ExtractFactsHandler().execute(
+        makeCtx(mem, { text: 'Seth lives in Toronto.', source: 'test' }, makeMockInfraLlm(['yes', SETH_FACT])),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { stored: 0, redirected: 0, skipped: false, failed: 0, ambiguous: 1 },
+      });
+    });
+
+    it('resolves to the hinted contact node when it is one of the candidates', async () => {
+      const { mem, store } = makeMemoryWithStore();
+      const { a, b } = await seedTwoSeths(store);
+      const contactService = makeContactService({ 'contact-b': { id: 'contact-b', kgNodeId: b.id } });
+
+      const result = await new ExtractFactsHandler().execute(
+        makeCtx(
+          mem,
+          { text: 'Seth lives in Toronto.', source: 'test', subject_contact_id: 'contact-b' },
+          makeMockInfraLlm(['yes', SETH_FACT]),
+          contactService,
+        ),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { stored: 1, redirected: 0, skipped: false, failed: 0, ambiguous: 0 },
+      });
+      // The fact hangs off contact B's node specifically, and does not leak onto the namesake.
+      expect(await mem.getFacts(b.id)).toHaveLength(1);
+      expect(await mem.getFacts(a.id)).toHaveLength(0);
+    });
+
+    it('skips rather than guessing when the hinted contact is not among the candidates', async () => {
+      const { mem, store } = makeMemoryWithStore();
+      await seedTwoSeths(store);
+      const other = await store.createNode({ type: 'person', label: 'Dana Wu', properties: {}, source: 'test' });
+      const contactService = makeContactService({ 'contact-c': { id: 'contact-c', kgNodeId: other.id } });
+
+      const result = await new ExtractFactsHandler().execute(
+        makeCtx(
+          mem,
+          { text: 'Seth lives in Toronto.', source: 'test', subject_contact_id: 'contact-c' },
+          makeMockInfraLlm(['yes', SETH_FACT]),
+          contactService,
+        ),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { stored: 0, redirected: 0, skipped: false, failed: 0, ambiguous: 1 },
+      });
+    });
+
+    it('skips when the hinted contact holds no KG node', async () => {
+      // Exactly the #1694 population: a hint exists but cannot identify a node.
+      const { mem, store } = makeMemoryWithStore();
+      await seedTwoSeths(store);
+      const contactService = makeContactService({ 'contact-d': { id: 'contact-d', kgNodeId: null } });
+
+      const result = await new ExtractFactsHandler().execute(
+        makeCtx(
+          mem,
+          { text: 'Seth lives in Toronto.', source: 'test', subject_contact_id: 'contact-d' },
+          makeMockInfraLlm(['yes', SETH_FACT]),
+          contactService,
+        ),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { stored: 0, redirected: 0, skipped: false, failed: 0, ambiguous: 1 },
+      });
+    });
+
+    it('degrades to no-tiebreaker when the contact lookup throws', async () => {
+      // A contacts-table hiccup must not fail the whole extraction batch.
+      const { mem, store } = makeMemoryWithStore();
+      await seedTwoSeths(store);
+      const contactService = {
+        getContact: vi.fn().mockRejectedValue(new Error('pool timeout')),
+        findContactByKgNodeId: vi.fn(async () => undefined),
+        updateContactFields: vi.fn(),
+      };
+
+      const result = await new ExtractFactsHandler().execute(
+        makeCtx(
+          mem,
+          { text: 'Seth lives in Toronto.', source: 'test', subject_contact_id: 'contact-b' },
+          makeMockInfraLlm(['yes', SETH_FACT]),
+          contactService,
+        ),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { stored: 0, redirected: 0, skipped: false, failed: 0, ambiguous: 1 },
+      });
+    });
+
+    it('leaves the unambiguous path untouched', async () => {
+      const { mem, store } = makeMemoryWithStore();
+      const only = await store.createNode({ type: 'person', label: 'Seth Berman', properties: {}, source: 'test' });
+
+      const result = await new ExtractFactsHandler().execute(
+        makeCtx(mem, { text: 'Seth lives in Toronto.', source: 'test' }, makeMockInfraLlm(['yes', SETH_FACT])),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { stored: 1, redirected: 0, skipped: false, failed: 0, ambiguous: 0 },
+      });
+      expect(await mem.getFacts(only.id)).toHaveLength(1);
+    });
   });
 });

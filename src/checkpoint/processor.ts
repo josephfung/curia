@@ -7,7 +7,7 @@ import { createCheckpointExtractionSkipped } from '../bus/events.js';
 import type { ToolResult } from '../skills/types.js';
 import type { ChannelPolicyConfig } from '../contacts/types.js';
 import {
-  loadFirstExternalOriginatorTier,
+  loadFirstExternalOriginator,
   resolveChannelTrust,
   shouldSkipCheckpointKgExtraction,
 } from './trust-gate.js';
@@ -40,7 +40,10 @@ export class ConversationCheckpointProcessor {
     if (turns.length === 0) return;
 
     const channelTrust = resolveChannelTrust(channelId, this.channelPolicies);
-    const firstExternalTier = await loadFirstExternalOriginatorTier(this.pool, conversationId);
+    // One audit read serves two consumers: the trust gate needs the tier, and
+    // extract-facts needs the contact id as a subject tiebreaker (#1694).
+    const firstExternal = await loadFirstExternalOriginator(this.pool, conversationId);
+    const firstExternalTier = firstExternal === 'none' ? 'none' : firstExternal.tier;
     const skipKgExtraction = shouldSkipCheckpointKgExtraction(channelTrust, firstExternalTier);
 
     if (skipKgExtraction) {
@@ -97,9 +100,26 @@ export class ConversationCheckpointProcessor {
     // others or prevent the watermark from advancing — hence Promise.allSettled.
     // Check both rejected promises (thrown errors) and resolved { success: false }
     // results — ExecutionLayer never throws, so the latter is the normal failure path.
+    // The conversation's external counterpart, passed to extract-facts so an ambiguous
+    // subject name ("Seth Berman", when two contacts share it) can be resolved to this
+    // contact's own node instead of being dropped. It is a tiebreaker, not an assertion
+    // that every fact in the transcript is about them — extract-facts only applies it
+    // when one of the ambiguous candidates IS this contact's node (#1694 / ADR-040).
+    // Undefined for principal/system/agent-originated conversations, which have no
+    // external counterpart to disambiguate against.
+    const subjectContactId = firstExternal === 'none' ? undefined : firstExternal.contactId ?? undefined;
+
     const results = await Promise.allSettled(
       CHECKPOINT_TOOLS.map(skill =>
-        this.executionLayer.invoke(skill.name, { text: transcript, source }, callerContext),
+        this.executionLayer.invoke(
+          skill.name,
+          // Only extract-facts accepts the hint; extract-relationships has no single
+          // subject to disambiguate, so it keeps the original input shape.
+          skill.name === 'extract-facts' && subjectContactId !== undefined
+            ? { text: transcript, source, subject_contact_id: subjectContactId }
+            : { text: transcript, source },
+          callerContext,
+        ),
       ),
     );
 

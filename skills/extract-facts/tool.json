@@ -1,19 +1,21 @@
 {
   "name": "extract-facts",
   "description": "Extract single-entity attribute facts from a passage of text and persist them as knowledge graph fact nodes. Self-classifies internally — always safe to call; exits early if no facts are found.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
     "text": "string (the message or turn text to extract facts from)",
     "source": "string (provenance string, e.g. 'system:checkpoint/conversation:abc/agent:coordinator/channel:cli')",
+    "subject_contact_id": "string? (optional contact UUID for the conversation's counterpart. Used ONLY to break a tie when a subject name matches several entities of the same type, and only when one of them is that contact's own node. Not a claim that every extracted fact is about this contact.)",
     "max_stored": "number? (optional cap on facts persisted in this invocation)"
   },
   "outputs": {
     "stored": "number (new or updated fact nodes persisted to the KG)",
     "redirected": "number (canonical contact attribute writes redirected to ContactService instead of KG)",
     "skipped": "boolean (true if the classifier gate determined no facts were present)",
-    "failed": "number (facts that could not be persisted due to errors)"
+    "failed": "number (facts that could not be persisted due to errors)",
+    "ambiguous": "number (facts dropped because the subject name matched several same-type entities and nothing could break the tie — distinct from `failed`: nothing malfunctioned, and the fix is to supply subject_contact_id or disambiguate the entities, not to retry)"
   },
   "permissions": [],
   "secrets": [],
@@ -22,5 +24,7 @@
     "entityMemory",
     "infraLlm"
   ],
-  "allowed_callers": ["system"]
+  "allowed_callers": [
+    "system"
+  ]
 }

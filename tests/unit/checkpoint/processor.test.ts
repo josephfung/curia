@@ -67,6 +67,95 @@ describe('ConversationCheckpointProcessor', () => {
     );
   });
 
+  // #1694 / ADR-040 — the hint has to actually be supplied. An optional input no
+  // caller passes is dead code, which is how the entity_enrichment warn in #1701 ended
+  // up on a path no manifest reaches.
+  describe('subject_contact_id wiring', () => {
+    // The audit row the trust gate already reads also carries the originator contact id.
+    const externalOriginator = {
+      rows: [{ tier: 'known', contact_id: 'contact-seth-2' }],
+    };
+
+    it('passes the external originator contact id to extract-facts', async () => {
+      stubs.queryMock.mockResolvedValueOnce(externalOriginator);
+      const processor = new ConversationCheckpointProcessor(
+        stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger,
+        { cli: { trust: 'high' } } as never,
+      );
+      processor.register();
+
+      await fireCheckpoint(stubs.subscribeHandlers, {
+        conversationId: 'conv-1', agentId: 'coordinator', channelId: 'cli',
+        since: '2026-01-01T00:00:00Z',
+        turns: [{ role: 'user', content: 'Seth lives in Toronto' }],
+      });
+
+      const factsCall = vi.mocked(stubs.executionLayer.invoke).mock.calls
+        .find(call => call[0] === 'extract-facts');
+      expect(factsCall).toBeDefined();
+      expect(factsCall![1]).toMatchObject({ subject_contact_id: 'contact-seth-2' });
+    });
+
+    it('does not pass the hint to extract-relationships', async () => {
+      // It has no single subject to disambiguate; sending the field would imply otherwise.
+      stubs.queryMock.mockResolvedValueOnce(externalOriginator);
+      const processor = new ConversationCheckpointProcessor(
+        stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger,
+        { cli: { trust: 'high' } } as never,
+      );
+      processor.register();
+
+      await fireCheckpoint(stubs.subscribeHandlers, {
+        conversationId: 'conv-1', agentId: 'coordinator', channelId: 'cli',
+        since: '2026-01-01T00:00:00Z',
+        turns: [{ role: 'user', content: 'Seth lives in Toronto' }],
+      });
+
+      const relCall = vi.mocked(stubs.executionLayer.invoke).mock.calls
+        .find(call => call[0] === 'extract-relationships');
+      expect(relCall![1]).not.toHaveProperty('subject_contact_id');
+    });
+
+    it('omits the hint when the conversation has no external originator', async () => {
+      // principal/system/agent-originated: no counterpart to disambiguate against.
+      stubs.queryMock.mockResolvedValueOnce({ rows: [] });
+      const processor = new ConversationCheckpointProcessor(
+        stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger,
+        { cli: { trust: 'high' } } as never,
+      );
+      processor.register();
+
+      await fireCheckpoint(stubs.subscribeHandlers, {
+        conversationId: 'conv-1', agentId: 'coordinator', channelId: 'cli',
+        since: '2026-01-01T00:00:00Z',
+        turns: [{ role: 'user', content: 'hello' }],
+      });
+
+      const factsCall = vi.mocked(stubs.executionLayer.invoke).mock.calls
+        .find(call => call[0] === 'extract-facts');
+      expect(factsCall![1]).not.toHaveProperty('subject_contact_id');
+    });
+
+    it('omits the hint when the audit row predates the contactId field', async () => {
+      stubs.queryMock.mockResolvedValueOnce({ rows: [{ tier: 'known', contact_id: null }] });
+      const processor = new ConversationCheckpointProcessor(
+        stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger,
+        { cli: { trust: 'high' } } as never,
+      );
+      processor.register();
+
+      await fireCheckpoint(stubs.subscribeHandlers, {
+        conversationId: 'conv-1', agentId: 'coordinator', channelId: 'cli',
+        since: '2026-01-01T00:00:00Z',
+        turns: [{ role: 'user', content: 'hello' }],
+      });
+
+      const factsCall = vi.mocked(stubs.executionLayer.invoke).mock.calls
+        .find(call => call[0] === 'extract-facts');
+      expect(factsCall![1]).not.toHaveProperty('subject_contact_id');
+    });
+  });
+
   it('calls extract-relationships with concatenated transcript', async () => {
     const processor = new ConversationCheckpointProcessor(
       stubs.bus, stubs.executionLayer, stubs.pool, stubs.logger,
