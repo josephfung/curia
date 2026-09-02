@@ -65,9 +65,13 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 # pulseaudio-utils provides parec/pacat, which SignalAudioTransport spawns to
 # move call PCM through the Pulse socket shared from the signal-cli container
 # (#1672). Client tools only — no PulseAudio daemon runs in this image.
-RUN apt-get update \
- && apt-get upgrade -y \
- && apt-get install -y --no-install-recommends curl pulseaudio-utils \
+# Acquire::Retries covers a transient Debian mirror hiccup, the apt-side equivalent of
+# the npm registry drop that motivated #1699. Without it a single failed fetch fails the
+# whole publish — and for the curia-postgres image this apt call is the ONLY network step,
+# so it gets no benefit from the pnpm retry wrapper.
+RUN apt-get -o Acquire::Retries=3 update \
+ && apt-get -o Acquire::Retries=3 upgrade -y \
+ && apt-get -o Acquire::Retries=3 install -y --no-install-recommends curl pulseaudio-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root system user/group for the runtime process.
@@ -158,7 +162,10 @@ RUN pnpm-retry pnpm add -w --save-prod --prod tsx
 # /root/.cache/node/corepack (confirmed by the Trivy alert path); the alternate
 # layout /root/.cache/corepack (used by older corepack versions) is removed too
 # so this stays correct across future base-image bumps.
-RUN rm -rf /root/.cache/node/corepack /root/.cache/corepack
+# pnpm-retry is build-only tooling; the last runtime-stage use is the `pnpm add` above.
+# Drop it here so it doesn't ship in the published image, consistent with this stage
+# already stripping unused npm/npx and the corepack cache (#1699).
+RUN rm -rf /root/.cache/node/corepack /root/.cache/corepack /usr/local/bin/pnpm-retry
 
 # Copy compiled output from build stage
 COPY --from=build /app/dist ./dist

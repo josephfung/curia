@@ -69,11 +69,17 @@ minimumReleaseAge: 1440
 # install, so they apply inside the image build, not just on a developer machine.
 # Purely transport-level: no interaction with minimumReleaseAge or the Dependabot
 # cooldown, which govern WHICH versions may be selected, not how they are fetched.
-fetchRetries: 5
+# Kept deliberately modest. These compose MULTIPLICATIVELY with the command-level
+# retry: worst case is (fetchRetries + 1) requests x fetchTimeout, inside up to
+# PNPM_RETRY_ATTEMPTS runs, at each of the three install sites. Chasing a bigger budget
+# buys little against a sustained outage and mostly delays an honest failure, so the
+# `build` job also carries a timeout-minutes bound. Note the two knobs read differently:
+# fetchRetries counts RETRIES (so 3 = 4 tries), PNPM_RETRY_ATTEMPTS counts TOTAL attempts.
+fetchRetries: 3
 fetchRetryFactor: 2
 fetchRetryMintimeout: 10000
-fetchRetryMaxtimeout: 90000
-fetchTimeout: 120000
+fetchRetryMaxtimeout: 60000
+fetchTimeout: 90000
 
 # Dependency version overrides. pnpm v10+ reads `overrides` ONLY from this file —
 # a `pnpm.overrides` block in package.json is silently ignored. These pins force

@@ -9,8 +9,12 @@
 # the digest within the major. Re-resolve the digest when intentionally moving pg majors.
 FROM pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-16-pgaudit \
+# Acquire::Retries covers a transient Debian mirror hiccup, the apt-side equivalent of
+# the npm registry drop that motivated #1699. Without it a single failed fetch fails the
+# whole publish — and for the curia-postgres image this apt call is the ONLY network step,
+# so it gets no benefit from the pnpm retry wrapper.
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends postgresql-16-pgaudit \
     && rm -rf /var/lib/apt/lists/*
 
 # Startup verification script ensures pgAudit is correctly set up on every boot,
