@@ -49,6 +49,32 @@ trustPolicyIgnoreAfter: 10080
 # nosemgrep: package_managers.pnpm.pnpm-missing-minimum-release-age.pnpm-minimum-release-age
 minimumReleaseAge: 1440
 
+# -- Registry request resilience (#1699) --
+#
+# These raise pnpm's own retry budget for request failures it CATCHES and classifies
+# as retryable (e.g. ERR_SOCKET_TIMEOUT, which it logs as "Will retry in Ns").
+# Defaults are fetchRetries: 2 with a 10s floor, which is thin for the emulated
+# linux/arm64 leg of docker-publish: it installs ~1000 packages under QEMU, so it
+# stays connected to the registry far longer than a native build and sees more of
+# any registry wobble.
+#
+# These settings alone are NOT the whole fix. The failure in run 33556099876 was an
+# UNHANDLED undici stream error (UND_ERR_SOCKET) that aborted the Node process before
+# pnpm could retry anything — no value here would have prevented it. The command-level
+# retry in docker/pnpm-retry.sh covers that case; these cover the softer ones, so a
+# hard process abort stays rare rather than routine.
+#
+# pnpm v10+ reads these from this file (camelCase), not .npmrc — the same reason
+# `overrides` lives here. The Dockerfile COPYs pnpm-workspace.yaml before every
+# install, so they apply inside the image build, not just on a developer machine.
+# Purely transport-level: no interaction with minimumReleaseAge or the Dependabot
+# cooldown, which govern WHICH versions may be selected, not how they are fetched.
+fetchRetries: 5
+fetchRetryFactor: 2
+fetchRetryMintimeout: 10000
+fetchRetryMaxtimeout: 90000
+fetchTimeout: 120000
+
 # Dependency version overrides. pnpm v10+ reads `overrides` ONLY from this file —
 # a `pnpm.overrides` block in package.json is silently ignored. These pins force
 # transitive deps onto patched versions to clear known CVEs.

@@ -19,7 +19,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/console/package.json ./apps/console/
 COPY apps/antfarm/package.json ./apps/antfarm/
 COPY packages/shared-types/package.json ./packages/shared-types/
-RUN pnpm install --frozen-lockfile
+# Retry wrapper: a dropped registry connection can abort the Node process outright
+# (unhandled stream error), which pnpm's own fetchRetries cannot catch. See
+# docker/pnpm-retry.sh for the incident and why both layers are needed (#1699).
+COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
+RUN pnpm-retry pnpm install --frozen-lockfile
 
 # Build backend
 COPY src/ ./src/
@@ -119,7 +123,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # does a strict re-resolution.) shared-types is imported type-only (erased at build), so
 # it isn't required at runtime, but shipping the member keeps the manifest honest.
 COPY --from=build /app/packages/shared-types ./packages/shared-types
-RUN pnpm install --frozen-lockfile --prod
+# Same transient-network guard as the build stage (#1699).
+COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
+RUN pnpm-retry pnpm install --frozen-lockfile --prod
 
 # tsx is needed at runtime: skill handlers are .ts files loaded via dynamic
 # import(), and they use ESM .js extension mapping (e.g., import from './foo.js'
@@ -139,7 +145,7 @@ RUN pnpm install --frozen-lockfile --prod
 #   --save-prod: tsx is declared as a *devDependency* in package.json, so --prod alone
 #     would leave it there and never install it — no ./node_modules/.bin/tsx, which the
 #     CMD below invokes. --save-prod promotes tsx into `dependencies` so it installs.
-RUN pnpm add -w --save-prod --prod tsx
+RUN pnpm-retry pnpm add -w --save-prod --prod tsx
 
 # Remove corepack's cached pnpm tarballs. Node 24's bundled corepack pre-caches
 # pnpm@11.0.8 (the version shipped with Node 24) during `corepack enable`, even
