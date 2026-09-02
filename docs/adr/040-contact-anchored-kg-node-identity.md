@@ -315,8 +315,10 @@ unless `subject_contact_id` picks a side, and the only caller supplying that hin
 checkpoint processor, which passes the conversation's counterpart — so a fact about a *third
 party* named in a transcript is dropped rather than stored. The nodes exist and can hold
 facts; the automatic extraction path largely cannot write to them without a hint. Watch the
-`ambiguous` counter after deploy. `extract-relationships` is worse and is tracked in #1714:
-it still takes `candidates[0]`, so it misattributes rather than skipping.
+`ambiguous` counter after deploy. `extract-relationships` took `candidates[0]` and so would
+have misattributed rather than skipped; it now skips and counts on the same contract (#1714),
+which means relationships about a shared name are dropped rather than attached to the wrong
+one of two real people. Dropping is recoverable; misattributing is not.
 
 **Orphaned anchors accumulate.** An anchored node whose contact goes away without archival
 never decays, because every decay and archival path now excludes the anchored tier. Three
@@ -343,7 +345,7 @@ contacts a durable identity; it does not give the KG one for everyone else.
   still assemble — adjacent, and made load-bearing by the deletion rule above)
 - #1711 (contact merge loses KG memory on a foreign-key violation — pre-existing, and the
   reason the Backfill section above no longer claims `085` fixes merges)
-- #1714 (`extract-relationships` still picks `candidates[0]` — pre-existing, but this ADR
-  makes same-label collisions routine rather than rare)
+- #1714 (`extract-relationships` picked `candidates[0]` — pre-existing, but this ADR makes
+  same-label collisions routine rather than rare, so it is fixed here rather than deferred)
 - Migrations 010, 016, 027, 056 (the indexes and backfills this supersedes or amends)
 - ADR-028 (shared, unbound agent memory) for the surrounding memory-governance model

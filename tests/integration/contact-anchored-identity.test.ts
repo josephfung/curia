@@ -323,8 +323,7 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
     // replay and the assertions all see the same uncommitted state, and nothing survives.
     // (The arms do take row locks on other suites' nodeless contacts for the life of each
     // transaction; these are short, so that is contention, not corruption.)
-    let backfillArms: string[];
-    let anchorSteps: string[];
+    let migrationSteps: string[];
 
     beforeAll(async () => {
       const sql = await readFile(
@@ -333,39 +332,30 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       );
       const up = sql.split('-- Down Migration')[0] ?? '';
 
-      // Match each arm from its WITH clause to the terminating semicolon. Deliberately NOT
-      // a split(';'): this file has semicolons inside `--` comments and inside the
-      // COMMENT ON string literal, and a naive split cuts straight through them. An earlier
-      // version did exactly that and lost arm B the moment a comment gained a semicolon.
-      // Neither arm contains a semicolon of its own, so first-semicolon is the real end.
-      // Step 2 / 2a / 2b are plain UPDATEs, extracted by their leading keyword + table so
-      // the anchoring pass and the archived-node repair are exercised too. Without these
-      // the suite replayed only the arms and the repair in 2a was unguarded by construction.
-      anchorSteps = (up.match(/^UPDATE kg_nodes[\s\S]*?;/gm) ?? []);
-      if (anchorSteps.length !== 3) {
-        throw new Error(
-          `migration 085: expected 3 UPDATE kg_nodes steps (anchor, un-archive, clear warnings), `
-          + `found ${anchorSteps.length} — update this extractor rather than skipping them.`,
-        );
-      }
+      // Replay EVERY data step, in file order, rather than a hand-picked list of statement
+      // shapes. The previous version matched `WITH candidates` / `WITH minted` / `UPDATE
+      // kg_nodes` by name, so when the organization backfill was split into an INSERT plus
+      // a link step those two silently stopped being replayed — the suite kept passing on
+      // the arms it knew about while testing nothing about the half that had changed.
+      //
+      // Comments are stripped BEFORE splitting on ';': this file has semicolons inside `--`
+      // comments and inside the COMMENT ON string literal, and splitting first cuts through
+      // them. Whatever fragments the COMMENT literal produces do not begin with a data-step
+      // keyword, so the filter discards them.
+      migrationSteps = up
+        .replace(/^\s*--[^\n]*$/gm, '')
+        .split(';')
+        .map(stmt => stmt.trim())
+        .filter(stmt => /^(WITH|INSERT|UPDATE)\b/i.test(stmt));
 
-      backfillArms = (['candidates', 'minted'] as const).map((cte) => {
-        const match = new RegExp(`^WITH\\s+${cte}\\s+AS\\b[\\s\\S]*?;`, 'm').exec(up);
-        if (!match) {
-          // Loud rather than silent: a renamed CTE would otherwise reduce this whole suite
-          // to asserting nothing while still reporting green.
-          throw new Error(
-            `migration 085: could not locate backfill arm "WITH ${cte} AS ..." — if the CTE `
-            + 'was renamed, update this extractor; do not let the suite run without it.',
-          );
-        }
-        return match[0];
-      });
-
-      // Arm A ("candidates") and arm B ("minted").
-      expect(backfillArms).toHaveLength(2);
-      expect(backfillArms[0]).toContain('kind = \'organization\'');
-      expect(backfillArms[1]).toContain('migration_085');
+      // Anchor, un-archive, clear-warnings, arm A, arm B non-org, arm B org insert, arm B
+      // org link. A changed count means the migration grew or lost a data step and this
+      // extractor has to be updated — loud, rather than silently replaying a subset.
+      expect(migrationSteps).toHaveLength(7);
+      // Spot-check identity so a reordering that preserves the count still fails.
+      expect(migrationSteps.filter(st => /^WITH candidates\b/.test(st))).toHaveLength(1);
+      expect(migrationSteps.filter(st => /^WITH minted\b/.test(st))).toHaveLength(1);
+      expect(migrationSteps.filter(st => /migration_085/.test(st))).toHaveLength(2);
     });
 
     /** Run `body` on a dedicated client in a transaction that is always rolled back. */
@@ -387,9 +377,9 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       }
     }
 
-    /** Replay the migration's data steps in shipped order: anchor, repair, then both arms. */
+    /** Replay the migration's data steps in shipped order. */
     async function runBackfill(tx: pg.PoolClient): Promise<void> {
-      for (const stmt of [...anchorSteps, ...backfillArms]) {
+      for (const stmt of migrationSteps) {
         await tx.query(stmt);
       }
     }
@@ -459,27 +449,58 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       });
     });
 
-    it('does not link an organization contact whose domain matches nothing', async () => {
-      // Arm B then mints it one, rather than guessing at an unrelated organization.
+    it('mints a LABEL-TIER org node when no domain matches, carrying the domain', async () => {
+      // Arm B mints rather than guessing at an unrelated organization — but label-tier, so
+      // the node stays deduplicated by (lower(label), type) and stays shareable by the
+      // other role addresses at that domain. The domain is copied into properties because
+      // that is resolveOrCreateOrgNode's FIRST lookup; without it the next role address
+      // finds nothing and mints a second node for the same organization.
+      const domain = `nowhere-${randomUUID().slice(0, 8)}.test`;
       await inRolledBackTransaction(async (tx) => {
         const orphan = await insertContact({
           displayName: `Nowhere Inc ${randomUUID()}`,
           kind: 'organization',
-          primaryEmail: `hello@nowhere-${randomUUID().slice(0, 8)}.test`,
+          primaryEmail: `hello@${domain}`,
         }, tx);
 
         await runBackfill(tx);
 
-        const { rows } = await tx.query<{ type: string; identity_source: string; source: string }>(
-          `SELECT n.type, n.identity_source, n.source
+        const { rows } = await tx.query<{
+          type: string; identity_source: string; source: string; domain: string | null;
+        }>(
+          `SELECT n.type, n.identity_source, n.source, n.properties->>'domain' AS domain
              FROM contacts c JOIN kg_nodes n ON n.id = c.kg_node_id
             WHERE c.id = $1`,
           [orphan],
         );
         expect(rows).toHaveLength(1);
         expect(rows[0]!.type).toBe('organization');
-        expect(rows[0]!.identity_source).toBe('contact');
+        expect(rows[0]!.identity_source).toBe('label');
         expect(rows[0]!.source).toBe('migration_085');
+        expect(rows[0]!.domain).toBe(domain);
+      });
+    });
+
+    it('shares one minted org node between two same-name org contacts', async () => {
+      // The org half mints per distinct display_name, not per contact — the opposite of
+      // the person half — because org nodes are legitimately shared and label-keyed.
+      await inRolledBackTransaction(async (tx) => {
+        const label = `Acme Group ${randomUUID()}`;
+        const a = await insertContact({
+          displayName: label, kind: 'organization', primaryEmail: `info@acme-${randomUUID().slice(0, 8)}.test`,
+        }, tx);
+        const b = await insertContact({
+          displayName: label, kind: 'organization', primaryEmail: `support@acme-${randomUUID().slice(0, 8)}.test`,
+        }, tx);
+
+        await runBackfill(tx);
+
+        const { rows } = await tx.query<{ id: string; kg_node_id: string | null }>(
+          'SELECT id, kg_node_id FROM contacts WHERE id = ANY($1::uuid[])', [[a, b]],
+        );
+        const links = new Map(rows.map(r => [r.id, r.kg_node_id]));
+        expect(links.get(a)).not.toBeNull();
+        expect(links.get(a)).toBe(links.get(b));
       });
     });
 
