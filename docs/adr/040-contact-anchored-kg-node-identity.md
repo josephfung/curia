@@ -158,8 +158,9 @@ onto the wrong person is not.
 
 ### Contact deletion
 
-Deleting a contact **archives its anchored node** (`archived_at = now()`). Archiving is the
-right instrument here for three reasons: `idx_kg_nodes_unique` already excludes archived
+Deleting a contact **archives its anchored node** (`archived_at = now()`), which is only
+unambiguous because nothing else archives anchored nodes — see *Identity does not decay*
+below. Archiving is the right instrument here for three reasons: `idx_kg_nodes_unique` already excludes archived
 rows, so the label is freed for reuse without a demote step that could itself raise a
 unique violation *during a delete*; the node and its facts are soft-deleted, so the
 knowledge is recoverable in SQL rather than destroyed; and it reuses the dream engine's
@@ -167,6 +168,47 @@ existing archival semantics instead of inventing an orphan state nothing else un
 
 Organization nodes are exempt — they are unanchored and shared, and outlive any one
 contact.
+
+### Identity does not decay
+
+Archiving an anchored node on contact deletion gives `archived_at` a specific meaning for
+these rows: *this contact is gone*. That meaning only holds if nothing else archives them.
+Today something does.
+
+`DreamEngine` decays every non-permanent node continuously and archives anything at or
+below `archiveThreshold` (0.05), with no exclusion for nodes a contact points at. Its
+decay-warning mechanism does not help: a node is "important" enough to warn only if it
+carries high sensitivity or has an edge count at or above the p95 floor of 5, and being a
+contact's node is not a criterion. Warned nodes are archived anyway after
+`warnHoldBackDays`. Measured in production: **532 of 534** contact-linked nodes are
+non-permanent, and **478** of those would be archived with no warning at all.
+
+Nor does interaction protect them. The only writes that refresh an entity node's
+`last_confirmed_at` are an explicit `updateNode`, a human confirming a decay warning, and a
+creation-time upsert collision. Receiving mail from someone, replying to them, and storing
+facts *about* them all leave the entity node untouched — `storeFact`'s `updateNode` calls
+target the fact node, not the entity. A contact you email daily decays at exactly the same
+rate as one you met once. The decay is monotonic and universal.
+
+So: **a contact's node is the container for its memory, not a memory itself. Containers
+persist as long as the contact does; contents age normally.**
+
+Contact-anchored nodes are excluded from decay and from archival — the predicate
+`identity_source = 'label'` is added to `DreamEngine`'s decay passes (1a, 1b) and its
+node-archival pass (2b). Facts hanging off an anchored node keep decaying exactly as
+before, so this does not freeze memory; it stops the *anchor* from evaporating out from
+under a live contact.
+
+This is ADR-039's rule applied consistently rather than a new one. *Did a process decide
+this, or did Curia learn it?* A contact-anchored node's existence is decided by contact
+creation. Its facts are learned. The first gets a durable row; the second decays.
+
+Rejected: promoting anchored nodes to `decay_class = 'permanent'` in the backfill. It
+needs no `DreamEngine` change and reuses migration 062's mechanism, but it is a data fix
+rather than a rule — `createContact` and every future node-writing path has to remember to
+set it, and any `updateNode` can silently clear it. That is an invariant maintained by
+convention across N call sites, which is the same shape this ADR rejected for the identity
+pointer. It also overloads `permanent`, which today means "a fact that will never change".
 
 ### Backfill
 
@@ -223,6 +265,13 @@ merge. The identity rule is enforced by Postgres rather than maintained by conve
 `identity_source` makes "why does this node not dedup by label?" answerable from a single
 column.
 
+**Accepted: the graph stops self-pruning contact anchors.** Excluding anchored nodes from
+decay means the node count for contacts only grows, and a contact who is never heard from
+again keeps their anchor indefinitely. That is deliberate — the alternative is an identity
+that evaporates on a timer — but it moves the cleanup question onto contact deletion, which
+is now the only thing that retires an anchor. Facts still decay, so the storage that
+actually accumulates is still bounded by the existing mechanism.
+
 **Harder / accepted trade-offs.** There are now two identity tiers to keep in mind, and the
 `upsertNode`-is-label-only invariant is the seam where a careless caller could put an
 anchored node back into the label pool. Name-only writes return `ambiguous` far more often
@@ -265,5 +314,7 @@ contacts a durable identity; it does not give the KG one for everyone else.
 - PR #1700 (this ADR), PR #1701 (increment 1 — visibility, and the measurement above)
 - #1702 (`entity-context` reports a DB failure as "contact not found" — the same
   absence-of-evidence failure on the error path, found while reviewing #1701)
+- #1707 (the entity-context read path ignores `archived_at`, so archived nodes and facts
+  still assemble — adjacent, and made load-bearing by the deletion rule above)
 - Migrations 010, 016, 027, 056 (the indexes and backfills this supersedes or amends)
 - ADR-028 (shared, unbound agent memory) for the surrounding memory-governance model

@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **ADR-040 (Accepted)** — contact-anchored KG node identity; a contact's node is keyed on the contact, not its label. (#1694)
 - **ADR-040 measured population** — migration `085` sizing recorded from production: 14 nodeless contacts, arm A empty. (#1694)
+- **ADR-040 identity decay rule** — contact-anchored KG nodes are excluded from decay and archival; facts still decay. (#1694)
 - **`scripts/kg-node-linkage-report.ts`** — read-only count of nodeless contacts, split across ADR-040's two backfill arms. (#1694)
 - **Signal voice calls** — anyone can Signal-call Curia; live conversation via VoiceRuntime, config-gated off. (#1672)
 - **`MemorySampler`** — periodic `process.memoryUsage()` logging to diagnose heap growth in prod. (#1650)
