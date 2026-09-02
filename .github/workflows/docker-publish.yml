@@ -3,6 +3,8 @@ name: docker-publish
 # Build, push, sign, and SBOM-attest the Curia app + Postgres images to GHCR.
 # - release published -> semver + latest (app), pg16 + latest (postgres)
 # - push to main      -> edge (both), for dogfood / curia-deploy pulls
+# - manual dispatch   -> with a tag: that tag's semver only, rebuilt from its
+#                        source; without a tag: same as a push to main.
 on:
   release:
     types: [published]
@@ -17,49 +19,77 @@ on:
 # Least privilege at the workflow level; jobs opt into the scopes they need
 # (mirrors release.yml). Only the `build` job touches GHCR / OIDC, so the
 # `packages: write` + `id-token: write` scopes live there, not here — the
-# `guard` job (which only validates a tag string) never receives them.
+# `resolve` job (which only validates a tag string) never receives them.
 permissions:
   contents: read
 
-# Only the newest run per ref needs to publish. A rapid batch of main merges
-# (e.g. several back-to-back dependency bumps) each retag `edge`, so keeping
-# every superseded ~10min build running is pure waste — cancel the in-flight
-# one when a newer commit for the same ref arrives.
+# Only the newest run per publish target needs to publish. A rapid batch of main
+# merges (e.g. several back-to-back dependency bumps) each retag `edge`, so
+# keeping every superseded ~10min build running is pure waste — cancel the
+# in-flight one when a newer commit for the same target arrives.
 #
-# Keying on `github.ref` (not just the workflow name) keeps the trigger types
+# Keying on the target (not just the workflow name) keeps the trigger types
 # independent: `push` to main collapses into one group (refs/heads/main) so
 # older edge builds get cancelled, while each `release` sits in its own
 # per-tag group (refs/tags/vX.Y.Z) and is never cancelled by another release
 # or by a main push. `edge` is a mutable last-write-wins tag, so cancelling a
 # partial push just leaves the previous `edge` in place until the winner lands.
+#
+# `inputs.tag` has to come first: on a workflow_dispatch, `github.ref` is the
+# branch the run was launched from rather than the tag being built (#1715), so
+# without it a manual re-publish would share main's group and be cancelled by
+# the next merge — precisely the wrong moment, since a re-publish is an
+# incident-response action.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref }}
   cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Validate a workflow_dispatch tag input against strict semver to avoid
-  # injection (mirrors release.yml). No-op on release/push triggers.
-  guard:
+  # Resolve what is being *built*, before anything else keys off it.
+  #
+  # `github.ref` and `github.event_name` describe where a run was launched from,
+  # not what gets checked out: a workflow_dispatch carrying `tag: v0.40.0` still
+  # reports `refs/heads/main`. Keying the image tags off those meant a manual
+  # re-publish built the old release's source and pushed it as `:edge` — moving
+  # the pointer production consumes by default *backwards*, onto code whose
+  # migrations had already run against the live database — while publishing no
+  # semver tag at all (#1715).
+  #
+  # So the target is resolved once, here, and everything downstream reads
+  # `needs.resolve.outputs.tag`. Mirrors the `resolve` job in release.yml.
+  resolve:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      # The release tag being published or re-published; empty for an edge build.
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
-      - name: Validate dispatch tag
-        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
-        # Pass the input through an env var so the shell never sees raw
-        # expression output — prevents injection if the value contains
-        # shell metacharacters (mirrors the pattern in release.yml).
+      - name: Resolve and validate the publish target
+        id: resolve
+        # Pass the event/input values through env vars so the shell never sees
+        # raw expression output — prevents injection if a value contains shell
+        # metacharacters (mirrors the pattern in release.yml).
         env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
-          printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$' \
-            || { echo "Invalid tag format"; exit 1; }
+          # A dispatch input wins; on a release event it is empty and the
+          # release's own tag is used. On a push — or a bare dispatch — both are
+          # empty, which is the signal for an `edge` build.
+          TAG="${INPUT_TAG:-$EVENT_TAG}"
+          if [ -n "$TAG" ]; then
+            printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$' \
+              || { echo "Invalid tag format: refusing to build"; exit 1; }
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publish target: ${TAG:-main (edge)}"
 
   build:
-    needs: guard
+    needs: resolve
     runs-on: ubuntu-latest
     # Hard wall-clock bound. The retry layers added in #1699 compose multiplicatively —
     # pnpm's own fetch retries per request, inside up to 3 command-level attempts, across
@@ -79,28 +109,53 @@ jobs:
           - name: curia
             image: curia
             dockerfile: Dockerfile
-            # App tags: semver+latest on release, edge on main.
+            # App tags: semver on any release build (published or re-published),
+            # `latest` only on a real release, `edge` only on a main build.
+            #
+            # `value=` pins the semver source to the resolved target. Without it
+            # metadata-action falls back to its default `context: workflow` and
+            # derives the version from `github.ref`, which on a dispatch is a
+            # branch and yields no semver tag at all.
+            #
+            # `latest` deliberately stays keyed to the event rather than to the
+            # target: like `edge` it is a floating "newest" pointer, and a
+            # re-publish names an arbitrary older tag, so only an actual release
+            # may advance it.
             tags: |
-              type=semver,pattern=v{{version}}
-              type=semver,pattern=v{{major}}.{{minor}}
+              type=semver,pattern=v{{version}},value=${{ needs.resolve.outputs.tag }}
+              type=semver,pattern=v{{major}}.{{minor}},value=${{ needs.resolve.outputs.tag }}
               type=raw,value=latest,enable=${{ github.event_name == 'release' }}
-              type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+              type=raw,value=edge,enable=${{ needs.resolve.outputs.tag == '' && github.ref == 'refs/heads/main' }}
           - name: curia-postgres
             image: curia-postgres
             dockerfile: docker/postgres.Dockerfile
-            # DB is versioned by pg major, not app semver.
+            # DB is versioned by pg major, not app semver — so every tag it has
+            # is a floating pointer, and none of them may be moved by a
+            # re-publish of an old app release. That leaves a dispatched
+            # re-publish with nothing to write for this image; the steps below
+            # skip the leg rather than failing on an empty tag list.
             tags: |
               type=raw,value=pg16,enable=${{ github.event_name == 'release' }}
               type=raw,value=latest,enable=${{ github.event_name == 'release' }}
-              type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+              type=raw,value=edge,enable=${{ needs.resolve.outputs.tag == '' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On a manual workflow_dispatch re-publish, check out the requested
-          # tag so the built image matches inputs.tag (validated in the guard
-          # job). For release/push triggers inputs.tag is empty, so fall back to
-          # the event ref (the release tag or the pushed branch).
-          ref: ${{ inputs.tag || github.ref }}
+          # On a manual re-publish, check out the requested tag so the built
+          # image really is that release's source. For release/push triggers the
+          # resolved tag is the release tag or empty, so this falls back to the
+          # event ref (the release tag or the pushed branch).
+          ref: ${{ needs.resolve.outputs.tag || github.ref }}
+
+      # metadata-action stamps `org.opencontainers.image.revision` from
+      # `github.sha`, which on a dispatch is the launch branch's HEAD — not the
+      # tag just checked out. A re-published v0.40.0 image would therefore claim
+      # main's revision, and curia-deploy's deploy-time revision assert
+      # (curia-deploy#213 / #215) would wave that old image straight through.
+      # Read the commit that was actually checked out instead.
+      - name: Resolve the built commit
+        id: src
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -118,9 +173,23 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
           tags: ${{ matrix.tags }}
+          # Overrides metadata-action's `github.sha` default — see the step above.
+          labels: |
+            org.opencontainers.image.revision=${{ steps.src.outputs.sha }}
+
+      # With no tags, `push: true` fails buildx outright ("tag is needed when
+      # pushing to registry"), which would turn a correct no-op into a red run
+      # and file a spurious publish-failure issue. Skip instead — but say so in
+      # the run log, so a skipped image is never mistaken for a published one.
+      - name: Report an image with nothing to publish
+        if: steps.meta.outputs.tags == ''
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: echo "::notice::No tags apply to ${IMAGE} on this trigger; skipping its build and push."
 
       - name: Build and push
         id: build
+        if: steps.meta.outputs.tags != ''
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -133,9 +202,11 @@ jobs:
           sbom: true
 
       - name: Install cosign
+        if: steps.meta.outputs.tags != ''
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign the pushed image by digest
+        if: steps.meta.outputs.tags != ''
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
@@ -152,8 +223,11 @@ jobs:
   #
   # Gated on `needs.build.result == 'failure'` rather than on the event name, so it
   # fires for a failed manual republish too (the moment someone is already firefighting
-  # a stale tag) while never firing for a `guard` rejection of a malformed dispatch tag,
-  # which is a typo, not an incident.
+  # a stale tag) while never firing for a `resolve` rejection of a malformed tag, which
+  # is a typo, not an incident — `build` is then `skipped`, not `failure`. That covers a
+  # malformed *release* tag as well, which `resolve` now rejects: it stops the publish
+  # dead instead of pushing `latest` with no semver tag beside it, and you are standing
+  # at the release you just cut when it happens.
   #
   # `failure()` deliberately excludes cancellation: `cancel-in-progress` cancels
   # superseded builds on a rapid batch of main merges, and that is normal. `always()`
@@ -162,7 +236,7 @@ jobs:
   # push can cancel the alert itself — benign, because the newer run either succeeds
   # (the tags are fresh, the alert was moot) or fails and raises its own.
   notify-failure:
-    needs: build
+    needs: [resolve, build]
     if: always() && needs.build.result == 'failure'
     runs-on: ubuntu-latest
     permissions:
@@ -171,6 +245,9 @@ jobs:
     steps:
       - name: Open or update the publish-failure issue
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # The publish *target*, which on a dispatch is not `context.ref` (#1715).
+          RESOLVED_TAG: ${{ needs.resolve.outputs.tag }}
         with:
           script: |
             const label = 'publish-failure';
@@ -178,14 +255,20 @@ jobs:
             const sha = context.sha.substring(0, 8);
 
             // Say what actually happened rather than hardcoding "main" / ":edge".
-            // This workflow also runs on `release: published`, where main is not
-            // involved and it is the semver + `latest` tags that are missing.
+            // This workflow also runs on `release: published` (where main is not
+            // involved and it is the semver + `latest` tags that are missing) and
+            // on a manual re-publish of an existing tag. Key off the resolved
+            // target, not `context.ref` — on a dispatch the latter is the branch
+            // the run was launched from, not the tag being built (#1715).
+            const targetTag = process.env.RESOLVED_TAG || '';
             const isRelease = context.eventName === 'release';
-            const what = isRelease
-              ? `release \`${context.ref.replace('refs/tags/', '')}\``
+            const what = targetTag
+              ? `${isRelease ? 'release' : 're-publish of'} \`${targetTag}\``
               : `\`${context.ref}\` at \`${sha}\``;
-            const staleTags = isRelease
-              ? 'the release\'s semver and `latest` tags may not have been published'
+            const staleTags = targetTag
+              ? (isRelease
+                  ? 'the release\'s semver and `latest` tags may not have been published'
+                  : `the semver tags for \`${targetTag}\` may not have been re-published`)
               : '`:edge` may still point at the previously published commit';
 
             const body = [
@@ -258,7 +341,7 @@ jobs:
             const { data: created } = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `docker-publish failed for ${isRelease ? context.ref.replace('refs/tags/', '') : 'main'} (${sha})`,
+              title: `docker-publish failed for ${targetTag || `main (${sha})`}`,
               labels: [label, 'infra'],
               body,
             });
