@@ -163,12 +163,14 @@ hold KG nodes; the second contact keeps `kg_node_id = NULL`. This ADR removes th
 *exclusions*' dependency on that, and nothing else. Same-name contacts remain second-class
 KG citizens for facts, relationships, and entity-context enrichment: facts about them have
 nowhere to live, and enrichment returns nothing. That is a separate, still-open problem,
-tracked in **#1694**. It must not be treated as resolved by this change.
+tracked in **#1694**. It must not be treated as resolved by this change. The chosen
+resolution is ADR-040 (contact-anchored node identity), which supersedes this paragraph
+once it moves from Proposed to Accepted.
 
 ## Related
 
 - #1625 (this change), #1623 (the incident), PR #1624 (interim `multiValued` fix)
 - #1027 / PR #1040 (original decline → exclusion wiring)
-- #1694 (KG same-name node identity — still open)
+- #1694 (KG same-name node identity — still open) / ADR-040 (the chosen resolution)
 - #1695 (`mergeContacts` write sequence made transactional — closed)
 - ADR-028 (shared, unbound agent memory) for the surrounding memory-governance model
