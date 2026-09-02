@@ -111,6 +111,39 @@ describe('EntityContextHandler', () => {
     expect(reason).not.toMatch(/^no (facts|context|information)/i);
   });
 
+  it('echoes inputId back so the agent can map the answer to what it asked for', async () => {
+    // The email case is why this matters: contactId is a UUID the caller never saw,
+    // and displayName may not resemble the address it supplied.
+    const ctx = makeCtx(
+      { entityIds: ['seth@example.com'] },
+      { nodeless: [{ inputId: 'seth@example.com', contactId: 'contact-2', displayName: 'Seth Berman' }] },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+    const data = expectData(result) as unknown as { nodeless: Array<{ inputId: string }> };
+
+    expect(data.nodeless[0].inputId).toBe('seth@example.com');
+  });
+
+  it('emits nodeless before entities so head-slice truncation cannot drop it', async () => {
+    // The execution layer caps aggregate output by JSON.stringify + slice(0, max),
+    // and stringify preserves insertion order. If entities came first, a large batch
+    // would truncate away the one signal saying some contacts can hold no knowledge —
+    // and they are absent from `unresolved` too, so they would vanish entirely.
+    const ctx = makeCtx(
+      { contactIds: ['contact-1', 'contact-2'] },
+      {
+        entities: [makeEntity()],
+        nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' }],
+      },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+    const keys = Object.keys(expectData(result));
+
+    expect(keys.indexOf('nodeless')).toBeLessThan(keys.indexOf('entities'));
+  });
+
   it('omits the nodeless key entirely when there is nothing to report', async () => {
     // An always-present empty array is prompt noise on the overwhelmingly common
     // path where every contact has a node.
