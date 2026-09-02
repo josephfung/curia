@@ -587,8 +587,8 @@ describe('ExtractFactsHandler', () => {
   // These ten pre-existing call sites still logged it. `subject` is an LLM-extracted
   // entity name (usually a person's name) and the pino redact list does not cover it.
   // Substitute: entityNodeId where a node is resolved; omit it when resolution has
-  // not completed. `attribute` is a snake_case key and is kept — it is not identifying
-  // on its own.
+  // not completed. `attribute` is logged only when it is snake_case — the LLM can
+  // put a name in that field, and pino does not redact it.
   describe('fact-loop logs never carry the raw subject name (PII guard)', () => {
     const PII_SUBJECT = 'Priya Ramanathan';
     const UNNORMALIZABLE_PHONE = '020 7946 0958';
@@ -834,6 +834,29 @@ describe('ExtractFactsHandler', () => {
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
+    });
+
+    it('does not log a non-snake_case attribute (PII guard)', async () => {
+      // The extraction prompt asks for snake_case keys, but the model can ignore
+      // that and put a person's name in `attribute`. pino does not redact it.
+      const entityMemory = makeEntityMemory();
+      vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({
+        stored: false,
+        action: 'conflict',
+        conflict: 'contradicts existing value: London',
+      });
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} is vegetarian.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson(PII_SUBJECT, 'vegetarian')]),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.warn, /fact not stored/);
+      expectNoPii(call);
+      expect(call![0]).not.toHaveProperty('attribute');
     });
 
     it('programming-error in fact loop', async () => {
