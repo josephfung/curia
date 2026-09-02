@@ -582,7 +582,28 @@ export class ContactService {
    * of minting a person node.
    */
   async createContact(options: CreateContactOptions): Promise<Contact> {
+    return (await this.createContactWithKgOutcome(options)).contact;
+  }
+
+  /**
+   * `createContact`, plus whether the KG node it linked was MINTED here or was already
+   * there (adopted, caller-supplied, or a shared organization node).
+   *
+   * Orphan-cleanup paths need this. When `linkIdentity` loses its race they delete the
+   * contact, and what should happen to the node depends entirely on where it came from: a
+   * node minted moments ago for this failed attempt should go with it, whereas an adopted
+   * one may carry facts and edges accrued long before and is not ours to remove. Since
+   * ADR-040 a minted anchored node also never decays, so leaving it behind is a permanent
+   * leak that makes later resolution ambiguous — the reason this is threaded rather than
+   * left to a periodic sweep.
+   */
+  async createContactWithKgOutcome(
+    options: CreateContactOptions,
+  ): Promise<{ contact: Contact; kgNodeCreated: boolean }> {
     const now = new Date();
+    // Set only where this call actually mints a node. Adoption, an explicit kgNodeId and
+    // organization routing all leave it false: those nodes outlive this contact.
+    let kgNodeCreated = false;
 
     // Defense-in-depth: sanitize display names at storage time to prevent
     // stored prompt injection. External sources (email participants, CRM imports)
@@ -669,6 +690,7 @@ export class ContactService {
             source: options.source,
           });
           kgNodeId = entity.id;
+          kgNodeCreated = true;
         }
 
         // Org routing did not fire or returned null (KG transient failure), so we fell
@@ -754,6 +776,7 @@ export class ContactService {
       // collide however many namesakes already exist.
       if (pgCode === '23505' && constraint === 'idx_contacts_kg_node_unique') {
         const replacement = await this.mintAnchoredNodeForContact(contact, options.source);
+        kgNodeCreated = replacement !== null;
         this.logger?.warn(
           {
             contactId: contact.id,
@@ -827,7 +850,7 @@ export class ContactService {
       });
     }
 
-    return contact;
+    return { contact, kgNodeCreated };
   }
 
   /** Retrieve a contact by ID. Returns undefined if not found. */
@@ -1096,7 +1119,7 @@ export class ContactService {
       return { contactId: existing.contactId, tier: existing.tier, created: false };
     }
 
-    const contact = await this.createContact({
+    const { contact, kgNodeCreated } = await this.createContactWithKgOutcome({
       displayName: params.displayName,
       fallbackDisplayName: params.fallbackDisplayName,
       source: params.source,
@@ -1117,9 +1140,10 @@ export class ContactService {
       // 23505: identity already belongs to an existing contact (concurrent create).
       // Non-23505: unexpected failure. In both cases the new contact row is orphaned.
       try {
-        // Orphan cleanup: createContact may have adopted a pre-existing node. See the
-        // archiveAnchoredNode note on deleteContact.
-        await this.deleteContact(contact.id, { archiveAnchoredNode: false });
+        // Orphan cleanup. Retire the node only if THIS call minted it: an adopted node may
+        // carry facts and edges accrued long before this failed attempt (ADR-040). A minted
+        // one is anchored and so never decays, which is why it cannot simply be left.
+        await this.deleteContact(contact.id, { archiveAnchoredNode: kgNodeCreated });
       } catch (cleanupErr) {
         this.logger?.warn(
           {

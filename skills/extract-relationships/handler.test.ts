@@ -237,6 +237,10 @@ describe('ExtractRelationshipsHandler', () => {
       // Neither namesake picked up the edge.
       expect(await entityMemory.findEdges(a!)).toHaveLength(0);
       expect(await entityMemory.findEdges(b!)).toHaveLength(0);
+      // And the OTHER endpoint was never minted. Looking up both ends before creating
+      // either is what prevents an edgeless node being persisted for a triple the handler
+      // decided not to record.
+      expect(await entityMemory.findEntities('Project Atlas')).toHaveLength(0);
     });
 
     it('skips and counts a triple whose OBJECT matches two nodes', async () => {
@@ -260,6 +264,8 @@ describe('ExtractRelationshipsHandler', () => {
       });
       expect(await entityMemory.findEdges(a!)).toHaveLength(0);
       expect(await entityMemory.findEdges(b!)).toHaveLength(0);
+      // The subject is the new label this time — it must not be minted either.
+      expect(await entityMemory.findEntities('Dana Wu')).toHaveLength(0);
     });
 
     it('still resolves when exactly one candidate has the requested type', async () => {

@@ -57,7 +57,21 @@ export async function bootstrapAgentIdentity(
       `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at, identity_source)
        VALUES ('person', $1, $2, 1.0, 'permanent', 'bootstrap', now(), now(), 'contact')
        ON CONFLICT ((properties->>'is_agent')) WHERE (properties->>'is_agent') = 'true'
-       DO UPDATE SET label = EXCLUDED.label, last_confirmed_at = now()
+       DO UPDATE SET label = EXCLUDED.label,
+                     last_confirmed_at = now(),
+                     -- The conflict path must anchor too, not just the insert. An agent
+                     -- node that exists while no contact points at it (a previous boot
+                     -- whose contact INSERT failed) is skipped by migration 085 step 2, so
+                     -- it arrives here still label-tier. Without this the contact upsert
+                     -- below would link a label-tier node — contact-linked but adoptable,
+                     -- which is exactly the invariant ADR-040 exists to hold.
+                     identity_source = 'contact',
+                     -- Anchoring clears any pending warning, for the same reason
+                     -- anchorNode() does: nothing retires an anchored node's warning now
+                     -- that the decay passes, listDecayWarnings and dismissDecayWarning
+                     -- all skip the anchored tier, so it would sit warned forever.
+                     warned_at = NULL,
+                     warn_reason = NULL
        RETURNING id`,
       [
         displayName,

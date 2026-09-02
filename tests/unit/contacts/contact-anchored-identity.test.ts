@@ -305,6 +305,52 @@ describe('contact-anchored KG node identity (ADR-040)', () => {
       expect(await store.getNode(nodeId)).toBeDefined();
     });
 
+    it('reports mint-vs-adopt so orphan cleanup can tell them apart', async () => {
+      // The distinction the three orphan-cleanup callers branch on. A minted node is
+      // anchored and never decays, so abandoning it leaks; an adopted one may carry facts
+      // from before this contact existed, so removing it destroys them.
+      const { entity } = await entityMemory.createEntity({
+        type: 'person', label: 'Dana Wu', properties: {}, source: 'extraction',
+      });
+
+      const adopted = await service.createContactWithKgOutcome({
+        displayName: 'Dana Wu', source: 'test',
+      });
+      expect(adopted.contact.kgNodeId).toBe(entity.id);
+      expect(adopted.kgNodeCreated).toBe(false);
+
+      const minted = await service.createContactWithKgOutcome({
+        displayName: 'Someone New', source: 'test',
+      });
+      expect(minted.kgNodeCreated).toBe(true);
+
+      // A shared organization node is neither minted here nor ours to retire.
+      const org = await service.createContactWithKgOutcome({
+        displayName: 'Acme', primaryEmail: 'info@acme.com', source: 'test',
+      });
+      expect(org.kgNodeCreated).toBe(false);
+    });
+
+    it('retires a minted node on orphan cleanup but keeps an adopted one', async () => {
+      const { entity } = await entityMemory.createEntity({
+        type: 'person', label: 'Dana Wu', properties: {}, source: 'extraction',
+      });
+      const adopted = await service.createContactWithKgOutcome({
+        displayName: 'Dana Wu', source: 'test',
+      });
+      const minted = await service.createContactWithKgOutcome({
+        displayName: 'Someone New', source: 'test',
+      });
+
+      await service.deleteContact(adopted.contact.id, { archiveAnchoredNode: adopted.kgNodeCreated });
+      await service.deleteContact(minted.contact.id, { archiveAnchoredNode: minted.kgNodeCreated });
+
+      // Adopted survives — it predates this contact.
+      expect(await store.getNode(entity.id)).toBeDefined();
+      // Minted goes with the contact it was minted for, rather than leaking forever.
+      expect(await store.getNode(minted.contact.kgNodeId!)).toBeUndefined();
+    });
+
     it('leaves an anchored node alone while another contact still points at it', async () => {
       // Organization contacts are exempt from idx_contacts_kg_node_unique, so several can
       // share one node — including an anchored one minted by migration 085's backfill.

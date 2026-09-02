@@ -1009,7 +1009,7 @@ export class EmailAdapter implements Channel {
         // sanitizes to empty (e.g., pure injection text), the email is used instead.
         // primaryEmail is passed so createContact() can route business senders to an
         // existing or new organization KG node instead of minting a person node.
-        const contact = await contactService.createContact({
+        const { contact, kgNodeCreated } = await contactService.createContactWithKgOutcome({
           displayName: p.name || p.email,
           fallbackDisplayName: p.email,
           source: 'email_participant',
@@ -1035,11 +1035,11 @@ export class EmailAdapter implements Channel {
         } catch (linkErr) {
           const pgCode = (linkErr as { code?: string }).code;
           try {
-            // Orphan cleanup, so do not archive the KG node: createContact may have
-            // adopted a pre-existing one carrying facts (ADR-040). This path runs per
-            // participant on every inbound email, so an archiving cleanup here would be
-            // the highest-traffic way to lose knowledge in the system.
-            await contactService.deleteContact(contact.id, { archiveAnchoredNode: false });
+            // Orphan cleanup. Retire the node only if THIS call minted it: an adopted node
+            // carries facts accrued long before this attempt (ADR-040), and this path runs
+            // per participant on every inbound email — archiving indiscriminately here
+            // would be the highest-traffic way to lose knowledge in the system.
+            await contactService.deleteContact(contact.id, { archiveAnchoredNode: kgNodeCreated });
           } catch (deleteErr) {
             // Include linkErr so both failure modes are co-located in the log entry.
             logger.warn(

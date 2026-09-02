@@ -49,6 +49,7 @@ function createMocks() {
   const contactService = {
     resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
     createContact: vi.fn(),
+    createContactWithKgOutcome: vi.fn(),
     linkIdentity: vi.fn(),
   } as unknown as ContactService;
 
@@ -608,7 +609,8 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 3 });
 
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.createContactWithKgOutcome as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ contact: { id: 'c1' }, kgNodeCreated: true });
     (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
     // 6 non-self participants (1 from + 5 CC)
@@ -619,7 +621,7 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     await flushPoll();
 
     // Only 3 contacts should be created (per-message cap of 3)
-    expect(mocks.contactService.createContact).toHaveBeenCalledTimes(3);
+    expect(mocks.contactService.createContactWithKgOutcome).toHaveBeenCalledTimes(3);
 
     await adapter.stop();
   });
@@ -629,7 +631,8 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     const adapter = makeAdapter(mocks, { contactCreationMaxPerHour: 2, contactCreationMaxPerMessage: 100 });
 
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.createContactWithKgOutcome as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ contact: { id: 'c1' }, kgNodeCreated: true });
     (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
     // First email: 2 new participants (from + 1 CC) — creates 2, hits hourly cap
@@ -652,7 +655,7 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     await flushPoll();
 
     // Only 2 contacts created total (hourly cap of 2), not 3
-    expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+    expect(mocks.contactService.createContactWithKgOutcome).toHaveBeenCalledTimes(2);
 
     await adapter.stop();
   });
@@ -664,7 +667,8 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
       const adapter = makeAdapter(mocks, { contactCreationMaxPerHour: 1, contactCreationMaxPerMessage: 100 });
 
       (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-      (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+      (mocks.contactService.createContactWithKgOutcome as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ contact: { id: 'c1' }, kgNodeCreated: true });
       (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
       // First poll: 1 new participant — hits hourly cap of 1
@@ -680,7 +684,7 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
       // setTimeout is fake — skip it and assert directly.
       await adapter.start();
 
-      expect(mocks.contactService.createContact).toHaveBeenCalledTimes(1);
+      expect(mocks.contactService.createContactWithKgOutcome).toHaveBeenCalledTimes(1);
 
       // Advance time by 1 hour + 1ms so the window resets
       vi.advanceTimersByTime(3_600_001);
@@ -695,7 +699,7 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
 
       await (adapter as unknown as { poll(): Promise<void> }).poll();
 
-      expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+      expect(mocks.contactService.createContactWithKgOutcome).toHaveBeenCalledTimes(2);
 
       await adapter.stop();
     } finally {
@@ -713,7 +717,8 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
       resolveCallCount++;
       return Promise.resolve(resolveCallCount <= 3 ? { id: 'existing' } : null);
     });
-    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.createContactWithKgOutcome as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ contact: { id: 'c1' }, kgNodeCreated: true });
     (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
     // 5 non-self participants (1 from + 4 CC)
@@ -724,7 +729,7 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     await flushPoll();
 
     // 3 existed, 2 are new — both new ones created (under the cap of 2)
-    expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+    expect(mocks.contactService.createContactWithKgOutcome).toHaveBeenCalledTimes(2);
 
     await adapter.stop();
   });
@@ -734,7 +739,8 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 1 });
 
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.createContactWithKgOutcome as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ contact: { id: 'c1' }, kgNodeCreated: true });
     (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
     // 3 non-self participants (from + 2 CC), cap is 1 — 2 will be skipped
@@ -763,7 +769,8 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 1 });
 
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.createContactWithKgOutcome as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ contact: { id: 'c1' }, kgNodeCreated: true });
     (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
     // Two emails that both trigger the per-message limit
@@ -795,7 +802,8 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     const adapter = makeAdapter(mocks, { contactCreationMaxPerMessage: 2, contactCreationMaxPerHour: 5 });
 
     (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    (mocks.contactService.createContact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'c1' });
+    (mocks.contactService.createContactWithKgOutcome as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ contact: { id: 'c1' }, kgNodeCreated: true });
     (mocks.contactService.linkIdentity as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
     // 4 non-self participants (1 from + 3 CC) — per-message cap of 2 should apply
@@ -805,7 +813,7 @@ describe('EmailAdapter — contact auto-creation rate limiting', () => {
     await adapter.start();
     await flushPoll();
 
-    expect(mocks.contactService.createContact).toHaveBeenCalledTimes(2);
+    expect(mocks.contactService.createContactWithKgOutcome).toHaveBeenCalledTimes(2);
 
     await adapter.stop();
   });
