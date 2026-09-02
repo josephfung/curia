@@ -64,6 +64,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`extract-facts`** — fact-loop logs use node id instead of the raw subject name. (#1706)
+- **`buildCanonicalPatch`** — phone fallback reason is a stable code, not the raw number. (#1706)
 - **`createContact`** — a display-name collision now mints a node instead of dropping the link. (#1694)
 - **Orphan cleanup** — a failed contact create no longer archives a KG node it merely adopted. (#1694)
 - **Signal inbound** — ACI-only senders keep a non-empty sender and conversation identity. (#1600)

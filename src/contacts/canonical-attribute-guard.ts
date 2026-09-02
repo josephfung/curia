@@ -120,7 +120,8 @@ export function normalizePhone(value: string): string | null {
  *   - The attribute is not in the canonical deny-list (caller should write to KG).
  *   - The attribute IS canonical but the value failed normalization (e.g. a phone
  *     number that cannot be parsed to E.164). In this case `fallbackToKg` is true
- *     in the returned tuple so the caller can log and write to the KG instead.
+ *     and `reason` is a stable code (`phone_normalization_failed`) so callers can
+ *     log the outcome without interpolating the raw value (which may be PII).
  */
 export function buildCanonicalPatch(
   attribute: string,
@@ -134,7 +135,9 @@ export function buildCanonicalPatch(
     if (!normalized) {
       return {
         fallbackToKg: true,
-        reason: `Phone value could not be normalized to E.164: "${value}". Writing to KG instead.`,
+        // Stable code, not the raw value — failed E.164 parse does not mean
+        // "not a real number", and `reason` is not on the pino redact list.
+        reason: 'phone_normalization_failed',
       };
     }
     return { fields: { primaryPhone: normalized }, fallbackToKg: false };

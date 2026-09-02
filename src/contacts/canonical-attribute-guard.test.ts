@@ -116,15 +116,24 @@ describe('buildCanonicalPatch', () => {
   });
 
   it('returns fallbackToKg when phone cannot be normalized', () => {
-    const result = buildCanonicalPatch('phone', 'not-a-phone');
+    const result = buildCanonicalPatch('phone', '020 7946 0958');
     expect(result).not.toBeNull();
     expect(result?.fallbackToKg).toBe(true);
+    if (result?.fallbackToKg) {
+      expect(result.reason).toBe('phone_normalization_failed');
+      expect(result.reason).not.toContain('020');
+      expect(result.reason).not.toContain('7946');
+    }
   });
 
   it('returns fallbackToKg for mobile with unnormalizable number', () => {
     const result = buildCanonicalPatch('mobile', '555-1234'); // 7-digit local, no area code
     expect(result).not.toBeNull();
     expect(result?.fallbackToKg).toBe(true);
+    if (result?.fallbackToKg) {
+      expect(result.reason).toBe('phone_normalization_failed');
+      expect(result.reason).not.toContain('555-1234');
+    }
   });
 
   it('is case-insensitive on attribute key', () => {
