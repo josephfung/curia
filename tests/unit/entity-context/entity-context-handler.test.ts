@@ -39,6 +39,7 @@ function makeCtx(
     entities: result.entities ?? [],
     unresolved: result.unresolved ?? [],
     nodeless: result.nodeless ?? [],
+    failed: result.failed ?? [],
   };
   return {
     input,
@@ -151,6 +152,97 @@ describe('EntityContextHandler', () => {
     const result = await new EntityContextHandler().execute(ctx);
 
     expect(expectData(result)).not.toHaveProperty('nodeless');
+  });
+
+  it('reports a failed lookup separately from unresolved', async () => {
+    const ctx = makeCtx(
+      { contactIds: ['contact-1', 'contact-2'] },
+      {
+        entities: [makeEntity()],
+        failed: [{ inputId: 'contact-2', retryable: true }],
+      },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+    const data = expectData(result) as unknown as {
+      failed: Array<{ inputId: string; reason: string }>;
+      unresolved: string[];
+    };
+
+    expect(data.failed).toHaveLength(1);
+    expect(data.failed[0].inputId).toBe('contact-2');
+    expect(data.failed[0].reason).toMatch(/retry/i);
+    expect(data.failed[0].reason).toMatch(/not evidence/i);
+    expect(data.unresolved).toEqual([]);
+  });
+
+  it('does not describe permanent failures as retryable', async () => {
+    const ctx = makeCtx(
+      { contactIds: ['contact-1', 'contact-2'] },
+      {
+        entities: [makeEntity()],
+        failed: [{ inputId: 'contact-2', retryable: false }],
+      },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+    const data = expectData(result) as unknown as { failed: Array<{ reason: string }> };
+
+    expect(data.failed[0].reason).toMatch(/do not retry/i);
+    expect(data.failed[0].reason).not.toMatch(/retry the lookup/i);
+  });
+
+  it('emits failed before entities so head-slice truncation cannot drop it', async () => {
+    const ctx = makeCtx(
+      { contactIds: ['contact-1', 'contact-2'] },
+      {
+        entities: [makeEntity()],
+        failed: [{ inputId: 'contact-2', retryable: true }],
+      },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+    const keys = Object.keys(expectData(result));
+
+    expect(keys.indexOf('failed')).toBeLessThan(keys.indexOf('entities'));
+  });
+
+  it('omits the failed key entirely when there is nothing to report', async () => {
+    const ctx = makeCtx({ contactIds: ['contact-1'] }, { entities: [makeEntity()] });
+    const result = await new EntityContextHandler().execute(ctx);
+
+    expect(expectData(result)).not.toHaveProperty('failed');
+  });
+
+  it('returns success false when every ID failed and nothing assembled', async () => {
+    const ctx = makeCtx(
+      { contactIds: ['contact-1', 'contact-2'] },
+      { failed: [{ inputId: 'contact-1', retryable: true }, { inputId: 'contact-2', retryable: true }] },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('expected failure');
+    expect(result.error).toMatch(/retry/i);
+    expect(result.error).toMatch(/not evidence/i);
+  });
+
+  it('warns when some lookups failed without logging raw input IDs', async () => {
+    const warn = vi.fn();
+    const spyLogger = { ...logger, warn, child: () => spyLogger } as unknown as typeof logger;
+    const ctx = makeCtx(
+      { entityIds: ['jenna@example.com'] },
+      { failed: [{ inputId: 'jenna@example.com', retryable: true }] },
+    );
+    ctx.log = spyLogger;
+
+    await new EntityContextHandler().execute(ctx);
+
+    const failedWarn = warn.mock.calls.find(call => /lookups failed/i.test(String(call[1])));
+    expect(failedWarn).toBeDefined();
+    expect(failedWarn![0]).toEqual({ failedCount: 1, retryableCount: 1 });
+    expect(JSON.stringify(failedWarn![0])).not.toContain('jenna@example.com');
   });
 
   it('falls back to the caller contact when no IDs are supplied', async () => {

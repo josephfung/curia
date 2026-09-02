@@ -1,7 +1,7 @@
 {
   "name": "entity-context",
-  "description": "Assemble rich context about one or more entities (people, orgs, events, etc.). Returns known facts, connected accounts, preferences, relationships, and other contextual information. Use contactIds for people; entityIds for any KG node. Omit both to get context for the caller. Use this when you need to know what resources (calendars, email accounts) an entity has, or to retrieve stored facts (timezone, preferences, identifiers). Some contacts have no stored profile and can hold no facts at all; those come back under `nodeless` with a reason, and an empty result for them is a capability gap, not evidence the contact is unknown.",
-  "version": "1.1.0",
+  "description": "Assemble rich context about one or more entities (people, orgs, events, etc.). Returns known facts, connected accounts, preferences, relationships, and other contextual information. Use contactIds for people; entityIds for any KG node. Omit both to get context for the caller. Use this when you need to know what resources (calendars, email accounts) an entity has, or to retrieve stored facts (timezone, preferences, identifiers). Some contacts have no stored profile and can hold no facts at all; those come back under `nodeless` with a reason, and an empty result for them is a capability gap, not evidence the contact is unknown. Transient lookup failures come back under `failed` with a retry hint — also not evidence of absence.",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -12,7 +12,8 @@
   "outputs": {
     "entities": "EntityContext[] (assembled context payloads for each resolved entity)",
     "unresolved": "string[] (IDs that could not be found in the KG or contacts table)",
-    "nodeless": "{inputId, contactId, displayName, reason}[]? (present only when non-empty — contacts that exist but have no stored profile, so they can hold no facts or context; inputId echoes the ID or email you passed in)"
+    "nodeless": "{inputId, contactId, displayName, reason}[]? (present only when non-empty — contacts that exist but have no stored profile, so they can hold no facts or context; inputId echoes the ID or email you passed in)",
+    "failed": "{inputId, reason}[]? (present only when non-empty — lookups that errored; reason distinguishes retryable transient failures from permanent system errors; never evidence of absence)"
   },
   "permissions": [],
   "secrets": [],

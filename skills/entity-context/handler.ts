@@ -8,11 +8,13 @@
 // entity_enrichment manifest declaration instead — that runs the same
 // assembler without an extra LLM round-trip.
 //
-// Three buckets come back and all three are surfaced: entities that assembled,
-// `unresolved` IDs that matched nothing, and `nodeless` contacts that exist but
-// cannot hold knowledge (#1694 / ADR-040).
+// Four buckets come back and all are surfaced: entities that assembled,
+// `unresolved` IDs that matched nothing, `nodeless` contacts that exist but
+// cannot hold knowledge (#1694 / ADR-040), and `failed` IDs whose lookup errored
+// (#1702). The handler owns all LLM-facing wording for `nodeless` and `failed`.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
+import type { AssembleManyFailedEntry, AssembleManyResult } from '../../src/entity-context/assembler.js';
 
 // Shown to the LLM for every contact that resolved but holds no KG node.
 //
@@ -29,6 +31,49 @@ const NODELESS_REASON =
   'This contact exists but has no stored profile, so it cannot hold facts, '
   + 'relationships, or background context. Having no context here does not mean the '
   + 'contact is unknown to us. Do not try to store facts about them; report the gap instead.';
+
+const NOT_UNKNOWN_SUFFIX =
+  'This is not evidence the contact or entity is unknown.';
+
+function formatFailedReason(retryable: boolean): string {
+  if (retryable) {
+    return `Entity context lookup failed due to a transient error. Retry the lookup; ${NOT_UNKNOWN_SUFFIX}`;
+  }
+  return `Entity context lookup failed due to a system error. Do not retry; report the failure. ${NOT_UNKNOWN_SUFFIX}`;
+}
+
+function formatTotalFailureError(failed: AssembleManyFailedEntry[]): string {
+  const retryable = failed.some(f => f.retryable);
+  if (retryable) {
+    return `Entity context lookup failed for all requested IDs due to transient errors. Retry; ${NOT_UNKNOWN_SUFFIX}`;
+  }
+  return `Entity context lookup failed for all requested IDs due to a system error. Do not retry; report the failure. ${NOT_UNKNOWN_SUFFIX}`;
+}
+
+function buildSuccessData(result: AssembleManyResult): Record<string, unknown> {
+  return {
+    ...(result.nodeless.length > 0
+      ? {
+          nodeless: result.nodeless.map(n => ({
+            inputId: n.inputId,
+            contactId: n.contactId,
+            displayName: n.displayName,
+            reason: NODELESS_REASON,
+          })),
+        }
+      : {}),
+    ...(result.failed.length > 0
+      ? {
+          failed: result.failed.map(f => ({
+            inputId: f.inputId,
+            reason: formatFailedReason(f.retryable),
+          })),
+        }
+      : {}),
+    unresolved: result.unresolved,
+    entities: result.entities,
+  };
+}
 
 export class EntityContextHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -69,9 +114,25 @@ export class EntityContextHandler implements ToolHandler {
           resolvedCount: result.entities.length,
           unresolvedCount: result.unresolved.length,
           nodelessCount: result.nodeless.length,
+          failedCount: result.failed.length,
         },
         'entity-context: assembled context',
       );
+
+      if (result.failed.length > 0) {
+        const retryableCount = result.failed.filter(f => f.retryable).length;
+        ctx.log.warn(
+          { failedCount: result.failed.length, retryableCount },
+          'entity-context: some lookups failed — see failed bucket in result',
+        );
+      }
+
+      // Total failure: every ID errored and nothing assembled. A success-shaped
+      // result with only a retry hint has nothing to stop the agent retrying into
+      // a hard-down DB (#1702 review).
+      if (result.entities.length === 0 && result.failed.length > 0) {
+        return { success: false, error: formatTotalFailureError(result.failed) };
+      }
 
       // Key order is deliberate. The execution layer enforces an aggregate size cap by
       // JSON.stringify-ing this object and head-slicing it (see skillOutputMaxLength),
@@ -81,26 +142,7 @@ export class EntityContextHandler implements ToolHandler {
       // being absent from `unresolved` too, would otherwise vanish without trace.
       return {
         success: true,
-        data: {
-          // Only present when non-empty: on the common path every contact has a
-          // node, and an always-there empty array is pure prompt noise.
-          ...(result.nodeless.length > 0
-            ? {
-                nodeless: result.nodeless.map(n => ({
-                  // inputId is echoed back so the agent can map the answer to what it
-                  // asked for. It matters most for email inputs, where contactId is a
-                  // UUID the caller has never seen and displayName may not resemble
-                  // the address.
-                  inputId: n.inputId,
-                  contactId: n.contactId,
-                  displayName: n.displayName,
-                  reason: NODELESS_REASON,
-                })),
-              }
-            : {}),
-          unresolved: result.unresolved,
-          entities: result.entities,
-        },
+        data: buildSuccessData(result),
       };
     } catch (err) {
       // Log the full error server-side but don't expose DB internals (table names,
