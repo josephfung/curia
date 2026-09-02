@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Publish-failure alert** — a failed `docker-publish` opens/updates a tracking issue, since `:edge` goes stale silently. (#1699)
 - **Contact-anchored KG identity** — same-name contacts each hold their own node, facts, and enrichment. (#1694)
 - **ADR-040 (Accepted)** — contact-anchored KG node identity; a contact's node is keyed on the contact, not its label. (#1694)
 - **ADR-040 measured population** — migration `085` sizing recorded from production: 14 nodeless contacts, arm A empty. (#1694)
@@ -67,6 +68,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Contact merge** — secondary KG memory folds into the survivor after the contact delete. (#1711)
+- **`docker-publish`** — a transient registry drop mid-`pnpm install` retries instead of failing the publish. (#1699)
 - **`entity-context` assembler** — archived nodes, facts, and edges no longer assemble. (#1707)
 - **`entity-context` cache** — an archived node is re-checked before a TTL hit is served. (#1707)
 - **`DreamEngine`** — flushes entity-context cache after a decay pass archives. (#1707)
