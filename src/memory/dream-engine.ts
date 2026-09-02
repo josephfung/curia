@@ -278,6 +278,22 @@ export class DreamEngine {
     archiveThreshold: number,
     halfLifeDays: DecayConfig['halfLifeDays'],
   ): Promise<Omit<DecayPassResult, 'durationMs'> & { warnedRows: Array<{ id: string; type: string; label: string; confidence: number; sensitivity: string; edge_count: string; warn_reason: string; warned_at: Date }> }> {
+    // ADR-040 — "Identity does not decay". Node passes 1a, 1b and 2b are restricted to
+    // identity_source = 'label'. A contact's node is the container for its memory, not a
+    // memory itself: nothing refreshes an entity node's last_confirmed_at through ordinary
+    // interaction (storeFact updates the FACT node), so decay here is monotonic and
+    // universal — a contact emailed daily ages at exactly the rate of one met once. Left
+    // in, every contact anchor would eventually archive out from under a live contact, and
+    // archived_at would stop meaning "this contact is gone".
+    //
+    // Facts hanging off an anchored node are label-tier and keep decaying as before, so
+    // this bounds nothing but the anchor. Edge passes (1c, 1d, 3) are untouched: edges
+    // have no identity tier, and Pass 3 still archives edges incident to an archived node.
+    //
+    // Pass 2a (archive expired warnings) needs no predicate: warning requires
+    // confidence <= archiveThreshold, which an undecayed anchored node never reaches.
+    // Migration 085 clears the legacy warned_at rows that predate the exclusion.
+    //
     // Pass 1a: Decay slow_decay nodes
     // Uses COALESCE(last_decayed_at, last_confirmed_at) so each run only applies
     // decay for the interval since the last run rather than re-applying the full
@@ -290,6 +306,7 @@ export class DreamEngine {
              EXTRACT(EPOCH FROM (now() - COALESCE(last_decayed_at, last_confirmed_at))) / 86400.0 / $1),
              last_decayed_at = now()
        WHERE archived_at IS NULL
+         AND identity_source = 'label'
          AND decay_class = $2
          AND confidence > $3`,
       [halfLifeDays.slow_decay, 'slow_decay', archiveThreshold],
@@ -302,6 +319,7 @@ export class DreamEngine {
              EXTRACT(EPOCH FROM (now() - COALESCE(last_decayed_at, last_confirmed_at))) / 86400.0 / $1),
              last_decayed_at = now()
        WHERE archived_at IS NULL
+         AND identity_source = 'label'
          AND decay_class = $2
          AND confidence > $3`,
       [halfLifeDays.fast_decay, 'fast_decay', archiveThreshold],
@@ -434,12 +452,14 @@ export class DreamEngine {
     const nodesExpired = archiveExpiredResult.rowCount ?? 0;
 
     // Pass 2b: Archive regular nodes at or below threshold. Excludes:
+    // - contact-anchored nodes (identity_source, ADR-040 — see the note above Pass 1a)
     // - permanent nodes (never archived by design)
     // - nodes with an active warning still within hold-back window (warned_at IS NOT NULL)
     const archiveNodeResult = await client.query(
       `UPDATE kg_nodes
           SET archived_at = now()
         WHERE archived_at IS NULL
+          AND identity_source = 'label'
           AND decay_class != 'permanent'
           AND confidence <= $1
           AND warned_at IS NULL`,

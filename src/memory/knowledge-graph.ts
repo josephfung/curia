@@ -7,6 +7,7 @@ import type {
   EdgeType,
   DecayClass,
   Sensitivity,
+  IdentitySource,
   SearchResult,
   TraversalResult,
 } from './types.js';
@@ -30,6 +31,11 @@ export interface CreateNodeOptions {
    *  this via SensitivityClassifier before calling createNode, so this should always
    *  be set. Defaults to 'internal' if somehow omitted. */
   sensitivity?: Sensitivity;
+  /** Identity tier (ADR-040). Defaults to 'label'. Pass 'contact' only when minting a
+   *  node that backs a specific contact — those are exempt from label uniqueness, so
+   *  createNode cannot fall back on ON CONFLICT to deduplicate them.
+   *  upsertNode ignores this field: it is the label-keyed path, exclusively. */
+  identitySource?: IdentitySource;
 }
 
 export interface CreateEdgeOptions {
@@ -89,9 +95,14 @@ interface KnowledgeGraphBackend {
   // Atomic upsert: creates if no matching (src, tgt, type) pair exists in either
   // direction; otherwise raises confidence and refreshes lastConfirmedAt.
   upsertEdge(edge: KgEdge): Promise<{ edge: KgEdge; created: boolean }>;
-  // Idempotent node creation: matches on lower(label) + type for non-fact nodes.
-  // fact nodes always insert as new regardless of label collision.
+  // Idempotent node creation: matches on lower(label) + type for non-fact,
+  // label-tier nodes. fact nodes always insert as new regardless of label collision,
+  // and contact-anchored nodes are never matched (ADR-040 invariant 1).
   upsertNode(node: KgNode): Promise<{ node: KgNode; created: boolean }>;
+  /** Promote a label-tier node to contact-anchored (ADR-040). Compare-and-set: returns
+   *  false if the node is missing, archived, or already anchored to some contact, which
+   *  is what makes concurrent adoption safe without a transaction. */
+  anchorNode(id: string): Promise<boolean>;
   traverse(startNodeId: string, maxDepth: number): Promise<TraversalResult>;
   semanticSearch(
     queryEmbedding: number[],
@@ -171,10 +182,24 @@ export class KnowledgeGraphStore {
       },
       sensitivity: options.sensitivity ?? 'internal',
       aliases: [],
+      identitySource: options.identitySource ?? 'label',
     };
 
     await this.backend.createNode(node);
     return node;
+  }
+
+  /**
+   * Promote a label-tier node to contact-anchored (ADR-040 adoption).
+   *
+   * Compare-and-set on identity_source, so two contacts racing to adopt the same
+   * unanchored node cannot both win: the loser gets false and mints its own node
+   * rather than silently sharing an identity.
+   *
+   * Returns false when the node does not exist, is archived, or is already anchored.
+   */
+  async anchorNode(id: string): Promise<boolean> {
+    return this.backend.anchorNode(id);
   }
 
   /**
@@ -186,6 +211,11 @@ export class KnowledgeGraphStore {
    * are left untouched — use updateNode() to change those explicitly.
    *
    * fact nodes always create a new node regardless of label collision.
+   *
+   * ADR-040 invariant 1: this is the label-keyed path, exclusively. It only ever inserts
+   * identity_source = 'label' rows and its ON CONFLICT predicate matches the narrowed
+   * idx_kg_nodes_unique, so no caller can accidentally upsert its way onto a node that
+   * already belongs to a contact. Anchored nodes are minted through createNode().
    *
    * Returns the persisted node and whether it was newly created.
    */
@@ -208,6 +238,8 @@ export class KnowledgeGraphStore {
       },
       sensitivity: options.sensitivity ?? 'internal',
       aliases: [],
+      // Not options.identitySource — see the invariant above. upsertNode is label-tier only.
+      identitySource: 'label',
     };
 
     return this.backend.upsertNode(node);
@@ -411,8 +443,8 @@ class PostgresBackend implements KnowledgeGraphBackend {
     this.logger.debug({ nodeId: node.id, type: node.type, sensitivity: node.sensitivity }, 'kg: creating node');
     const embeddingStr = node.embedding ? `[${node.embedding.join(',')}]` : null;
     await this.pool.query(
-      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity, aliases)
-       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10, $11, $12)`,
+      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity, aliases, identity_source)
+       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
         node.id,
         node.type,
@@ -426,17 +458,38 @@ class PostgresBackend implements KnowledgeGraphBackend {
         node.temporal.lastConfirmedAt,
         node.sensitivity,
         node.aliases,
+        node.identitySource,
       ],
     );
+  }
+
+  async anchorNode(id: string): Promise<boolean> {
+    // Compare-and-set: the identity_source = 'label' predicate is the whole point —
+    // it makes losing an adoption race observable (rowCount 0) instead of letting two
+    // contacts quietly share one identity.
+    const result = await this.pool.query(
+      `UPDATE kg_nodes
+          SET identity_source = 'contact'
+        WHERE id = $1
+          AND archived_at IS NULL
+          AND identity_source = 'label'`,
+      [id],
+    );
+    const anchored = (result.rowCount ?? 0) > 0;
+    this.logger.debug({ nodeId: id, anchored }, 'kg: anchorNode');
+    return anchored;
   }
 
   async upsertNode(node: KgNode): Promise<{ node: KgNode; created: boolean }> {
     this.logger.debug({ type: node.type, label: node.label }, 'kg: upserting node');
     const embeddingStr = node.embedding ? `[${node.embedding.join(',')}]` : null;
     const result = await this.pool.query<PgNodeRow & { is_new: boolean }>(
-      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity, aliases)
-       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9, $10, $11)
-       ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL
+      // identity_source is hardcoded 'label' rather than parameterised: the ON CONFLICT
+      // predicate below must match the narrowed idx_kg_nodes_unique, and an anchored row
+      // would not be in that index at all, so the upsert would silently always insert.
+      `INSERT INTO kg_nodes (id, type, label, properties, embedding, confidence, decay_class, source, created_at, last_confirmed_at, sensitivity, aliases, identity_source)
+       VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $9, $10, $11, 'label')
+       ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL AND identity_source = 'label'
        DO UPDATE SET
          confidence = GREATEST(kg_nodes.confidence, EXCLUDED.confidence),
          last_confirmed_at = EXCLUDED.last_confirmed_at
@@ -833,6 +886,7 @@ interface PgNodeRow {
   sensitivity: string;
   archived_at: Date | null;
   aliases: string[];
+  identity_source: string;
 }
 
 interface PgEdgeRow {
@@ -865,6 +919,10 @@ function pgRowToNode(row: PgNodeRow): KgNode {
     },
     sensitivity: (row.sensitivity as Sensitivity) ?? 'internal',
     aliases: row.aliases ?? [],
+    // Default rather than cast-and-trust: a row read through a projection that omits the
+    // column must not be mistaken for an anchored node, or callers would skip decay and
+    // refuse adoption for a node that is in fact label-keyed. 'label' is the safe read.
+    identitySource: row.identity_source === 'contact' ? 'contact' : 'label',
   };
 }
 
@@ -932,8 +990,16 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     const lowerLabel = node.label.toLowerCase();
     let existing: KgNode | undefined;
     for (const n of this.nodes.values()) {
-      // Archived nodes are treated as non-existent — don't merge with them
-      if (n.type !== 'fact' && n.label.toLowerCase() === lowerLabel && n.type === node.type && !this.archivedNodes.has(n.id)) {
+      // Mirrors the partial index idx_kg_nodes_unique: archived nodes are treated as
+      // non-existent, and contact-anchored nodes are outside the label-keyed tier
+      // entirely, so upsert must never merge onto one (ADR-040 invariant 1).
+      if (
+        n.type !== 'fact'
+        && n.label.toLowerCase() === lowerLabel
+        && n.type === node.type
+        && n.identitySource === 'label'
+        && !this.archivedNodes.has(n.id)
+      ) {
         existing = n;
         break;
       }
@@ -973,6 +1039,13 @@ class InMemoryBackend implements KnowledgeGraphBackend {
         this.edges.delete(edgeId);
       }
     }
+  }
+
+  async anchorNode(id: string): Promise<boolean> {
+    const node = this.nodes.get(id);
+    if (!node || this.archivedNodes.has(id) || node.identitySource !== 'label') return false;
+    this.nodes.set(id, { ...node, identitySource: 'contact' });
+    return true;
   }
 
   async archiveNode(id: string): Promise<void> {

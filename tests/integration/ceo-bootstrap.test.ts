@@ -56,8 +56,9 @@ describeIf('ceo-bootstrap principal/KG utilities', () => {
 
       const node = await pool.query<{
         type: string; label: string; decay_class: string; source: string; confidence: number;
+        identity_source: string;
       }>(
-        `SELECT type, label, decay_class, source, confidence FROM kg_nodes WHERE id = $1`,
+        `SELECT type, label, decay_class, source, confidence, identity_source FROM kg_nodes WHERE id = $1`,
         [id],
       );
       expect(node.rows[0]).toBeDefined();
@@ -66,6 +67,9 @@ describeIf('ceo-bootstrap principal/KG utilities', () => {
       expect(node.rows[0]!.decay_class).toBe('permanent');
       expect(node.rows[0]!.source).toBe('bootstrap');
       expect(node.rows[0]!.confidence).toBe(1);
+      // The principal is a contact, so its node is contact-anchored like any other
+      // (ADR-040) — not left in the label tier where a namesake would collide with it.
+      expect(node.rows[0]!.identity_source).toBe('contact');
     });
 
     it('promotes a pre-existing slow_decay person node to permanent on conflict', async () => {
@@ -81,8 +85,10 @@ describeIf('ceo-bootstrap principal/KG utilities', () => {
       const id = await insertKgPersonNode(LABEL, pool);
       expect(id).toBe(preExistingNodeId);
 
-      const node = await pool.query<{ decay_class: string; confidence: number; source: string }>(
-        `SELECT decay_class, confidence, source FROM kg_nodes WHERE id = $1`,
+      const node = await pool.query<{
+        decay_class: string; confidence: number; source: string; identity_source: string;
+      }>(
+        `SELECT decay_class, confidence, source, identity_source FROM kg_nodes WHERE id = $1`,
         [preExistingNodeId],
       );
       expect(node.rows[0]).toBeDefined();
@@ -90,6 +96,8 @@ describeIf('ceo-bootstrap principal/KG utilities', () => {
       expect(node.rows[0]!.confidence).toBeGreaterThanOrEqual(1.0);
       // source is preserved (not overwritten) to keep the audit trail intact
       expect(node.rows[0]!.source).toBe('extraction');
+      // Adoption, not a second node: the extraction node becomes the principal's identity.
+      expect(node.rows[0]!.identity_source).toBe('contact');
     });
 
     it('does not demote confidence when the conflicting node already has confidence >= 1.0', async () => {

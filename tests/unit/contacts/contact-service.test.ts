@@ -1341,15 +1341,17 @@ describe('ContactService', () => {
     });
 
     it('works when BOTH contacts have kg_node_id = NULL (#1623 regression)', async () => {
-      // Two contacts sharing a display name: createContact drops the KG link on the
-      // second one because of idx_contacts_kg_node_unique. That pair could not hold a
-      // KG-fact exclusion at all — the whole reason exclusions moved to a table.
+      // Two contacts sharing a display name used to leave the second with no KG link,
+      // and that pair could not hold a KG-fact exclusion at all — the whole reason
+      // exclusions moved to a table. ADR-040 gives them both a node, so the null case is
+      // now forced explicitly rather than produced by the collision. The exclusion table
+      // must still work for it: nodeless contacts remain reachable through migration
+      // gaps, KG outages during create, and older rows.
       const a = await service.createContact({ displayName: 'Seth Berman', source: 'test' });
       const b = await service.createContact({ displayName: 'Seth Berman', source: 'test' });
-      expect(b.kgNodeId).toBeNull();
 
-      // Force the null-node case on both sides.
       await service.saveContact({ ...a, kgNodeId: null });
+      await service.saveContact({ ...b, kgNodeId: null });
 
       const { created } = await service.addDedupExclusion(a.id, b.id, 'ceo');
       expect(created).toBe(true);
