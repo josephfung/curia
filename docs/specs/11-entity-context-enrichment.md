@@ -196,16 +196,33 @@ A new skill that assembles the full context payload for one or more entities. Av
   },
   "outputs": {
     "entities": "EntityContext[]",
-    "unresolved": "string[] (IDs that couldn't be found)"
+    "unresolved": "string[] (IDs that matched no contact and no KG node)",
+    "nodeless": "{inputId, contactId, displayName, reason}[]? (contacts that exist but have no stored profile — cannot hold facts; not evidence of absence)",
+    "failed": "{inputId, reason}[]? (lookups that errored — retry may succeed; not evidence of absence)"
   }
 }
 ```
 
+**Result buckets** — `assembleMany` and the skill surface four disjoint outcomes per input ID:
+
+| Bucket | Meaning | Agent action |
+|---|---|---|
+| `entities` | Full `EntityContext` assembled | Use the payload |
+| `unresolved` | ID matched no contact and no KG node | Treat as genuinely unknown |
+| `nodeless` | Contact exists but holds no KG node (#1694) | Report capability gap; do not store facts or infer absence |
+| `failed` | Assembly threw (#1702) | If reason says retryable: retry. If not: report failure. **Not** evidence the contact is unknown |
+
+Diagnostic buckets (`nodeless`, `failed`, `unresolved`) are emitted before `entities` in the skill result so head-slice output truncation sacrifices bulk entity data rather than the warnings.
+
+When every requested ID lands in `failed` and `entities` is empty, the skill returns `success: false` (not a success-shaped empty result with retry hints) so the agent does not loop against a hard-down database.
+
 **Resolution priority for each ID:**
-1. If the ID matches a `contacts.id` → look up `kg_node_id` from the contact, then assemble from the KG node
-2. If the ID matches a `kg_nodes.id` directly → assemble from the KG node
-3. Special values: `"caller"` → resolve to `ctx.caller.contactId`, `"agent"` → resolve to the agent's contactId
-4. If no match → include in the `unresolved` array (not a hard error)
+1. If the ID matches a `contacts.id` with a non-null `kg_node_id` → assemble from that KG node
+2. If the ID matches a `contacts.id` with a null `kg_node_id` → include in `nodeless` (contact exists but cannot hold knowledge)
+3. If the ID matches a `kg_nodes.id` directly → assemble from that KG node
+4. Special values: `"caller"` → resolve to `ctx.caller.contactId`, `"agent"` → resolve to the agent's contactId
+5. If no match → include in the `unresolved` array (not a hard error)
+6. If assembly throws → include in `failed` with a retry classification (not `unresolved`)
 
 ### Assembly Pipeline
 

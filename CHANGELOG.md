@@ -39,6 +39,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`EntityContextAssembler.assembleMany`** — new `nodeless` bucket, disjoint from `unresolved`; logged at warn. (#1694)
 - **`entity-context`** — output gains `nodeless`; agents read a missing node as a capability gap. (#1694)
 - **`entity-context` output schema** — new `nodeless` key on `ToolResult.data` (public API surface). (#1694)
+- **`entity-context` output schema** — new `failed` key on `ToolResult.data` (public API surface). (#1702)
 - **`entity_enrichment`** — nodeless contacts get their own warn line instead of joining the unresolved-IDs line. (#1694)
 - **`contact-dedup-exclude`** — writes the exclusions table; outputs `created`, no `entityMemory` capability. (#1625)
 - **`contact-find-duplicates`** — loads exclusions in one query; `entityMemory` capability dropped. (#1625)
@@ -54,6 +55,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Signal inbound** — ACI-only senders keep a non-empty sender and conversation identity. (#1600)
+- **`entity-context`** — transient DB failures surface in `failed`, not `unresolved`. (#1702)
+- **`entity_enrichment`** — failed lookups get their own warn line instead of joining unresolved. (#1702)
 - **Slack file download** — abort streamed bodies once they exceed the voice-note size cap. (#1600)
 - **Contact merge** — merge writes run in one transaction; a failure no longer strands identities or dedup rulings. (#1695)
 - **Signal voice calls** — duplicate `RINGING_INCOMING` for one call no longer self-rejects it as busy. (#1672)

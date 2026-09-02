@@ -18,17 +18,19 @@
 // callers (ContactService, EntityMemory) call after mutations.
 //
 // assembleMany() wraps each per-ID call in its own try/catch so that a DB error
-// on one entity doesn't abort the entire batch — failed IDs are logged and placed
-// in the `unresolved` array rather than propagating.
+// on one entity doesn't abort the entire batch — errored IDs are logged and placed
+// in the `failed` array rather than propagating.
 //
-// Misses are reported in two separate buckets, because they mean different things
-// (#1694 / ADR-040):
-//   unresolved — the ID matched no contact and no KG node, or assembly errored.
+// Misses are reported in three separate buckets, because they mean different things
+// (#1694 / ADR-040, #1702):
+//   unresolved — the ID matched no contact and no KG node.
 //   nodeless   — the ID matched a real contact that holds no KG node. The contact
 //                exists but is structurally unable to carry facts, relationships,
 //                or context, and no amount of retrying will change that. Collapsing
 //                it into `unresolved` made an agent read "cannot hold knowledge" as
 //                "we know nothing about them", which is the silence #1694 is about.
+//   failed     — assembly threw. Classified as retryable or not; never evidence the
+//                contact is unknown (#1702).
 
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
@@ -52,12 +54,22 @@ export interface NodelessContact {
   displayName: string;
 }
 
+/** An ID whose assembly threw — classified for retry, not a miss. */
+export interface AssembleManyFailedEntry {
+  /** The string the caller passed in (contact UUID, KG node ID, or email). */
+  inputId: string;
+  /** True when the error is likely transient (timeout, connection limit, reset). */
+  retryable: boolean;
+}
+
 export interface AssembleManyResult {
   entities: EntityContext[];
-  /** IDs that matched nothing, or whose assembly threw. */
+  /** IDs that matched no contact and no KG node. */
   unresolved: string[];
   /** Contacts that exist but cannot hold knowledge. Disjoint from `unresolved`. */
   nodeless: NodelessContact[];
+  /** IDs whose assembly errored. Disjoint from `unresolved` and `nodeless`. */
+  failed: AssembleManyFailedEntry[];
 }
 
 /** Outcome of resolving a caller-supplied ID to something assemblable. */
@@ -94,8 +106,8 @@ export class EntityContextAssembler {
    *   2. Matches a kg_nodes.id directly → assemble from that KG node
    *   3. No match → included in `unresolved` (not a hard error)
    *
-   * Each ID is assembled independently; a DB error on one ID logs a warning and
-   * adds the ID to `unresolved` without aborting the remaining IDs in the batch.
+   * Each ID is assembled independently; a DB error on one ID logs at error and
+   * adds the ID to `failed` without aborting the remaining IDs in the batch.
    *
    * @param ids   Array of contact IDs or KG node IDs to resolve.
    * @param includeRelationships  If false, the relationships field is skipped.
@@ -108,6 +120,7 @@ export class EntityContextAssembler {
     const entities: EntityContext[] = [];
     const unresolved: string[] = [];
     const nodeless: NodelessContact[] = [];
+    const failed: AssembleManyFailedEntry[] = [];
 
     for (const id of ids) {
       // Cache stores full payloads (with relationships) only. Skipping the cache for
@@ -147,13 +160,13 @@ export class EntityContextAssembler {
         }
       } catch (err) {
         // Per-ID failure is non-fatal for the batch — log with full context and
-        // treat as unresolved so the caller gets partial results instead of nothing.
-        this.logger.error({ err, entityId: id }, 'entity-context: assembleOne failed — treating as unresolved');
-        unresolved.push(id);
+        // place in `failed` so the caller can retry instead of reading absence.
+        this.logger.error({ err, entityId: id }, 'entity-context: assembleOne failed — treating as failed');
+        failed.push({ inputId: id, retryable: isRetryableAssemblyError(err) });
       }
     }
 
-    return { entities, unresolved, nodeless };
+    return { entities, unresolved, nodeless, failed };
   }
 
   /**
@@ -684,4 +697,44 @@ function isContactRowColumnPopulated(
     case 'bio':           return row.bio != null;
     case 'birthday':      return row.birthday != null;
   }
+}
+
+/**
+ * Classify whether a thrown assembly error is likely transient.
+ * The handler owns LLM-facing wording; this only supplies the retry signal.
+ */
+export function isRetryableAssemblyError(err: unknown): boolean {
+  if (err !== null && typeof err === 'object' && 'code' in err) {
+    const code = (err as { code: string }).code;
+    switch (code) {
+      // Transient: pool pressure, timeouts, connection loss, deadlocks
+      case '53300': // too_many_connections
+      case '57014': // query_canceled (statement timeout)
+      case '08000': // connection_exception
+      case '08003': // connection_does_not_exist
+      case '08006': // connection_failure
+      case '40001': // serialization_failure
+      case '40P01': // deadlock_detected
+      case '57P03': // cannot_connect_now
+        return true;
+      // Permanent: schema drift, missing objects, privilege
+      case '42703': // undefined_column
+      case '42P01': // undefined_table
+      case '42501': // insufficient_privilege
+        return false;
+    }
+  }
+  if (err instanceof TypeError) return false;
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    if (
+      msg.includes('econnreset')
+      || msg.includes('connection reset')
+      || msg.includes('pool timeout')
+    ) {
+      return true;
+    }
+  }
+  // Unknown errors: do not invite a retry loop
+  return false;
 }

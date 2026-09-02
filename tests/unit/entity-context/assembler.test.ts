@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
-import { EntityContextAssembler } from '../../../src/entity-context/assembler.js';
+import { EntityContextAssembler, isRetryableAssemblyError } from '../../../src/entity-context/assembler.js';
 import type { DbPool } from '../../../src/db/connection.js';
 
 const logger = pino({ level: 'silent' });
@@ -23,18 +23,22 @@ function makeMockPool(): DbPool {
 }
 
 // Helper: build a pool mock that responds to queries in order.
-// Each call to pool.query() returns the next response in the queue.
-function makeSequentialPool(responses: Array<{ rows: unknown[] }>): DbPool {
+// Each call to pool.query() returns the next response in the queue, or rejects
+// when the step is `{ reject: Error }`.
+type SequentialPoolStep = { rows: unknown[] } | { reject: Error };
+
+function makeSequentialPool(steps: SequentialPoolStep[]): DbPool {
   const pool = makeMockPool();
   let callIndex = 0;
   vi.mocked(pool.query).mockImplementation(() => {
-    const res = responses[callIndex++];
-    if (!res) {
-      // Throw so tests fail fast when the assembler issues more queries than expected.
-      // A silent empty-rows fallback would mask regressions where extra DB calls are added.
+    const step = steps[callIndex++];
+    if (!step) {
       throw new Error(`Unexpected query call #${callIndex} — add a response to makeSequentialPool`);
     }
-    return Promise.resolve(res as unknown as ReturnType<DbPool['query']>);
+    if ('reject' in step) {
+      return Promise.reject(step.reject);
+    }
+    return Promise.resolve({ rows: step.rows } as unknown as ReturnType<DbPool['query']>);
   });
   return pool;
 }
@@ -561,14 +565,90 @@ describe('EntityContextAssembler', () => {
       await expect(assembler.assembleOne('jenna@example.com')).rejects.toThrow('Connection reset by peer');
     });
 
-    it('treats email DB errors as unresolved in assembleMany', async () => {
+    it('treats email DB errors as failed in assembleMany, not unresolved', async () => {
       const pool = makeMockPool();
       vi.mocked(pool.query).mockRejectedValueOnce(new Error('pool timeout'));
 
       const assembler = new EntityContextAssembler(pool, logger);
-      const { entities, unresolved } = await assembler.assembleMany(['jenna@example.com']);
+      const { entities, unresolved, failed } = await assembler.assembleMany(['jenna@example.com']);
       expect(entities).toHaveLength(0);
-      expect(unresolved).toEqual(['jenna@example.com']);
+      expect(unresolved).toHaveLength(0);
+      expect(failed).toEqual([
+        { inputId: 'jenna@example.com', retryable: true },
+      ]);
+    });
+
+    it('classifies permanent schema errors as non-retryable', async () => {
+      const pool = makeMockPool();
+      vi.mocked(pool.query).mockRejectedValueOnce(
+        Object.assign(new Error('column does not exist'), { code: '42703' }),
+      );
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { failed } = await assembler.assembleMany(['contact-1']);
+      expect(failed).toEqual([{ inputId: 'contact-1', retryable: false }]);
+    });
+
+    it('returns partial entities plus failed when a mid-batch DB error occurs', async () => {
+      const pool = makeSequentialPool([
+        { rows: [{ kg_node_id: 'node-1' }] },
+        { rows: [personNodeRow] },
+        { rows: [] },
+        { rows: [contactRow] },
+        { rows: [] },
+        { rows: [] },
+        { reject: Object.assign(new Error('too many connections'), { code: '53300' }) },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, failed } = await assembler.assembleMany(['contact-1', 'contact-2']);
+
+      expect(entities).toHaveLength(1);
+      expect(entities[0]!.entityId).toBe('node-1');
+      expect(unresolved).toHaveLength(0);
+      expect(failed).toEqual([{ inputId: 'contact-2', retryable: true }]);
+    });
+  });
+
+  describe('isRetryableAssemblyError', () => {
+    it('treats connection-limit and schema errors differently', () => {
+      expect(isRetryableAssemblyError(Object.assign(new Error('limit'), { code: '53300' }))).toBe(true);
+      expect(isRetryableAssemblyError(Object.assign(new Error('missing col'), { code: '42703' }))).toBe(false);
+      expect(isRetryableAssemblyError(new TypeError('cannot read property'))).toBe(false);
+    });
+  });
+
+  describe('assembleMany — all four buckets', () => {
+    it('places each ID in exactly one bucket in a mixed batch', async () => {
+      const pool = makeSequentialPool([
+        // contact-1 — resolves fully
+        { rows: [{ kg_node_id: 'node-1', display_name: 'Jenna Smith' }] },
+        { rows: [personNodeRow] },
+        { rows: [] },
+        { rows: [contactRow] },
+        { rows: [] },
+        { rows: [] },
+        // contact-2 — nodeless
+        { rows: [{ kg_node_id: null, display_name: 'Seth Berman' }] },
+        // ghost-id — unknown
+        { rows: [] },
+        { rows: [] },
+        // contact-3 — DB error
+        { reject: Object.assign(new Error('too many connections'), { code: '53300' }) },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, nodeless, failed } = await assembler.assembleMany([
+        'contact-1',
+        'contact-2',
+        'ghost-id',
+        'contact-3',
+      ]);
+
+      expect(entities).toHaveLength(1);
+      expect(nodeless.map(n => n.contactId)).toEqual(['contact-2']);
+      expect(unresolved).toEqual(['ghost-id']);
+      expect(failed).toEqual([{ inputId: 'contact-3', retryable: true }]);
     });
   });
 });

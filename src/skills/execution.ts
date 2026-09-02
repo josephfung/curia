@@ -1622,6 +1622,16 @@ export class ExecutionLayer {
               'entity_enrichment: contacts have no KG node — skill ran without their context',
             );
           }
+          if (enrichmentResult.failed.length > 0) {
+            const retryableCount = enrichmentResult.failed.filter(f => f.retryable).length;
+            // Same dormant note as the nodeless branch above — no tool.json currently
+            // declares entity_enrichment, but a future manifest should report failures
+            // with the skill name attached rather than silently.
+            skillLogger.warn(
+              { toolName, failedCount: enrichmentResult.failed.length, retryableCount },
+              'entity_enrichment: some entity lookups failed — see assembler failed bucket',
+            );
+          }
           ctx.entityContext = enrichmentResult.entities;
           skillLogger.debug({ toolName, enrichedCount: enrichmentResult.entities.length }, 'entity_enrichment: pre-enrichment complete');
         } catch (err) {

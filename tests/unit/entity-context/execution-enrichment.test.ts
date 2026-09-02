@@ -66,6 +66,7 @@ function makeMockAssembler(result: Partial<AssembleManyResult>): EntityContextAs
     entities: result.entities ?? [],
     unresolved: result.unresolved ?? [],
     nodeless: result.nodeless ?? [],
+    failed: result.failed ?? [],
   };
   return {
     assembleMany: vi.fn().mockResolvedValue(full),
@@ -307,6 +308,30 @@ describe('ExecutionLayer — entity_enrichment', () => {
     await execution.invoke('test-skill', { contacts: ['contact-1'] });
 
     expect(warn.mock.calls.filter(call => /no KG node/i.test(String(call[1])))).toHaveLength(0);
+  });
+
+  it('logs failed lookups on their own line, not lumped into unresolved', async () => {
+    const warn = vi.fn();
+    const spyLogger = { ...logger, warn, child: () => spyLogger } as unknown as typeof logger;
+
+    const handler: ToolHandler = { execute: async () => ({ success: true, data: 'ok' }) };
+    registry.register(makeManifest({ entity_enrichment: { param: 'contacts', default: 'caller' } }), handler);
+
+    const assembler = makeMockAssembler({
+      entities: [sampleEntityContext],
+      failed: [{ inputId: 'contact-2', retryable: true }],
+    });
+    const execution = new ExecutionLayer(registry, spyLogger, {
+      entityContextAssembler: assembler,
+    });
+
+    const result = await execution.invoke('test-skill', { contacts: ['contact-1', 'contact-2'] });
+    expect(result.success).toBe(true);
+
+    const failedLine = warn.mock.calls.find(call => /lookups failed/i.test(String(call[1])));
+    expect(failedLine).toBeDefined();
+    expect((failedLine![0] as { failedCount?: number; retryableCount?: number }).failedCount).toBe(1);
+    expect((failedLine![0] as { inputIds?: string[] }).inputIds).toBeUndefined();
   });
 
   it('exposes agentContactId on ctx for all skills', async () => {
