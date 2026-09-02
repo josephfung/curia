@@ -114,17 +114,65 @@ PNPM_RETRY_DELAY=0 PNPM_RETRY_ATTEMPTS=abc "$WRAPPER" "$d/cmd" >/dev/null 2>&1
 check_eq "rejects a non-numeric PNPM_RETRY_ATTEMPTS" "2" "$?"
 if [ ! -f "$d/count" ]; then ok "  ...before running the command at all"; else bad "  ...ran the command anyway"; fi
 
-# 8. When every attempt fails the same way, the operator is told it is NOT transient.
-#    The whole risk of a retry wrapper is that it makes deterministic breakage (a stale
-#    lockfile is the common one) read as flakiness.
+# 8. When every attempt fails the same way, the operator gets the observation and NO
+#    verdict. An earlier version called an identical repeat failure "very likely
+#    deterministic, NOT a transient network fault" — which is backwards for the exact
+#    incident this wrapper exists for: pnpm and Node both exit 1 for nearly everything,
+#    so a sustained registry outage produces three identical exit 1s and would have been
+#    reported as a lockfile problem. Equal statuses carry no signal; don't pretend.
 d="$tmpdir/t8"; mkdir -p "$d"; make_stub "$d/cmd" 99
 out=$(PNPM_RETRY_DELAY=0 PNPM_RETRY_ATTEMPTS=2 "$WRAPPER" "$d/cmd" 2>&1 || true)
 case "$out" in
-  *"failed identically"*) ok "warns that an identical repeat failure is not transient" ;;
-  *) bad "no not-transient warning on identical repeat failures" ;;
+  *"every attempt exited 1"*) ok "reports an identical repeat failure without a verdict" ;;
+  *) bad "no report of identical repeat failures" ;;
+esac
+case "$out" in
+  *"cannot tell transient from deterministic"*) ok "  ...and says the cause is unknown" ;;
+  *) bad "  ...but does not admit the cause is unknown" ;;
+esac
+# Guard the regression directly: never claim a repeated failure is non-transient.
+case "$out" in
+  *"NOT a transient"*|*"failed identically"*) bad "  ...but still asserts a deterministic cause" ;;
+  *) ok "  ...and never asserts the failure was non-transient" ;;
 esac
 
-# 9. Re-run the load-bearing cases under the shells the Dockerfile ACTUALLY uses.
+# 9. A zero-prefixed PNPM_RETRY_DELAY is a decimal, not an octal constant.
+#    `$(( ))` follows C rules, so an unnormalized `010` silently means 8, and `08` is not
+#    a valid octal constant at all: the shell aborts under `set -e` and the wrapped
+#    command's exit code is replaced by the shell's. Both slip past the digits-only
+#    validator, so the normalization is the only thing standing between them and a
+#    build whose reported failure is not the failure that happened.
+#
+#    `sleep` is shadowed on PATH so these run instantly AND so the delay the wrapper
+#    actually computed is observable rather than merely inferred from timing.
+d="$tmpdir/t9"; mkdir -p "$d/bin"
+printf '#!/bin/sh\nexit 42\n' > "$d/cmd"; chmod +x "$d/cmd"
+printf '#!/bin/sh\necho "SLEPT:$1" >&2\n' > "$d/bin/sleep"; chmod +x "$d/bin/sleep"
+
+out=$(PATH="$d/bin:$PATH" PNPM_RETRY_DELAY=010 PNPM_RETRY_ATTEMPTS=2 "$WRAPPER" "$d/cmd" 2>&1)
+check_eq "zero-prefixed delay 010 preserves the wrapped exit code" "42" "$?"
+case "$out" in
+  *"SLEPT:10"*) ok "  ...and waits 10s (decimal), not 8s (octal)" ;;
+  *) bad "  ...but waited the octal value ($(printf '%s' "$out" | tr '\n' ' '))" ;;
+esac
+
+# `08` is the sharper case: invalid octal, so it kills the shell mid-retry.
+out=$(PATH="$d/bin:$PATH" PNPM_RETRY_DELAY=08 PNPM_RETRY_ATTEMPTS=2 "$WRAPPER" "$d/cmd" 2>&1)
+check_eq "invalid-octal delay 08 preserves the wrapped exit code" "42" "$?"
+case "$out" in
+  *"SLEPT:8"*) ok "  ...and still retries rather than aborting the shell" ;;
+  *) bad "  ...but did not retry ($(printf '%s' "$out" | tr '\n' ' '))" ;;
+esac
+
+# A delay of all zeros must normalize to 0, not to the empty string.
+out=$(PATH="$d/bin:$PATH" PNPM_RETRY_DELAY=000 PNPM_RETRY_ATTEMPTS=2 "$WRAPPER" "$d/cmd" 2>&1)
+check_eq "all-zero delay 000 preserves the wrapped exit code" "42" "$?"
+case "$out" in
+  *"SLEPT:0"*) ok "  ...and normalizes to 0" ;;
+  *) bad "  ...but did not normalize to 0 ($(printf '%s' "$out" | tr '\n' ' '))" ;;
+esac
+
+# 10. Re-run the load-bearing cases under the shells the Dockerfile ACTUALLY uses.
 #    The wrapper's shebang is `#!/usr/bin/env sh`, and in node:24-slim /bin/sh is dash,
 #    not bash. Testing only under bash hid a real bug: `[ 1 -ge abc ]` returns 2 in dash,
 #    which an `if` reads as false, so a non-numeric attempts value looped forever instead
@@ -150,6 +198,13 @@ for shell in sh dash bash; do
 
   PNPM_RETRY_DELAY=0 "$shell" "$WRAPPER" true >/dev/null 2>&1
   check_eq "[$shell] success exits 0" "0" "$?"
+
+  # Octal is an arithmetic-evaluation behaviour, so it belongs in the per-shell sweep:
+  # `08` aborts sh, dash, and bash alike, each with its own status, and any of them
+  # would overwrite the wrapped command's 42.
+  mkdir -p "$d/bin"; printf '#!/bin/sh\necho "SLEPT:$1" >&2\n' > "$d/bin/sleep"; chmod +x "$d/bin/sleep"
+  PATH="$d/bin:$PATH" PNPM_RETRY_ATTEMPTS=2 PNPM_RETRY_DELAY=08 "$shell" "$WRAPPER" "$d/fail" >/dev/null 2>&1
+  check_eq "[$shell] invalid-octal delay does not replace the exit code" "42" "$?"
 done
 
 echo
