@@ -296,14 +296,29 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
         'utf8',
       );
       const up = sql.split('-- Down Migration')[0] ?? '';
-      backfillArms = up
-        .split(';')
-        .map(stmt => stmt.replace(/^\s*(--[^\n]*\n)+/gm, '').trim())
-        .filter(stmt => /^WITH\s+(candidates|minted)\b/i.test(stmt));
 
-      // Arm A ("candidates") and arm B ("minted"). A rename must fail loudly here rather
-      // than silently reduce this suite to asserting nothing.
+      // Match each arm from its WITH clause to the terminating semicolon. Deliberately NOT
+      // a split(';'): this file has semicolons inside `--` comments and inside the
+      // COMMENT ON string literal, and a naive split cuts straight through them. An earlier
+      // version did exactly that and lost arm B the moment a comment gained a semicolon.
+      // Neither arm contains a semicolon of its own, so first-semicolon is the real end.
+      backfillArms = (['candidates', 'minted'] as const).map((cte) => {
+        const match = new RegExp(`^WITH\\s+${cte}\\s+AS\\b[\\s\\S]*?;`, 'm').exec(up);
+        if (!match) {
+          // Loud rather than silent: a renamed CTE would otherwise reduce this whole suite
+          // to asserting nothing while still reporting green.
+          throw new Error(
+            `migration 085: could not locate backfill arm "WITH ${cte} AS ..." — if the CTE `
+            + 'was renamed, update this extractor; do not let the suite run without it.',
+          );
+        }
+        return match[0];
+      });
+
+      // Arm A ("candidates") and arm B ("minted").
       expect(backfillArms).toHaveLength(2);
+      expect(backfillArms[0]).toContain('kind = \'organization\'');
+      expect(backfillArms[1]).toContain('migration_085');
     });
 
     /** Run `body` on a dedicated client in a transaction that is always rolled back. */
