@@ -35,12 +35,11 @@ UPDATE kg_nodes n
    AND n.type <> 'organization'
    AND n.archived_at IS NULL;
 
--- Clear decay warnings on the nodes just anchored. DreamEngine's Pass 2a archives any
--- node whose warning outlives warnHoldBackDays, and it is deliberately left without an
--- identity_source predicate: a node can only be warned once its confidence falls to the
--- archive threshold, which an anchored node no longer decays towards. That reasoning
--- only holds for warnings raised from here on, so retire the ones already in flight —
--- a pending "confirm or lose this" prompt is void for a node we now guarantee to keep.
+-- Clear decay warnings on the nodes just anchored. DreamEngine now excludes anchored rows
+-- from its warn pass and from both archival passes, so no NEW warning can be raised for
+-- one. This retires the warnings already in flight: a pending "confirm this or lose it"
+-- prompt is void for a node we have just guaranteed to keep, and Pass 2a would otherwise
+-- leave it warned forever.
 
 UPDATE kg_nodes
    SET warned_at = NULL,
@@ -116,8 +115,8 @@ UPDATE contacts c
 -- safe to run against an unknown deployment.
 --
 -- Deliberately makes no attempt to detect that two nodeless "Seth Berman" contacts might
--- be one person. That is the dedup sweep's ruling to make, and it now works better:
--- mergeContacts only carries KG memory when both sides have a node.
+-- be one person. That is the dedup sweep's ruling to make. (Note the sweep does NOT yet
+-- carry KG memory across a merge — mergeEntities trips the contacts FK; see #1711.)
 --
 -- Convention (confidence 0.5, slow_decay, internal, no embedding) mirrors migration 056.
 -- The contact id is recorded in properties so the nodes can be mapped back below and so

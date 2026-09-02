@@ -71,7 +71,15 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
     await pool.end();
   });
 
-  /** Insert a node directly so the test controls identity_source and confidence exactly. */
+  /**
+   * Anything that can run a query: the pool, or a transaction client. The backfill suite
+   * passes a client so its table-wide statements can be rolled back.
+   */
+  type Queryable = Pick<pg.Pool, 'query'>;
+
+  /** Insert a node directly so the test controls identity_source and confidence exactly.
+   *  Rows created on a transaction client are not tracked for cleanup — the rollback is
+   *  the cleanup, and recording them would make afterEach chase ids that never committed. */
   async function insertNode(opts: {
     label: string;
     type?: string;
@@ -79,8 +87,8 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
     confidence?: number;
     decayClass?: string;
     properties?: Record<string, unknown>;
-  }): Promise<string> {
-    const { rows } = await pool.query<{ id: string }>(
+  }, tx: Queryable = pool): Promise<string> {
+    const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO kg_nodes (type, label, properties, source, confidence, decay_class, sensitivity, identity_source,
                              created_at, last_confirmed_at, last_decayed_at)
        VALUES ($1, $2, $3, 'test', $4, $5, 'internal', $6, now() - INTERVAL '400 days', now() - INTERVAL '400 days', now() - INTERVAL '400 days')
@@ -95,7 +103,7 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       ],
     );
     const id = rows[0]!.id;
-    nodeIds.push(id);
+    if (tx === pool) nodeIds.push(id);
     return id;
   }
 
@@ -104,14 +112,14 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
     kgNodeId?: string | null;
     kind?: string;
     primaryEmail?: string | null;
-  }): Promise<string> {
+  }, tx: Queryable = pool): Promise<string> {
     const id = randomUUID();
-    await pool.query(
+    await tx.query(
       `INSERT INTO contacts (id, kg_node_id, display_name, tier, kind, primary_email, created_at, updated_at)
        VALUES ($1, $2, $3, 'known', $4, $5, now(), now())`,
       [id, opts.kgNodeId ?? null, opts.displayName, opts.kind ?? 'person', opts.primaryEmail ?? null],
     );
-    contactIds.push(id);
+    if (tx === pool) contactIds.push(id);
     return id;
   }
 
@@ -249,12 +257,37 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
 
       expect(await store.anchorNode(nodeId)).toBe(false);
     });
+
+    it('clears a pending decay warning on adoption', async () => {
+      // Adopting a node is a promise to keep it, so the "confirm this or lose it" prompt is
+      // void. Without this the node would sit warned forever, since Pass 2a now skips it.
+      const nodeId = await insertNode({ label: `Warned ${randomUUID()}` });
+      await pool.query(
+        `UPDATE kg_nodes SET warned_at = now(), warn_reason = 'high_sensitivity' WHERE id = $1`,
+        [nodeId],
+      );
+
+      expect(await store.anchorNode(nodeId)).toBe(true);
+
+      const { rows } = await pool.query<{ warned_at: Date | null; warn_reason: string | null }>(
+        'SELECT warned_at, warn_reason FROM kg_nodes WHERE id = $1', [nodeId],
+      );
+      expect(rows[0]!.warned_at).toBeNull();
+      expect(rows[0]!.warn_reason).toBeNull();
+    });
   });
 
   describe('migration 085 backfill', () => {
     // Re-runs the migration's own two arms rather than a paraphrase of them, so the test
-    // fails if the shipped SQL changes shape. Both are scoped to kg_node_id IS NULL, so
-    // re-running them against already-linked rows is a no-op.
+    // fails if the shipped SQL changes shape.
+    //
+    // Both arms are scoped only by "kg_node_id IS NULL", which makes them table-wide: run
+    // against the shared curia_test database they would link any nodeless contact another
+    // suite happens to own, and arm B would mint a node this suite never records. So every
+    // case here runs inside a transaction that is always rolled back — the fixtures, the
+    // replay and the assertions all see the same uncommitted state, and nothing survives.
+    // (The arms do take row locks on other suites' nodeless contacts for the life of each
+    // transaction; these are short, so that is contention, not corruption.)
     let backfillArms: string[];
 
     beforeAll(async () => {
@@ -273,106 +306,149 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       expect(backfillArms).toHaveLength(2);
     });
 
-    async function runBackfill(): Promise<void> {
+    /** Run `body` on a dedicated client in a transaction that is always rolled back. */
+    async function inRolledBackTransaction(
+      body: (tx: pg.PoolClient) => Promise<void>,
+    ): Promise<void> {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await body(client);
+      } finally {
+        // Not swallowed: a ROLLBACK that fails means the connection is in a state the next
+        // test would inherit, and that should be loud even though it masks a body error.
+        try {
+          await client.query('ROLLBACK');
+        } finally {
+          client.release();
+        }
+      }
+    }
+
+    async function runBackfill(tx: pg.PoolClient): Promise<void> {
       for (const stmt of backfillArms) {
-        await pool.query(stmt);
+        await tx.query(stmt);
       }
     }
 
     it('gives two nodeless same-name contacts a node each, never a shared one', async () => {
       // The #1623 population. Migration 056 minted one node per distinct display_name,
       // which is exactly why the namesakes were left nodeless.
-      const label = `Seth Berman ${randomUUID()}`;
-      const a = await insertContact({ displayName: label });
-      const b = await insertContact({ displayName: label });
+      await inRolledBackTransaction(async (tx) => {
+        const label = `Seth Berman ${randomUUID()}`;
+        const a = await insertContact({ displayName: label }, tx);
+        const b = await insertContact({ displayName: label }, tx);
 
-      await runBackfill();
+        await runBackfill(tx);
 
-      const { rows } = await pool.query<{ id: string; kg_node_id: string | null }>(
-        'SELECT id, kg_node_id FROM contacts WHERE id = ANY($1::uuid[])', [[a, b]],
-      );
-      const links = new Map(rows.map(r => [r.id, r.kg_node_id]));
-      for (const id of [a, b]) {
-        expect(links.get(id)).not.toBeNull();
-        nodeIds.push(links.get(id)!);
-      }
-      expect(links.get(a)).not.toBe(links.get(b));
+        const { rows } = await tx.query<{ id: string; kg_node_id: string | null }>(
+          'SELECT id, kg_node_id FROM contacts WHERE id = ANY($1::uuid[])', [[a, b]],
+        );
+        const links = new Map(rows.map(r => [r.id, r.kg_node_id]));
+        expect(links.get(a)).not.toBeNull();
+        expect(links.get(b)).not.toBeNull();
+        expect(links.get(a)).not.toBe(links.get(b));
+      });
     });
 
     it('anchors what it mints, at migration 056 confidence', async () => {
-      const contactId = await insertContact({ displayName: `Solo ${randomUUID()}` });
+      await inRolledBackTransaction(async (tx) => {
+        const contactId = await insertContact({ displayName: `Solo ${randomUUID()}` }, tx);
 
-      await runBackfill();
+        await runBackfill(tx);
 
-      const { rows } = await pool.query<{
-        id: string; identity_source: string; confidence: number; source: string; type: string;
-      }>(
-        `SELECT n.id, n.identity_source, n.confidence, n.source, n.type
-           FROM contacts c JOIN kg_nodes n ON n.id = c.kg_node_id
-          WHERE c.id = $1`,
-        [contactId],
-      );
-      expect(rows).toHaveLength(1);
-      nodeIds.push(rows[0]!.id);
-      expect(rows[0]!.identity_source).toBe('contact');
-      expect(rows[0]!.type).toBe('person');
-      expect(rows[0]!.source).toBe('migration_085');
-      expect(rows[0]!.confidence).toBeCloseTo(0.5, 5);
+        const { rows } = await tx.query<{
+          identity_source: string; confidence: number; source: string; type: string;
+        }>(
+          `SELECT n.identity_source, n.confidence, n.source, n.type
+             FROM contacts c JOIN kg_nodes n ON n.id = c.kg_node_id
+            WHERE c.id = $1`,
+          [contactId],
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.identity_source).toBe('contact');
+        expect(rows[0]!.type).toBe('person');
+        expect(rows[0]!.source).toBe('migration_085');
+        expect(rows[0]!.confidence).toBeCloseTo(0.5, 5);
+      });
     });
 
     it('arm A re-links a nodeless organization contact to its domain node', async () => {
-      const domain = `acme-${randomUUID().slice(0, 8)}.test`;
-      const orgNode = await insertNode({
-        label: `Acme ${randomUUID()}`, type: 'organization', properties: { domain },
-      });
-      // The role address that minted the node, and the one the old index turned away.
-      await insertContact({
-        displayName: 'Acme info', kind: 'organization', kgNodeId: orgNode, primaryEmail: `info@${domain}`,
-      });
-      const support = await insertContact({
-        displayName: 'Acme support', kind: 'organization', primaryEmail: `support@${domain}`,
-      });
+      await inRolledBackTransaction(async (tx) => {
+        const domain = `acme-${randomUUID().slice(0, 8)}.test`;
+        const orgNode = await insertNode({
+          label: `Acme ${randomUUID()}`, type: 'organization', properties: { domain },
+        }, tx);
+        // The role address that minted the node, and the one the old index turned away.
+        await insertContact({
+          displayName: 'Acme info', kind: 'organization', kgNodeId: orgNode, primaryEmail: `info@${domain}`,
+        }, tx);
+        const support = await insertContact({
+          displayName: 'Acme support', kind: 'organization', primaryEmail: `support@${domain}`,
+        }, tx);
 
-      await runBackfill();
+        await runBackfill(tx);
 
-      const { rows } = await pool.query<{ kg_node_id: string | null }>(
-        'SELECT kg_node_id FROM contacts WHERE id = $1', [support],
-      );
-      expect(rows[0]!.kg_node_id).toBe(orgNode);
+        const { rows } = await tx.query<{ kg_node_id: string | null }>(
+          'SELECT kg_node_id FROM contacts WHERE id = $1', [support],
+        );
+        expect(rows[0]!.kg_node_id).toBe(orgNode);
+      });
     });
 
     it('does not link an organization contact whose domain matches nothing', async () => {
       // Arm B then mints it one, rather than guessing at an unrelated organization.
-      const orphan = await insertContact({
-        displayName: `Nowhere Inc ${randomUUID()}`,
-        kind: 'organization',
-        primaryEmail: `hello@nowhere-${randomUUID().slice(0, 8)}.test`,
+      await inRolledBackTransaction(async (tx) => {
+        const orphan = await insertContact({
+          displayName: `Nowhere Inc ${randomUUID()}`,
+          kind: 'organization',
+          primaryEmail: `hello@nowhere-${randomUUID().slice(0, 8)}.test`,
+        }, tx);
+
+        await runBackfill(tx);
+
+        const { rows } = await tx.query<{ type: string; identity_source: string; source: string }>(
+          `SELECT n.type, n.identity_source, n.source
+             FROM contacts c JOIN kg_nodes n ON n.id = c.kg_node_id
+            WHERE c.id = $1`,
+          [orphan],
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.type).toBe('organization');
+        expect(rows[0]!.identity_source).toBe('contact');
+        expect(rows[0]!.source).toBe('migration_085');
       });
-
-      await runBackfill();
-
-      const { rows } = await pool.query<{ id: string; type: string; identity_source: string }>(
-        `SELECT n.id, n.type, n.identity_source
-           FROM contacts c JOIN kg_nodes n ON n.id = c.kg_node_id
-          WHERE c.id = $1`,
-        [orphan],
-      );
-      expect(rows).toHaveLength(1);
-      nodeIds.push(rows[0]!.id);
-      expect(rows[0]!.type).toBe('organization');
-      expect(rows[0]!.identity_source).toBe('contact');
     });
 
     it('leaves already-linked contacts untouched', async () => {
-      const nodeId = await insertNode({ label: `Linked ${randomUUID()}`, identitySource: 'contact' });
-      const contactId = await insertContact({ displayName: 'Linked', kgNodeId: nodeId });
+      await inRolledBackTransaction(async (tx) => {
+        const nodeId = await insertNode({ label: `Linked ${randomUUID()}`, identitySource: 'contact' }, tx);
+        const contactId = await insertContact({ displayName: 'Linked', kgNodeId: nodeId }, tx);
 
-      await runBackfill();
+        await runBackfill(tx);
 
-      const { rows } = await pool.query<{ kg_node_id: string | null }>(
-        'SELECT kg_node_id FROM contacts WHERE id = $1', [contactId],
+        const { rows } = await tx.query<{ kg_node_id: string | null }>(
+          'SELECT kg_node_id FROM contacts WHERE id = $1', [contactId],
+        );
+        expect(rows[0]!.kg_node_id).toBe(nodeId);
+      });
+    });
+
+    it('leaves nothing behind — the replay is rolled back', async () => {
+      // Guards the isolation itself: if the transaction wrapper regressed, this suite
+      // would start linking other suites' fixtures and minting untracked nodes.
+      let contactId = '';
+      await inRolledBackTransaction(async (tx) => {
+        contactId = await insertContact({ displayName: `Ephemeral ${randomUUID()}` }, tx);
+        await runBackfill(tx);
+      });
+
+      const { rows } = await pool.query('SELECT 1 FROM contacts WHERE id = $1', [contactId]);
+      expect(rows).toHaveLength(0);
+      const minted = await pool.query(
+        `SELECT 1 FROM kg_nodes WHERE properties->>'backfilled_for_contact' = $1`, [contactId],
       );
-      expect(rows[0]!.kg_node_id).toBe(nodeId);
+      expect(minted.rows).toHaveLength(0);
     });
   });
 
@@ -423,6 +499,60 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       const byId = new Map(rows.map(r => [r.id, r]));
 
       expect(byId.get(anchored)!.archived_at).toBeNull();
+      expect(byId.get(labelTier)!.archived_at).not.toBeNull();
+    });
+
+    it('never warns an anchored node, however sensitive', async () => {
+      // The hole an earlier version of this change left open. Freezing decay does not RAISE
+      // confidence, so a node anchored while already below archiveThreshold stays below it.
+      // Without the filter on the warn pass, high sensitivity alone re-warns it every run.
+      const anchored = await insertNode({
+        label: `Sensitive ${randomUUID()}`, identitySource: 'contact', confidence: 0.01,
+      });
+      await pool.query(`UPDATE kg_nodes SET sensitivity = 'restricted' WHERE id = $1`, [anchored]);
+      const labelTier = await insertNode({
+        label: `SensitiveTwin ${randomUUID()}`, identitySource: 'label', confidence: 0.01,
+      });
+      await pool.query(`UPDATE kg_nodes SET sensitivity = 'restricted' WHERE id = $1`, [labelTier]);
+
+      await engine.runDecayPass();
+
+      const { rows } = await pool.query<{ id: string; warned_at: Date | null }>(
+        'SELECT id, warned_at FROM kg_nodes WHERE id = ANY($1::uuid[])', [[anchored, labelTier]],
+      );
+      const byId = new Map(rows.map(r => [r.id, r]));
+      expect(byId.get(anchored)!.warned_at).toBeNull();
+      // The label-tier control proves the warn pass fired at all this run.
+      expect(byId.get(labelTier)!.warned_at).not.toBeNull();
+    });
+
+    it('does not archive an anchored node whose warning has already expired', async () => {
+      // Pass 2a, reached across a second decay pass. A warning raised before the node was
+      // anchored (anchorNode clears warned_at, migration 085 clears the legacy rows, but a
+      // concurrent pass could still land one) must not become the surviving archival path.
+      const anchored = await insertNode({
+        label: `StaleWarned ${randomUUID()}`, identitySource: 'contact', confidence: 0.01,
+      });
+      const labelTier = await insertNode({
+        label: `StaleWarnedTwin ${randomUUID()}`, identitySource: 'label', confidence: 0.01,
+      });
+      // warnHoldBackDays is 30 in this suite's config, so 60 days is comfortably expired.
+      await pool.query(
+        `UPDATE kg_nodes
+            SET warned_at = now() - INTERVAL '60 days', warn_reason = 'high_sensitivity'
+          WHERE id = ANY($1::uuid[])`,
+        [[anchored, labelTier]],
+      );
+
+      await engine.runDecayPass();
+      await engine.runDecayPass();
+
+      const { rows } = await pool.query<{ id: string; archived_at: Date | null }>(
+        'SELECT id, archived_at FROM kg_nodes WHERE id = ANY($1::uuid[])', [[anchored, labelTier]],
+      );
+      const byId = new Map(rows.map(r => [r.id, r]));
+      expect(byId.get(anchored)!.archived_at).toBeNull();
+      // The label-tier control proves Pass 2a ran and did archive an expired warning.
       expect(byId.get(labelTier)!.archived_at).not.toBeNull();
     });
 
