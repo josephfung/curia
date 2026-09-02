@@ -586,19 +586,23 @@ describe('ExtractFactsHandler', () => {
   // The malformed-fact and ambiguity paths already omit the raw subject name.
   // These ten pre-existing call sites still logged it. `subject` is an LLM-extracted
   // entity name (usually a person's name) and the pino redact list does not cover it.
-  // Substitute: entityNodeId where a node is resolved; presence flags otherwise.
-  // `attribute` is a snake_case key and is kept — it is not identifying on its own.
+  // Substitute: entityNodeId where a node is resolved; omit it when resolution has
+  // not completed. `attribute` is a snake_case key and is kept — it is not identifying
+  // on its own.
   describe('fact-loop logs never carry the raw subject name (PII guard)', () => {
     const PII_SUBJECT = 'Priya Ramanathan';
+    const UNNORMALIZABLE_PHONE = '020 7946 0958';
 
     function spyLog() {
-      return {
+      const log = {
         warn: vi.fn(),
         info: vi.fn(),
         debug: vi.fn(),
         error: vi.fn(),
         child: vi.fn(),
       };
+      log.child.mockReturnValue(log);
+      return log;
     }
 
     function attachSpyLog(ctx: ToolContext) {
@@ -611,9 +615,24 @@ describe('ExtractFactsHandler', () => {
       return fn.mock.calls.find(c => messageRe.test(String(c[c.length - 1])));
     }
 
-    function expectNoRawSubject(call: unknown[] | undefined) {
+    // JSON.stringify skips Error.message (non-enumerable). Pino does serialize it,
+    // so fold err.message/stack in or the guard is inert on the three `err` sites.
+    function serializeLogPayload(payload: unknown): string {
+      const obj = payload as Record<string, unknown> | null;
+      const err = obj?.err;
+      const errText = err instanceof Error
+        ? `${err.name} ${err.message} ${err.stack ?? ''}`
+        : '';
+      return `${JSON.stringify(payload)}\n${errText}`;
+    }
+
+    function expectNoPii(call: unknown[] | undefined, extraForbidden: string[] = []) {
       expect(call).toBeDefined();
-      expect(JSON.stringify(call![0])).not.toContain(PII_SUBJECT);
+      const serialized = serializeLogPayload(call![0]);
+      expect(serialized).not.toContain(PII_SUBJECT);
+      for (const s of extraForbidden) {
+        expect(serialized).not.toContain(s);
+      }
       expect(call![0]).not.toHaveProperty('subject');
     }
 
@@ -638,8 +657,8 @@ describe('ExtractFactsHandler', () => {
       const entityMemory = makeEntityMemory();
       const ctx = makeCtx(
         entityMemory,
-        { text: `${PII_SUBJECT} phone is not-a-phone-number.`, source: 'test' },
-        makeMockInfraLlm(['yes', factJson('phone', 'not-a-phone-number')]),
+        { text: `${PII_SUBJECT} phone is ${UNNORMALIZABLE_PHONE}.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('phone', UNNORMALIZABLE_PHONE)]),
         makeContactService(),
       );
       const log = attachSpyLog(ctx);
@@ -647,10 +666,11 @@ describe('ExtractFactsHandler', () => {
       await new ExtractFactsHandler().execute(ctx);
 
       const call = findCall(log.warn, /canonical attribute normalization failed/);
-      expectNoRawSubject(call);
+      expectNoPii(call, [UNNORMALIZABLE_PHONE, '7946 0958']);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'phone');
+      expect(call![0]).toHaveProperty('reason', 'phone_normalization_failed');
     });
 
     it('findContactByKgNodeId-failed warn', async () => {
@@ -668,7 +688,7 @@ describe('ExtractFactsHandler', () => {
       await new ExtractFactsHandler().execute(ctx);
 
       const call = findCall(log.warn, /findContactByKgNodeId failed/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'timezone');
@@ -691,7 +711,7 @@ describe('ExtractFactsHandler', () => {
         data: { stored: 0, redirected: 1, skipped: false, failed: 0, ambiguous: 0 },
       });
       const call = findCall(log.info, /canonical attribute redirected/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'timezone');
@@ -715,7 +735,7 @@ describe('ExtractFactsHandler', () => {
       await new ExtractFactsHandler().execute(ctx);
 
       const call = findCall(log.warn, /canonical attribute validation failed/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'primary_email');
@@ -741,7 +761,7 @@ describe('ExtractFactsHandler', () => {
         data: { stored: 0, redirected: 0, skipped: false, failed: 1, ambiguous: 0 },
       });
       const call = findCall(log.error, /canonical attribute redirect failed with unexpected error/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'timezone');
@@ -756,7 +776,7 @@ describe('ExtractFactsHandler', () => {
       });
       const ctx = makeCtx(
         entityMemory,
-        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        { text: `${PII_SUBJECT} is vegetarian.`, source: 'test' },
         makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
       );
       const log = attachSpyLog(ctx);
@@ -764,7 +784,7 @@ describe('ExtractFactsHandler', () => {
       await new ExtractFactsHandler().execute(ctx);
 
       const call = findCall(log.info, /fact auto-resolved/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
@@ -779,7 +799,7 @@ describe('ExtractFactsHandler', () => {
       });
       const ctx = makeCtx(
         entityMemory,
-        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        { text: `${PII_SUBJECT} is vegetarian.`, source: 'test' },
         makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
       );
       const log = attachSpyLog(ctx);
@@ -787,7 +807,7 @@ describe('ExtractFactsHandler', () => {
       await new ExtractFactsHandler().execute(ctx);
 
       const call = findCall(log.error, /write rate limit exceeded/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
@@ -802,7 +822,7 @@ describe('ExtractFactsHandler', () => {
       });
       const ctx = makeCtx(
         entityMemory,
-        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        { text: `${PII_SUBJECT} is vegetarian.`, source: 'test' },
         makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
       );
       const log = attachSpyLog(ctx);
@@ -810,7 +830,7 @@ describe('ExtractFactsHandler', () => {
       await new ExtractFactsHandler().execute(ctx);
 
       const call = findCall(log.warn, /fact not stored/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
@@ -823,7 +843,7 @@ describe('ExtractFactsHandler', () => {
       );
       const ctx = makeCtx(
         entityMemory,
-        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        { text: `${PII_SUBJECT} is vegetarian.`, source: 'test' },
         makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
       );
       const log = attachSpyLog(ctx);
@@ -831,10 +851,10 @@ describe('ExtractFactsHandler', () => {
       await new ExtractFactsHandler().execute(ctx);
 
       const call = findCall(log.error, /unexpected programming error in fact loop/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
-      expect(call![0]).toHaveProperty('hasSubject', true);
+      expect(call![0]).not.toHaveProperty('hasSubject');
       expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
     });
 
@@ -843,7 +863,7 @@ describe('ExtractFactsHandler', () => {
       vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(new Error('DB connection lost'));
       const ctx = makeCtx(
         entityMemory,
-        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        { text: `${PII_SUBJECT} is vegetarian.`, source: 'test' },
         makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
       );
       const log = attachSpyLog(ctx);
@@ -851,10 +871,10 @@ describe('ExtractFactsHandler', () => {
       await new ExtractFactsHandler().execute(ctx);
 
       const call = findCall(log.error, /failed to persist fact/);
-      expectNoRawSubject(call);
+      expectNoPii(call);
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
-      expect(call![0]).toHaveProperty('hasSubject', true);
+      expect(call![0]).not.toHaveProperty('hasSubject');
       expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
     });
   });

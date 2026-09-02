@@ -12,7 +12,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { DECAY_CLASSES, NODE_TYPES } from '../../src/memory/types.js';
-import type { DecayClass, NodeType } from '../../src/memory/types.js';
+import type { DecayClass, NodeType, KgNode } from '../../src/memory/types.js';
 import { buildCanonicalPatch } from '../../src/contacts/canonical-attribute-guard.js';
 import type { Contact } from '../../src/contacts/types.js';
 import { ContactValidationError } from '../../src/contacts/contact-service.js';
@@ -179,7 +179,7 @@ ${text}`,
         let attribute = typeof fact?.attribute === 'string' ? fact.attribute.trim() : '';
         // Hoisted so catch can log entityNodeId when resolution completed.
         // Undefined until then — never log the raw subject name (PII).
-        let entityNode: { id: string; type: NodeType } | undefined;
+        let entityNode: KgNode | undefined;
 
         try {
           // Guard: skip malformed entries where required string fields are absent or blank.
@@ -414,10 +414,9 @@ ${text}`,
             ctx.log.error(
               {
                 err,
-                // Never the raw subject name. Node id when resolution completed;
-                // hasSubject is enough to tell malformed/pre-resolve failures apart.
+                // Never the raw subject name. entityNodeId is set after resolveOrCreate
+                // succeeds; undefined here is the pre-resolve signal.
                 entityNodeId: entityNode?.id,
-                hasSubject: Boolean(subject),
                 attribute,
               },
               'extract-facts: unexpected programming error in fact loop — re-throwing',
@@ -430,7 +429,6 @@ ${text}`,
             {
               err,
               entityNodeId: entityNode?.id,
-              hasSubject: Boolean(subject),
               attribute,
             },
             'extract-facts: failed to persist fact, skipping',
