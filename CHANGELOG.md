@@ -69,6 +69,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Contact merge** — secondary KG memory folds into the survivor after the contact delete. (#1711)
 - **`docker-publish`** — a transient registry drop mid-`pnpm install` retries instead of failing the publish. (#1699)
+- **`docker-publish`** — `apt` fetches retry too; the `curia-postgres` leg has no other network step. (#1699)
 - **`entity-context` assembler** — archived nodes, facts, and edges no longer assemble. (#1707)
 - **`entity-context` cache** — an archived node is re-checked before a TTL hit is served. (#1707)
 - **`DreamEngine`** — flushes entity-context cache after a decay pass archives. (#1707)
