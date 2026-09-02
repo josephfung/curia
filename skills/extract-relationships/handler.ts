@@ -140,11 +140,16 @@ ${text}`,
       NODE_TYPES.filter(t => t !== 'fact'),
     );
 
+    // Bind the narrowed values once: the guards above have already established both, but
+    // a closure defined here does not carry that narrowing on its own.
+    const entityMemory = ctx.entityMemory;
+    const edgeSource = source;
+
     /**
-     * Resolve one endpoint of a triple, or report that the label is ambiguous.
+     * Look one endpoint up. Pure read — it never writes, which is the point.
      *
      * Mirrors `EntityMemory.resolveOrCreate`'s exact-match contract (#1705):
-     *   0 matches                                   → create
+     *   0 matches                                   → absent (caller decides whether to mint)
      *   1 match                                     → that node, even if its type differs
      *                                                 (a lone label match is almost always
      *                                                 the same real-world entity)
@@ -156,45 +161,44 @@ ${text}`,
      * where an extra embed + vector search per endpoint is real cost. The exact-match half
      * is what this fix needs; the two must be kept in step if either changes.
      *
-     * Before ADR-040 this took `matches[0]` when several nodes shared a label. That was
-     * always a coin flip, but two contacts with the same display name could not both hold
-     * a node, so it was rare. Now they can, so it would be routine — and attaching a
+     * Before ADR-040 resolution took `matches[0]` when several nodes shared a label. That
+     * was always a coin flip, but two contacts with the same display name could not both
+     * hold a node, so it was rare. Now they can, so it would be routine — and attaching a
      * relationship to the wrong one of two real people is worse than dropping it (#1714).
      */
-    // Bind the narrowed values once: the guards above have already established both, but
-    // a closure defined here does not carry that narrowing on its own.
-    const entityMemory = ctx.entityMemory;
-    const edgeSource = source;
-
-    async function resolveEndpoint(
+    async function lookupEndpoint(
       label: string,
       wantedType: NodeType,
     ): Promise<
-      | { kind: 'resolved'; node: KgNode }
+      | { kind: 'found'; node: KgNode }
       | { kind: 'ambiguous'; candidateIds: string[] }
+      | { kind: 'absent' }
     > {
       const matches = await entityMemory.findEntities(label);
 
-      if (matches.length === 0) {
-        const { entity } = await entityMemory.createEntity({
-          type: wantedType,
-          label,
-          properties: {},
-          source: edgeSource,
-          confidence: 0.6,
-        });
-        return { kind: 'resolved', node: entity };
-      }
-
-      if (matches.length === 1) return { kind: 'resolved', node: matches[0]! };
+      if (matches.length === 0) return { kind: 'absent' };
+      if (matches.length === 1) return { kind: 'found', node: matches[0]! };
 
       const typeMatches = matches.filter(n => n.type === wantedType);
-      if (typeMatches.length === 1) return { kind: 'resolved', node: typeMatches[0]! };
+      if (typeMatches.length === 1) return { kind: 'found', node: typeMatches[0]! };
 
       return {
         kind: 'ambiguous',
         candidateIds: (typeMatches.length > 1 ? typeMatches : matches).map(n => n.id),
       };
+    }
+
+    /** Mint an endpoint node. Separate from the lookup so nothing is written until BOTH
+     *  endpoints are known to be resolvable — see the call site. */
+    async function createEndpoint(label: string, wantedType: NodeType): Promise<KgNode> {
+      const { entity } = await entityMemory.createEntity({
+        type: wantedType,
+        label,
+        properties: {},
+        source: edgeSource,
+        confidence: 0.6,
+      });
+      return entity;
     }
 
     for (const triple of triples) {
@@ -226,19 +230,22 @@ ${text}`,
           ? triple.objectType as NodeType
           : 'person';
 
-        // Resolve both endpoints. Either one being ambiguous drops the whole triple:
-        // an edge needs both ends, and half a relationship is not a relationship.
-        const subjectResolution = await resolveEndpoint(triple.subject, subjectType);
-        const objectResolution = await resolveEndpoint(triple.object, objectType);
+        // Look BOTH endpoints up before minting either. An edge needs both ends, so a
+        // triple with one ambiguous endpoint is dropped — and if the lookup and the mint
+        // were interleaved, dropping it would still leave behind whichever endpoint had
+        // already been created: an edgeless node persisted for a relationship this handler
+        // decided not to record.
+        const subjectLookup = await lookupEndpoint(triple.subject, subjectType);
+        const objectLookup = await lookupEndpoint(triple.object, objectType);
 
-        if (subjectResolution.kind === 'ambiguous' || objectResolution.kind === 'ambiguous') {
+        if (subjectLookup.kind === 'ambiguous' || objectLookup.kind === 'ambiguous') {
           // Candidate ids, never the raw label — those are extracted entity names and
           // therefore PII (#1706). The ids are enough to inspect the collision by hand.
           ctx.log.warn(
             {
               predicate,
-              subjectCandidateIds: subjectResolution.kind === 'ambiguous' ? subjectResolution.candidateIds : undefined,
-              objectCandidateIds: objectResolution.kind === 'ambiguous' ? objectResolution.candidateIds : undefined,
+              subjectCandidateIds: subjectLookup.kind === 'ambiguous' ? subjectLookup.candidateIds : undefined,
+              objectCandidateIds: objectLookup.kind === 'ambiguous' ? objectLookup.candidateIds : undefined,
             },
             'extract-relationships: ambiguous endpoint — skipping triple rather than guessing',
           );
@@ -246,8 +253,15 @@ ${text}`,
           continue;
         }
 
-        const subjectNode = subjectResolution.node;
-        const objectNode = objectResolution.node;
+        // Both resolvable, so minting is safe. A triple naming the same new label at both
+        // ends mints once, not twice: createEntity upserts on (lower(label), type), so the
+        // second call returns the first node and the self-loop guard below catches it.
+        const subjectNode = subjectLookup.kind === 'found'
+          ? subjectLookup.node
+          : await createEndpoint(triple.subject, subjectType);
+        const objectNode = objectLookup.kind === 'found'
+          ? objectLookup.node
+          : await createEndpoint(triple.object, objectType);
 
         // Skip self-loops — subject and object resolved to the same node.
         // The extraction prompt asks for two distinct entities but the LLM can still

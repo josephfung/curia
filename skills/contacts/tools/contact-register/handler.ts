@@ -104,7 +104,7 @@ export class ContactRegisterHandler implements ToolHandler {
       if (!resolvedSender) {
         ctx.log.info({ channel }, 'contact-register: no existing contact — creating at tier=unknown');
 
-        const contact = await ctx.contactService.createContact({
+        const { contact, kgNodeCreated } = await ctx.contactService.createContactWithKgOutcome({
           displayName,
           // Use the identifier (e.g. email address) as a fallback display name in
           // case the displayName sanitizes to empty (prompt injection defense).
@@ -155,9 +155,10 @@ export class ContactRegisterHandler implements ToolHandler {
           // but it will leave a dangling row. Log as warn so it can be caught by a
           // periodic cleanup sweep if needed.
           try {
-            // Orphan cleanup — do not archive the KG node; createContact may have adopted
-            // a pre-existing one (ADR-040, see deleteContact).
-            await ctx.contactService.deleteContact(contact.id, { archiveAnchoredNode: false });
+            // Orphan cleanup — retire the KG node only if THIS call minted it. An adopted
+            // node may carry pre-existing facts and is not ours to remove; a minted one is
+            // anchored and never decays, so it cannot just be abandoned (ADR-040).
+            await ctx.contactService.deleteContact(contact.id, { archiveAnchoredNode: kgNodeCreated });
           } catch (deleteErr) {
             ctx.log.warn(
               { deleteErr, orphanId: contact.id },

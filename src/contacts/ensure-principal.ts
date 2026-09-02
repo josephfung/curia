@@ -187,11 +187,18 @@ export async function ensurePrincipalContact(
           [kgNodeId],
         );
       } catch (cleanupErr) {
-        // Best-effort: the original failure is the one worth propagating.
-        logger.warn(
+        // The contacts INSERT failure stays the thrown error — it is the cause, and
+        // callers branch on its pgCode/constraint. The cleanup failure is attached as
+        // `cause` rather than discarded, so a caller or error reporter that walks the
+        // chain still sees that a permanent, undecayable node was left behind.
+        logger.error(
           { cleanupErr, kgNodeId },
-          'ensure-principal: could not remove the orphaned principal KG node after a failed create',
+          'ensure-principal: could not remove the orphaned principal KG node after a failed create — '
+            + 'it is anchored and will not decay; see the anchored-orphan query in scripts/kg-node-linkage-report.ts',
         );
+        if (err instanceof Error && err.cause === undefined) {
+          err.cause = cleanupErr;
+        }
       }
     } else {
       logger.warn(
