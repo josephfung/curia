@@ -43,11 +43,25 @@ function formatFailedReason(retryable: boolean): string {
 }
 
 function formatTotalFailureError(failed: AssembleManyFailedEntry[]): string {
-  const retryable = failed.some(f => f.retryable);
-  if (retryable) {
+  const retryableCount = failed.filter(f => f.retryable).length;
+  const nonRetryableCount = failed.length - retryableCount;
+  if (retryableCount > 0 && nonRetryableCount > 0) {
+    return 'Entity context lookup failed for all requested IDs. Some failures may be transient (retry those lookups); others are system errors (do not retry those). '
+      + NOT_UNKNOWN_SUFFIX;
+  }
+  if (retryableCount > 0) {
     return `Entity context lookup failed for all requested IDs due to transient errors. Retry; ${NOT_UNKNOWN_SUFFIX}`;
   }
   return `Entity context lookup failed for all requested IDs due to a system error. Do not retry; report the failure. ${NOT_UNKNOWN_SUFFIX}`;
+}
+
+function isTotalFailure(result: AssembleManyResult): boolean {
+  return (
+    result.entities.length === 0
+    && result.failed.length > 0
+    && result.unresolved.length === 0
+    && result.nodeless.length === 0
+  );
 }
 
 function buildSuccessData(result: AssembleManyResult): Record<string, unknown> {
@@ -127,10 +141,10 @@ export class EntityContextHandler implements ToolHandler {
         );
       }
 
-      // Total failure: every ID errored and nothing assembled. A success-shaped
-      // result with only a retry hint has nothing to stop the agent retrying into
-      // a hard-down DB (#1702 review).
-      if (result.entities.length === 0 && result.failed.length > 0) {
+      // Total failure: every ID errored and no other bucket has entries. A
+      // success-shaped result with only a retry hint has nothing to stop the
+      // agent retrying into a hard-down DB (#1702 review).
+      if (isTotalFailure(result)) {
         return { success: false, error: formatTotalFailureError(result.failed) };
       }
 
