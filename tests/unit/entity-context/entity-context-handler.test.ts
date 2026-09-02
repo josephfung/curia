@@ -80,7 +80,7 @@ describe('EntityContextHandler', () => {
       { contactIds: ['contact-2', 'ghost-id'] },
       {
         unresolved: ['ghost-id'],
-        nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' }],
+        nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'missing' }],
       },
     );
 
@@ -88,18 +88,19 @@ describe('EntityContextHandler', () => {
 
     const data = expectData(result) as unknown as {
       unresolved: string[];
-      nodeless: Array<{ contactId: string; displayName: string; reason: string }>;
+      nodeless: Array<{ contactId: string; displayName: string; reason: string; cause: string }>;
     };
     expect(data.unresolved).toEqual(['ghost-id']);
     expect(data.nodeless).toHaveLength(1);
     expect(data.nodeless[0].contactId).toBe('contact-2');
     expect(data.nodeless[0].displayName).toBe('Seth Berman');
+    expect(data.nodeless[0].cause).toBe('missing');
   });
 
   it('gives each nodeless contact a reason the LLM cannot read as plain absence', async () => {
     const ctx = makeCtx(
       { contactIds: ['contact-2'] },
-      { nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' }] },
+      { nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'missing' }] },
     );
 
     const result = await new EntityContextHandler().execute(ctx);
@@ -110,6 +111,25 @@ describe('EntityContextHandler', () => {
     // the distinction rather than the exact sentence so the copy can be reworded.
     expect(reason).toMatch(/cannot/i);
     expect(reason).not.toMatch(/^no (facts|context|information)/i);
+    expect(reason).toMatch(/has no stored profile/i);
+    expect(reason).not.toMatch(/retired/i);
+  });
+
+  it('gives an archived-node contact a reason that distinguishes retirement from never-had', async () => {
+    const ctx = makeCtx(
+      { contactIds: ['contact-2'] },
+      { nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'archived' }] },
+    );
+
+    const result = await new EntityContextHandler().execute(ctx);
+    const data = expectData(result) as unknown as {
+      nodeless: Array<{ cause: string; reason: string }>;
+    };
+
+    expect(data.nodeless[0].cause).toBe('archived');
+    expect(data.nodeless[0].reason).toMatch(/retired/i);
+    expect(data.nodeless[0].reason).toMatch(/cannot/i);
+    expect(data.nodeless[0].reason).not.toMatch(/has no stored profile/i);
   });
 
   it('echoes inputId back so the agent can map the answer to what it asked for', async () => {
@@ -117,7 +137,7 @@ describe('EntityContextHandler', () => {
     // and displayName may not resemble the address it supplied.
     const ctx = makeCtx(
       { entityIds: ['seth@example.com'] },
-      { nodeless: [{ inputId: 'seth@example.com', contactId: 'contact-2', displayName: 'Seth Berman' }] },
+      { nodeless: [{ inputId: 'seth@example.com', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'missing' }] },
     );
 
     const result = await new EntityContextHandler().execute(ctx);
@@ -135,7 +155,7 @@ describe('EntityContextHandler', () => {
       { contactIds: ['contact-1', 'contact-2'] },
       {
         entities: [makeEntity()],
-        nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' }],
+        nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'missing' }],
       },
     );
 
@@ -266,7 +286,7 @@ describe('EntityContextHandler', () => {
       { contactIds: ['contact-1', 'contact-2'] },
       {
         failed: [{ inputId: 'contact-1', retryable: true }],
-        nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' }],
+        nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'missing' }],
       },
     );
 

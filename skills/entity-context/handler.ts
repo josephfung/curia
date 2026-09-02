@@ -10,11 +10,12 @@
 //
 // Four buckets come back and all are surfaced: entities that assembled,
 // `unresolved` IDs that matched nothing, `nodeless` contacts that exist but
-// cannot hold knowledge (#1694 / ADR-040), and `failed` IDs whose lookup errored
+// cannot hold knowledge — either they never had a stored profile or theirs
+// was retired (#1694 / ADR-040, #1707) — and `failed` IDs whose lookup errored
 // (#1702). The handler owns all LLM-facing wording for `nodeless` and `failed`.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
-import type { AssembleManyFailedEntry, AssembleManyResult } from '../../src/entity-context/assembler.js';
+import type { AssembleManyFailedEntry, AssembleManyResult, NodelessCause } from '../../src/entity-context/assembler.js';
 
 // Shown to the LLM for every contact that resolved but holds no KG node.
 //
@@ -27,10 +28,23 @@ import type { AssembleManyFailedEntry, AssembleManyResult } from '../../src/enti
 // and may be paraphrased to the principal, so "stored profile" rather than "KG node".
 // Kept kind-neutral too — nodeless contacts include organizations, not just people
 // (ADR-040's arm A exists precisely because org contacts are a large share of them).
-const NODELESS_REASON =
+const NODELESS_MISSING_REASON =
   'This contact exists but has no stored profile, so it cannot hold facts, '
   + 'relationships, or background context. Having no context here does not mean the '
   + 'contact is unknown to us. Do not try to store facts about them; report the gap instead.';
+
+// Same capability-gap shape, but the contact *had* a profile that was retired
+// (dream-engine decay, or contact deletion under ADR-040). Must not read as
+// "never had a profile" — that would send the agent looking for a backfill that
+// already happened and then got archived (#1707).
+const NODELESS_ARCHIVED_REASON =
+  'This contact\'s stored profile was retired, so it cannot hold facts, '
+  + 'relationships, or background context. Having no context here does not mean the '
+  + 'contact is unknown to us. Do not try to store facts about them; report the gap instead.';
+
+function formatNodelessReason(cause: NodelessCause): string {
+  return cause === 'archived' ? NODELESS_ARCHIVED_REASON : NODELESS_MISSING_REASON;
+}
 
 const NOT_UNKNOWN_SUFFIX =
   'This is not evidence the contact or entity is unknown.';
@@ -72,7 +86,8 @@ function buildSuccessData(result: AssembleManyResult): Record<string, unknown> {
             inputId: n.inputId,
             contactId: n.contactId,
             displayName: n.displayName,
-            reason: NODELESS_REASON,
+            cause: n.cause,
+            reason: formatNodelessReason(n.cause),
           })),
         }
       : {}),

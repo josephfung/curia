@@ -276,7 +276,7 @@ describe('ExecutionLayer — entity_enrichment', () => {
 
     const assembler = makeMockAssembler({
       unresolved: ['ghost-id'],
-      nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' }],
+      nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'missing' }],
     });
     const execution = new ExecutionLayer(registry, spyLogger, {
       entityContextAssembler: assembler,
@@ -290,8 +290,9 @@ describe('ExecutionLayer — entity_enrichment', () => {
     expect(nodelessLine, `expected a nodeless warn line, got: ${messages.join(' | ')}`).toBeDefined();
 
     // The nodeless line carries contact IDs, and does not also list the unknown ID.
-    const payload = nodelessLine![0] as { contactIds?: string[] };
+    const payload = nodelessLine![0] as { contactIds?: string[]; causes?: string[] };
     expect(payload.contactIds).toEqual(['contact-2']);
+    expect(payload.causes).toEqual(['missing']);
   });
 
   it('does not emit a nodeless warn when every contact has a node', async () => {

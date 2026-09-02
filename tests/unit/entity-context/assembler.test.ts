@@ -251,7 +251,7 @@ describe('EntityContextAssembler', () => {
       expect(entities).toHaveLength(0);
       expect(unresolved).toHaveLength(0);
       expect(nodeless).toEqual([
-        { inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' },
+        { inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'missing' },
       ]);
     });
 
@@ -268,7 +268,7 @@ describe('EntityContextAssembler', () => {
       // inputId keeps the caller's original string so it can correlate the result
       // back to what it asked for; contactId is what the row actually resolved to.
       expect(nodeless).toEqual([
-        { inputId: 'seth@example.com', contactId: 'contact-2', displayName: 'Seth Berman' },
+        { inputId: 'seth@example.com', contactId: 'contact-2', displayName: 'Seth Berman', cause: 'missing' },
       ]);
     });
 
@@ -325,6 +325,143 @@ describe('EntityContextAssembler', () => {
       await assembler.assembleMany(['contact-2']);
 
       expect(vi.mocked(pool.query)).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // -- Archived nodes (#1707) --
+  //
+  // DreamEngine (and, once ADR-040 increment 3 lands, contact deletion) retires
+  // knowledge by setting archived_at. The write path has always respected that;
+  // the entity-context read path did not, so retired facts still assembled.
+  describe('assembleMany — archived nodes', () => {
+    function querySql(pool: DbPool): string[] {
+      return vi.mocked(pool.query).mock.calls.map(call => String(call[0]));
+    }
+
+    it('reports a contact whose KG node is archived as nodeless, not assembled', async () => {
+      const pool = makeSequentialPool([
+        { rows: [{ kg_node_id: 'node-retired', display_name: 'Retired Person', node_archived: true }] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, nodeless } = await assembler.assembleMany(['contact-retired']);
+
+      expect(entities).toHaveLength(0);
+      expect(unresolved).toHaveLength(0);
+      expect(nodeless).toEqual([
+        {
+          inputId: 'contact-retired',
+          contactId: 'contact-retired',
+          displayName: 'Retired Person',
+          cause: 'archived',
+        },
+      ]);
+    });
+
+    it('reports an email that resolves to an archived-node contact as nodeless', async () => {
+      const pool = makeSequentialPool([
+        {
+          rows: [{
+            contact_id: 'contact-retired',
+            kg_node_id: 'node-retired',
+            display_name: 'Retired Person',
+            node_archived: true,
+          }],
+        },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, nodeless } = await assembler.assembleMany(['retired@example.com']);
+
+      expect(entities).toHaveLength(0);
+      expect(unresolved).toHaveLength(0);
+      expect(nodeless).toEqual([
+        {
+          inputId: 'retired@example.com',
+          contactId: 'contact-retired',
+          displayName: 'Retired Person',
+          cause: 'archived',
+        },
+      ]);
+    });
+
+    it('treats a direct lookup of an archived node ID as unresolved', async () => {
+      // No contact was addressed, so this is not a nodeless contact — the node is
+      // simply not a live entity. The kg_nodes query must filter archived_at so
+      // we do not then log a false referential-integrity warning.
+      const pool = makeSequentialPool([
+        { rows: [] }, // not a contact
+        { rows: [] }, // not a live KG node
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, nodeless } = await assembler.assembleMany(['node-retired']);
+
+      expect(entities).toHaveLength(0);
+      expect(nodeless).toHaveLength(0);
+      expect(unresolved).toEqual(['node-retired']);
+
+      const nodeIdLookup = querySql(pool).find(s =>
+        s.includes('FROM kg_nodes') && !s.includes('SELECT id, type, label'),
+      );
+      expect(nodeIdLookup).toMatch(/archived_at IS NULL/);
+    });
+
+    it('does not cache archived-node nodeless results', async () => {
+      const pool = makeSequentialPool([
+        { rows: [{ kg_node_id: 'node-retired', display_name: 'Retired Person', node_archived: true }] },
+        { rows: [{ kg_node_id: 'node-retired', display_name: 'Retired Person', node_archived: true }] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      await assembler.assembleMany(['contact-retired']);
+      await assembler.assembleMany(['contact-retired']);
+
+      expect(vi.mocked(pool.query)).toHaveBeenCalledTimes(2);
+    });
+
+    it('excludes archived entity nodes, facts, and relationship endpoints from the read SQL', async () => {
+      // Three cases in one assembly of a live contact:
+      //   1. getKgNode must not return an archived entity node
+      //   2. getFacts must not return an archived fact hanging off a live node
+      //   3. getRelationships must not return an edge whose other end is archived
+      // The mock pool does not execute SQL, so the assertions are on the predicates
+      // both UNION halves send to Postgres.
+      const pool = makeSequentialPool([
+        { rows: [{ kg_node_id: 'node-1', display_name: 'Jenna Smith' }] },
+        { rows: [personNodeRow] },
+        { rows: [timezoneFactRow] },
+        { rows: [contactRow] },
+        { rows: [calendarRow] },
+        { rows: [relationshipRow] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const ctx = await assembler.assembleOne('contact-1');
+      expect(ctx).toBeDefined();
+
+      const sql = querySql(pool);
+
+      const nodeLookup = sql.find(s => s.includes('SELECT id, type, label, properties'));
+      expect(nodeLookup, 'getKgNode query').toMatch(/archived_at IS NULL/);
+
+      const facts = sql.find(s => s.includes("e.type = 'relates_to'"));
+      expect(facts, 'getFacts query').toBeDefined();
+      const factHalves = facts!.split(/UNION ALL/i);
+      expect(factHalves).toHaveLength(2);
+      for (const half of factHalves) {
+        expect(half).toMatch(/e\.archived_at IS NULL/);
+        expect(half).toMatch(/n\.archived_at IS NULL/);
+      }
+
+      const rels = sql.find(s => s.includes("n.type != 'fact'"));
+      expect(rels, 'getRelationships query').toBeDefined();
+      const relHalves = rels!.split(/UNION ALL/i);
+      expect(relHalves).toHaveLength(2);
+      for (const half of relHalves) {
+        expect(half).toMatch(/e\.archived_at IS NULL/);
+        expect(half).toMatch(/n\.archived_at IS NULL/);
+      }
     });
   });
 

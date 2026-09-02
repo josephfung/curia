@@ -22,13 +22,14 @@
 // in the `failed` array rather than propagating.
 //
 // Misses are reported in three separate buckets, because they mean different things
-// (#1694 / ADR-040, #1702):
-//   unresolved — the ID matched no contact and no KG node.
-//   nodeless   — the ID matched a real contact that holds no KG node. The contact
-//                exists but is structurally unable to carry facts, relationships,
-//                or context, and no amount of retrying will change that. Collapsing
-//                it into `unresolved` made an agent read "cannot hold knowledge" as
-//                "we know nothing about them", which is the silence #1694 is about.
+// (#1694 / ADR-040, #1702, #1707):
+//   unresolved — the ID matched no contact and no live KG node.
+//   nodeless   — the ID matched a real contact that cannot carry context. Either it
+//                never had a KG node (`cause: 'missing'`), or its node was archived
+//                (`cause: 'archived'`) — decay retirement, or contact deletion under
+//                ADR-040. Both are structurally unable to carry facts, relationships,
+//                or context. Collapsing either into `unresolved` made an agent read
+//                "cannot hold knowledge" as "we know nothing about them".
 //   failed     — assembly threw. Classified as retryable or not; never evidence the
 //                contact is unknown (#1702).
 
@@ -46,12 +47,21 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-/** A contact that exists but holds no KG node, so it can carry no context. */
+/** Why a real contact cannot carry context. */
+export type NodelessCause = 'missing' | 'archived';
+
+/** A contact that exists but cannot carry context. */
 export interface NodelessContact {
   /** The string the caller passed in (contact UUID or email), so it can correlate results. */
   inputId: string;
   contactId: string;
   displayName: string;
+  /**
+   * `missing` — `kg_node_id` is NULL; the contact never had a stored profile.
+   * `archived` — `kg_node_id` points at a node with `archived_at` set; the profile
+   * was retired (dream-engine decay, or contact deletion under ADR-040).
+   */
+  cause: NodelessCause;
 }
 
 /** An ID whose assembly threw — classified for retry, not a miss. */
@@ -66,7 +76,7 @@ export interface AssembleManyResult {
   entities: EntityContext[];
   /** IDs that matched no contact and no KG node. */
   unresolved: string[];
-  /** Contacts that exist but cannot hold knowledge. Disjoint from `unresolved`. */
+  /** Contacts that exist but cannot hold knowledge (no node, or archived node). Disjoint from `unresolved`. */
   nodeless: NodelessContact[];
   /** IDs whose assembly errored. Disjoint from `unresolved` and `nodeless`. */
   failed: AssembleManyFailedEntry[];
@@ -75,7 +85,7 @@ export interface AssembleManyResult {
 /** Outcome of resolving a caller-supplied ID to something assemblable. */
 type ResolvedInput =
   | { kind: 'node'; kgNodeId: string }
-  | { kind: 'nodeless'; contactId: string; displayName: string }
+  | { kind: 'nodeless'; contactId: string; displayName: string; cause: NodelessCause }
   | { kind: 'unknown' };
 
 /** Outcome of a single assembly attempt, with the reason for a miss preserved. */
@@ -102,9 +112,10 @@ export class EntityContextAssembler {
    * Resolve one or more IDs to EntityContext payloads.
    *
    * Resolution priority for each ID:
-   *   1. Matches a contacts.id → look up kg_node_id, assemble from that KG node
-   *   2. Matches a kg_nodes.id directly → assemble from that KG node
-   *   3. No match → included in `unresolved` (not a hard error)
+   *   1. Matches a contacts.id with a live kg_node_id → assemble from that KG node
+   *   2. Matches a contacts.id with no node, or whose node is archived → `nodeless`
+   *   3. Matches a live kg_nodes.id directly → assemble from that KG node
+   *   4. No match → included in `unresolved` (not a hard error)
    *
    * Each ID is assembled independently; a DB error on one ID logs at error and
    * adds the ID to `failed` without aborting the remaining IDs in the batch.
@@ -150,8 +161,10 @@ export class EntityContextAssembler {
           // operators need a searchable signal. This is the standing production
           // record that a real contact was addressed with no context available.
           this.logger.warn(
-            { contactId: outcome.entry.contactId },
-            'entity-context: contact holds no KG node — cannot carry facts, relationships, or context',
+            { contactId: outcome.entry.contactId, cause: outcome.entry.cause },
+            outcome.entry.cause === 'archived'
+              ? 'entity-context: contact KG node is archived — cannot carry facts, relationships, or context'
+              : 'entity-context: contact holds no KG node — cannot carry facts, relationships, or context',
           );
           nodeless.push(outcome.entry);
         } else {
@@ -198,7 +211,12 @@ export class EntityContextAssembler {
       if (resolved.kind === 'nodeless') {
         return {
           kind: 'nodeless',
-          entry: { inputId: id, contactId: resolved.contactId, displayName: resolved.displayName },
+          entry: {
+            inputId: id,
+            contactId: resolved.contactId,
+            displayName: resolved.displayName,
+            cause: resolved.cause,
+          },
         };
       }
       const kgNodeId = resolved.kgNodeId;
@@ -403,22 +421,34 @@ export class EntityContextAssembler {
       // UUID columns. This handles CC flows and ceo-inbox triage where the LLM passes a
       // raw email rather than a contact UUID.
       if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) {
-        const emailResult = await this.pool.query<{ contact_id: string; kg_node_id: string | null; display_name: string }>(
-          `SELECT c.id AS contact_id, c.kg_node_id, c.display_name
+        const emailResult = await this.pool.query<{
+          contact_id: string;
+          kg_node_id: string | null;
+          display_name: string;
+          node_archived: boolean | null;
+        }>(
+          `SELECT c.id AS contact_id, c.kg_node_id, c.display_name,
+                  (n.archived_at IS NOT NULL) AS node_archived
            FROM contact_channel_identities cci
            JOIN contacts c ON c.id = cci.contact_id
+           LEFT JOIN kg_nodes n ON n.id = c.kg_node_id
            WHERE cci.channel = 'email' AND LOWER(cci.channel_identifier) = LOWER($1)`,
           [id],
         );
         if (emailResult.rows.length > 0) {
-          const row = emailResult.rows[0];
-          const kgNodeId = row?.kg_node_id;
-          if (!kgNodeId) {
+          const row = emailResult.rows[0]!;
+          const nodeless = classifyLinkedNode(row.kg_node_id, row.node_archived);
+          if (nodeless) {
             // Use inputKind rather than the raw email — 'email' is on the pino redact list.
-            this.logger.debug({ inputKind: 'email', contactId: row?.contact_id }, 'entity-context: email resolved to contact with no linked KG node');
-            return { kind: 'nodeless', contactId: row!.contact_id, displayName: row!.display_name };
+            this.logger.debug(
+              { inputKind: 'email', contactId: row.contact_id, cause: nodeless },
+              nodeless === 'archived'
+                ? 'entity-context: email resolved to contact whose KG node is archived'
+                : 'entity-context: email resolved to contact with no linked KG node',
+            );
+            return { kind: 'nodeless', contactId: row.contact_id, displayName: row.display_name, cause: nodeless };
           }
-          return { kind: 'node', kgNodeId };
+          return { kind: 'node', kgNodeId: row.kg_node_id! };
         }
         // Email not found in contact_channel_identities — unregistered contact
         this.logger.debug({ inputKind: 'email' }, 'entity-context: email not found in contact_channel_identities — treating as unresolved');
@@ -426,25 +456,40 @@ export class EntityContextAssembler {
       }
 
       // Try as a contact ID first
-      const contactResult = await this.pool.query<{ kg_node_id: string | null; display_name: string }>(
-        'SELECT kg_node_id, display_name FROM contacts WHERE id = $1',
+      const contactResult = await this.pool.query<{
+        kg_node_id: string | null;
+        display_name: string;
+        node_archived: boolean | null;
+      }>(
+        `SELECT c.kg_node_id, c.display_name,
+                (n.archived_at IS NOT NULL) AS node_archived
+         FROM contacts c
+         LEFT JOIN kg_nodes n ON n.id = c.kg_node_id
+         WHERE c.id = $1`,
         [id],
       );
       if (contactResult.rows.length > 0) {
-        const row = contactResult.rows[0];
-        const kgNodeId = row?.kg_node_id;
-        // Contact exists but holds no KG node — a different answer from "no such
-        // contact", and the caller needs to be able to tell them apart (#1694).
-        if (!kgNodeId) {
-          this.logger.debug({ contactId: id }, 'entity-context: contact has no linked KG node');
-          return { kind: 'nodeless', contactId: id, displayName: row!.display_name };
+        const row = contactResult.rows[0]!;
+        const nodeless = classifyLinkedNode(row.kg_node_id, row.node_archived);
+        // Contact exists but cannot carry context — a different answer from "no such
+        // contact", and the caller needs to be able to tell them apart (#1694, #1707).
+        if (nodeless) {
+          this.logger.debug(
+            { contactId: id, cause: nodeless },
+            nodeless === 'archived'
+              ? 'entity-context: contact KG node is archived'
+              : 'entity-context: contact has no linked KG node',
+          );
+          return { kind: 'nodeless', contactId: id, displayName: row.display_name, cause: nodeless };
         }
-        return { kind: 'node', kgNodeId };
+        return { kind: 'node', kgNodeId: row.kg_node_id! };
       }
 
-      // Try as a KG node ID directly
+      // Try as a KG node ID directly. Archived nodes are not live entities — looking
+      // one up by ID is an unresolved miss, not a nodeless contact (no contact row
+      // was addressed). getKgNode filters archived_at again as defence in depth.
       const nodeResult = await this.pool.query<{ id: string }>(
-        'SELECT id FROM kg_nodes WHERE id = $1',
+        'SELECT id FROM kg_nodes WHERE id = $1 AND archived_at IS NULL',
         [id],
       );
       if (nodeResult.rows.length > 0) {
@@ -476,7 +521,7 @@ export class EntityContextAssembler {
 
   private async getKgNode(id: string): Promise<KgNodeRow | undefined> {
     const result = await this.pool.query<KgNodeRow>(
-      'SELECT id, type, label, properties FROM kg_nodes WHERE id = $1',
+      'SELECT id, type, label, properties FROM kg_nodes WHERE id = $1 AND archived_at IS NULL',
       [id],
     );
     return result.rows[0];
@@ -496,13 +541,17 @@ export class EntityContextAssembler {
        WHERE e.source_node_id = $1
          AND e.type = 'relates_to'
          AND n.type = 'fact'
+         AND e.archived_at IS NULL
+         AND n.archived_at IS NULL
        UNION ALL
        SELECT n.label, n.properties, n.confidence, n.last_confirmed_at
        FROM kg_edges e
        JOIN kg_nodes n ON n.id = e.source_node_id
        WHERE e.target_node_id = $1
          AND e.type = 'relates_to'
-         AND n.type = 'fact'`,
+         AND n.type = 'fact'
+         AND e.archived_at IS NULL
+         AND n.archived_at IS NULL`,
       [entityNodeId],
     );
 
@@ -592,6 +641,8 @@ export class EntityContextAssembler {
        JOIN kg_nodes n ON n.id = e.target_node_id
        WHERE e.source_node_id = $1
          AND n.type != 'fact'
+         AND e.archived_at IS NULL
+         AND n.archived_at IS NULL
        UNION ALL
        SELECT
          e.type AS edge_type,
@@ -602,7 +653,9 @@ export class EntityContextAssembler {
        FROM kg_edges e
        JOIN kg_nodes n ON n.id = e.source_node_id
        WHERE e.target_node_id = $1
-         AND n.type != 'fact'`,
+         AND n.type != 'fact'
+         AND e.archived_at IS NULL
+         AND n.archived_at IS NULL`,
       [entityNodeId],
     );
 
@@ -670,6 +723,21 @@ interface RelationshipRow {
   related_id: string;
   related_label: string;
   related_type: string;
+}
+
+/**
+ * Classify a contact's linked KG node for the nodeless bucket.
+ * `nodeArchived` is the SQL `(n.archived_at IS NOT NULL)` boolean from the LEFT JOIN;
+ * undefined/null means the mock (or a missing node row) did not set it — treat as live
+ * so a dangling FK still falls through to getKgNode's referential-integrity warning.
+ */
+function classifyLinkedNode(
+  kgNodeId: string | null | undefined,
+  nodeArchived: boolean | null | undefined,
+): NodelessCause | null {
+  if (!kgNodeId) return 'missing';
+  if (nodeArchived === true) return 'archived';
+  return null;
 }
 
 /**
