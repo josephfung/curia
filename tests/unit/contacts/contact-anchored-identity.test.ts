@@ -15,18 +15,27 @@ import { EmbeddingService } from '../../../src/memory/embedding.js';
 import { EntityMemory } from '../../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../../src/memory/validation.js';
 import { createSilentLogger } from '../../../src/logger.js';
+import type { Logger } from '../../../src/logger.js';
 
 describe('contact-anchored KG node identity (ADR-040)', () => {
   let service: ContactService;
   let entityMemory: EntityMemory;
   let store: KnowledgeGraphStore;
+  // Captures warn/info messages. The previous increment of #1694 shipped a diagnostic at
+  // `debug` into a production running at `info` and produced no signal for weeks, so the
+  // load-bearing lines here are asserted rather than left to review.
+  let warnings: string[];
+  let logger: Logger;
 
   beforeEach(() => {
     const embeddingService = EmbeddingService.createForTesting();
     store = KnowledgeGraphStore.createInMemory(embeddingService);
     const validator = new MemoryValidator(store, embeddingService);
     entityMemory = new EntityMemory(store, validator, embeddingService, createSilentLogger());
-    service = ContactService.createInMemory(entityMemory);
+    warnings = [];
+    const capture = (_obj: unknown, msg?: string) => { if (msg) warnings.push(msg); };
+    logger = { ...createSilentLogger(), warn: capture, info: capture } as unknown as Logger;
+    service = ContactService.createInMemory(entityMemory, undefined, logger);
   });
 
   describe('two contacts sharing a display name', () => {
@@ -326,12 +335,49 @@ describe('contact-anchored KG node identity (ADR-040)', () => {
         },
       }) as EntityMemory;
 
-      // Same in-memory contact store, different entityMemory — the delete must not throw.
-      const degraded = ContactService.createInMemory(failing);
+      // createInMemory builds a fresh backend each call, so `degraded` has its own contact
+      // store; the contact under test has to be created inside it.
+      const degraded = ContactService.createInMemory(failing, undefined, logger);
       const own = await degraded.createContact({ displayName: 'Dana Wu', source: 'test' });
+
       await expect(degraded.deleteContact(own.id)).resolves.toBeUndefined();
+
+      // The delete is what must survive — and the failure must be visible, not swallowed.
       expect(await degraded.getContact(own.id)).toBeUndefined();
+      expect(warnings.some(w => /node is now orphaned/.test(w))).toBe(true);
       expect(contact.kgNodeId).not.toBeNull();
+    });
+
+    it('does not archive the node during orphan cleanup', async () => {
+      // The three real deleteContact callers are all orphan cleanup after a failed
+      // linkIdentity, and createContact may have ADOPTED a node carrying facts accrued
+      // long before this attempt. Archiving cascades to incident edges, so cleaning up
+      // would destroy knowledge that was never this contact's to take.
+      const { entity } = await entityMemory.createEntity({
+        type: 'person', label: 'Dana Wu', properties: {}, source: 'extraction',
+      });
+      await entityMemory.storeFact({
+        entityNodeId: entity.id, label: 'Prefers morning meetings', source: 'extraction',
+      });
+      const contact = await service.createContact({ displayName: 'Dana Wu', source: 'test' });
+      expect(contact.kgNodeId).toBe(entity.id);
+
+      await service.deleteContact(contact.id, { archiveAnchoredNode: false });
+
+      expect(await store.getNode(entity.id)).toBeDefined();
+      expect((await entityMemory.getFacts(entity.id)).map(f => f.label))
+        .toEqual(['Prefers morning meetings']);
+    });
+
+    it('reports the node it deliberately left behind during orphan cleanup', async () => {
+      // Skipping the archive leaks an anchored node that no longer decays, so the leak
+      // has to be visible rather than silent.
+      const svc = ContactService.createInMemory(entityMemory, undefined, logger);
+      const contact = await svc.createContact({ displayName: 'Dana Wu', source: 'test' });
+
+      await svc.deleteContact(contact.id, { archiveAnchoredNode: false });
+
+      expect(warnings.some(w => /without archiving its KG node/.test(w))).toBe(true);
     });
   });
 });

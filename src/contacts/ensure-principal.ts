@@ -83,6 +83,14 @@ export async function ensurePrincipalContact(
   // race can rescue it onto the winner), then the contacts row in a transaction so
   // a partial failure can't leave an orphan.
   const { id: kgNodeId, created: kgNodeCreated } = await insertKgPersonNode(displayName, pool);
+  // Adoption inherits whatever an LLM previously attached to this label and is one-way
+  // (identity_source never moves back), so record which branch fired.
+  logger.info(
+    { kgNodeId, created: kgNodeCreated, displayName },
+    kgNodeCreated
+      ? 'ensure-principal: minted a new KG node for the principal'
+      : 'ensure-principal: adopted an existing KG node as the principal identity',
+  );
   const contactId = randomUUID();
   const client = await pool.connect();
   try {
@@ -160,6 +168,36 @@ export async function ensurePrincipalContact(
       logger.warn(
         { pgCode, constraint },
         'ensure-principal: 23505 on principal index but winner re-query returned no rows — re-throwing',
+      );
+    }
+
+    // The contacts INSERT failed and we are giving up, so the node minted above has no
+    // owner. It must not be left behind: since ADR-040 it is contact-anchored, which means
+    // permanent, undecayable and unarchivable, and it carries the principal's display name.
+    // Every failed boot would add another, until resolveOrCreate() sees N candidates for
+    // that name, returns 'ambiguous', and facts about the principal stop landing at all.
+    // Before ADR-040 the old ON CONFLICT made a retry reuse the same row, so this leak is
+    // new. Gated on kgNodeCreated for the usual reason — an ADOPTED node predates us.
+    if (kgNodeCreated) {
+      try {
+        await pool.query(
+          `DELETE FROM kg_nodes
+            WHERE id = $1
+              AND NOT EXISTS (SELECT 1 FROM contacts WHERE kg_node_id = $1)`,
+          [kgNodeId],
+        );
+      } catch (cleanupErr) {
+        // Best-effort: the original failure is the one worth propagating.
+        logger.warn(
+          { cleanupErr, kgNodeId },
+          'ensure-principal: could not remove the orphaned principal KG node after a failed create',
+        );
+      }
+    } else {
+      logger.warn(
+        { kgNodeId },
+        'ensure-principal: adopted KG node left anchored with no contact after a failed create — '
+          + 'it will not decay; see the anchored-orphan query in scripts/kg-node-linkage-report.ts',
       );
     }
     throw err;

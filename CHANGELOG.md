@@ -39,6 +39,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`DreamEngine`** — contact-anchored nodes no longer decay or archive; their facts still do. (#1694)
+- **Decay warnings** — anchored nodes are never listed for re-confirmation nor archived by dismissal. (#1694)
 - **`deleteContact`** — archives the contact's anchored KG node, freeing its label for reuse. (#1694)
 - **`EntityMemory.resolveOrCreate`** — returns `ambiguous` when 2+ matches share the requested type, instead of taking the first. (#1694)
 - **`extract-facts`** — skips and counts an ambiguous subject rather than guessing; new `ambiguous` output. (#1694)
@@ -62,6 +63,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`createContact`** — a display-name collision now mints a node instead of dropping the link. (#1694)
+- **Orphan cleanup** — a failed contact create no longer archives a KG node it merely adopted. (#1694)
 - **Signal inbound** — ACI-only senders keep a non-empty sender and conversation identity. (#1600)
 - **`entity-context`** — transient DB failures surface in `failed`, not `unresolved`. (#1702)
 - **`entity_enrichment`** — failed lookups get their own warn line instead of joining unresolved. (#1702)

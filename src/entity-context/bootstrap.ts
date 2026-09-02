@@ -49,8 +49,13 @@ export async function bootstrapAgentIdentity(
   // ON CONFLICT fires when a concurrent INSERT tries to create a second agent node.
   try {
     const nodeResult = await pool.query<{ id: string }>(
-      `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
-       VALUES ('person', $1, $2, 1.0, 'permanent', 'bootstrap', now(), now())
+      // identity_source = 'contact' (ADR-040): this node backs the agent's contact row, so
+      // it belongs to the anchored tier. Without it a FRESH install would leave the agent's
+      // node label-keyed while a MIGRATED install anchors it (migration 085 step 2) — and a
+      // label-tier node that is contact-linked is exactly what adoptUnanchoredPersonNode
+      // looks for, so a stranger's contact with the agent's display name could adopt it.
+      `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at, identity_source)
+       VALUES ('person', $1, $2, 1.0, 'permanent', 'bootstrap', now(), now(), 'contact')
        ON CONFLICT ((properties->>'is_agent')) WHERE (properties->>'is_agent') = 'true'
        DO UPDATE SET label = EXCLUDED.label, last_confirmed_at = now()
        RETURNING id`,

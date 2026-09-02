@@ -308,6 +308,25 @@ and it moves the risk out of the migration. Two consequences for sequencing: the
 relaxation is prevention rather than repair and should not lead, and the `resolveOrCreate`
 ambiguity fix — which addresses a live alias-collision path, per Context — should.
 
+**Name-only extraction gets quieter, not smarter.** Two contacts sharing a display name now
+produce two same-label person nodes, and `findNodesByLabel` returns both by design. So every
+name-only write about that name resolves `ambiguous`: `extract-facts` skips and counts it
+unless `subject_contact_id` picks a side, and the only caller supplying that hint is the
+checkpoint processor, which passes the conversation's counterpart — so a fact about a *third
+party* named in a transcript is dropped rather than stored. The nodes exist and can hold
+facts; the automatic extraction path largely cannot write to them without a hint. Watch the
+`ambiguous` counter after deploy. `extract-relationships` is worse and is tracked in #1714:
+it still takes `candidates[0]`, so it misattributes rather than skipping.
+
+**Orphaned anchors accumulate.** An anchored node whose contact goes away without archival
+never decays, because every decay and archival path now excludes the anchored tier. Three
+paths produce them: an adoption abandoned when the contact INSERT fails, orphan cleanup after
+a lost `linkIdentity` race (which must not archive, since the node may predate the attempt),
+and a contact merge whose KG half fails on the foreign key (#1711). The first two are logged
+at `warn`; the third is repaired inline. `scripts/kg-node-linkage-report.ts` counts them, and
+a growing number is the signal that name-only extraction is silently degrading, since two
+same-label nodes make every write about that name ambiguous.
+
 **Not addressed.** Nothing here improves resolution *quality* for names Curia has never
 associated with a contact — an unanchored "Seth Berman" mentioned in an email body still
 resolves by label and embedding, with all the fuzziness that implies. This ADR gives
@@ -324,5 +343,7 @@ contacts a durable identity; it does not give the KG one for everyone else.
   still assemble — adjacent, and made load-bearing by the deletion rule above)
 - #1711 (contact merge loses KG memory on a foreign-key violation — pre-existing, and the
   reason the Backfill section above no longer claims `085` fixes merges)
+- #1714 (`extract-relationships` still picks `candidates[0]` — pre-existing, but this ADR
+  makes same-label collisions routine rather than rare)
 - Migrations 010, 016, 027, 056 (the indexes and backfills this supersedes or amends)
 - ADR-028 (shared, unbound agent memory) for the surrounding memory-governance model
