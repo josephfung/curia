@@ -43,6 +43,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`deleteContact`** — archives the contact's anchored KG node, freeing its label for reuse. (#1694)
 - **`EntityMemory.resolveOrCreate`** — returns `ambiguous` when 2+ matches share the requested type, instead of taking the first. (#1694)
 - **`extract-facts`** — skips and counts an ambiguous subject rather than guessing; new `ambiguous` output. (#1694)
+- **`extract-relationships`** — skips and counts ambiguous endpoints instead of taking the first match. (#1714)
 - **Checkpoint extraction** — passes the conversation's external originator to `extract-facts` as a subject tiebreaker. (#1694)
 - **`EntityContextAssembler.assembleMany`** — new `nodeless` bucket, disjoint from `unresolved`; logged at warn. (#1694)
 - **`entity-context`** — output gains `nodeless`; agents read a missing node as a capability gap. (#1694)

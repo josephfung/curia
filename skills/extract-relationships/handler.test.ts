@@ -65,7 +65,7 @@ describe('ExtractRelationshipsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 0, skipped: true } });
+    expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 0, failed: 0, ambiguous: 0, skipped: true } });
     // Classifier was called; extraction was not
     expect(infraLlm.classify).toHaveBeenCalledTimes(1);
     expect(infraLlm.extract).not.toHaveBeenCalled();
@@ -85,7 +85,7 @@ describe('ExtractRelationshipsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, failed: 0, skipped: false } });
+    expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, failed: 0, ambiguous: 0, skipped: false } });
 
     // Verify the edge exists in the KG
     const adaNodes = await entityMemory.findEntities('Ada Lovelace');
@@ -116,7 +116,7 @@ describe('ExtractRelationshipsHandler', () => {
     const ctx2 = makeCtx(entityMemory, { text: 'John Smith is Bob\'s wife.', source: 'test' }, infraLlm2);
     const result = await handler2.execute(ctx2);
 
-    expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 1, failed: 0, skipped: false } });
+    expect(result).toEqual({ success: true, data: { extracted: 0, confirmed: 1, failed: 0, ambiguous: 0, skipped: false } });
 
     // Exactly two person nodes, one edge — no duplicate
     const josephNodes = await entityMemory.findEntities('Jane Doe');
@@ -166,7 +166,7 @@ describe('ExtractRelationshipsHandler', () => {
 
     const result = await handler.execute(ctx);
 
-    expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, failed: 0, skipped: false } });
+    expect(result).toEqual({ success: true, data: { extracted: 1, confirmed: 0, failed: 0, ambiguous: 0, skipped: false } });
 
     const xiaopuNodes = await entityMemory.findEntities('John Smith');
     const josephNodes = await entityMemory.findEntities('Jane Doe');
@@ -195,5 +195,147 @@ describe('ExtractRelationshipsHandler', () => {
     expect(aliceNodes).toHaveLength(1);
     const queryResult = await entityMemory.query(aliceNodes[0]!.id);
     expect(queryResult.relationships[0]!.edge.type).toBe('relates_to');
+  });
+
+  // -- Ambiguity (#1714 / ADR-040) --
+  //
+  // ADR-040 lets two contacts sharing a display name each hold their own person node, and
+  // findNodesByLabel returns both by design. Before this, resolution took matches[0] — a
+  // coin flip that attached the relationship to whichever node came back first. Attaching a
+  // relationship to the wrong one of two real people is worse than not recording it.
+
+  describe('ambiguous endpoints', () => {
+    /** Two anchored person nodes sharing a label, as migration 085 produces. */
+    async function twoNamesakes(entityMemory: EntityMemory, label: string): Promise<string[]> {
+      const a = await entityMemory.createAnchoredEntity({
+        type: 'person', label, properties: {}, source: 'test',
+      });
+      const b = await entityMemory.createAnchoredEntity({
+        type: 'person', label, properties: {}, source: 'test',
+      });
+      return [a.id, b.id];
+    }
+
+    it('skips and counts a triple whose SUBJECT matches two nodes', async () => {
+      const entityMemory = makeEntityMemory();
+      const [a, b] = await twoNamesakes(entityMemory, 'Seth Berman');
+      const infraLlm = makeMockInfraLlm([
+        'yes',
+        JSON.stringify([{ subject: 'Seth Berman', predicate: 'works_on', object: 'Project Atlas',
+                          subjectType: 'person', objectType: 'project', confidence: 0.9 }]),
+      ]);
+      const handler = new ExtractRelationshipsHandler();
+
+      const result = await handler.execute(
+        makeCtx(entityMemory, { text: 'Seth Berman works on Project Atlas.', source: 'test' }, infraLlm),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { extracted: 0, confirmed: 0, failed: 0, ambiguous: 1, skipped: false },
+      });
+      // Neither namesake picked up the edge.
+      expect(await entityMemory.findEdges(a!)).toHaveLength(0);
+      expect(await entityMemory.findEdges(b!)).toHaveLength(0);
+    });
+
+    it('skips and counts a triple whose OBJECT matches two nodes', async () => {
+      // An edge needs both ends; half a relationship is not a relationship.
+      const entityMemory = makeEntityMemory();
+      const [a, b] = await twoNamesakes(entityMemory, 'Seth Berman');
+      const infraLlm = makeMockInfraLlm([
+        'yes',
+        JSON.stringify([{ subject: 'Dana Wu', predicate: 'reports_to', object: 'Seth Berman',
+                          subjectType: 'person', objectType: 'person', confidence: 0.9 }]),
+      ]);
+      const handler = new ExtractRelationshipsHandler();
+
+      const result = await handler.execute(
+        makeCtx(entityMemory, { text: 'Dana Wu reports to Seth Berman.', source: 'test' }, infraLlm),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { extracted: 0, confirmed: 0, failed: 0, ambiguous: 1, skipped: false },
+      });
+      expect(await entityMemory.findEdges(a!)).toHaveLength(0);
+      expect(await entityMemory.findEdges(b!)).toHaveLength(0);
+    });
+
+    it('still resolves when exactly one candidate has the requested type', async () => {
+      // Cross-type collisions must keep working: "River" the organization is not "River"
+      // the person, so the type is a real tiebreaker rather than a guess.
+      const entityMemory = makeEntityMemory();
+      await entityMemory.createAnchoredEntity({
+        type: 'person', label: 'River', properties: {}, source: 'test',
+      });
+      await entityMemory.createEntity({
+        type: 'organization', label: 'River', properties: {}, source: 'test',
+      });
+      const infraLlm = makeMockInfraLlm([
+        'yes',
+        JSON.stringify([{ subject: 'River', predicate: 'works_on', object: 'Project Atlas',
+                          subjectType: 'person', objectType: 'project', confidence: 0.9 }]),
+      ]);
+      const handler = new ExtractRelationshipsHandler();
+
+      const result = await handler.execute(
+        makeCtx(entityMemory, { text: 'River works on Project Atlas.', source: 'test' }, infraLlm),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { extracted: 1, confirmed: 0, failed: 0, ambiguous: 0, skipped: false },
+      });
+    });
+
+    it('does not let one ambiguous triple stop the others in the batch', async () => {
+      const entityMemory = makeEntityMemory();
+      await twoNamesakes(entityMemory, 'Seth Berman');
+      const infraLlm = makeMockInfraLlm([
+        'yes',
+        JSON.stringify([
+          { subject: 'Seth Berman', predicate: 'works_on', object: 'Project Atlas',
+            subjectType: 'person', objectType: 'project', confidence: 0.9 },
+          { subject: 'Dana Wu', predicate: 'works_on', object: 'Project Borealis',
+            subjectType: 'person', objectType: 'project', confidence: 0.9 },
+        ]),
+      ]);
+      const handler = new ExtractRelationshipsHandler();
+
+      const result = await handler.execute(
+        makeCtx(entityMemory, { text: 'Two relationships.', source: 'test' }, infraLlm),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        data: { extracted: 1, confirmed: 0, failed: 0, ambiguous: 1, skipped: false },
+      });
+    });
+
+    it('reports the skip at a level production can see, without the raw label', async () => {
+      // prod runs at info, so a debug line would be no signal at all. The label is an
+      // extracted entity name and therefore PII (#1706) — ids only.
+      const entityMemory = makeEntityMemory();
+      const [a, b] = await twoNamesakes(entityMemory, 'Seth Berman');
+      const infraLlm = makeMockInfraLlm([
+        'yes',
+        JSON.stringify([{ subject: 'Seth Berman', predicate: 'works_on', object: 'Project Atlas',
+                          subjectType: 'person', objectType: 'project', confidence: 0.9 }]),
+      ]);
+      const warn = vi.fn();
+      const ctx = makeCtx(entityMemory, { text: 'x', source: 'test' }, infraLlm);
+      (ctx as unknown as { log: unknown }).log = {
+        info: vi.fn(), warn, error: vi.fn(), debug: vi.fn(),
+      };
+
+      await new ExtractRelationshipsHandler().execute(ctx);
+
+      const call = warn.mock.calls.find(c => /ambiguous endpoint/.test(String(c[1])));
+      expect(call).toBeDefined();
+      const payload = call![0] as { subjectCandidateIds?: string[] };
+      expect(payload.subjectCandidateIds).toEqual(expect.arrayContaining([a, b]));
+      expect(JSON.stringify(payload)).not.toContain('Seth Berman');
+    });
   });
 });
