@@ -574,7 +574,7 @@ Contact CRUD operations are exposed as skills, invoked by the Coordinator during
 | `contact.lookup` | Look up a contact by name, role, or channel identifier |
 | `contact.list` | List contacts filtered by role, `tier`, or `kind`, with limit/offset. Default view excludes `automated` and `agent` contacts. Filtering is DB-level for performance. |
 | `contact.set-tier` | Set a contact's `tier` directly ("treat Dana as trusted"); principal-auth guarded, rejects `tier='principal'`. |
-| `contact.merge` | Merge two contacts into one (consolidates channel identities, overrides, and KG memory) |
+| `contact.merge` | Merge two contacts into one (channel identities and overrides always; KG memory fold is best-effort — on failure the merge stays committed and the secondary node is archived) |
 
 All contact mutations are audit-logged. The Coordinator confirms changes with the CEO before writing:
 

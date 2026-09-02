@@ -1614,17 +1614,27 @@ describe('ContactService', () => {
       expect(primary.kgNodeId).toBeTruthy();
       expect(secondary.kgNodeId).toBeTruthy();
 
+      // invocationCallOrder on withTransaction records entry, not commit. An
+      // implementation that called mergeEntities inside the callback would still
+      // pass that check. Record an explicit post-callback marker so this test
+      // fails unless mergeEntities runs after withTransaction has returned.
+      const order: string[] = [];
       const backend = backendOf(service);
-      const withTransaction = vi.spyOn(backend, 'withTransaction');
-      const mergeEntities = vi.spyOn(entityMemory, 'mergeEntities');
+      const originalWithTransaction = backend.withTransaction.bind(backend);
+      vi.spyOn(backend, 'withTransaction').mockImplementation(async (fn) => {
+        const result = await originalWithTransaction(fn);
+        order.push('committed');
+        return result;
+      });
+      const originalMerge = entityMemory.mergeEntities.bind(entityMemory);
+      vi.spyOn(entityMemory, 'mergeEntities').mockImplementation(async (primaryId, secondaryId) => {
+        order.push('mergeEntities');
+        return originalMerge(primaryId, secondaryId);
+      });
 
       await service.mergeContacts(primary.id, secondary.id, false);
 
-      expect(withTransaction).toHaveBeenCalledTimes(1);
-      expect(mergeEntities).toHaveBeenCalledTimes(1);
-      expect(mergeEntities).toHaveBeenCalledWith(primary.kgNodeId, secondary.kgNodeId);
-      expect(mergeEntities.mock.invocationCallOrder[0]!)
-        .toBeGreaterThan(withTransaction.mock.invocationCallOrder[0]!);
+      expect(order).toEqual(['committed', 'mergeEntities']);
     });
 
     it('does not merge KG nodes when the contact-merge transaction rolls back (#1711)', async () => {

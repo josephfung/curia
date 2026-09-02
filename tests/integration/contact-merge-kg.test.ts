@@ -19,6 +19,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import type { Logger } from '../../src/logger.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 
@@ -41,6 +42,10 @@ function mockLogger(): Logger & { warn: ReturnType<typeof vi.fn>; error: ReturnT
 describeIf('mergeContacts KG memory (#1711)', () => {
   let pool: pg.Pool;
   let entityMemory: EntityMemory;
+  // Set true only after requireCuriaTestDatabase confirms we're on curia_test. vitest still
+  // fires afterEach/afterAll after a FAILED beforeAll, so without this flag a guard abort
+  // against a mispointed DATABASE_URL would still run the teardown DELETEs.
+  let onTestDb = false;
 
   const createdContactIds: string[] = [];
   const createdKgNodeIds: string[] = [];
@@ -66,6 +71,8 @@ describeIf('mergeContacts KG memory (#1711)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
+    onTestDb = true;
     const logger = createSilentLogger();
     const embeddingService = EmbeddingService.createForTesting();
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
@@ -76,6 +83,7 @@ describeIf('mergeContacts KG memory (#1711)', () => {
   });
 
   afterEach(async () => {
+    if (!onTestDb) return;
     if (createdContactIds.length > 0) {
       await pool.query(`DELETE FROM contacts WHERE id = ANY($1::uuid[])`, [createdContactIds]);
       createdContactIds.length = 0;
@@ -91,7 +99,7 @@ describeIf('mergeContacts KG memory (#1711)', () => {
   });
 
   afterAll(async () => {
-    await pool.end();
+    await pool?.end();
   });
 
   it('folds the secondary\'s facts, aliases and edges into the survivor when both have a node', async () => {
