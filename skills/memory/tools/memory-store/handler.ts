@@ -102,6 +102,10 @@ export class MemoryStoreHandler implements ToolHandler {
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
+    // Hoisted so catch can log entityNodeId when resolution completed.
+    // Never log the raw `entity` name — it is PII and the pino redact list does not cover it.
+    let entityNode: KgNode | undefined;
+
     try {
       // --- Entity resolution ---
       //
@@ -113,20 +117,19 @@ export class MemoryStoreHandler implements ToolHandler {
       // if not found); UUIDs return entity_not_found if the node was deleted.
 
       const resolvedEntityType = (entity_type as NodeType | undefined) ?? 'concept';
-      let entityNode: KgNode;
 
       if (UUID_PATTERN.test(entity)) {
         // entity_type has no effect when a UUID is supplied — the node type is already
         // determined by the existing KG node. Log a warning so LLM callers notice the mismatch.
         if (entity_type !== undefined) {
           ctx.log.warn(
-            { entity, entity_type },
+            { entityNodeId: entity, entity_type },
             'memory-store: entity_type hint is ignored when entity is a UUID — type is fixed by the existing KG node',
           );
         }
         const byId = await ctx.entityMemory.getEntity(entity);
         if (!byId) {
-          ctx.log.warn({ entity }, 'memory-store: entity UUID not found in KG — entity may have been deleted');
+          ctx.log.warn({ entityNodeId: entity }, 'memory-store: entity UUID not found in KG — entity may have been deleted');
           return {
             success: true,
             data: {
@@ -151,7 +154,10 @@ export class MemoryStoreHandler implements ToolHandler {
         });
 
         if (resolved.kind === 'ambiguous') {
-          ctx.log.debug({ entity, count: resolved.candidates.length }, 'memory-store: ambiguous entity label');
+          ctx.log.debug(
+            { candidateCount: resolved.candidates.length, expectedType: resolvedEntityType },
+            'memory-store: ambiguous entity label',
+          );
           return {
             success: true,
             data: {
@@ -185,7 +191,7 @@ export class MemoryStoreHandler implements ToolHandler {
           if (patch.fallbackToKg) {
             // Normalization failed (e.g. unparseable phone number) — let the KG write through.
             ctx.log.warn(
-              { entity, field, reason: patch.reason },
+              { entityNodeId: entityNode.id, field, reason: patch.reason },
               'memory-store: canonical attribute normalization failed — falling back to KG write',
             );
           } else {
@@ -197,7 +203,7 @@ export class MemoryStoreHandler implements ToolHandler {
               contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
             } catch (lookupErr) {
               ctx.log.warn(
-                { entity, field, entityNodeId: entityNode.id, err: lookupErr },
+                { entityNodeId: entityNode.id, field, err: lookupErr },
                 'memory-store: findContactByKgNodeId failed — falling back to KG write',
               );
             }
@@ -206,7 +212,7 @@ export class MemoryStoreHandler implements ToolHandler {
               try {
                 await ctx.contactService.updateContactFields(contact.id, patch.fields);
                 ctx.log.info(
-                  { entity, field, contactId: contact.id },
+                  { entityNodeId: entityNode.id, field, contactId: contact.id },
                   'memory-store: canonical attribute redirected to ContactService',
                 );
                 return {
@@ -222,7 +228,7 @@ export class MemoryStoreHandler implements ToolHandler {
                 // are surfaced as a skill error — the agent can retry or adjust.
                 const msg = err instanceof Error ? err.message : String(err);
                 ctx.log.warn(
-                  { entity, field, contactId: contact.id, err },
+                  { entityNodeId: entityNode.id, field, contactId: contact.id, err },
                   'memory-store: canonical attribute redirect to ContactService failed',
                 );
                 return { success: false, error: `Could not update contact field "${field}": ${msg}` };
@@ -251,7 +257,7 @@ export class MemoryStoreHandler implements ToolHandler {
         // taskEventId is available. If this fires in production, it means channelId
         // or agentId wasn't threaded through InvokeOptions — check the caller.
         ctx.log.debug(
-          { entity, field, fallbackSource: source },
+          { entityNodeId: entityNode.id, field, fallbackSource: source },
           'memory-store: memoryWriteSource not set — using LLM-provided source fallback',
         );
       }
@@ -269,12 +275,12 @@ export class MemoryStoreHandler implements ToolHandler {
       if (result.stored) {
         if (result.sensitivityFallback) {
           ctx.log.warn(
-            { entity, field, nodeId: result.nodeId, sensitivity: result.sensitivity },
+            { entityNodeId: entityNode.id, field, nodeId: result.nodeId, sensitivity: result.sensitivity },
             'memory-store: sensitivity in result may be inaccurate — stored node was unreadable after update (race/transient DB error)',
           );
         }
         ctx.log.info(
-          { entity, field, action: result.action, nodeId: result.nodeId },
+          { entityNodeId: entityNode.id, field, action: result.action, nodeId: result.nodeId },
           'memory-store: fact stored',
         );
         return {
@@ -290,7 +296,7 @@ export class MemoryStoreHandler implements ToolHandler {
 
       if (result.action === 'conflict') {
         ctx.log.warn(
-          { entity, field, existingNodeId: result.existingNodeId },
+          { entityNodeId: entityNode.id, field, existingNodeId: result.existingNodeId },
           'memory-store: fact conflicts with existing KG data — surfacing to agent',
         );
         return {
@@ -307,13 +313,13 @@ export class MemoryStoreHandler implements ToolHandler {
       switch (result.action) {
         case 'entity_not_found':
           // Validator race guard — entity existed at resolution time but was deleted before write.
-          ctx.log.warn({ entity, field }, 'memory-store: entity node gone at write time — validator race');
+          ctx.log.warn({ entityNodeId: entityNode.id, field }, 'memory-store: entity node gone at write time — validator race');
           return {
             success: true,
             data: { stored: false, action: 'entity_not_found', reason: result.conflict },
           };
         case 'rate_limited':
-          ctx.log.warn({ entity, field, reason: result.conflict }, 'memory-store: write rate limit reached');
+          ctx.log.warn({ entityNodeId: entityNode.id, field, reason: result.conflict }, 'memory-store: write rate limit reached');
           return {
             success: true,
             data: { stored: false, action: 'rate_limited', reason: result.conflict },
@@ -322,7 +328,7 @@ export class MemoryStoreHandler implements ToolHandler {
           // Auto-rejected: existing fact had higher confidence — write was dropped.
           // Surface to the agent so it knows the write was skipped and why.
           ctx.log.info(
-            { entity, field, existingNodeId: result.existingNodeId },
+            { entityNodeId: entityNode.id, field, existingNodeId: result.existingNodeId },
             'memory-store: fact auto-rejected — existing has higher confidence',
           );
           return {
@@ -345,7 +351,7 @@ export class MemoryStoreHandler implements ToolHandler {
           // resolve to a ToolResult, never throw), surface the impossible state as a
           // logged failure rather than a thrown Error.
           ctx.log.error(
-            { entity, field, action: result.action },
+            { entityNodeId: entityNode.id, field, action: result.action },
             'memory-store: impossible storeFact state (stored-only action reached the stored=false branch)',
           );
           return {
@@ -358,7 +364,7 @@ export class MemoryStoreHandler implements ToolHandler {
           // return a logged failure rather than throw, per the skill contract.
           const _exhaustive: never = result.action;
           ctx.log.error(
-            { entity, field, action: String(_exhaustive) },
+            { entityNodeId: entityNode.id, field, action: String(_exhaustive) },
             'memory-store: unhandled storeFact action',
           );
           return {
@@ -368,7 +374,16 @@ export class MemoryStoreHandler implements ToolHandler {
         }
       }
     } catch (err) {
-      ctx.log.error({ err, entity, field }, 'memory-store: unexpected error');
+      ctx.log.error(
+        {
+          err,
+          // Never the raw entity name. entityNodeId is set after resolution
+          // succeeds; undefined here is the pre-resolve signal.
+          entityNodeId: entityNode?.id,
+          field,
+        },
+        'memory-store: unexpected error',
+      );
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
   }

@@ -361,7 +361,9 @@ export class EntityMemory {
       // See: https://github.com/josephfung/curia/issues/474
       if (node.type !== options.type) {
         this.logger.warn(
-          { label: options.label, expectedType: options.type, actualType: node.type, nodeId: node.id },
+          // nodeId, not label: the caller-supplied name is PII and the
+          // pino redact list does not cover it.
+          { expectedType: options.type, actualType: node.type, nodeId: node.id },
           'resolveOrCreate: single match type differs from caller hint',
         );
       }
@@ -428,7 +430,7 @@ export class EntityMemory {
 
         if (best.node.type !== options.type) {
           this.logger.warn(
-            { label: options.label, expectedType: options.type, actualType: best.node.type, nodeId: best.node.id },
+            { expectedType: options.type, actualType: best.node.type, nodeId: best.node.id },
             'resolveOrCreate: fuzzy auto-resolve type differs from caller hint',
           );
         }
@@ -456,7 +458,8 @@ export class EntityMemory {
       }
     } catch (err) {
       this.logger.warn(
-        { label: options.label, error: err instanceof Error ? err.message : String(err) },
+        // No node id yet — log the type hint, not the raw label.
+        { expectedType: options.type, error: err instanceof Error ? err.message : String(err) },
         'resolveOrCreate: fuzzy semantic search failed — falling back to entity creation',
       );
       // Fall through to Phase 3 intentionally: fact storage must not block on
@@ -498,7 +501,8 @@ export class EntityMemory {
       // the backend, so this read is for logging only — not for correctness.
       const node = await this.store.getNode(nodeId);
       if (!node) {
-        this.logger.warn({ nodeId, alias }, 'addAlias: entity node not found');
+        // nodeId, not alias: the variant is PII and the pino redact list does not cover it.
+        this.logger.warn({ nodeId }, 'addAlias: entity node not found');
         return;
       }
 
@@ -510,7 +514,7 @@ export class EntityMemory {
       // Log before delegating so the warning appears even if the backend silently rejects.
       if (node.aliases.length >= MAX_ALIASES_PER_ENTITY) {
         this.logger.warn(
-          { nodeId, alias, count: node.aliases.length, max: MAX_ALIASES_PER_ENTITY },
+          { nodeId, count: node.aliases.length, max: MAX_ALIASES_PER_ENTITY },
           'addAlias: alias cap reached — skipping',
         );
         return;
@@ -521,13 +525,13 @@ export class EntityMemory {
         // Backend rejected — likely a dedup or cap race between our pre-flight read and this write.
         // The backend's atomic predicate handled it correctly; this is just for observability.
         this.logger.debug(
-          { nodeId, alias: lowerAlias },
+          { nodeId },
           'addAlias: backend rejected (dedup or cap race)',
         );
       }
     } catch (err) {
       this.logger.warn(
-        { nodeId, alias, error: err instanceof Error ? err.message : String(err) },
+        { nodeId, error: err instanceof Error ? err.message : String(err) },
         'addAlias: unexpected error — skipping',
       );
       // Best-effort: do not rethrow

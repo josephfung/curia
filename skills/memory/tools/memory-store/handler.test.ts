@@ -663,4 +663,376 @@ describe('MemoryStoreHandler', () => {
       expect((result as { success: false; error: string }).error).toContain('DB connection lost');
     });
   });
+
+  // -- PII guard: fact-loop logs (#1713) --
+  //
+  // `entity` is a caller-supplied name (usually a person's name) and the pino
+  // redact list does not cover it. Substitute entityNodeId where a node is
+  // resolved; otherwise log type/presence flags. UUID paths log the UUID as
+  // entityNodeId (it is already a node id, not a name).
+  describe('fact-loop logs never carry the raw entity name (PII guard)', () => {
+    const PII_ENTITY = 'Priya Ramanathan';
+    const NODE_ID = 'entity-1';
+    const UNNORMALIZABLE_PHONE = '020 7946 0958';
+    const UUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
+    function spyLog() {
+      const log = {
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+        error: vi.fn(),
+        child: vi.fn(),
+      };
+      log.child.mockReturnValue(log);
+      return log;
+    }
+
+    function findCall(fn: ReturnType<typeof vi.fn>, messageRe: RegExp) {
+      return fn.mock.calls.find(c => messageRe.test(String(c[c.length - 1])));
+    }
+
+    function serializeLogPayload(payload: unknown): string {
+      const obj = payload as Record<string, unknown> | null;
+      const err = obj?.err;
+      const errText = err instanceof Error
+        ? `${err.name} ${err.message} ${err.stack ?? ''}`
+        : '';
+      return `${JSON.stringify(payload)}\n${errText}`;
+    }
+
+    function expectNoPii(call: unknown[] | undefined, extraForbidden: string[] = []) {
+      expect(call).toBeDefined();
+      const serialized = serializeLogPayload(call![0]);
+      expect(serialized).not.toContain(PII_ENTITY);
+      for (const s of extraForbidden) {
+        expect(serialized).not.toContain(s);
+      }
+      expect(call![0]).not.toHaveProperty('entity');
+    }
+
+    function piiInput(overrides: Record<string, unknown> = {}) {
+      return {
+        entity: PII_ENTITY,
+        field: 'preferred_airline',
+        value: 'Air Canada',
+        source: 'test',
+        ...overrides,
+      };
+    }
+
+    function mockMem(storeFactResult: Record<string, unknown>, node: { id: string; label: string; type: string } = {
+      id: NODE_ID,
+      label: PII_ENTITY,
+      type: 'person',
+    }) {
+      return {
+        resolveOrCreate: vi.fn().mockResolvedValue({ kind: 'found', node }),
+        storeFact: vi.fn().mockResolvedValue(storeFactResult),
+        getEntity: vi.fn().mockResolvedValue(node),
+        addAlias: vi.fn().mockResolvedValue(undefined),
+      };
+    }
+
+    function ctxFor(
+      entityMemory: ReturnType<typeof mockMem> | EntityMemory,
+      input: Record<string, unknown>,
+      extras: Record<string, unknown> = {},
+    ) {
+      const log = spyLog();
+      const ctx = {
+        input,
+        secret: () => 'test-key',
+        log,
+        entityMemory,
+        ...extras,
+      } as unknown as ToolContext;
+      return { ctx, log };
+    }
+
+    it('UUID entity_type-ignored warn', async () => {
+      const entityMemory = mockMem({ stored: true, action: 'created', nodeId: 'fact-1' }, {
+        id: UUID, label: PII_ENTITY, type: 'person',
+      });
+      const { ctx, log } = ctxFor(entityMemory, piiInput({ entity: UUID, entity_type: 'person' }));
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /entity_type hint is ignored/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', UUID);
+      expect(call![0]).toHaveProperty('entity_type', 'person');
+    });
+
+    it('UUID-not-found warn', async () => {
+      const entityMemory = {
+        ...mockMem({}),
+        getEntity: vi.fn().mockResolvedValue(undefined),
+      };
+      const { ctx, log } = ctxFor(entityMemory, piiInput({ entity: UUID }));
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /entity UUID not found/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', UUID);
+    });
+
+    it('ambiguous-entity debug', async () => {
+      const { mem, store } = makeEntityMemory();
+      await store.createNode({ type: 'person', label: PII_ENTITY, properties: {}, source: 'test' });
+      await store.createNode({ type: 'organization', label: PII_ENTITY, properties: {}, source: 'test' });
+      const { ctx, log } = ctxFor(mem, piiInput());
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.debug, /ambiguous entity label/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('candidateCount', 2);
+      expect(call![0]).toHaveProperty('expectedType', 'concept');
+      expect(call![0]).not.toHaveProperty('entityNodeId');
+    });
+
+    it('canonical-normalization-failed warn', async () => {
+      const entityMemory = mockMem({ stored: true, action: 'created', nodeId: 'fact-1' });
+      const { ctx, log } = ctxFor(
+        entityMemory,
+        piiInput({ field: 'phone', value: UNNORMALIZABLE_PHONE }),
+        {
+          contactService: {
+            findContactByKgNodeId: vi.fn().mockResolvedValue({ id: 'contact-1' }),
+            updateContactFields: vi.fn(),
+          },
+        },
+      );
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /canonical attribute normalization failed/);
+      expectNoPii(call, [UNNORMALIZABLE_PHONE, '7946 0958']);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('field', 'phone');
+      expect(call![0]).toHaveProperty('reason', 'phone_normalization_failed');
+    });
+
+    it('findContactByKgNodeId-failed warn', async () => {
+      const entityMemory = mockMem({ stored: true, action: 'created', nodeId: 'fact-1' });
+      const { ctx, log } = ctxFor(
+        entityMemory,
+        piiInput({ field: 'timezone', value: 'America/Toronto' }),
+        {
+          contactService: {
+            findContactByKgNodeId: vi.fn().mockRejectedValue(new Error('connection timeout')),
+            updateContactFields: vi.fn(),
+          },
+        },
+      );
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /findContactByKgNodeId failed/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('field', 'timezone');
+    });
+
+    it('canonical-redirected info', async () => {
+      const entityMemory = mockMem({});
+      const { ctx, log } = ctxFor(
+        entityMemory,
+        piiInput({ field: 'timezone', value: 'America/Toronto' }),
+        {
+          contactService: {
+            findContactByKgNodeId: vi.fn().mockResolvedValue({ id: 'contact-1' }),
+            updateContactFields: vi.fn().mockResolvedValue({ id: 'contact-1' }),
+          },
+        },
+      );
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.info, /canonical attribute redirected/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('contactId', 'contact-1');
+    });
+
+    it('canonical-redirect-failed warn', async () => {
+      const entityMemory = mockMem({});
+      const { ctx, log } = ctxFor(
+        entityMemory,
+        piiInput({ field: 'primary_email', value: 'priya@example.com' }),
+        {
+          contactService: {
+            findContactByKgNodeId: vi.fn().mockResolvedValue({ id: 'contact-1' }),
+            updateContactFields: vi.fn().mockRejectedValue(
+              new Error('primaryEmail not found in contact_channel_identities'),
+            ),
+          },
+        },
+      );
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /canonical attribute redirect to ContactService failed/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('contactId', 'contact-1');
+    });
+
+    it('memoryWriteSource-fallback debug', async () => {
+      const entityMemory = mockMem({ stored: true, action: 'created', nodeId: 'fact-1' });
+      const { ctx, log } = ctxFor(entityMemory, piiInput());
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.debug, /memoryWriteSource not set/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('field', 'preferred_airline');
+    });
+
+    it('sensitivity-fallback warn', async () => {
+      const entityMemory = mockMem({
+        stored: true,
+        action: 'updated',
+        nodeId: 'fact-1',
+        sensitivity: 'internal',
+        sensitivityFallback: true,
+      });
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /sensitivity in result may be inaccurate/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('nodeId', 'fact-1');
+    });
+
+    it('fact-stored info', async () => {
+      const entityMemory = mockMem({ stored: true, action: 'created', nodeId: 'fact-1', sensitivity: 'internal' });
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.info, /memory-store: fact stored/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('action', 'created');
+      expect(call![0]).toHaveProperty('nodeId', 'fact-1');
+    });
+
+    it('fact-conflict warn', async () => {
+      const entityMemory = mockMem({
+        stored: false,
+        action: 'conflict',
+        conflict: 'contradicts existing value',
+        existingNodeId: 'fact-old',
+      });
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /fact conflicts with existing KG data/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('existingNodeId', 'fact-old');
+    });
+
+    it('entity-gone-at-write-time warn', async () => {
+      const entityMemory = mockMem({
+        stored: false,
+        action: 'entity_not_found',
+        conflict: 'Entity node not found: entity-1',
+      });
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /entity node gone at write time/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+    });
+
+    it('rate-limited warn', async () => {
+      const entityMemory = mockMem({
+        stored: false,
+        action: 'rate_limited',
+        conflict: 'Memory write rate limit exceeded (50 per agent per task)',
+      });
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.warn, /write rate limit reached/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+    });
+
+    it('auto-rejected info', async () => {
+      const entityMemory = mockMem({
+        stored: false,
+        action: 'auto_rejected',
+        conflict: 'existing has higher confidence',
+        existingNodeId: 'fact-old',
+      });
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.info, /fact auto-rejected/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('existingNodeId', 'fact-old');
+    });
+
+    it('impossible storeFact state error', async () => {
+      const entityMemory = mockMem({ stored: false, action: 'created' });
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.error, /impossible storeFact state/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).toHaveProperty('action', 'created');
+    });
+
+    it('unhandled storeFact action error', async () => {
+      const entityMemory = mockMem({ stored: false, action: 'not_a_real_action' });
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.error, /unhandled storeFact action/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+    });
+
+    it('unexpected-error after resolution', async () => {
+      const entityMemory = mockMem({});
+      entityMemory.storeFact.mockRejectedValue(new Error('DB connection lost'));
+      const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.error, /memory-store: unexpected error/);
+      expectNoPii(call);
+      expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
+      expect(call![0]).not.toHaveProperty('entity');
+    });
+
+    it('unexpected-error before resolution', async () => {
+      const entityMemory = mockMem({});
+      entityMemory.resolveOrCreate.mockRejectedValue(new Error('DB connection lost'));
+      const { ctx, log } = ctxFor(entityMemory, piiInput());
+
+      await handler.execute(ctx);
+
+      const call = findCall(log.error, /memory-store: unexpected error/);
+      expectNoPii(call);
+      expect((call![0] as Record<string, unknown>).entityNodeId).toBeUndefined();
+    });
+  });
 });
