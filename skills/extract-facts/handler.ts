@@ -177,6 +177,9 @@ ${text}`,
         // below fires correctly when subject or attribute could not be determined.
         let subject = typeof fact?.subject === 'string' ? fact.subject.trim() : '';
         let attribute = typeof fact?.attribute === 'string' ? fact.attribute.trim() : '';
+        // Hoisted so catch can log entityNodeId when resolution completed.
+        // Undefined until then — never log the raw subject name (PII).
+        let entityNode: { id: string; type: NodeType } | undefined;
 
         try {
           // Guard: skip malformed entries where required string fields are absent or blank.
@@ -233,7 +236,6 @@ ${text}`,
             confidence: 0.6,
           });
 
-          let entityNode;
           if (resolved.kind === 'ambiguous') {
             // The only admissible tiebreaker is the caller's subject-contact hint, and
             // only when one candidate IS that contact's node. The hint identifies the
@@ -284,7 +286,9 @@ ${text}`,
             if (patch !== null) {
               if (patch.fallbackToKg) {
                 ctx.log.warn(
-                  { subject, attribute, reason: patch.reason },
+                  // entityNodeId, not subject: the LLM-extracted name is PII and the
+                  // pino redact list does not cover it. attribute is a snake_case key.
+                  { entityNodeId: entityNode.id, attribute, reason: patch.reason },
                   'extract-facts: canonical attribute normalization failed — falling back to KG write',
                 );
               } else {
@@ -302,7 +306,7 @@ ${text}`,
                     contactLookupCache.set(entityNode.id, contact ?? null);
                   } catch (lookupErr) {
                     ctx.log.warn(
-                      { subject, attribute, entityNodeId: entityNode.id, err: lookupErr },
+                      { entityNodeId: entityNode.id, attribute, err: lookupErr },
                       'extract-facts: findContactByKgNodeId failed — falling back to KG write',
                     );
                     // Leave contact undefined — the guard below treats undefined the same as null.
@@ -314,7 +318,7 @@ ${text}`,
                   try {
                     await ctx.contactService.updateContactFields(contact.id, patch.fields);
                     ctx.log.info(
-                      { subject, attribute, contactId: contact.id },
+                      { entityNodeId: entityNode.id, attribute, contactId: contact.id },
                       'extract-facts: canonical attribute redirected to ContactService',
                     );
                     redirected++;
@@ -325,14 +329,14 @@ ${text}`,
                       // Validation failure (e.g. primaryEmail not in CCI) — this is expected
                       // for some inputs; fall through so the information is preserved in the KG.
                       ctx.log.warn(
-                        { subject, attribute, contactId: contact.id, reason: err.message },
+                        { entityNodeId: entityNode.id, attribute, contactId: contact.id, reason: err.message },
                         'extract-facts: canonical attribute validation failed — falling back to KG write',
                       );
                     } else {
                       // Infrastructure or programming error — do not silently diverge the
                       // contacts table from the KG. Increment failed and skip the KG write.
                       ctx.log.error(
-                        { subject, attribute, contactId: contact.id, err },
+                        { entityNodeId: entityNode.id, attribute, contactId: contact.id, err },
                         'extract-facts: canonical attribute redirect failed with unexpected error — skipping fact',
                       );
                       failed++;
@@ -375,7 +379,7 @@ ${text}`,
             if (result.action === 'auto_resolved') {
               // Incoming fact superseded a lower-confidence existing fact — audit trail preserved.
               ctx.log.info(
-                { subject, attribute, source: effectiveSource, nodeId: result.nodeId },
+                { entityNodeId: entityNode.id, attribute, source: effectiveSource, nodeId: result.nodeId },
                 'extract-facts: fact auto-resolved — existing superseded by higher-confidence incoming',
               );
             }
@@ -386,14 +390,14 @@ ${text}`,
             // in this batch will also fail, so break immediately rather than burning
             // through the rest of the loop and mis-reporting them as conflicts.
             ctx.log.error(
-              { subject, attribute, source: effectiveSource, reason: result.conflict },
+              { entityNodeId: entityNode.id, attribute, source: effectiveSource, reason: result.conflict },
               'extract-facts: write rate limit exceeded — aborting remaining facts in batch',
             );
             failed++;
             break;
           } else {
             // conflict, auto_rejected, or entity_not_found — expected semantic outcomes, not infra failures.
-            ctx.log.warn({ subject, attribute, conflict: result.conflict, action: result.action, source: effectiveSource }, 'extract-facts: fact not stored');
+            ctx.log.warn({ entityNodeId: entityNode.id, attribute, conflict: result.conflict, action: result.action, source: effectiveSource }, 'extract-facts: fact not stored');
           }
         } catch (err) {
           // Re-throw programming errors — these indicate bugs in this handler (wrong
@@ -407,13 +411,30 @@ ${text}`,
             err instanceof EvalError ||
             err instanceof URIError
           ) {
-            ctx.log.error({ err, subject, attribute }, 'extract-facts: unexpected programming error in fact loop — re-throwing');
+            ctx.log.error(
+              {
+                err,
+                // Never the raw subject name. Node id when resolution completed;
+                // hasSubject is enough to tell malformed/pre-resolve failures apart.
+                entityNodeId: entityNode?.id,
+                hasSubject: Boolean(subject),
+                attribute,
+              },
+              'extract-facts: unexpected programming error in fact loop — re-throwing',
+            );
             throw err;
           }
           // Infrastructure errors (DB outage, connection loss) — log at error so they
           // surface in Sentry, then continue processing the remaining facts in the batch.
-          // subject and attribute are always in scope here (declared before this try).
-          ctx.log.error({ err, subject, attribute }, 'extract-facts: failed to persist fact, skipping');
+          ctx.log.error(
+            {
+              err,
+              entityNodeId: entityNode?.id,
+              hasSubject: Boolean(subject),
+              attribute,
+            },
+            'extract-facts: failed to persist fact, skipping',
+          );
           failed++;
         }
       }

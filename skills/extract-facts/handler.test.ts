@@ -11,6 +11,7 @@ import { EntityMemory } from '../../src/memory/entity-memory.js';
 import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ExtractFactsHandler } from './handler.js';
+import { ContactValidationError } from '../../src/contacts/contact-service.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import type { InfraLlm, InfraLlmResult } from '../../src/skills/infra-llm.js';
 
@@ -577,6 +578,284 @@ describe('ExtractFactsHandler', () => {
         data: { stored: 1, redirected: 0, skipped: false, failed: 0, ambiguous: 0 },
       });
       expect(await mem.getFacts(only.id)).toHaveLength(1);
+    });
+  });
+
+  // -- PII guard: remaining fact-loop logs (#1706) --
+  //
+  // The malformed-fact and ambiguity paths already omit the raw subject name.
+  // These ten pre-existing call sites still logged it. `subject` is an LLM-extracted
+  // entity name (usually a person's name) and the pino redact list does not cover it.
+  // Substitute: entityNodeId where a node is resolved; presence flags otherwise.
+  // `attribute` is a snake_case key and is kept — it is not identifying on its own.
+  describe('fact-loop logs never carry the raw subject name (PII guard)', () => {
+    const PII_SUBJECT = 'Priya Ramanathan';
+
+    function spyLog() {
+      return {
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+        error: vi.fn(),
+        child: vi.fn(),
+      };
+    }
+
+    function attachSpyLog(ctx: ToolContext) {
+      const log = spyLog();
+      (ctx as unknown as { log: typeof log }).log = log;
+      return log;
+    }
+
+    function findCall(fn: ReturnType<typeof vi.fn>, messageRe: RegExp) {
+      return fn.mock.calls.find(c => messageRe.test(String(c[c.length - 1])));
+    }
+
+    function expectNoRawSubject(call: unknown[] | undefined) {
+      expect(call).toBeDefined();
+      expect(JSON.stringify(call![0])).not.toContain(PII_SUBJECT);
+      expect(call![0]).not.toHaveProperty('subject');
+    }
+
+    function factJson(attribute: string, value: string) {
+      return JSON.stringify([
+        { subject: PII_SUBJECT, subjectType: 'person', attribute, value, confidence: 0.9, decayClass: 'slow_decay' },
+      ]);
+    }
+
+    function makeContactService(overrides: {
+      findContactByKgNodeId?: ReturnType<typeof vi.fn>;
+      updateContactFields?: ReturnType<typeof vi.fn>;
+    } = {}) {
+      return {
+        getContact: vi.fn(async () => undefined),
+        findContactByKgNodeId: overrides.findContactByKgNodeId ?? vi.fn(async () => ({ id: 'contact-1' })),
+        updateContactFields: overrides.updateContactFields ?? vi.fn(async () => ({ id: 'contact-1' })),
+      };
+    }
+
+    it('canonical-normalization-failed warn', async () => {
+      const entityMemory = makeEntityMemory();
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} phone is not-a-phone-number.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('phone', 'not-a-phone-number')]),
+        makeContactService(),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.warn, /canonical attribute normalization failed/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('attribute', 'phone');
+    });
+
+    it('findContactByKgNodeId-failed warn', async () => {
+      const entityMemory = makeEntityMemory();
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} timezone is America/Toronto.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('timezone', 'America/Toronto')]),
+        makeContactService({
+          findContactByKgNodeId: vi.fn().mockRejectedValue(new Error('connection timeout')),
+        }),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.warn, /findContactByKgNodeId failed/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('attribute', 'timezone');
+    });
+
+    it('canonical-redirected info', async () => {
+      const entityMemory = makeEntityMemory();
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} timezone is America/Toronto.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('timezone', 'America/Toronto')]),
+        makeContactService(),
+      );
+      const log = attachSpyLog(ctx);
+
+      const result = await new ExtractFactsHandler().execute(ctx);
+
+      expect(result).toEqual({
+        success: true,
+        data: { stored: 0, redirected: 1, skipped: false, failed: 0, ambiguous: 0 },
+      });
+      const call = findCall(log.info, /canonical attribute redirected/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('attribute', 'timezone');
+      expect(call![0]).toHaveProperty('contactId', 'contact-1');
+    });
+
+    it('canonical-validation-failed warn', async () => {
+      const entityMemory = makeEntityMemory();
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} email is priya@example.com.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('primary_email', 'priya@example.com')]),
+        makeContactService({
+          updateContactFields: vi.fn().mockRejectedValue(
+            new ContactValidationError('primaryEmail not found in contact_channel_identities'),
+          ),
+        }),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.warn, /canonical attribute validation failed/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('attribute', 'primary_email');
+      expect(call![0]).toHaveProperty('contactId', 'contact-1');
+    });
+
+    it('canonical-redirect unexpected-error', async () => {
+      const entityMemory = makeEntityMemory();
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} timezone is America/Toronto.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('timezone', 'America/Toronto')]),
+        makeContactService({
+          updateContactFields: vi.fn().mockRejectedValue(new Error('pool timeout')),
+        }),
+      );
+      const log = attachSpyLog(ctx);
+
+      const result = await new ExtractFactsHandler().execute(ctx);
+
+      expect(result).toEqual({
+        success: true,
+        data: { stored: 0, redirected: 0, skipped: false, failed: 1, ambiguous: 0 },
+      });
+      const call = findCall(log.error, /canonical attribute redirect failed with unexpected error/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('attribute', 'timezone');
+    });
+
+    it('auto-resolved info', async () => {
+      const entityMemory = makeEntityMemory();
+      vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({
+        stored: true,
+        action: 'auto_resolved',
+        nodeId: 'fact-1',
+      });
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.info, /fact auto-resolved/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
+    });
+
+    it('rate-limited error', async () => {
+      const entityMemory = makeEntityMemory();
+      vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({
+        stored: false,
+        action: 'rate_limited',
+        conflict: '50-write limit reached',
+      });
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.error, /write rate limit exceeded/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
+    });
+
+    it('fact-not-stored warn', async () => {
+      const entityMemory = makeEntityMemory();
+      vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({
+        stored: false,
+        action: 'conflict',
+        conflict: 'contradicts existing value: London',
+      });
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.warn, /fact not stored/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
+    });
+
+    it('programming-error in fact loop', async () => {
+      const entityMemory = makeEntityMemory();
+      vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(
+        new TypeError("Cannot read properties of undefined (reading 'id')"),
+      );
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.error, /unexpected programming error in fact loop/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('hasSubject', true);
+      expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
+    });
+
+    it('failed-to-persist error', async () => {
+      const entityMemory = makeEntityMemory();
+      vi.spyOn(entityMemory, 'storeFact').mockRejectedValueOnce(new Error('DB connection lost'));
+      const ctx = makeCtx(
+        entityMemory,
+        { text: `${PII_SUBJECT} prefers aisle seats.`, source: 'test' },
+        makeMockInfraLlm(['yes', factJson('dietary_preference', 'vegetarian')]),
+      );
+      const log = attachSpyLog(ctx);
+
+      await new ExtractFactsHandler().execute(ctx);
+
+      const call = findCall(log.error, /failed to persist fact/);
+      expectNoRawSubject(call);
+      const nodes = await entityMemory.findEntities(PII_SUBJECT);
+      expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
+      expect(call![0]).toHaveProperty('hasSubject', true);
+      expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
     });
   });
 });
