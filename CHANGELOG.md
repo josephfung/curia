@@ -36,6 +36,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`EntityMemory.resolveOrCreate`** — returns `ambiguous` when 2+ matches share the requested type, instead of taking the first. (#1694)
+- **`extract-facts`** — skips and counts an ambiguous subject rather than guessing; new `ambiguous` output. (#1694)
+- **Checkpoint extraction** — passes the conversation's external originator to `extract-facts` as a subject tiebreaker. (#1694)
 - **`EntityContextAssembler.assembleMany`** — new `nodeless` bucket, disjoint from `unresolved`; logged at warn. (#1694)
 - **`entity-context`** — output gains `nodeless`; agents read a missing node as a capability gap. (#1694)
 - **`entity-context` output schema** — new `nodeless` key on `ToolResult.data` (public API surface). (#1694)

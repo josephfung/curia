@@ -280,8 +280,9 @@ export class EntityMemory {
    *
    * Resolution logic (in order):
    *   1 exact match  → return { kind: 'found', node }
-   *   2+ exact matches, one has the expected type → return { kind: 'found', node: typeMatch }
-   *   2+ exact matches, no type match → return { kind: 'ambiguous', candidates }
+   *   2+ exact matches, exactly one has the expected type → { kind: 'found', node: typeMatch }
+   *   2+ exact matches, several share the expected type → { kind: 'ambiguous', candidates }
+   *   2+ exact matches, none has the expected type → { kind: 'ambiguous', candidates }
    *   0 exact matches, fuzzy score ≥ 0.90 → auto-resolve, learn alias, return { kind: 'found', node }
    *   0 exact matches, fuzzy score 0.75–0.90 → return { kind: 'ambiguous', candidates }
    *   0 exact matches, fuzzy score < 0.75 → create via createEntity(), return { kind: 'created', node }
@@ -292,7 +293,8 @@ export class EntityMemory {
    * This is the shared primitive used by both memory-store (agent-directed writes)
    * and extract-facts (background batch extraction). Callers handle 'ambiguous'
    * differently: memory-store surfaces candidates to the agent for disambiguation;
-   * extract-facts takes candidates[0] to avoid stalling a batch job.
+   * extract-facts tries its optional subject_contact_id tiebreaker and otherwise skips
+   * the fact, counting it. Neither guesses — see #1694.
    */
   async resolveOrCreate(options: ResolveOrCreateOptions): Promise<ResolveOrCreateResult> {
     // Phase 1: exact match on canonical label + aliases
@@ -317,13 +319,33 @@ export class EntityMemory {
     }
 
     if (matches.length > 1) {
-      // 2+ matches — prefer a node whose type matches the caller's expected type.
-      const typeMatch = matches.find(n => n.type === options.type);
-      if (typeMatch) {
-        return { kind: 'found', node: typeMatch };
+      // 2+ matches — type is the discriminator, but only when it actually discriminates.
+      //
+      // Exactly one candidate of the requested type is unambiguous: a person "River" and
+      // an organization "River" are different entities, and a caller asking for a person
+      // means the person. Treating that as ambiguous would make every cross-type label
+      // collision unresolvable.
+      //
+      // Two or more candidates of the requested type is a different situation entirely.
+      // Nothing in the label, the type, or the ordering distinguishes them, so returning
+      // the first is not a resolution — it is a coin flip that silently attaches the
+      // caller's fact to whichever node the backend happened to return first. Under
+      // ADR-040, where two contacts named "Seth Berman" each hold their own person node,
+      // that coin flip is the misattribution the whole change exists to prevent. It is
+      // also already reachable today through shared aliases, which carry no cross-node
+      // uniqueness. Declining and letting the caller disambiguate loses a fact; guessing
+      // corrupts one. (#1694)
+      const typeMatches = matches.filter(n => n.type === options.type);
+      if (typeMatches.length === 1) {
+        return { kind: 'found', node: typeMatches[0]! };
       }
-      // No type match — caller must ask the user to pick one.
-      return { kind: 'ambiguous', candidates: matches };
+      // Either nothing matched the requested type, or several did. Both need the caller
+      // to pick. When several share the type, surface only those — the cross-type
+      // candidates are noise for a caller that already told us which type it wants.
+      return {
+        kind: 'ambiguous',
+        candidates: typeMatches.length > 1 ? typeMatches : matches,
+      };
     }
 
     // Phase 2: no exact match — try embedding-based fuzzy resolution.

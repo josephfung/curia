@@ -99,6 +99,63 @@ describe('EntityMemory.resolveOrCreate', () => {
     expect(result.candidates).toHaveLength(2);
   });
 
+  // #1694 / ADR-040 — two candidates of the *requested* type cannot be told apart by
+  // type, and picking the first silently attributes a fact to the wrong entity. That
+  // is worse than declining, so these must report ambiguous.
+  it('returns ambiguous when 2+ matches share the requested type', async () => {
+    const { mem, store } = makeEntityMemory();
+
+    await store.createNode({ type: 'person', label: 'Seth Berman', properties: {}, source: 'test' });
+    await store.createNode({ type: 'person', label: 'Seth Berman', properties: {}, source: 'test' });
+
+    const result = await mem.resolveOrCreate({
+      label: 'Seth Berman',
+      type: 'person',
+      source: 'test',
+    });
+
+    expect(result.kind).toBe('ambiguous');
+    if (result.kind !== 'ambiguous') throw new Error('narrowing');
+    expect(result.candidates).toHaveLength(2);
+  });
+
+  it('returns ambiguous when 2+ matches share the requested type via a shared alias', async () => {
+    // The live path today: aliases carry no cross-node uniqueness (no unique index,
+    // and addAlias only checks the node it writes to), and resolveOrCreate's own fuzzy
+    // branch calls addAlias automatically. So two person nodes can end up sharing an
+    // alias without anyone doing anything unusual.
+    const { mem, store } = makeEntityMemory();
+
+    const a = await store.createNode({ type: 'person', label: 'Seth Berman', properties: {}, source: 'test' });
+    const b = await store.createNode({ type: 'person', label: 'Seth Berkowitz', properties: {}, source: 'test' });
+    await store.addAlias(a.id, 'seth');
+    await store.addAlias(b.id, 'seth');
+
+    const result = await mem.resolveOrCreate({ label: 'seth', type: 'person', source: 'test' });
+
+    expect(result.kind).toBe('ambiguous');
+    if (result.kind !== 'ambiguous') throw new Error('narrowing');
+    expect(result.candidates.map(n => n.id).sort()).toEqual([a.id, b.id].sort());
+  });
+
+  it('still returns found when exactly one match has the requested type', async () => {
+    // Regression guard for the narrowing above: one person + one organization sharing
+    // a label is NOT ambiguous when the caller asks for a person. Type is a sufficient
+    // discriminator with a single candidate of that type, and treating this as
+    // ambiguous would make every cross-type label collision unresolvable.
+    const { mem, store } = makeEntityMemory();
+
+    const person = await store.createNode({ type: 'person', label: 'River', properties: {}, source: 'test' });
+    await store.createNode({ type: 'organization', label: 'River', properties: {}, source: 'test' });
+    await store.createNode({ type: 'project', label: 'River', properties: {}, source: 'test' });
+
+    const result = await mem.resolveOrCreate({ label: 'River', type: 'person', source: 'test' });
+
+    expect(result.kind).toBe('found');
+    if (result.kind !== 'found') throw new Error('narrowing');
+    expect(result.node.id).toBe(person.id);
+  });
+
   it('returns found (with existing type) when 1 match exists but type differs from caller hint', async () => {
     const { mem } = makeEntityMemory();
     const { entity } = await mem.createEntity({
