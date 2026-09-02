@@ -230,12 +230,13 @@ contacts might be one person. That is the dedup sweep's job.
 
 An earlier draft of this ADR claimed the backfill also makes contact merges carry KG memory,
 because `mergeContacts` only calls `mergeEntities` when *both* sides have a node. The
-precondition is right and the conclusion is wrong. `mergeEntities` hard-`DELETE`s the
-secondary node while the secondary contact still points at it, and `contacts.kg_node_id`
-is a `NO ACTION` foreign key, so the delete raises `23503` and the merge is swallowed as
-"KG node merge failed (non-fatal)". This is pre-existing and already near-universal —
-534 of 548 contacts were linked before `085` — so the backfill neither causes it nor cures
-it. Tracked separately in #1711; until that lands, a contact merge still loses KG memory.
+precondition is right and the conclusion was wrong: `mergeEntities` hard-`DELETE`s the
+secondary node, and `contacts.kg_node_id` is a `NO ACTION` foreign key, so calling it
+*before* the contact-merge transaction raised `23503` and the failure was swallowed as
+"KG node merge failed (non-fatal)". That was pre-existing and already near-universal —
+534 of 548 contacts were linked before `085` — so the backfill neither caused it nor
+cured it. #1711 moved `mergeEntities` to after the secondary contact row is gone, so a
+merge of two linked contacts now folds facts, aliases and edges into the survivor.
 
 ### Rejected alternatives
 

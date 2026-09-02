@@ -999,6 +999,44 @@ describe('ContactService', () => {
       expect(proposal.goldenRecord.notes).toContain('Primary note');
       expect(proposal.goldenRecord.notes).toContain('Secondary note');
     });
+
+    it('does not call mergeEntities when only the primary has a KG node', async () => {
+      const primary = await service.createContact({ displayName: 'Has Node', source: 'test' });
+      const secondary = await service.createContact({ displayName: 'No Node', source: 'test' });
+      await service.saveContact({ ...secondary, kgNodeId: null });
+      const mergeEntities = vi.spyOn(entityMemory, 'mergeEntities');
+
+      await service.mergeContacts(primary.id, secondary.id, false);
+
+      expect(mergeEntities).not.toHaveBeenCalled();
+      expect(await service.getContact(secondary.id)).toBeUndefined();
+      expect((await service.getContact(primary.id))?.kgNodeId).toBe(primary.kgNodeId);
+    });
+
+    it('does not call mergeEntities when only the secondary has a KG node', async () => {
+      const primary = await service.createContact({ displayName: 'No Node', source: 'test' });
+      const secondary = await service.createContact({ displayName: 'Has Node', source: 'test' });
+      await service.saveContact({ ...primary, kgNodeId: null });
+      const mergeEntities = vi.spyOn(entityMemory, 'mergeEntities');
+
+      await service.mergeContacts(primary.id, secondary.id, false);
+
+      expect(mergeEntities).not.toHaveBeenCalled();
+      expect(await service.getContact(secondary.id)).toBeUndefined();
+    });
+
+    it('does not call mergeEntities when neither contact has a KG node', async () => {
+      const primary = await service.createContact({ displayName: 'No Node A', source: 'test' });
+      const secondary = await service.createContact({ displayName: 'No Node B', source: 'test' });
+      await service.saveContact({ ...primary, kgNodeId: null });
+      await service.saveContact({ ...secondary, kgNodeId: null });
+      const mergeEntities = vi.spyOn(entityMemory, 'mergeEntities');
+
+      await service.mergeContacts(primary.id, secondary.id, false);
+
+      expect(mergeEntities).not.toHaveBeenCalled();
+      expect(await service.getContact(secondary.id)).toBeUndefined();
+    });
   });
   describe('dedup hook (onDuplicateDetected)', () => {
     it('calls onDuplicateDetected when a certain duplicate is created', async () => {
@@ -1568,6 +1606,47 @@ describe('ContactService', () => {
 
       // The sequence aborts at the failing write — the delete never runs.
       expect(deleteContact).not.toHaveBeenCalled();
+    });
+
+    it('folds KG nodes only after the contact-merge transaction commits (#1711)', async () => {
+      const primary = await service.createContact({ displayName: 'Kg Tx Primary', source: 'test' });
+      const secondary = await service.createContact({ displayName: 'Kg Tx Secondary', source: 'test' });
+      expect(primary.kgNodeId).toBeTruthy();
+      expect(secondary.kgNodeId).toBeTruthy();
+
+      const backend = backendOf(service);
+      const withTransaction = vi.spyOn(backend, 'withTransaction');
+      const mergeEntities = vi.spyOn(entityMemory, 'mergeEntities');
+
+      await service.mergeContacts(primary.id, secondary.id, false);
+
+      expect(withTransaction).toHaveBeenCalledTimes(1);
+      expect(mergeEntities).toHaveBeenCalledTimes(1);
+      expect(mergeEntities).toHaveBeenCalledWith(primary.kgNodeId, secondary.kgNodeId);
+      expect(mergeEntities.mock.invocationCallOrder[0]!)
+        .toBeGreaterThan(withTransaction.mock.invocationCallOrder[0]!);
+    });
+
+    it('does not merge KG nodes when the contact-merge transaction rolls back (#1711)', async () => {
+      const error = vi.fn();
+      const svc = ContactService.createInMemory(
+        entityMemory,
+        undefined,
+        { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn() } as never,
+      );
+      const primary = await svc.createContact({ displayName: 'Kg Rollback Primary', source: 'test' });
+      const secondary = await svc.createContact({ displayName: 'Kg Rollback Secondary', source: 'test' });
+
+      const mergeEntities = vi.spyOn(entityMemory, 'mergeEntities');
+      vi.spyOn(backendOf(svc), 'deleteContact')
+        .mockRejectedValue(new Error('forced delete failure'));
+
+      await expect(svc.mergeContacts(primary.id, secondary.id, false))
+        .rejects.toThrow('forced delete failure');
+
+      expect(mergeEntities).not.toHaveBeenCalled();
+      expect(error.mock.calls.some(([, msg]) => String(msg).includes('may already have been applied'))).toBe(false);
+      expect(error.mock.calls.some(([, msg]) => String(msg).includes('KG nodes were not touched'))).toBe(true);
     });
   });
 

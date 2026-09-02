@@ -13,9 +13,13 @@
 // Every fixture row is created by this suite and deleted by id in afterEach.
 // Skips gracefully when DATABASE_URL is not set.
 
-import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, afterAll, vi } from 'vitest';
 import pg from 'pg';
 import { ContactService } from '../../src/contacts/contact-service.js';
+import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
+import { EmbeddingService } from '../../src/memory/embedding.js';
+import { EntityMemory } from '../../src/memory/entity-memory.js';
+import { MemoryValidator } from '../../src/memory/validation.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
@@ -29,8 +33,11 @@ const FAIL_TRIGGER = 'itest_1695_block_secondary_delete';
 describeIf('mergeContacts transactionality (#1695)', () => {
   let pool: pg.Pool;
   let contactService: ContactService;
+  let contactServiceWithKg: ContactService;
+  let entityMemory: EntityMemory;
 
   const createdContactIds: string[] = [];
+  const createdKgNodeIds: string[] = [];
 
   /** Insert a contact directly: kg_node_id stays NULL so no KG merge is attempted. */
   async function makeContact(displayName: string): Promise<string> {
@@ -127,9 +134,16 @@ describeIf('mergeContacts transactionality (#1695)', () => {
     // never point at a real database even though every row it writes is its own.
     await requireCuriaTestDatabase(pool);
 
-    // No EntityMemory: the fixtures have kg_node_id = NULL, so mergeContacts skips the
-    // KG merge entirely and the suite needs no embedding credentials.
+    // No EntityMemory on the original service: the fixtures have kg_node_id = NULL, so
+    // mergeContacts skips the KG merge entirely and those tests need no embeddings.
     contactService = ContactService.createWithPostgres(pool, undefined, createSilentLogger());
+
+    const logger = createSilentLogger();
+    const embeddingService = EmbeddingService.createForTesting();
+    const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
+    const validator = new MemoryValidator(kgStore, embeddingService);
+    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
+    contactServiceWithKg = ContactService.createWithPostgres(pool, entityMemory, logger);
 
     // Fails fast when migration 084 has not been applied.
     await pool.query('SELECT 1 FROM contact_dedup_exclusions LIMIT 0');
@@ -141,6 +155,14 @@ describeIf('mergeContacts transactionality (#1695)', () => {
     if (createdContactIds.length > 0) {
       await pool.query(`DELETE FROM contacts WHERE id = ANY($1::uuid[])`, [createdContactIds]);
       createdContactIds.length = 0;
+    }
+    if (createdKgNodeIds.length > 0) {
+      await pool.query(
+        `DELETE FROM kg_edges WHERE source_node_id = ANY($1::uuid[]) OR target_node_id = ANY($1::uuid[])`,
+        [createdKgNodeIds],
+      );
+      await pool.query(`DELETE FROM kg_nodes WHERE id = ANY($1::uuid[])`, [createdKgNodeIds]);
+      createdKgNodeIds.length = 0;
     }
   });
 
@@ -186,6 +208,55 @@ describeIf('mergeContacts transactionality (#1695)', () => {
       a: secondary < other ? secondary : other,
       b: secondary < other ? other : secondary,
     });
+  });
+
+  it('leaves both KG nodes untouched when the contact-merge transaction rolls back (#1711)', async () => {
+    const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const error = vi.fn();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error,
+      debug: vi.fn(),
+      child: vi.fn().mockReturnThis(),
+    } as never;
+    const loggedService = ContactService.createWithPostgres(pool, entityMemory, logger);
+
+    const primary = await contactServiceWithKg.createContact({
+      displayName: `Tx KG Primary ${runId}`,
+      source: 'itest-1711',
+    });
+    const secondary = await contactServiceWithKg.createContact({
+      displayName: `Tx KG Secondary ${runId}`,
+      source: 'itest-1711',
+    });
+    createdContactIds.push(primary.id, secondary.id);
+    expect(primary.kgNodeId).toBeTruthy();
+    expect(secondary.kgNodeId).toBeTruthy();
+    createdKgNodeIds.push(primary.kgNodeId!, secondary.kgNodeId!);
+
+    await entityMemory.storeFact({
+      entityNodeId: secondary.kgNodeId!,
+      label: `Secondary-only fact ${runId}`,
+      source: 'itest-1711',
+    });
+    const secondaryFactsBefore = await entityMemory.getFacts(secondary.kgNodeId!);
+    expect(secondaryFactsBefore).toHaveLength(1);
+    createdKgNodeIds.push(secondaryFactsBefore[0]!.id);
+
+    await blockDeleteOf(secondary.id);
+
+    await expect(loggedService.mergeContacts(primary.id, secondary.id, false))
+      .rejects.toThrow(/forced merge failure/);
+
+    expect(error.mock.calls.some(([, msg]) => String(msg).includes('may already have been applied'))).toBe(false);
+    expect(error.mock.calls.some(([, msg]) => String(msg).includes('KG nodes were not touched'))).toBe(true);
+
+    expect(await entityMemory.getEntity(primary.kgNodeId!)).toBeDefined();
+    expect(await entityMemory.getEntity(secondary.kgNodeId!)).toBeDefined();
+    const secondaryFactsAfter = (await entityMemory.getFacts(secondary.kgNodeId!)).map(f => f.label);
+    expect(secondaryFactsAfter).toEqual([`Secondary-only fact ${runId}`]);
+    expect(await entityMemory.getFacts(primary.kgNodeId!)).toHaveLength(0);
   });
 
   it('commits the same sequence when nothing fails', async () => {

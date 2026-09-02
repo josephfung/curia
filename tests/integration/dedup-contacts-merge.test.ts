@@ -36,6 +36,7 @@ const createdKgNodeIds: string[] = [];
 describeIf('dedup-contacts merge integration', () => {
   let pool: pg.Pool;
   let contactService: ContactService;
+  let entityMemory: EntityMemory;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
@@ -48,7 +49,7 @@ describeIf('dedup-contacts merge integration', () => {
     const embeddingService = EmbeddingService.createForTesting();
     const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
     const validator = new MemoryValidator(kgStore, embeddingService);
-    const entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
+    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
 
     const auditLogger = new AuditLogger(pool, logger);
     // Wire EventBus with the write-ahead audit hook — identical to the CLI entry point.
@@ -165,6 +166,12 @@ describeIf('dedup-contacts merge integration', () => {
       const secondaryBefore = await contactService.getContact(secondary.id);
       expect(primaryBefore).toBeDefined();
       expect(secondaryBefore).toBeDefined();
+      // Both sides hold a node — the path #1711 covers. The assertions after merge
+      // check the survivor kept its node and the secondary's node is gone, not just
+      // contact-level outcomes.
+      expect(primaryBefore!.kgNodeId).toBeTruthy();
+      expect(secondaryBefore!.kgNodeId).toBeTruthy();
+      expect(primaryBefore!.kgNodeId).not.toBe(secondaryBefore!.kgNodeId);
 
       // --- 3. Run the REAL merge path used by the script ---
       //
@@ -226,6 +233,12 @@ describeIf('dedup-contacts merge integration', () => {
       // Confirm the payload carries both contact IDs (no deep JSON parse needed — text search is fine)
       expect(auditRow!.payload).toContain(primary.id);
       expect(auditRow!.payload).toContain(secondary.id);
+
+      // --- 7. Assert: secondary KG node is gone; survivor still holds its node (#1711) ---
+      const survivor = await contactService.getContact(primary.id);
+      expect(survivor?.kgNodeId).toBe(primaryBefore!.kgNodeId);
+      expect(await entityMemory.getEntity(primaryBefore!.kgNodeId!)).toBeDefined();
+      expect(await entityMemory.getEntity(secondaryBefore!.kgNodeId!)).toBeUndefined();
     },
   );
 });
