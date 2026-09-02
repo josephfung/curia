@@ -278,8 +278,8 @@ export class DreamEngine {
     archiveThreshold: number,
     halfLifeDays: DecayConfig['halfLifeDays'],
   ): Promise<Omit<DecayPassResult, 'durationMs'> & { warnedRows: Array<{ id: string; type: string; label: string; confidence: number; sensitivity: string; edge_count: string; warn_reason: string; warned_at: Date }> }> {
-    // ADR-040 — "Identity does not decay". Node passes 1a, 1b and 2b are restricted to
-    // identity_source = 'label'. A contact's node is the container for its memory, not a
+    // ADR-040 — "Identity does not decay". Every node pass that decays or archives is
+    // restricted to identity_source = 'label'. A contact's node is the container for its memory, not a
     // memory itself: nothing refreshes an entity node's last_confirmed_at through ordinary
     // interaction (storeFact updates the FACT node), so decay here is monotonic and
     // universal — a contact emailed daily ages at exactly the rate of one met once. Left
@@ -290,9 +290,14 @@ export class DreamEngine {
     // this bounds nothing but the anchor. Edge passes (1c, 1d, 3) are untouched: edges
     // have no identity tier, and Pass 3 still archives edges incident to an archived node.
     //
-    // Pass 2a (archive expired warnings) needs no predicate: warning requires
-    // confidence <= archiveThreshold, which an undecayed anchored node never reaches.
-    // Migration 085 clears the legacy warned_at rows that predate the exclusion.
+    // The filter is on every node pass that decays OR archives — 1a, 1b, the Pass 1.5 warn
+    // candidates, 2a and 2b. An earlier version of this change guarded only 1a/1b/2b, on the
+    // reasoning that warning requires confidence <= archiveThreshold and an undecayed
+    // anchored node never reaches it. That was wrong in the direction that matters: freezing
+    // decay does not RAISE confidence, and 478 of 532 contact nodes in production were
+    // already at or below the threshold when they were anchored. Pass 1.5 would re-warn the
+    // sensitive or well-connected ones on the next run and Pass 2a would archive them
+    // warnHoldBackDays later — the exclusion defeated by the one path left open.
     //
     // Pass 1a: Decay slow_decay nodes
     // Uses COALESCE(last_decayed_at, last_confirmed_at) so each run only applies
@@ -409,6 +414,7 @@ export class DreamEngine {
                   ON (e.source_node_id = n.id OR e.target_node_id = n.id)
                  AND e.archived_at IS NULL
           WHERE n.archived_at IS NULL
+            AND n.identity_source = 'label'
             AND n.warned_at IS NULL
             AND n.decay_class != 'permanent'
             AND n.confidence <= $1
@@ -439,12 +445,16 @@ export class DreamEngine {
 
     // Pass 2a: Archive expired warnings — nodes whose hold-back window has closed
     // without a CEO response. These were warned but never confirmed or dismissed.
+    // Also excludes contact-anchored nodes: a warning raised before the node was adopted
+    // (anchorNode clears warned_at, but a row could still slip through a concurrent pass)
+    // must not become the one archival path that survives ADR-040.
     const archiveExpiredResult = await client.query(
       `UPDATE kg_nodes
           SET archived_at = now(),
               warned_at = NULL,
               warn_reason = NULL
         WHERE archived_at IS NULL
+          AND identity_source = 'label'
           AND warned_at IS NOT NULL
           AND warned_at <= now() - ($1 * INTERVAL '1 day')`,
       [this.config.warnHoldBackDays],

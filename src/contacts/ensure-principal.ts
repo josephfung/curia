@@ -82,7 +82,7 @@ export async function ensurePrincipalContact(
   // 2. Create the principal. KG node first (outside the transaction so a concurrent
   // race can rescue it onto the winner), then the contacts row in a transaction so
   // a partial failure can't leave an orphan.
-  const kgNodeId = await insertKgPersonNode(displayName, pool);
+  const { id: kgNodeId, created: kgNodeCreated } = await insertKgPersonNode(displayName, pool);
   const contactId = randomUUID();
   const client = await pool.connect();
   try {
@@ -133,11 +133,15 @@ export async function ensurePrincipalContact(
           );
         }
         // Loser-path orphan cleanup: if the winner already had their own kg_node_id
-        // before we got here, the node we created at line 80 is now unreferenced.
+        // before we got here, the node we created above is now unreferenced.
         // The NOT EXISTS guard makes the delete safe under further concurrent races
         // (some other process may have linked our node to their own contact between
         // our UPDATE recheck above and this DELETE).
-        if (winnerKgNodeId !== kgNodeId) {
+        //
+        // Gated on kgNodeCreated: insertKgPersonNode may have ADOPTED a pre-existing
+        // extraction node rather than minting one, and that node's facts and edges are
+        // not ours to delete just because we lost the principal race (ADR-040).
+        if (kgNodeCreated && winnerKgNodeId !== kgNodeId) {
           await pool.query(
             `DELETE FROM kg_nodes
              WHERE id = $1

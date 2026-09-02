@@ -83,10 +83,18 @@ export async function repairPrincipalMetadata(contactId: string, pool: DbPool, l
  * two concurrent boots can each mint one; both call sites resolve that by keeping the
  * node the winning contact actually points at and deleting the unreferenced loser.
  *
+ * Returns `created` alongside the id so callers can tell an ADOPTED node — which may
+ * already carry facts and edges from extraction — apart from one this call minted. Only
+ * the latter is safe to delete on a lost race; deleting the former destroys pre-existing
+ * knowledge that was never ours to remove.
+ *
  * Exported so ensure-principal.ts can reuse the exact same node-creation semantics
  * for the wizard's no-channel principal-creation path.
  */
-export async function insertKgPersonNode(displayName: string, pool: DbPool): Promise<string> {
+export async function insertKgPersonNode(
+  displayName: string,
+  pool: DbPool,
+): Promise<{ id: string; created: boolean }> {
   const adopted = await pool.query<{ id: string }>(
     `UPDATE kg_nodes
         SET identity_source   = 'contact',
@@ -101,7 +109,7 @@ export async function insertKgPersonNode(displayName: string, pool: DbPool): Pro
     [displayName],
   );
   const adoptedId = adopted.rows[0]?.id;
-  if (adoptedId) return adoptedId;
+  if (adoptedId) return { id: adoptedId, created: false };
 
   const created = await pool.query<{ id: string }>(
     `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at, identity_source)
@@ -113,7 +121,7 @@ export async function insertKgPersonNode(displayName: string, pool: DbPool): Pro
   if (!id) {
     throw new Error('ceo-bootstrap: INSERT INTO kg_nodes returned no rows or no id — check migrations 004, 016 and 085 were applied');
   }
-  return id;
+  return { id, created: true };
 }
 
 /**
@@ -124,7 +132,7 @@ export async function insertKgPersonNode(displayName: string, pool: DbPool): Pro
  * Exported so ensure-principal.ts can reuse the same backfill semantics.
  */
 export async function createAndLinkKgNode(contactId: string, displayName: string, pool: DbPool): Promise<string> {
-  const newKgNodeId = await insertKgPersonNode(displayName, pool);
+  const { id: newKgNodeId, created } = await insertKgPersonNode(displayName, pool);
   await pool.query(
     `UPDATE contacts SET kg_node_id = $1, updated_at = now() WHERE id = $2 AND kg_node_id IS NULL`,
     [newKgNodeId, contactId],
@@ -143,7 +151,13 @@ export async function createAndLinkKgNode(contactId: string, displayName: string
   // longer collide on the label, so a lost race leaves OUR node unreferenced rather than
   // resolving to the same row. Mirrors ensure-principal.ts — the NOT EXISTS guard keeps
   // the delete safe if a further concurrent writer claimed it in the meantime.
-  if (linkedKgNodeId !== newKgNodeId) {
+  //
+  // Gated on `created`. An ADOPTED node predates this call and may carry extraction facts
+  // and edges that would go with it (kg_edges cascades on node delete); losing a link race
+  // is no licence to destroy them. Such a node is left anchored but unreferenced — a
+  // harmless orphan, and deliberately not reverted to the label tier, since another node
+  // may have taken that label in the meantime and the revert would raise 23505 here.
+  if (created && linkedKgNodeId !== newKgNodeId) {
     await pool.query(
       `DELETE FROM kg_nodes
         WHERE id = $1

@@ -467,9 +467,16 @@ class PostgresBackend implements KnowledgeGraphBackend {
     // Compare-and-set: the identity_source = 'label' predicate is the whole point —
     // it makes losing an adoption race observable (rowCount 0) instead of letting two
     // contacts quietly share one identity.
+    //
+    // Clearing warned_at is the same reasoning as migration 085 step 2b: a node adopted
+    // while a decay warning was pending is a node we have just promised to keep, so the
+    // "confirm this or lose it" prompt is void. Leaving it set would strand the node in a
+    // permanently warned state now that Pass 2a skips anchored rows.
     const result = await this.pool.query(
       `UPDATE kg_nodes
-          SET identity_source = 'contact'
+          SET identity_source = 'contact',
+              warned_at = NULL,
+              warn_reason = NULL
         WHERE id = $1
           AND archived_at IS NULL
           AND identity_source = 'label'`,

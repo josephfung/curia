@@ -48,7 +48,7 @@ function makePool(
 
 // We need to mock ceo-bootstrap's exported helpers because they reach the DB.
 vi.mock('./ceo-bootstrap.js', () => ({
-  insertKgPersonNode: vi.fn().mockResolvedValue('kg-node-123'),
+  insertKgPersonNode: vi.fn().mockResolvedValue({ id: 'kg-node-123', created: true }),
   createAndLinkKgNode: vi.fn().mockResolvedValue('kg-node-existing'),
   repairPrincipalMetadata: vi.fn().mockResolvedValue(undefined),
 }));

@@ -5,7 +5,7 @@
 // The env-var-driven bootstrapCeoContact was removed in #1049 — these tests now cover
 // the surviving, shared helpers that the onboarding-wizard path (ensure-principal.ts)
 // and the startup principal resolution (src/index.ts) both depend on:
-//   - insertKgPersonNode: create / ON-CONFLICT-promote a permanent person node
+//   - insertKgPersonNode: adopt-or-mint a permanent, contact-anchored person node (ADR-040)
 //   - createAndLinkKgNode: link a freshly created node to a contact with kg_node_id = NULL
 //   - repairPrincipalMetadata: idempotent self-heal of role/system_role/tier/kind
 //
@@ -51,8 +51,9 @@ describeIf('ceo-bootstrap principal/KG utilities', () => {
 
   describe('insertKgPersonNode', () => {
     it('creates a permanent person node from scratch', async () => {
-      const id = await insertKgPersonNode(LABEL, pool);
+      const { id, created } = await insertKgPersonNode(LABEL, pool);
       expect(id).toBeTruthy();
+      expect(created).toBe(true);
 
       const node = await pool.query<{
         type: string; label: string; decay_class: string; source: string; confidence: number;
@@ -82,8 +83,11 @@ describeIf('ceo-bootstrap principal/KG utilities', () => {
         [preExistingNodeId, LABEL],
       );
 
-      const id = await insertKgPersonNode(LABEL, pool);
+      const { id, created } = await insertKgPersonNode(LABEL, pool);
       expect(id).toBe(preExistingNodeId);
+      // Adopted, not minted — the caller must be able to tell, because only a node this
+      // call created is safe to delete on a lost race (ADR-040, PR #1712 review).
+      expect(created).toBe(false);
 
       const node = await pool.query<{
         decay_class: string; confidence: number; source: string; identity_source: string;
@@ -108,8 +112,9 @@ describeIf('ceo-bootstrap principal/KG utilities', () => {
         [preExistingNodeId, LABEL],
       );
 
-      const id = await insertKgPersonNode(LABEL, pool);
+      const { id, created } = await insertKgPersonNode(LABEL, pool);
       expect(id).toBe(preExistingNodeId);
+      expect(created).toBe(false);
 
       const node = await pool.query<{ decay_class: string; confidence: number }>(
         `SELECT decay_class, confidence FROM kg_nodes WHERE id = $1`,
