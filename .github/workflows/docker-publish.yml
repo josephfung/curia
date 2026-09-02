@@ -133,3 +133,89 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+  # Turn a failed publish into an active notification (#1699).
+  #
+  # Why this is needed: when a publish fails, the mutable `edge` tag silently keeps
+  # pointing at the PREVIOUS commit. Nothing downstream notices — curia-deploy pulls
+  # `:edge` and ships older code, and its older migrations, while reporting success.
+  # The only prior signal was a red run nobody is obliged to look at before deploying.
+  # (The deploy-side half — asserting the pulled image's revision — is curia-deploy#213.)
+  #
+  # `if: failure()` deliberately excludes cancellation: `cancel-in-progress` cancels
+  # superseded builds on a rapid batch of main merges, and that is normal, not an
+  # incident. `failure()` is false for cancelled runs; `always()` or `!success()`
+  # would page on every superseded build and train everyone to ignore this.
+  notify-failure:
+    needs: build
+    if: failure() && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write     # file / comment on the tracking issue
+    steps:
+      - name: Open or update the publish-failure issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const label = 'publish-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const sha = context.sha.substring(0, 8);
+
+            const body = [
+              `**\`docker-publish\` failed on \`${context.ref}\` at \`${sha}\`.**`,
+              '',
+              `Run: ${runUrl}`,
+              '',
+              'Until a publish succeeds, `ghcr.io/josephfung/curia:edge` still points at the',
+              'previous commit. A deploy now would ship older code **and skip any migrations**',
+              'added since, while appearing to succeed. Either re-run the failed job or pin',
+              '`CURIA_IMAGE_TAG` deliberately before deploying.',
+              '',
+              'Transient npm registry drops are the known cause (#1699); re-running is usually',
+              'enough. If it recurs, the retry wrapper in `docker/pnpm-retry.sh` is not holding.',
+            ].join('\n');
+
+            // Reuse one open issue rather than filing a new one per failure — a flaky
+            // registry could otherwise produce a stream of duplicates and get muted.
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 1,
+            });
+
+            if (open.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open[0].number,
+                body,
+              });
+              core.notice(`Commented on existing publish-failure issue #${open[0].number}`);
+              return;
+            }
+
+            // The label may not exist yet on a fresh repo; create it first so the
+            // dedupe lookup above works on the next failure.
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: 'b60205',
+                description: 'A docker-publish run failed; :edge may be stale',
+              });
+            } catch (err) {
+              if (err.status !== 422) throw err;   // 422 = already exists, fine
+            }
+
+            const { data: created } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `docker-publish failed on main — :edge is stale at ${sha}`,
+              labels: [label, 'infra'],
+              body,
+            });
+            core.notice(`Opened publish-failure issue #${created.number}`);
