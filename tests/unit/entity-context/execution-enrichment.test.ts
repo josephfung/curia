@@ -57,9 +57,18 @@ const sampleEntityContext: EntityContext = {
   relationships: [],
 };
 
-function makeMockAssembler(result: Awaited<ReturnType<EntityContextAssembler['assembleMany']>>): EntityContextAssembler {
+type AssembleManyResult = Awaited<ReturnType<EntityContextAssembler['assembleMany']>>;
+
+// Takes a partial so each test states only the bucket it cares about; the rest
+// default to empty. Keeps tests readable as assembleMany grows buckets.
+function makeMockAssembler(result: Partial<AssembleManyResult>): EntityContextAssembler {
+  const full: AssembleManyResult = {
+    entities: result.entities ?? [],
+    unresolved: result.unresolved ?? [],
+    nodeless: result.nodeless ?? [],
+  };
   return {
-    assembleMany: vi.fn().mockResolvedValue(result),
+    assembleMany: vi.fn().mockResolvedValue(full),
     assembleOne: vi.fn(),
     clearCacheForEntity: vi.fn(),
   } as unknown as EntityContextAssembler;
@@ -251,6 +260,53 @@ describe('ExecutionLayer — entity_enrichment', () => {
     const result = await execution.invoke('test-skill', { contacts: ['ghost-id'] });
     // Skill should still succeed even if the entity wasn't found
     expect(result.success).toBe(true);
+  });
+
+  // #1694 / ADR-040 — a contact that exists but holds no KG node is a different
+  // operational signal from an ID that matches nothing, and the log has to say so:
+  // it is the only passive record that a real contact ran through a skill with no
+  // context attached.
+  it('logs nodeless contacts on their own line, not lumped into unresolved', async () => {
+    const warn = vi.fn();
+    const spyLogger = { ...logger, warn, child: () => spyLogger } as unknown as typeof logger;
+
+    const handler: ToolHandler = { execute: async () => ({ success: true, data: 'ok' }) };
+    registry.register(makeManifest({ entity_enrichment: { param: 'contacts', default: 'caller' } }), handler);
+
+    const assembler = makeMockAssembler({
+      unresolved: ['ghost-id'],
+      nodeless: [{ inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' }],
+    });
+    const execution = new ExecutionLayer(registry, spyLogger, {
+      entityContextAssembler: assembler,
+    });
+
+    const result = await execution.invoke('test-skill', { contacts: ['ghost-id', 'contact-2'] });
+    expect(result.success).toBe(true);
+
+    const messages = warn.mock.calls.map(call => String(call[1]));
+    const nodelessLine = warn.mock.calls.find(call => /no KG node/i.test(String(call[1])));
+    expect(nodelessLine, `expected a nodeless warn line, got: ${messages.join(' | ')}`).toBeDefined();
+
+    // The nodeless line carries contact IDs, and does not also list the unknown ID.
+    const payload = nodelessLine![0] as { contactIds?: string[] };
+    expect(payload.contactIds).toEqual(['contact-2']);
+  });
+
+  it('does not emit a nodeless warn when every contact has a node', async () => {
+    const warn = vi.fn();
+    const spyLogger = { ...logger, warn, child: () => spyLogger } as unknown as typeof logger;
+
+    const handler: ToolHandler = { execute: async () => ({ success: true, data: 'ok' }) };
+    registry.register(makeManifest({ entity_enrichment: { param: 'contacts', default: 'caller' } }), handler);
+
+    const execution = new ExecutionLayer(registry, spyLogger, {
+      entityContextAssembler: makeMockAssembler({ entities: [sampleEntityContext] }),
+    });
+
+    await execution.invoke('test-skill', { contacts: ['contact-1'] });
+
+    expect(warn.mock.calls.filter(call => /no KG node/i.test(String(call[1])))).toHaveLength(0);
   });
 
   it('exposes agentContactId on ctx for all skills', async () => {

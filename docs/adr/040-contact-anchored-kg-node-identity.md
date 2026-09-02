@@ -1,7 +1,7 @@
 # ADR-040: Contact-anchored KG node identity — a contact's node is identified by the contact, not by its label
 
 Date: 2026-09-01
-Status: Proposed
+Status: Accepted
 
 ## Context
 

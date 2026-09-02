@@ -20,6 +20,15 @@
 // assembleMany() wraps each per-ID call in its own try/catch so that a DB error
 // on one entity doesn't abort the entire batch — failed IDs are logged and placed
 // in the `unresolved` array rather than propagating.
+//
+// Misses are reported in two separate buckets, because they mean different things
+// (#1694 / ADR-040):
+//   unresolved — the ID matched no contact and no KG node, or assembly errored.
+//   nodeless   — the ID matched a real contact that holds no KG node. The contact
+//                exists but is structurally unable to carry facts, relationships,
+//                or context, and no amount of retrying will change that. Collapsing
+//                it into `unresolved` made an agent read "cannot hold knowledge" as
+//                "we know nothing about them", which is the silence #1694 is about.
 
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
@@ -34,6 +43,34 @@ interface CacheEntry {
   context: EntityContext;
   expiresAt: number;
 }
+
+/** A contact that exists but holds no KG node, so it can carry no context. */
+export interface NodelessContact {
+  /** The string the caller passed in (contact UUID or email), so it can correlate results. */
+  inputId: string;
+  contactId: string;
+  displayName: string;
+}
+
+export interface AssembleManyResult {
+  entities: EntityContext[];
+  /** IDs that matched nothing, or whose assembly threw. */
+  unresolved: string[];
+  /** Contacts that exist but cannot hold knowledge. Disjoint from `unresolved`. */
+  nodeless: NodelessContact[];
+}
+
+/** Outcome of resolving a caller-supplied ID to something assemblable. */
+type ResolvedInput =
+  | { kind: 'node'; kgNodeId: string }
+  | { kind: 'nodeless'; contactId: string; displayName: string }
+  | { kind: 'unknown' };
+
+/** Outcome of a single assembly attempt, with the reason for a miss preserved. */
+type AssembleOutcome =
+  | { kind: 'assembled'; context: EntityContext }
+  | { kind: 'nodeless'; entry: NodelessContact }
+  | { kind: 'unknown' };
 
 /**
  * Assembles EntityContext payloads from the database.
@@ -66,10 +103,11 @@ export class EntityContextAssembler {
   async assembleMany(
     ids: string[],
     options: { includeRelationships?: boolean } = {},
-  ): Promise<{ entities: EntityContext[]; unresolved: string[] }> {
+  ): Promise<AssembleManyResult> {
     const includeRelationships = options.includeRelationships ?? true;
     const entities: EntityContext[] = [];
     const unresolved: string[] = [];
+    const nodeless: NodelessContact[] = [];
 
     for (const id of ids) {
       // Cache stores full payloads (with relationships) only. Skipping the cache for
@@ -82,12 +120,21 @@ export class EntityContextAssembler {
       }
 
       try {
-        const ctx = await this.assembleOne(id, includeRelationships);
-        if (ctx) {
+        const outcome = await this.assembleOneClassified(id, includeRelationships);
+        if (outcome.kind === 'assembled') {
           if (includeRelationships) {
-            this.putInCache(id, ctx);
+            this.putInCache(id, outcome.context);
           }
-          entities.push(ctx);
+          entities.push(outcome.context);
+        } else if (outcome.kind === 'nodeless') {
+          // Deliberately not cached: a backfill or a contact merge can give this
+          // contact a node at any time, and a cached verdict would keep it
+          // context-free for the rest of the TTL.
+          this.logger.debug(
+            { contactId: outcome.entry.contactId },
+            'entity-context: contact resolved but holds no KG node — cannot carry facts, relationships, or context',
+          );
+          nodeless.push(outcome.entry);
         } else {
           this.logger.debug({ entityId: id }, 'entity-context: ID could not be resolved to a KG node');
           unresolved.push(id);
@@ -100,7 +147,7 @@ export class EntityContextAssembler {
       }
     }
 
-    return { entities, unresolved };
+    return { entities, unresolved, nodeless };
   }
 
   /**
@@ -108,15 +155,38 @@ export class EntityContextAssembler {
    * Throws on DB errors — callers should wrap in try/catch or use assembleMany().
    */
   async assembleOne(id: string, includeRelationships = true): Promise<EntityContext | undefined> {
+    const result = await this.assembleOneClassified(id, includeRelationships);
+    return result.kind === 'assembled' ? result.context : undefined;
+  }
+
+  /**
+   * assembleOne with the reason for a miss preserved.
+   *
+   * `assembleOne` collapses every miss to `undefined`, which loses the distinction
+   * between "no such entity" and "this contact exists but cannot hold knowledge".
+   * assembleMany needs that distinction to fill its `nodeless` bucket, and gets it
+   * here without issuing a second query or changing the public signature (#1694).
+   */
+  private async assembleOneClassified(
+    id: string,
+    includeRelationships = true,
+  ): Promise<AssembleOutcome> {
     try {
       // Step 1: Resolve the input ID to a KG node.
       // Try contact ID first, then fall back to direct KG node ID.
-      const kgNodeId = await this.resolveKgNodeId(id);
-      if (!kgNodeId) return undefined;
+      const resolved = await this.resolveInput(id);
+      if (resolved.kind === 'unknown') return { kind: 'unknown' };
+      if (resolved.kind === 'nodeless') {
+        return {
+          kind: 'nodeless',
+          entry: { inputId: id, contactId: resolved.contactId, displayName: resolved.displayName },
+        };
+      }
+      const kgNodeId = resolved.kgNodeId;
 
       // Step 2: Load the KG node
       const nodeRow = await this.getKgNode(kgNodeId);
-      if (!nodeRow) return undefined;
+      if (!nodeRow) return { kind: 'unknown' };
 
       // Steps 3-6: Run assembly pipeline in parallel where safe.
       // Contact lookup + connected accounts depend on each other (need contactId),
@@ -181,7 +251,7 @@ export class EntityContextAssembler {
         relationships,
       };
 
-      return ctx;
+      return { kind: 'assembled', context: ctx };
     } catch (err) {
       // Re-throw with the entity ID stamped in the error for upstream diagnostic logs.
       // assembleMany() catches this and logs `{ err, entityId: id }`.
@@ -298,15 +368,15 @@ export class EntityContextAssembler {
    * LLMs pass raw email addresses from CC preambles or inbox triage rather than
    * resolving to a contact UUID first.
    */
-  private async resolveKgNodeId(id: string): Promise<string | undefined> {
+  private async resolveInput(id: string): Promise<ResolvedInput> {
     try {
       // Email address detection: if the input looks like an email address (local-part @
       // domain with at least one dot), resolve via contact_channel_identities instead of
       // UUID columns. This handles CC flows and ceo-inbox triage where the LLM passes a
       // raw email rather than a contact UUID.
       if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) {
-        const emailResult = await this.pool.query<{ contact_id: string; kg_node_id: string | null }>(
-          `SELECT c.id AS contact_id, c.kg_node_id
+        const emailResult = await this.pool.query<{ contact_id: string; kg_node_id: string | null; display_name: string }>(
+          `SELECT c.id AS contact_id, c.kg_node_id, c.display_name
            FROM contact_channel_identities cci
            JOIN contacts c ON c.id = cci.contact_id
            WHERE cci.channel = 'email' AND LOWER(cci.channel_identifier) = LOWER($1)`,
@@ -318,29 +388,30 @@ export class EntityContextAssembler {
           if (!kgNodeId) {
             // Use inputKind rather than the raw email — 'email' is on the pino redact list.
             this.logger.debug({ inputKind: 'email', contactId: row?.contact_id }, 'entity-context: email resolved to contact with no linked KG node');
-            return undefined;
+            return { kind: 'nodeless', contactId: row!.contact_id, displayName: row!.display_name };
           }
-          return kgNodeId;
+          return { kind: 'node', kgNodeId };
         }
         // Email not found in contact_channel_identities — unregistered contact
         this.logger.debug({ inputKind: 'email' }, 'entity-context: email not found in contact_channel_identities — treating as unresolved');
-        return undefined;
+        return { kind: 'unknown' };
       }
 
       // Try as a contact ID first
-      const contactResult = await this.pool.query<{ kg_node_id: string | null }>(
-        'SELECT kg_node_id FROM contacts WHERE id = $1',
+      const contactResult = await this.pool.query<{ kg_node_id: string | null; display_name: string }>(
+        'SELECT kg_node_id, display_name FROM contacts WHERE id = $1',
         [id],
       );
       if (contactResult.rows.length > 0) {
         const row = contactResult.rows[0];
         const kgNodeId = row?.kg_node_id;
-        // Contact found but has no linked KG node — return undefined (unresolved)
+        // Contact exists but holds no KG node — a different answer from "no such
+        // contact", and the caller needs to be able to tell them apart (#1694).
         if (!kgNodeId) {
           this.logger.debug({ contactId: id }, 'entity-context: contact has no linked KG node');
-          return undefined;
+          return { kind: 'nodeless', contactId: id, displayName: row!.display_name };
         }
-        return kgNodeId;
+        return { kind: 'node', kgNodeId };
       }
 
       // Try as a KG node ID directly
@@ -349,10 +420,11 @@ export class EntityContextAssembler {
         [id],
       );
       if (nodeResult.rows.length > 0) {
-        return nodeResult.rows[0]?.id;
+        const nodeId = nodeResult.rows[0]?.id;
+        if (nodeId) return { kind: 'node', kgNodeId: nodeId };
       }
 
-      return undefined;
+      return { kind: 'unknown' };
     } catch (err) {
       // PostgreSQL error 22P02 = invalid_text_representation: the ID is not a valid UUID.
       // This happens when the LLM passes a hallucinated or synthetic string (e.g.
@@ -367,8 +439,8 @@ export class EntityContextAssembler {
         // Warn rather than debug: after the contact-resolver fix ships, this path should be
         // unreachable in production. If it fires, something upstream is still leaking a
         // synthetic/hallucinated ID and operators need a searchable signal to trace it.
-        this.logger.warn({ id }, 'entity-context: non-UUID id passed to resolveKgNodeId — treating as unresolved');
-        return undefined;
+        this.logger.warn({ id }, 'entity-context: non-UUID id passed to resolveInput — treating as unresolved');
+        return { kind: 'unknown' };
       }
       throw err;
     }

@@ -164,8 +164,9 @@ hold KG nodes; the second contact keeps `kg_node_id = NULL`. This ADR removes th
 KG citizens for facts, relationships, and entity-context enrichment: facts about them have
 nowhere to live, and enrichment returns nothing. That is a separate, still-open problem,
 tracked in **#1694**. It must not be treated as resolved by this change. The chosen
-resolution is ADR-040 (contact-anchored node identity), which supersedes this paragraph
-once it moves from Proposed to Accepted.
+resolution is ADR-040 (contact-anchored node identity), which supersedes this paragraph.
+Implementation is staged across #1694; until the identity model lands, nodeless contacts
+are at least *visible* rather than silently context-free.
 
 ## Related
 
