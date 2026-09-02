@@ -70,6 +70,8 @@ export class DreamEngine {
   private workingDocsRepo?: WorkingDocsRepo;
   private scratchTtlDays?: number;
   private llmCallArchiveRetentionDays?: number;
+  /** Called after a decay pass COMMITs at least one node or edge archive. */
+  private onArchived?: () => void;
 
   constructor(
     pool: Pool,
@@ -92,6 +94,16 @@ export class DreamEngine {
     this.workingDocsRepo = workingDocsRepo;
     this.scratchTtlDays = scratchTtlDays;
     this.llmCallArchiveRetentionDays = llmCallArchiveRetentionDays;
+  }
+
+  /**
+   * Register a callback fired after a decay pass commits at least one archive.
+   * Used to drop the entity-context TTL cache so retired nodes/facts cannot
+   * keep assembling from a hit (#1707). Invoked after COMMIT so a rolled-back
+   * pass cannot evict live cache, and a failure here cannot roll back decay.
+   */
+  setOnArchived(handler: () => void): void {
+    this.onArchived = handler;
   }
 
   /**
@@ -177,6 +189,20 @@ export class DreamEngine {
       const result = await this._runDecayPassOnClient(client, archiveThreshold, halfLifeDays);
 
       await client.query('COMMIT');
+
+      // Entity-context cache is a correctness boundary once archival retires
+      // knowledge (#1707). Flush after COMMIT so a rolled-back pass cannot
+      // evict live entries, and a callback failure cannot roll back decay.
+      if (result.nodesArchived + result.nodesExpired + result.edgesArchived > 0) {
+        try {
+          this.onArchived?.();
+        } catch (err) {
+          this.logger.error(
+            { err },
+            'DreamEngine: entity-context cache invalidation after archive failed',
+          );
+        }
+      }
 
       // Emit bus events AFTER commit — DB state is now authoritative.
       // Bus/audit failures here don't affect the committed warn state.

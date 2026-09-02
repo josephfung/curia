@@ -42,7 +42,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Decay warnings** — anchored nodes are never listed for re-confirmation nor archived by dismissal. (#1694)
 - **`deleteContact`** — archives the contact's anchored KG node, freeing its label for reuse. (#1694)
 - **`entity-context` nodeless** — retired-profile contacts get `cause: archived` and a distinct reason. (#1707)
-- **`entity-context` output schema** — `nodeless` entries gain `cause` (`missing` or `archived`) (public API surface). (#1707)
+- **`entity-context` output schema** — `nodeless` entries gain `cause` (`missing` or `archived`); skill v1.3.0 (public API surface). (#1707)
+- **`entity-context`** — archived node IDs owned by a contact land in `nodeless`. (#1707)
 - **`EntityMemory.resolveOrCreate`** — returns `ambiguous` when 2+ matches share the requested type, instead of taking the first. (#1694)
 - **`extract-facts`** — skips and counts an ambiguous subject rather than guessing; new `ambiguous` output. (#1694)
 - **`extract-relationships`** — skips and counts ambiguous endpoints instead of taking the first match. (#1714)
@@ -66,6 +67,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`entity-context` assembler** — archived nodes, facts, and edges no longer assemble. (#1707)
+- **`entity-context` cache** — an archived node is re-checked before a TTL hit is served. (#1707)
+- **`DreamEngine`** — flushes entity-context cache after a decay pass archives. (#1707)
 - **`extract-facts`** — fact-loop logs use node id instead of the raw subject name. (#1706)
 - **`extract-facts`** — fact-loop logs omit `attribute` unless it is snake_case. (#1706)
 - **`buildCanonicalPatch`** — phone fallback reason is a stable code, not the raw number. (#1706)

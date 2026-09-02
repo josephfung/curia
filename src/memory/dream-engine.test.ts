@@ -98,6 +98,63 @@ describe('DreamEngine.runDecayPass', () => {
     expect(result.edgesArchived).toBe(2);
   });
 
+  it('invokes onArchived after COMMIT when the pass archived nodes or edges', async () => {
+    const { pool } = makePoolWithResponses([
+      { rowCount: 0 },
+      { rowCount: 0 },
+      { rowCount: 0 },
+      { rowCount: 0 },
+      { rows: [{ threshold: 10 }] },
+      { rowCount: 0, rows: [] },
+      { rowCount: 0 },
+      { rowCount: 2 },
+      { rowCount: 0 },
+    ]);
+    const onArchived = vi.fn();
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
+    engine.setOnArchived(onArchived);
+
+    await engine.runDecayPass();
+
+    expect(onArchived).toHaveBeenCalledTimes(1);
+    const client = await (pool.connect as ReturnType<typeof vi.fn>).mock.results[0]!.value;
+    const allSqls = (client.query as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c: unknown[]) => (c as [string])[0],
+    );
+    expect(allSqls[allSqls.length - 1]).toBe('COMMIT');
+  });
+
+  it('does not invoke onArchived when the pass archived nothing', async () => {
+    const { pool } = makePoolWithResponses(defaultResponses());
+    const onArchived = vi.fn();
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
+    engine.setOnArchived(onArchived);
+
+    await engine.runDecayPass();
+
+    expect(onArchived).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the decay pass when onArchived throws', async () => {
+    const { pool } = makePoolWithResponses([
+      { rowCount: 0 },
+      { rowCount: 0 },
+      { rowCount: 0 },
+      { rowCount: 0 },
+      { rows: [{ threshold: 10 }] },
+      { rowCount: 0, rows: [] },
+      { rowCount: 0 },
+      { rowCount: 1 },
+      { rowCount: 0 },
+    ]);
+    const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);
+    engine.setOnArchived(() => {
+      throw new Error('cache flush failed');
+    });
+
+    await expect(engine.runDecayPass()).resolves.toMatchObject({ nodesArchived: 1 });
+  });
+
   it('does not run any SQL for permanent nodes (halfLifeDays.permanent is null)', async () => {
     const { pool, queries } = makePoolWithResponses(defaultResponses());
     const engine = new DreamEngine(pool, makeBus(), createSilentLogger(), defaultConfig);

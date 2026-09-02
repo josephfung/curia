@@ -115,7 +115,8 @@ export class EntityContextAssembler {
    *   1. Matches a contacts.id with a live kg_node_id → assemble from that KG node
    *   2. Matches a contacts.id with no node, or whose node is archived → `nodeless`
    *   3. Matches a live kg_nodes.id directly → assemble from that KG node
-   *   4. No match → included in `unresolved` (not a hard error)
+   *   4. Matches an archived kg_nodes.id owned by a contact → `nodeless` (cause archived)
+   *   5. No match → included in `unresolved` (not a hard error)
    *
    * Each ID is assembled independently; a DB error on one ID logs at error and
    * adds the ID to `failed` without aborting the remaining IDs in the batch.
@@ -137,13 +138,20 @@ export class EntityContextAssembler {
       // Cache stores full payloads (with relationships) only. Skipping the cache for
       // includeRelationships=false requests prevents a partial payload from being served
       // to a later caller that wants the full payload (and vice versa).
-      const cached = includeRelationships ? this.getFromCache(id) : undefined;
-      if (cached) {
-        entities.push(cached);
-        continue;
-      }
-
       try {
+        const cached = includeRelationships ? this.getFromCache(id) : undefined;
+        if (cached) {
+          // Archival is a correctness boundary (#1707): a payload cached before
+          // DreamEngine (or contact deletion) archived the node must not be served.
+          // One indexed lookup per hit; if the node is gone, drop every alias and
+          // fall through to assembleOneClassified so the caller gets `nodeless`.
+          if (await this.isLiveKgNode(cached.entityId)) {
+            entities.push(cached);
+            continue;
+          }
+          this.clearCacheForEntity(cached.entityId);
+        }
+
         const outcome = await this.assembleOneClassified(id, includeRelationships);
         if (outcome.kind === 'assembled') {
           if (includeRelationships) {
@@ -341,6 +349,17 @@ export class EntityContextAssembler {
     }
   }
 
+  /**
+   * Drop every cached payload. Called after DreamEngine archives nodes or edges
+   * so a fact/relationship retired on a still-live entity does not keep assembling
+   * from a TTL hit. Per-entity invalidation cannot see parent entity IDs from a
+   * bulk `UPDATE kg_nodes SET archived_at`.
+   */
+  clearCache(): void {
+    this.cache.clear();
+    this.entityToCacheKeys.clear();
+  }
+
   // -- Private helpers --
 
   private getFromCache(id: string): EntityContext | undefined {
@@ -485,16 +504,36 @@ export class EntityContextAssembler {
         return { kind: 'node', kgNodeId: row.kg_node_id! };
       }
 
-      // Try as a KG node ID directly. Archived nodes are not live entities — looking
-      // one up by ID is an unresolved miss, not a nodeless contact (no contact row
-      // was addressed). getKgNode filters archived_at again as defence in depth.
-      const nodeResult = await this.pool.query<{ id: string }>(
-        'SELECT id FROM kg_nodes WHERE id = $1 AND archived_at IS NULL',
+      // Try as a KG node ID directly. Live nodes assemble. Archived nodes look up
+      // the owning contact (agents routinely reuse `entities[].entityId` across
+      // turns) and land in `nodeless` with cause archived — the same #1694 silence
+      // class as the contactIds path. Unanchored archived nodes stay unresolved.
+      const nodeResult = await this.pool.query<{ id: string; archived: boolean }>(
+        'SELECT id, (archived_at IS NOT NULL) AS archived FROM kg_nodes WHERE id = $1',
         [id],
       );
       if (nodeResult.rows.length > 0) {
-        const nodeId = nodeResult.rows[0]?.id;
-        if (nodeId) return { kind: 'node', kgNodeId: nodeId };
+        const nodeRow = nodeResult.rows[0]!;
+        if (!nodeRow.archived) return { kind: 'node', kgNodeId: nodeRow.id };
+
+        const owner = await this.pool.query<{ id: string; display_name: string }>(
+          'SELECT id, display_name FROM contacts WHERE kg_node_id = $1',
+          [id],
+        );
+        if (owner.rows.length > 0) {
+          const contact = owner.rows[0]!;
+          this.logger.debug(
+            { kgNodeId: id, contactId: contact.id },
+            'entity-context: archived KG node is owned by a contact',
+          );
+          return {
+            kind: 'nodeless',
+            contactId: contact.id,
+            displayName: contact.display_name,
+            cause: 'archived',
+          };
+        }
+        return { kind: 'unknown' };
       }
 
       return { kind: 'unknown' };
@@ -525,6 +564,15 @@ export class EntityContextAssembler {
       [id],
     );
     return result.rows[0];
+  }
+
+  /** True when the node exists and has not been archived. Used to reject stale cache hits. */
+  private async isLiveKgNode(id: string): Promise<boolean> {
+    const result = await this.pool.query<{ id: string }>(
+      'SELECT id FROM kg_nodes WHERE id = $1 AND archived_at IS NULL',
+      [id],
+    );
+    return result.rows.length > 0;
   }
 
   /**
@@ -727,9 +775,10 @@ interface RelationshipRow {
 
 /**
  * Classify a contact's linked KG node for the nodeless bucket.
- * `nodeArchived` is the SQL `(n.archived_at IS NOT NULL)` boolean from the LEFT JOIN;
- * undefined/null means the mock (or a missing node row) did not set it — treat as live
- * so a dangling FK still falls through to getKgNode's referential-integrity warning.
+ * `nodeArchived` is the SQL `(n.archived_at IS NOT NULL)` boolean from the LEFT JOIN.
+ * An unmatched join (dangling `kg_node_id`) yields `false`, not null — both are
+ * treated as live so the miss still falls through to getKgNode's referential-integrity
+ * warning. `true` is the only archived signal.
  */
 function classifyLinkedNode(
   kgNodeId: string | null | undefined,

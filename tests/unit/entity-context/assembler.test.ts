@@ -385,13 +385,35 @@ describe('EntityContextAssembler', () => {
       ]);
     });
 
-    it('treats a direct lookup of an archived node ID as unresolved', async () => {
-      // No contact was addressed, so this is not a nodeless contact — the node is
-      // simply not a live entity. The kg_nodes query must filter archived_at so
-      // we do not then log a false referential-integrity warning.
+    it('reports a direct lookup of an archived node ID as nodeless when a contact owns it', async () => {
+      // Agents reuse entities[].entityId across turns. An archived node reached
+      // that way must not read as "genuinely unknown" (#1694 / #1707).
       const pool = makeSequentialPool([
-        { rows: [] }, // not a contact
-        { rows: [] }, // not a live KG node
+        { rows: [] }, // not a contact UUID
+        { rows: [{ id: 'node-retired', archived: true }] },
+        { rows: [{ id: 'contact-retired', display_name: 'Retired Person' }] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, nodeless } = await assembler.assembleMany(['node-retired']);
+
+      expect(entities).toHaveLength(0);
+      expect(unresolved).toHaveLength(0);
+      expect(nodeless).toEqual([
+        {
+          inputId: 'node-retired',
+          contactId: 'contact-retired',
+          displayName: 'Retired Person',
+          cause: 'archived',
+        },
+      ]);
+    });
+
+    it('treats a direct lookup of an unanchored archived node as unresolved', async () => {
+      const pool = makeSequentialPool([
+        { rows: [] }, // not a contact UUID
+        { rows: [{ id: 'node-retired', archived: true }] },
+        { rows: [] }, // no owning contact
       ]);
 
       const assembler = new EntityContextAssembler(pool, logger);
@@ -400,11 +422,6 @@ describe('EntityContextAssembler', () => {
       expect(entities).toHaveLength(0);
       expect(nodeless).toHaveLength(0);
       expect(unresolved).toEqual(['node-retired']);
-
-      const nodeIdLookup = querySql(pool).find(s =>
-        s.includes('FROM kg_nodes') && !s.includes('SELECT id, type, label'),
-      );
-      expect(nodeIdLookup).toMatch(/archived_at IS NULL/);
     });
 
     it('does not cache archived-node nodeless results', async () => {
@@ -469,7 +486,7 @@ describe('EntityContextAssembler', () => {
     // Cache is keyed by the input ID in assembleMany. Direct assembleOne()
     // calls bypass the cache — the cache only applies when going through assembleMany().
 
-    it('returns cached result on second assembleMany call without hitting DB again', async () => {
+    it('returns cached result on second assembleMany call after confirming the node is still live', async () => {
       const pool = makeSequentialPool([
         { rows: [{ kg_node_id: 'node-1' }] },
         { rows: [personNodeRow] },
@@ -477,17 +494,46 @@ describe('EntityContextAssembler', () => {
         { rows: [contactRow] },
         { rows: [] },
         { rows: [] },
+        { rows: [{ id: 'node-1' }] }, // isLiveKgNode
       ]);
 
       const assembler = new EntityContextAssembler(pool, logger);
 
-      // First call — hits DB
       await assembler.assembleMany(['contact-1']);
       const callsAfterFirst = vi.mocked(pool.query).mock.calls.length;
 
-      // Second call — should hit cache, no additional DB queries
       await assembler.assembleMany(['contact-1']);
-      expect(vi.mocked(pool.query).mock.calls.length).toBe(callsAfterFirst);
+      // One indexed live-check; the assembly queries must not re-run.
+      expect(vi.mocked(pool.query).mock.calls.length).toBe(callsAfterFirst + 1);
+      expect(String(vi.mocked(pool.query).mock.calls[callsAfterFirst]![0])).toMatch(/archived_at IS NULL/);
+    });
+
+    it('does not serve a cached payload after the entity node is archived', async () => {
+      const pool = makeSequentialPool([
+        { rows: [{ kg_node_id: 'node-1', display_name: 'Jenna Smith' }] },
+        { rows: [personNodeRow] },
+        { rows: [] },
+        { rows: [contactRow] },
+        { rows: [] },
+        { rows: [] },
+        { rows: [] }, // isLiveKgNode: archived
+        { rows: [{ kg_node_id: 'node-1', display_name: 'Jenna Smith', node_archived: true }] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const first = await assembler.assembleMany(['contact-1']);
+      expect(first.entities).toHaveLength(1);
+
+      const second = await assembler.assembleMany(['contact-1']);
+      expect(second.entities).toHaveLength(0);
+      expect(second.nodeless).toEqual([
+        {
+          inputId: 'contact-1',
+          contactId: 'contact-1',
+          displayName: 'Jenna Smith',
+          cause: 'archived',
+        },
+      ]);
     });
 
     it('clears cache for entity on clearCacheForEntity()', async () => {
@@ -643,7 +689,7 @@ describe('EntityContextAssembler', () => {
     it('assembleMany resolves a mix of email addresses and contact UUIDs', async () => {
       // putInCache stores under all aliases: inputId ('jenna@example.com'),
       // entityId ('node-1'), and contactId ('contact-1'). So the second
-      // lookup for 'contact-1' is a cache hit — no extra DB queries needed.
+      // lookup for 'contact-1' is a cache hit — one live-check, no re-assembly.
       const pool = makeSequentialPool([
         // First ID: email address — full resolution + assembly
         { rows: [channelIdentityRow] },    // email resolution
@@ -652,7 +698,7 @@ describe('EntityContextAssembler', () => {
         { rows: [contactRow] },             // getContactByKgNodeId
         { rows: [] },                       // getConnectedAccounts
         { rows: [] },                       // getRelationships
-        // Second ID 'contact-1': cache hit, no DB queries
+        { rows: [{ id: 'node-1' }] },       // isLiveKgNode for cached 'contact-1'
       ]);
 
       const assembler = new EntityContextAssembler(pool, logger);

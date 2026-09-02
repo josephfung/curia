@@ -1,7 +1,7 @@
 {
   "name": "entity-context",
   "description": "Assemble rich context about one or more entities (people, orgs, events, etc.). Returns known facts, connected accounts, preferences, relationships, and other contextual information. Use contactIds for people; entityIds for any KG node. Omit both to get context for the caller. Use this when you need to know what resources (calendars, email accounts) an entity has, or to retrieve stored facts (timezone, preferences, identifiers). Some contacts have no stored profile (or theirs was retired) and can hold no facts at all; those come back under `nodeless` with a reason, and an empty result for them is a capability gap, not evidence the contact is unknown. Transient lookup failures come back under `failed` with a retry hint — also not evidence of absence.",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
