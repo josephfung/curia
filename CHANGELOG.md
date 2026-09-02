@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **ADR-040 (Accepted)** — contact-anchored KG node identity; a contact's node is keyed on the contact, not its label. (#1694)
+- **`scripts/kg-node-linkage-report.ts`** — read-only count of contacts holding no KG node, split across ADR-040's two backfill arms. `pnpm run report:kg-linkage`. (#1694)
 - **Signal voice calls** — anyone can Signal-call Curia; live conversation via VoiceRuntime, config-gated off. (#1672)
 - **`MemorySampler`** — periodic `process.memoryUsage()` logging to diagnose heap growth in prod. (#1650)
 - **Speech media service** — top-level `src/speech/` batch STT/TTS for voice notes. (#1597)
@@ -33,6 +35,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`EntityContextAssembler.assembleMany`** — returns a third bucket, `nodeless`, for contacts that exist but hold no KG node; disjoint from `unresolved`. (#1694)
+- **`entity-context`** — output gains `nodeless` (present only when non-empty) so an agent reads a missing node as a capability gap, not as an absence of facts. (#1694)
+- **`entity_enrichment`** — nodeless contacts get their own warn line instead of joining the unresolved-IDs line. (#1694)
 - **`contact-dedup-exclude`** — writes the exclusions table; outputs `created`, no `entityMemory` capability. (#1625)
 - **`contact-find-duplicates`** — loads exclusions in one query; `entityMemory` capability dropped. (#1625)
 - **Contact merge** — re-points and renormalizes exclusion rows onto the survivor. (#1625)

@@ -219,10 +219,108 @@ describe('EntityContextAssembler', () => {
       ]);
 
       const assembler = new EntityContextAssembler(pool, logger);
-      const { entities, unresolved } = await assembler.assembleMany(['ghost-id']);
+      const { entities, unresolved, nodeless } = await assembler.assembleMany(['ghost-id']);
 
       expect(entities).toHaveLength(0);
       expect(unresolved).toEqual(['ghost-id']);
+      // An ID we have never heard of is *unknown*, not nodeless — the two buckets
+      // answer different questions and must not be conflated (#1694).
+      expect(nodeless).toHaveLength(0);
+    });
+  });
+
+  // -- Nodeless contacts (#1694 / ADR-040) --
+  //
+  // A contact with kg_node_id = NULL exists but cannot hold facts, relationships,
+  // or context. Before this bucket existed it landed in `unresolved` alongside IDs
+  // that match nothing at all, so a caller could not tell "we have never heard of
+  // this person" from "this person is structurally unable to hold knowledge".
+  describe('assembleMany — nodeless contacts', () => {
+    it('reports a contact with no KG node as nodeless, not unresolved', async () => {
+      const pool = makeSequentialPool([
+        { rows: [{ kg_node_id: null, display_name: 'Seth Berman' }] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, nodeless } = await assembler.assembleMany(['contact-2']);
+
+      expect(entities).toHaveLength(0);
+      expect(unresolved).toHaveLength(0);
+      expect(nodeless).toEqual([
+        { inputId: 'contact-2', contactId: 'contact-2', displayName: 'Seth Berman' },
+      ]);
+    });
+
+    it('reports an email that resolves to a nodeless contact as nodeless', async () => {
+      const pool = makeSequentialPool([
+        { rows: [{ contact_id: 'contact-2', kg_node_id: null, display_name: 'Seth Berman' }] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, nodeless } = await assembler.assembleMany(['seth@example.com']);
+
+      expect(entities).toHaveLength(0);
+      expect(unresolved).toHaveLength(0);
+      // inputId keeps the caller's original string so it can correlate the result
+      // back to what it asked for; contactId is what the row actually resolved to.
+      expect(nodeless).toEqual([
+        { inputId: 'seth@example.com', contactId: 'contact-2', displayName: 'Seth Berman' },
+      ]);
+    });
+
+    it('separates resolved, nodeless, and unknown IDs in one batch', async () => {
+      const pool = makeSequentialPool([
+        // 'contact-1' — resolves fully
+        { rows: [{ kg_node_id: 'node-1', display_name: 'Jenna Smith' }] },
+        { rows: [personNodeRow] },
+        { rows: [] },                // facts
+        { rows: [contactRow] },
+        { rows: [] },                // calendars
+        { rows: [] },                // relationships
+        // 'contact-2' — exists, no KG node
+        { rows: [{ kg_node_id: null, display_name: 'Seth Berman' }] },
+        // 'ghost-id' — matches nothing
+        { rows: [] },                // not a contact
+        { rows: [] },                // not a KG node
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      const { entities, unresolved, nodeless } = await assembler.assembleMany([
+        'contact-1',
+        'contact-2',
+        'ghost-id',
+      ]);
+
+      expect(entities).toHaveLength(1);
+      expect(entities[0].entityId).toBe('node-1');
+      expect(unresolved).toEqual(['ghost-id']);
+      expect(nodeless.map(n => n.contactId)).toEqual(['contact-2']);
+    });
+
+    it('leaves assembleOne returning undefined for a nodeless contact', async () => {
+      // assembleOne's signature is deliberately unchanged — the classification is
+      // only surfaced through assembleMany, which is what every caller uses.
+      const pool = makeSequentialPool([
+        { rows: [{ kg_node_id: null, display_name: 'Seth Berman' }] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      expect(await assembler.assembleOne('contact-2')).toBeUndefined();
+    });
+
+    it('does not cache nodeless results', async () => {
+      // Caching a nodeless verdict would keep a contact context-free for the whole
+      // TTL after a backfill or merge gave it a node.
+      const pool = makeSequentialPool([
+        { rows: [{ kg_node_id: null, display_name: 'Seth Berman' }] },
+        { rows: [{ kg_node_id: null, display_name: 'Seth Berman' }] },
+      ]);
+
+      const assembler = new EntityContextAssembler(pool, logger);
+      await assembler.assembleMany(['contact-2']);
+      await assembler.assembleMany(['contact-2']);
+
+      expect(vi.mocked(pool.query)).toHaveBeenCalledTimes(2);
     });
   });
 

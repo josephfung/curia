@@ -7,8 +7,24 @@
 // For automatic pre-enrichment before skill invocation, use the
 // entity_enrichment manifest declaration instead — that runs the same
 // assembler without an extra LLM round-trip.
+//
+// Three buckets come back and all three are surfaced: entities that assembled,
+// `unresolved` IDs that matched nothing, and `nodeless` contacts that exist but
+// cannot hold knowledge (#1694 / ADR-040).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
+
+// Shown to the LLM for every contact that resolved but holds no KG node.
+//
+// The wording is load-bearing. An empty result reads as "nothing is known about this
+// person", which invites the agent to fill the gap by asking or by storing what it
+// learns — neither of which can work, because there is no node for a fact to attach
+// to. It has to read as a capability gap instead. Deliberately free of issue numbers
+// and internal schema terms: this string goes into a prompt, not a log.
+const NODELESS_REASON =
+  'This contact exists but has no knowledge-graph entity, so it cannot hold facts, '
+  + 'relationships, or background context. Absence of context here does not mean the '
+  + 'person is unknown. Do not try to store facts about them; report the gap instead.';
 
 export class EntityContextHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -45,7 +61,11 @@ export class EntityContextHandler implements ToolHandler {
       });
 
       ctx.log.info(
-        { resolvedCount: result.entities.length, unresolvedCount: result.unresolved.length },
+        {
+          resolvedCount: result.entities.length,
+          unresolvedCount: result.unresolved.length,
+          nodelessCount: result.nodeless.length,
+        },
         'entity-context: assembled context',
       );
 
@@ -54,6 +74,17 @@ export class EntityContextHandler implements ToolHandler {
         data: {
           entities: result.entities,
           unresolved: result.unresolved,
+          // Only present when non-empty: on the common path every contact has a
+          // node, and an always-there empty array is pure prompt noise.
+          ...(result.nodeless.length > 0
+            ? {
+                nodeless: result.nodeless.map(n => ({
+                  contactId: n.contactId,
+                  displayName: n.displayName,
+                  reason: NODELESS_REASON,
+                })),
+              }
+            : {}),
         },
       };
     } catch (err) {

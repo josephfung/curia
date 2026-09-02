@@ -1,7 +1,7 @@
 {
   "name": "entity-context",
   "description": "Assemble rich context about one or more entities (people, orgs, events, etc.). Returns known facts, connected accounts, preferences, relationships, and other contextual information. Use contactIds for people; entityIds for any KG node. Omit both to get context for the caller. Use this when you need to know what resources (calendars, email accounts) an entity has, or to retrieve stored facts (timezone, preferences, identifiers).",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -11,7 +11,8 @@
   },
   "outputs": {
     "entities": "EntityContext[] (assembled context payloads for each resolved entity)",
-    "unresolved": "string[] (IDs that could not be found in the KG or contacts table)"
+    "unresolved": "string[] (IDs that could not be found in the KG or contacts table)",
+    "nodeless": "{contactId, displayName, reason}[]? (present only when non-empty — contacts that exist but have no knowledge-graph entity, so they can hold no facts or context; an empty result for these is a capability gap, not evidence the person is unknown)"
   },
   "permissions": [],
   "secrets": [],

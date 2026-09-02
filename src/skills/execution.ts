@@ -1607,6 +1607,17 @@ export class ExecutionLayer {
           if (enrichmentResult.unresolved.length > 0) {
             skillLogger.warn({ toolName, unresolved: enrichmentResult.unresolved }, 'entity_enrichment: some IDs could not be resolved');
           }
+          // Nodeless contacts get their own line rather than joining `unresolved`.
+          // They are a different operational signal: the contact is real and was
+          // addressed by a skill, but it holds no KG node, so it ran with no context
+          // at all and no retry will change that (#1694 / ADR-040). This log is the
+          // only passive record of that happening in production.
+          if (enrichmentResult.nodeless.length > 0) {
+            skillLogger.warn(
+              { toolName, contactIds: enrichmentResult.nodeless.map(n => n.contactId) },
+              'entity_enrichment: contacts have no KG node — skill ran without their context',
+            );
+          }
           ctx.entityContext = enrichmentResult.entities;
           skillLogger.debug({ toolName, enrichedCount: enrichmentResult.entities.length }, 'entity_enrichment: pre-enrichment complete');
         } catch (err) {
