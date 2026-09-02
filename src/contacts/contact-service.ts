@@ -1585,7 +1585,9 @@ export class ContactService {
    * - tier: blocked-on-either-side wins (most restrictive); otherwise the higher TIER_RANK
    * - channel identities: union (duplicates discarded)
    * - auth overrides: union (primary wins on same-permission conflict)
-   * - KG nodes: merged via entityMemory.mergeEntities() (Phase 1: scalar + facts)
+   * - KG nodes: merged via entityMemory.mergeEntities() after the secondary
+   *   contact row is deleted, so the node delete is not blocked by the
+   *   contacts.kg_node_id foreign key (#1711)
    *
    * @param dryRun - if true, return proposal without writing (default: false)
    */
@@ -1647,35 +1649,20 @@ export class ContactService {
       this.logger?.warn({ err, primaryId, secondaryId }, 'contacts: dedup exclusion check failed before merge (non-fatal)');
     }
 
-    // Merge KG nodes (best-effort — failure does not abort the contact merge).
-    //
-    // This currently fails on essentially every merge: mergeEntities ends by hard-deleting
-    // the secondary node while the secondary contact still references it, and
-    // contacts.kg_node_id is a NO ACTION foreign key, so Postgres raises 23503 (#1711).
-    // Track the outcome — since ADR-040 the secondary's node is anchored, and an anchored
-    // node excluded from every decay and archival pass would otherwise survive forever with
-    // no contact pointing at it. Two same-label person nodes make resolveOrCreate return
-    // 'ambiguous', so extract-facts would then drop every fact about that name: merging two
-    // contacts to consolidate their memory would stop memory being written about them.
-    let kgMerged = false;
-    if (primary.kgNodeId && secondary.kgNodeId && this.entityMemory) {
-      try {
-        await this.entityMemory.mergeEntities(primary.kgNodeId, secondary.kgNodeId);
-        kgMerged = true;
-      } catch (err) {
-        this.logger?.warn({ err, primaryId, secondaryId, primaryKgNodeId: primary.kgNodeId, secondaryKgNodeId: secondary.kgNodeId }, 'KG node merge failed (non-fatal)');
-      }
-    }
-
     // The whole write sequence runs on one client inside one transaction (#1695).
     // Before that it was five independent pool queries, so a failure part-way could
     // leave the secondary alive with its identities, auth overrides and CEO dedup
     // rulings already re-pointed onto the survivor — the next sweep would then see the
     // secondary again with none of its "not the same person" rulings attached.
     //
-    // Deliberately outside the transaction: the KG mergeEntities call above (a different
-    // store, documented as best-effort) and the notifications below, which must describe
-    // committed state only.
+    // Deliberately outside the transaction: KG mergeEntities (a different store,
+    // documented as best-effort) and the notifications below, which must describe
+    // committed state only. mergeEntities runs AFTER this commit — it ends by
+    // hard-deleting the secondary node, and contacts.kg_node_id is a NO ACTION
+    // foreign key, so the delete raises 23503 while the secondary contact still
+    // points at that node (#1711). Waiting until the contact row is gone unblocks
+    // the node delete, and a rolled-back contact merge cannot have already
+    // collapsed the two KG nodes.
     let exclusions: ReattachExclusionsResult;
     try {
       exclusions = await this.backend.withTransaction(async (client) => {
@@ -1709,13 +1696,33 @@ export class ContactService {
     } catch (err) {
       // One transaction, so the failure rolled the whole sequence back: both contacts,
       // their identities, auth overrides and exclusion rows are exactly as they were and
-      // the merge can simply be retried. The KG node merge above is the one thing not
-      // covered — it may already have collapsed the two nodes.
+      // the merge can simply be retried. KG nodes are untouched — mergeEntities runs
+      // only after this commit (#1711).
       this.logger?.error(
         { err, primaryId, secondaryId },
-        'Contact merge rolled back — no contact rows changed; a KG node merge may already have been applied (#1695)',
+        'Contact merge rolled back — no contact rows changed; KG nodes were not touched (#1695)',
       );
       throw err;
+    }
+
+    // Merge KG nodes (best-effort — failure does not abort the already-committed
+    // contact merge). Track the outcome: since ADR-040 the secondary's node is
+    // anchored, and an anchored node excluded from every decay and archival pass
+    // would otherwise survive forever with no contact pointing at it. Two
+    // same-label person nodes make resolveOrCreate return 'ambiguous', so
+    // extract-facts would then drop every fact about that name.
+    //
+    // Node ids were captured on the Contact objects loaded before the
+    // transaction; the secondary contact row is now gone, so the FK no longer
+    // blocks deleteNode (#1711).
+    let kgMerged = false;
+    if (primary.kgNodeId && secondary.kgNodeId && this.entityMemory) {
+      try {
+        await this.entityMemory.mergeEntities(primary.kgNodeId, secondary.kgNodeId);
+        kgMerged = true;
+      } catch (err) {
+        this.logger?.warn({ err, primaryId, secondaryId, primaryKgNodeId: primary.kgNodeId, secondaryKgNodeId: secondary.kgNodeId }, 'KG node merge failed (non-fatal)');
+      }
     }
 
     // The secondary contact row is now gone. If the KG merge did not fold its node into the
@@ -1862,8 +1869,8 @@ export class ContactService {
    * `scripts/kg-node-linkage-report.ts` for the query that finds them.
    *
    * mergeContacts deletes the secondary through the backend directly and handles its own
-   * node disposal — see the note there. (It cannot rely on `mergeEntities` having folded
-   * the node into the survivor's: that call currently fails on a foreign key, #1711.)
+   * node disposal — mergeEntities after the contact row is gone, then archiveAnchoredNode
+   * if that fold fails (#1711).
    */
   async deleteContact(
     id: string,

@@ -66,6 +66,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Contact merge** — secondary KG memory folds into the survivor after the contact delete. (#1711)
 - **`entity-context` assembler** — archived nodes, facts, and edges no longer assemble. (#1707)
 - **`entity-context` cache** — an archived node is re-checked before a TTL hit is served. (#1707)
 - **`DreamEngine`** — flushes entity-context cache after a decay pass archives. (#1707)
