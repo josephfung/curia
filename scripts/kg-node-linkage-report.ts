@@ -52,6 +52,10 @@ export interface LinkageReport {
   byKind: KindBreakdown[];
   /** Arm A: nodeless org contacts re-linkable to an organization node that already exists. */
   orgArmEligible: number;
+  /** Contacts linked to an ARCHIVED node: linked-looking but unable to hold anything. */
+  archivedLink: number;
+  /** Anchored nodes no contact references. Post-ADR-040 these never decay; watch it grow. */
+  anchoredOrphans: number;
   /** Arm B: nodeless contacts needing a freshly minted node — the insert count for 085. */
   personArmMints: number;
   /** Nodeless contacts whose display name is shared with a contact that has a node. */
@@ -121,7 +125,31 @@ const REPORT_SQL = `
             AND lower(o.display_name) = lower(c.display_name)
             AND o.kg_node_id IS NOT NULL
         )
-    ) AS shadowed
+    ) AS shadowed,
+    -- Contacts whose kg_node_id points at an ARCHIVED node. These look linked and are
+    -- broken: getNode() filters archived_at, so they resolve to nothing and hold no facts,
+    -- relationships or enrichment — the #1694 failure with a non-NULL pointer. They are
+    -- invisible to the nodeless count above, which is why this column exists. Migration
+    -- 085 step 2a repairs them; this is how you check the count before and after.
+    count(*) FILTER (
+      WHERE c.kg_node_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM kg_nodes n
+           WHERE n.id = c.kg_node_id
+             AND n.archived_at IS NOT NULL
+        )
+    ) AS archived_link,
+    -- Anchored nodes with no contact pointing at them. Post-ADR-040 these never decay and
+    -- are never archived, so they accumulate: an abandoned adoption, or a contact merge
+    -- whose KG half failed (#1711). Two same-label person nodes make resolveOrCreate
+    -- return 'ambiguous', so a growing number here means facts silently stop landing.
+    -- Not per-kind (it counts nodes, not contacts) — read it from any row.
+    (
+      SELECT count(*) FROM kg_nodes n
+       WHERE n.identity_source = 'contact'
+         AND n.archived_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM contacts oc WHERE oc.kg_node_id = n.id)
+    ) AS anchored_orphans
   FROM contacts c
   GROUP BY c.kind
   ORDER BY c.kind
@@ -169,6 +197,11 @@ export async function runLinkageReport(pool: PoolLike): Promise<LinkageReport> {
   const totalNodeless = byKind.reduce((sum, k) => sum + k.nodeless, 0);
   const orgArmEligible = rows.reduce((sum, row) => sum + requireCount(row, 'org_arm'), 0);
   const sameNameShadowed = rows.reduce((sum, row) => sum + requireCount(row, 'shadowed'), 0);
+  const archivedLink = rows.reduce((sum, row) => sum + requireCount(row, 'archived_link'), 0);
+  // Scalar subquery: identical on every group row, so read it once rather than summing.
+  // An empty contacts table yields no rows at all, in which case there is nothing linked
+  // and therefore nothing orphaned either.
+  const anchoredOrphans = rows[0] ? requireCount(rows[0], 'anchored_orphans') : 0;
 
   // Arm B is the remainder by construction: every nodeless contact arm A cannot
   // re-link needs a node minted. Because all four counts come from one statement,
@@ -189,6 +222,8 @@ export async function runLinkageReport(pool: PoolLike): Promise<LinkageReport> {
     orgArmEligible,
     personArmMints,
     sameNameShadowed,
+    archivedLink,
+    anchoredOrphans,
   };
 }
 
@@ -208,6 +243,10 @@ export function formatReport(report: LinkageReport): string {
     `    arm B (mint a node)   ${report.personArmMints}`,
     '',
     `  of which shadowed by a same-name contact that has a node: ${report.sameNameShadowed}`,
+    '',
+    '  other broken linkage (not part of the nodeless count above):',
+    `    linked to an ARCHIVED node   ${report.archivedLink}   (085 step 2a repairs these)`,
+    `    anchored nodes with no contact ${report.anchoredOrphans}   (never decay — watch this grow)`,
   ];
   return lines.join('\n');
 }

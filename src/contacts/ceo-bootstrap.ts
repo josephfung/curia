@@ -78,6 +78,11 @@ export async function repairPrincipalMetadata(contactId: string, pool: DbPool, l
  * person node per label — and the identity_source predicate makes it a compare-and-set,
  * so two concurrent boots cannot both adopt.
  *
+ * Clearing warned_at mirrors anchorNode() and migration 085: DreamEngine may have warned
+ * the extraction node before we adopted it, and nothing clears an anchored node's warning
+ * afterwards (the decay passes, listDecayWarnings and dismissDecayWarning all skip the
+ * anchored tier now), so it would sit warned forever.
+ *
  * Step 2 mints a fresh anchored node. It needs no ON CONFLICT: anchored nodes are outside
  * idx_kg_nodes_unique, so the INSERT cannot raise 23505 on the label. The cost is that
  * two concurrent boots can each mint one; both call sites resolve that by keeping the
@@ -100,7 +105,9 @@ export async function insertKgPersonNode(
         SET identity_source   = 'contact',
             last_confirmed_at = now(),
             decay_class       = 'permanent',
-            confidence        = GREATEST(confidence, 1.0)
+            confidence        = GREATEST(confidence, 1.0),
+            warned_at         = NULL,
+            warn_reason       = NULL
       WHERE type = 'person'
         AND lower(label) = lower($1)
         AND archived_at IS NULL

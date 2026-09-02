@@ -155,7 +155,9 @@ export class ContactRegisterHandler implements ToolHandler {
           // but it will leave a dangling row. Log as warn so it can be caught by a
           // periodic cleanup sweep if needed.
           try {
-            await ctx.contactService.deleteContact(contact.id);
+            // Orphan cleanup — do not archive the KG node; createContact may have adopted
+            // a pre-existing one (ADR-040, see deleteContact).
+            await ctx.contactService.deleteContact(contact.id, { archiveAnchoredNode: false });
           } catch (deleteErr) {
             ctx.log.warn(
               { deleteErr, orphanId: contact.id },

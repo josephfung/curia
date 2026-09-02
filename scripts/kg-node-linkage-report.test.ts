@@ -21,9 +21,9 @@ function makePool(rows: unknown[]): MockPool {
 describe('runLinkageReport', () => {
   it('splits the nodeless population across the two backfill arms', async () => {
     const pool = makePool([
-      { kind: 'person', total: '120', nodeless: '9', org_arm: '0', shadowed: '7' },
-      { kind: 'organization', total: '30', nodeless: '6', org_arm: '4', shadowed: '0' },
-      { kind: 'automated', total: '15', nodeless: '0', org_arm: '0', shadowed: '0' },
+      { kind: 'person', total: '120', nodeless: '9', org_arm: '0', shadowed: '7', archived_link: '0', anchored_orphans: '0' },
+      { kind: 'organization', total: '30', nodeless: '6', org_arm: '4', shadowed: '0', archived_link: '0', anchored_orphans: '0' },
+      { kind: 'automated', total: '15', nodeless: '0', org_arm: '0', shadowed: '0', archived_link: '0', anchored_orphans: '0' },
     ]);
 
     const report = await runLinkageReport(pool as never);
@@ -43,7 +43,7 @@ describe('runLinkageReport', () => {
 
   it('reports a clean database as zero work, not as an error', async () => {
     const pool = makePool([
-      { kind: 'person', total: '40', nodeless: '0', org_arm: '0', shadowed: '0' },
+      { kind: 'person', total: '40', nodeless: '0', org_arm: '0', shadowed: '0', archived_link: '0', anchored_orphans: '0' },
     ]);
 
     const report = await runLinkageReport(pool as never);
@@ -64,7 +64,7 @@ describe('runLinkageReport', () => {
   it('throws when the grouping column is not a usable kind', async () => {
     // String(undefined) would print "undefined" in the by-kind table, which reads
     // like a real contact kind rather than a broken query.
-    const pool = makePool([{ total: '10', nodeless: '3', org_arm: '0', shadowed: '0' }]);
+    const pool = makePool([{ total: '10', nodeless: '3', org_arm: '0', shadowed: '0', archived_link: '0', anchored_orphans: '0' }]);
 
     await expect(runLinkageReport(pool as never)).rejects.toThrow(/"kind"/);
   });
@@ -81,7 +81,7 @@ describe('runLinkageReport', () => {
 
   it('throws rather than reporting a fabricated count when a column is unparseable', async () => {
     const pool = makePool([
-      { kind: 'person', total: '10', nodeless: '3', org_arm: 'n/a', shadowed: '0' },
+      { kind: 'person', total: '10', nodeless: '3', org_arm: 'n/a', shadowed: '0', archived_link: '0', anchored_orphans: '0' },
     ]);
 
     await expect(runLinkageReport(pool as never)).rejects.toThrow(/org_arm/);
@@ -91,7 +91,7 @@ describe('runLinkageReport', () => {
     // Internally inconsistent input means the query is wrong. Clamping would hide
     // that behind a plausible arm-B number, which is the one output that matters.
     const pool = makePool([
-      { kind: 'organization', total: '10', nodeless: '2', org_arm: '5', shadowed: '0' },
+      { kind: 'organization', total: '10', nodeless: '2', org_arm: '5', shadowed: '0', archived_link: '0', anchored_orphans: '0' },
     ]);
 
     await expect(runLinkageReport(pool as never)).rejects.toThrow(/internally inconsistent/);
@@ -102,7 +102,7 @@ describe('runLinkageReport', () => {
     // database with contact ingestion running, the arms could then fail to sum to the
     // total they are derived from.
     const pool = makePool([
-      { kind: 'person', total: '1', nodeless: '0', org_arm: '0', shadowed: '0' },
+      { kind: 'person', total: '1', nodeless: '0', org_arm: '0', shadowed: '0', archived_link: '0', anchored_orphans: '0' },
     ]);
 
     await runLinkageReport(pool as never);
@@ -112,7 +112,7 @@ describe('runLinkageReport', () => {
 
   it('never issues a write', async () => {
     const pool = makePool([
-      { kind: 'person', total: '1', nodeless: '0', org_arm: '0', shadowed: '0' },
+      { kind: 'person', total: '1', nodeless: '0', org_arm: '0', shadowed: '0', archived_link: '0', anchored_orphans: '0' },
     ]);
 
     await runLinkageReport(pool as never);

@@ -109,7 +109,9 @@ interface KnowledgeGraphBackend {
     limit: number,
     filters?: { type?: NodeType; maxSensitivity?: Sensitivity },
   ): Promise<SearchResult[]>;
-  /** List all warned (warned_at IS NOT NULL), non-archived nodes, sorted oldest-first. */
+  /** List all warned (warned_at IS NOT NULL), non-archived, LABEL-TIER nodes, oldest-first.
+   *  Contact-anchored nodes are excluded: they cannot decay, so a "confirm this or lose it"
+   *  prompt for one is a question the system will never act on (ADR-040). */
   listDecayWarnings(): Promise<DecayWarningRow[]>;
   /** Confirm a warned node: reset last_confirmed_at = NOW(), confidence = 1.0, warned_at = NULL.
    *  Returns success: false if the node is not in a warned state. */
@@ -819,6 +821,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
                                AND e.archived_at IS NULL
         WHERE n.warned_at IS NOT NULL
           AND n.archived_at IS NULL
+          AND n.identity_source = 'label'
         GROUP BY n.id, n.type, n.label, n.confidence, n.sensitivity,
                  n.warn_reason, n.warned_at
         ORDER BY n.warned_at ASC`,
@@ -855,6 +858,11 @@ class PostgresBackend implements KnowledgeGraphBackend {
   }
 
   async dismissDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
+    // identity_source = 'label' matters here as much as it does in DreamEngine: this is an
+    // archival path OUTSIDE the decay passes. A contact-anchored node reaching it — via a
+    // warning raised before it was anchored — would be archived out from under a live
+    // contact, which is precisely what ADR-040 says nothing but contact deletion may do.
+    // Returns success: false rather than throwing, matching the not-warned case.
     const result = await this.pool.query<{ label: string }>(
       `UPDATE kg_nodes
           SET archived_at = now(),
@@ -863,6 +871,7 @@ class PostgresBackend implements KnowledgeGraphBackend {
         WHERE id = $1
           AND warned_at IS NOT NULL
           AND archived_at IS NULL
+          AND identity_source = 'label'
         RETURNING label`,
       [nodeId],
     );
@@ -1297,6 +1306,9 @@ class InMemoryBackend implements KnowledgeGraphBackend {
       if (this.archivedNodes.has(nodeId)) continue;
       const node = this.nodes.get(nodeId);
       if (!node) continue;
+      // Mirrors the Postgres predicate: anchored nodes never decay, so they are never
+      // offered for re-confirmation (ADR-040).
+      if (node.identitySource !== 'label') continue;
       const edgeCount = Array.from(this.edges.values()).filter(
         e => !this.archivedEdges.has(e.id) && (e.sourceNodeId === nodeId || e.targetNodeId === nodeId),
       ).length;
@@ -1334,6 +1346,9 @@ class InMemoryBackend implements KnowledgeGraphBackend {
     }
     const node = this.nodes.get(nodeId);
     if (!node) return { success: false };
+    // Mirrors the Postgres predicate: dismissing archives, and nothing but contact
+    // deletion may archive an anchored node (ADR-040).
+    if (node.identitySource !== 'label') return { success: false };
     this.warnedNodes.delete(nodeId);
     // archiveNode handles both node and incident edge archival, keeping
     // behaviour consistent with the Postgres backend and archiveNode().

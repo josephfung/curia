@@ -518,6 +518,22 @@ export class ContactService {
       }
 
       const candidate = candidates[0]!;
+
+      // identity_source = 'label' is a proxy for "no contact owns this", and a proxy can
+      // be wrong: any node inserted without an explicit identity_source defaults to the
+      // label tier even when a contact points at it. Ask the contacts table directly
+      // rather than trusting the tier alone — adopting a node out from under an existing
+      // contact is the one outcome ADR-040 forbids outright.
+      const owner = await this.backend.findContactByKgNodeId(candidate.id);
+      if (owner) {
+        this.logger?.warn(
+          { displayName: safeName, nodeId: candidate.id, ownerContactId: owner.id },
+          'createContact: label-tier KG node is already claimed by a contact — not adopting; '
+            + 'this is an ADR-040 invariant violation worth investigating',
+        );
+        return undefined;
+      }
+
       if (!(await this.entityMemory.adoptEntity(candidate.id))) {
         // Lost the race, or the node was archived between the lookup and the CAS.
         this.logger?.info(
@@ -1101,7 +1117,9 @@ export class ContactService {
       // 23505: identity already belongs to an existing contact (concurrent create).
       // Non-23505: unexpected failure. In both cases the new contact row is orphaned.
       try {
-        await this.deleteContact(contact.id);
+        // Orphan cleanup: createContact may have adopted a pre-existing node. See the
+        // archiveAnchoredNode note on deleteContact.
+        await this.deleteContact(contact.id, { archiveAnchoredNode: false });
       } catch (cleanupErr) {
         this.logger?.warn(
           {
@@ -1605,10 +1623,21 @@ export class ContactService {
       this.logger?.warn({ err, primaryId, secondaryId }, 'contacts: dedup exclusion check failed before merge (non-fatal)');
     }
 
-    // Merge KG nodes (best-effort — failure does not abort the contact merge)
+    // Merge KG nodes (best-effort — failure does not abort the contact merge).
+    //
+    // This currently fails on essentially every merge: mergeEntities ends by hard-deleting
+    // the secondary node while the secondary contact still references it, and
+    // contacts.kg_node_id is a NO ACTION foreign key, so Postgres raises 23503 (#1711).
+    // Track the outcome — since ADR-040 the secondary's node is anchored, and an anchored
+    // node excluded from every decay and archival pass would otherwise survive forever with
+    // no contact pointing at it. Two same-label person nodes make resolveOrCreate return
+    // 'ambiguous', so extract-facts would then drop every fact about that name: merging two
+    // contacts to consolidate their memory would stop memory being written about them.
+    let kgMerged = false;
     if (primary.kgNodeId && secondary.kgNodeId && this.entityMemory) {
       try {
         await this.entityMemory.mergeEntities(primary.kgNodeId, secondary.kgNodeId);
+        kgMerged = true;
       } catch (err) {
         this.logger?.warn({ err, primaryId, secondaryId, primaryKgNodeId: primary.kgNodeId, secondaryKgNodeId: secondary.kgNodeId }, 'KG node merge failed (non-fatal)');
       }
@@ -1663,6 +1692,15 @@ export class ContactService {
         'Contact merge rolled back — no contact rows changed; a KG node merge may already have been applied (#1695)',
       );
       throw err;
+    }
+
+    // The secondary contact row is now gone. If the KG merge did not fold its node into the
+    // survivor's, that node is orphaned — and anchored, so nothing will ever retire it.
+    // Archive it here, which is what deleteContact would have done had this path used it.
+    // Runs after commit so it can never claim to have retired a node for a merge that
+    // rolled back, and guarded so it cannot touch the survivor's own node.
+    if (!kgMerged && secondary.kgNodeId && secondary.kgNodeId !== primary.kgNodeId) {
+      await this.archiveAnchoredNode(secondaryId, secondary.kgNodeId);
     }
 
     if (exclusions.dropped > 0) {
@@ -1786,22 +1824,41 @@ export class ContactService {
    * Primarily used during contact merge (to remove the secondary) and during
    * error recovery (to remove orphaned contacts created by a failed identify).
    *
-   * Also archives the contact's KG node when that node was its identity (ADR-040). An
-   * anchored node means nothing without the contact it anchors, and archiving rather
-   * than deleting frees the label for reuse (idx_kg_nodes_unique already excludes
+   * By default also archives the contact's KG node when that node was its identity
+   * (ADR-040). An anchored node means nothing without the contact it anchors, and archiving
+   * rather than deleting frees the label for reuse (idx_kg_nodes_unique already excludes
    * archived rows) while leaving the accumulated knowledge recoverable in SQL.
    *
-   * Note mergeContacts deletes the secondary through the backend directly, deliberately
-   * bypassing this: mergeEntities has already folded the secondary's node into the
-   * survivor's, so there is nothing left to archive.
+   * `archiveAnchoredNode: false` is for ORPHAN CLEANUP — undoing a contact whose creation
+   * failed part-way (a lost `linkIdentity` race). Those callers must not archive, because
+   * `createContact` may have ADOPTED a pre-existing node carrying facts and edges accrued
+   * long before this failed attempt. Archiving cascades to incident edges, so the cleanup
+   * would destroy knowledge that was never this contact's to take. The cost of skipping it
+   * is an anchored node with no contact, which no longer decays — see
+   * `scripts/kg-node-linkage-report.ts` for the query that finds them.
+   *
+   * mergeContacts deletes the secondary through the backend directly and handles its own
+   * node disposal — see the note there. (It cannot rely on `mergeEntities` having folded
+   * the node into the survivor's: that call currently fails on a foreign key, #1711.)
    */
-  async deleteContact(id: string): Promise<void> {
+  async deleteContact(
+    id: string,
+    options?: { archiveAnchoredNode?: boolean },
+  ): Promise<void> {
     // Read the link before the delete — afterwards there is no row to read it from.
     const contact = await this.backend.getContact(id);
     await this.backend.deleteContact(id);
-    if (contact?.kgNodeId) {
-      await this.archiveAnchoredNode(id, contact.kgNodeId);
+    if (!contact?.kgNodeId) return;
+
+    if (options?.archiveAnchoredNode === false) {
+      this.logger?.warn(
+        { contactId: id, kgNodeId: contact.kgNodeId },
+        'contacts: contact removed without archiving its KG node (orphan cleanup) — '
+          + 'if the node was anchored it now has no contact and will not decay',
+      );
+      return;
     }
+    await this.archiveAnchoredNode(id, contact.kgNodeId);
   }
 
   /**
@@ -1828,7 +1885,9 @@ export class ContactService {
 
       const stillReferenced = await this.backend.findContactByKgNodeId(kgNodeId);
       if (stillReferenced) {
-        this.logger?.debug(
+        // info, not debug: prod runs at info, and this is the only line distinguishing
+        // "retired this contact's identity" from "left it in place for its siblings".
+        this.logger?.info(
           { contactId, kgNodeId, remainingContactId: stillReferenced.id },
           'contacts: anchored KG node still referenced by another contact — not archiving',
         );

@@ -258,6 +258,41 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       expect(await store.anchorNode(nodeId)).toBe(false);
     });
 
+    it('refuses to dismiss (and so archive) an anchored node', async () => {
+      // dismissDecayWarning archives, and it sits OUTSIDE the decay passes — so without a
+      // tier filter it is the one archival path that survives ADR-040, reachable by the
+      // CEO answering a warning prompt for a node that was warned before being anchored.
+      const nodeId = await insertNode({ label: `Anchored ${randomUUID()}`, identitySource: 'contact' });
+      await pool.query(
+        `UPDATE kg_nodes SET warned_at = now(), warn_reason = 'high_sensitivity' WHERE id = $1`,
+        [nodeId],
+      );
+
+      expect((await store.dismissDecayWarning(nodeId)).success).toBe(false);
+
+      const { rows } = await pool.query<{ archived_at: Date | null }>(
+        'SELECT archived_at FROM kg_nodes WHERE id = $1', [nodeId],
+      );
+      expect(rows[0]!.archived_at).toBeNull();
+    });
+
+    it('does not offer an anchored node for re-confirmation', async () => {
+      // Same reasoning from the read side: a "confirm this or lose it" prompt for a node
+      // that cannot decay is a question the system will never act on.
+      const anchored = await insertNode({ label: `Anchored ${randomUUID()}`, identitySource: 'contact' });
+      const labelTier = await insertNode({ label: `LabelTier ${randomUUID()}` });
+      await pool.query(
+        `UPDATE kg_nodes SET warned_at = now(), warn_reason = 'high_sensitivity'
+          WHERE id = ANY($1::uuid[])`,
+        [[anchored, labelTier]],
+      );
+
+      const warned = (await store.listDecayWarnings()).map(w => w.nodeId);
+      expect(warned).not.toContain(anchored);
+      // Control: the label-tier twin proves the listing works at all.
+      expect(warned).toContain(labelTier);
+    });
+
     it('clears a pending decay warning on adoption', async () => {
       // Adopting a node is a promise to keep it, so the "confirm this or lose it" prompt is
       // void. Without this the node would sit warned forever, since Pass 2a now skips it.
@@ -289,6 +324,7 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
     // (The arms do take row locks on other suites' nodeless contacts for the life of each
     // transaction; these are short, so that is contention, not corruption.)
     let backfillArms: string[];
+    let anchorSteps: string[];
 
     beforeAll(async () => {
       const sql = await readFile(
@@ -302,6 +338,17 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       // COMMENT ON string literal, and a naive split cuts straight through them. An earlier
       // version did exactly that and lost arm B the moment a comment gained a semicolon.
       // Neither arm contains a semicolon of its own, so first-semicolon is the real end.
+      // Step 2 / 2a / 2b are plain UPDATEs, extracted by their leading keyword + table so
+      // the anchoring pass and the archived-node repair are exercised too. Without these
+      // the suite replayed only the arms and the repair in 2a was unguarded by construction.
+      anchorSteps = (up.match(/^UPDATE kg_nodes[\s\S]*?;/gm) ?? []);
+      if (anchorSteps.length !== 3) {
+        throw new Error(
+          `migration 085: expected 3 UPDATE kg_nodes steps (anchor, un-archive, clear warnings), `
+          + `found ${anchorSteps.length} — update this extractor rather than skipping them.`,
+        );
+      }
+
       backfillArms = (['candidates', 'minted'] as const).map((cte) => {
         const match = new RegExp(`^WITH\\s+${cte}\\s+AS\\b[\\s\\S]*?;`, 'm').exec(up);
         if (!match) {
@@ -340,8 +387,9 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
       }
     }
 
+    /** Replay the migration's data steps in shipped order: anchor, repair, then both arms. */
     async function runBackfill(tx: pg.PoolClient): Promise<void> {
-      for (const stmt of backfillArms) {
+      for (const stmt of [...anchorSteps, ...backfillArms]) {
         await tx.query(stmt);
       }
     }
@@ -446,6 +494,109 @@ describeIf('contact-anchored KG node identity (ADR-040, migration 085)', () => {
           'SELECT kg_node_id FROM contacts WHERE id = $1', [contactId],
         );
         expect(rows[0]!.kg_node_id).toBe(nodeId);
+      });
+    });
+
+    it('repairs a contact whose node was archived out from under it', async () => {
+      // Pre-085 DreamEngine archived contact nodes with no exclusion, and
+      // dismissDecayWarning still archives on demand. Such a contact looks linked and is
+      // broken: getNode filters archived_at, so it holds no facts and no enrichment — the
+      // #1694 failure with a non-NULL pointer. It is invisible to both arms (step 2 skips
+      // it as archived, arm B skips it as linked), so step 2a exists to catch it.
+      await inRolledBackTransaction(async (tx) => {
+        const nodeId = await insertNode({ label: `Faded ${randomUUID()}` }, tx);
+        const contactId = await insertContact({ displayName: 'Faded', kgNodeId: nodeId }, tx);
+        await tx.query(
+          `UPDATE kg_nodes SET archived_at = now(), confidence = 0.01,
+                               warned_at = now(), warn_reason = 'high_sensitivity'
+            WHERE id = $1`,
+          [nodeId],
+        );
+
+        await runBackfill(tx);
+
+        const { rows } = await tx.query<{
+          archived_at: Date | null; identity_source: string; confidence: number;
+          warned_at: Date | null; kg_node_id: string;
+        }>(
+          `SELECT n.archived_at, n.identity_source, n.confidence, n.warned_at, c.kg_node_id
+             FROM contacts c JOIN kg_nodes n ON n.id = c.kg_node_id
+            WHERE c.id = $1`,
+          [contactId],
+        );
+        expect(rows).toHaveLength(1);
+        // Same node, restored — not a fresh one, so the facts underneath survive.
+        expect(rows[0]!.kg_node_id).toBe(nodeId);
+        expect(rows[0]!.archived_at).toBeNull();
+        expect(rows[0]!.identity_source).toBe('contact');
+        expect(rows[0]!.confidence).toBeGreaterThanOrEqual(0.5);
+        expect(rows[0]!.warned_at).toBeNull();
+      });
+    });
+
+    it('clears a pending decay warning on the nodes it anchors', async () => {
+      await inRolledBackTransaction(async (tx) => {
+        const nodeId = await insertNode({ label: `Warned ${randomUUID()}` }, tx);
+        await insertContact({ displayName: 'Warned', kgNodeId: nodeId }, tx);
+        await tx.query(
+          `UPDATE kg_nodes SET warned_at = now(), warn_reason = 'high_sensitivity' WHERE id = $1`,
+          [nodeId],
+        );
+
+        await runBackfill(tx);
+
+        const { rows } = await tx.query<{ identity_source: string; warned_at: Date | null }>(
+          'SELECT identity_source, warned_at FROM kg_nodes WHERE id = $1', [nodeId],
+        );
+        expect(rows[0]!.identity_source).toBe('contact');
+        expect(rows[0]!.warned_at).toBeNull();
+      });
+    });
+
+    it('leaves organization nodes in the label tier', async () => {
+      // Anchoring them would take them out of idx_kg_nodes_unique, so
+      // resolveOrCreateOrgNode could mint a second node for one organization, and
+      // deleting one role-address contact could archive a node its siblings still use.
+      await inRolledBackTransaction(async (tx) => {
+        const domain = `acme-${randomUUID().slice(0, 8)}.test`;
+        const orgNode = await insertNode({
+          label: `Acme ${randomUUID()}`, type: 'organization', properties: { domain },
+        }, tx);
+        await insertContact({
+          displayName: 'Acme info', kind: 'organization', kgNodeId: orgNode, primaryEmail: `info@${domain}`,
+        }, tx);
+
+        await runBackfill(tx);
+
+        const { rows } = await tx.query<{ identity_source: string }>(
+          'SELECT identity_source FROM kg_nodes WHERE id = $1', [orgNode],
+        );
+        expect(rows[0]!.identity_source).toBe('label');
+      });
+    });
+
+    it('skips system_role contacts, leaving them to bootstrap', async () => {
+      // Migration 056's convention. A plain person node here would leave
+      // bootstrapAgentIdentity's ON CONFLICT unable to match, inserting a second agent
+      // contact and tripping idx_contacts_system_role_agent on every startup.
+      await inRolledBackTransaction(async (tx) => {
+        // system_role='system' rather than 'agent'/'principal': migration 035 puts a unique
+        // index on those two, and another suite's committed agent contact would make this
+        // INSERT 23505 even inside a rolled-back transaction. Any non-NULL value exercises
+        // the guard, which is `system_role IS NULL`.
+        const id = randomUUID();
+        await tx.query(
+          `INSERT INTO contacts (id, kg_node_id, display_name, tier, kind, system_role, created_at, updated_at)
+           VALUES ($1, NULL, $2, 'known', 'person', 'system', now(), now())`,
+          [id, `System ${randomUUID()}`],
+        );
+
+        await runBackfill(tx);
+
+        const { rows } = await tx.query<{ kg_node_id: string | null }>(
+          'SELECT kg_node_id FROM contacts WHERE id = $1', [id],
+        );
+        expect(rows[0]!.kg_node_id).toBeNull();
       });
     });
 

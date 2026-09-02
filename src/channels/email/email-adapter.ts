@@ -1035,7 +1035,11 @@ export class EmailAdapter implements Channel {
         } catch (linkErr) {
           const pgCode = (linkErr as { code?: string }).code;
           try {
-            await contactService.deleteContact(contact.id);
+            // Orphan cleanup, so do not archive the KG node: createContact may have
+            // adopted a pre-existing one carrying facts (ADR-040). This path runs per
+            // participant on every inbound email, so an archiving cleanup here would be
+            // the highest-traffic way to lose knowledge in the system.
+            await contactService.deleteContact(contact.id, { archiveAnchoredNode: false });
           } catch (deleteErr) {
             // Include linkErr so both failure modes are co-located in the log entry.
             logger.warn(

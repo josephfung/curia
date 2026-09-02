@@ -145,6 +145,43 @@ describeIf('ceo-bootstrap principal/KG utilities', () => {
   });
 
   describe('createAndLinkKgNode', () => {
+    it('keeps an ADOPTED node when the contact-link race is lost', async () => {
+      // The highest-consequence branch added by ADR-040: insertKgPersonNode may adopt a
+      // pre-existing extraction node carrying facts and edges, and kg_edges cascades on
+      // node delete. A wrong `created` value here destroys knowledge that predates the
+      // call entirely, so the loser-path delete must not fire for an adopted node.
+      const preExistingNodeId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+         VALUES ($1, 'person', $2, '{}', 0.7, 'slow_decay', 'extraction', now(), now())`,
+        [preExistingNodeId, LABEL],
+      );
+      // A contact that already holds a DIFFERENT node — so our UPDATE ... WHERE
+      // kg_node_id IS NULL no-ops and createAndLinkKgNode takes the lost-race path.
+      const winnerNodeId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO kg_nodes (id, type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
+         VALUES ($1, 'person', $2, '{}', 0.7, 'slow_decay', 'test', now(), now())`,
+        [winnerNodeId, `${LABEL} Winner`],
+      );
+      const contactId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO contacts (id, kg_node_id, display_name, role, tier, kind, created_at, updated_at)
+         VALUES ($1, $2, $3, 'ceo', 'principal', 'principal', now(), now())`,
+        [contactId, winnerNodeId, LABEL],
+      );
+
+      const linked = await createAndLinkKgNode(contactId, LABEL, pool);
+
+      expect(linked).toBe(winnerNodeId);
+      // The adopted node must still exist — it was never ours to delete.
+      const survivor = await pool.query('SELECT 1 FROM kg_nodes WHERE id = $1', [preExistingNodeId]);
+      expect(survivor.rows).toHaveLength(1);
+
+      await pool.query('DELETE FROM contacts WHERE id = $1', [contactId]);
+      await pool.query('DELETE FROM kg_nodes WHERE id = ANY($1::uuid[])', [[preExistingNodeId, winnerNodeId]]);
+    });
+
     it('creates a node and links it to a contact whose kg_node_id is NULL', async () => {
       const contactId = crypto.randomUUID();
       await pool.query(
