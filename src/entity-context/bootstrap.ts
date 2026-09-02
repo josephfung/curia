@@ -12,7 +12,8 @@
 //
 // Idempotency is guaranteed by two partial unique indexes added in migration 010:
 //   - idx_kg_nodes_agent_singleton on (properties->>'is_agent') WHERE = 'true'
-//   - idx_contacts_kg_node_unique on (kg_node_id) WHERE kg_node_id IS NOT NULL
+//   - idx_contacts_kg_node_unique on (kg_node_id)
+//     WHERE kg_node_id IS NOT NULL AND kind <> 'organization'  (narrowed by migration 085)
 //
 // The returned contactId is injected into:
 //   - The coordinator's system prompt (so "you" resolves correctly)
@@ -69,9 +70,11 @@ export async function bootstrapAgentIdentity(
     logger.debug({ kgNodeId, displayName }, 'agent-bootstrap: agent KG node ready');
 
     // Step 2: Find or create the agent's contact record linked to the KG node.
-    // The partial unique index idx_contacts_kg_node_unique (migration 010) ensures
-    // ON CONFLICT fires when a concurrent INSERT tries to create a second contact for
-    // the same KG node.
+    // The partial unique index idx_contacts_kg_node_unique (migration 010, narrowed by
+    // 085) ensures ON CONFLICT fires when a concurrent INSERT tries to create a second
+    // contact for the same KG node. The predicate must be repeated verbatim for Postgres
+    // to infer the index — omit the kind clause and this INSERT fails with 42P10 on every
+    // startup. kind is 'agent' here, so the row is always inside the index.
     //
     // display_name is included in DO UPDATE so renames made via the wizard
     // (PUT /api/identity → version bump → process restart → bootstrap re-runs with
@@ -86,7 +89,7 @@ export async function bootstrapAgentIdentity(
       // Legacy status column not written here (#955).
       `INSERT INTO contacts (kg_node_id, display_name, role, system_role, tier, kind, created_at, updated_at)
        VALUES ($1, $2, 'agent', 'agent', 'known', 'agent', now(), now())
-       ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL
+       ON CONFLICT (kg_node_id) WHERE kg_node_id IS NOT NULL AND kind <> 'organization'
        DO UPDATE SET display_name = EXCLUDED.display_name, role = 'agent', system_role = 'agent', tier = 'known', kind = 'agent', updated_at = now()
        RETURNING id`,
       [kgNodeId, displayName],
@@ -95,7 +98,7 @@ export async function bootstrapAgentIdentity(
     if (!contactResult.rows[0]) {
       throw new Error(
         `agent-bootstrap: INSERT ... ON CONFLICT returned no rows for kgNodeId="${kgNodeId}" — ` +
-        'check that migration 010 was applied (idx_contacts_kg_node_unique must exist)',
+        'check that migrations 010 and 085 were applied (idx_contacts_kg_node_unique must exist)',
       );
     }
     const contactId = contactResult.rows[0].id;

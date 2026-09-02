@@ -51,6 +51,21 @@ export type EdgeType = (typeof EDGE_TYPES)[number];
 export const DECAY_CLASSES = ['permanent', 'slow_decay', 'fast_decay'] as const;
 export type DecayClass = (typeof DECAY_CLASSES)[number];
 
+// -- Identity tiers (ADR-040) --
+//
+// Which anchor gives a node its identity:
+//   'label'   — (lower(label), type). Deduplicated by idx_kg_nodes_unique, so a label
+//               resolves to exactly one node. The default, and the only tier upsertNode
+//               ever writes.
+//   'contact' — the contact that points at it via contacts.kg_node_id. The label is a
+//               display attribute and is free to collide, so two people called
+//               "Seth Berman" each hold their own node. Minted by createNode, or promoted
+//               from 'label' by anchorNode() when a new contact adopts an existing node.
+//               Never decayed or archived by the DreamEngine (ADR-040, "Identity does not
+//               decay") — only contact deletion retires one.
+export const IDENTITY_SOURCES = ['label', 'contact'] as const;
+export type IdentitySource = (typeof IDENTITY_SOURCES)[number];
+
 // -- Temporal metadata, present on every node and edge (spec line 82-91) --
 export interface TemporalMetadata {
   createdAt: Date;
@@ -75,6 +90,9 @@ export interface KgNode {
   // Stored as lowercased strings; exact-match resolution checks aliases
   // alongside the canonical label. Capped at MAX_ALIASES_PER_ENTITY (10).
   aliases: string[];
+  // Which anchor identifies this node (ADR-040). See IdentitySource above.
+  // Only ever moves 'label' → 'contact', via anchorNode().
+  identitySource: IdentitySource;
 }
 
 // -- Knowledge Graph Edge --

@@ -142,9 +142,11 @@ export async function setupRoutes(
           await contactService.updateDisplayName(result.contactId, trimmed);
           renamed = true;
           // Best-effort: keep the KG person-node label in sync so KG browsing shows the
-          // corrected name. The unique index idx_kg_nodes_unique (lower(label), type) can
-          // reject the rename if another non-fact node already owns that label; that's
-          // non-fatal — the contact column is the authoritative display name.
+          // corrected name. Since ADR-040 the principal's node is contact-anchored and so
+          // outside idx_kg_nodes_unique, meaning the rename normally succeeds even when
+          // another node owns that label. The catch stays for nodes still in the label
+          // tier — a rejected rename is non-fatal either way, because the contact column
+          // is the authoritative display name.
           try {
             await pool.query(
               `UPDATE kg_nodes SET label = $1, last_confirmed_at = now()

@@ -60,39 +60,58 @@ export async function repairPrincipalMetadata(contactId: string, pool: DbPool, l
  * Uses decay_class='permanent' and confidence=1.0 to match the agent identity pattern —
  * bootstrap nodes are never decayed by the DreamEngine.
  *
- * Uses ON CONFLICT on the idx_kg_nodes_unique index (migration 016) rather than a blind
- * INSERT, because a person node with the same label may already exist — either from a
- * concurrent startup or from email-based contact extraction that ran before bootstrap.
- * Without this, a blind INSERT would 23505 outside the contact-identity recovery block
- * and propagate as an unhandled error.
+ * Adopt-or-mint, the ADR-040 rule applied to the principal. A person node with the same
+ * label may already exist — from a concurrent startup, or from email-based contact
+ * extraction that ran before bootstrap — and the principal should inherit it rather than
+ * start empty beside it.
  *
- * The DO UPDATE also promotes decay_class to 'permanent' and pins confidence to 1.0
- * on the conflicting row. Email-based extraction creates person nodes with the default
- * slow_decay, which makes them eligible for DreamEngine archival once confidence decays.
- * When that pre-existing node belongs to the principal, bootstrap must repair it — and
+ * Step 1 promotes an existing *unanchored* node to the principal's identity. It also
+ * pins decay_class='permanent' and confidence 1.0: extraction creates person nodes at the
+ * default slow_decay, which used to make them eligible for DreamEngine archival once
+ * confidence decayed. ADR-040's anchoring now covers that on its own, but the explicit
+ * values are kept so the repair still holds for anyone reading decay_class directly.
  * GREATEST ensures we never *demote* a node that already has a higher confidence value.
  * `source` is intentionally not updated: preserving the original creator (e.g.
- * 'extraction') keeps the audit trail honest; decay protection is controlled
- * exclusively by decay_class, not source.
- * (Issue #1004)
+ * 'extraction') keeps the audit trail honest. (Issue #1004)
+ *
+ * At most one row can match step 1 — idx_kg_nodes_unique still guarantees one label-tier
+ * person node per label — and the identity_source predicate makes it a compare-and-set,
+ * so two concurrent boots cannot both adopt.
+ *
+ * Step 2 mints a fresh anchored node. It needs no ON CONFLICT: anchored nodes are outside
+ * idx_kg_nodes_unique, so the INSERT cannot raise 23505 on the label. The cost is that
+ * two concurrent boots can each mint one; both call sites resolve that by keeping the
+ * node the winning contact actually points at and deleting the unreferenced loser.
  *
  * Exported so ensure-principal.ts can reuse the exact same node-creation semantics
  * for the wizard's no-channel principal-creation path.
  */
 export async function insertKgPersonNode(displayName: string, pool: DbPool): Promise<string> {
-  const result = await pool.query<{ id: string }>(
-    `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at)
-     VALUES ('person', $1, '{}', 1.0, 'permanent', 'bootstrap', now(), now())
-     ON CONFLICT (lower(label), type) WHERE type != 'fact' AND archived_at IS NULL
-     DO UPDATE SET last_confirmed_at = now(),
-                   decay_class       = 'permanent',
-                   confidence        = GREATEST(kg_nodes.confidence, 1.0)
+  const adopted = await pool.query<{ id: string }>(
+    `UPDATE kg_nodes
+        SET identity_source   = 'contact',
+            last_confirmed_at = now(),
+            decay_class       = 'permanent',
+            confidence        = GREATEST(confidence, 1.0)
+      WHERE type = 'person'
+        AND lower(label) = lower($1)
+        AND archived_at IS NULL
+        AND identity_source = 'label'
+      RETURNING id`,
+    [displayName],
+  );
+  const adoptedId = adopted.rows[0]?.id;
+  if (adoptedId) return adoptedId;
+
+  const created = await pool.query<{ id: string }>(
+    `INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, created_at, last_confirmed_at, identity_source)
+     VALUES ('person', $1, '{}', 1.0, 'permanent', 'bootstrap', now(), now(), 'contact')
      RETURNING id`,
     [displayName],
   );
-  const id = result.rows[0]?.id;
+  const id = created.rows[0]?.id;
   if (!id) {
-    throw new Error('ceo-bootstrap: INSERT INTO kg_nodes returned no rows or no id — check migrations 004 and 016 were applied');
+    throw new Error('ceo-bootstrap: INSERT INTO kg_nodes returned no rows or no id — check migrations 004, 016 and 085 were applied');
   }
   return id;
 }
@@ -116,8 +135,21 @@ export async function createAndLinkKgNode(contactId: string, displayName: string
     `SELECT kg_node_id FROM contacts WHERE id = $1`,
     [contactId],
   );
-  if (!result.rows[0]?.kg_node_id) {
+  const linkedKgNodeId = result.rows[0]?.kg_node_id;
+  if (!linkedKgNodeId) {
     throw new Error(`ceo-bootstrap: contact ${contactId} still has no kg_node_id after UPDATE — possible concurrent conflict`);
   }
-  return result.rows[0].kg_node_id;
+  // Loser-path cleanup: under ADR-040 insertKgPersonNode mints anchored nodes, which no
+  // longer collide on the label, so a lost race leaves OUR node unreferenced rather than
+  // resolving to the same row. Mirrors ensure-principal.ts — the NOT EXISTS guard keeps
+  // the delete safe if a further concurrent writer claimed it in the meantime.
+  if (linkedKgNodeId !== newKgNodeId) {
+    await pool.query(
+      `DELETE FROM kg_nodes
+        WHERE id = $1
+          AND NOT EXISTS (SELECT 1 FROM contacts WHERE kg_node_id = $1)`,
+      [newKgNodeId],
+    );
+  }
+  return linkedKgNodeId;
 }

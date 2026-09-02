@@ -167,6 +167,56 @@ export class EntityMemory {
     return { entity: node, created };
   }
 
+  /**
+   * Mint a contact-anchored entity node (ADR-040).
+   *
+   * Unlike createEntity(), this never deduplicates by label: anchored nodes sit outside
+   * idx_kg_nodes_unique precisely so two contacts sharing a display name can each hold
+   * their own. Callers that want label dedup want createEntity().
+   *
+   * Only ContactService and the principal/agent bootstrap paths should call this — the
+   * node it creates is meaningless until a contact points at it.
+   */
+  async createAnchoredEntity(options: CreateEntityOptions): Promise<KgNode> {
+    const sensitivity: Sensitivity = options.sensitivity
+      ?? this.sensitivityClassifier?.classify(options.label, options.properties, options.sensitivityCategory)
+      ?? 'internal';
+
+    return this.store.createNode({
+      type: options.type,
+      label: options.label,
+      properties: options.properties,
+      source: options.source,
+      confidence: options.confidence ?? 0.7,
+      sensitivity,
+      identitySource: 'contact',
+    });
+  }
+
+  /**
+   * Adopt an existing label-tier node as a contact's identity (ADR-040).
+   *
+   * This is what preserves the good part of the old behaviour: Curia learns about
+   * "Dana Wu" from an email body, Dana later emails in, and her new contact inherits the
+   * facts already accumulated about her rather than starting empty.
+   *
+   * Returns false when the node is gone, archived, or already anchored to another
+   * contact — the caller must then mint a fresh node rather than share an identity.
+   */
+  async adoptEntity(nodeId: string): Promise<boolean> {
+    return this.store.anchorNode(nodeId);
+  }
+
+  /**
+   * Archive an entity node and cascade to its incident edges.
+   *
+   * Used when a contact is deleted: an anchored node's whole meaning is "this contact",
+   * so it retires with the contact rather than lingering as an orphan (ADR-040).
+   */
+  async archiveEntity(nodeId: string): Promise<void> {
+    return this.store.archiveNode(nodeId);
+  }
+
   /** Retrieve an entity node by ID. Returns undefined if not found. */
   async getEntity(id: string): Promise<KgNode | undefined> {
     return this.store.getNode(id);

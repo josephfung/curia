@@ -226,10 +226,16 @@ Existing linked nodes are flipped to `identity_source = 'contact'` in the same m
 Everything else keeps the default `'label'`.
 
 The backfill deliberately makes no attempt to detect that two nodeless "Seth Berman"
-contacts might be one person. That is the dedup sweep's job, and it now works better:
-`mergeContacts` only calls `mergeEntities` when *both* sides have a node
-(`src/contacts/contact-service.ts`), so giving every contact a node is what finally lets a
-contact merge carry memory across.
+contacts might be one person. That is the dedup sweep's job.
+
+An earlier draft of this ADR claimed the backfill also makes contact merges carry KG memory,
+because `mergeContacts` only calls `mergeEntities` when *both* sides have a node. The
+precondition is right and the conclusion is wrong. `mergeEntities` hard-`DELETE`s the
+secondary node while the secondary contact still points at it, and `contacts.kg_node_id`
+is a `NO ACTION` foreign key, so the delete raises `23503` and the merge is swallowed as
+"KG node merge failed (non-fatal)". This is pre-existing and already near-universal —
+534 of 548 contacts were linked before `085` — so the backfill neither causes it nor cures
+it. Tracked separately in #1711; until that lands, a contact merge still loses KG memory.
 
 ### Rejected alternatives
 
@@ -316,5 +322,7 @@ contacts a durable identity; it does not give the KG one for everyone else.
   absence-of-evidence failure on the error path, found while reviewing #1701)
 - #1707 (the entity-context read path ignores `archived_at`, so archived nodes and facts
   still assemble — adjacent, and made load-bearing by the deletion rule above)
+- #1711 (contact merge loses KG memory on a foreign-key violation — pre-existing, and the
+  reason the Backfill section above no longer claims `085` fixes merges)
 - Migrations 010, 016, 027, 056 (the indexes and backfills this supersedes or amends)
 - ADR-028 (shared, unbound agent memory) for the surrounding memory-governance model

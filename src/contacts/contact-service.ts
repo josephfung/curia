@@ -443,6 +443,123 @@ export class ContactService {
   }
 
   /**
+   * Mint a fresh contact-anchored person node after losing a race for an existing one
+   * (ADR-040). Anchored nodes sit outside idx_kg_nodes_unique, so this cannot collide on
+   * the label no matter how many namesakes are already stored.
+   *
+   * Returns null rather than throwing: this runs inside createContact's 23505 recovery,
+   * and a contact with no KG link is a degraded contact, whereas a thrown error is no
+   * contact at all. A null is logged by the caller with the full collision context.
+   */
+  private async mintAnchoredNodeForContact(
+    contact: Contact,
+    source: string,
+  ): Promise<string | null> {
+    if (!this.entityMemory) return null;
+    try {
+      const entity = await this.entityMemory.createAnchoredEntity({
+        type: 'person',
+        label: contact.displayName,
+        properties: contact.role ? { role: contact.role } : {},
+        source,
+      });
+      return entity.id;
+    } catch (err) {
+      if (err instanceof TypeError || err instanceof RangeError) throw err;
+      this.logger?.error(
+        { err, contactId: contact.id, step: 'mintAnchoredNodeForContact' },
+        'createContact: could not mint a replacement KG node after a link collision',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * ADR-040 adoption: claim an existing *unanchored* person node whose label matches, so
+   * a new contact inherits facts Curia already accumulated about that name (learned from
+   * an email body, say) instead of starting empty.
+   *
+   * Returns the adopted node id, or undefined when there is nothing safe to adopt — the
+   * caller then mints a fresh anchored node. "Nothing safe" covers three cases, and all
+   * three must mint rather than share:
+   *   - no label match at all;
+   *   - every match is already anchored to some other contact (the case that used to
+   *     produce a nodeless contact, which is the whole reason #1694 exists);
+   *   - two or more unanchored candidates of the right type. Aliases carry no cross-node
+   *     uniqueness, so this is reachable; picking one would be the same silent
+   *     first-match guess resolveOrCreate stopped making in #1705.
+   *
+   * Adoption itself is a compare-and-set inside the store, so two contacts racing for one
+   * node cannot both win — the loser sees false here and mints.
+   *
+   * KG I/O failures return undefined rather than propagating: falling back to a fresh
+   * node loses an inheritance, while failing the create loses the contact.
+   */
+  private async adoptUnanchoredPersonNode(
+    safeName: string,
+    role: string | null | undefined,
+  ): Promise<string | undefined> {
+    if (!this.entityMemory) return undefined;
+
+    try {
+      const matches = await this.entityMemory.findEntities(safeName);
+      const candidates = matches.filter(
+        n => n.type === 'person' && n.identitySource === 'label',
+      );
+
+      if (candidates.length !== 1) {
+        if (candidates.length > 1) {
+          this.logger?.warn(
+            { displayName: safeName, candidateIds: candidates.map(n => n.id) },
+            'createContact: several unanchored person nodes share this label — minting a fresh node rather than guessing',
+          );
+        }
+        return undefined;
+      }
+
+      const candidate = candidates[0]!;
+      if (!(await this.entityMemory.adoptEntity(candidate.id))) {
+        // Lost the race, or the node was archived between the lookup and the CAS.
+        this.logger?.info(
+          { displayName: safeName, nodeId: candidate.id },
+          'createContact: KG node was claimed before adoption — minting a fresh node',
+        );
+        return undefined;
+      }
+
+      // Apply the role only when the node does not already carry one: the existing node
+      // may have been created without one (extract-relationships always passes empty
+      // properties), but a role already there is better-sourced than ours.
+      if (role && !candidate.properties.role) {
+        try {
+          await this.entityMemory.updateNode(candidate.id, {
+            properties: { ...candidate.properties, role },
+          });
+        } catch (err) {
+          // Non-fatal: the adoption is already committed and is the valuable part.
+          this.logger?.warn(
+            { err, nodeId: candidate.id, step: 'adoptUnanchoredPersonNode_role' },
+            'createContact: adopted KG node but could not apply role property',
+          );
+        }
+      }
+
+      this.logger?.info(
+        { displayName: safeName, nodeId: candidate.id },
+        'createContact: adopted an unanchored KG node as this contact\'s identity',
+      );
+      return candidate.id;
+    } catch (err) {
+      if (err instanceof TypeError || err instanceof RangeError) throw err;
+      this.logger?.error(
+        { err, displayName: safeName, step: 'adoptUnanchoredPersonNode' },
+        'createContact: KG adoption lookup failed — minting a fresh node instead',
+      );
+      return undefined;
+    }
+  }
+
+  /**
    * Create a new contact. If entityMemory is available and no kgNodeId is provided,
    * auto-creates or resolves a KG node and links it to the contact. When primaryEmail
    * is set and classifies as an org sender, routes to an organization KG node instead
@@ -521,23 +638,20 @@ export class ContactService {
         }
       }
 
-      // If no org node was resolved, auto-create a person KG node as before.
+      // If no org node was resolved, resolve a person KG node under the ADR-040
+      // adoption rule: adopt an unanchored node whose label matches, otherwise mint a
+      // fresh anchored one. Never take a node that already belongs to another contact.
       if (!kgNodeId) {
-        const { entity, created } = await this.entityMemory.createEntity({
-          type: 'person',
-          label: safeName,
-          properties: options.role ? { role: options.role } : {},
-          source: options.source,
-        });
-        if (!created && options.role) {
-          // A KG node already existed for this label. Apply the role property if
-          // it isn't already set — the existing node may have been created without
-          // one (e.g. by extract-relationships which always passes empty properties).
-          const { node } = await this.entityMemory.updateNode(entity.id, {
-            properties: { ...entity.properties, role: options.role },
-          });
-          kgNodeId = node.id;
+        const adopted = await this.adoptUnanchoredPersonNode(safeName, options.role);
+        if (adopted) {
+          kgNodeId = adopted;
         } else {
+          const entity = await this.entityMemory.createAnchoredEntity({
+            type: 'person',
+            label: safeName,
+            properties: options.role ? { role: options.role } : {},
+            source: options.source,
+          });
           kgNodeId = entity.id;
         }
 
@@ -613,21 +727,32 @@ export class ContactService {
     } catch (err) {
       const pgCode = (err as { code?: string }).code;
       const constraint = (err as { constraint?: string }).constraint;
-      // idx_contacts_kg_node_unique (partial unique index on kg_node_id) fires when
-      // upsertNode returned an existing kg_node that is already claimed by another
-      // contact — e.g. two people both named "Alice Smith". Retry without a KG link;
-      // the two contacts can be merged later via the contact-merge flow.
+      // idx_contacts_kg_node_unique fires when the node we resolved was claimed by
+      // another contact between our lookup and this INSERT — two people both named
+      // "Alice Smith", or a lost adoption race.
+      //
+      // Before ADR-040 the retry dropped the link and stored kg_node_id = NULL, leaving a
+      // contact that could hold no facts, relationships or entity-context enrichment.
+      // That is the behaviour #1694 exists to remove: retry with a FRESH anchored node
+      // instead. Anchored nodes are exempt from label uniqueness, so minting one cannot
+      // collide however many namesakes already exist.
       if (pgCode === '23505' && constraint === 'idx_contacts_kg_node_unique') {
-        // Downgrade kind to 'person' alongside stripping the KG link — but only if the
-        // contact was an org contact, to avoid violating the invariant that org contacts
-        // are always linked to a KG org node. Automated contacts keep their kind even
-        // without a KG link (their person-type node may still be around; the link is just
-        // lost for this contact instance due to the collision).
+        const replacement = await this.mintAnchoredNodeForContact(contact, options.source);
         this.logger?.warn(
-          { contactId: contact.id, kgNodeId: contact.kgNodeId, contactKind: contact.kind },
-          'KG node already claimed by another contact — creating contact without KG link; org kind downgraded to person',
+          {
+            contactId: contact.id,
+            claimedKgNodeId: contact.kgNodeId,
+            replacementKgNodeId: replacement,
+            contactKind: contact.kind,
+          },
+          replacement
+            ? 'KG node already claimed by another contact — minted a fresh anchored node for this contact'
+            : 'KG node already claimed by another contact and minting a replacement failed — creating contact without KG link',
         );
-        contact.kgNodeId = null;
+        contact.kgNodeId = replacement;
+        // Only downgrade kind when we genuinely ended up without a link: an org contact
+        // with no KG org node would violate the kind/type invariant migration 056 keeps.
+        // A contact that got a replacement person node is downgraded for the same reason.
         if (contact.kind === 'organization') {
           contact.kind = 'person';
         }
@@ -1660,9 +1785,67 @@ export class ContactService {
    *
    * Primarily used during contact merge (to remove the secondary) and during
    * error recovery (to remove orphaned contacts created by a failed identify).
+   *
+   * Also archives the contact's KG node when that node was its identity (ADR-040). An
+   * anchored node means nothing without the contact it anchors, and archiving rather
+   * than deleting frees the label for reuse (idx_kg_nodes_unique already excludes
+   * archived rows) while leaving the accumulated knowledge recoverable in SQL.
+   *
+   * Note mergeContacts deletes the secondary through the backend directly, deliberately
+   * bypassing this: mergeEntities has already folded the secondary's node into the
+   * survivor's, so there is nothing left to archive.
    */
   async deleteContact(id: string): Promise<void> {
+    // Read the link before the delete — afterwards there is no row to read it from.
+    const contact = await this.backend.getContact(id);
     await this.backend.deleteContact(id);
+    if (contact?.kgNodeId) {
+      await this.archiveAnchoredNode(id, contact.kgNodeId);
+    }
+  }
+
+  /**
+   * Archive a deleted contact's KG node, if that node was its identity and nothing else
+   * still points at it.
+   *
+   * Both guards matter:
+   *   - identity_source: a label-tier node (an organization, or a person Curia only knows
+   *     from an email body) outlives any one contact and must not be archived.
+   *   - no remaining referents: organization contacts are exempt from
+   *     idx_contacts_kg_node_unique, so several can share one node — including, after
+   *     migration 085's backfill, an anchored one. Deleting one of them must not archive
+   *     the node the others are still using.
+   *
+   * Best-effort by design. The contacts row is already gone and committed; a KG failure
+   * here leaves a recoverable orphan, whereas throwing would report a delete as failed
+   * that in fact succeeded.
+   */
+  private async archiveAnchoredNode(contactId: string, kgNodeId: string): Promise<void> {
+    if (!this.entityMemory) return;
+    try {
+      const node = await this.entityMemory.getEntity(kgNodeId);
+      if (!node || node.identitySource !== 'contact') return;
+
+      const stillReferenced = await this.backend.findContactByKgNodeId(kgNodeId);
+      if (stillReferenced) {
+        this.logger?.debug(
+          { contactId, kgNodeId, remainingContactId: stillReferenced.id },
+          'contacts: anchored KG node still referenced by another contact — not archiving',
+        );
+        return;
+      }
+
+      await this.entityMemory.archiveEntity(kgNodeId);
+      this.logger?.info(
+        { contactId, kgNodeId },
+        'contacts: archived the deleted contact\'s anchored KG node (ADR-040)',
+      );
+    } catch (err) {
+      this.logger?.warn(
+        { err, contactId, kgNodeId, step: 'archiveAnchoredNode' },
+        'contacts: contact deleted but archiving its anchored KG node failed — node is now orphaned',
+      );
+    }
   }
 
   /**
@@ -2702,9 +2885,12 @@ class InMemoryContactBackend implements ContactServiceBackend {
 
   async createContact(contact: Contact): Promise<void> {
     // Enforce the partial unique index idx_contacts_kg_node_unique to match Postgres.
-    if (contact.kgNodeId !== null) {
+    // Mirrors idx_contacts_kg_node_unique as narrowed by migration 085: organization
+    // contacts are exempt, because several role addresses at one domain legitimately
+    // share their organization's node (ADR-040).
+    if (contact.kgNodeId !== null && contact.kind !== 'organization') {
       for (const existing of this.contacts.values()) {
-        if (existing.kgNodeId === contact.kgNodeId) {
+        if (existing.kgNodeId === contact.kgNodeId && existing.kind !== 'organization') {
           const err = Object.assign(new Error('duplicate key value violates unique constraint "idx_contacts_kg_node_unique"'), {
             code: '23505',
             constraint: 'idx_contacts_kg_node_unique',
