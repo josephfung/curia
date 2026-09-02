@@ -121,8 +121,15 @@ Both images are built for `linux/amd64` + `linux/arm64` and signed with **cosign
 - **Push to `main`** → `:edge` on both images (for dogfood use).
 - **Release published** → app gets `vX.Y.Z`, `vX.Y`, and `latest`; the DB image gets
   `pg16` and `latest` (versioned by Postgres major, not app semver).
-- A `workflow_dispatch` input re-publishes a given tag; the dispatched tag is validated
-  against strict semver before build (mirrors `release.yml`).
+- **Manual dispatch** with a `tag` input → that release's source is rebuilt and pushed
+  under its semver tags **only**. `edge`, `latest`, and `pg16` are floating "newest"
+  pointers, and a re-publish names an arbitrary older tag, so a dispatch never moves
+  them — doing so shipped old code past migrations that had already run (#1715). A
+  dispatch with **no** `tag` behaves exactly like a push to `main`.
+- The tag being built is resolved once (in the `resolve` job) and validated against
+  strict semver before checkout, and every downstream tag decision keys off that rather
+  than off `github.ref`, which on a dispatch names the launch branch and not the built
+  source (mirrors `release.yml`).
 
 **`install.sh` — the supported self-host path** (`install.sh`, download-then-run; it uses
 interactive `read` prompts, so `curl … | bash` does not work). The script:
