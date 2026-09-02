@@ -221,9 +221,10 @@ When every requested ID lands in `failed` and `entities`, `unresolved`, and `nod
 2. If the ID matches a `contacts.id` with a null `kg_node_id` → include in `nodeless` with `cause: "missing"` (contact exists but never had a stored profile)
 3. If the ID matches a `contacts.id` whose `kg_node_id` points at an archived node → include in `nodeless` with `cause: "archived"` (the profile was retired; not silently assembled)
 4. If the ID matches a live `kg_nodes.id` directly → assemble from that KG node
-5. Special values: `"caller"` → resolve to `ctx.caller.contactId`, `"agent"` → resolve to the agent's contactId
-6. If no match (including a direct lookup of an archived node ID) → include in the `unresolved` array (not a hard error)
-7. If assembly throws → include in `failed` with a retry classification (not `unresolved`)
+5. If the ID matches an archived `kg_nodes.id` owned by a contact → include in `nodeless` with `cause: "archived"` (agents reuse `entities[].entityId` across turns)
+6. Special values: `"caller"` → resolve to `ctx.caller.contactId`, `"agent"` → resolve to the agent's contactId
+7. If no match (including an unanchored archived node ID) → include in the `unresolved` array (not a hard error)
+8. If assembly throws → include in `failed` with a retry classification (not `unresolved`)
 
 ### Assembly Pipeline
 
@@ -255,7 +256,9 @@ The pipeline is a database read path — no LLM involvement, no external API cal
 
 ### Caching
 
-Entity context changes infrequently compared to how often it's queried. A simple TTL cache (keyed by entity ID, 5-minute TTL) avoids redundant DB queries when multiple skills operate on the same entity in a single conversation. Cache invalidation on contact/KG mutations is straightforward since those writes go through `ContactService` and `EntityMemory`, which can clear the cache.
+Entity context changes infrequently compared to how often it's queried. A simple TTL cache (keyed by entity ID, 5-minute TTL) avoids redundant DB queries when multiple skills operate on the same entity in a single conversation.
+
+A cache hit always re-checks that the entity node is still live (`archived_at IS NULL`). If DreamEngine or contact deletion archived it, the cached payload is dropped and the ID is re-assembled into `nodeless`. DreamEngine also flushes the whole cache after a decay pass that archives any node or edge, so retired facts hanging off a still-live entity cannot keep assembling from a TTL hit. Per-mutation invalidation for ordinary contact/KG writes (`clearCacheForEntity`) is still not wired (see Known Deficiencies).
 
 ---
 
@@ -576,7 +579,7 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 
 - **Entity context is read-only.** The assembly pipeline queries the KG, contacts, and connected accounts but never writes. All mutations go through their respective services (ContactService, EntityMemory).
 - **No cross-entity leakage.** The entity-context payload includes only the requested entities. A skill asking for Jenna's context does not receive the CEO's connected accounts.
-- **Cached context is TTL-bounded.** A 5-minute TTL caps staleness. Per-mutation invalidation (`clearCacheForEntity`) exists but is not yet wired to the contact/KG write paths (see Known Deficiencies). Either way, stale context is a convenience issue (slightly outdated preferences), not a security issue (wrong person's data).
+- **Cached context is TTL-bounded, with an archival live-check.** A 5-minute TTL caps staleness for ordinary mutations. Archival is a correctness boundary (#1707): cache hits re-validate `archived_at IS NULL` on the entity node, and DreamEngine flushes the cache after a decay pass that archives anything. Per-mutation invalidation (`clearCacheForEntity`) exists but is not yet wired to the contact/KG write paths (see Known Deficiencies). Stale *preferences* from an unwired write are a convenience issue; stale *retired* knowledge is not served.
 - **Agent self-identity is seeded, not self-created.** Curia's contact record is created during bootstrap by the orchestrator, not by the agent itself. The agent cannot modify its own identity.
 - **LLM sees entity IDs, not raw KG internals.** The payload exposes curated facts with labels, not raw JSONB properties or internal node IDs beyond what's needed for skill invocation.
 
@@ -599,7 +602,7 @@ A scheduled job runs `cleanupExpired()` on a fixed cadence. The dispatcher's rea
 ## Known Deficiencies
 
 - **Proactive account discovery** — the `discoveredAccounts` field in the entity-context assembly pipeline is not yet implemented.
-- **Cache invalidation on mutations is not wired** — `EntityContextAssembler.clearCacheForEntity()` exists and is unit-tested, but no contact/KG write path (`ContactService`, `EntityMemory`) actually calls it. Cached entity context is bounded only by the 5-minute TTL, so a mutation may not be reflected until the entry expires. Low severity — staleness is a convenience issue, not a correctness/security one (see Security Considerations) — but the "invalidated on contact/KG writes" behaviour those sections describe is not yet true.
+- **Cache invalidation on mutations is not wired** — `EntityContextAssembler.clearCacheForEntity()` exists and is unit-tested, but no contact/KG write path (`ContactService`, `EntityMemory`) actually calls it. Cached entity context for ordinary mutations (renames, new facts) is bounded only by the 5-minute TTL. Archival is handled separately: cache hits re-check `archived_at`, and DreamEngine flushes the cache after a decay pass that archives (#1707). Remaining gap is convenience-level staleness, not retired knowledge leaking back into context.
 - **Calendar `entity_enrichment` manifests** — calendar skills do not yet declare `entity_enrichment` in their manifests. (#544)
 - **Remove `calendarId` from tool definitions** — `calendarId` has not yet been removed from LLM-visible tool definitions; pending cleanup.
 - **Calendar integration test** — the end-to-end "What's on Jenna's calendar?" integration test is not yet implemented. (#544)

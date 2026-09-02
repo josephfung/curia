@@ -2095,6 +2095,7 @@ async function main(): Promise<void> {
     yamlConfig.documentWorkspace?.scratchTtlDays ?? DEFAULT_SCRATCH_DOC_TTL_DAYS,
     llmCallArchiveRetentionDays,
   );
+  dreamEngine.setOnArchived(() => entityContextAssembler.clearCache());
   logger.info(
     {
       decayConfig,
