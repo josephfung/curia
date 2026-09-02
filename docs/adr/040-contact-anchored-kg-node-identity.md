@@ -35,6 +35,13 @@ contacts legitimately represent one organization, and forcing them to compete fo
 link is a modelling error rather than an identity ambiguity. A fix that only re-keys person
 identity leaves this half of the nodeless population untouched.
 
+**Measured after acceptance (2026-09-02, production):** the org population is *empirically
+zero*. Of 548 contacts, 14 hold no node; none of them are `kind='organization'` (all 38 org
+contacts are linked). The collision path above is real and reachable in code, but it has not
+yet occurred in this deployment. The org half of this section describes a latent defect, not
+an observed one — the relaxed `idx_contacts_kg_node_unique` is worth keeping as prevention,
+but it should not be sequenced as though it were clearing a backlog. See Consequences.
+
 ### Why label-keyed identity exists at all
 
 The unique index is not the disease; it is the coping mechanism. `upsertNode`'s
@@ -51,11 +58,18 @@ not; the name is all there is.
 ### The latent misattribution bug
 
 `EntityMemory.resolveOrCreate` currently handles 2+ exact matches by returning
-`matches.find(n => n.type === options.type)` as `found`. Today the unique index makes two
-same-type matches impossible, so the branch is unreachable for the case that matters. The
-moment N nodes may share a label, every `memory-store` write for "Seth Berman" silently
-lands on whichever node sorts first. That is strictly worse than the present silent no-op,
-and fixing it is a prerequisite for the migration rather than a follow-up.
+`matches.find(n => n.type === options.type)` as `found`. The moment N nodes may share a
+label, every `memory-store` write for "Seth Berman" silently lands on whichever node sorts
+first — strictly worse than the present silent no-op, and so a prerequisite for the
+migration rather than a follow-up.
+
+It is also not purely latent today, contrary to an earlier draft of this ADR.
+`findNodesByLabel` matches `lower(label)` **or** `aliases`, and aliases carry no cross-node
+uniqueness — no unique index on the column, and `addAlias` only checks that the alias is
+absent from the node it is writing to. Two person nodes can therefore both carry the alias
+"Seth" and the same silent first-match pick applies. `resolveOrCreate`'s own fuzzy path
+calls `addAlias` automatically, so such a collision can arise without anyone doing anything
+unusual. Rare, but live.
 
 ## Decision
 
@@ -217,10 +231,27 @@ will silently skip facts about common names until callers pass subject context. 
 contact now archives real knowledge along with it; recoverable, but a behaviour change from
 today's leave-it-orphaned.
 
-**Risk concentrated in the migration.** `085` mints a node per nodeless contact, and the
-true size of that population is not yet measured in production. The visibility increment
-lands first specifically so the migration is written against a known number rather than an
-assumed one.
+**Migration risk, now measured.** The visibility increment (#1701) landed first specifically
+so `085` could be written against a known number rather than an assumed one. Run against
+production on 2026-09-02 via `scripts/kg-node-linkage-report.ts`:
+
+| | |
+|---|---|
+| contacts total | 548 |
+| holding no KG node | 14 (2.6%) |
+| arm A — org re-link | **0** |
+| arm B — mint a node | **14** |
+| shadowed by a same-name contact that has a node | 12 |
+
+By kind, the nodeless 14 are 12 `person` and 2 `automated`; `organization`, `principal` and
+`agent` are fully linked. Across the whole table there are 14 same-name clusters and the
+largest holds 3 contacts.
+
+So the migration inserts 14 rows, and 12 of the 14 are the same-name case #1623 described.
+This is a much smaller and better-bounded change than this ADR assumed when it was accepted,
+and it moves the risk out of the migration. Two consequences for sequencing: the org index
+relaxation is prevention rather than repair and should not lead, and the `resolveOrCreate`
+ambiguity fix — which addresses a live alias-collision path, per Context — should.
 
 **Not addressed.** Nothing here improves resolution *quality* for names Curia has never
 associated with a contact — an unanchored "Seth Berman" mentioned in an email body still
@@ -231,5 +262,8 @@ contacts a durable identity; it does not give the KG one for everyone else.
 
 - #1694 (this change), #1623 (the incident), #1625 / ADR-039 (named this as the remaining gap)
 - PR #1624 (design review that rejected `ensureKgNode` as the fix)
+- PR #1700 (this ADR), PR #1701 (increment 1 — visibility, and the measurement above)
+- #1702 (`entity-context` reports a DB failure as "contact not found" — the same
+  absence-of-evidence failure on the error path, found while reviewing #1701)
 - Migrations 010, 016, 027, 056 (the indexes and backfills this supersedes or amends)
 - ADR-028 (shared, unbound agent memory) for the surrounding memory-governance model
