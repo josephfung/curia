@@ -18,7 +18,7 @@
     "build": "tsup src/index.ts --format esm --dts",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:shell": "bash tests/setup/test-setup-functions.sh",
+    "test:shell": "bash tests/setup/test-setup-functions.sh && bash tests/docker/test-pnpm-retry.sh",
     "test:postgres-image": "bash tests/docker/test-postgres-init.sh",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.skills.json && tsc --noEmit -p tsconfig.tests.json && pnpm --filter @curia/antfarm run typecheck",

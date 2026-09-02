@@ -14,3 +14,6 @@ docker/*
 !docker/postgres.Dockerfile
 !docker/postgres-init-pgaudit.sql
 !docker/postgres-verify-pgaudit.sh
+# Needed by the main Dockerfile's install steps (#1699) — without this exception
+# the COPY fails with "not found in build context" and every build breaks.
+!docker/pnpm-retry.sh
