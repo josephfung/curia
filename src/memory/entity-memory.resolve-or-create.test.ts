@@ -3,12 +3,13 @@
 //
 // Uses the in-memory KG backend — no Postgres required.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { KnowledgeGraphStore } from './knowledge-graph.js';
 import { EmbeddingService } from './embedding.js';
 import { EntityMemory, FUZZY_RESOLVE_THRESHOLD, FUZZY_AMBIGUITY_FLOOR, MAX_ALIASES_PER_ENTITY } from './entity-memory.js';
 import { MemoryValidator, MAX_WRITES_PER_AGENT_TASK } from './validation.js';
 import { createSilentLogger } from '../logger.js';
+import type { Logger } from '../logger.js';
 
 function makeEntityMemory() {
   const embeddingService = EmbeddingService.createForTesting();
@@ -803,5 +804,187 @@ describe('EntityMemory.search — alias exact-match path', () => {
     expect(results[0]!.score).toBe(1.0);
     // Verify the secondary node (non-alias-matched) also appears via vector search
     expect(results.some(r => r.node.label === 'searchterm adjacent')).toBe(true);
+  });
+});
+
+// -- PII guard: resolveOrCreate / addAlias logs (#1713) --
+//
+// extract-facts (and memory-store) pass the caller-supplied entity name as
+// `label` / `alias`. Those strings are usually a person's name, and the pino
+// redact list does not cover `label` or `alias`. Substitute nodeId where a
+// node is resolved; otherwise log type/presence flags only.
+describe('resolveOrCreate / addAlias logs never carry the raw label or alias (PII guard)', () => {
+  const PII_LABEL = 'Priya Ramanathan';
+
+  function spyLog() {
+    const log = {
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      error: vi.fn(),
+      child: vi.fn(),
+    };
+    log.child.mockReturnValue(log);
+    return log;
+  }
+
+  function makeMem(log: ReturnType<typeof spyLog>) {
+    const embeddingService = EmbeddingService.createForTesting();
+    const store = KnowledgeGraphStore.createInMemory(embeddingService);
+    const validator = new MemoryValidator(store, embeddingService);
+    return {
+      mem: new EntityMemory(store, validator, embeddingService, log as unknown as Logger),
+      store,
+      embeddingService,
+    };
+  }
+
+  function findCall(fn: ReturnType<typeof vi.fn>, messageRe: RegExp) {
+    return fn.mock.calls.find(c => messageRe.test(String(c[c.length - 1])));
+  }
+
+  function serializeLogPayload(payload: unknown): string {
+    const obj = payload as Record<string, unknown> | null;
+    const err = obj?.err;
+    const errText = err instanceof Error
+      ? `${err.name} ${err.message} ${err.stack ?? ''}`
+      : '';
+    const errorField = obj?.error;
+    const errorText = typeof errorField === 'string' ? errorField : '';
+    return `${JSON.stringify(payload)}\n${errText}\n${errorText}`;
+  }
+
+  function expectNoPii(call: unknown[] | undefined) {
+    expect(call).toBeDefined();
+    const serialized = serializeLogPayload(call![0]);
+    expect(serialized).not.toContain(PII_LABEL);
+    expect(serialized.toLowerCase()).not.toContain(PII_LABEL.toLowerCase());
+    expect(call![0]).not.toHaveProperty('label');
+    expect(call![0]).not.toHaveProperty('alias');
+  }
+
+  it('single-match type-differs warn', async () => {
+    const log = spyLog();
+    const { mem } = makeMem(log);
+    const { entity } = await mem.createEntity({
+      type: 'person', label: PII_LABEL, properties: {}, source: 'test',
+    });
+
+    await mem.resolveOrCreate({
+      label: PII_LABEL,
+      type: 'organization',
+      source: 'test',
+    });
+
+    const call = findCall(log.warn, /single match type differs from caller hint/);
+    expectNoPii(call);
+    expect(call![0]).toHaveProperty('nodeId', entity.id);
+    expect(call![0]).toHaveProperty('expectedType', 'organization');
+    expect(call![0]).toHaveProperty('actualType', 'person');
+  });
+
+  it('fuzzy auto-resolve type-differs warn', async () => {
+    const log = spyLog();
+    const { mem, store, embeddingService } = makeMem(log);
+    const queryEmbedding = await embeddingService.embed(PII_LABEL);
+    const node = await store.createNode({
+      type: 'person',
+      label: 'Completely Unrelated Org Label',
+      properties: {},
+      source: 'test',
+      embedding: queryEmbedding,
+    });
+
+    await mem.resolveOrCreate({
+      label: PII_LABEL,
+      type: 'organization',
+      source: 'test',
+    });
+
+    const call = findCall(log.warn, /fuzzy auto-resolve type differs from caller hint/);
+    expectNoPii(call);
+    expect(call![0]).toHaveProperty('nodeId', node.id);
+    expect(call![0]).toHaveProperty('expectedType', 'organization');
+    expect(call![0]).toHaveProperty('actualType', 'person');
+  });
+
+  it('fuzzy semantic-search-failed warn', async () => {
+    const log = spyLog();
+    const { mem, store } = makeMem(log);
+    vi.spyOn(store, 'semanticSearch').mockRejectedValueOnce(new Error('embedding timeout'));
+
+    await mem.resolveOrCreate({
+      label: PII_LABEL,
+      type: 'person',
+      source: 'test',
+    });
+
+    const call = findCall(log.warn, /fuzzy semantic search failed/);
+    expectNoPii(call);
+    expect(call![0]).toHaveProperty('expectedType', 'person');
+    expect(call![0]).not.toHaveProperty('nodeId');
+    expect(call![0]).toHaveProperty('error', 'embedding timeout');
+  });
+
+  it('addAlias entity-node-not-found warn', async () => {
+    const log = spyLog();
+    const { mem } = makeMem(log);
+    const missingId = '00000000-0000-0000-0000-000000000000';
+
+    await mem.addAlias(missingId, PII_LABEL);
+
+    const call = findCall(log.warn, /addAlias: entity node not found/);
+    expectNoPii(call);
+    expect(call![0]).toHaveProperty('nodeId', missingId);
+  });
+
+  it('addAlias alias-cap-reached warn', async () => {
+    const log = spyLog();
+    const { mem } = makeMem(log);
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+    for (let i = 0; i < MAX_ALIASES_PER_ENTITY; i++) {
+      await mem.addAlias(entity.id, `alias-${i}`);
+    }
+
+    await mem.addAlias(entity.id, PII_LABEL);
+
+    const call = findCall(log.warn, /addAlias: alias cap reached/);
+    expectNoPii(call);
+    expect(call![0]).toHaveProperty('nodeId', entity.id);
+    expect(call![0]).toHaveProperty('count', MAX_ALIASES_PER_ENTITY);
+    expect(call![0]).toHaveProperty('max', MAX_ALIASES_PER_ENTITY);
+  });
+
+  it('addAlias backend-rejected debug', async () => {
+    const log = spyLog();
+    const { mem } = makeMem(log);
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+
+    await mem.addAlias(entity.id, PII_LABEL);
+    await mem.addAlias(entity.id, PII_LABEL);
+
+    const call = findCall(log.debug, /addAlias: backend rejected/);
+    expectNoPii(call);
+    expect(call![0]).toHaveProperty('nodeId', entity.id);
+  });
+
+  it('addAlias unexpected-error warn', async () => {
+    const log = spyLog();
+    const { mem, store } = makeMem(log);
+    const { entity } = await mem.createEntity({
+      type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
+    });
+    vi.spyOn(store, 'getNode').mockRejectedValueOnce(new Error('connection timeout'));
+
+    await mem.addAlias(entity.id, PII_LABEL);
+
+    const call = findCall(log.warn, /addAlias: unexpected error/);
+    expectNoPii(call);
+    expect(call![0]).toHaveProperty('nodeId', entity.id);
+    expect(call![0]).toHaveProperty('error', 'connection timeout');
   });
 });
