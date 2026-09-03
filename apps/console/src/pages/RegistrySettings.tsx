@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, Fragment } from 'react';
 import { MobileMenuContext } from '../context/MobileMenu.js';
 import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch } from '../components/Topbar.js';
@@ -443,6 +443,16 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
   const [pageSize, setPageSize] = useState(10);
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
   const [stateFilter, setStateFilter] = useState<'all' | DerivedState>('all');
+  // Bundle rows collapse by default — a bundle with 14 members would otherwise
+  // dominate the first page.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpanded = useCallback((name: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset['mobileSidebar'] = mobileOpen ? 'open' : '';
@@ -497,9 +507,7 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
   }, [kind]);
 
   // Lookup so the render can find a row (bundle members, pin state) for a paged entry.
-  // Not read yet — Task 5 wires this into the table body. Same `void` rationale as `agents`.
   const rowByName = useMemo(() => new Map(rows.map(r => [r.entry.name, r])), [rows]);
-  void rowByName;
 
   useEffect(() => { void load(); }, [load]);
 
@@ -545,8 +553,8 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
 
   const title = kind === 'tool' ? 'Tools' : 'Agents';
   // Name, State, kind-specific columns, Version. Agents have one kind-specific
-  // column (Model tier); skills have two (Action risk, Sensitivity).
-  const colCount = kind === 'agent' ? 4 : 5;
+  // column (Model tier); tools have four (Type, Action risk, Sensitivity, Pinned by).
+  const colCount = kind === 'agent' ? 4 : 7;
 
   return (
     <MobileMenuContext.Provider value={{ open: mobileOpen, setOpen: setMobileOpen }}>
@@ -613,6 +621,7 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
                               Name <span className="sort-arrow">{sortArrow('name')}</span>
                             </button>
                           </th>
+                          {kind === 'tool' && <th>Type</th>}
                           <th className="sortable" aria-sort={sort.key === 'state' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
                             <button className="sort-btn" onClick={() => toggleSort('state')}>
                               State <span className="sort-arrow">{sortArrow('state')}</span>
@@ -638,6 +647,7 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
                                   Sensitivity <span className="sort-arrow">{sortArrow('sensitivity')}</span>
                                 </button>
                               </th>
+                              <th>Pinned by</th>
                             </>
                           )}
                           <th className="sortable" aria-sort={sort.key === 'version' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
@@ -648,35 +658,98 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {pageRows.map(e => (
-                          <tr
-                            key={e.name}
-                            className={selected?.name === e.name ? 'active' : undefined}
-                            onClick={() => setSelected(e)}
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {/* Warn icon if the manifest failed to parse */}
-                            <td>{e.name}{e.manifestError ? ' ⚠' : ''}</td>
-                            <td>
-                              <span className={`status-pill ${STATE_PILL[e.state]}`}>
-                                {/* Extra warning on ghost: manifest is gone but DB row lingers */}
-                                {e.state}{e.state === 'ghost' ? ' ⚠' : ''}
-                              </span>
-                            </td>
-                            {kind === 'agent' ? (
-                              <>
-                                <td>{e.metadata?.modelTier ?? '—'}</td>
-                              </>
-                            ) : (
-                              <>
-                                {/* actionRisk may be 0 (a valid risk score), so guard on null, not falsy. */}
-                                <td>{e.metadata?.actionRisk != null ? String(e.metadata.actionRisk) : '—'}</td>
-                                <td>{e.metadata?.sensitivity ?? '—'}</td>
-                              </>
-                            )}
-                            <td>{e.metadata?.version ?? '—'}</td>
-                          </tr>
-                        ))}
+                        {pageRows.map(e => {
+                          const row = rowByName.get(e.name);
+                          const isBundle = row?.rowKind === 'bundle';
+                          const isOpen = expanded.has(e.name);
+                          // A bundle is "broken" when it's pinned by at least one enabled
+                          // agent but the bundle itself isn't enabled — those tools are
+                          // silently missing from that agent's function list.
+                          const broken = (row?.unresolvedFor.length ?? 0) > 0;
+                          return (
+                            <Fragment key={e.name}>
+                              <tr
+                                className={selected?.name === e.name ? 'active' : undefined}
+                                onClick={() => setSelected(e)}
+                                style={{ cursor: 'pointer' }}
+                              >
+                                <td>
+                                  {isBundle && (
+                                    <button
+                                      type="button"
+                                      aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${e.name}`}
+                                      aria-expanded={isOpen}
+                                      onClick={ev => { ev.stopPropagation(); toggleExpanded(e.name); }}
+                                      style={{
+                                        background: 'none', border: 'none', cursor: 'pointer',
+                                        padding: '0 6px 0 0', color: 'inherit', font: 'inherit',
+                                      }}
+                                    >
+                                      {isOpen ? '▾' : '▸'}
+                                    </button>
+                                  )}
+                                  {/* Warn icon if the manifest failed to parse */}
+                                  {e.name}{e.manifestError ? ' ⚠' : ''}
+                                </td>
+                                {kind === 'tool' && (
+                                  <td>
+                                    <span className="status-pill">
+                                      {isBundle ? 'bundle' : 'tool'}
+                                    </span>
+                                  </td>
+                                )}
+                                <td>
+                                  <span className={`status-pill ${STATE_PILL[e.state]}`}>
+                                    {/* Extra warning on ghost: manifest is gone but DB row lingers */}
+                                    {e.state}{e.state === 'ghost' ? ' ⚠' : ''}
+                                  </span>
+                                </td>
+                                {kind === 'agent' ? (
+                                  <>
+                                    <td>{e.metadata?.modelTier ?? '—'}</td>
+                                  </>
+                                ) : (
+                                  <>
+                                    {/* actionRisk may be 0 (a valid risk score), so guard on null, not falsy. */}
+                                    <td>{e.metadata?.actionRisk != null ? String(e.metadata.actionRisk) : '—'}</td>
+                                    <td>{e.metadata?.sensitivity ?? '—'}</td>
+                                    <td>
+                                      {broken ? (
+                                        <span
+                                          className="status-pill blocked"
+                                          title={
+                                            `${row!.unresolvedFor.join(', ')} pin${row!.unresolvedFor.length === 1 ? 's' : ''} ` +
+                                            `this bundle. It is not enabled, so ${row!.members.length} ` +
+                                            `tool${row!.members.length === 1 ? '' : 's'} are missing from ` +
+                                            `${row!.unresolvedFor.length === 1 ? 'that agent' : 'those agents'}' function list.`
+                                          }
+                                        >
+                                          ⚠ {row!.unresolvedFor.join(', ')}
+                                        </span>
+                                      ) : (
+                                        row?.pinnedBy.length ? row.pinnedBy.join(', ') : '—'
+                                      )}
+                                    </td>
+                                  </>
+                                )}
+                                <td>{e.metadata?.version ?? '—'}</td>
+                              </tr>
+                              {isBundle && isOpen && row!.members.map(m => (
+                                <tr key={`${e.name}:${m.name}`} style={{ opacity: 0.75 }}>
+                                  <td style={{ paddingLeft: 28 }}>{m.name}</td>
+                                  <td />
+                                  <td>
+                                    <span className={`status-pill ${STATE_PILL[m.state]}`}>{m.state}</span>
+                                  </td>
+                                  <td colSpan={3} style={{ fontSize: 12, color: 'var(--app-fg-muted)' }}>
+                                    managed by {e.name}
+                                  </td>
+                                  <td>{m.metadata?.version ?? '—'}</td>
+                                </tr>
+                              ))}
+                            </Fragment>
+                          );
+                        })}
                         {pageRows.length === 0 && (
                           <tr>
                             <td colSpan={colCount} style={{ textAlign: 'center', padding: 40, color: 'var(--app-fg-muted)' }}>
