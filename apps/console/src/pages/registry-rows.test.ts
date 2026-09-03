@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRows } from './registry-rows.js';
+import { buildRows, collateralPins } from './registry-rows.js';
 import type { RegistryEntry } from './registry-rows.js';
 
 const entry = (name: string, over: Partial<RegistryEntry> = {}): RegistryEntry => ({
@@ -68,5 +68,35 @@ describe('buildRows', () => {
     );
 
     expect(rows.map(r => r.entry.name)).toEqual(['ghost-bundle', 'orphan-tool']);
+  });
+});
+
+describe('collateralPins', () => {
+  const row = {
+    entry: bundle('ceo-inbox', ['ceo-inbox-search', 'ceo-inbox-list'], [], 'enabled'),
+    rowKind: 'bundle' as const,
+    members: [entry('ceo-inbox-search'), entry('ceo-inbox-list')],
+    pinnedBy: [],
+    unresolvedFor: [],
+  };
+
+  it('reports member tools pinned individually by other agents', () => {
+    const agents = [
+      entry('T2125-expense-tracker', {
+        kind: 'agent', state: 'enabled',
+        metadata: { name: 'T2125-expense-tracker', description: 'd', version: '1.0.0',
+          pinnedTools: ['ceo-inbox-search'] },
+      }),
+    ];
+
+    expect(collateralPins(row, agents)).toEqual([
+      { tool: 'ceo-inbox-search', agents: ['T2125-expense-tracker'] },
+    ]);
+  });
+
+  // Brief's original name implied this exercises "the bundle owner itself" too, but the
+  // assertion below only ever covers the empty-agents case — renamed to match reality.
+  it('returns nothing when no other agent pins a member', () => {
+    expect(collateralPins(row, [])).toEqual([]);
   });
 });

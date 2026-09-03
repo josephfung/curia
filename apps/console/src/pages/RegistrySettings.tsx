@@ -6,7 +6,7 @@ import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 // Types + row-tree builder live in registry-rows.ts, shared with its unit tests
 // (mirrors src/registry/types.ts RegistryEntry).
-import { buildRows, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
+import { buildRows, collateralPins, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
 
 // Map each DerivedState to one of the existing .status-pill modifier classes
 // (app.css) so no new CSS is needed:
@@ -103,9 +103,13 @@ function SecretRow({ name, configured, onSaved }: {
 
 // ── Detail drawer ────────────────────────────────────────────────────────────
 
-function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
+function RegistryDrawer({ entry, kindPath, row, agents, onClose, onChanged }: {
   entry: RegistryEntry;
   kindPath: 'tools' | 'agents';
+  // Only populated on the /tools path — used to warn before a bundle disable strips a
+  // tool that some other agent pins directly (#1724).
+  row?: Row;
+  agents: RegistryEntry[];
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -167,6 +171,31 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
       void act('DELETE', '');
     }
   };
+
+  // Disabling a bundle cascades to its member tools. Some of those tools may be pinned
+  // directly by a different agent that never asked for the bundle at all — silently
+  // stripping them from that agent's function list (the real-world case: T2125-expense-tracker
+  // pins ceo-inbox-search/ceo-inbox-download-attachment, both ceo-inbox members). Warn the
+  // operator with the affected agents before letting the disable through. Non-bundle rows
+  // (or rows we weren't given, e.g. the /agents page) skip straight to true — nothing cascades.
+  const confirmDisable = useCallback((): boolean => {
+    if (row?.rowKind !== 'bundle') return true;
+    const collateral = collateralPins(row, agents);
+    const lines = [
+      `Disable the "${entry.name}" bundle?`,
+      '',
+      `This also disables ${row.members.length} member tool${row.members.length === 1 ? '' : 's'}.`,
+    ];
+    if (collateral.length > 0) {
+      lines.push(
+        '',
+        'These member tools are pinned directly by other agents, which will lose them:',
+        ...collateral.map(c => `  • ${c.tool} — ${c.agents.join(', ')}`),
+      );
+    }
+    lines.push('', 'Takes effect on the next restart.');
+    return window.confirm(lines.join('\n'));
+  }, [row, agents, entry.name]);
 
   return (
     <aside className="drawer">
@@ -322,7 +351,7 @@ function RegistryDrawer({ entry, kindPath, onClose, onChanged }: {
             type="button"
             className="btn btn-secondary btn-sm"
             disabled={busy}
-            onClick={() => void act('POST', '/disable')}
+            onClick={() => { if (confirmDisable()) void act('POST', '/disable'); }}
           >
             Disable
           </button>
@@ -430,12 +459,9 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
 
   const [entries, setEntries] = useState<RegistryEntry[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
-  // Retained on the /tools path so Task 6's drawer can warn which enabled agents
-  // pin a bundle directly, without a second round-trip to /api/registry/agents.
-  // Not read yet — this task only wires the fetch; Task 6 consumes it. The `void`
-  // keeps noUnusedLocals quiet without touching rendered markup ahead of that task.
+  // Retained on the /tools path so the drawer can warn which enabled agents pin a
+  // bundle's member tools directly, without a second round-trip to /api/registry/agents.
   const [agents, setAgents] = useState<RegistryEntry[]>([]);
-  void agents;
   const [selected, setSelected] = useState<RegistryEntry | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -775,6 +801,8 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
                     key={selected.name}
                     entry={selected}
                     kindPath={kindPath}
+                    row={rowByName.get(selected.name)}
+                    agents={agents}
                     onClose={() => setSelected(null)}
                     onChanged={() => { void load(); }}
                   />

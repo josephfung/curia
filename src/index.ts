@@ -2358,6 +2358,9 @@ async function main(): Promise<void> {
             version: d.config.version ?? '0.0.0',
             role: d.config.role,
             modelTier: d.config.model?.tier,
+            // Raw pinned_skills, unfiltered — the console cross-references this against
+            // each bundle's members to warn before a disable strips a directly-pinned tool.
+            pinnedTools: d.config.pinned_skills ?? [],
           }
         : null,
       error: d.error,
