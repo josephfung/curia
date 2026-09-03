@@ -7,7 +7,7 @@
 // Kinds: tool (atom), skill (bundle), agent.
 
 import type {
-  IRegistryRepo, RegistryKind, RegistryEntry, Discovery, SecretsLister,
+  IRegistryRepo, RegistryKind, RegistryEntry, Discovery, SecretsLister, IBundleCascadeRepo,
 } from './types.js';
 import { RegistryGuardError } from './types.js';
 
@@ -27,6 +27,9 @@ export class RegistryService {
     private readonly secrets?: SecretsLister,
     private readonly skillRepo?: IRegistryRepo,
     private skillDiscovery: Discovery[] = [],
+    // Cross-table cascade for bundle enable/disable. Required for kind='skill';
+    // absent is a wiring error, not a fallback (see bundleTools()).
+    private readonly cascade?: IBundleCascadeRepo,
   ) {}
 
   setDiscovery(kind: RegistryKind, discovery: Discovery[]): void {
@@ -48,6 +51,23 @@ export class RegistryService {
     if (kind === 'tool') return this.toolDiscovery;
     if (kind === 'agent') return this.agentDiscovery;
     return this.skillDiscovery;
+  }
+
+  /** Member tools of a bundle, from on-disk discovery. Empty array for a bundle whose
+   *  manifest failed to parse — cascading nothing is correct there, the bundle row
+   *  still flips and the broken manifest is already surfaced as `manifestError`. */
+  private bundleTools(name: string): string[] {
+    return this.skillDiscovery.find(d => d.name === name)?.metadata?.tools ?? [];
+  }
+
+  private requireCascade(name: string): IBundleCascadeRepo {
+    if (!this.cascade) {
+      throw new Error(
+        `RegistryService: bundle cascade repo not configured; refusing to change '${name}' ` +
+        `without cascading its member tools`,
+      );
+    }
+    return this.cascade;
   }
 
   /** Every known item (on disk and/or in DB) with its derived state. */
@@ -161,7 +181,12 @@ export class RegistryService {
     await this.assertSecretsConfigured(kind, name);
     const row = await this.repo(kind).getRow(name);
     if (!row) throw new RegistryGuardError(`Cannot enable '${name}': not installed. Install it first.`);
-    await this.repo(kind).enable(name, actor);
+    if (kind === 'skill') {
+      // Bundle + members in one transaction — the bundle is the unit of control (#1724).
+      await this.requireCascade(name).enableBundle(name, this.bundleTools(name), actor);
+    } else {
+      await this.repo(kind).enable(name, actor);
+    }
     return this.entry(kind, name);
   }
 
@@ -169,14 +194,22 @@ export class RegistryService {
     this.assertInstallable(kind, name);
     await this.assertSecretsConfigured(kind, name);
     await this.repo(kind).install(name, actor);
-    await this.repo(kind).enable(name, actor);
+    if (kind === 'skill') {
+      await this.requireCascade(name).enableBundle(name, this.bundleTools(name), actor);
+    } else {
+      await this.repo(kind).enable(name, actor);
+    }
     return this.entry(kind, name);
   }
 
   async disable(kind: RegistryKind, name: string, actor: string): Promise<RegistryEntry> {
     const row = await this.repo(kind).getRow(name);
     if (!row) throw new RegistryGuardError(`Cannot disable '${name}': no registry row.`);
-    await this.repo(kind).disable(name, actor);
+    if (kind === 'skill') {
+      await this.requireCascade(name).disableBundle(name, this.bundleTools(name), actor);
+    } else {
+      await this.repo(kind).disable(name, actor);
+    }
     return this.entry(kind, name);
   }
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { RegistryService } from './registry-service.js';
-import type { IRegistryRepo, RegistryRow, Discovery, SecretsLister } from './types.js';
+import type { IRegistryRepo, RegistryRow, Discovery, SecretsLister, IBundleCascadeRepo } from './types.js';
 
 // In-memory fake vault — returns whatever key names it was seeded with.
 class FakeSecrets implements SecretsLister {
@@ -247,5 +247,79 @@ describe('RegistryService.list — skill bundle metadata', () => {
     const bundle = (await svc.list('skill')).find(e => e.name === 'ceo-inbox');
     expect(bundle?.state).toBe('uninstalled');
     expect(bundle?.metadata?.tools).toEqual(['ceo-inbox-list']);
+  });
+});
+
+class FakeCascade implements IBundleCascadeRepo {
+  enabled: Array<{ bundle: string; tools: string[] }> = [];
+  disabled: Array<{ bundle: string; tools: string[] }> = [];
+  async enableBundle(bundle: string, tools: string[]) { this.enabled.push({ bundle, tools }); }
+  async disableBundle(bundle: string, tools: string[]) { this.disabled.push({ bundle, tools }); }
+}
+
+describe('RegistryService — bundle cascade', () => {
+  const bundleDisc = [{
+    name: 'ceo-inbox',
+    metadata: {
+      name: 'ceo-inbox', description: 'd', version: '0.1.0',
+      tools: ['ceo-inbox-list', 'ceo-inbox-read'], pinnedBy: ['ceo-inbox'],
+    },
+  }];
+
+  it('enable cascades the bundle and its member tools', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    const cascade = new FakeCascade();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, cascade,
+    );
+
+    await svc.enable('skill', 'ceo-inbox', 'web-app');
+
+    expect(cascade.enabled).toEqual([
+      { bundle: 'ceo-inbox', tools: ['ceo-inbox-list', 'ceo-inbox-read'] },
+    ]);
+  });
+
+  it('disable cascades the bundle and its member tools', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    const cascade = new FakeCascade();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, cascade,
+    );
+
+    await svc.disable('skill', 'ceo-inbox', 'web-app');
+
+    expect(cascade.disabled).toEqual([
+      { bundle: 'ceo-inbox', tools: ['ceo-inbox-list', 'ceo-inbox-read'] },
+    ]);
+  });
+
+  it('refuses a bundle enable when no cascade repo is wired', async () => {
+    // Fail loudly rather than silently writing only skill_registry and leaving the
+    // member tools untouched — a partial enable is the bug this feature exists to stop.
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc,
+    );
+
+    await expect(svc.enable('skill', 'ceo-inbox', 'web-app'))
+      .rejects.toThrow(/cascade repo not configured/i);
+  });
+
+  it('leaves tool and agent enable on the single-table path', async () => {
+    const toolRepo = new FakeRepo();
+    await toolRepo.install('bullpen', 'test');
+    const cascade = new FakeCascade();
+    const svc = new RegistryService(
+      toolRepo, new FakeRepo(), [disc('bullpen')], [], undefined, new FakeRepo(), [], cascade,
+    );
+
+    await svc.enable('tool', 'bullpen', 'web-app');
+
+    expect(cascade.enabled).toEqual([]);
+    expect((await toolRepo.getRow('bullpen'))?.enabled).toBe(true);
   });
 });
