@@ -2330,6 +2330,18 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Which agents pin each skill bundle. Read from agent manifests on disk so the
+  // registry UI can flag a bundle that an agent depends on but which is not enabled —
+  // the condition that silently stripped ceo-inbox's 14 tools for a month (#1724).
+  const pinnedByBundle = new Map<string, string[]>();
+  for (const agent of agentDiscovery) {
+    for (const pin of agent.config?.pinned_skills ?? []) {
+      const list = pinnedByBundle.get(pin);
+      if (list) list.push(agent.name);
+      else pinnedByBundle.set(pin, [agent.name]);
+    }
+  }
+
   // RegistryService backs the /api/registry/* routes. Seed it with the discovery
   // captured above so the UI can show uninstalled/ghost/error items, not just enabled.
   const registryService = new RegistryService(
@@ -2360,6 +2372,8 @@ async function main(): Promise<void> {
             name: d.metadata.name,
             description: d.metadata.description,
             version: d.metadata.version,
+            tools: d.metadata.tools,
+            pinnedBy: pinnedByBundle.get(d.name) ?? [],
           }
         : null,
       error: d.error,

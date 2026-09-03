@@ -205,3 +205,47 @@ describe('RegistryService secrets gate', () => {
       .rejects.toThrow(/vault is unavailable/);
   });
 });
+
+describe('RegistryService.list — skill bundle metadata', () => {
+  it('surfaces member tools and pin consumers for a bundle', async () => {
+    const skillRepo = new FakeRepo();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo,
+      [{
+        name: 'ceo-inbox',
+        metadata: {
+          name: 'ceo-inbox',
+          description: 'CEO inbox tools',
+          version: '0.1.0',
+          tools: ['ceo-inbox-list', 'ceo-inbox-read'],
+          pinnedBy: ['ceo-inbox'],
+        },
+      }],
+    );
+
+    const entries = await svc.list('skill');
+    const bundle = entries.find(e => e.name === 'ceo-inbox');
+
+    expect(bundle?.metadata?.tools).toEqual(['ceo-inbox-list', 'ceo-inbox-read']);
+    expect(bundle?.metadata?.pinnedBy).toEqual(['ceo-inbox']);
+  });
+
+  it('reports members for a bundle that is not installed', async () => {
+    // The whole point: a disabled bundle is never in SkillRegistry, so membership
+    // must come from on-disk discovery. An empty skillRepo = uninstalled.
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, new FakeRepo(),
+      [{
+        name: 'ceo-inbox',
+        metadata: {
+          name: 'ceo-inbox', description: 'd', version: '0.1.0',
+          tools: ['ceo-inbox-list'], pinnedBy: [],
+        },
+      }],
+    );
+
+    const bundle = (await svc.list('skill')).find(e => e.name === 'ceo-inbox');
+    expect(bundle?.state).toBe('uninstalled');
+    expect(bundle?.metadata?.tools).toEqual(['ceo-inbox-list']);
+  });
+});
