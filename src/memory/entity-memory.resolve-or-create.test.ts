@@ -911,7 +911,9 @@ describe('resolveOrCreate / addAlias logs never carry the raw label or alias (PI
   it('fuzzy semantic-search-failed warn', async () => {
     const log = spyLog();
     const { mem, store } = makeMem(log);
-    vi.spyOn(store, 'semanticSearch').mockRejectedValueOnce(new Error('embedding timeout'));
+    vi.spyOn(store, 'semanticSearch').mockRejectedValueOnce(
+      new Error(`embedding timeout for ${PII_LABEL}`),
+    );
 
     await mem.resolveOrCreate({
       label: PII_LABEL,
@@ -923,7 +925,9 @@ describe('resolveOrCreate / addAlias logs never carry the raw label or alias (PI
     expectNoPii(call);
     expect(call![0]).toHaveProperty('expectedType', 'person');
     expect(call![0]).not.toHaveProperty('nodeId');
-    expect(call![0]).toHaveProperty('error', 'embedding timeout');
+    expect(call![0]).not.toHaveProperty('error');
+    expect(call![0]).not.toHaveProperty('err');
+    expect(call![0]).toHaveProperty('errorName', 'Error');
   });
 
   it('addAlias entity-node-not-found warn', async () => {
@@ -978,13 +982,17 @@ describe('resolveOrCreate / addAlias logs never carry the raw label or alias (PI
     const { entity } = await mem.createEntity({
       type: 'organization', label: 'Darlise Restaurant', properties: {}, source: 'test',
     });
-    vi.spyOn(store, 'getNode').mockRejectedValueOnce(new Error('connection timeout'));
+    vi.spyOn(store, 'getNode').mockRejectedValueOnce(
+      new Error(`connection timeout for ${PII_LABEL}`),
+    );
 
     await mem.addAlias(entity.id, PII_LABEL);
 
     const call = findCall(log.warn, /addAlias: unexpected error/);
     expectNoPii(call);
     expect(call![0]).toHaveProperty('nodeId', entity.id);
-    expect(call![0]).toHaveProperty('error', 'connection timeout');
+    expect(call![0]).not.toHaveProperty('error');
+    expect(call![0]).not.toHaveProperty('err');
+    expect(call![0]).toHaveProperty('errorName', 'Error');
   });
 });

@@ -459,7 +459,9 @@ export class EntityMemory {
     } catch (err) {
       this.logger.warn(
         // No node id yet — log the type hint, not the raw label.
-        { expectedType: options.type, error: err instanceof Error ? err.message : String(err) },
+        // errorName, not err.message: embedding/DB errors can echo the query
+        // (the caller-supplied name) and pino does not redact it.
+        { expectedType: options.type, errorName: err instanceof Error ? err.name : typeof err },
         'resolveOrCreate: fuzzy semantic search failed — falling back to entity creation',
       );
       // Fall through to Phase 3 intentionally: fact storage must not block on
@@ -531,7 +533,7 @@ export class EntityMemory {
       }
     } catch (err) {
       this.logger.warn(
-        { nodeId, error: err instanceof Error ? err.message : String(err) },
+        { nodeId, errorName: err instanceof Error ? err.name : typeof err },
         'addAlias: unexpected error — skipping',
       );
       // Best-effort: do not rethrow

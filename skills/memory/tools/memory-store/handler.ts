@@ -376,7 +376,10 @@ export class MemoryStoreHandler implements ToolHandler {
     } catch (err) {
       ctx.log.error(
         {
-          err,
+          // errorName, not the raw Error: pino serializes err.message, which can
+          // echo the caller-supplied entity name. The skill result still returns
+          // the message to the agent.
+          errorName: err instanceof Error ? err.name : typeof err,
           // Never the raw entity name. entityNodeId is set after resolution
           // succeeds; undefined here is the pre-resolve signal.
           entityNodeId: entityNode?.id,

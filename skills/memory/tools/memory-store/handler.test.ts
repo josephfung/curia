@@ -1012,7 +1012,7 @@ describe('MemoryStoreHandler', () => {
 
     it('unexpected-error after resolution', async () => {
       const entityMemory = mockMem({});
-      entityMemory.storeFact.mockRejectedValue(new Error('DB connection lost'));
+      entityMemory.storeFact.mockRejectedValue(new Error(`DB connection lost for ${PII_ENTITY}`));
       const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
 
       await handler.execute(ctx);
@@ -1021,11 +1021,14 @@ describe('MemoryStoreHandler', () => {
       expectNoPii(call);
       expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
       expect(call![0]).not.toHaveProperty('entity');
+      expect(call![0]).not.toHaveProperty('err');
+      expect(call![0]).not.toHaveProperty('error');
+      expect(call![0]).toHaveProperty('errorName', 'Error');
     });
 
     it('unexpected-error before resolution', async () => {
       const entityMemory = mockMem({});
-      entityMemory.resolveOrCreate.mockRejectedValue(new Error('DB connection lost'));
+      entityMemory.resolveOrCreate.mockRejectedValue(new Error(`DB connection lost for ${PII_ENTITY}`));
       const { ctx, log } = ctxFor(entityMemory, piiInput());
 
       await handler.execute(ctx);
@@ -1033,6 +1036,9 @@ describe('MemoryStoreHandler', () => {
       const call = findCall(log.error, /memory-store: unexpected error/);
       expectNoPii(call);
       expect((call![0] as Record<string, unknown>).entityNodeId).toBeUndefined();
+      expect(call![0]).not.toHaveProperty('err');
+      expect(call![0]).not.toHaveProperty('error');
+      expect(call![0]).toHaveProperty('errorName', 'Error');
     });
   });
 });
