@@ -303,6 +303,25 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
           tags: ${{ matrix.tags }}
+          # `latest` comes from the `type=raw` line in `matrix.tags` and NOWHERE
+          # else. metadata-action's default is `latest=auto`, under which
+          # `procSemver` sets latest for *any non-prerelease semver it resolves*
+          # — it does not care that our raw entry said `enable=false`, and it
+          # does not require a tag ref.
+          #
+          # That default was harmless until #1715 gave the semver entries an
+          # explicit `value=`. Before that, a dispatch resolved no version at
+          # all (branch ref, no value), so auto-latest had nothing to attach to.
+          # Afterwards a re-publish of v0.41.0 resolved a version, auto-latest
+          # fired, and `latest` moved **backwards** onto the old release —
+          # the exact failure #1715 and #1718 were about, reintroduced through
+          # an input neither of them touched. Caught by the live dispatch in
+          # #1718's AC #5; expression-level tests could not see it, because the
+          # tags block they model was correct and the default is not in it.
+          #
+          # Keep this pinned off, so `latest` is only ever written by a rule
+          # visible in this file.
+          flavor: latest=false
           # Overrides metadata-action's `github.sha` default — see the step above.
           labels: |
             org.opencontainers.image.revision=${{ steps.src.outputs.sha }}

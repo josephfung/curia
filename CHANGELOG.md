@@ -67,6 +67,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`docker-publish` `:latest`** — pinned `flavor: latest=false`; a dispatched re-publish no longer moves `latest` backwards. (#1718)
 - **`docker-publish` re-publish** — the ref-dropdown form now resolves and validates its tag like the input form. (#1718)
 - **`docker-publish` dispatch** — a dispatch that would publish nothing, or name a tag from an unrelated branch, is refused. (#1718)
 - **`docker-publish` concurrency** — a re-publish can no longer cancel the release build of the same tag. (#1718)

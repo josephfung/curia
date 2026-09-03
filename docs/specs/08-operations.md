@@ -132,6 +132,13 @@ Both images are built for `linux/amd64` + `linux/arm64` and signed with **cosign
   strict semver before checkout, and every downstream tag decision keys off that rather
   than off `github.ref`, which on a dispatch names the launch branch and not the built
   source (mirrors `release.yml`).
+- `metadata-action` runs with **`flavor: latest=false`**, so `latest` is only ever
+  written by the `type=raw` rule above. Its default is `latest=auto`, under which any
+  non-prerelease semver it resolves adds `latest` regardless of that rule's `enable=`.
+  Combined with the explicit `value=` added in #1715, that silently moved `latest` onto
+  a dispatched re-publish of an old release — found by an actual dispatch, since every
+  expression in the workflow was correct and the offending default was not in the file
+  at all (#1718).
 
 **Re-publishing a release by hand.** There are two ways to name the tag, and they are
 equivalent — `resolve` normalises both to one publish target (#1718):
