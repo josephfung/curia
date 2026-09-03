@@ -6,7 +6,7 @@ import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 // Types + row-tree builder live in registry-rows.ts, shared with its unit tests
 // (mirrors src/registry/types.ts RegistryEntry).
-import { buildRows, collateralPins, registryPathSegment, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
+import { buildRows, collateralPins, registryPathSegment, uninstallBlockedReason, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
 
 // Map each DerivedState to one of the existing .status-pill modifier classes
 // (app.css) so no new CSS is needed:
@@ -168,7 +168,14 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
     }
   }, [entry.name, entry.kind, onChanged]);
 
+  // Non-null when the server would refuse this uninstall (an enabled bundle). Drives both
+  // the disabled state and the explanatory copy below the action row.
+  const uninstallBlocked = uninstallBlockedReason(entry);
+
   const confirmUninstall = () => {
+    // Belt and braces: the button is already disabled in this state, but a stray caller
+    // must not be able to fire a delete the server will reject.
+    if (uninstallBlocked !== null) return;
     if (window.confirm(`Uninstall "${entry.name}"? This removes its registry row.`)) {
       void act('DELETE', '');
     }
@@ -379,16 +386,26 @@ function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
           </button>
         )}
 
-        {/* Uninstall — available for any entry that has a registry row */}
+        {/* Uninstall — available for any entry that has a registry row. Kept visible but
+            inert for an enabled bundle: the server refuses that delete, so offering a live
+            button would invite a click that can only end in a 400. The tooltip carries the
+            reason and the remedy, which is more useful than hiding the control and leaving
+            the operator to wonder where it went. */}
         {entry.state !== 'uninstalled' && (
           <button
             type="button"
             className="btn btn-danger btn-sm"
-            disabled={busy}
+            disabled={busy || uninstallBlocked !== null}
+            title={uninstallBlocked ?? undefined}
             onClick={confirmUninstall}
           >
             Uninstall
           </button>
+        )}
+        {uninstallBlocked && (
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--app-fg-muted)' }}>
+            {uninstallBlocked}
+          </p>
         )}
       </div>
     </aside>

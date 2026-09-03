@@ -69,6 +69,27 @@ export function registryPathSegment(kind: RegistryEntry['kind']): 'skills' | 'to
 }
 
 /**
+ * Why uninstall is refused for this entry, or null when it is allowed.
+ *
+ * Mirrors the server guard in RegistryService.uninstall: an ENABLED bundle cannot be
+ * uninstalled, because deleting the skill_registry row leaves every member tool_registry
+ * row enabled — and runtime tool availability reads tool_registry alone, so those tools
+ * stay loaded and callable with no bundle owning them. Disable first; that cascades.
+ *
+ * Deliberately NOT stricter than the server. A bundle whose manifest is missing derives
+ * state 'ghost', not 'enabled', and the server permits that delete precisely because
+ * clearing a ghost row is the only way to remove one — blocking it here would leave the
+ * row with no console action at all. Plain tools and agents are never blocked.
+ *
+ * Returned string is shown as the button's tooltip, so it must say what to do instead.
+ */
+export function uninstallBlockedReason(entry: RegistryEntry): string | null {
+  if (entry.kind !== 'skill' || entry.state !== 'enabled') return null;
+  return 'Disable this bundle first — uninstalling it now would leave its member tools '
+    + 'enabled and callable with no bundle owning them.';
+}
+
+/**
  * Build the merged row list: every bundle first (in the order returned), then any
  * tool not claimed by a bundle.
  *
