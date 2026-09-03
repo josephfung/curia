@@ -322,4 +322,48 @@ describe('RegistryService — bundle cascade', () => {
     expect(cascade.enabled).toEqual([]);
     expect((await toolRepo.getRow('bullpen'))?.enabled).toBe(true);
   });
+
+  it('installAndEnable cascades the bundle and its member tools', async () => {
+    // Starts from an empty skillRepo so this genuinely installs then enables —
+    // this is the /api/registry/skills/:name/install-enable route an operator
+    // actually uses to enrol a bundle for the first time (#1724).
+    const skillRepo = new FakeRepo();
+    const cascade = new FakeCascade();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, cascade,
+    );
+
+    await svc.installAndEnable('skill', 'ceo-inbox', 'web-app');
+
+    expect(cascade.enabled).toEqual([
+      { bundle: 'ceo-inbox', tools: ['ceo-inbox-list', 'ceo-inbox-read'] },
+    ]);
+    const row = await skillRepo.getRow('ceo-inbox');
+    expect(row).not.toBeNull();
+    expect(row?.installedBy).toBe('web-app');
+  });
+
+  it('refuses installAndEnable on a bundle when no cascade repo is wired', async () => {
+    const skillRepo = new FakeRepo();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc,
+    );
+
+    await expect(svc.installAndEnable('skill', 'ceo-inbox', 'web-app'))
+      .rejects.toThrow(/cascade repo not configured/i);
+  });
+
+  it('refuses a bundle disable when no cascade repo is wired', async () => {
+    // Symmetry with the enable-side guard: cheap to assert, and its absence is what
+    // would let a future refactor silently reintroduce the single-table fallback on
+    // disable while enable stays guarded.
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc,
+    );
+
+    await expect(svc.disable('skill', 'ceo-inbox', 'web-app'))
+      .rejects.toThrow(/cascade repo not configured/i);
+  });
 });
