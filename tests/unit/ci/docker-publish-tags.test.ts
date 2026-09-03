@@ -235,8 +235,32 @@ function applyPattern(pattern: string, rawVersion: string): string {
 }
 
 /** Render a matrix entry's `tags` block into the tag names it would publish. */
+/**
+ * Whether metadata-action's implicit auto-`latest` is disabled in the workflow.
+ *
+ * This models an input the workflow can *omit*, which is why it exists. The
+ * `tags:` block is not the only source of `latest`: metadata-action defaults to
+ * `flavor: latest=auto`, and under `auto` its `procSemver` sets latest for any
+ * non-prerelease semver it resolves — regardless of what the `type=raw` latest
+ * entry's `enable=` said, and regardless of whether the ref is a tag.
+ *
+ * That default published `latest` from a dispatched re-publish of an old
+ * release, moving it backwards, while every expression in the file evaluated
+ * correctly. A model that reads only what is written cannot catch a default
+ * that isn't — so read the flavor and model the default when it is absent.
+ */
+function autoLatestDisabled(): boolean {
+  const meta = workflow.jobs.build.steps.find((s) => (s as Step).id === 'meta') as Step | undefined;
+  if (!meta) throw new Error("no step with id 'meta' in jobs.build.steps");
+  return /(^|\s)latest=false(\s|$)/.test(String(meta.with?.flavor ?? ''));
+}
+
 function renderTags(tagsBlock: string, ctx: Context): string[] {
   const published: string[] = [];
+  // Set when a semver entry resolves a non-prerelease version, mirroring
+  // `procSemver`. Only consulted if the workflow has not pinned latest off.
+  let autoLatest = false;
+
   for (const rawLine of tagsBlock.split('\n')) {
     const line = rawLine.trim();
     if (line === '' || line.startsWith('#')) continue;
@@ -257,10 +281,16 @@ function renderTags(tagsBlock: string, ctx: Context): string[] {
       const ref = lookup('github.ref', ctx);
       const version = explicit || (ref.startsWith('refs/tags/') ? ref.slice('refs/tags/'.length) : '');
       if (version === '') continue;
+      // `procSemver` skips auto-latest for a prerelease, and only for that.
+      if (!/-/.test(version)) autoLatest = true;
       published.push(applyPattern(attrs.get('pattern') ?? '', version));
       continue;
     }
     throw new Error(`renderTags: unsupported tag type '${type}' — extend the evaluator`);
+  }
+
+  if (autoLatest && !autoLatestDisabled() && !published.includes('latest')) {
+    published.push('latest');
   }
   return published;
 }
@@ -709,6 +739,37 @@ describe('docker-publish.yml tag derivation', () => {
     it('matches what the app image will actually publish for an accepted tag', () => {
       expect(tagGuardPattern().test('v0.40.0')).toBe(true);
       expect(tagsFor('curia', DISPATCH_WITH_TAG).sort()).toEqual(['v0.40', 'v0.40.0']);
+    });
+  });
+
+  describe('implicit auto-latest (the #1718 AC-5 finding)', () => {
+    // Found by an actual dispatch, not by this file: a re-publish of v0.41.0
+    // published `latest` alongside its semver tags, moving the pointer
+    // backwards onto old code. Every expression in the workflow was correct.
+    // The extra tag came from metadata-action's default `flavor: latest=auto`,
+    // an input the workflow did not set — so there was nothing here to model.
+    it('is pinned off in the workflow', () => {
+      const meta = workflow.jobs.build.steps.find((s) => (s as Step).id === 'meta') as Step;
+      expect(String(meta.with?.flavor ?? '')).toMatch(/(^|\s)latest=false(\s|$)/);
+    });
+
+    it('would otherwise put :latest on a dispatched re-publish', () => {
+      // Guards the guard: if `latest=false` is dropped, this proves the model
+      // notices, so the assertions below are not passing for a stale reason.
+      expect(renderTags('type=semver,pattern=v{{version}},value=v0.40.0', DISPATCH_WITH_TAG)).toEqual([
+        'v0.40.0',
+      ]);
+      expect(autoLatestDisabled()).toBe(true);
+    });
+
+    it('leaves :latest on a re-publish coming only from the release rule', () => {
+      // The behavioural assertion. `latest` must appear for a release and for
+      // nothing else — including the two dispatch forms, both of which resolve
+      // a real non-prerelease semver and would trip auto-latest.
+      expect(tagsFor('curia', RELEASE)).toContain('latest');
+      expect(tagsFor('curia', DISPATCH_WITH_TAG)).not.toContain('latest');
+      expect(tagsFor('curia', DISPATCH_FROM_TAG_REF)).not.toContain('latest');
+      expect(tagsFor('curia', PUSH_MAIN)).not.toContain('latest');
     });
   });
 
