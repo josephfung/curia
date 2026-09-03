@@ -103,8 +103,11 @@ export interface IRegistryRepo {
   enable(name: string, actor: string): Promise<RegistryRow>;
   /** Set enabled=false (+ clear enabled_at/by). Throws if no row exists. */
   disable(name: string, actor: string): Promise<RegistryRow>;
-  /** Delete the row. No error if absent. */
-  uninstall(name: string): Promise<void>;
+  /** Delete the row. No error if absent — the caller (RegistryService.uninstall)
+   *  decides whether a no-op delete is a guard rejection. Returns whether a row was
+   *  actually deleted so a route/UI action can't report success after deleting
+   *  nothing (finding #2). */
+  uninstall(name: string): Promise<boolean>;
 }
 
 /** Cross-table bundle operations. Separate from IRegistryRepo, which is deliberately

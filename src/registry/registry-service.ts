@@ -193,10 +193,16 @@ export class RegistryService {
   async installAndEnable(kind: RegistryKind, name: string, actor: string): Promise<RegistryEntry> {
     this.assertInstallable(kind, name);
     await this.assertSecretsConfigured(kind, name);
-    await this.repo(kind).install(name, actor);
     if (kind === 'skill') {
+      // No separate install() here: ENABLE_SKILL (bundle-cascade-repo.ts) is already an
+      // upsert (`INSERT ... ON CONFLICT DO UPDATE`), so the cascade alone installs-and-
+      // enables the bundle + its member tools in one transaction. Pre-installing via
+      // repo(kind).install() would commit outside that transaction — if the cascade then
+      // failed, the bundle would be left installed with zero member tools touched, the
+      // exact partial state this feature exists to prevent (finding #4).
       await this.requireCascade(name).enableBundle(name, this.bundleTools(name), actor);
     } else {
+      await this.repo(kind).install(name, actor);
       await this.repo(kind).enable(name, actor);
     }
     return this.entry(kind, name);
@@ -213,8 +219,14 @@ export class RegistryService {
     return this.entry(kind, name);
   }
 
-  /** Uninstall is allowed even for ghosts — it's the only way to clear a ghost row. */
+  /** Uninstall is allowed even for ghosts — it's the only way to clear a ghost row.
+   *  Rejects when nothing was actually deleted: a DELETE that matches zero rows (e.g.
+   *  the bundle-routing bug that sent `DELETE /skills/ceo-inbox` to the tools table)
+   *  must not report success while leaving the item in place (finding #2). */
   async uninstall(kind: RegistryKind, name: string, _actor: string): Promise<void> {
-    await this.repo(kind).uninstall(name);
+    const deleted = await this.repo(kind).uninstall(name);
+    if (!deleted) {
+      throw new RegistryGuardError(`Cannot uninstall ${kind} '${name}': no registry row exists.`);
+    }
   }
 }

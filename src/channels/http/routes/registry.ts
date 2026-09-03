@@ -136,6 +136,12 @@ export async function registryRoutes(
       await registryService.uninstall(kind, name, ACTOR);
       return reply.send({ ok: true });
     } catch (err) {
+      if (err instanceof RegistryGuardError) {
+        // Expected validation rejection (e.g. nothing to delete) — bad request, not a
+        // server failure. Mirrors the install/enable/disable action handler above.
+        request.log.info({ err, kind, name }, 'registry uninstall rejected: guard');
+        return reply.status(400).send({ error: err.message });
+      }
       request.log.error({ err, kind, name }, 'registry uninstall failed');
       return reply.status(500).send({ error: 'Uninstall failed. Check server logs.' });
     }

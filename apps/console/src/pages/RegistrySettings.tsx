@@ -6,7 +6,7 @@ import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
 // Types + row-tree builder live in registry-rows.ts, shared with its unit tests
 // (mirrors src/registry/types.ts RegistryEntry).
-import { buildRows, collateralPins, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
+import { buildRows, collateralPins, registryPathSegment, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
 
 // Map each DerivedState to one of the existing .status-pill modifier classes
 // (app.css) so no new CSS is needed:
@@ -103,9 +103,8 @@ function SecretRow({ name, configured, onSaved }: {
 
 // ── Detail drawer ────────────────────────────────────────────────────────────
 
-function RegistryDrawer({ entry, kindPath, row, agents, onClose, onChanged }: {
+function RegistryDrawer({ entry, row, agents, onClose, onChanged }: {
   entry: RegistryEntry;
-  kindPath: 'tools' | 'agents';
   // Only populated on the /tools path — used to warn before a bundle disable strips a
   // tool that some other agent pins directly (#1724).
   row?: Row;
@@ -154,7 +153,10 @@ function RegistryDrawer({ entry, kindPath, row, agents, onClose, onChanged }: {
     setErr(null);
     try {
       const res = await apiFetch(
-        `/api/registry/${kindPath}/${encodeURIComponent(entry.name)}${suffix}`,
+        // Route by the entry's own kind, not the page it's rendered on — a bundle
+        // (`kind: 'skill'`) must hit /api/registry/skills/..., even though bundle rows
+        // render on the /tools page alongside standalone tools (finding #1).
+        `/api/registry/${registryPathSegment(entry.kind)}/${encodeURIComponent(entry.name)}${suffix}`,
         { method },
       );
       if (!res.ok) throw new Error(await errorMessage(res));
@@ -164,7 +166,7 @@ function RegistryDrawer({ entry, kindPath, row, agents, onClose, onChanged }: {
     } finally {
       setBusy(false);
     }
-  }, [entry.name, kindPath, onChanged]);
+  }, [entry.name, entry.kind, onChanged]);
 
   const confirmUninstall = () => {
     if (window.confirm(`Uninstall "${entry.name}"? This removes its registry row.`)) {
@@ -179,7 +181,27 @@ function RegistryDrawer({ entry, kindPath, row, agents, onClose, onChanged }: {
   // operator with the affected agents before letting the disable through. Non-bundle rows
   // (or rows we weren't given, e.g. the /agents page) skip straight to true — nothing cascades.
   const confirmDisable = useCallback((): boolean => {
-    if (row?.rowKind !== 'bundle') return true;
+    // Key the guard on the entry's own kind, not `row?.rowKind` — `row` is only
+    // populated on the /tools page (see prop comment above), so `row?.rowKind !==
+    // 'bundle'` used to default to true (skip the warning entirely) whenever `row` was
+    // undefined. `entry.kind` is authoritative and always present (finding #3).
+    if (entry.kind !== 'skill') return true;
+
+    if (!row || row.rowKind !== 'bundle') {
+      // We know this is a bundle but don't have its member-tool row data to list what
+      // will be affected — still confirm, with a generic warning rather than silently
+      // letting the cascade through unwarned.
+      return window.confirm(
+        [
+          `Disable the "${entry.name}" bundle?`,
+          '',
+          'This also disables its member tools, but the exact list could not be determined.',
+          '',
+          'Takes effect on the next restart.',
+        ].join('\n'),
+      );
+    }
+
     const collateral = collateralPins(row, agents);
     const lines = [
       `Disable the "${entry.name}" bundle?`,
@@ -195,7 +217,7 @@ function RegistryDrawer({ entry, kindPath, row, agents, onClose, onChanged }: {
     }
     lines.push('', 'Takes effect on the next restart.');
     return window.confirm(lines.join('\n'));
-  }, [row, agents, entry.name]);
+  }, [row, agents, entry.name, entry.kind]);
 
   return (
     <aside className="drawer">
@@ -800,7 +822,6 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
                   <RegistryDrawer
                     key={selected.name}
                     entry={selected}
-                    kindPath={kindPath}
                     row={rowByName.get(selected.name)}
                     agents={agents}
                     onClose={() => setSelected(null)}
