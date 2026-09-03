@@ -85,6 +85,13 @@ export function registryPathSegment(kind: RegistryEntry['kind']): 'skills' | 'to
  */
 export function uninstallBlockedReason(entry: RegistryEntry): string | null {
   if (entry.kind !== 'skill' || entry.state !== 'enabled') return null;
+  // Mirror the server's second condition too: it only refuses when the member list is
+  // READABLE, i.e. when "disable first" is advice that actually works. A bundle whose
+  // SKILL.md fails to parse has metadata === null and derives state 'enabled' (the
+  // directory is on disk, so it is not a ghost) — and disable() rejects it for the same
+  // unreadable-member-list reason. Blocking uninstall here as well would leave that row
+  // with no console action at all, which is the dead end this guard exists to avoid.
+  if (entry.metadata?.tools == null) return null;
   return 'Disable this bundle first — uninstalling it now would leave its member tools '
     + 'enabled and callable with no bundle owning them.';
 }

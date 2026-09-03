@@ -108,6 +108,14 @@ export interface IRegistryRepo {
    *  actually deleted so a route/UI action can't report success after deleting
    *  nothing (finding #2). */
   uninstall(name: string): Promise<boolean>;
+  /** Delete the row only while it is still disabled, in a single statement. Returns false
+   *  when nothing was deleted — either no row exists, or it is enabled.
+   *
+   *  Exists so RegistryService.uninstall's "refuse while enabled" guard cannot be raced: a
+   *  read-then-delete leaves a window in which a concurrent enable commits its bundle+member
+   *  cascade, after which the DELETE would strip the owning bundle row and strand its member
+   *  tools enabled. The predicate moves that check into the same statement as the delete. */
+  uninstallIfDisabled(name: string): Promise<boolean>;
 }
 
 /** Cross-table bundle operations. Separate from IRegistryRepo, which is deliberately

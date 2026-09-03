@@ -151,3 +151,24 @@ describe('uninstallBlockedReason', () => {
     ).toBeNull();
   });
 });
+
+describe('uninstallBlockedReason — must mirror the server, not exceed it', () => {
+  it('allows an enabled bundle whose manifest failed to parse', () => {
+    // metadata === null means the member list is unreadable. The server permits this delete
+    // precisely because there is no cascade route: disable() also rejects it, so blocking
+    // here too would leave the row with no console action at all. Note the derived state is
+    // 'enabled' (not 'ghost') — the directory IS on disk, its SKILL.md just doesn't parse —
+    // which is why keying only on state was wrong.
+    expect(
+      uninstallBlockedReason(
+        entry('broken-bundle', { kind: 'skill', state: 'enabled', metadata: null }),
+      ),
+    ).toBeNull();
+  });
+
+  it('still blocks an enabled bundle whose members are readable', () => {
+    expect(
+      uninstallBlockedReason(bundle('ceo-inbox', ['ceo-inbox-list'], [], 'enabled')),
+    ).not.toBeNull();
+  });
+});
