@@ -67,6 +67,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`docker-publish` re-publish** — the ref-dropdown form now resolves and validates its tag like the input form. (#1718)
+- **`docker-publish` dispatch** — a tag input disagreeing with the launch ref fails instead of silently picking one. (#1718)
 - **`resolveOrCreate` / `addAlias` / `memory-store`** — error logs keep the class name, not the message. (#1713)
 - **`resolveOrCreate` / `addAlias`** — logs use node id instead of the raw label or alias. (#1713)
 - **`memory-store`** — fact-loop logs use node id instead of the raw entity name. (#1713)

@@ -22,7 +22,9 @@
  * stay green while the workflow did something entirely different.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 
@@ -35,9 +37,18 @@ interface MatrixEntry {
   tags: string;
 }
 
+interface Step {
+  id?: string;
+  uses?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: Record<string, unknown>;
+}
+
 interface Workflow {
   concurrency: { group: string };
   jobs: {
+    resolve: { steps: Step[] };
     build: {
       strategy: { matrix: { include: MatrixEntry[] } };
       steps: Array<Record<string, unknown>>;
@@ -60,6 +71,10 @@ function assertWorkflowShape(doc: unknown): asserts doc is Workflow {
   const build = root.jobs?.build;
   if (!build) problems.push('jobs.build');
   if (!Array.isArray(build?.steps) || build.steps.length === 0) problems.push('jobs.build.steps');
+  const resolveSteps = root.jobs?.resolve?.steps;
+  if (!Array.isArray(resolveSteps) || !resolveSteps.some((s) => typeof s?.run === 'string')) {
+    problems.push('jobs.resolve.steps (needs a step with a `run` block)');
+  }
   const include = build?.strategy?.matrix?.include;
   if (!Array.isArray(include) || include.length === 0) {
     problems.push('jobs.build.strategy.matrix.include');
@@ -243,13 +258,23 @@ function renderTags(tagsBlock: string, ctx: Context): string[] {
  * `needs.resolve.outputs.tag` is the workflow's own answer to "what release is
  * being built?" — computed by the `resolve` job from either trigger. Mirrored
  * here so the fixture stays a single source of truth per scenario.
+ *
+ * The precedence must match the shell in `resolve`: dispatch input, then the
+ * release event's tag, then a `refs/tags/*` launch ref. That last one is the
+ * ref-dropdown dispatch form (#1718), and it is the only case where
+ * `github.ref` legitimately names the build target rather than the launch site.
  */
 function contextFor(opts: { eventName: string; ref: string; inputTag?: string; releaseTag?: string }): Context {
-  const resolvedTag = opts.inputTag || opts.releaseTag || '';
+  const refTag = opts.ref.startsWith('refs/tags/') ? opts.ref.slice('refs/tags/'.length) : '';
+  const resolvedTag = opts.inputTag || opts.releaseTag || refTag;
   return {
     github: {
       event_name: opts.eventName,
       ref: opts.ref,
+      // `ref_name` is `ref` with its `refs/heads/` or `refs/tags/` prefix
+      // stripped; the concurrency group reads it. Derived rather than passed in
+      // so a fixture can never state a ref and a ref_name that disagree.
+      ref_name: opts.ref.replace(/^refs\/(heads|tags)\//, ''),
       event: { release: { tag_name: opts.releaseTag ?? '' } },
     },
     inputs: { tag: opts.inputTag ?? '' },
@@ -268,6 +293,11 @@ const DISPATCH_BARE = contextFor({ eventName: 'workflow_dispatch', ref: 'refs/he
 const DISPATCH_BARE_OFF_MAIN = contextFor({
   eventName: 'workflow_dispatch',
   ref: 'refs/heads/some-feature',
+});
+/** The other dispatch form: the tag picked in "Use workflow from", input empty. */
+const DISPATCH_FROM_TAG_REF = contextFor({
+  eventName: 'workflow_dispatch',
+  ref: 'refs/tags/v0.40.0',
 });
 
 /**
@@ -295,6 +325,55 @@ function checkoutRef(): string {
     throw new Error('no actions/checkout step with a `ref` in jobs.build.steps');
   }
   return checkout.with.ref;
+}
+
+// --- running the real `resolve` script ---------------------------------------
+
+/**
+ * The rest of this file *models* the workflow. That model now has a second
+ * source of truth to stay in sync with — `contextFor` mirrors the precedence
+ * rules inside the `resolve` job's shell — and a mirror that drifts is worse
+ * than no test, because it stays green while describing a workflow that no
+ * longer exists.
+ *
+ * So run the actual script. Its `env:` block is interpolated against the same
+ * simulated context the tag assertions use, giving one end-to-end path:
+ * trigger context -> env vars -> the real shell -> the resolved target. Anyone
+ * editing the precedence in the YAML and not here gets a red test.
+ *
+ * `bash -e` matches the default shell GitHub Actions runs a `run:` block under.
+ */
+function runResolve(ctx: Context): { status: number; tag: string; stderr: string } {
+  const step = workflow.jobs.resolve.steps.find((s) => typeof s.run === 'string');
+  if (!step) throw new Error('no `run` step in jobs.resolve.steps');
+
+  const dir = mkdtempSync(join(tmpdir(), 'docker-publish-resolve-'));
+  const scriptPath = join(dir, 'resolve.sh');
+  const outputPath = join(dir, 'github_output');
+  writeFileSync(scriptPath, step.run!);
+  writeFileSync(outputPath, '');
+
+  // Only the variables the step declares, plus GITHUB_OUTPUT. Inheriting the
+  // ambient environment would let a stray INPUT_TAG on a developer's machine
+  // change the result.
+  const env: Record<string, string> = { PATH: process.env.PATH ?? '', GITHUB_OUTPUT: outputPath };
+  for (const [name, expr] of Object.entries(step.env ?? {})) {
+    env[name] = interpolate(String(expr), ctx);
+  }
+
+  let status = 0;
+  let stderr = '';
+  try {
+    execFileSync('bash', ['-e', scriptPath], { env, encoding: 'utf8', stdio: 'pipe' });
+  } catch (err) {
+    const failure = err as { status?: number; stdout?: string; stderr?: string };
+    status = failure.status ?? 1;
+    // The workflow reports failures with `::error::` on stdout, not stderr.
+    stderr = `${failure.stdout ?? ''}${failure.stderr ?? ''}`;
+  }
+
+  const match = /^tag=(.*)$/m.exec(readFileSync(outputPath, 'utf8'));
+  return { status, tag: match?.[1] ?? '', stderr };
 }
 
 function tagsFor(imageName: string, ctx: Context): string[] {
@@ -374,6 +453,100 @@ describe('docker-publish.yml tag derivation', () => {
     it('never mints an edge tag from a non-main branch', () => {
       expect(tagsFor('curia', DISPATCH_BARE_OFF_MAIN)).not.toContain('edge');
       expect(tagsFor('curia-postgres', DISPATCH_BARE_OFF_MAIN)).not.toContain('edge');
+    });
+  });
+
+  describe('workflow_dispatch from the ref dropdown (#1718)', () => {
+    // The second way to re-publish: pick the tag in "Use workflow from" and
+    // leave the `tag` input empty. It has to reach the same place as the input
+    // form, or the workflow has two behaviours and its documentation can only
+    // describe one of them.
+    it('publishes the same tags as the input form', () => {
+      expect(tagsFor('curia', DISPATCH_FROM_TAG_REF).sort()).toEqual(
+        tagsFor('curia', DISPATCH_WITH_TAG).sort(),
+      );
+      expect(tagsFor('curia-postgres', DISPATCH_FROM_TAG_REF)).toEqual(
+        tagsFor('curia-postgres', DISPATCH_WITH_TAG),
+      );
+    });
+
+    it('publishes that release semver and nothing floating', () => {
+      expect(tagsFor('curia', DISPATCH_FROM_TAG_REF).sort()).toEqual(['v0.40', 'v0.40.0']);
+      expect(tagsFor('curia', DISPATCH_FROM_TAG_REF)).not.toContain('edge');
+      expect(tagsFor('curia', DISPATCH_FROM_TAG_REF)).not.toContain('latest');
+      expect(tagsFor('curia-postgres', DISPATCH_FROM_TAG_REF)).toEqual([]);
+    });
+
+    it('checks out the tag, and shares the input form concurrency group', () => {
+      expect(interpolate(checkoutRef(), DISPATCH_FROM_TAG_REF)).toBe('v0.40.0');
+      // Both routes re-publish the same tag, so they must not run concurrently
+      // and race to write it. `github.ref_name` is what makes them agree.
+      expect(interpolate(workflow.concurrency.group, DISPATCH_FROM_TAG_REF)).toBe(
+        interpolate(workflow.concurrency.group, DISPATCH_WITH_TAG),
+      );
+    });
+  });
+
+  describe('the resolve job, executed', () => {
+    // These run the workflow's own shell rather than the model of it above.
+    it.each([
+      ['push to main', PUSH_MAIN, ''],
+      ['a release', RELEASE, 'v0.42.0'],
+      ['a dispatch with a tag input', DISPATCH_WITH_TAG, 'v0.40.0'],
+      ['a dispatch from a tag ref', DISPATCH_FROM_TAG_REF, 'v0.40.0'],
+      ['a bare dispatch from main', DISPATCH_BARE, ''],
+      ['a bare dispatch off main', DISPATCH_BARE_OFF_MAIN, ''],
+    ])('resolves %s to %o', (_name, ctx, expected) => {
+      const result = runResolve(ctx as Context);
+      expect(result.status).toBe(0);
+      expect(result.tag).toBe(expected);
+      // The fixtures feed the tag assertions above; if the real script and the
+      // fixture disagree, every other test in this file is measuring fiction.
+      expect(result.tag).toBe(lookup('needs.resolve.outputs.tag', ctx as Context));
+    });
+
+    it('accepts both boxes filled when they name the same tag', () => {
+      const agreeing = contextFor({
+        eventName: 'workflow_dispatch',
+        ref: 'refs/tags/v0.40.0',
+        inputTag: 'v0.40.0',
+      });
+      expect(runResolve(agreeing)).toMatchObject({ status: 0, tag: 'v0.40.0' });
+    });
+
+    it('refuses a dispatch whose tag input and launch ref disagree', () => {
+      // Ambiguous, and the two boxes have different consequences: the input
+      // decides what is built, the dropdown decides which workflow file runs.
+      const conflicting = contextFor({
+        eventName: 'workflow_dispatch',
+        ref: 'refs/tags/v0.41.0',
+        inputTag: 'v0.40.0',
+      });
+      const result = runResolve(conflicting);
+      expect(result.status).not.toBe(0);
+      expect(result.tag).toBe('');
+      expect(result.stderr).toContain('::error::');
+    });
+
+    it('refuses a malformed tag before anything is built', () => {
+      const bad = contextFor({
+        eventName: 'workflow_dispatch',
+        ref: 'refs/heads/main',
+        inputTag: 'v1.2.3.4',
+      });
+      const result = runResolve(bad);
+      expect(result.status).not.toBe(0);
+      expect(result.tag).toBe('');
+    });
+
+    it('refuses a malformed tag arriving via the ref dropdown', () => {
+      // Before #1718 this path bypassed the guard entirely: `resolve` saw no
+      // tag, and metadata-action silently dropped the unparseable semver entry,
+      // leaving a green run that published nothing.
+      const bad = contextFor({ eventName: 'workflow_dispatch', ref: 'refs/tags/nightly-2026-09-02' });
+      const result = runResolve(bad);
+      expect(result.status).not.toBe(0);
+      expect(result.tag).toBe('');
     });
   });
 

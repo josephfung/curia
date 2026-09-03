@@ -131,6 +131,18 @@ Both images are built for `linux/amd64` + `linux/arm64` and signed with **cosign
   than off `github.ref`, which on a dispatch names the launch branch and not the built
   source (mirrors `release.yml`).
 
+**Re-publishing a release by hand.** There are two ways to name the tag, and they are
+equivalent — `resolve` normalises both to one publish target (#1718):
+
+1. Leave "Use workflow from" on `main` and type the tag into the `tag` input.
+2. Select the tag itself in the "Use workflow from" dropdown and leave `tag` empty.
+
+**Prefer (1).** The dropdown also chooses which *version of the workflow file* runs, so
+(2) re-publishes an old release using that release's copy of `docker-publish.yml`,
+missing every fix landed since — the wrong direction on an incident-response path. Both
+boxes may be filled if they name the same tag; a mismatch fails the run rather than
+guessing which one the operator meant.
+
 **`install.sh` — the supported self-host path** (`install.sh`, download-then-run; it uses
 interactive `read` prompts, so `curl … | bash` does not work). The script:
 
