@@ -168,6 +168,7 @@ import * as fs from 'node:fs';
 import * as yaml from 'js-yaml';
 import { RegistryRepo } from './registry/registry-repo.js';
 import { RegistryService } from './registry/registry-service.js';
+import { BundleCascadeRepo } from './registry/bundle-cascade-repo.js';
 import { reconcileRegistries, type RegistryDefaults } from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
@@ -2378,6 +2379,7 @@ async function main(): Promise<void> {
         : null,
       error: d.error,
     })),
+    new BundleCascadeRepo(pool, logger),
   );
 
   // Wire skill-declared key names into McpRegistryService so uninstall
