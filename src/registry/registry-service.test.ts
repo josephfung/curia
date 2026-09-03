@@ -43,6 +43,14 @@ class FakeRepo implements IRegistryRepo {
     this.rows.set(name, next); return next;
   }
   async uninstall(name: string) { return this.rows.delete(name); }
+  /** Names passed to the conditional delete — lets tests assert which path was taken. */
+  conditionalDeletes: string[] = [];
+  async uninstallIfDisabled(name: string) {
+    this.conditionalDeletes.push(name);
+    const row = this.rows.get(name);
+    if (!row || row.enabled) return false;
+    return this.rows.delete(name);
+  }
 }
 
 const disc = (name: string, extra: Partial<Discovery> = {}): Discovery => ({
@@ -520,5 +528,73 @@ describe('RegistryService — bundle cascade', () => {
 
     await expect(svc.disable('skill', 'ceo-inbox', 'web-app'))
       .rejects.toThrow(/cascade repo not configured/i);
+  });
+});
+
+describe('RegistryService.uninstall — enabled check and delete are atomic', () => {
+  const readableDisc = [{
+    name: 'ceo-inbox',
+    metadata: {
+      name: 'ceo-inbox', description: 'd', version: '0.1.0',
+      tools: ['ceo-inbox-list'], pinnedBy: [],
+    },
+  }];
+
+  it('uses the conditional delete for a bundle whose members are readable', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, readableDisc,
+      new FakeCascade(),
+    );
+
+    await svc.uninstall('skill', 'ceo-inbox', 'web-app');
+
+    expect(skillRepo.conditionalDeletes).toEqual(['ceo-inbox']);
+    expect(await skillRepo.getRow('ceo-inbox')).toBeNull();
+  });
+
+  it('rejects when the row is enabled by a concurrent caller between check and delete', async () => {
+    // The race the conditional delete closes: the guard used to read `enabled`, then DELETE
+    // unconditionally, so an enable committing in between would have its bundle row deleted
+    // while its member tools stayed enabled — orphaning exactly what this guard protects.
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    await skillRepo.enable('ceo-inbox', 'other-actor'); // the concurrent enable
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, readableDisc,
+      new FakeCascade(),
+    );
+
+    await expect(svc.uninstall('skill', 'ceo-inbox', 'web-app'))
+      .rejects.toThrow(/while it is enabled/i);
+    // The row must survive a refused uninstall.
+    expect(await skillRepo.getRow('ceo-inbox')).not.toBeNull();
+  });
+
+  it('still reports the no-row case distinctly', async () => {
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, new FakeRepo(), readableDisc,
+      new FakeCascade(),
+    );
+    await expect(svc.uninstall('skill', 'ceo-inbox', 'web-app'))
+      .rejects.toThrow(/no registry row exists/i);
+  });
+
+  it('uses the unconditional delete when the member list is unreadable', async () => {
+    // Broken manifest: discovery entry present, metadata null. No cascade route exists, so
+    // the delete must still go through or the row becomes unremovable.
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('broken', 'test');
+    await skillRepo.enable('broken', 'test');
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo,
+      [{ name: 'broken', metadata: null, error: 'bad yaml' }], new FakeCascade(),
+    );
+
+    await svc.uninstall('skill', 'broken', 'web-app');
+
+    expect(skillRepo.conditionalDeletes).toEqual([]);
+    expect(await skillRepo.getRow('broken')).toBeNull();
   });
 });

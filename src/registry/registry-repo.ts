@@ -47,6 +47,7 @@ const SQL: Record<RegistryTable, {
   enable: string;
   disable: string;
   uninstall: string;
+  uninstallIfDisabled: string;
 }> = {
   tool_registry: {
     list: `SELECT ${COLS} FROM tool_registry`,
@@ -68,6 +69,7 @@ const SQL: Record<RegistryTable, {
               WHERE name = $1
               RETURNING ${COLS}`,
     uninstall: `DELETE FROM tool_registry WHERE name = $1`,
+    uninstallIfDisabled: `DELETE FROM tool_registry WHERE name = $1 AND enabled = false`,
   },
   agent_registry: {
     list: `SELECT ${COLS} FROM agent_registry`,
@@ -89,6 +91,7 @@ const SQL: Record<RegistryTable, {
               WHERE name = $1
               RETURNING ${COLS}`,
     uninstall: `DELETE FROM agent_registry WHERE name = $1`,
+    uninstallIfDisabled: `DELETE FROM agent_registry WHERE name = $1 AND enabled = false`,
   },
   skill_registry: {
     list: `SELECT ${COLS} FROM skill_registry`,
@@ -112,6 +115,7 @@ const SQL: Record<RegistryTable, {
               WHERE name = $1
               RETURNING ${COLS}`,
     uninstall: `DELETE FROM skill_registry WHERE name = $1`,
+    uninstallIfDisabled: `DELETE FROM skill_registry WHERE name = $1 AND enabled = false`,
   },
 };
 
@@ -168,6 +172,13 @@ export class RegistryRepo implements IRegistryRepo {
     const { rows } = await this.pool.query<DbRegistryRow>(this.sql.disable, [name]);
     if (!rows[0]) throw new Error(`disable: no registry row for '${name}'`);
     return mapRow(rows[0]);
+  }
+
+  /** Delete only while still disabled — the predicate lives in the statement so the
+   *  "refuse to uninstall an enabled bundle" guard cannot be raced by a concurrent enable. */
+  async uninstallIfDisabled(name: string): Promise<boolean> {
+    const result = await this.pool.query(this.sql.uninstallIfDisabled, [name]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   async uninstall(name: string): Promise<boolean> {

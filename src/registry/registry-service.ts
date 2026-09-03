@@ -351,23 +351,35 @@ export class RegistryService {
       // Refuse, and point at disable — which DOES cascade — as the way to get there. We do
       // not silently disable-then-uninstall on the operator's behalf: an unrequested cascade
       // that strips 14 tools is not something to do implicitly.
-      const row = await this.repo(kind).getRow(name);
       // The refusal is scoped to bundles whose member list is readable — i.e. exactly the
       // bundles for which "disable first" is a route that actually works. A ghost (no
       // manifest on disk) or a bundle with an unparsable manifest has no cascade route at
-      // all: disable() rejects it for the same reason, and the console derives 'ghost' state
-      // so it never even offers Disable. Blocking uninstall there too would leave the row
-      // with no console action whatsoever, and clearing a ghost row is the only way to
-      // remove one. So those fall through and the row delete proceeds.
-      if (row?.enabled && this.bundleTools(name) !== null) {
-        throw new RegistryGuardError(
-          `Cannot uninstall bundle '${name}' while it is enabled: its member tools would stay ` +
-          `enabled and callable with no bundle owning them. Disable the bundle first (that ` +
-          `cascades to its member tools), then uninstall it.`,
-        );
+      // all: disable() rejects those for the same unreadable-member-list reason, so blocking
+      // uninstall too would leave the row with no route out at all, and clearing a ghost row
+      // is the only way to remove one. Those fall through to the unconditional delete below.
+      if (this.bundleTools(name) !== null) {
+        // Conditional delete rather than read-then-delete: checking `enabled` and then
+        // DELETEing in two statements leaves a window in which a concurrent enable commits
+        // its bundle+member cascade, after which the DELETE strips the owning bundle row and
+        // strands its members enabled — the exact orphaning this guard exists to prevent.
+        // The predicate rides in the statement, so the check and the delete are atomic.
+        const deleted = await this.repo(kind).uninstallIfDisabled(name);
+        if (deleted) return;
+
+        // Nothing deleted: either no row, or it is enabled. Re-read only to pick the right
+        // message — this read carries no correctness weight, the delete already did that.
+        const row = await this.repo(kind).getRow(name);
+        if (row?.enabled) {
+          throw new RegistryGuardError(
+            `Cannot uninstall bundle '${name}' while it is enabled: its member tools would stay ` +
+            `enabled and callable with no bundle owning them. Disable the bundle first (that ` +
+            `cascades to its member tools), then uninstall it.`,
+          );
+        }
+        throw new RegistryGuardError(`Cannot uninstall ${kind} '${name}': no registry row exists.`);
       }
-      // An 'installed' (not enabled) bundle falls through too: it has no live members to
-      // strand, so deleting its row is safe.
+      // An 'installed' (not enabled) bundle needs no special handling: it has no live members
+      // to strand, and the conditional delete above already covers it.
     }
     const deleted = await this.repo(kind).uninstall(name);
     if (!deleted) {

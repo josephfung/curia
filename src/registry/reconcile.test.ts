@@ -26,6 +26,14 @@ class FakeRepo implements IRegistryRepo {
     this.rows.set(name, n); return n;
   }
   async uninstall(name: string) { return this.rows.delete(name); }
+  /** Names passed to the conditional delete — lets tests assert which path was taken. */
+  conditionalDeletes: string[] = [];
+  async uninstallIfDisabled(name: string) {
+    this.conditionalDeletes.push(name);
+    const row = this.rows.get(name);
+    if (!row || row.enabled) return false;
+    return this.rows.delete(name);
+  }
 }
 
 const logger = createLogger('silent');
