@@ -54,6 +54,21 @@ export interface Row {
 }
 
 /**
+ * Map an entry's own `kind` to its URL path segment under /api/registry/.
+ *
+ * Routing must key off the entry's own kind, not the page it happens to render on — a
+ * bundle row (`kind: 'skill'`) shown on the /tools page still lives at
+ * /api/registry/skills/:name, not /api/registry/tools/:name. Getting this wrong sent
+ * every bundle enable/disable/install from the console to the tools endpoint, which
+ * 400s because no *tool* manifest exists under the bundle's name (finding #1).
+ */
+export function registryPathSegment(kind: RegistryEntry['kind']): 'skills' | 'tools' | 'agents' {
+  if (kind === 'skill') return 'skills';
+  if (kind === 'agent') return 'agents';
+  return 'tools';
+}
+
+/**
  * Build the merged row list: every bundle first (in the order returned), then any
  * tool not claimed by a bundle.
  *

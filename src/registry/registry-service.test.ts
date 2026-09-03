@@ -42,7 +42,7 @@ class FakeRepo implements IRegistryRepo {
     const next = { ...row, enabled: false, enabledAt: null, enabledBy: null, updatedAt: 't1' };
     this.rows.set(name, next); return next;
   }
-  async uninstall(name: string) { this.rows.delete(name); }
+  async uninstall(name: string) { return this.rows.delete(name); }
 }
 
 const disc = (name: string, extra: Partial<Discovery> = {}): Discovery => ({
@@ -127,6 +127,16 @@ describe('RegistryService lifecycle guards', () => {
     await skillRepo.install('gone', 'web-app');
     await svc.uninstall('tool', 'gone', 'web-app');
     expect(await skillRepo.getRow('gone')).toBeNull();
+  });
+
+  it('uninstall rejects when there is no registry row to delete', async () => {
+    // Finding #2: the routing bug (finding #1) sent bundle deletes to the tools table,
+    // which matched zero rows — and the old signature had no way to notice. A delete
+    // that removes nothing must fail loudly, naming the item, so the console never
+    // reports success while the item is still there.
+    svc.setDiscovery('tool', [disc('never-installed')]);
+    await expect(svc.uninstall('tool', 'never-installed', 'web-app'))
+      .rejects.toThrow(/never-installed/);
   });
 });
 
@@ -323,11 +333,23 @@ describe('RegistryService — bundle cascade', () => {
     expect((await toolRepo.getRow('bullpen'))?.enabled).toBe(true);
   });
 
-  it('installAndEnable cascades the bundle and its member tools', async () => {
+  it('installAndEnable cascades the bundle and its member tools without a separate install() call', async () => {
     // Starts from an empty skillRepo so this genuinely installs then enables —
     // this is the /api/registry/skills/:name/install-enable route an operator
     // actually uses to enrol a bundle for the first time (#1724).
+    //
+    // Finding #4: a separate repo.install() before the cascade would commit outside
+    // the cascade's own transaction — if enableBundle() then failed, the bundle would
+    // be left installed with zero member tools touched. Spy on skillRepo.install to
+    // prove that never happens: the bundle must reach "enabled" through the cascade's
+    // upsert alone.
     const skillRepo = new FakeRepo();
+    let installCalls = 0;
+    const originalInstall = skillRepo.install.bind(skillRepo);
+    skillRepo.install = async (name: string, actor: string) => {
+      installCalls++;
+      return originalInstall(name, actor);
+    };
     const cascade = new FakeCascade();
     const svc = new RegistryService(
       new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, cascade,
@@ -338,9 +360,7 @@ describe('RegistryService — bundle cascade', () => {
     expect(cascade.enabled).toEqual([
       { bundle: 'ceo-inbox', tools: ['ceo-inbox-list', 'ceo-inbox-read'] },
     ]);
-    const row = await skillRepo.getRow('ceo-inbox');
-    expect(row).not.toBeNull();
-    expect(row?.installedBy).toBe('web-app');
+    expect(installCalls).toBe(0);
   });
 
   it('refuses installAndEnable on a bundle when no cascade repo is wired', async () => {

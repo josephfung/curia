@@ -170,7 +170,10 @@ export class RegistryRepo implements IRegistryRepo {
     return mapRow(rows[0]);
   }
 
-  async uninstall(name: string): Promise<void> {
-    await this.pool.query(this.sql.uninstall, [name]);
+  async uninstall(name: string): Promise<boolean> {
+    const result = await this.pool.query(this.sql.uninstall, [name]);
+    // rowCount is null for statement types that don't report it (never DELETE in
+    // practice, but pg's types allow it) — treat that as "nothing confirmed deleted".
+    return (result.rowCount ?? 0) > 0;
   }
 }

@@ -53,6 +53,10 @@ export class BundleCascadeRepo implements IBundleCascadeRepo {
     toolSql: string,
   ): Promise<void> {
     const client = await this.pool.connect();
+    // Set only if ROLLBACK itself throws — passed to client.release() below so the pool
+    // destroys the connection instead of recycling one still stuck mid-transaction
+    // (node-postgres convention: release(err) signals "don't reuse this client").
+    let releaseErr: Error | undefined;
     try {
       await client.query('BEGIN');
       // Disable takes only the name; enable also records the actor.
@@ -67,10 +71,11 @@ export class BundleCascadeRepo implements IBundleCascadeRepo {
       // must not mask the original error.
       await client.query('ROLLBACK').catch((rollbackErr: unknown) => {
         this.logger.error({ rollbackErr, bundle, op }, 'ROLLBACK failed after cascade error');
+        releaseErr = rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr));
       });
       throw err;
     } finally {
-      client.release();
+      client.release(releaseErr);
     }
   }
 }

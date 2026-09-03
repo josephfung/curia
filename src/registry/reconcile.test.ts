@@ -25,7 +25,7 @@ class FakeRepo implements IRegistryRepo {
     const r = this.rows.get(name)!; const n = { ...r, enabled: false, enabledAt: null, enabledBy: null, updatedAt: 't1' };
     this.rows.set(name, n); return n;
   }
-  async uninstall(name: string) { this.rows.delete(name); }
+  async uninstall(name: string) { return this.rows.delete(name); }
 }
 
 const logger = createLogger('silent');

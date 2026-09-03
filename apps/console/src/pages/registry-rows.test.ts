@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRows, collateralPins } from './registry-rows.js';
+import { buildRows, collateralPins, registryPathSegment } from './registry-rows.js';
 import type { RegistryEntry } from './registry-rows.js';
 
 const entry = (name: string, over: Partial<RegistryEntry> = {}): RegistryEntry => ({
@@ -12,6 +12,25 @@ const bundle = (name: string, tools: string[], pinnedBy: string[], state: Regist
     kind: 'skill', state,
     metadata: { name, description: 'd', version: '1.0.0', tools, pinnedBy },
   });
+
+describe('registryPathSegment', () => {
+  // Regression guard for finding #1: the drawer's act() used to route on the *page's*
+  // kind (`kindPath`) instead of the entry's own kind, so a bundle row (kind: 'skill')
+  // rendered on the /tools page sent every action to /api/registry/tools/:name — which
+  // 400s because no tool manifest exists under the bundle's name. Nothing exercised the
+  // request URL before, so this pins the mapping directly.
+  it('maps a bundle (skill) entry to the skills segment', () => {
+    expect(registryPathSegment('skill')).toBe('skills');
+  });
+
+  it('maps a tool entry to the tools segment', () => {
+    expect(registryPathSegment('tool')).toBe('tools');
+  });
+
+  it('maps an agent entry to the agents segment', () => {
+    expect(registryPathSegment('agent')).toBe('agents');
+  });
+});
 
 describe('buildRows', () => {
   it('nests member tools under their bundle and leaves standalone tools flat', () => {
