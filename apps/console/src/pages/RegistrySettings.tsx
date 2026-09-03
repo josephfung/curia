@@ -4,35 +4,9 @@ import { Sidebar } from '../components/Sidebar.js';
 import { Topbar, TopbarSearch } from '../components/Topbar.js';
 import { apiFetch } from '../api.js';
 import { useTheme } from '../hooks/useTheme.js';
-
-// ── Types (mirror src/registry/types.ts RegistryEntry) ──────────────────────
-type DerivedState = 'uninstalled' | 'installed' | 'enabled' | 'ghost';
-
-interface ManifestMetadata {
-  name: string;
-  description: string;
-  version: string;
-  actionRisk?: string | number;
-  sensitivity?: string;
-  capabilities?: string[];
-  role?: string;
-  modelTier?: string;
-  // PR2 (#939): vault keys a skill declares in install.requires_secrets. Cross-referenced
-  // against GET /api/vault/status to show configured/missing status and gate install/enable.
-  requiresSecrets?: string[];
-}
-
-interface RegistryEntry {
-  name: string;
-  kind: 'tool' | 'agent';
-  state: DerivedState;
-  metadata: ManifestMetadata | null;
-  manifestError?: string;
-  installedAt: string | null;
-  installedBy: string | null;
-  enabledAt: string | null;
-  enabledBy: string | null;
-}
+// Types + row-tree builder live in registry-rows.ts, shared with its unit tests
+// (mirrors src/registry/types.ts RegistryEntry).
+import { buildRows, type RegistryEntry, type DerivedState, type Row } from './registry-rows.js';
 
 // Map each DerivedState to one of the existing .status-pill modifier classes
 // (app.css) so no new CSS is needed:
@@ -455,6 +429,13 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const [entries, setEntries] = useState<RegistryEntry[]>([]);
+  const [rows, setRows] = useState<Row[]>([]);
+  // Retained on the /tools path so Task 6's drawer can warn which enabled agents
+  // pin a bundle directly, without a second round-trip to /api/registry/agents.
+  // Not read yet — this task only wires the fetch; Task 6 consumes it. The `void`
+  // keeps noUnusedLocals quiet without touching rendered markup ahead of that task.
+  const [agents, setAgents] = useState<RegistryEntry[]>([]);
+  void agents;
   const [selected, setSelected] = useState<RegistryEntry | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -469,21 +450,56 @@ function RegistryPage({ kind }: { kind: 'tool' | 'agent' }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await apiFetch(`/api/registry/${kindPath}`);
-      if (!res.ok) throw new Error(await errorMessage(res));
-      const data = await res.json() as Record<string, RegistryEntry[]>;
-      const list = data[kindPath] ?? [];
-      setEntries(list);
-      setLoadError(null); // clear any prior error on successful reload
-      // Keep the drawer in sync with the freshly-loaded state so action
-      // buttons reflect the true current state after a transition.
+      if (kind === 'agent') {
+        const res = await apiFetch('/api/registry/agents');
+        if (!res.ok) throw new Error(await errorMessage(res));
+        const data = await res.json() as { agents?: RegistryEntry[] };
+        const list = data.agents ?? [];
+        setEntries(list);
+        // Read here, unused on this path (only /tools's drawer needs the agent
+        // list) — set it anyway so `agents` never carries stale data from a
+        // previous /tools load.
+        setAgents(list);
+        setRows(list.map(e => ({
+          entry: e, rowKind: 'tool' as const, members: [], pinnedBy: [], unresolvedFor: [],
+        })));
+        setLoadError(null);
+        setSelected(prev => (prev ? list.find(e => e.name === prev.name) ?? null : null));
+        return;
+      }
+
+      // /tools merges three endpoints: bundles, tools, and agents (agents only so an
+      // unresolved pin can be flagged against agents that are actually enabled).
+      const [skillsRes, toolsRes, agentsRes] = await Promise.all([
+        apiFetch('/api/registry/skills'),
+        apiFetch('/api/registry/tools'),
+        apiFetch('/api/registry/agents'),
+      ]);
+      for (const res of [skillsRes, toolsRes, agentsRes]) {
+        if (!res.ok) throw new Error(await errorMessage(res));
+      }
+      const skills = (await skillsRes.json() as { skills?: RegistryEntry[] }).skills ?? [];
+      const tools = (await toolsRes.json() as { tools?: RegistryEntry[] }).tools ?? [];
+      const agentList = (await agentsRes.json() as { agents?: RegistryEntry[] }).agents ?? [];
+
+      const built = buildRows(skills, tools, agentList);
+      setRows(built);
+      // `entries` stays the flat list the search/sort/filter/pagination code already uses.
+      setEntries(built.map(r => r.entry));
+      setAgents(agentList);
+      setLoadError(null);
       setSelected(prev =>
-        prev ? list.find(e => e.name === prev.name) ?? null : null,
+        prev ? built.map(r => r.entry).find(e => e.name === prev.name) ?? null : null,
       );
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Failed to load');
     }
-  }, [kindPath]);
+  }, [kind]);
+
+  // Lookup so the render can find a row (bundle members, pin state) for a paged entry.
+  // Not read yet — Task 5 wires this into the table body. Same `void` rationale as `agents`.
+  const rowByName = useMemo(() => new Map(rows.map(r => [r.entry.name, r])), [rows]);
+  void rowByName;
 
   useEffect(() => { void load(); }, [load]);
 
