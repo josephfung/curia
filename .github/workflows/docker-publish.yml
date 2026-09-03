@@ -7,6 +7,24 @@ name: docker-publish
 #                        source; without a tag, from main: same as a push to
 #                        main. A bare dispatch from any other branch publishes
 #                        nothing, by design — `edge` must only ever mean main.
+#
+# ## Re-publishing a release by hand (#1718)
+#
+# The dispatch form has two boxes, and they are two ways to say the same thing:
+#
+#   1. leave "Use workflow from" on `main` and type the tag in the `tag` input
+#   2. pick the tag itself in the "Use workflow from" dropdown, leave `tag` empty
+#
+# **Either is fine, and both do the same thing** — `resolve` below normalises
+# them to one publish target, so the tag set, the source that gets built, and
+# the stamped revision are identical. Prefer (1): the dropdown also selects
+# which *version of this workflow file* runs, so (2) re-publishes an old
+# release using that release's copy of this file, without whichever fixes have
+# landed since. That is the wrong direction on the one path where correctness
+# matters most.
+#
+# Setting both is allowed as long as they name the same tag; a mismatch is a
+# confused operator, so `resolve` fails the run rather than guessing.
 on:
   release:
     types: [published]
@@ -15,7 +33,10 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to (re)publish, e.g. v0.40.0"
+        # Optional because a bare dispatch from main is the "rebuild edge" path.
+        # If you selected the tag in the "Use workflow from" dropdown instead,
+        # leave this empty — see the note above.
+        description: "Release tag to (re)publish, e.g. v0.40.0. Leave empty to rebuild :edge from main."
         required: false
 
 # Least privilege at the workflow level; jobs opt into the scopes they need
@@ -42,8 +63,15 @@ permissions:
 # without it a manual re-publish would share main's group and be cancelled by
 # the next merge — precisely the wrong moment, since a re-publish is an
 # incident-response action.
+#
+# `github.ref_name` rather than `github.ref` so the two dispatch forms (#1718)
+# land in one group: the input gives a bare `v0.40.0`, and the ref dropdown a
+# `refs/tags/v0.40.0` that `ref_name` shortens to the same string. Otherwise two
+# runs re-publishing the same tag by different routes would race to write it.
+# This job cannot read `needs`, so the target is recomputed here; `resolve` is
+# the authority and rejects the case where these two disagree.
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag || github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -78,11 +106,34 @@ jobs:
         env:
           EVENT_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
+          LAUNCH_REF: ${{ github.ref }}
         run: |
+          # The third way a tag can arrive: an operator who used the "Use
+          # workflow from" dropdown instead of the `tag` input (see the note at
+          # the top of this file). That makes `github.ref` a tag ref rather than
+          # a branch — the one case where it *does* name the build target.
+          REF_TAG=""
+          case "$LAUNCH_REF" in
+            refs/tags/*) REF_TAG="${LAUNCH_REF#refs/tags/}" ;;
+          esac
+
+          # Filling in both boxes is fine when they agree, and is how a careful
+          # operator double-checks themselves. Disagreeing means one of the two
+          # is not what they think it is, and the consequences diverge — the
+          # input decides what gets built and tagged, the dropdown decides which
+          # version of this workflow runs. Refuse rather than silently honouring
+          # one of them.
+          if [ -n "$INPUT_TAG" ] && [ -n "$REF_TAG" ] && [ "$INPUT_TAG" != "$REF_TAG" ]; then
+            echo "::error::Dispatched with tag input '${INPUT_TAG}' from ref '${LAUNCH_REF}'. Pick one: type the tag and launch from main, or select the tag in the ref dropdown and leave the input empty."
+            exit 1
+          fi
+
           # A dispatch input wins; on a release event it is empty and the
-          # release's own tag is used. On a push — or a bare dispatch — both are
-          # empty, which is the signal for an `edge` build.
+          # release's own tag is used; failing both, a tag ref in the launch ref
+          # is the ref-dropdown form. On a push — or a bare dispatch from a
+          # branch — all three are empty, the signal for an `edge` build.
           TAG="${INPUT_TAG:-$EVENT_TAG}"
+          TAG="${TAG:-$REF_TAG}"
           # Strict SemVer 2.0.0 with a mandatory `v`, and no `+build` metadata
           # (a `+` is not a legal Docker tag character anyway). Being loose here
           # is not a harmless typo check: `metadata-action` silently *skips* a
@@ -95,7 +146,17 @@ jobs:
               || { echo "Invalid tag format: refusing to build"; exit 1; }
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Publish target: ${TAG:-main (edge)}"
+          # Surfaced as a notice so the resolved target shows on the run summary
+          # page, not only inside the step log. This is an incident-response
+          # button: "which thing did I just publish?" should be answerable at a
+          # glance. Report the launch ref verbatim for an edge build rather than
+          # asserting "main" — a bare dispatch from a feature branch lands here
+          # too, and publishes nothing.
+          if [ -n "$TAG" ]; then
+            echo "::notice::Publish target: release ${TAG}, rebuilt from its own source."
+          else
+            echo "::notice::Publish target: ${LAUNCH_REF} (:edge — published only if that ref is main)."
+          fi
 
   build:
     needs: resolve
