@@ -22,7 +22,7 @@
  * stay green while the workflow did something entirely different.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -136,9 +136,22 @@ function evalBoolean(expr: string, ctx: Context): boolean {
     });
 }
 
-/** Substitute `${{ path }}` / `${{ a || b }}` spans inside a string value. */
+/**
+ * GitHub's ternary idiom: `<condition> && '<then>' || '<else>'`. Both branches
+ * must be string literals — modelling an arbitrary expression there would mean
+ * a general evaluator, and this file's whole premise is that it refuses what it
+ * does not understand.
+ */
+const TERNARY = /^(.+?)\s*&&\s*'([^']*)'\s*\|\|\s*'([^']*)'$/;
+
+/** Substitute `${{ path }}` / `${{ a || b }}` / ternary spans in a string value. */
 function interpolate(raw: string, ctx: Context): string {
   return raw.replace(/\$\{\{([^}]*)\}\}/g, (_full, inner: string) => {
+    const ternary = TERNARY.exec(inner.trim());
+    if (ternary) {
+      const [, condition, whenTrue, whenFalse] = ternary;
+      return evalBoolean(condition!, ctx) ? whenTrue! : whenFalse!;
+    }
     // `a || b` is GitHub's coalesce: first non-falsy operand wins.
     for (const operand of inner.split('||').map((s) => s.trim())) {
       if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(operand)) {
@@ -343,37 +356,60 @@ function checkoutRef(): string {
  *
  * `bash -e` matches the default shell GitHub Actions runs a `run:` block under.
  */
-function runResolve(ctx: Context): { status: number; tag: string; stderr: string } {
-  const step = workflow.jobs.resolve.steps.find((s) => typeof s.run === 'string');
-  if (!step) throw new Error('no `run` step in jobs.resolve.steps');
+function runResolve(ctx: Context): { status: number; wrote: boolean; tag: string; output: string } {
+  // By id, not by position — the same principle `checkoutRef` states above. A
+  // setup step with its own `run:` inserted ahead of this one would otherwise
+  // silently redirect the whole suite onto the wrong script, with the wrong
+  // `env:` block interpolated alongside it.
+  const step = workflow.jobs.resolve.steps.find((s) => s.id === 'resolve' && typeof s.run === 'string');
+  if (!step) throw new Error("no `run` step with id 'resolve' in jobs.resolve.steps");
 
   const dir = mkdtempSync(join(tmpdir(), 'docker-publish-resolve-'));
-  const scriptPath = join(dir, 'resolve.sh');
-  const outputPath = join(dir, 'github_output');
-  writeFileSync(scriptPath, step.run!);
-  writeFileSync(outputPath, '');
-
-  // Only the variables the step declares, plus GITHUB_OUTPUT. Inheriting the
-  // ambient environment would let a stray INPUT_TAG on a developer's machine
-  // change the result.
-  const env: Record<string, string> = { PATH: process.env.PATH ?? '', GITHUB_OUTPUT: outputPath };
-  for (const [name, expr] of Object.entries(step.env ?? {})) {
-    env[name] = interpolate(String(expr), ctx);
-  }
-
-  let status = 0;
-  let stderr = '';
   try {
-    execFileSync('bash', ['-e', scriptPath], { env, encoding: 'utf8', stdio: 'pipe' });
-  } catch (err) {
-    const failure = err as { status?: number; stdout?: string; stderr?: string };
-    status = failure.status ?? 1;
-    // The workflow reports failures with `::error::` on stdout, not stderr.
-    stderr = `${failure.stdout ?? ''}${failure.stderr ?? ''}`;
-  }
+    const scriptPath = join(dir, 'resolve.sh');
+    const outputPath = join(dir, 'github_output');
+    writeFileSync(scriptPath, step.run!);
+    writeFileSync(outputPath, '');
 
-  const match = /^tag=(.*)$/m.exec(readFileSync(outputPath, 'utf8'));
-  return { status, tag: match?.[1] ?? '', stderr };
+    // Only the variables the step declares, plus GITHUB_OUTPUT. Inheriting the
+    // ambient environment would let a stray INPUT_TAG on a developer's machine
+    // change the result.
+    //
+    // Note this models `step.env` only — a future edit reading a workflow- or
+    // job-level `env` var would be exercised here as unset while the real
+    // runner has it set. Extend this if the resolve script ever needs one.
+    const env: Record<string, string> = { PATH: process.env.PATH ?? '', GITHUB_OUTPUT: outputPath };
+    for (const [name, expr] of Object.entries(step.env ?? {})) {
+      env[name] = interpolate(String(expr), ctx);
+    }
+
+    let status = 0;
+    let output = '';
+    try {
+      // The workflow writes both `::error::` and `::notice::` to stdout, so
+      // capture it on the success path too — those annotations are the run
+      // summary's only account of what got published, and are asserted below.
+      output = execFileSync('bash', ['-e', scriptPath], { env, encoding: 'utf8', stdio: 'pipe' });
+    } catch (err) {
+      const failure = err as { status?: number; stdout?: string; stderr?: string };
+      // `execFileSync` also throws when bash cannot be spawned, on maxBuffer
+      // overflow, and on death by signal — in all of which `status` is absent.
+      // Coercing those to 1 would let a broken harness masquerade as the script
+      // correctly refusing, quietly passing every negative test below.
+      if (typeof failure.status !== 'number') throw err;
+      status = failure.status;
+      output = `${failure.stdout ?? ''}${failure.stderr ?? ''}`;
+    }
+
+    // Last write wins, matching the runner's GITHUB_OUTPUT semantics — a script
+    // that wrote a default and then overrode it would otherwise be read here as
+    // the opposite of what really runs. `wrote` keeps "never written" separate
+    // from "written empty", which an `?? ''` fallback would collapse.
+    const written = [...readFileSync(outputPath, 'utf8').matchAll(/^tag=(.*)$/gm)];
+    return { status, wrote: written.length > 0, tag: written.at(-1)?.[1] ?? '', output };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function tagsFor(imageName: string, ctx: Context): string[] {
@@ -441,11 +477,13 @@ describe('docker-publish.yml tag derivation', () => {
   });
 
   describe('bare workflow_dispatch from a branch other than main', () => {
-    // Not an oversight: `edge` means "the newest main", so a dispatch launched
-    // from a feature branch must publish nothing rather than mint an `edge`
-    // that points at unmerged code. The run is green with a skip notice per
-    // image; before #1715 it failed red inside buildx instead.
-    it('publishes nothing at all', () => {
+    // `edge` means "the newest main", so this must never mint one from unmerged
+    // code — and it does not. But there is also nothing else it could publish,
+    // so as of #1718 `resolve` refuses the run outright (asserted below in
+    // "the resolve job, executed"). It used to be green with a skip notice per
+    // image, which is a publish workflow reporting success having published
+    // nothing: the #1715 failure mode wearing a different hat.
+    it('would publish nothing, on both images', () => {
       expect(tagsFor('curia', DISPATCH_BARE_OFF_MAIN)).toEqual([]);
       expect(tagsFor('curia-postgres', DISPATCH_BARE_OFF_MAIN)).toEqual([]);
     });
@@ -477,13 +515,45 @@ describe('docker-publish.yml tag derivation', () => {
       expect(tagsFor('curia-postgres', DISPATCH_FROM_TAG_REF)).toEqual([]);
     });
 
-    it('checks out the tag, and shares the input form concurrency group', () => {
+    it('checks out the tag', () => {
       expect(interpolate(checkoutRef(), DISPATCH_FROM_TAG_REF)).toBe('v0.40.0');
-      // Both routes re-publish the same tag, so they must not run concurrently
-      // and race to write it. `github.ref_name` is what makes them agree.
-      expect(interpolate(workflow.concurrency.group, DISPATCH_FROM_TAG_REF)).toBe(
-        interpolate(workflow.concurrency.group, DISPATCH_WITH_TAG),
-      );
+    });
+  });
+
+  describe('concurrency grouping', () => {
+    const groupFor = (ctx: Context) => interpolate(workflow.concurrency.group, ctx);
+
+    it('isolates a release from a re-publish of the very same tag', () => {
+      // The asymmetry that makes this matter: a release publishes semver +
+      // `latest` + `pg16`; a re-publish of that tag publishes semver only. With
+      // `cancel-in-progress`, sharing a group means an impatient re-publish
+      // ("is the release build stuck?") cancels the release and strands
+      // `latest` and `pg16` on the previous version. Nothing would report it:
+      // `notify-failure` gates on failure and excludes cancellation.
+      const releaseOfSameTag = contextFor({
+        eventName: 'release',
+        ref: 'refs/tags/v0.40.0',
+        releaseTag: 'v0.40.0',
+      });
+      expect(groupFor(releaseOfSameTag)).not.toBe(groupFor(DISPATCH_WITH_TAG));
+      expect(groupFor(releaseOfSameTag)).not.toBe(groupFor(DISPATCH_FROM_TAG_REF));
+    });
+
+    it('collapses a push to main with a bare dispatch from main', () => {
+      // Both write exactly `:edge`, so the newer one superseding the older is
+      // the intended behaviour rather than a lost publish.
+      expect(groupFor(DISPATCH_BARE)).toBe(groupFor(PUSH_MAIN));
+    });
+
+    it('keeps a tag-shaped input away from the branch it names', () => {
+      // Groups are evaluated at queue time, before `resolve` can reject
+      // anything. So `tag: main` — a plausible misreading of the input box —
+      // must not land in main's group and cancel an in-flight `edge` build on
+      // its way to being refused. This is why the group is not normalised with
+      // `github.ref_name`, which would flatten branches, tags and inputs into
+      // one string space.
+      const typo = contextFor({ eventName: 'workflow_dispatch', ref: 'refs/heads/main', inputTag: 'main' });
+      expect(groupFor(typo)).not.toBe(groupFor(PUSH_MAIN));
     });
   });
 
@@ -495,14 +565,24 @@ describe('docker-publish.yml tag derivation', () => {
       ['a dispatch with a tag input', DISPATCH_WITH_TAG, 'v0.40.0'],
       ['a dispatch from a tag ref', DISPATCH_FROM_TAG_REF, 'v0.40.0'],
       ['a bare dispatch from main', DISPATCH_BARE, ''],
-      ['a bare dispatch off main', DISPATCH_BARE_OFF_MAIN, ''],
     ])('resolves %s to %o', (_name, ctx, expected) => {
       const result = runResolve(ctx as Context);
       expect(result.status).toBe(0);
+      expect(result.wrote).toBe(true);
       expect(result.tag).toBe(expected);
       // The fixtures feed the tag assertions above; if the real script and the
       // fixture disagree, every other test in this file is measuring fiction.
       expect(result.tag).toBe(lookup('needs.resolve.outputs.tag', ctx as Context));
+    });
+
+    it.each([
+      ['a tag build', DISPATCH_WITH_TAG, '::notice::Publish target: release v0.40.0'],
+      ['an edge build', PUSH_MAIN, '::notice::Publish target: main'],
+    ])('announces %s on the run summary', (_name, ctx, expected) => {
+      // The notices are the run summary's only account of what was published.
+      // Without this they could be deleted, or inverted to report a tag build
+      // as an edge build, with every other test still green.
+      expect(runResolve(ctx as Context).output).toContain(expected);
     });
 
     it('accepts both boxes filled when they name the same tag', () => {
@@ -511,7 +591,7 @@ describe('docker-publish.yml tag derivation', () => {
         ref: 'refs/tags/v0.40.0',
         inputTag: 'v0.40.0',
       });
-      expect(runResolve(agreeing)).toMatchObject({ status: 0, tag: 'v0.40.0' });
+      expect(runResolve(agreeing)).toMatchObject({ status: 0, wrote: true, tag: 'v0.40.0' });
     });
 
     it('refuses a dispatch whose tag input and launch ref disagree', () => {
@@ -524,8 +604,33 @@ describe('docker-publish.yml tag derivation', () => {
       });
       const result = runResolve(conflicting);
       expect(result.status).not.toBe(0);
-      expect(result.tag).toBe('');
-      expect(result.stderr).toContain('::error::');
+      expect(result.wrote).toBe(false);
+      expect(result.output).toContain("::error::Tag input 'v0.40.0' was dispatched from 'refs/tags/v0.41.0'");
+    });
+
+    it('refuses a tag re-publish launched from an unrelated branch', () => {
+      // Resolves to the right *target*, but would run that branch's copy of the
+      // workflow — and the branch most likely to be selected here is one
+      // editing this very file. A real release image built from unreviewed YAML.
+      const offMain = contextFor({
+        eventName: 'workflow_dispatch',
+        ref: 'refs/heads/some-feature',
+        inputTag: 'v0.40.0',
+      });
+      const result = runResolve(offMain);
+      expect(result.status).not.toBe(0);
+      expect(result.wrote).toBe(false);
+      expect(result.output).toContain('::error::');
+    });
+
+    it('refuses a bare dispatch that could publish nothing', () => {
+      // There is no tag and `edge` may only ever mean main, so this run has
+      // nothing it could write. It used to be green with a skip notice per
+      // image — a publish workflow reporting success having published nothing.
+      const result = runResolve(DISPATCH_BARE_OFF_MAIN);
+      expect(result.status).not.toBe(0);
+      expect(result.wrote).toBe(false);
+      expect(result.output).toContain('::error::Nothing to publish');
     });
 
     it('refuses a malformed tag before anything is built', () => {
@@ -536,7 +641,25 @@ describe('docker-publish.yml tag derivation', () => {
       });
       const result = runResolve(bad);
       expect(result.status).not.toBe(0);
-      expect(result.tag).toBe('');
+      expect(result.wrote).toBe(false);
+      // Naming the offending value and where it came from is the point: this is
+      // reachable from the ref dropdown, where the operator typed nothing.
+      expect(result.output).toContain("::error::Refusing to build: 'v1.2.3.4' (from the tag input)");
+    });
+
+    it('refuses a multi-line tag rather than validating only its first line', () => {
+      // `grep` asks "does any line match", so `v1.2.3\nfoo` passed the SemVer
+      // guard on its first line and wrote two lines into GITHUB_OUTPUT — where
+      // the runner reads the *last* one as the output, unvalidated.
+      const sneaky = contextFor({
+        eventName: 'workflow_dispatch',
+        ref: 'refs/heads/main',
+        inputTag: 'v1.2.3\nnot-a-version',
+      });
+      const result = runResolve(sneaky);
+      expect(result.status).not.toBe(0);
+      expect(result.wrote).toBe(false);
+      expect(result.output).toContain('::error::Refusing to build: the publish target spans multiple lines.');
     });
 
     it('refuses a malformed tag arriving via the ref dropdown', () => {
@@ -545,6 +668,8 @@ describe('docker-publish.yml tag derivation', () => {
       // leaving a green run that published nothing.
       const bad = contextFor({ eventName: 'workflow_dispatch', ref: 'refs/tags/nightly-2026-09-02' });
       const result = runResolve(bad);
+      expect(result.wrote).toBe(false);
+      expect(result.output).toContain('(from the launch ref refs/tags/nightly-2026-09-02)');
       expect(result.status).not.toBe(0);
       expect(result.tag).toBe('');
     });
