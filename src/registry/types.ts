@@ -101,3 +101,11 @@ export interface IRegistryRepo {
   /** Delete the row. No error if absent. */
   uninstall(name: string): Promise<void>;
 }
+
+/** Cross-table bundle operations. Separate from IRegistryRepo, which is deliberately
+ *  one-instance-per-table; enabling a bundle must write skill_registry and every
+ *  member's tool_registry row in a single transaction (#1724). */
+export interface IBundleCascadeRepo {
+  enableBundle(bundle: string, tools: string[], actor: string): Promise<void>;
+  disableBundle(bundle: string, tools: string[], actor: string): Promise<void>;
+}
