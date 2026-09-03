@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRows, collateralPins, registryPathSegment } from './registry-rows.js';
+import { buildRows, collateralPins, registryPathSegment, uninstallBlockedReason } from './registry-rows.js';
 import type { RegistryEntry } from './registry-rows.js';
 
 const entry = (name: string, over: Partial<RegistryEntry> = {}): RegistryEntry => ({
@@ -117,5 +117,37 @@ describe('collateralPins', () => {
   // assertion below only ever covers the empty-agents case — renamed to match reality.
   it('returns nothing when no other agent pins a member', () => {
     expect(collateralPins(row, [])).toEqual([]);
+  });
+});
+
+describe('uninstallBlockedReason', () => {
+  it('blocks an enabled bundle and explains the member-tool consequence', () => {
+    const reason = uninstallBlockedReason(
+      bundle('ceo-inbox', ['ceo-inbox-list'], [], 'enabled'),
+    );
+    expect(reason).toMatch(/disable/i);
+    expect(reason).toMatch(/member tool/i);
+  });
+
+  it('allows an installed-but-not-enabled bundle', () => {
+    expect(
+      uninstallBlockedReason(bundle('ceo-inbox', ['ceo-inbox-list'], [], 'installed')),
+    ).toBeNull();
+  });
+
+  it('allows a ghost bundle — clearing the row is the only way to remove one', () => {
+    // A ghost has a registry row but no manifest, so its members are unknowable and the
+    // server permits the delete. The console must not be stricter than the server here,
+    // or the row becomes unremovable from the UI.
+    expect(
+      uninstallBlockedReason(entry('dead-bundle', { kind: 'skill', state: 'ghost' })),
+    ).toBeNull();
+  });
+
+  it('never blocks a plain tool or an agent, even when enabled', () => {
+    expect(uninstallBlockedReason(entry('bullpen', { state: 'enabled' }))).toBeNull();
+    expect(
+      uninstallBlockedReason(entry('coordinator', { kind: 'agent', state: 'enabled' })),
+    ).toBeNull();
   });
 });
