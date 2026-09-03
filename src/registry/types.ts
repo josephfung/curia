@@ -33,6 +33,14 @@ export interface ManifestMetadata {
   /** Vault keys the skill's install block declares it needs (install.requires_secrets).
    *  Surfaced to the registry UI and consulted by the install/enable secrets gate. */
   requiresSecrets?: string[];
+  /** Member tool names for a SKILL.md bundle. Sourced from on-disk discovery, NOT
+   *  SkillRegistry — a bundle that is disabled is never registered, so SkillRegistry
+   *  cannot report its members. Skills only; undefined for tools and agents. */
+  tools?: string[];
+  /** Names of agents whose `pinned_skills` reference this bundle. Static, read from
+   *  agent manifests on disk. The console cross-references each agent's own enabled
+   *  state (via /api/registry/agents) to decide which combinations are broken. */
+  pinnedBy?: string[];
   // agents
   role?: string;
   modelTier?: string;
