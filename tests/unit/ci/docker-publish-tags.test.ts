@@ -285,8 +285,14 @@ function contextFor(opts: { eventName: string; ref: string; inputTag?: string; r
       event_name: opts.eventName,
       ref: opts.ref,
       // `ref_name` is `ref` with its `refs/heads/` or `refs/tags/` prefix
-      // stripped; the concurrency group reads it. Derived rather than passed in
-      // so a fixture can never state a ref and a ref_name that disagree.
+      // stripped. Deliberately unread today — the concurrency group keys on
+      // `github.ref`, because `ref_name` would flatten branches, tags and
+      // inputs into one string space (see "keeps a tag-shaped input away from
+      // the branch it names"). It stays in the fixture because `lookup` fails
+      // soft: an expression that started reading `github.ref_name` would
+      // otherwise render as `''` here and quietly assert nonsense. Derived
+      // rather than passed in so a fixture cannot state a ref and a ref_name
+      // that disagree.
       ref_name: opts.ref.replace(/^refs\/(heads|tags)\//, ''),
       event: { release: { tag_name: opts.releaseTag ?? '' } },
     },
