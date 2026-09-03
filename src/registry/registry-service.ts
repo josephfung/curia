@@ -53,11 +53,39 @@ export class RegistryService {
     return this.skillDiscovery;
   }
 
-  /** Member tools of a bundle, from on-disk discovery. Empty array for a bundle whose
-   *  manifest failed to parse — cascading nothing is correct there, the bundle row
-   *  still flips and the broken manifest is already surfaced as `manifestError`. */
-  private bundleTools(name: string): string[] {
-    return this.skillDiscovery.find(d => d.name === name)?.metadata?.tools ?? [];
+  /** Member tools of a bundle, from on-disk discovery.
+   *
+   *  Returns `null` when the member list CANNOT be determined — no discovery entry at all
+   *  (a ghost bundle) or `metadata === null` because the manifest failed to parse. That is
+   *  emphatically NOT the same as a manifest that parsed and legitimately lists no tools,
+   *  which returns `[]`.
+   *
+   *  The distinction is load-bearing (finding #2). A tool's runtime availability is gated
+   *  ONLY by `tool_registry.enabled` — src/index.ts builds the enabled-tool set purely from
+   *  `tool_registry` with no join to `skill_registry`, and tools are loaded before
+   *  SkillRegistry is even populated. So cascading `[]` because we could not read the member
+   *  list would flip only the `skill_registry` row while every member tool_registry row
+   *  stayed enabled: the tools remain live and callable, and the operator is told the
+   *  disable succeeded. Callers must therefore treat `null` as "refuse", never as "nothing
+   *  to do". */
+  private bundleTools(name: string): string[] | null {
+    const disc = this.skillDiscovery.find(d => d.name === name);
+    if (!disc || disc.metadata === null) return null;
+    return disc.metadata.tools ?? [];
+  }
+
+  /** bundleTools() for callers that have already passed assertInstallable — which
+   *  guarantees a discovery entry with parsed metadata, hence a determinable member list.
+   *  The throw is a defensive invariant check, not an expected operator-facing rejection. */
+  private requireBundleTools(name: string): string[] {
+    const tools = this.bundleTools(name);
+    if (tools === null) {
+      throw new RegistryGuardError(
+        `Cannot determine the member tools of bundle '${name}': its manifest is missing or ` +
+        `failed to parse. Repair the manifest before enabling the bundle.`,
+      );
+    }
+    return tools;
   }
 
   private requireCascade(name: string): IBundleCascadeRepo {
@@ -145,9 +173,18 @@ export class RegistryService {
    *  install.requires_secrets that aren't all present in the vault. Items with no declared
    *  secrets are unaffected. A declared-but-unverifiable secret (no lister wired) fails
    *  closed — we never let something requiring secrets go live without confirming them.
-   *  Bundle skills do not declare requires_secrets (member tools do). */
+   *
+   *  A bundle skill declares no requires_secrets of its own — its member tools do — so the
+   *  bundle path delegates to assertBundleSecretsConfigured, which gates on the union of the
+   *  members' declarations. Returning early for kind='skill' (as this used to) let an
+   *  operator bypass the gate entirely: enabling `web-search` directly was refused when its
+   *  key was absent, but enabling the `web` bundle wrote the same tool_registry row through
+   *  the cascade and the tool went live at the next restart with no credential (finding #1). */
   private async assertSecretsConfigured(kind: RegistryKind, name: string): Promise<void> {
-    if (kind === 'skill') return; // secrets gate is per-tool
+    if (kind === 'skill') {
+      await this.assertBundleSecretsConfigured(name);
+      return;
+    }
     const disc = this.discovery(kind).find(d => d.name === name);
     const required = disc?.metadata?.requiresSecrets ?? [];
     if (required.length === 0) return;
@@ -163,6 +200,60 @@ export class RegistryService {
       throw new RegistryGuardError(
         `Cannot install '${name}': required secret(s) not configured in the vault: ${missing.join(', ')}. ` +
         `Configure them before installing.`,
+      );
+    }
+  }
+
+  /** Bundle arm of the secrets gate (finding #1). Enabling a bundle writes its member
+   *  tool_registry rows through the cascade — the very rows that make a tool live — so the
+   *  bundle must clear the same vault check the member tools would have enforced had they
+   *  been enabled one at a time.
+   *
+   *  We track WHICH member declared each key, not just the key set, because an operator
+   *  staring at "bundle web needs tavily_api_key" has to know it is `web-search` asking, so
+   *  they can decide whether to supply the credential or drop the member.
+   *
+   *  A member with no discovery entry (or an unparsable manifest) contributes nothing here:
+   *  its own per-tool gate still runs whenever it is enabled directly, and a tool whose
+   *  manifest cannot be read never loads at runtime anyway, so it cannot go live without a
+   *  credential. Failing closed on such members would instead block bundles whose members
+   *  simply are not in the tool discovery set (e.g. under test or partial discovery). */
+  private async assertBundleSecretsConfigured(bundle: string): Promise<void> {
+    // Same member list the cascade will write, so the gate can never cover a different set
+    // of tools than the operation itself touches.
+    const members = this.requireBundleTools(bundle);
+
+    // secret key → member tools that declare it (deduped by construction).
+    const requiredBy = new Map<string, string[]>();
+    for (const member of members) {
+      const memberDisc = this.toolDiscovery.find(d => d.name === member);
+      for (const secret of memberDisc?.metadata?.requiresSecrets ?? []) {
+        const declarers = requiredBy.get(secret) ?? [];
+        declarers.push(member);
+        requiredBy.set(secret, declarers);
+      }
+    }
+    if (requiredBy.size === 0) return;
+
+    const required = [...requiredBy.keys()];
+    // Renders "key (required by tool-a, tool-b)" so the message names the credential AND
+    // the member that needs it.
+    const describe = (keys: string[]): string =>
+      keys.map(k => `${k} (required by ${requiredBy.get(k)!.join(', ')})`).join('; ');
+
+    if (!this.secrets) {
+      // Fail closed, exactly as the per-tool path does: unverifiable is not the same as fine.
+      throw new RegistryGuardError(
+        `Cannot enable bundle '${bundle}': its member tools require secrets ` +
+        `(${describe(required)}) but the secrets vault is unavailable.`,
+      );
+    }
+    const configured = new Set(await this.secrets.list());
+    const missing = required.filter(s => !configured.has(s));
+    if (missing.length > 0) {
+      throw new RegistryGuardError(
+        `Cannot enable bundle '${bundle}': required secret(s) not configured in the vault: ` +
+        `${describe(missing)}. Configure them before enabling the bundle.`,
       );
     }
   }
@@ -183,7 +274,9 @@ export class RegistryService {
     if (!row) throw new RegistryGuardError(`Cannot enable '${name}': not installed. Install it first.`);
     if (kind === 'skill') {
       // Bundle + members in one transaction — the bundle is the unit of control (#1724).
-      await this.requireCascade(name).enableBundle(name, this.bundleTools(name), actor);
+      // requireBundleTools (not bundleTools) because assertInstallable above has already
+      // proven the manifest parsed, so the member list must be determinable here.
+      await this.requireCascade(name).enableBundle(name, this.requireBundleTools(name), actor);
     } else {
       await this.repo(kind).enable(name, actor);
     }
@@ -200,7 +293,7 @@ export class RegistryService {
       // repo(kind).install() would commit outside that transaction — if the cascade then
       // failed, the bundle would be left installed with zero member tools touched, the
       // exact partial state this feature exists to prevent (finding #4).
-      await this.requireCascade(name).enableBundle(name, this.bundleTools(name), actor);
+      await this.requireCascade(name).enableBundle(name, this.requireBundleTools(name), actor);
     } else {
       await this.repo(kind).install(name, actor);
       await this.repo(kind).enable(name, actor);
@@ -212,7 +305,29 @@ export class RegistryService {
     const row = await this.repo(kind).getRow(name);
     if (!row) throw new RegistryGuardError(`Cannot disable '${name}': no registry row.`);
     if (kind === 'skill') {
-      await this.requireCascade(name).disableBundle(name, this.bundleTools(name), actor);
+      // Deliberately NOT assertInstallable: disabling a bundle whose manifest is merely
+      // broken is a legitimate thing to want to do — it is often exactly why the operator
+      // is here. What we must refuse is a disable whose cascade would be INCOMPLETE.
+      //
+      // bundleTools() returns null when the member list cannot be read (ghost bundle, or a
+      // manifest that failed to parse). Cascading `[]` there would flip only the
+      // skill_registry row while every member tool_registry row stayed enabled — and since
+      // runtime availability is gated on tool_registry alone, those tools would stay live
+      // and callable while the console reported success. Re-enabling is blocked by
+      // assertInstallable, so there would be no bundle-level route back to a consistent
+      // state either. Fail loudly and tell the operator the two ways out (finding #2).
+      const tools = this.bundleTools(name);
+      if (tools === null) {
+        throw new RegistryGuardError(
+          `Cannot disable bundle '${name}': its member tool list cannot be read (no manifest ` +
+          `on disk, or the manifest failed to parse), so the cascade would leave its member ` +
+          `tools enabled and still callable. Disable the member tools individually, or repair ` +
+          `the bundle's manifest and try again.`,
+        );
+      }
+      // A manifest that parsed and lists zero tools reaches here with `[]` — cascading
+      // nothing is correct in that case, and the bundle row still flips.
+      await this.requireCascade(name).disableBundle(name, tools, actor);
     } else {
       await this.repo(kind).disable(name, actor);
     }
@@ -220,10 +335,40 @@ export class RegistryService {
   }
 
   /** Uninstall is allowed even for ghosts — it's the only way to clear a ghost row.
-   *  Rejects when nothing was actually deleted: a DELETE that matches zero rows (e.g.
+   *  Rejects an ENABLED bundle whose members are known (finding #3 — see inline), and
+   *  rejects when nothing was actually deleted: a DELETE that matches zero rows (e.g.
    *  the bundle-routing bug that sent `DELETE /skills/ceo-inbox` to the tools table)
    *  must not report success while leaving the item in place (finding #2). */
   async uninstall(kind: RegistryKind, name: string, _actor: string): Promise<void> {
+    if (kind === 'skill') {
+      // Finding #3: uninstall deletes the skill_registry row only — it never routes through
+      // the cascade. Uninstalling an ENABLED bundle therefore removed the row that owns the
+      // members while leaving every member tool_registry row enabled = true; after a restart
+      // those tools still load (runtime gating reads tool_registry alone) and stay callable
+      // by any agent, with no bundle owning them. The console offers Uninstall in the
+      // 'enabled' state, so this is one misclick away.
+      //
+      // Refuse, and point at disable — which DOES cascade — as the way to get there. We do
+      // not silently disable-then-uninstall on the operator's behalf: an unrequested cascade
+      // that strips 14 tools is not something to do implicitly.
+      const row = await this.repo(kind).getRow(name);
+      // The refusal is scoped to bundles whose member list is readable — i.e. exactly the
+      // bundles for which "disable first" is a route that actually works. A ghost (no
+      // manifest on disk) or a bundle with an unparsable manifest has no cascade route at
+      // all: disable() rejects it for the same reason, and the console derives 'ghost' state
+      // so it never even offers Disable. Blocking uninstall there too would leave the row
+      // with no console action whatsoever, and clearing a ghost row is the only way to
+      // remove one. So those fall through and the row delete proceeds.
+      if (row?.enabled && this.bundleTools(name) !== null) {
+        throw new RegistryGuardError(
+          `Cannot uninstall bundle '${name}' while it is enabled: its member tools would stay ` +
+          `enabled and callable with no bundle owning them. Disable the bundle first (that ` +
+          `cascades to its member tools), then uninstall it.`,
+        );
+      }
+      // An 'installed' (not enabled) bundle falls through too: it has no live members to
+      // strand, so deleting its row is safe.
+    }
     const deleted = await this.repo(kind).uninstall(name);
     if (!deleted) {
       throw new RegistryGuardError(`Cannot uninstall ${kind} '${name}': no registry row exists.`);

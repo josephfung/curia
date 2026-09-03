@@ -373,6 +373,141 @@ describe('RegistryService — bundle cascade', () => {
       .rejects.toThrow(/cascade repo not configured/i);
   });
 
+  // ── Finding #1: the secrets gate must cover the bundle path ────────────────
+  //
+  // A bundle enable writes its members' tool_registry rows through the cascade — the same
+  // rows that make a tool live — so it has to clear the same vault check the member tools
+  // enforce individually. Before the fix, assertSecretsConfigured returned early for
+  // kind='skill' and enabling the bundle was a way around the per-tool gate entirely.
+
+  it('rejects a bundle enable when a member tool needs an unconfigured secret', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('web', 'test');
+    const cascade = new FakeCascade();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(),
+      [discWithSecrets('web-search', ['tavily_api_key'])], // member tool declares the secret
+      [], new FakeSecrets([]),                             // vault has nothing
+      skillRepo,
+      [disc('web', { metadata: { name: 'web', description: 'd', version: '0.1.0', tools: ['web-search'] } })],
+      cascade,
+    );
+
+    await expect(svc.enable('skill', 'web', 'web-app'))
+      .rejects.toThrow(/tavily_api_key/);
+    // The operator needs to know which member is asking, not just which key is missing.
+    await expect(svc.enable('skill', 'web', 'web-app'))
+      .rejects.toThrow(/web-search/);
+    // And nothing was written — the gate runs before the cascade.
+    expect(cascade.enabled).toEqual([]);
+  });
+
+  it('allows a bundle enable once the member tool secret is configured', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('web', 'test');
+    const cascade = new FakeCascade();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(),
+      [discWithSecrets('web-search', ['tavily_api_key'])],
+      [], new FakeSecrets(['tavily_api_key']),             // vault now has the key
+      skillRepo,
+      [disc('web', { metadata: { name: 'web', description: 'd', version: '0.1.0', tools: ['web-search'] } })],
+      cascade,
+    );
+
+    const entry = await svc.enable('skill', 'web', 'web-app');
+
+    // FakeCascade records rather than writing rows, so the derived state still reflects the
+    // untouched fake repo row — what matters here is that the gate let the cascade run.
+    expect(entry.name).toBe('web');
+    expect(cascade.enabled).toEqual([{ bundle: 'web', tools: ['web-search'] }]);
+  });
+
+  // ── Finding #2: disable must refuse when the member list is unreadable ─────
+
+  it('refuses to disable a bundle whose manifest failed to parse, without cascading', async () => {
+    // Cascading `[]` here would flip only skill_registry; the member tool_registry rows
+    // would stay enabled and — since runtime gating reads tool_registry alone — the tools
+    // would stay live while the console reported success.
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    await skillRepo.enable('ceo-inbox', 'test');
+    const cascade = new FakeCascade();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo,
+      [{ name: 'ceo-inbox', metadata: null, error: 'bad yaml' }],
+      cascade,
+    );
+
+    await expect(svc.disable('skill', 'ceo-inbox', 'web-app'))
+      .rejects.toThrow(/member tool list cannot be read/i);
+    expect(cascade.disabled).toEqual([]);
+  });
+
+  it('disables a bundle whose manifest legitimately lists no tools, cascading an empty list', async () => {
+    // The counterpart to the test above: a manifest that parsed and lists zero members is
+    // not a failure — cascading nothing is correct, and the bundle row must still flip.
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('empty-bundle', 'test');
+    await skillRepo.enable('empty-bundle', 'test');
+    const cascade = new FakeCascade();
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo,
+      [{ name: 'empty-bundle', metadata: { name: 'empty-bundle', description: 'd', version: '0.1.0', tools: [] } }],
+      cascade,
+    );
+
+    const entry = await svc.disable('skill', 'empty-bundle', 'web-app');
+
+    // The call succeeds and cascades an explicitly empty member list (FakeCascade records
+    // rather than writing, so the derived state still comes from the untouched fake row).
+    expect(entry.name).toBe('empty-bundle');
+    expect(cascade.disabled).toEqual([{ bundle: 'empty-bundle', tools: [] }]);
+  });
+
+  // ── Finding #3: uninstall must not strand an enabled bundle's members ──────
+
+  it('refuses to uninstall an enabled bundle and points at disable first', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    await skillRepo.enable('ceo-inbox', 'test');
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, new FakeCascade(),
+    );
+
+    await expect(svc.uninstall('skill', 'ceo-inbox', 'web-app'))
+      .rejects.toThrow(/disable the bundle first/i);
+    // The row is untouched, so the operator can still take the cascading route.
+    expect((await skillRepo.getRow('ceo-inbox'))?.enabled).toBe(true);
+  });
+
+  it('uninstalls a bundle that is installed but not enabled', async () => {
+    // Nothing live to strand: its member tool rows were never enabled by the cascade.
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, new FakeCascade(),
+    );
+
+    await svc.uninstall('skill', 'ceo-inbox', 'web-app');
+
+    expect(await skillRepo.getRow('ceo-inbox')).toBeNull();
+  });
+
+  it('still clears a ghost bundle row (no discovery entry)', async () => {
+    // Deleting the row is the ONLY way to remove a ghost — the console offers no other
+    // action for one — so the finding #3 guard must not swallow this case.
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('gone-bundle', 'test');
+    const svc = new RegistryService(
+      new FakeRepo(), new FakeRepo(), [], [], undefined, skillRepo, [], new FakeCascade(),
+    );
+
+    await svc.uninstall('skill', 'gone-bundle', 'web-app');
+
+    expect(await skillRepo.getRow('gone-bundle')).toBeNull();
+  });
+
   it('refuses a bundle disable when no cascade repo is wired', async () => {
     // Symmetry with the enable-side guard: cheap to assert, and its absence is what
     // would let a future refactor silently reintroduce the single-table fallback on
