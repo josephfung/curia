@@ -4,7 +4,9 @@ name: docker-publish
 # - release published -> semver + latest (app), pg16 + latest (postgres)
 # - push to main      -> edge (both), for dogfood / curia-deploy pulls
 # - manual dispatch   -> with a tag: that tag's semver only, rebuilt from its
-#                        source; without a tag: same as a push to main.
+#                        source; without a tag, from main: same as a push to
+#                        main. A bare dispatch from any other branch publishes
+#                        nothing, by design — `edge` must only ever mean main.
 on:
   release:
     types: [published]
@@ -81,8 +83,15 @@ jobs:
           # release's own tag is used. On a push — or a bare dispatch — both are
           # empty, which is the signal for an `edge` build.
           TAG="${INPUT_TAG:-$EVENT_TAG}"
+          # Strict SemVer 2.0.0 with a mandatory `v`, and no `+build` metadata
+          # (a `+` is not a legal Docker tag character anyway). Being loose here
+          # is not a harmless typo check: `metadata-action` silently *skips* a
+          # `type=semver` entry it cannot parse, while `latest` — keyed to the
+          # event, not to the version — publishes regardless. A tag like
+          # `v1.2.3.4` or `v1.2.3-rc..1` would therefore move `latest` onto a
+          # build with no version tag beside it. Reject it before the build.
           if [ -n "$TAG" ]; then
-            printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$' \
+            printf '%s' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$' \
               || { echo "Invalid tag format: refusing to build"; exit 1; }
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -109,6 +118,9 @@ jobs:
           - name: curia
             image: curia
             dockerfile: Dockerfile
+            # This is the only image carrying app semver, so it is the only one
+            # a tag build must produce a version for (asserted after `meta`).
+            expects_semver: true
             # App tags: semver on any release build (published or re-published),
             # `latest` only on a real release, `edge` only on a main build.
             #
@@ -129,6 +141,7 @@ jobs:
           - name: curia-postgres
             image: curia-postgres
             dockerfile: docker/postgres.Dockerfile
+            expects_semver: false
             # DB is versioned by pg major, not app semver — so every tag it has
             # is a floating pointer, and none of them may be moved by a
             # re-publish of an old app release. That leaves a dispatched
@@ -176,6 +189,22 @@ jobs:
           # Overrides metadata-action's `github.sha` default — see the step above.
           labels: |
             org.opencontainers.image.revision=${{ steps.src.outputs.sha }}
+
+      # The regex in `resolve` predicts what metadata-action will accept; this
+      # checks what it actually did. Belt and braces on purpose — the failure it
+      # guards against is silent and production-facing (`latest` advancing onto a
+      # build with no version tag), and a prediction can be wrong in a way a
+      # direct check cannot.
+      - name: Assert a tag build produced its version tags
+        if: needs.resolve.outputs.tag != '' && matrix.expects_semver
+        env:
+          META_VERSION: ${{ steps.meta.outputs.version }}
+          TARGET: ${{ needs.resolve.outputs.tag }}
+        run: |
+          if [ -z "$META_VERSION" ]; then
+            echo "::error::Building ${TARGET} produced no version tag. Refusing to publish, since \`latest\` would move onto a build with no semver tag beside it."
+            exit 1
+          fi
 
       # With no tags, `push: true` fails buildx outright ("tag is needed when
       # pushing to registry"), which would turn a correct no-op into a red run

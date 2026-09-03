@@ -45,8 +45,41 @@ interface Workflow {
   };
 }
 
+const WORKFLOW_SOURCE = readFileSync(WORKFLOW_PATH, 'utf8');
+
+/**
+ * Check the shape we depend on before asserting the type, so a restructured
+ * workflow fails here with a sentence about what is missing rather than ten
+ * lines down on `Cannot read properties of undefined`.
+ */
+function assertWorkflowShape(doc: unknown): asserts doc is Workflow {
+  const problems: string[] = [];
+  const root = doc as Partial<Workflow> | null;
+  if (typeof root !== 'object' || root === null) throw new Error('workflow did not parse to an object');
+  if (typeof root.concurrency?.group !== 'string') problems.push('concurrency.group');
+  const build = root.jobs?.build;
+  if (!build) problems.push('jobs.build');
+  if (!Array.isArray(build?.steps) || build.steps.length === 0) problems.push('jobs.build.steps');
+  const include = build?.strategy?.matrix?.include;
+  if (!Array.isArray(include) || include.length === 0) {
+    problems.push('jobs.build.strategy.matrix.include');
+  } else {
+    for (const entry of include) {
+      if (typeof entry?.name !== 'string' || typeof entry?.tags !== 'string') {
+        problems.push(`matrix entry ${JSON.stringify(entry?.name)} (needs name + tags)`);
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(`docker-publish.yml is missing or has restructured: ${problems.join(', ')}`);
+  }
+}
+
 // The workflow is plain YAML; the `${{ … }}` expressions load as ordinary strings.
-const workflow = yaml.load(readFileSync(WORKFLOW_PATH, 'utf8')) as unknown as Workflow;
+const parsed: unknown = yaml.load(WORKFLOW_SOURCE);
+// Cast only after the runtime check above.
+assertWorkflowShape(parsed);
+const workflow: Workflow = parsed;
 
 // --- a deliberately narrow GitHub Actions expression evaluator ---------------
 
@@ -232,6 +265,37 @@ const DISPATCH_WITH_TAG = contextFor({
   inputTag: 'v0.40.0',
 });
 const DISPATCH_BARE = contextFor({ eventName: 'workflow_dispatch', ref: 'refs/heads/main' });
+const DISPATCH_BARE_OFF_MAIN = contextFor({
+  eventName: 'workflow_dispatch',
+  ref: 'refs/heads/some-feature',
+});
+
+/**
+ * The `resolve` job's tag guard, lifted from the workflow itself rather than
+ * copied — a test that restates the pattern would pass against its own copy
+ * while the real one drifted. The grammar uses only constructs that mean the
+ * same thing in POSIX ERE and JS (no lookaround, no `\d`, trailing `-` inside
+ * the bracket expressions), so `grep -E` and `RegExp` agree.
+ */
+function tagGuardPattern(): RegExp {
+  const match = /grep -Eq '(\^v[^']*)'/.exec(WORKFLOW_SOURCE);
+  if (!match) throw new Error('could not find the tag-validation grep in the resolve job');
+  return new RegExp(match[1]!);
+}
+
+/**
+ * Locate the checkout step by what it *is*, not where it sits — a new setup
+ * step inserted above it should not fail these tests for ordering.
+ */
+function checkoutRef(): string {
+  const checkout = workflow.jobs.build.steps.find((step) =>
+    String(step.uses ?? '').startsWith('actions/checkout@'),
+  ) as { with?: { ref?: string } } | undefined;
+  if (typeof checkout?.with?.ref !== 'string') {
+    throw new Error('no actions/checkout step with a `ref` in jobs.build.steps');
+  }
+  return checkout.with.ref;
+}
 
 function tagsFor(imageName: string, ctx: Context): string[] {
   const entry = workflow.jobs.build.strategy.matrix.include.find((e) => e.name === imageName);
@@ -280,8 +344,7 @@ describe('docker-publish.yml tag derivation', () => {
     });
 
     it('checks out the requested tag, and the concurrency group follows it', () => {
-      const checkout = workflow.jobs.build.steps[0] as { with: { ref: string } };
-      expect(interpolate(checkout.with.ref, DISPATCH_WITH_TAG)).toBe('v0.40.0');
+      expect(interpolate(checkoutRef(), DISPATCH_WITH_TAG)).toBe('v0.40.0');
       // Not `refs/heads/main`, or a routine main merge would cancel a rollback.
       expect(interpolate(workflow.concurrency.group, DISPATCH_WITH_TAG)).not.toContain('refs/heads/main');
     });
@@ -294,8 +357,54 @@ describe('docker-publish.yml tag derivation', () => {
     });
 
     it('checks out the launch ref', () => {
-      const checkout = workflow.jobs.build.steps[0] as { with: { ref: string } };
-      expect(interpolate(checkout.with.ref, DISPATCH_BARE)).toBe('refs/heads/main');
+      expect(interpolate(checkoutRef(), DISPATCH_BARE)).toBe('refs/heads/main');
+    });
+  });
+
+  describe('bare workflow_dispatch from a branch other than main', () => {
+    // Not an oversight: `edge` means "the newest main", so a dispatch launched
+    // from a feature branch must publish nothing rather than mint an `edge`
+    // that points at unmerged code. The run is green with a skip notice per
+    // image; before #1715 it failed red inside buildx instead.
+    it('publishes nothing at all', () => {
+      expect(tagsFor('curia', DISPATCH_BARE_OFF_MAIN)).toEqual([]);
+      expect(tagsFor('curia-postgres', DISPATCH_BARE_OFF_MAIN)).toEqual([]);
+    });
+
+    it('never mints an edge tag from a non-main branch', () => {
+      expect(tagsFor('curia', DISPATCH_BARE_OFF_MAIN)).not.toContain('edge');
+      expect(tagsFor('curia-postgres', DISPATCH_BARE_OFF_MAIN)).not.toContain('edge');
+    });
+  });
+
+  describe('the resolve job tag guard', () => {
+    // A loose guard is not a harmless typo check. metadata-action silently skips
+    // a `type=semver` entry it cannot parse, while `latest` is keyed to the
+    // event rather than to the version — so a tag that looks version-ish but is
+    // not SemVer would advance `latest` onto a build with no version tag.
+    it.each(['v1.2.3', 'v0.43.0', 'v1.0.0', 'v1.2.3-rc.1', 'v1.2.3-beta', 'v10.20.30'])(
+      'accepts %s',
+      (tag) => {
+        expect(tagGuardPattern().test(tag)).toBe(true);
+      },
+    );
+
+    it.each([
+      'v1.2.3.4', // four components — not SemVer
+      'v1.2.3-rc..1', // empty prerelease identifier
+      'v01.2.3', // leading zero
+      'v1.2.3+build.1', // build metadata; `+` is not a legal Docker tag character
+      'v1.2', // missing patch
+      '1.2.3', // missing the `v`
+      'v1.2.3-', // empty prerelease
+      'v1.2.3 ; rm -rf /', // shell metacharacters
+    ])('rejects %s', (tag) => {
+      expect(tagGuardPattern().test(tag)).toBe(false);
+    });
+
+    it('matches what the app image will actually publish for an accepted tag', () => {
+      expect(tagGuardPattern().test('v0.40.0')).toBe(true);
+      expect(tagsFor('curia', DISPATCH_WITH_TAG).sort()).toEqual(['v0.40', 'v0.40.0']);
     });
   });
 
