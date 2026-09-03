@@ -125,7 +125,9 @@ Both images are built for `linux/amd64` + `linux/arm64` and signed with **cosign
   under its semver tags **only**. `edge`, `latest`, and `pg16` are floating "newest"
   pointers, and a re-publish names an arbitrary older tag, so a dispatch never moves
   them — doing so shipped old code past migrations that had already run (#1715). A
-  dispatch with **no** `tag` behaves exactly like a push to `main`.
+  dispatch with **no** `tag`, launched from `main`, behaves exactly like a push to
+  `main`; from any other branch it is refused (see *Re-publishing a release by hand*
+  below).
 - The tag being built is resolved once (in the `resolve` job) and validated against
   strict semver before checkout, and every downstream tag decision keys off that rather
   than off `github.ref`, which on a dispatch names the launch branch and not the built
