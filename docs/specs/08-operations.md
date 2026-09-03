@@ -139,9 +139,28 @@ equivalent — `resolve` normalises both to one publish target (#1718):
 
 **Prefer (1).** The dropdown also chooses which *version of the workflow file* runs, so
 (2) re-publishes an old release using that release's copy of `docker-publish.yml`,
-missing every fix landed since — the wrong direction on an incident-response path. Both
-boxes may be filled if they name the same tag; a mismatch fails the run rather than
-guessing which one the operator meant.
+missing every fix landed since — the wrong direction on an incident-response path.
+
+`resolve` refuses anything outside those two shapes, rather than publishing on a guess:
+
+- both boxes filled with **different** tags — ambiguous;
+- a `tag` input dispatched from a **branch other than `main`** — it would publish a real
+  release image while running that branch's unreviewed copy of the workflow, and the
+  branch most likely to be selected is one editing that very file;
+- a **bare dispatch from a branch other than `main`** — `edge` may only ever mean main and
+  no tag was named, so the run has nothing it could publish. This was previously a green
+  run that skipped both images with a notice, which is a publish workflow reporting
+  success having published nothing (#1718).
+
+A rejection fails `resolve` and leaves `build` *skipped*, so no publish-failure issue is
+filed — an operator mis-click is a typo, not an incident.
+
+Concurrency groups keep a release in its own namespace. A release publishes `latest` and
+`pg16`; a re-publish of that same tag deliberately does not. With `cancel-in-progress`,
+sharing a group would let an impatient re-publish cancel the release build still in
+flight and strand the floating pointers on the previous version, with no alert —
+`notify-failure` excludes cancellation. Only a run publishing a superset may cancel one
+publishing a subset.
 
 **`install.sh` — the supported self-host path** (`install.sh`, download-then-run; it uses
 interactive `read` prompts, so `curl … | bash` does not work). The script:

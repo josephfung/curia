@@ -3,10 +3,12 @@ name: docker-publish
 # Build, push, sign, and SBOM-attest the Curia app + Postgres images to GHCR.
 # - release published -> semver + latest (app), pg16 + latest (postgres)
 # - push to main      -> edge (both), for dogfood / curia-deploy pulls
-# - manual dispatch   -> with a tag: that tag's semver only, rebuilt from its
-#                        source; without a tag, from main: same as a push to
-#                        main. A bare dispatch from any other branch publishes
-#                        nothing, by design — `edge` must only ever mean main.
+# - manual dispatch   -> with a tag (named either way, see below): that tag's
+#                        semver only, rebuilt from its source; without a tag,
+#                        from main: same as a push to main. A dispatch that
+#                        would publish nothing, or that names a tag from an
+#                        unrelated branch, is refused rather than run —
+#                        `edge` must only ever mean main.
 #
 # ## Re-publishing a release by hand (#1718)
 #
@@ -64,14 +66,24 @@ permissions:
 # the next merge — precisely the wrong moment, since a re-publish is an
 # incident-response action.
 #
-# `github.ref_name` rather than `github.ref` so the two dispatch forms (#1718)
-# land in one group: the input gives a bare `v0.40.0`, and the ref dropdown a
-# `refs/tags/v0.40.0` that `ref_name` shortens to the same string. Otherwise two
-# runs re-publishing the same tag by different routes would race to write it.
-# This job cannot read `needs`, so the target is recomputed here; `resolve` is
-# the authority and rejects the case where these two disagree.
+# A release gets its own namespace, because cancellation here is not symmetric
+# (#1718). A release publishes `latest` / `pg16`; a re-publish of the same tag
+# deliberately does not. Without the prefix those two share a group — the ref
+# dropdown makes `github.ref` the tag ref, exactly what a release event carries
+# — so re-publishing vX.Y.Z while its release build is still running would
+# cancel the release and leave the floating pointers on the previous version.
+# Nothing would report it either: `notify-failure` excludes cancellation. Only
+# a run that publishes a superset may cancel one that publishes a subset, and
+# the release event is the only superset there is.
+#
+# The two dispatch forms of the same tag do NOT share a group (one keys on
+# `v0.40.0`, the other on `refs/tags/v0.40.0`). That is deliberate: normalising
+# them with `github.ref_name` would flatten the branch, tag and input
+# namespaces into one string space, letting a `tag: main` typo cancel an
+# in-flight `edge` build. Two identical re-publishes racing is the cheaper
+# problem, and GHCR resolves it last-write-wins with the same content.
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'release' && 'release-' || '' }}${{ inputs.tag || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -117,14 +129,20 @@ jobs:
             refs/tags/*) REF_TAG="${LAUNCH_REF#refs/tags/}" ;;
           esac
 
-          # Filling in both boxes is fine when they agree, and is how a careful
-          # operator double-checks themselves. Disagreeing means one of the two
-          # is not what they think it is, and the consequences diverge — the
-          # input decides what gets built and tagged, the dropdown decides which
-          # version of this workflow runs. Refuse rather than silently honouring
-          # one of them.
-          if [ -n "$INPUT_TAG" ] && [ -n "$REF_TAG" ] && [ "$INPUT_TAG" != "$REF_TAG" ]; then
-            echo "::error::Dispatched with tag input '${INPUT_TAG}' from ref '${LAUNCH_REF}'. Pick one: type the tag and launch from main, or select the tag in the ref dropdown and leave the input empty."
+          # The `tag` input says *what to build*; the launch ref also decides
+          # *which copy of this workflow runs*. So a tag re-publish is only
+          # well-formed from `main` (the reviewed definition) or from that same
+          # tag (the ref-dropdown form). Anything else is one of:
+          #
+          #   - the two boxes naming different tags — ambiguous, and honouring
+          #     either one silently is a guess about which the operator meant;
+          #   - a tag re-publish launched from a feature branch, which would
+          #     publish a real release image using unreviewed YAML. The branch
+          #     most likely to be selected here is one editing this very file.
+          #
+          # Neither is a thing to guess at while firefighting a stale tag.
+          if [ -n "$INPUT_TAG" ] && [ "$LAUNCH_REF" != "refs/heads/main" ] && [ "$REF_TAG" != "$INPUT_TAG" ]; then
+            echo "::error::Tag input '${INPUT_TAG}' was dispatched from '${LAUNCH_REF}'. Re-publish a tag from main (leaving the ref dropdown alone), or select that same tag in the dropdown and leave the input empty."
             exit 1
           fi
 
@@ -134,6 +152,25 @@ jobs:
           # branch — all three are empty, the signal for an `edge` build.
           TAG="${INPUT_TAG:-$EVENT_TAG}"
           TAG="${TAG:-$REF_TAG}"
+
+          # No tag and not on main: there is nothing this run could publish.
+          # `edge` may only ever mean main, and no release was named. `push` is
+          # restricted to `branches: [main]`, so only a bare dispatch off main
+          # reaches here.
+          #
+          # This used to be a green run: both matrix legs derived an empty tag
+          # list and skipped with a notice buried in the job log. But a publish
+          # workflow that publishes nothing, reports success, and leaves every
+          # tag pointing where it was is the #1715 / #1718 failure mode itself —
+          # the operator's mental model is "I re-published", and nothing on the
+          # summary contradicts them. Fail here instead, before the build burns
+          # a ten-minute multi-arch runner. (`notify-failure` stays quiet: it
+          # gates on `build` *failing*, and a resolve rejection leaves `build`
+          # skipped. An operator mis-click is not an incident.)
+          if [ -z "$TAG" ] && [ "$LAUNCH_REF" != "refs/heads/main" ]; then
+            echo "::error::Nothing to publish: dispatched from '${LAUNCH_REF}' with no tag. ':edge' may only ever mean main, so launch from main to rebuild it, or name a release tag to re-publish."
+            exit 1
+          fi
           # Strict SemVer 2.0.0 with a mandatory `v`, and no `+build` metadata
           # (a `+` is not a legal Docker tag character anyway). Being loose here
           # is not a harmless typo check: `metadata-action` silently *skips* a
@@ -142,20 +179,39 @@ jobs:
           # `v1.2.3.4` or `v1.2.3-rc..1` would therefore move `latest` onto a
           # build with no version tag beside it. Reject it before the build.
           if [ -n "$TAG" ]; then
+            # `grep` is line-oriented: it answers "does any line match", so a
+            # multi-line value would pass on the strength of its first line and
+            # carry the rest through unvalidated. `tag=$TAG` is then written to
+            # GITHUB_OUTPUT as several lines, and the runner reads the last one
+            # — an arbitrary unvalidated string — as the output. Reject anything
+            # that is not a single line before asking grep about its shape.
+            if [ "$(printf '%s' "$TAG" | wc -l)" -ne 0 ]; then
+              echo "::error::Refusing to build: the publish target spans multiple lines."
+              exit 1
+            fi
             printf '%s' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$' \
-              || { echo "Invalid tag format: refusing to build"; exit 1; }
+              || {
+                # `::error::` rather than a plain echo, and name the value and
+                # where it came from. This is reachable from the ref dropdown
+                # now, where the operator typed nothing at all — "Invalid tag
+                # format" with no offending value would leave them guessing.
+                if [ -n "$INPUT_TAG" ]; then SOURCE="the tag input"; else SOURCE="the launch ref ${LAUNCH_REF}"; fi
+                echo "::error::Refusing to build: '${TAG}' (from ${SOURCE}) is not a strict SemVer release tag of the form vMAJOR.MINOR.PATCH[-prerelease]."
+                exit 1
+              }
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           # Surfaced as a notice so the resolved target shows on the run summary
           # page, not only inside the step log. This is an incident-response
           # button: "which thing did I just publish?" should be answerable at a
-          # glance. Report the launch ref verbatim for an edge build rather than
-          # asserting "main" — a bare dispatch from a feature branch lands here
-          # too, and publishes nothing.
+          # glance.
           if [ -n "$TAG" ]; then
             echo "::notice::Publish target: release ${TAG}, rebuilt from its own source."
           else
-            echo "::notice::Publish target: ${LAUNCH_REF} (:edge — published only if that ref is main)."
+            # No hedge here: an empty target that reached this line is main, by
+            # the guard above. A step that reports "published only if…" and then
+            # exits 0 is the ambiguity this issue is about.
+            echo "::notice::Publish target: main (:edge on both images)."
           fi
 
   build:
