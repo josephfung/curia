@@ -72,6 +72,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`memory-store`** — fact-loop logs use node id instead of the raw entity name. (#1713)
 - **`docker-publish`** — a dispatched re-publish no longer retags `:edge` backwards; it publishes semver. (#1715)
 - **`docker-publish`** — the image revision label now records the commit built, not the launch ref. (#1715)
+- **`docker-publish`** — strict SemVer tag guard; a malformed tag no longer moves `latest` alone. (#1715)
 - **Contact merge** — secondary KG memory folds into the survivor after the contact delete. (#1711)
 - **`docker-publish`** — a transient registry drop mid-`pnpm install` retries instead of failing the publish. (#1699)
 - **`docker-publish`** — `apt` fetches retry too; the `curia-postgres` leg has no other network step. (#1699)
