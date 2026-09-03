@@ -44,6 +44,11 @@ export interface ManifestMetadata {
   // agents
   role?: string;
   modelTier?: string;
+  /** Raw `pinned_skills` for an agent — a mix of bundle names and first-class tool
+   *  pins (ADR-032). Distinct from `tools`, which means bundle membership on a skill.
+   *  The console uses this to warn before a bundle disable strips a tool that some
+   *  other agent pins directly. Agents only. */
+  pinnedTools?: string[];
 }
 
 /** One on-disk item found during discovery. `metadata` is null when the manifest

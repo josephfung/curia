@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Skill bundle registry UI** — `/tools` now enables/disables bundles and flags unresolved agent pins. (#1724)
 - **Publish-failure alert** — a failed `docker-publish` opens/updates a tracking issue, since `:edge` goes stale silently. (#1699)
 - **Contact-anchored KG identity** — same-name contacts each hold their own node, facts, and enrichment. (#1694)
 - **ADR-040 (Accepted)** — contact-anchored KG node identity; a contact's node is keyed on the contact, not its label. (#1694)

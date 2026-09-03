@@ -20,6 +20,11 @@ export interface ManifestMetadata {
   tools?: string[];
   /** Agents whose pinned_skills reference this bundle — skill bundles only. */
   pinnedBy?: string[];
+  /** Raw pinned_skills for an agent — a mix of bundle names and first-class tool pins
+   *  (ADR-032). Distinct from `tools`, which means bundle membership on a skill. Used
+   *  by collateralPins to warn before a bundle disable strips a directly-pinned tool.
+   *  Agents only. */
+  pinnedTools?: string[];
 }
 
 export interface RegistryEntry {
@@ -95,4 +100,31 @@ export function buildRows(
     .map(entry => ({ entry, rowKind: 'tool', members: [], pinnedBy: [], unresolvedFor: [] }));
 
   return [...bundleRows, ...toolRows];
+}
+
+/**
+ * Member tools of `row` that some agent pins directly, by tool name.
+ *
+ * Disabling a bundle cascades to its members, which would strip those tools from an
+ * agent that never asked for the bundle at all. The operator sees this list before
+ * confirming. Only enabled agents count — a disabled agent loses nothing.
+ */
+export function collateralPins(
+  row: Row,
+  agents: RegistryEntry[],
+): Array<{ tool: string; agents: string[] }> {
+  const memberNames = new Set(row.members.map(m => m.name));
+  const byTool = new Map<string, string[]>();
+
+  for (const agent of agents) {
+    if (agent.state !== 'enabled') continue;
+    for (const pin of agent.metadata?.pinnedTools ?? []) {
+      if (!memberNames.has(pin)) continue;
+      const list = byTool.get(pin);
+      if (list) list.push(agent.name);
+      else byTool.set(pin, [agent.name]);
+    }
+  }
+
+  return [...byTool.entries()].map(([tool, names]) => ({ tool, agents: names }));
 }
