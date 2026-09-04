@@ -14,7 +14,7 @@
 // Exclusion pair-normalization unit tests live in src/contacts/dedup-exclusions.test.ts;
 // the table itself is covered by tests/integration/contact-dedup-exclusions.test.ts.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type MockedFunction } from 'vitest';
 import type { Contact, ChannelIdentity } from '../src/contacts/types.js';
 import {
   runDedup,
@@ -34,9 +34,12 @@ function makeContact(
     kgNodeId: null,
     role: null,
     systemRole: null,
-    status: 'confirmed',
+    // tier/kind replaced status/trust_level as the capability axis (#945, columns
+    // dropped in migration 059). 'known' is the ordinary non-blocked tier the sweep
+    // operates on; 'person' matches the classifier's default for a human contact.
+    tier: 'known',
+    kind: 'person',
     contactConfidence: 0.8,
-    trustLevel: null,
     lastSeenAt: null,
     inboundMessageCount: 0,
     outboundMessageCount: 0,
@@ -84,21 +87,24 @@ function makeIdentity(
 // ---------------------------------------------------------------------------
 
 describe('runDedup — unit', () => {
-  let mergeMock: ReturnType<typeof vi.fn>;
-  let createTaskMock: ReturnType<typeof vi.fn>;
-  let listExclusionPairKeysMock: ReturnType<typeof vi.fn>;
+  // Typed from DedupRunOptions rather than `ReturnType<typeof vi.fn>`: the bare form
+  // is `Mock<Procedure | Constructable>`, which does not satisfy the specific call
+  // signatures on the options object.
+  let mergeMock: MockedFunction<DedupRunOptions['mergeContacts']>;
+  let createTaskMock: MockedFunction<DedupRunOptions['createTask']>;
+  let listExclusionPairKeysMock: MockedFunction<DedupRunOptions['listExclusionPairKeys']>;
   let opts: DedupRunOptions;
 
   beforeEach(() => {
-    mergeMock = vi.fn().mockResolvedValue({
+    mergeMock = vi.fn<DedupRunOptions['mergeContacts']>().mockResolvedValue({
       primaryContactId: 'c1',
       secondaryContactId: 'c2',
       goldenRecord: {},
       dryRun: false,
       mergedAt: new Date(),
     });
-    createTaskMock = vi.fn().mockResolvedValue({ id: 'task-1', title: 'test' });
-    listExclusionPairKeysMock = vi.fn().mockResolvedValue(new Set<string>());
+    createTaskMock = vi.fn<DedupRunOptions['createTask']>().mockResolvedValue({ id: 'task-1', title: 'test' });
+    listExclusionPairKeysMock = vi.fn<DedupRunOptions['listExclusionPairKeys']>().mockResolvedValue(new Set<string>());
 
     opts = {
       dryRun: false,

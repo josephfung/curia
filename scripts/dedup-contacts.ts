@@ -18,6 +18,7 @@ import pg from 'pg';
 import { createLogger } from '../src/logger.js';
 import { classifyPair, type PairClassification } from '../src/contacts/dedup-classifier.js';
 import type { Contact, ChannelIdentity, ContactKind } from '../src/contacts/types.js';
+import { meetsMinimumTier } from '../src/contacts/types.js';
 import {
   canonicalPairKey,
   dedupPairTag,
@@ -438,11 +439,9 @@ type ContactRow = {
   display_name: string;
   role: string | null;
   system_role: string | null;
-  status: string;
   tier: string;
   kind: string | null;
   contact_confidence: string;
-  trust_level: string | null;
   last_seen_at: Date | null;
   inbound_message_count: string;
   outbound_message_count: string;
@@ -500,11 +499,9 @@ function rowToContact(row: ContactRow): Contact {
     systemRole: (row.system_role === 'principal' || row.system_role === 'agent' || row.system_role === 'system')
       ? row.system_role
       : null,
-    status: row.status as Contact['status'],
     tier: row.tier as Contact['tier'],
     kind: parseContactKind(row.id, row.kind),
     contactConfidence: Number(row.contact_confidence),
-    trustLevel: row.trust_level as Contact['trustLevel'],
     lastSeenAt: row.last_seen_at,
     inboundMessageCount: Number(row.inbound_message_count),
     outboundMessageCount: Number(row.outbound_message_count),
@@ -546,18 +543,26 @@ async function loadContactsAndIdentities(pool: pg.Pool): Promise<{
   contacts: Contact[];
   identityMap: Map<string, ChannelIdentity[]>;
 }> {
-  // Load only 'confirmed' and 'provisional' contacts — skip 'blocked'.
-  // Blocked contacts should not be merged; they are deliberately excluded.
+  // Load every contact, then drop the blocked ones — blocked contacts must not be
+  // merged, and they are deliberately excluded.
+  //
+  // The filter is applied in JS rather than SQL so it can go through meetsMinimumTier()
+  // instead of naming tiers in a WHERE clause: 'unknown' is the lowest non-blocked tier,
+  // so "meets minimum 'unknown'" is exactly "not blocked" and stays correct if the tier
+  // ladder is ever reordered. This replaced `WHERE status IN ('confirmed','provisional')`
+  // — contacts.status was dropped in migration 059 (#955/#1070), so that query had been
+  // failing outright against any migrated database (#1729).
   const contactsResult = await pool.query<ContactRow>(
-    `SELECT id, kg_node_id, display_name, role, system_role, status, tier, kind, contact_confidence,
-            trust_level, last_seen_at, inbound_message_count, outbound_message_count, notes,
+    `SELECT id, kg_node_id, display_name, role, system_role, tier, kind, contact_confidence,
+            last_seen_at, inbound_message_count, outbound_message_count, notes,
             created_at, updated_at, preferred_name, title, organization, primary_email,
             primary_phone, timezone, locale, location, pronouns, linkedin_url, bio, birthday
      FROM contacts
-     WHERE status IN ('confirmed', 'provisional')
      ORDER BY created_at ASC`,
   );
-  const contacts = contactsResult.rows.map(rowToContact);
+  const contacts = contactsResult.rows
+    .map(rowToContact)
+    .filter((contact) => meetsMinimumTier(contact.tier, 'unknown'));
 
   // Load all identities for the fetched contacts in one query.
   // The contact IDs are parameterized via ANY($1) to avoid string interpolation.
