@@ -71,6 +71,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Vitest `.tsx` coverage** — component tests now run; `VoiceCallBar.test.tsx` had never executed. (#1727)
 - **Root `typecheck` coverage** — now recurses over every workspace package; `apps/console` was silently skipped. (#1726)
 - **`docker-publish` `:latest`** — pinned `flavor: latest=false`; a dispatched re-publish no longer moves `latest` backwards. (#1718)
 - **`docker-publish` re-publish** — the ref-dropdown form now resolves and validates its tag like the input form. (#1718)
