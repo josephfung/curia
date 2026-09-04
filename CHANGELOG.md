@@ -42,6 +42,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Spec 15** — blocked-body audit placement matches the event contract. (#1732)
 - **`DreamEngine`** — contact-anchored nodes no longer decay or archive; their facts still do. (#1694)
 - **Decay warnings** — anchored nodes are never listed for re-confirmation nor archived by dismissal. (#1694)
 - **`deleteContact`** — archives the contact's anchored KG node, freeing its label for reuse. (#1694)

@@ -88,10 +88,17 @@ acknowledgement and delivered — the failure mode of the 2026-09-04 reply storm
 
 Skipping salvage on an exact rewrite abandon is deliberate, not an accident of the early
 return. A draft is a standing invitation to send the blocked text; the point of abandon is
-that the message should not exist. The blocked body is copied onto `outbound.no_reply`
-(`abandonedContent`) so it is recoverable from the audit row. The `outbound.blocked` CEO
-notification at block time remains the human-visible signal — it is considered sufficient
-closure for the abandoned case.
+that the message should not exist. The three events that fire around a block do not all
+carry the body:
+
+- `outbound.blocked.content` stores the PII-redacted body (`redactedBody`).
+- `outbound.notification` omits the body (recipient, timestamp, block ID, audit event ID,
+  and a principal-safe reason summary only).
+- Exact rewrite abandon stores the blocked body on `outbound.no_reply.abandonedContent`
+  so it is recoverable from the audit row without a log dig.
+
+The `outbound.blocked` CEO notification at block time remains the human-visible signal —
+it is considered sufficient closure for the abandoned case.
 
 A near-miss sentinel (fenced token plus prose, or the token as a standalone word in a longer
 body) is the opposite trade: suppress the send and salvage an email draft, never deliver the
@@ -168,7 +175,9 @@ principal-safe **reason summary**:
 - For a Stage 1 deterministic block, only the rule *name* is shown (e.g. `secret-pattern`); the
   rule detail can embed the matched fragment, so it is withheld.
 
-The blocked content itself is never included, on either path. There is no review-and-approve /
+`outbound.blocked.content` stores the PII-redacted body. The CEO notification omits the
+blocked body on both Stage 1 and Stage 2 paths. Exact rewrite abandon additionally copies
+the blocked body onto `outbound.no_reply.abandonedContent`. There is no review-and-approve /
 resend flow yet (see *What's Not Here Yet*), so a false positive currently means the agent's send
 is dropped and must be re-requested.
 
