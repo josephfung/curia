@@ -29,7 +29,15 @@ function makeFakeBus(opts: { publishThrows?: boolean } = {}) {
   return { bus, published, emit };
 }
 
-const ORIGINATOR = { contactId: 'ceo', systemRole: 'principal', channel: 'email', initiatedAt: 't' };
+const ORIGINATOR = {
+  contactId: 'ceo',
+  systemRole: 'principal' as const,
+  channel: 'email',
+  initiatedAt: 't',
+  // Production stamps tier via stampOriginator (#950); omitting it made this
+  // fixture the one CEO-facing shape that decideRelayGateC would escalate (#1733).
+  tier: 'principal' as const,
+};
 
 function makeCapturedEvent(overrides: Partial<Parameters<typeof createSecretCaptured>[0]> = {}) {
   return createSecretCaptured(
@@ -99,7 +107,27 @@ describe('SecretCaptureResumeSubscriber', () => {
       conversationId: 'conv-1',
       senderId: 'ceo',
       // Gate C on the relay requires originator (#1733) — round-tripped from the capture token.
-      originator: { ...ORIGINATOR, tier: null },
+      // Must carry tier: 'principal' so CEO-facing resume replies are not escalated.
+      originator: ORIGINATOR,
+    });
+  });
+
+  it('CEO resume originator is allowed by decideRelayGateC (#1733 acceptance)', async () => {
+    const { decideRelayGateC } = await import('../dispatch/relay-gate-c.js');
+    const { emit, routingCalls } = makeSubscriber();
+    await emit(makeCapturedEvent());
+    const originator = routingCalls[0]!.routing.originator;
+    const outcome = await decideRelayGateC({
+      originator,
+      content: 'Secret was captured — continuing.',
+      conversationId: 'conv-1',
+      channelId: 'email',
+    });
+    expect(outcome).toEqual({
+      kind: 'decide',
+      decision: 'allow',
+      tier: 'principal',
+      reason: 'tier_permits_external_send',
     });
   });
 

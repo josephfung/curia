@@ -74,4 +74,34 @@ describe('dispatcher-relay registry enrollment (#1733)', () => {
       },
     });
   });
+
+  it('rejects non-system callers without humanApproved (allowed_callers enforcement)', async () => {
+    const registry = new ToolRegistry();
+    const skillsDir = path.resolve(import.meta.dirname, '../../../skills');
+    const discoveries = discoverToolManifests(skillsDir);
+    await loadToolsFromDirectory(
+      discoveries,
+      registry,
+      logger,
+      new Set(['dispatcher-relay']),
+    );
+
+    const execution = new ExecutionLayer(registry, logger, {
+      bus: { publish: async () => undefined } as unknown as EventBus,
+    });
+    const result = await execution.invoke(
+      'dispatcher-relay',
+      {
+        channelId: 'email',
+        to: 'dana@example.com',
+        body: 'Should not send',
+        conversationId: 'email:thread-1',
+      },
+      { contactId: 'agent-1', role: null, channel: 'email' },
+      { agentId: 'coordinator', taskEventId: 'task-1' },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/not allowed to call|allowed_callers|system/i);
+  });
 });
