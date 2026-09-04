@@ -17,6 +17,6 @@ Closes #
 - [ ] Tests added/updated for new functionality
 - [ ] No `any` types introduced
 - [ ] No empty `catch {}` blocks
-- [ ] No `console.log` (use pino)
+- [ ] No `console.log` in backend code (use pino; `apps/` is exempt)
 - [ ] Spec docs updated if behavior changes
 - [ ] CI passes

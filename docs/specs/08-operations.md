@@ -317,7 +317,10 @@ All logging via pino (structured JSON):
 - `info` — lifecycle events (task started, task completed, channel connected)
 - `debug` — detailed execution (LLM calls, skill invocations) — disabled in production by default
 
-**No `console.log`** anywhere in the codebase. Enforced by lint rule.
+**No `console.log`** in backend code (`src/`, `tests/`). Enforced by the `no-console` lint rule.
+
+The browser apps under `apps/` are exempt: pino is a Node logger with no browser equivalent
+to mandate, so `no-console` is deliberately not set on their `eslint.config.js` block.
 
 ### Graceful Shutdown
 

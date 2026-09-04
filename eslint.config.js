@@ -37,8 +37,13 @@ export default [
     //     with no consistent fix to offer. Worth revisiting once the apps agree on a wrapper.
     //   - `.tsx` needs ecmaFeatures.jsx, which the backend has no reason to enable.
     //   - the react-hooks rules only make sense where React is.
-    // `apps/*/*.config.ts` (vite configs) is included so the build config is linted too.
-    files: ['apps/*/src/**/*.{ts,tsx}', 'apps/*/*.config.{ts,tsx}'],
+    // The glob is deliberately `apps/**` and not `apps/*/src/**` plus a config special-case.
+    // A path-shaped list is what #1726 and #1727 both were: `apps/console/tools/`, an
+    // `e2e/` directory, or a vite config nested one level deeper would each match nothing
+    // and be silently unlinted, with `eslint apps/` still exiting 0. Extensions are listed
+    // for the same reason — a `.js`/`.jsx` file matches ESLint's built-in default and would
+    // otherwise be counted as "linted" while no rule-bearing config applies to it.
+    files: ['apps/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {

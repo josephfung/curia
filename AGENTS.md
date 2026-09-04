@@ -61,7 +61,7 @@ caveats; standard commands live in `package.json` scripts and `scripts/setup.sh`
 ### Lint / typecheck / test / build (commands in `package.json`)
 - Lint: `pnpm run lint` — covers `src/`, `tests/` and `apps/`. The browser apps get their
   own `eslint.config.js` block: no `no-console` there (pino is a Node logger), plus the
-  React hooks rules. Not covered: `skills/**` and `scripts/**`.
+  React hooks rules. Not covered: `skills/**`, `scripts/**` and `packages/**`.
 - Typecheck: `pnpm run typecheck` — 3 root tsconfigs (`src/`,
   `skills/`, `tests/`) plus **every** workspace package under `apps/*` and `packages/*`
   via `pnpm -r run typecheck`. No workspace package is checked separately; a per-package
