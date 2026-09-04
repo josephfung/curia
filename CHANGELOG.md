@@ -72,7 +72,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Vitest `.tsx` coverage** — component tests now run; `VoiceCallBar.test.tsx` had never executed. (#1727)
 - **Root `typecheck` coverage** — now recurses over every workspace package; `apps/console` was silently skipped. (#1726)
-- **`scripts/` typecheck coverage** — a fourth tsconfig project checks maintenance scripts and `vitest.config.ts`. (#1729)
+- **`scripts/` typecheck coverage** — maintenance scripts get a strict tsconfig project; their tests and `vitest.config.ts` join the tests project. (#1729)
 - **`dedup-contacts` schema rot** — the sweep queried `status`/`trust_level`, dropped in migration 059; it now filters on tier. (#1729)
 - **Prompt scripts read the wrong config** — trust thresholds come from the YAML config, not the env-derived one. (#1729)
 - **`docker-publish` `:latest`** — pinned `flavor: latest=false`; a dispatched re-publish no longer moves `latest` backwards. (#1718)
