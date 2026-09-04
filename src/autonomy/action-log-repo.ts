@@ -193,18 +193,23 @@ export class ActionLogRepo {
   }
 
   /**
-   * Find any pending_approval row for a task, regardless of skill/payload (#1733).
-   * Used by the dispatcher relay so a Gate C escalate joins an approval already
-   * pending from a reply skill on the same turn instead of creating a second one.
+   * Find a pending_approval row for a task whose skill is in the given set (#1733).
+   * Used by the dispatcher relay so a Gate C escalate joins a reply-class approval
+   * already pending on the same turn — not an unrelated calendar/etc. approval.
    */
-  async findAnyPendingByTask(taskId: string): Promise<ActionLogRow | null> {
+  async findPendingByTaskAndSkills(
+    taskId: string,
+    skillNames: readonly string[],
+  ): Promise<ActionLogRow | null> {
+    if (skillNames.length === 0) return null;
     const result = await this.pool.query(
       `SELECT * FROM autonomy_action_log
        WHERE task_id = $1
          AND outcome = 'pending_approval'
+         AND skill_name = ANY($2::text[])
        ORDER BY created_at ASC
        LIMIT 1`,
-      [taskId],
+      [taskId, [...skillNames]],
     );
     if (result.rows.length === 0) return null;
     return mapRow(result.rows[0]);

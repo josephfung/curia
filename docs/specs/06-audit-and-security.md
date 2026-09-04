@@ -46,7 +46,7 @@ written to the audit log:
 | `outbound.no_reply` | dispatch | The agent declined to reply (`NO_REPLY` sentinel), returned empty content, or produced a near-miss control token. No live `outbound.message` is published. Reasons: `'agent_declined'`, `'content_block_abandoned'`, `'empty_response'`, `'ambiguous_decline'`. Distinct from `outbound.suppressed_duplicate`. See [spec 05](05-error-recovery.md). (#1732) |
 | `channel.poll` | channel | Emitted once per email poll cycle for operator visibility. See [spec 04](04-channels.md). |
 | `channel.stalled` | channel | Watchdog event when no successful poll completes within `5 × pollingIntervalMs` (at most once per adapter lifecycle). See [spec 04](04-channels.md). |
-| `authorization.decision` | dispatch, execution | Records an allow/deny/escalate authorization outcome — at Gate-1/authz (dispatch) and Gate C (execution). Payload carries the decision, gate, and subject. See [spec 09](09-contacts-and-identity.md). (#1379) |
+| `authorization.decision` | dispatch, execution | Records an allow/deny/escalate authorization outcome — at Gate-1/authz (dispatch) and Gate C (execution for skills, **and dispatch for the auto-reply relay** with `action: 'dispatcher-relay'`). Payload may carry `conversationId` so the dispatcher can suppress the relay when a reply skill escalates under a different task id (#1733). See [spec 09](09-contacts-and-identity.md). (#1379) |
 
 ### Redaction
 

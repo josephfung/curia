@@ -69,7 +69,7 @@ The gateway emits an `outbound.delivered` event after every successful send. Thi
 - Distinct from `outbound.message` (emitted by `dispatch` when translating `agent.response` → send request), which represents *intent* to send and is only emitted for response-path sends. Skill-invoked sends (`signal-send`, `email-send`, `email-reply`, etc.) bypass `dispatch` entirely; without `outbound.delivered`, those sends would be invisible to a security review counting outbound traffic. See [spec 10](10-audit-log-hardening.md) for the full extraction-row contract.
 - HTTP/web responses are captured by `agent.response` and are out of scope for `outbound.delivered`. CLI is dev-only and excluded by design.
 
-### Dispatcher relay can send nothing (#1732)
+### Dispatcher relay can send nothing (#1732, #1733)
 
 The dispatcher translates every `agent.response` with a routing entry into `outbound.message`,
 **except**:
@@ -80,6 +80,15 @@ The dispatcher translates every `agent.response` with a routing entry into `outb
    `NO_REPLY`. Nothing is published to the channel. Reasons: `'agent_declined'` on a normal
    turn, `'content_block_abandoned'` when the agent returns the sentinel on a content-filter
    rewrite task.
+3. **Gate C on the relay** (#1733) — the relay is subject to the same contact-tier action
+   gate as an equivalent medium-risk reply skill. A known-tier ambiguous cell consults the
+   EscalationJudge (email may reply-all). Escalate withholds the real `outbound.message`,
+   emits `authorization.decision` with `action: 'dispatcher-relay'` / `sourceLayer: 'dispatch'`,
+   and creates a pending approval whose approve path re-invokes the `dispatcher-relay` skill.
+   If a reply skill on the same turn already Gate C–escalated, the relay is suppressed without
+   a second approval (matched via `authorization.decision` `taskEventId` or `conversationId`).
+   HTTP/`EventRouter` waiters receive a terminal pending-approval status outbound so
+   `POST /api/messages` does not hang for the full response timeout.
 
 The content-filter rewrite prompt (#1355) offers `NO_REPLY` alongside rewrite. Returning it
 abandons delivery: no send, no salvage draft, no further retry. An `llm-judge-audience-leak`

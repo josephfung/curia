@@ -4,8 +4,9 @@
  * The execution-layer reply skills (email-reply, etc.) already enforce Gate C.
  * handleAgentResponse used to publish outbound.message with no tier check, so a
  * skill-level escalate quietly diverted the send onto an ungated path. This
- * module applies the same tier × consequence policy to the relay, treating it
- * as a reply-to-sender medium-risk send (reversible-external, not third-party).
+ * module applies the same tier × consequence policy to the relay, consulting the
+ * EscalationJudge when the third-party axis is ambiguous (known × reversible-
+ * external) — matching ExecutionLayer.resolveTierGateDecision.
  */
 
 import type { ContactTier, TaskOriginator } from '../contacts/types.js';
@@ -13,8 +14,10 @@ import { getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/
 import {
   applyActionPolicy,
   mapActionRiskToConsequenceClass,
+  moreSevereConsequence,
   type EscalationDecision,
 } from '../autonomy/escalation-policy.js';
+import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 
 /** Human-facing outbound skills whose Gate C escalate must suppress the relay. */
 export const REPLY_SKILLS_GATE_C = new Set([
@@ -23,16 +26,24 @@ export const REPLY_SKILLS_GATE_C = new Set([
   'signal-send',
   'sms-send',
   'slack-send',
+  'dispatcher-relay',
 ]);
 
-/** Audit `action` value for authorization.decision emitted on the relay path. */
+/** Audit `action` on authorization.decision for the relay path.
+ * Approval rows use the same name so approve-action re-invokes the
+ * `dispatcher-relay` skill (which publishes the withheld outbound.message).
+ */
 export const RELAY_GATE_C_ACTION = 'dispatcher-relay';
+
+/** Terminal HTTP/EventRouter status when Gate C withholds the real reply (#1733). */
+export const RELAY_GATE_C_HTTP_PENDING_MESSAGE =
+  'Approval required — Curia withheld this reply pending CEO approval (contact-tier gate).';
 
 /** action_risk equivalent for a relayed agent.response reply. */
 export const RELAY_ACTION_RISK = 'medium' as const;
 
 export type RelayGateCOutcome =
-  | { kind: 'skip'; reason: 'no_external_originator' | 'system_or_agent' }
+  | { kind: 'skip'; reason: 'originator_absent' | 'system_or_agent' }
   | {
       kind: 'decide';
       decision: EscalationDecision;
@@ -40,22 +51,32 @@ export type RelayGateCOutcome =
       reason: string;
     };
 
+export interface DecideRelayGateCOptions {
+  originator: TaskOriginator | undefined;
+  /** Reply body — fed to the EscalationJudge description when the axis is ambiguous. */
+  content: string;
+  conversationId: string;
+  channelId: string;
+  /** When wired and enabled, resolves known × reversible-external like email-reply. */
+  escalationJudge?: EscalationJudge;
+}
+
 /**
- * Decide Gate C for a dispatcher-relayed reply to the inbound sender.
+ * Decide Gate C for a dispatcher-relayed reply.
  *
- * Mirrors ExecutionLayer.resolveTierGateDecision for action_risk medium without
- * re-running the EscalationJudge on this hot path. When reply-to-sender vs
- * third-party-facing would change the outcome (known × reversible-external),
- * fail closed — escalate — matching email-reply with no judge wired. That is
- * the cell named by #1733's "known-tier third-party relay escalates" criterion
- * and closes the ungated auto-reply hole for known contacts. Unambiguous cells
- * (principal / trusted allow; unknown / blocked escalate) decide deterministically.
- * Principal-sole-recipient carve-out (#1301) does not apply: the relay recipient
- * *is* the initiator.
+ * Mirrors ExecutionLayer.resolveTierGateDecision for action_risk medium:
+ * deterministic when reply-to-sender vs third-party agree; otherwise consult
+ * the EscalationJudge (fail closed when absent/disabled/undetermined).
+ * Principal-sole-recipient carve-out (#1301) does not apply: the relay
+ * recipient *is* the initiator.
  */
-export function decideRelayGateC(originator: TaskOriginator | undefined): RelayGateCOutcome {
+export async function decideRelayGateC(
+  opts: DecideRelayGateCOptions,
+): Promise<RelayGateCOutcome> {
+  const { originator, content, conversationId, channelId, escalationJudge } = opts;
+
   if (!originator) {
-    return { kind: 'skip', reason: 'no_external_originator' };
+    return { kind: 'skip', reason: 'originator_absent' };
   }
 
   const metadata: Record<string, unknown> = { originator };
@@ -77,35 +98,72 @@ export function decideRelayGateC(originator: TaskOriginator | undefined): RelayG
   const decisionIfReplyToSender = applyActionPolicy(initiatingTier, actionClass, false, false);
   const decisionIfThirdParty = applyActionPolicy(initiatingTier, actionClass, true, false);
 
-  // Ambiguous cell (known × reversible-external): fail closed without a judge.
-  if (decisionIfReplyToSender !== decisionIfThirdParty) {
+  if (decisionIfReplyToSender === decisionIfThirdParty) {
     return {
       kind: 'decide',
-      decision: 'escalate',
+      decision: decisionIfReplyToSender,
       tier: initiatingTier,
-      reason: 'third_party_axis_ambiguous_fail_closed',
+      reason:
+        decisionIfReplyToSender === 'allow' ? 'tier_permits_external_send' : 'tier_requires_approval',
+    };
+  }
+
+  // Ambiguous cell (known × reversible-external): consult the judge, same as email-reply.
+  if (escalationJudge?.isEnabled()) {
+    const excerpt = content.length > 500 ? `${content.slice(0, 500)}…` : content;
+    const verdict = await escalationJudge.classifyAction({
+      description:
+        `Dispatcher auto-reply on channel '${channelId}' to the inbound sender. ` +
+        `The email adapter may reply-all (CC thread participants). Body:\n${excerpt}`,
+      initiatingTier,
+      conversationId,
+    });
+    if (verdict.isThirdPartyFacing === undefined) {
+      return {
+        kind: 'decide',
+        decision: 'escalate',
+        tier: initiatingTier,
+        reason: 'judge_no_third_party_determination',
+      };
+    }
+    const effectiveClass = moreSevereConsequence(actionClass, verdict.actionClass ?? actionClass);
+    const decision = applyActionPolicy(
+      initiatingTier,
+      effectiveClass,
+      verdict.isThirdPartyFacing,
+      false,
+    );
+    return {
+      kind: 'decide',
+      decision,
+      tier: initiatingTier,
+      reason: verdict.isThirdPartyFacing
+        ? 'judge_third_party_facing'
+        : 'judge_reply_to_sender',
     };
   }
 
   return {
     kind: 'decide',
-    decision: decisionIfReplyToSender,
+    decision: 'escalate',
     tier: initiatingTier,
-    reason:
-      decisionIfReplyToSender === 'allow' ? 'tier_permits_external_send' : 'tier_requires_approval',
+    reason: 'third_party_axis_ambiguous_no_judge',
   };
 }
 
-/**
- * True when a failed tool.result error string indicates a Gate C (tier) block
- * rather than a score gate or handler failure.
- */
-export function isGateCBlockError(error: unknown): boolean {
-  if (typeof error !== 'string') return false;
-  return (
-    error.includes("initiating contact's tier") ||
-    error.includes('external originator has no resolved tier') ||
-    error.includes('failed to audit Gate C authorization.decision') ||
-    error.includes('untrusted external originator')
-  );
+/** Build the approval payload for the dispatcher-relay skill (approve-action re-exec). */
+export function buildRelayApprovalInput(args: {
+  channelId: string;
+  senderId: string;
+  content: string;
+  conversationId: string;
+  accountId?: string;
+}): Record<string, unknown> {
+  return {
+    channelId: args.channelId,
+    to: args.senderId,
+    body: args.content,
+    conversationId: args.conversationId,
+    ...(args.accountId ? { accountId: args.accountId } : {}),
+  };
 }

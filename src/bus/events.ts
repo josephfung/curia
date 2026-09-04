@@ -642,6 +642,13 @@ interface AuthorizationDecisionPayload {
   subjectSummary: string;
   agentId?: string;
   taskEventId?: string;
+  /**
+   * Conversation this decision applies to (ADR-034 Gate C / #1733).
+   * Preferred correlation key when consumers cannot rely on taskEventId alone
+   * (e.g. dispatcher relay suppression when a reply skill ran under a
+   * different task id than the coordinator routing entry).
+   */
+  conversationId?: string;
 }
 
 // AutonomySkillBlockedPayload — published by the execution layer when a skill

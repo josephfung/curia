@@ -2108,6 +2108,13 @@ describe('Dispatcher content-block relay (#1355)', () => {
       channelId: 'email',
       conversationId: 'email:thread-99',
       senderId: 'alice@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
 
     await bus.publish('system', createAgentResponse({
@@ -2153,6 +2160,13 @@ describe('Dispatcher content-block relay (#1355)', () => {
       channelId: 'email',
       conversationId: 'email:thread-101',
       senderId: 'carol@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -2208,6 +2222,13 @@ describe('Dispatcher content-block relay (#1355)', () => {
       channelId: 'email',
       conversationId: 'email:thread-200',
       senderId: 'dana@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -2257,6 +2278,13 @@ describe('Dispatcher content-block relay (#1355)', () => {
       channelId: 'email',
       conversationId: 'email:thread-leak',
       senderId: 'known@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
 
     await bus.publish('system', createAgentResponse({

@@ -59,6 +59,7 @@ const VERB_RULES: Array<{ test: (name: string) => boolean; verb: string }> = [
   { test: (n) => n === 'calendar-respond-to-invite', verb: 'Respond to calendar invite' },
   { test: (n) => n === 'email-reply', verb: 'Send email reply' },
   { test: (n) => n === 'email-draft-save', verb: 'Save email draft' },
+  { test: (n) => n === 'dispatcher-relay', verb: 'Relay withheld reply' },
   { test: (n) => n === 'store-fact', verb: 'Store fact' },
   { test: (n) => n.startsWith('signal-'), verb: 'Send Signal message' },
   { test: (n) => n.startsWith('sms-'), verb: 'Send SMS' },
@@ -142,22 +143,32 @@ export class ApprovalTriggerService {
      *  score-based message is used. Provide this for non-score gate blocks (e.g. tier gate). */
     reason?: string;
     /**
-     * When true, treat any pending_approval on this task as a duplicate (#1733) —
-     * used by the dispatcher relay so it joins a reply-skill approval already
-     * pending on the same turn instead of creating a second request.
+     * When set, treat a pending_approval on this task whose skill is in the list
+     * as a duplicate (#1733) — used by the dispatcher relay so it joins a
+     * reply-class approval already pending on the same turn, not an unrelated
+     * calendar (etc.) approval.
      */
-    dedupeAnyPendingOnTask?: boolean;
+    dedupePendingSkillsOnTask?: readonly string[];
   }): Promise<ApprovalRequestResult> {
     const { taskId, conversationId, toolName, actionRisk, input, currentScore, requiredScore } = opts;
 
     // Step 1: Dedup check
-    if (opts.dedupeAnyPendingOnTask) {
-      const anyPending = await this.actionLogRepo.findAnyPendingByTask(taskId);
-      if (anyPending) {
-        const existingShortRef = anyPending.shortRef ?? 'unknown';
+    if (opts.dedupePendingSkillsOnTask && opts.dedupePendingSkillsOnTask.length > 0) {
+      const replyPending = await this.actionLogRepo.findPendingByTaskAndSkills(
+        taskId,
+        opts.dedupePendingSkillsOnTask,
+      );
+      if (replyPending) {
+        const existingShortRef = replyPending.shortRef ?? 'unknown';
         this.logger.info(
-          { taskId, toolName, existingShortRef },
-          'approval-trigger: duplicate request — pending_approval already exists on this task',
+          {
+            taskId,
+            toolName,
+            existingShortRef,
+            existingSkill: replyPending.toolName,
+            skillScope: opts.dedupePendingSkillsOnTask,
+          },
+          'approval-trigger: duplicate request — reply-class pending_approval already exists on this task',
         );
         return { created: false, reason: 'duplicate', existingShortRef };
       }

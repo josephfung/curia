@@ -14,10 +14,10 @@ const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import type { AgentTaskEvent } from '../../src/bus/events.js';
-import { createInboundMessage } from '../../src/bus/events.js';
 import pino from 'pino';
 import type { HealthService } from '../../src/health/health-service.js';
 import { makePrincipalContactResolver } from '../helpers/principal-contact-resolver.js';
+import { RELAY_GATE_C_HTTP_PENDING_MESSAGE } from '../../src/dispatch/relay-gate-c.js';
 
 // Minimal HealthService stub for integration tests that don't test health behavior.
 // Returns a minimal ok response so GET /api/health stays up without a real DB.
@@ -428,21 +428,30 @@ describe('Trust scoring — unknown sender via HTTP', () => {
     await app.close();
   });
 
-  it('agent.task carries messageTrustScore for unknown HTTP sender', async () => {
+  it('agent.task carries messageTrustScore for unknown HTTP sender via POST /api/messages', async () => {
     const tasks: AgentTaskEvent[] = [];
 
-    // Subscribe before publishing so we don't miss a fast delivery.
-    // Publish inbound.message directly on the bus — POST /api/messages waits for
-    // outbound.message, which Gate C withholds for unknown-tier senders (#1733).
+    // Subscribe before the POST so we don't miss a fast delivery.
     bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
-    await bus.publish('channel', createInboundMessage({
-      conversationId: 'trust-int-test-1',
-      channelId: 'http',
-      senderId: 'unknown-api-caller',
-      content: 'What time is it?',
-      metadata: { trustLevel: 'medium' },
-    }));
+    // Unknown-tier senders escalate Gate C on the relay (#1733). The endpoint must
+    // still return a terminal response (pending-approval status) rather than hang
+    // for RESPONSE_TIMEOUT_MS waiting on the withheld real reply.
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/messages',
+      payload: {
+        content: 'What time is it?',
+        conversation_id: 'trust-int-test-1',
+        sender_id: 'unknown-api-caller',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      conversation_id: 'trust-int-test-1',
+      content: RELAY_GATE_C_HTTP_PENDING_MESSAGE,
+    });
 
     expect(tasks.length).toBeGreaterThan(0);
 

@@ -503,6 +503,7 @@ export class ExecutionLayer {
         }),
         agentId: options?.agentId,
         taskEventId: options?.taskEventId,
+        conversationId: options?.conversationId,
         parentEventId: options?.taskEventId ?? options?.parentEventId,
         sourceLayer: 'execution',
       }));

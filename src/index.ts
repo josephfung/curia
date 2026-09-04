@@ -2884,6 +2884,7 @@ async function main(): Promise<void> {
     outboundContextService,
     ceoEmail: principalEmail,
     approvalTrigger,
+    escalationJudge,
   });
   dispatcher.register();
 
