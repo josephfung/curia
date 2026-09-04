@@ -68,15 +68,48 @@ function workspacePackageDirsByGlob(): Map<string, string[]> {
   return byGlob;
 }
 
-/** True if the directory tree holds at least one .ts/.tsx file outside build output. */
+// Every extension tsc treats as TypeScript input. `.mts`/`.cts` matter as much as `.ts`:
+// a package written entirely in them is just as unchecked, and just as invisible.
+const TS_EXTENSION = /\.(?:[cm]?ts|tsx)$/;
+
+/** True if the directory tree holds at least one TypeScript file outside build output. */
 function hasTypeScriptSources(dir: string): boolean {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
       if (hasTypeScriptSources(join(dir, entry.name))) return true;
-    } else if (/\.tsx?$/.test(entry.name)) {
+    } else if (TS_EXTENSION.test(entry.name)) {
       return true;
     }
+  }
+  return false;
+}
+
+// Wrappers that may precede the real binary: `pnpm exec tsc`, `npx -y tsc`, `pnpm run tsc`.
+const RUNNERS = new Set(['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx', 'exec', 'run', 'dlx']);
+// Invocations that exit 0 without typechecking anything.
+const NON_CHECKING_FLAGS = /^(?:-v|-h|--version|--help|--init|--showConfig)$/i;
+
+/**
+ * True if the script actually *executes* tsc as a typechecking command.
+ *
+ * A substring match is not enough: `echo tsc` and `tsc --version` both contain "tsc",
+ * both exit 0, and both leave the package unchecked while satisfying `pnpm -r` — the
+ * precise shape of #1726, so the guard must not accept them. Split the script into
+ * commands, skip any runner prefix, and require `tsc` to be the command being run
+ * with at least one argument that isn't version/help.
+ */
+function runsTsc(script: string): boolean {
+  for (const segment of script.split(/&&|\|\||[;|]/)) {
+    const words = segment.trim().split(/\s+/).filter(Boolean);
+
+    let i = 0;
+    while (i < words.length && (RUNNERS.has(words[i]!) || words[i]!.startsWith('-'))) i++;
+    if (words[i] !== 'tsc') continue;
+
+    const args = words.slice(i + 1);
+    if (args.some((arg) => NON_CHECKING_FLAGS.test(arg))) continue;
+    return true;
   }
   return false;
 }
@@ -99,9 +132,10 @@ describe('workspace typecheck coverage', () => {
 
       if (!script) {
         missing.push(name);
-      } else if (!/\btsc\b/.test(script)) {
-        // A `typecheck` script that never invokes tsc (`echo ok`, `exit 0`) satisfies
-        // `pnpm -r` and is green forever — success reported over an unchecked package.
+      } else if (!runsTsc(script)) {
+        // A `typecheck` script that never really invokes tsc (`echo ok`, `exit 0`,
+        // `tsc --version`) satisfies `pnpm -r` and is green forever — success reported
+        // over an unchecked package.
         notRunningTsc.push(`${name} (${script})`);
       }
     }
