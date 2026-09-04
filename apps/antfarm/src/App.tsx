@@ -107,6 +107,7 @@ export function App() {
     }
     return layout;
   // rosterKey captures registry + directive agent set; avoid deps that churn each frame.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registryAgents, rosterKey]);
 
   const openOverlay = useCallback((detail: OverlayDetail) => {

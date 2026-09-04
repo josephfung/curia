@@ -156,12 +156,10 @@ export function useChatSession(): ChatSession {
 
     void load();
   // Run once on mount; conversationId.current is a ref, not a reactive dep.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-send the onboarding kickoff message once on first mount.
   // send is captured from this render; deps omitted intentionally (one-shot).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!pendingKickoff.current) return;
     void send(KICKOFF_TEXT);
