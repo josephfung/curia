@@ -85,7 +85,7 @@ describe('SecretCaptureResumeSubscriber', () => {
     expect(task.payload.senderId).toBe('ceo');
     // parentEventId threads back to the originating agent.task for causal tracing.
     expect(task.parentEventId).toBe('task-evt-9');
-    // originator is preserved so authorization/identity gates still resolve on the resumed task.
+    // originator is normalized (parseOriginator) so Gate C on skills and relay see the same bag.
     expect(task.payload.metadata).toEqual({ originator: ORIGINATOR });
     // The content tells the agent what arrived + the original intent so it can reason about
     // completeness from its own conversation history.
@@ -162,8 +162,9 @@ describe('SecretCaptureResumeSubscriber', () => {
     expect(routingCalls).toHaveLength(0);
   });
 
-  it('falls back to a generic sender when no originator is present', async () => {
-    const { published, emit } = makeSubscriber();
+  it('falls back to fail-closed unresolved originator when none is present (#1733)', async () => {
+    const { decideRelayGateC } = await import('../dispatch/relay-gate-c.js');
+    const { published, emit, routingCalls } = makeSubscriber();
     await emit(createSecretCaptured({
       secretName: 'user.x',
       label: 'X',
@@ -175,11 +176,23 @@ describe('SecretCaptureResumeSubscriber', () => {
     const task = published[0]!.event as AgentTaskEvent;
     expect(typeof task.payload.senderId).toBe('string');
     expect(task.payload.senderId.length).toBeGreaterThan(0);
-    expect(task.payload.metadata).toBeUndefined();
+    // Metadata and routing share the same fail-closed originator so Gate C cannot skip.
+    const originator = routingCalls[0]!.routing.originator;
+    expect(task.payload.metadata).toEqual({ originator });
+    expect(originator.tier).toBeNull();
+    expect(originator.systemRole).toBeNull();
+    const outcome = await decideRelayGateC({
+      originator,
+      content: 'Continuing after capture.',
+      conversationId: 'conv-1',
+      channelId: 'email',
+    });
+    expect(outcome).toMatchObject({ kind: 'decide', decision: 'escalate' });
   });
 
-  it('falls back to a generic sender when originator.contactId is malformed (not a string)', async () => {
-    const { published, emit } = makeSubscriber();
+  it('falls back to fail-closed unresolved originator when originator.contactId is malformed (#1733)', async () => {
+    const { decideRelayGateC } = await import('../dispatch/relay-gate-c.js');
+    const { published, emit, routingCalls } = makeSubscriber();
     // A malformed persisted originator (contactId is a number) must not yield a non-string senderId.
     await emit(makeCapturedEvent({
       originator: { contactId: 123 as unknown as string, systemRole: 'principal', channel: 'email', initiatedAt: 't' },
@@ -187,6 +200,15 @@ describe('SecretCaptureResumeSubscriber', () => {
     expect(published).toHaveLength(1);
     const task = published[0]!.event as AgentTaskEvent;
     expect(task.payload.senderId).toBe('secret-capture');
+    const originator = routingCalls[0]!.routing.originator;
+    expect(task.payload.metadata).toEqual({ originator });
+    const outcome = await decideRelayGateC({
+      originator,
+      content: 'Continuing after capture.',
+      conversationId: 'conv-1',
+      channelId: 'email',
+    });
+    expect(outcome).toMatchObject({ kind: 'decide', decision: 'escalate' });
   });
 
   it('rolls back the dedup marker and propagates when publish fails', async () => {

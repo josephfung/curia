@@ -39,6 +39,9 @@ export const RELAY_GATE_C_ACTION = 'dispatcher-relay';
 export const RELAY_GATE_C_HTTP_PENDING_MESSAGE =
   'Approval required — Curia withheld this reply pending CEO approval (contact-tier gate).';
 
+/** Max body length for a relayed reply — shared by approval creation and dispatcher-relay. */
+export const RELAY_BODY_MAX_LENGTH = 50_000;
+
 /** action_risk equivalent for a relayed agent.response reply. */
 export const RELAY_ACTION_RISK = 'medium' as const;
 

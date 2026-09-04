@@ -434,6 +434,52 @@ describe('Dispatcher relay Gate C (#1733)', () => {
     });
   });
 
+  it('does not create an approval when relay body exceeds dispatcher-relay max length', async () => {
+    const approvalRequest = vi.fn();
+    const { dispatcher, publishedEvents, subscribeHandlers } = makeStubs({
+      approvalTrigger: { request: approvalRequest } as unknown as ApprovalTriggerService,
+    });
+    dispatcher.register();
+
+    seedRouting(dispatcher, 'task-oversized', {
+      originator: makeOriginator('unknown'),
+    });
+
+    const { RELAY_BODY_MAX_LENGTH } = await import('../../../src/dispatch/relay-gate-c.js');
+    await subscribeHandlers.get('agent.response')!(createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      content: 'x'.repeat(RELAY_BODY_MAX_LENGTH + 1),
+      parentEventId: 'task-oversized',
+    }));
+
+    expect(publishedEvents.filter((e) => e.type === 'outbound.message')).toHaveLength(0);
+    expect(approvalRequest).not.toHaveBeenCalled();
+  });
+
+  it('creates an approval when relay body is exactly at the dispatcher-relay max length', async () => {
+    const approvalRequest = vi.fn().mockResolvedValue({ created: true, shortRef: 'max00001', rowId: 2 });
+    const { dispatcher, subscribeHandlers } = makeStubs({
+      approvalTrigger: { request: approvalRequest } as unknown as ApprovalTriggerService,
+    });
+    dispatcher.register();
+
+    seedRouting(dispatcher, 'task-max', {
+      originator: makeOriginator('unknown'),
+    });
+
+    const { RELAY_BODY_MAX_LENGTH } = await import('../../../src/dispatch/relay-gate-c.js');
+    await subscribeHandlers.get('agent.response')!(createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      content: 'y'.repeat(RELAY_BODY_MAX_LENGTH),
+      parentEventId: 'task-max',
+    }));
+
+    expect(approvalRequest).toHaveBeenCalledOnce();
+    expect(approvalRequest.mock.calls[0]![0].input.body).toHaveLength(RELAY_BODY_MAX_LENGTH);
+  });
+
   it('settles HTTP waiter with pending-approval status on escalate', async () => {
     const { dispatcher, publishedEvents, subscribeHandlers } = makeStubs();
     dispatcher.register();

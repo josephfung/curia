@@ -9,8 +9,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createOutboundMessage } from '../../src/bus/events.js';
-
-const MAX_BODY_LENGTH = 50_000;
+import { RELAY_BODY_MAX_LENGTH } from '../../src/dispatch/relay-gate-c.js';
 
 export class DispatcherRelayHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -38,8 +37,8 @@ export class DispatcherRelayHandler implements ToolHandler {
     if (!conversationId || typeof conversationId !== 'string') {
       return { success: false, error: 'Missing required input: conversationId (string)' };
     }
-    if (body.length > MAX_BODY_LENGTH) {
-      return { success: false, error: `body must be ${MAX_BODY_LENGTH} characters or fewer` };
+    if (body.length > RELAY_BODY_MAX_LENGTH) {
+      return { success: false, error: `body must be ${RELAY_BODY_MAX_LENGTH} characters or fewer` };
     }
     if (!ctx.taskEventId || typeof ctx.taskEventId !== 'string') {
       return { success: false, error: 'Missing required context: taskEventId (string)' };

@@ -184,6 +184,7 @@ export class ActionLogRepo {
        WHERE task_id = $1
          AND skill_name = $2
          AND outcome = 'pending_approval'
+         AND expires_at > now()
          AND payload::jsonb = $3::jsonb
        LIMIT 1`,
       [taskId, toolName, JSON.stringify(payload)],
@@ -206,6 +207,7 @@ export class ActionLogRepo {
       `SELECT * FROM autonomy_action_log
        WHERE task_id = $1
          AND outcome = 'pending_approval'
+         AND expires_at > now()
          AND skill_name = ANY($2::text[])
        ORDER BY created_at ASC
        LIMIT 1`,

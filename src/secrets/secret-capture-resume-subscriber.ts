@@ -212,10 +212,18 @@ export class SecretCaptureResumeSubscriber {
     // Attribute the resumed turn to whoever started the chain. originator is round-tripped from
     // JSONB (typed Record<string, unknown>), so validate contactId is actually a string before
     // using it as senderId — a malformed persisted value must not produce a non-string senderId.
-    // The originator object is still preserved verbatim on metadata so authorization gates resolve
-    // exactly as they did on the original task.
+    // Normalize once for both task metadata and dispatcher routing so Gate C sees the same
+    // originator on skill invoke and on the relay (#1733). Absent/malformed bags fail closed.
     const contactId = originator?.['contactId'];
     const senderId = typeof contactId === 'string' && contactId.length > 0 ? contactId : 'secret-capture';
+    const parsedOriginator = parseOriginator(originator);
+    const routingOriginator = parsedOriginator ?? unresolvedExternalOriginator(channelId);
+    if (!parsedOriginator) {
+      this.logger.warn(
+        { eventId: event.id, channelId, conversationId, hadOriginatorBag: !!originator },
+        'secret.captured missing or malformed originator — using fail-closed unresolved originator for Gate C (#1733)',
+      );
+    }
 
     // Mark dispatched BEFORE publishing so a synchronous re-delivery during publish can't slip
     // through (mirrors the scheduler tracking its pending job before publish()). Placed here —
@@ -232,21 +240,13 @@ export class SecretCaptureResumeSubscriber {
       channelId,
       senderId,
       content,
-      metadata: originator ? { originator } : undefined,
+      metadata: { originator: routingOriginator },
       // Thread back to the originating agent.task when known so the causal chain is intact;
       // fall back to this event's id otherwise (agent.task requires a parentEventId).
       parentEventId: taskEventId ?? event.id,
     });
 
     try {
-      const routingOriginator =
-        parseOriginator(originator) ?? unresolvedExternalOriginator(channelId);
-      if (!originator) {
-        this.logger.warn(
-          { eventId: event.id, channelId, conversationId },
-          'secret.captured missing originator — registering fail-closed unresolved originator for Gate C (#1733)',
-        );
-      }
       this.registerRouting?.(task.id, {
         channelId,
         conversationId,
