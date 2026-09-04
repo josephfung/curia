@@ -2246,6 +2246,9 @@ describe('Dispatcher content-block relay (#1355)', () => {
     expect(outboundMessages).toHaveLength(1);
     expect(noReplyEvents).toHaveLength(1);
     expect(noReplyEvents[0]!.payload.reason).toBe('content_block_abandoned');
+    expect(noReplyEvents[0]!.payload.abandonedContent).toBe(
+      'This is an automated calendar decline notification — no reply needed from me.',
+    );
     expect(agentTasks).toHaveLength(1);
   });
 });

@@ -18,6 +18,7 @@ import type { ExecutionLayer } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
 import type { ChannelIdentity, TaskOriginator } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
+import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
@@ -1919,18 +1920,25 @@ export class AgentRuntime {
       await this.publishAgentErrorForFallback(taskEvent, responseAgentError);
     }
 
+    // Lift NO_REPLY out of content before persist/publish so scheduler summaries
+    // and working-memory turns do not store a control token (#1732).
+    const prepared = isResponseError
+      ? { content: responseContent, suppressDelivery: false }
+      : prepareAgentResponseContent(responseContent);
+
     // Persist the assistant response
     if (memory) {
-      await memory.addTurn(conversationId, agentId, { role: 'assistant', content: responseContent });
+      await memory.addTurn(conversationId, agentId, { role: 'assistant', content: prepared.content });
     }
 
     const responseEvent = createAgentResponse({
       agentId,
       conversationId,
-      content: responseContent,
+      content: prepared.content,
       // isResponseError propagates to consumers (delegate, scheduler) so they can
       // distinguish a fallback message from a real agent result.
       ...(isResponseError && { isError: true }),
+      ...(prepared.suppressDelivery && { suppressDelivery: true }),
       skillsCalled,
       parentEventId: taskEvent.id,
     });

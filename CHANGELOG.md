@@ -71,6 +71,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Dispatcher no-reply** — `NO_REPLY` ends a turn without publishing `outbound.message`. (#1732)
+- **`NO_REPLY` hardening** — principal declines notify; near-miss and empty replies do not send. (#1732)
 - **Vitest `.tsx` coverage** — component tests now run; `VoiceCallBar.test.tsx` had never executed. (#1727)
 - **Root `typecheck` coverage** — now recurses over every workspace package; `apps/console` was silently skipped. (#1726)
 - **`scripts/` typecheck coverage** — maintenance scripts get a strict tsconfig project; their tests and `vitest.config.ts` join the tests project. (#1729)

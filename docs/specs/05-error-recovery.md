@@ -202,20 +202,41 @@ receiving the same content twice.
 
 ### Explicit no-reply (#1732)
 
-Silence is a first-class outcome. If an agent's entire `agent.response` content is the sentinel
-`NO_REPLY` (optional surrounding whitespace or a single layer of quotes/backticks),
-`handleAgentResponse` publishes `outbound.no_reply` instead of `outbound.message`. Nothing is
-delivered. This is distinct from `outbound.suppressed_duplicate`: the reply-lock fires after a
+Silence is a first-class outcome. Dispatch publishes `outbound.no_reply` instead of
+`outbound.message` when:
+
+- the agent's entire response is the sentinel `NO_REPLY` (optional wrapping quotes,
+  backticks, markdown fence, or trailing punctuation), or
+- `AgentResponsePayload.suppressDelivery` is set (the runtime lifts the sentinel out of
+  `content` before publish so scheduler summaries and working-memory turns never store
+  a control token), or
+- the response is whitespace-only (`empty_response` — a blank email is not a reply), or
+- the response is a near-miss (starts with the token plus prose, or contains it as a
+  standalone word) — `ambiguous_decline`, send suppressed, email draft salvaged.
+
+This is distinct from `outbound.suppressed_duplicate`: the reply-lock fires after a
 human-facing skill already succeeded; no-reply means this turn sent nothing.
 
-The content-block rewrite prompt (#1355) offers the same sentinel as an abandon-send option. When
-the agent returns `NO_REPLY` on a rewrite task, the dispatcher does not salvage a draft and does
-not retry. An `llm-judge-audience-leak` block that the agent abandons therefore produces no
-delivered message.
+The content-block rewrite prompt (#1355) offers the same sentinel as an abandon-send
+option. Exact `NO_REPLY` on a rewrite task does **not** salvage a draft: a draft is an
+invitation to send the blocked text, and the point of abandon is that the message should
+not exist. The blocked body is copied into `outbound.no_reply.abandonedContent` so it is
+recoverable from the audit row without a log dig. The `outbound.blocked` CEO notification
+at block time remains the human-visible signal.
 
-Use `NO_REPLY` when nothing should go out (automated notification, archive-only FYI). Do not
-narrate that decision — narration becomes the outbound payload. The coordinator prompt documents
-the mechanism; the dispatcher is what honours it.
+The sentinel is interpreted by the agent runtime (to set `suppressDelivery` and blank
+content) and by dispatch (to skip the send). Other `agent.response` subscribers must not
+parse `content` for the token.
+
+A live principal turn that declines is still honoured (the CEO saying "thanks" and Curia
+correctly saying nothing is a real case) but dispatch publishes `outbound.notification`
+(`no_reply_principal`) so silence toward the principal is not invisible. Prompt-only
+"do not use NO_REPLY with the CEO" remains as guidance; the notification is the
+code-level guard.
+
+Use `NO_REPLY` when nothing should go out (automated notification, archive-only FYI).
+Do not narrate that decision — narration that does not start with the token is still
+payload. Near-miss narration that *does* start with the token is salvaged, not sent.
 
 ### Triage watermark moved to code (#866)
 

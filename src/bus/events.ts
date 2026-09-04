@@ -115,6 +115,14 @@ interface AgentResponsePayload {
   // Populated by the agent runtime's tool-use loop; absent on error-path responses
   // where the runtime bailed before completing the loop.
   skillsCalled?: string[];
+  /**
+   * Set by the agent runtime when it detects a no-reply sentinel (or a near-miss)
+   * in the model output. Dispatch honours this the same way it honours the
+   * in-band `NO_REPLY` token. Other `agent.response` subscribers (scheduler,
+   * resumable-continuation) must not parse `content` for the token — read this
+   * flag, and treat blank `content` as "nothing to summarise". See #1732.
+   */
+  suppressDelivery?: boolean;
 }
 
 interface OutboundMessagePayload {
@@ -244,8 +252,16 @@ interface OutboundNoReplyPayload {
   agentId: string;
   conversationId: string;
   channelId: string;
-  /** `agent_declined` = normal turn; `content_block_abandoned` = rewrite-path escape. */
-  reason: 'agent_declined' | 'content_block_abandoned';
+  /**
+   * `agent_declined` = exact `NO_REPLY` on a normal turn.
+   * `content_block_abandoned` = exact `NO_REPLY` on the rewrite path.
+   * `empty_response` = whitespace-only content (a blank email is not a reply).
+   * `ambiguous_decline` = near-miss sentinel (fenced token plus prose, or the
+   * token appearing as a standalone word) — send suppressed, draft salvaged.
+   */
+  reason: 'agent_declined' | 'content_block_abandoned' | 'empty_response' | 'ambiguous_decline';
+  /** Raw text preserved for recoverability (blocked draft or near-miss body). */
+  abandonedContent?: string;
 }
 
 // OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)
@@ -264,6 +280,7 @@ interface OutboundNoReplyPayload {
 //                           task-completion undo/confirm) event-driven when produced, after #1464 removed
 //                           the scheduled digest that used to surface them (#1466)
 //   - 'database_unavailable': CEO alert that Postgres has been unreachable for >5 minutes (#1381)
+//   - 'no_reply_principal': CEO alert that a live principal turn ended in NO_REPLY (#1732)
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'
@@ -273,7 +290,8 @@ export interface OutboundNotificationPayload {
     | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
     | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
     | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
-    | 'database_unavailable';  // Postgres unreachable beyond escalation threshold (#1381)
+    | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
+    | 'no_reply_principal';   // live principal turn ended without a reply (#1732)
   /** Recipient email for this notification (always the CEO email today). */
   ceoEmail: string;
   subject: string;
