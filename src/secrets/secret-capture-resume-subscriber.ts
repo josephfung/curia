@@ -21,17 +21,76 @@ import type { Logger } from '../logger.js';
 import type { BusEvent, SecretCapturedEvent } from '../bus/events.js';
 import { createAgentTask } from '../bus/events.js';
 import { decodeResumeToken } from '../agents/resume-token.js';
+import type { ContactTier, SystemRole, TaskOriginator } from '../contacts/types.js';
 
 /**
  * Seeds channel routing for the synthetic resume task so the agent's response is delivered back
  * to the originating channel. Without it, the dispatcher's handleAgentResponse finds no routing
  * for the task id and drops the reply (the same path bullpen tasks take). In production this is
  * `Dispatcher.registerExternalTaskRouting`; tests inject a spy.
+ *
+ * `originator` is required (#1733) so Gate C on the relay cannot silently skip.
  */
 export type ResumeRoutingRegistrar = (
   taskEventId: string,
-  routing: { channelId: string; conversationId: string; senderId: string; accountId?: string },
+  routing: {
+    channelId: string;
+    conversationId: string;
+    senderId: string;
+    originator: TaskOriginator;
+    accountId?: string;
+  },
 ) => void;
+
+/**
+ * Narrow the opaque originator bag from secret.captured into a TaskOriginator.
+ * Returns undefined when the bag is missing required fields (pre-#972 tokens).
+ */
+function parseOriginator(raw: Record<string, unknown> | undefined): TaskOriginator | undefined {
+  if (!raw) return undefined;
+  if (typeof raw.contactId !== 'string' || typeof raw.channel !== 'string') return undefined;
+  if (typeof raw.initiatedAt !== 'string') return undefined;
+  const systemRole = raw.systemRole;
+  if (
+    systemRole !== null &&
+    systemRole !== undefined &&
+    systemRole !== 'principal' &&
+    systemRole !== 'system' &&
+    systemRole !== 'agent'
+  ) {
+    return undefined;
+  }
+  const tier = raw.tier;
+  if (
+    tier !== undefined &&
+    tier !== null &&
+    tier !== 'principal' &&
+    tier !== 'trusted' &&
+    tier !== 'known' &&
+    tier !== 'unknown' &&
+    tier !== 'blocked'
+  ) {
+    return undefined;
+  }
+  return {
+    contactId: raw.contactId,
+    systemRole: (systemRole ?? null) as SystemRole | null,
+    channel: raw.channel,
+    initiatedAt: raw.initiatedAt,
+    tier: (tier ?? null) as ContactTier | null | undefined,
+  };
+}
+
+/** Fail-closed originator when the capture token carried none (#1733 / #1059). */
+function unresolvedExternalOriginator(channelId: string): TaskOriginator {
+  return {
+    contactId: 'unresolved',
+    systemRole: null,
+    channel: channelId,
+    initiatedAt: new Date().toISOString(),
+    tier: null,
+  };
+}
 
 /** Cap on the dedup set so a long-running process can't grow it without bound (one entry per
  *  capture otherwise lives for the process lifetime). Generous — duplicates are rare — and FIFO
@@ -180,7 +239,20 @@ export class SecretCaptureResumeSubscriber {
     });
 
     try {
-      this.registerRouting?.(task.id, { channelId, conversationId, senderId });
+      const routingOriginator =
+        parseOriginator(originator) ?? unresolvedExternalOriginator(channelId);
+      if (!originator) {
+        this.logger.warn(
+          { eventId: event.id, channelId, conversationId },
+          'secret.captured missing originator — registering fail-closed unresolved originator for Gate C (#1733)',
+        );
+      }
+      this.registerRouting?.(task.id, {
+        channelId,
+        conversationId,
+        senderId,
+        originator: routingOriginator,
+      });
       await this.bus.publish('system', task);
       this.logger.info({ eventId: event.id, agentId, conversationId, secretName }, 'Resumed agent after secret capture');
     } catch (err) {

@@ -1,0 +1,23 @@
+{
+  "name": "dispatcher-relay",
+  "description": "Deliver a previously withheld dispatcher-relayed reply after CEO approval. System infrastructure — not for agent use.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "medium",
+  "inputs": {
+    "channelId": "string",
+    "to": "string (recipient id — email address, phone, or conversation peer)",
+    "body": "string",
+    "conversationId": "string",
+    "accountId": "string?"
+  },
+  "outputs": {
+    "delivered": "boolean",
+    "outboundEventId": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["bus"],
+  "allowed_callers": ["system"]
+}

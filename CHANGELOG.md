@@ -71,7 +71,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Dispatcher relay Gate C** — auto-replies no longer bypass the contact-tier gate after a reply skill escalates. (#1733)
+- **Dispatcher relay Gate C** — every auto-reply is tier-gated; approve re-delivers via `dispatcher-relay`. (#1733)
 - **Dispatcher no-reply** — `NO_REPLY` ends a turn without publishing `outbound.message`. (#1732)
 - **`NO_REPLY` hardening** — principal declines notify; near-miss and empty replies do not send. (#1732)
 - **Vitest `.tsx` coverage** — component tests now run; `VoiceCallBar.test.tsx` had never executed. (#1727)

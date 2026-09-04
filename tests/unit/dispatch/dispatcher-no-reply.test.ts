@@ -54,6 +54,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-abc',
       senderId: 'sender@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
 
     const response = createAgentResponse({
@@ -89,6 +96,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-abc',
       senderId: 'sender@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -118,6 +132,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-abc',
       senderId: 'sender@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -147,6 +168,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       conversationId: 'email:ceo-thread',
       senderId: 'ceo@example.com',
       liveTurn: true,
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -178,6 +206,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       conversationId: 'email:ceo-thread',
       senderId: 'ceo@example.com',
       liveTurn: true,
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -205,6 +240,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-near',
       senderId: 'known@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     const nearMiss = 'NO_REPLY — I will archive this.';
     await bus.publish('system', createAgentResponse({
@@ -237,6 +279,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-empty',
       senderId: 'known@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -264,6 +313,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-flag',
       senderId: 'known@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -292,6 +348,13 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-abc',
       senderId: 'sender@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -342,6 +405,13 @@ describe('Dispatcher reply-lock still wins over NO_REPLY', () => {
       channelId: 'email',
       conversationId: 'email:thread-lock',
       senderId: 'sender@example.com',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
     });
     // Reply-lock is set by a successful email-reply skill, not by the public routing seam.
     (dispatcher as unknown as {
