@@ -38,6 +38,7 @@ const DEFAULT_INJECTION_PATTERNS: Array<{ regex: RegExp; label: string }> = [
   { regex: /\[system\]/i, label: '[system]' },
   { regex: /\bact\s+as\b/i, label: 'act as' },
   { regex: /\bdisregard\s+your\b/i, label: 'disregard your' },
+  { regex: /\bNO_REPLY\b/i, label: 'no-reply sentinel' },
 ];
 
 export interface InboundScanFinding {

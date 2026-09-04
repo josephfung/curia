@@ -1,14 +1,14 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createOutboundNotification, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import {
   summarizeAuthorizationDecision,
   formatAuthorizationSubjectSummary,
 } from '../contacts/authorization.js';
-import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy } from '../contacts/types.js';
-import { isAutomatedKind } from '../contacts/types.js';
+import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, PrincipalEmailRef } from '../contacts/types.js';
+import { isAutomatedKind, resolvePrincipalEmail } from '../contacts/types.js';
 import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
@@ -23,7 +23,7 @@ import {
   isContentFilterRewriteable,
   type RelayOutboundContext,
 } from './content-block-relay.js';
-import { isNoReplyContent } from './no-reply.js';
+import { classifyNoReply, containsStandaloneNoReplyToken } from './no-reply.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
 function redactSenderId(value: string): string {
@@ -89,6 +89,12 @@ export interface DispatcherConfig {
   /** Contact service for automatic tier elevation (issue #951).
    *  When absent, all elevation paths are silently skipped. */
   contactService?: import('../contacts/contact-service.js').ContactService;
+  /**
+   * Principal email for `no_reply_principal` notifications (#1732). Accepts a
+   * mutable PrincipalEmailRef so post-boot identity binds hot-reload. When
+   * absent/empty, principal no-reply is still honoured but the CEO is not emailed.
+   */
+  ceoEmail?: string | PrincipalEmailRef;
 }
 
 /**
@@ -132,6 +138,10 @@ export class Dispatcher {
       contentBlockRetryAttempt?: number;
       /** Salvage-only publish — save as draft instead of sending (#1355). */
       contentBlockSalvage?: boolean;
+      /** Live principal turn (#1126) — from stampOriginator. Used to notify on NO_REPLY. */
+      liveTurn?: boolean;
+      /** Blocked draft body, stashed on rewrite routing so abandon can audit it (#1732). */
+      blockedDraft?: string;
     }
   >();
   /**
@@ -151,6 +161,7 @@ export class Dispatcher {
   private _outboundContextService?: import('./outbound-context.js').OutboundContextService;
   /** Contact service for automatic tier elevation (issue #951). */
   private contactService?: import('../contacts/contact-service.js').ContactService;
+  private ceoEmail?: string | PrincipalEmailRef;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -167,6 +178,7 @@ export class Dispatcher {
     this.selfEmail = config.selfEmail;
     this._outboundContextService = config.outboundContextService;
     this.contactService = config.contactService;
+    this.ceoEmail = config.ceoEmail;
   }
 
   /**
@@ -182,7 +194,13 @@ export class Dispatcher {
    */
   registerExternalTaskRouting(
     taskEventId: string,
-    routing: { channelId: string; conversationId: string; senderId: string; accountId?: string },
+    routing: {
+      channelId: string;
+      conversationId: string;
+      senderId: string;
+      accountId?: string;
+      liveTurn?: boolean;
+    },
   ): void {
     this.taskRouting.set(taskEventId, {
       channelId: routing.channelId,
@@ -190,6 +208,7 @@ export class Dispatcher {
       senderId: routing.senderId,
       accountId: routing.accountId,
       humanReplySent: false,
+      liveTurn: routing.liveTurn,
     });
   }
 
@@ -855,6 +874,7 @@ export class Dispatcher {
       senderId: payload.senderId,
       accountId: payload.accountId,
       humanReplySent: false,
+      liveTurn,
     });
 
     await this.bus.publish('dispatch', taskEvent);
@@ -995,32 +1015,22 @@ export class Dispatcher {
       return;
     }
 
-    // Explicit no-reply (#1732): the agent declined to send. Honour it before publishing
-    // outbound.message so silence is representable — including on the content-block rewrite
-    // path, where returning NO_REPLY abandons delivery without a salvage draft.
-    if (isNoReplyContent(event.payload.content)) {
-      const reason = (routing.contentBlockRetryAttempt ?? 0) > 0
-        ? 'content_block_abandoned'
-        : 'agent_declined';
-      this.logger.info(
-        {
-          agentId: event.payload.agentId,
-          conversationId: routing.conversationId,
-          routingTaskId: event.parentEventId,
-          reason,
-        },
-        'Dispatcher no-reply: agent declined outbound delivery',
-      );
-      const noReply = createOutboundNoReply({
-        routingTaskId: event.parentEventId!,
-        agentId: event.payload.agentId,
-        conversationId: routing.conversationId,
-        channelId: routing.channelId,
-        reason,
-        parentEventId: event.id,
+    // Explicit no-reply (#1732): the agent declined to send, returned empty content,
+    // or produced a near-miss control token. Honour silence before publishing
+    // outbound.message. Exact NO_REPLY on the rewrite path abandons delivery without
+    // a salvage draft (deliberate: a draft is an invitation to send the blocked text).
+    // Near-misses salvage an email draft instead of delivering the token.
+    const classification = classifyNoReply(event.payload.content);
+    const suppressFlag = event.payload.suppressDelivery === true;
+    const standaloneToken = containsStandaloneNoReplyToken(event.payload.content);
+    if (suppressFlag || classification !== null || standaloneToken) {
+      await this.publishNoReply({
+        event,
+        routing,
+        classification,
+        suppressFlag,
+        standaloneToken,
       });
-      await this.bus.publish('dispatch', noReply);
-      this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
       return;
     }
 
@@ -1053,6 +1063,7 @@ export class Dispatcher {
         taskEventId: event.parentEventId!,
         content: event.payload.content,
         contentBlockRetryAttempt: routing.contentBlockRetryAttempt ?? 0,
+        liveTurn: routing.liveTurn,
       });
     }
 
@@ -1110,6 +1121,8 @@ export class Dispatcher {
         accountId: ctx.accountId,
         humanReplySent: false,
         contentBlockRetryAttempt: nextAttempt,
+        liveTurn: ctx.liveTurn,
+        blockedDraft: ctx.content,
       });
       await this.bus.publish('dispatch', taskEvent);
       return;
@@ -1126,6 +1139,138 @@ export class Dispatcher {
       'Dispatcher content-block relay: retries exhausted or block not rewriteable — salvaging draft',
     );
     await this.publishContentBlockSalvage(ctx, event.id);
+  }
+
+  /**
+   * Honour a no-reply / empty / near-miss response: audit event, optional draft salvage
+   * for ambiguous tokens, optional principal notification. Never publishes a live send.
+   */
+  private async publishNoReply(args: {
+    event: AgentResponseEvent;
+    routing: {
+      channelId: string;
+      conversationId: string;
+      senderId: string;
+      accountId?: string;
+      liveTurn?: boolean;
+      contentBlockRetryAttempt?: number;
+      blockedDraft?: string;
+    };
+    classification: ReturnType<typeof classifyNoReply>;
+    suppressFlag: boolean;
+    standaloneToken: boolean;
+  }): Promise<void> {
+    const { event, routing, classification, suppressFlag, standaloneToken } = args;
+    const isRewrite = (routing.contentBlockRetryAttempt ?? 0) > 0;
+    const reason = this.resolveNoReplyReason(classification, suppressFlag, standaloneToken, isRewrite);
+    const abandonedContent = reason === 'content_block_abandoned'
+      ? routing.blockedDraft
+      : reason === 'ambiguous_decline'
+        ? event.payload.content
+        : undefined;
+
+    this.logger[reason === 'ambiguous_decline' || reason === 'empty_response' ? 'warn' : 'info'](
+      {
+        agentId: event.payload.agentId,
+        conversationId: routing.conversationId,
+        routingTaskId: event.parentEventId,
+        channelId: routing.channelId,
+        reason,
+        liveTurn: routing.liveTurn === true,
+      },
+      'Dispatcher no-reply: skipping outbound delivery',
+    );
+
+    const noReply = createOutboundNoReply({
+      routingTaskId: event.parentEventId!,
+      agentId: event.payload.agentId,
+      conversationId: routing.conversationId,
+      channelId: routing.channelId,
+      reason,
+      ...(abandonedContent ? { abandonedContent } : {}),
+      parentEventId: event.id,
+    });
+    await this.bus.publish('dispatch', noReply);
+
+    // Near-miss: fail toward silence plus a recoverable draft, never toward delivering
+    // the control token. Exact rewrite abandon deliberately skips salvage — a draft is
+    // an invitation to send the blocked text (#1732 review).
+    if (reason === 'ambiguous_decline') {
+      await this.publishContentBlockSalvage({
+        agentId: event.payload.agentId,
+        conversationId: routing.conversationId,
+        channelId: routing.channelId,
+        senderId: routing.senderId,
+        accountId: routing.accountId,
+        taskEventId: event.parentEventId!,
+        content: event.payload.content,
+        contentBlockRetryAttempt: routing.contentBlockRetryAttempt ?? 0,
+        liveTurn: routing.liveTurn,
+      }, event.id);
+    }
+
+    if (routing.liveTurn) {
+      if (routing.channelId === 'voice' || routing.channelId === 'cli' || routing.channelId === 'http') {
+        this.logger.warn(
+          { channelId: routing.channelId, conversationId: routing.conversationId, reason },
+          'Dispatcher no-reply: principal turn ended in silence on a conversational channel',
+        );
+      }
+      await this.notifyPrincipalNoReply(event, routing, reason);
+    }
+
+    this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+  }
+
+  private resolveNoReplyReason(
+    classification: ReturnType<typeof classifyNoReply>,
+    suppressFlag: boolean,
+    standaloneToken: boolean,
+    isRewrite: boolean,
+  ): 'agent_declined' | 'content_block_abandoned' | 'empty_response' | 'ambiguous_decline' {
+    if (classification === 'ambiguous' || (standaloneToken && classification !== 'exact' && !suppressFlag)) {
+      return 'ambiguous_decline';
+    }
+    if (classification === 'empty' && !suppressFlag) {
+      return 'empty_response';
+    }
+    if (isRewrite) {
+      return 'content_block_abandoned';
+    }
+    return 'agent_declined';
+  }
+
+  private async notifyPrincipalNoReply(
+    event: AgentResponseEvent,
+    routing: { channelId: string; conversationId: string; senderId: string },
+    reason: 'agent_declined' | 'content_block_abandoned' | 'empty_response' | 'ambiguous_decline',
+  ): Promise<void> {
+    const ceoEmail = resolvePrincipalEmail(this.ceoEmail);
+    if (!ceoEmail) {
+      this.logger.warn(
+        { conversationId: routing.conversationId, channelId: routing.channelId, reason },
+        'Dispatcher no-reply: principal turn ended in silence but ceoEmail is unset — notification skipped',
+      );
+      return;
+    }
+    await this.bus.publish(
+      'dispatch',
+      createOutboundNotification({
+        notificationType: 'no_reply_principal',
+        ceoEmail,
+        subject: 'FYI — Curia ended a turn without replying',
+        body: [
+          'Curia ended a turn without sending a reply.',
+          'The original channel received nothing; this note is so the silence is visible.',
+          '',
+          `Channel: ${routing.channelId}`,
+          `Reason: ${reason}`,
+        ].join('\n'),
+        originalChannel: routing.channelId,
+        originalRecipientId: routing.senderId,
+        parentEventId: event.id,
+      }),
+    );
   }
 
   /** Publish a salvage outbound.message that the email adapter saves as a draft (#1355). */

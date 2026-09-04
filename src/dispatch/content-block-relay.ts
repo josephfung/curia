@@ -23,6 +23,7 @@ export interface RelayOutboundContext {
   taskEventId: string;
   content: string;
   contentBlockRetryAttempt: number;
+  liveTurn?: boolean;
 }
 
 /** Whether the block reason is fixable by rewriting the message body. */

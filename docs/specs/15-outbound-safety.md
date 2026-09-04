@@ -86,9 +86,24 @@ abandons delivery: no send, no salvage draft, no further retry. An `llm-judge-au
 block that the agent abandons therefore cannot be polished into a recipient-appropriate
 acknowledgement and delivered — the failure mode of the 2026-09-04 reply storm.
 
+Skipping salvage on an exact rewrite abandon is deliberate, not an accident of the early
+return. A draft is a standing invitation to send the blocked text; the point of abandon is
+that the message should not exist. The blocked body is copied onto `outbound.no_reply`
+(`abandonedContent`) so it is recoverable from the audit row. The `outbound.blocked` CEO
+notification at block time remains the human-visible signal — it is considered sufficient
+closure for the abandoned case.
+
+A near-miss sentinel (fenced token plus prose, or the token as a standalone word in a longer
+body) is the opposite trade: suppress the send and salvage an email draft, never deliver the
+control token to an external inbox.
+
+A live principal turn that returns `NO_REPLY` is honoured on the original channel and also
+emits `outbound.notification` (`no_reply_principal`) so silence toward the CEO is observable.
+
 Agents document the sentinel in the coordinator prompt (external-audience and Sending and
-replying sections). Narration such as "I'll just archive it" is **not** a no-reply; it is
-payload and will be sent.
+replying sections). Narration such as "I'll just archive it" that does **not** start with
+the token is still payload and will be sent. `InboundScanner` scores inbound occurrences of
+the token for visibility; it does not block.
 
 ---
 
