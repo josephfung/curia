@@ -94,7 +94,13 @@ describe('SecretCaptureResumeSubscriber', () => {
     expect(routingCalls).toHaveLength(1);
     const publishedTaskId = (published[0]!.event as AgentTaskEvent).id;
     expect(routingCalls[0]!.taskEventId).toBe(publishedTaskId);
-    expect(routingCalls[0]!.routing).toEqual({ channelId: 'email', conversationId: 'conv-1', senderId: 'ceo' });
+    expect(routingCalls[0]!.routing).toEqual({
+      channelId: 'email',
+      conversationId: 'conv-1',
+      senderId: 'ceo',
+      // Gate C on the relay requires originator (#1733) — round-tripped from the capture token.
+      originator: { ...ORIGINATOR, tier: null },
+    });
   });
 
   it('does not double-dispatch on duplicate event delivery', async () => {
