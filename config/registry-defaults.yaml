@@ -112,6 +112,10 @@ tools:
   - list-pending-actions
   - activity-log
   - approval-expiry-sweep
+  # Infrastructure-only: re-publishes a Gate C–withheld dispatcher relay after CEO
+  # approve (#1733). Not pinned to any agent; allowed_callers: ["system"] so agents
+  # cannot invoke it — only approve-action's humanApproved re-exec path reaches it.
+  - dispatcher-relay
   # NOTE: diagnostics skills (audit-query, audit-trace, ops-lookup) excluded — they
   #        read internal audit + operational state and are the principal-only
   #        diagnostics agent's toolset. Opt-in: enable them alongside the diagnostics
