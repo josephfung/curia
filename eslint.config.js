@@ -31,8 +31,11 @@ export default [
   {
     // Browser apps (console, antfarm). A separate block rather than a widened glob above,
     // because the rule set genuinely differs:
-    //   - `no-console` is deliberately absent: it exists on the backend because pino is the
-    //     mandated alternative, and there is no browser equivalent to point people at.
+    //   - `no-console` is deliberately absent. It exists on the backend because pino is the
+    //     mandated alternative, and pino is a Node logger. There is no single browser
+    //     replacement to point people at: antfarm has `clientWarn` (src/client-log.ts) but
+    //     the console app has nothing, so turning the rule on here would flag ~68 call sites
+    //     with no consistent fix to offer. Worth revisiting once the apps agree on a wrapper.
     //   - `.tsx` needs ecmaFeatures.jsx, which the backend has no reason to enable.
     //   - the react-hooks rules only make sense where React is.
     // `apps/*/*.config.ts` (vite configs) is included so the build config is linted too.
