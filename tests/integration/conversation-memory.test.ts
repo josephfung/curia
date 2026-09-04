@@ -7,6 +7,7 @@ import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/e
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
 const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
 import { createLogger } from '../../src/logger.js';
+import { makePrincipalContactResolver } from '../helpers/principal-contact-resolver.js';
 
 describe('Multi-turn conversation with working memory', () => {
   it('includes prior conversation turns in LLM context on second message', async () => {
@@ -41,7 +42,12 @@ describe('Multi-turn conversation with working memory', () => {
     });
     coordinator.register();
 
-    const dispatcher = new Dispatcher({ bus, logger });
+    // Principal resolver so Gate C on the relay (#1733) allows CLI-style delivery.
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: makePrincipalContactResolver(),
+    });
     dispatcher.register();
 
     const outbound: OutboundMessageEvent[] = [];
@@ -111,7 +117,11 @@ describe('Multi-turn conversation with working memory', () => {
     });
     coordinator.register();
 
-    const dispatcher = new Dispatcher({ bus, logger });
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: makePrincipalContactResolver(),
+    });
     dispatcher.register();
 
     bus.subscribe('outbound.message', 'channel', () => {});

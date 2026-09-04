@@ -14,8 +14,10 @@ const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import type { AgentTaskEvent } from '../../src/bus/events.js';
+import { createInboundMessage } from '../../src/bus/events.js';
 import pino from 'pino';
 import type { HealthService } from '../../src/health/health-service.js';
+import { makePrincipalContactResolver } from '../helpers/principal-contact-resolver.js';
 
 // Minimal HealthService stub for integration tests that don't test health behavior.
 // Returns a minimal ok response so GET /api/health stays up without a real DB.
@@ -67,7 +69,12 @@ describe('HTTP API integration', () => {
     });
     coordinator.register();
 
-    const dispatcher = new Dispatcher({ bus, logger });
+    // Principal resolver so Gate C on the relay (#1733) allows HTTP responses.
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: makePrincipalContactResolver(),
+    });
     dispatcher.register();
 
     app.register(messageRoutes, { bus, logger, eventRouter });
@@ -227,7 +234,11 @@ describe('HTTP API — bearer token authentication', () => {
       logger,
     });
     coordinator.register();
-    const dispatcher = new Dispatcher({ bus, logger });
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: makePrincipalContactResolver(),
+    });
     dispatcher.register();
 
     // Auth hook — same logic as HttpAdapter.start()
@@ -420,23 +431,19 @@ describe('Trust scoring — unknown sender via HTTP', () => {
   it('agent.task carries messageTrustScore for unknown HTTP sender', async () => {
     const tasks: AgentTaskEvent[] = [];
 
-    // Subscribe before injecting the request so we don't miss a fast delivery.
-    // bus.subscribe() returns void (no unsubscribe) — the subscription is scoped
-    // to this describe block's bus instance which is discarded after afterAll.
+    // Subscribe before publishing so we don't miss a fast delivery.
+    // Publish inbound.message directly on the bus — POST /api/messages waits for
+    // outbound.message, which Gate C withholds for unknown-tier senders (#1733).
     bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
 
-    await app.inject({
-      method: 'POST',
-      url: '/api/messages',
-      payload: {
-        content: 'What time is it?',
-        conversation_id: 'trust-int-test-1',
-        sender_id: 'unknown-api-caller',
-      },
-    });
+    await bus.publish('channel', createInboundMessage({
+      conversationId: 'trust-int-test-1',
+      channelId: 'http',
+      senderId: 'unknown-api-caller',
+      content: 'What time is it?',
+      metadata: { trustLevel: 'medium' },
+    }));
 
-    // The inject() call awaits the agent response, so by the time we reach this
-    // line the agent.task event has already been delivered to our subscriber.
     expect(tasks.length).toBeGreaterThan(0);
 
     // http medium=0.6, unknown contact confidence=0.0
