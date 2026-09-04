@@ -30,6 +30,7 @@ import {
   RELAY_ACTION_RISK,
   RELAY_GATE_C_ACTION,
   RELAY_GATE_C_HTTP_PENDING_MESSAGE,
+  RELAY_BODY_MAX_LENGTH,
   REPLY_SKILLS_GATE_C,
 } from './relay-gate-c.js';
 import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
@@ -1375,6 +1376,18 @@ export class Dispatcher {
     tier: import('../contacts/types.js').ContactTier | 'unresolved';
   }): Promise<void> {
     if (!this.approvalTrigger) return;
+    // Do not create an un-fulfillable approval — dispatcher-relay rejects oversized bodies.
+    if (args.content.length > RELAY_BODY_MAX_LENGTH) {
+      this.logger.warn(
+        {
+          taskEventId: args.taskEventId,
+          contentLength: args.content.length,
+          maxLength: RELAY_BODY_MAX_LENGTH,
+        },
+        'Dispatcher Gate C: relay escalate body exceeds dispatcher-relay limit — withholding without approval row',
+      );
+      return;
+    }
     try {
       const result = await this.approvalTrigger.request({
         taskId: args.taskEventId,

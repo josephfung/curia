@@ -45,6 +45,38 @@ describe('DispatcherRelayHandler', () => {
     }
   });
 
+  it('rejects body longer than RELAY_BODY_MAX_LENGTH', async () => {
+    const { RELAY_BODY_MAX_LENGTH } = await import('../../src/dispatch/relay-gate-c.js');
+    const handler = new DispatcherRelayHandler();
+    const result = await handler.execute(makeCtx({
+      input: {
+        channelId: 'email',
+        to: 'a@b.com',
+        body: 'z'.repeat(RELAY_BODY_MAX_LENGTH + 1),
+        conversationId: 'c',
+      },
+      taskEventId: 'task-1',
+    }));
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts body at exactly RELAY_BODY_MAX_LENGTH', async () => {
+    const { RELAY_BODY_MAX_LENGTH } = await import('../../src/dispatch/relay-gate-c.js');
+    const bus = { publish: vi.fn().mockResolvedValue(undefined) };
+    const handler = new DispatcherRelayHandler();
+    const result = await handler.execute(makeCtx({
+      bus: bus as unknown as ToolContext['bus'],
+      input: {
+        channelId: 'email',
+        to: 'a@b.com',
+        body: 'z'.repeat(RELAY_BODY_MAX_LENGTH),
+        conversationId: 'c',
+      },
+      taskEventId: 'task-1',
+    }));
+    expect(result.success).toBe(true);
+  });
+
   it('fails when bus is missing', async () => {
     const handler = new DispatcherRelayHandler();
     const result = await handler.execute(makeCtx({
@@ -55,6 +87,7 @@ describe('DispatcherRelayHandler', () => {
         body: 'x',
         conversationId: 'c',
       },
+      taskEventId: 'task-1',
     }));
     expect(result.success).toBe(false);
   });
