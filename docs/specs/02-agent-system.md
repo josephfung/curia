@@ -279,7 +279,7 @@ All agents receive a `## Current Date & Time` block in their system prompt on ev
 
 - Route every `inbound.message` to the Coordinator agent
 - Enforce policy: rate limits, blocked senders, required approvals
-- Translate `agent.response` → `outbound.message` (completing the response loop)
+- Translate `agent.response` → `outbound.message` (completing the response loop), unless the agent returns the `NO_REPLY` sentinel — then publish `outbound.no_reply` and send nothing (#1732)
 - Inject `persona.display_name` and `persona.email_signature` into outbound messages
 - Check for pending Bullpen threads on every `agent.task` routing
 - Subscribe to `agent.error` and notify the user on the originating channel

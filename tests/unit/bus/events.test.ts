@@ -9,6 +9,7 @@ import {
   createConversationCheckpoint,
   createVoiceSessionStarted,
   createVoiceSessionEnded,
+  createOutboundNoReply,
   type BusEvent,
 } from '../../../src/bus/events.js';
 
@@ -138,6 +139,22 @@ describe('Event Types', () => {
     expect(ended.type).toBe('voice.session.ended');
     expect(ended.sourceLayer).toBe('channel');
     expect(ended.payload.durationMs).toBe(1234);
+  });
+
+  it('creates an outbound.no_reply event', () => {
+    const event = createOutboundNoReply({
+      routingTaskId: 'task-1',
+      agentId: 'coordinator',
+      conversationId: 'email:thread-abc',
+      channelId: 'email',
+      reason: 'agent_declined',
+      parentEventId: 'response-1',
+    });
+    expect(event.type).toBe('outbound.no_reply');
+    expect(event.sourceLayer).toBe('dispatch');
+    expect(event.parentEventId).toBe('response-1');
+    expect(event.payload.reason).toBe('agent_declined');
+    expect(event.payload.channelId).toBe('email');
   });
 
   it('type narrows via discriminated union', () => {

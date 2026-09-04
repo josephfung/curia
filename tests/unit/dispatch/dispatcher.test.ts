@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
-import { createInboundMessage, createAgentError, createAgentTask, createAgentResponse, createOutboundBlocked, createAutonomySendBlocked, createToolResult, type OutboundMessageEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
+import { createInboundMessage, createAgentError, createAgentTask, createAgentResponse, createOutboundBlocked, createAutonomySendBlocked, createToolResult, type OutboundMessageEvent, type OutboundNoReplyEvent, type MessageRejectedEvent, type AgentTaskEvent, type ContactUnknownEvent, type BusEvent } from '../../../src/bus/events.js';
 import { CONTENT_BLOCK_MAX_RETRIES } from '../../../src/dispatch/content-block-relay.js';
+import { NO_REPLY_SENTINEL } from '../../../src/dispatch/no-reply.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -2089,6 +2090,7 @@ describe('Dispatcher content-block relay (#1355)', () => {
     expect(agentTasks[0]!.payload.agentId).toBe('coordinator');
     expect(agentTasks[0]!.payload.content).toContain('[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]');
     expect(agentTasks[0]!.payload.content).toContain('calendar specialist found 4 events');
+    expect(agentTasks[0]!.payload.content).toContain(NO_REPLY_SENTINEL);
     expect(agentTasks[0]!.payload.metadata?.contentBlockRewrite).toBe(true);
   });
 
@@ -2190,5 +2192,60 @@ describe('Dispatcher content-block relay (#1355)', () => {
     }));
 
     expect(agentTasks).toHaveLength(0);
+  });
+
+  it('honours NO_REPLY on rewrite without salvage or further retry (#1732)', async () => {
+    const { bus, dispatcher, outboundMessages, agentTasks } = buildHarness();
+    const noReplyEvents: OutboundNoReplyEvent[] = [];
+    bus.subscribe('outbound.no_reply', 'system', (event) => {
+      noReplyEvents.push(event as OutboundNoReplyEvent);
+    });
+
+    const task = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-leak',
+      channelId: 'email',
+      senderId: 'known@example.com',
+      content: 'Automated calendar decline',
+      parentEventId: 'inbound-leak',
+    });
+    dispatcher.registerExternalTaskRouting(task.id, {
+      channelId: 'email',
+      conversationId: 'email:thread-leak',
+      senderId: 'known@example.com',
+    });
+
+    await bus.publish('system', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-leak',
+      content: 'This is an automated calendar decline notification — no reply needed from me.',
+      parentEventId: task.id,
+    }));
+
+    expect(outboundMessages).toHaveLength(1);
+    await bus.publish('dispatch', createOutboundBlocked({
+      blockId: 'block_audience_leak',
+      conversationId: 'email:thread-leak',
+      channelId: 'email',
+      content: outboundMessages[0]!.payload.content,
+      recipientId: 'known@example.com',
+      reason: 'llm-judge-audience-leak: internal monologue',
+      findings: [{ rule: 'llm-judge-audience-leak', detail: 'internal monologue' }],
+      parentEventId: outboundMessages[0]!.id,
+    }));
+
+    expect(agentTasks).toHaveLength(1);
+    await bus.publish('system', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-leak',
+      content: NO_REPLY_SENTINEL,
+      parentEventId: agentTasks[0]!.id,
+    }));
+
+    expect(outboundMessages.filter((m) => m.payload.contentBlockSalvage)).toHaveLength(0);
+    expect(outboundMessages).toHaveLength(1);
+    expect(noReplyEvents).toHaveLength(1);
+    expect(noReplyEvents[0]!.payload.reason).toBe('content_block_abandoned');
+    expect(agentTasks).toHaveLength(1);
   });
 });

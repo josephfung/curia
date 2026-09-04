@@ -177,4 +177,13 @@ describe('Bus Permissions', () => {
     expect(canPublish('system', 'authorization.decision')).toBe(true);
     expect(canSubscribe('system', 'authorization.decision')).toBe(true);
   });
+
+  it('allows dispatch to publish outbound.no_reply and system to subscribe', () => {
+    expect(canPublish('dispatch', 'outbound.no_reply')).toBe(true);
+    expect(canPublish('system', 'outbound.no_reply')).toBe(true);
+    expect(canSubscribe('system', 'outbound.no_reply')).toBe(true);
+    expect(canPublish('agent', 'outbound.no_reply')).toBe(false);
+    expect(canPublish('channel', 'outbound.no_reply')).toBe(false);
+    expect(canSubscribe('channel', 'outbound.no_reply')).toBe(false);
+  });
 });

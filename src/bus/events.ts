@@ -234,6 +234,20 @@ interface OutboundSuppressedDuplicatePayload {
   reason: 'human_reply_already_sent';
 }
 
+// OutboundNoReplyPayload — emitted by the dispatch layer when an agent.response would have
+// produced an outbound.message, but the agent explicitly declined to reply (entire content
+// is the NO_REPLY sentinel). Distinct from outbound.suppressed_duplicate: nothing was sent
+// on this turn, whereas the reply-lock fires after a human-facing skill already succeeded.
+// See #1732.
+interface OutboundNoReplyPayload {
+  routingTaskId: string;   // agent.task event ID whose routing entry was skipped
+  agentId: string;
+  conversationId: string;
+  channelId: string;
+  /** `agent_declined` = normal turn; `content_block_abandoned` = rewrite-path escape. */
+  reason: 'agent_declined' | 'content_block_abandoned';
+}
+
 // OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)
 // when a system-level CEO alert needs to be sent. Routing through the bus ensures the notification
 // goes through the same safety pipeline as regular outbound messages, closing the prior direct
@@ -791,6 +805,15 @@ export interface OutboundSuppressedDuplicateEvent extends BaseEvent {
   payload: OutboundSuppressedDuplicatePayload;
 }
 
+// OutboundNoReplyEvent — published by the dispatch layer when handleAgentResponse honours
+// the NO_REPLY sentinel instead of publishing outbound.message. System layer subscribes
+// for audit logging. See #1732.
+export interface OutboundNoReplyEvent extends BaseEvent {
+  type: 'outbound.no_reply';
+  sourceLayer: 'dispatch';
+  payload: OutboundNoReplyPayload;
+}
+
 // OutboundNotificationEvent — published by the dispatch layer when a system-level CEO
 // notification needs to be sent (blocked-content alert, group-held alert, etc.).
 // Channel adapters subscribe to route it through the outbound safety pipeline.
@@ -1308,6 +1331,7 @@ export type BusEvent =
   | ExportDeliveredEvent   // MCP bulk export: Drive/Sheets record export succeeded (#201)
   | OutboundPiiRedactedEvent // Outbound PII redaction: PII scrubbed before delivery (#249)
   | OutboundSuppressedDuplicateEvent  // #847: duplicate reply suppressed by reply-lock
+  | OutboundNoReplyEvent              // #1732: agent declined to reply (NO_REPLY sentinel)
   | OutboundNotificationEvent // System notifications routed through safety pipeline (#206)
   | ScheduleCreatedEvent   // Scheduler: job created
   | ScheduleFiredEvent     // Scheduler: job fired
@@ -1491,6 +1515,22 @@ export function createOutboundSuppressedDuplicate(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'outbound.suppressed_duplicate',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createOutboundNoReply(
+  // parentEventId is required — the no-reply occupies the same causal slot outbound.message
+  // would have, tracing back to the agent.response that declined delivery. See #1732.
+  payload: OutboundNoReplyPayload & { parentEventId: string },
+): OutboundNoReplyEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'outbound.no_reply',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,

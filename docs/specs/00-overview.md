@@ -71,7 +71,7 @@ Full round-trip for an inbound message:
 3. Agent (subscribed to `agent.task`) calls LLM, may publish `tool.invoke`
 4. Execution layer (subscribed to `tool.invoke`) runs skill, publishes `tool.result`
 5. Agent (subscribed to `tool.result`) incorporates result, publishes `agent.response`
-6. Dispatch layer (subscribed to `agent.response`) translates to `outbound.message`
+6. Dispatch layer (subscribed to `agent.response`) translates to `outbound.message`, or publishes `outbound.no_reply` when the agent returns the `NO_REPLY` sentinel (#1732)
 7. Channel adapter (subscribed to `outbound.message`) sends via platform API
 
 Bullpen flow: Agent publishes `agent.discuss` → target agent (subscribed to `agent.discuss`) responds in the same thread.

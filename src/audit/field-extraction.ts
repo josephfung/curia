@@ -138,6 +138,17 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: INITIATOR_ID_DISPATCH,
   }),
 
+  // Agent explicitly declined to send (#1732). Action `suppress` is additive to
+  // spec 10's taxonomy — silence is the intended outcome, not a failed send.
+  'outbound.no_reply': (p, fail) => ({
+    action: 'suppress',
+    outcome: 'success',
+    target_type: 'conversation',
+    target_id: str(p, 'conversationId', fail),
+    initiator_type: INITIATOR_TYPE_SYSTEM,
+    initiator_id: INITIATOR_ID_DISPATCH,
+  }),
+
   // Spec maps initiator to channel / channelId; outbound.delivered payload uses `channel`.
   'outbound.delivered': (p, fail) => ({
     action: 'deliver',

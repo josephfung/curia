@@ -38,7 +38,7 @@ describe('content-block-relay', () => {
     expect(summary).toContain('calendar specialist');
   });
 
-  it('buildContentBlockRewriteTask passes block findings and draft without duplicating voice policy', () => {
+  it('buildContentBlockRewriteTask offers NO_REPLY alongside rewrite without duplicating voice policy', () => {
     const task = buildContentBlockRewriteTask('The calendar specialist found 4 events.', [
       { rule: 'llm-judge-audience-leak', detail: 'named internal agent' },
     ]);
@@ -47,7 +47,18 @@ describe('content-block-relay', () => {
     expect(task).toContain('llm-judge-audience-leak');
     expect(task).toContain('named internal agent');
     expect(task).toContain('your normal audience and voice rules');
+    expect(task).toContain('NO_REPLY');
+    expect(task).toContain('abandons delivery');
+    expect(task).toContain('Prefer NO_REPLY');
     expect(task).not.toContain('Never mention internal specialists');
+  });
+
+  it('buildContentBlockRewriteTask offers NO_REPLY for non-audience-leak blocks without preferring it', () => {
+    const task = buildContentBlockRewriteTask('Thanks for the note.', [
+      { rule: 'llm-judge-over-disclosure', detail: 'shared principal availability' },
+    ]);
+    expect(task).toContain('NO_REPLY');
+    expect(task).not.toContain('Prefer NO_REPLY');
   });
 
   it('allows two retries after the first block', () => {

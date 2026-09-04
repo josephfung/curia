@@ -69,6 +69,27 @@ The gateway emits an `outbound.delivered` event after every successful send. Thi
 - Distinct from `outbound.message` (emitted by `dispatch` when translating `agent.response` → send request), which represents *intent* to send and is only emitted for response-path sends. Skill-invoked sends (`signal-send`, `email-send`, `email-reply`, etc.) bypass `dispatch` entirely; without `outbound.delivered`, those sends would be invisible to a security review counting outbound traffic. See [spec 10](10-audit-log-hardening.md) for the full extraction-row contract.
 - HTTP/web responses are captured by `agent.response` and are out of scope for `outbound.delivered`. CLI is dev-only and excluded by design.
 
+### Dispatcher relay can send nothing (#1732)
+
+The dispatcher translates every `agent.response` with a routing entry into `outbound.message`,
+**except**:
+
+1. **Reply-lock** (`outbound.suppressed_duplicate`) — a human-facing reply skill already
+   succeeded on this task (#847).
+2. **Explicit no-reply** (`outbound.no_reply`) — the agent's entire response is the sentinel
+   `NO_REPLY`. Nothing is published to the channel. Reasons: `'agent_declined'` on a normal
+   turn, `'content_block_abandoned'` when the agent returns the sentinel on a content-filter
+   rewrite task.
+
+The content-filter rewrite prompt (#1355) offers `NO_REPLY` alongside rewrite. Returning it
+abandons delivery: no send, no salvage draft, no further retry. An `llm-judge-audience-leak`
+block that the agent abandons therefore cannot be polished into a recipient-appropriate
+acknowledgement and delivered — the failure mode of the 2026-09-04 reply storm.
+
+Agents document the sentinel in the coordinator prompt (external-audience and Sending and
+replying sections). Narration such as "I'll just archive it" is **not** a no-reply; it is
+payload and will be sent.
+
 ---
 
 ## Content Filter
