@@ -1,0 +1,24 @@
+{
+  // Type-only package consumed by both the Node backend (module: nodenext) and the
+  // Vite apps (moduleResolution: bundler). Its own check is deliberately standalone
+  // so the package is verified on its own terms rather than only incidentally, via
+  // whichever consumer happens to import it — see #1726.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  // `**/*.ts`, not `*.ts`: a top-level-only include would silently drop the package
+  // out of coverage the day it grows a `src/` directory.
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

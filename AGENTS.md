@@ -59,8 +59,12 @@ caveats; standard commands live in `package.json` scripts and `scripts/setup.sh`
   to mark identity configured, then restart the backend yourself.
 
 ### Lint / typecheck / test / build (commands in `package.json`)
-- Lint: `pnpm run lint`. Typecheck: `pnpm run typecheck` (3 tsconfigs) and
-  `pnpm --filter @curia/console run typecheck`. Build console: `pnpm --filter @curia/console run build`.
+- Lint: `pnpm run lint`. Typecheck: `pnpm run typecheck` — 3 root tsconfigs (`src/`,
+  `skills/`, `tests/`) plus **every** workspace package under `apps/*` and `packages/*`
+  via `pnpm -r run typecheck`. No workspace package is checked separately; a per-package
+  list here is how `apps/console` came to be missed (#1726). Not covered: `scripts/**`
+  (#1729) and `apps/*/vite.config.ts`. Build console:
+  `pnpm --filter @curia/console run build`.
 - Tests: `pnpm test` (vitest). Integration tests **require `DATABASE_URL`** and applied
   migrations; they `describe.skip` when it is unset. Mirror CI by using a separate
   `curia_test` DB: create it, migrate it, then
