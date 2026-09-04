@@ -60,11 +60,12 @@ jobs:
         env:
           DATABASE_URL: postgres://curia:curia_test@localhost:5432/curia_test
 
+      # Covers src/, skills/, tests/ and every workspace package (apps/*, packages/*)
+      # via `pnpm -r run typecheck` — see #1726. There is deliberately no separate
+      # console step: a hand-maintained per-package list here is how apps/console
+      # came to be missing from the root script.
       - name: Type check
         run: pnpm run typecheck
-
-      - name: Type check console
-        run: pnpm --filter @curia/console run typecheck
 
       - name: Build console
         run: pnpm --filter @curia/console run build

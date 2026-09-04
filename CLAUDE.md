@@ -27,9 +27,20 @@ Cross-cutting: Audit Logger, Memory Engine, Scheduler.
 
 ### Type Checking
 
-Always run `pnpm --prefix <worktree> run typecheck` (not raw `tsc --noEmit`) —
+Always run `pnpm -C <worktree> run typecheck` (not raw `tsc --noEmit`) —
 CI uses `pnpm run typecheck` which may resolve a different tsconfig chain than
 a bare `tsc` invocation. Run this before every commit that touches `.ts` files.
+
+This one command is complete: it covers `src/`, `skills/` and `tests/` (three
+tsconfig projects) plus every workspace package under `apps/*` and `packages/*`
+via `pnpm -r run typecheck`. Nothing needs to be checked separately, and new
+workspace packages are picked up automatically — they only need their own
+`typecheck` script, which `tests/unit/workspace-typecheck-coverage.test.ts`
+enforces.
+
+Use `-C`, not `--prefix`: for pnpm (unlike npm) `--prefix` sets only the install
+location, so workspace resolution still comes from the process CWD and can
+resolve the wrong workspace entirely.
 
 ### Strict TypeScript Patterns
 
