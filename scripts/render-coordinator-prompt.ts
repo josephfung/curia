@@ -13,7 +13,6 @@
 // Re-run when any of the following change:
 //   - agents/coordinator.yaml system_prompt
 //   - Office identity (wizard / PUT /api/identity)
-//   - config/executive-profile.yaml or executive profile via API
 //   - security.trust_thresholds in config/default.yaml
 //   - Specialist agents (agents/*.yaml)
 //
@@ -21,11 +20,10 @@
 
 import { resolve } from 'node:path';
 import pg from 'pg';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, loadYamlConfig } from '../src/config.js';
 import { loadAllAgentConfigs, interpolateRuntimeContext } from '../src/agents/loader.js';
 import { AgentRegistry } from '../src/agents/agent-registry.js';
 import { OfficeIdentityService } from '../src/identity/service.js';
-import { ExecutiveProfileService, compileWritingVoiceBlock } from '../src/executive/service.js';
 import { compileSecurityContextBlock } from '../src/security/security-context.js';
 import { formatTimeContextBlock } from '../src/time/time-context.js';
 import { EventBus } from '../src/bus/bus.js';
@@ -45,42 +43,23 @@ async function main(): Promise<void> {
   // No-op bus — this script only reads; services only use the bus for write paths.
   const bus = new EventBus(logger);
   const config = loadConfig();
+  // Trust thresholds live in the YAML config (config/default.yaml), not in the
+  // env-derived Config that loadConfig() returns. This script read the wrong one and
+  // silently fell back to the hardcoded defaults below (#1729).
+  const yamlConfig = loadYamlConfig(CONFIG_DIR);
   const pool = new pg.Pool({ connectionString: databaseUrl });
 
   let identityService: OfficeIdentityService | null = null;
-  let profileService: ExecutiveProfileService | null = null;
 
   try {
     // ── Identity block ─────────────────────────────────────────────────────────
     identityService = new OfficeIdentityService(pool, logger, bus);
     await identityService.initialize();
 
-    // ── Executive voice block ──────────────────────────────────────────────────
-    profileService = new ExecutiveProfileService(
-      pool,
-      logger,
-      bus,
-      resolve(CONFIG_DIR, 'executive-profile.yaml'),
-    );
-    await profileService.initialize();
-
-    // Resolve the principal's display name by system_role — the single source of truth
-    // (#1049). Mirrors how index.ts resolves the principal contact at startup.
-    let executiveDisplayName = 'the executive';
-    const nameResult = await pool.query<{ display_name: string }>(
-      `SELECT display_name FROM contacts WHERE system_role = 'principal' LIMIT 1`,
-    );
-    const principalRow = nameResult.rows[0];
-    if (principalRow?.display_name) {
-      executiveDisplayName = principalRow.display_name;
-    } else {
-      // Warn rather than fail — name is cosmetic; a fallback won't invalidate red-team results.
-      process.stderr.write(
-        'render-coordinator-prompt: warning: no principal contact found.\n' +
-        '  Executive display name will be "the executive" in the rendered prompt.\n' +
-        '  Has the onboarding wizard been completed on this instance?\n',
-      );
-    }
+    // No ExecutiveProfileService here: the ${executive_voice_block} injection it fed was
+    // removed in #957, so loading the profile (and starting its file watcher) would render
+    // a prompt block the runtime never emits. The principal's *contact* details below still
+    // come from the DB, which is what the runtime actually injects.
 
     // ── Agent contact ID + channel identities ─────────────────────────────────
     const agentResult = await pool.query<{ id: string }>(
@@ -143,7 +122,7 @@ async function main(): Promise<void> {
     }
 
     // ── Security context block ─────────────────────────────────────────────────
-    const rawThresholds = config.security?.trust_thresholds;
+    const rawThresholds = yamlConfig.security?.trust_thresholds;
     const thresholds = {
       information_query: rawThresholds?.information_query ?? 0.30,
       scheduling:        rawThresholds?.scheduling        ?? 0.50,
@@ -160,11 +139,14 @@ async function main(): Promise<void> {
     }
 
     // interpolateRuntimeContext handles: ${office_identity_block},
-    // ${executive_voice_block}, ${available_specialists}, ${agent_contact_id},
-    // ${principal_contact_id}. The security_context_block is compiled separately.
+    // ${available_specialists}, ${agent_contact_id}, ${principal_contact_id}.
+    // The security_context_block is compiled separately.
+    //
+    // ${executive_voice_block} is deliberately absent: the injection path was removed
+    // in #957 and the placeholder is gone from coordinator.yaml, so passing a voice
+    // block here would render a prompt the runtime never actually produces.
     let systemPrompt = interpolateRuntimeContext(coordinatorConfig.system_prompt, {
       officeIdentityBlock:   identityService.compileSystemPromptBlock(),
-      executiveVoiceBlock:   compileWritingVoiceBlock(profileService.get(), executiveDisplayName),
       availableSpecialists:  registry.specialistSummary(),
       agentContactId,
       principalContactId,
@@ -238,7 +220,6 @@ async function main(): Promise<void> {
     process.stdout.write(perTurnSection + '\n\n' + systemPrompt + '\n');
   } finally {
     await identityService?.stop();
-    await profileService?.stop();
     try {
       await pool.end();
     } catch (err: unknown) {

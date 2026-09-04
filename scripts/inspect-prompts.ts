@@ -27,7 +27,7 @@
 
 import { resolve } from 'node:path';
 import pg from 'pg';
-import { loadConfig } from '../src/config.js';
+import { loadYamlConfig } from '../src/config.js';
 import { loadAllAgentConfigs } from '../src/agents/loader.js';
 import { AgentRegistry } from '../src/agents/agent-registry.js';
 import { OfficeIdentityService } from '../src/identity/service.js';
@@ -51,7 +51,10 @@ async function main(): Promise<void> {
   // (update/reload paths), which never happen here.
   const bus = new EventBus(logger);
 
-  const config = loadConfig();
+  // Trust thresholds live in the YAML config (config/default.yaml), not in the
+  // env-derived Config that loadConfig() returns. This script read the wrong one and
+  // silently fell back to the hardcoded defaults below (#1729).
+  const yamlConfig = loadYamlConfig(CONFIG_DIR);
   const pool = new pg.Pool({ connectionString: databaseUrl });
 
   // Declared outside try so the finally block can call stop() on each service.
@@ -123,7 +126,7 @@ async function main(): Promise<void> {
     // Read from config the same way index.ts does. The defaults here match
     // Curia's hardcoded fallbacks so the output is correct even without a
     // config/default.yaml override.
-    const rawThresholds = config.security?.trust_thresholds;
+    const rawThresholds = yamlConfig.security?.trust_thresholds;
     const thresholds = {
       information_query: rawThresholds?.information_query ?? 0.30,
       scheduling:        rawThresholds?.scheduling        ?? 0.50,
