@@ -46,12 +46,20 @@ function seedRouting(
   opts: { channelId?: string; conversationId?: string; senderId?: string; humanReplySent?: boolean } = {},
 ) {
   (dispatcher as unknown as {
-    taskRouting: Map<string, { channelId: string; conversationId: string; senderId: string; humanReplySent: boolean }>;
+    taskRouting: Map<string, {
+      channelId: string;
+      conversationId: string;
+      senderId: string;
+      humanReplySent: boolean;
+      replySkillGateCBlocked: boolean;
+    }>;
   }).taskRouting.set(taskEventId, {
     channelId: opts.channelId ?? 'email',
     conversationId: opts.conversationId ?? 'email:thread-abc',
     senderId: opts.senderId ?? 'sender@example.com',
     humanReplySent: opts.humanReplySent ?? false,
+    // originator omitted → Gate C skips (#1733); isolates humanReplySent suppression.
+    replySkillGateCBlocked: false,
   });
 }
 

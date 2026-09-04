@@ -193,6 +193,24 @@ export class ActionLogRepo {
   }
 
   /**
+   * Find any pending_approval row for a task, regardless of skill/payload (#1733).
+   * Used by the dispatcher relay so a Gate C escalate joins an approval already
+   * pending from a reply skill on the same turn instead of creating a second one.
+   */
+  async findAnyPendingByTask(taskId: string): Promise<ActionLogRow | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM autonomy_action_log
+       WHERE task_id = $1
+         AND outcome = 'pending_approval'
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [taskId],
+    );
+    if (result.rows.length === 0) return null;
+    return mapRow(result.rows[0]);
+  }
+
+  /**
    * Mark that the CEO notification was successfully delivered.
    * Called after a successful sendNotification(). If notification fails,
    * this is never called — notification_sent_at stays null.

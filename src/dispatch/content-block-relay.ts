@@ -7,6 +7,7 @@
  */
 
 import { NO_REPLY_SENTINEL } from './no-reply.js';
+import type { TaskOriginator } from '../contacts/types.js';
 
 /** Maximum rewrite retries after the first content-filter block (2 retries → 3 send attempts). */
 export const CONTENT_BLOCK_MAX_RETRIES = 2;
@@ -24,6 +25,8 @@ export interface RelayOutboundContext {
   content: string;
   contentBlockRetryAttempt: number;
   liveTurn?: boolean;
+  /** Propagated so rewrite retries still enforce Gate C (#1733). */
+  originator?: TaskOriginator;
 }
 
 /** Whether the block reason is fixable by rewriting the message body. */

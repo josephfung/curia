@@ -2883,6 +2883,7 @@ async function main(): Promise<void> {
     selfEmail: resolvedEmailAccounts[0]?.selfEmail,
     outboundContextService,
     ceoEmail: principalEmail,
+    approvalTrigger,
   });
   dispatcher.register();
 
