@@ -46,8 +46,23 @@ describe('VoiceCallBar (#1571)', () => {
       <VoiceCallBar {...props({ callState: 'connected', heardAssistant: true })} />,
     );
     expect(html).toContain('Listening');
-    expect(html).toContain('Mute');
+    // Anchored, not toContain('Mute'): the bare substring is also satisfied by "Unmute"
+    // and by the aria-label, so it passes even when the two labels are swapped.
+    expect(html).toContain('>Mute</button>');
+    expect(html).toContain('aria-label="Mute microphone"');
     expect(html).toContain('Hang up');
+  });
+
+  // The muted branch had no coverage at all: `props()` hardcodes `muted: false` and nothing
+  // overrode it, so the status string and both mute labels could invert unnoticed.
+  it('renders the muted status and Unmute control while muted', () => {
+    const html = renderToStaticMarkup(
+      <VoiceCallBar {...props({ callState: 'connected', heardAssistant: true, muted: true })} />,
+    );
+    expect(html).toContain('On call · muted');
+    expect(html).not.toContain('Listening');
+    expect(html).toContain('>Unmute</button>');
+    expect(html).toContain('aria-label="Unmute microphone"');
   });
 
   it('renders retry when error', () => {

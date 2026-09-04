@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **`apps/*` lint coverage** — ESLint now checks the 94 console and antfarm files it previously skipped. (#1727)
+- **`apps/*` lint coverage** — ESLint now checks console and antfarm; `no-console` stays backend-only. (#1727)
 - **React hooks linting** — `rules-of-hooks` and `exhaustive-deps` now gate the browser apps. (#1727)
 - **Skill bundle registry UI** — `/tools` now enables/disables bundles and flags unresolved agent pins. (#1724)
 - **Publish-failure alert** — a failed `docker-publish` opens/updates a tracking issue, since `:edge` goes stale silently. (#1699)
@@ -42,7 +42,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **`pnpm lint`** — now covers `apps/` as well; `no-console` stays backend-only. (#1727)
 - **`DreamEngine`** — contact-anchored nodes no longer decay or archive; their facts still do. (#1694)
 - **Decay warnings** — anchored nodes are never listed for re-confirmation nor archived by dismissal. (#1694)
 - **`deleteContact`** — archives the contact's anchored KG node, freeing its label for reuse. (#1694)

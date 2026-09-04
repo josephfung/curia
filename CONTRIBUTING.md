@@ -60,7 +60,7 @@ The name and email must match your `git config user.name` / `user.email`.
 - **No `any` types** — use proper types or generics
 - **Parameterized SQL** — never interpolate variables into SQL strings
 - **Structured error handling** — no empty `catch {}` blocks (see [error recovery spec](docs/specs/05-error-recovery.md))
-- **Structured logging** — use pino, never `console.log`
+- **Structured logging** — use pino, never `console.log` (backend only; the browser apps under `apps/` have no pino and are exempt)
 - **Comment liberally** — explain *why*, not just *what*
 
 ### Testing
