@@ -62,11 +62,13 @@ caveats; standard commands live in `package.json` scripts and `scripts/setup.sh`
 - Lint: `pnpm run lint` — covers `src/`, `tests/` and `apps/`. The browser apps get their
   own `eslint.config.js` block: no `no-console` there (pino is a Node logger), plus the
   React hooks rules. Not covered: `skills/**`, `scripts/**` and `packages/**`.
-- Typecheck: `pnpm run typecheck` — 3 root tsconfigs (`src/`,
-  `skills/`, `tests/`) plus **every** workspace package under `apps/*` and `packages/*`
+- Typecheck: `pnpm run typecheck` — 4 root tsconfigs (`src/`, `skills/`, `tests/`,
+  `scripts/`) plus **every** workspace package under `apps/*` and `packages/*`
   via `pnpm -r run typecheck`. No workspace package is checked separately; a per-package
-  list here is how `apps/console` came to be missed (#1726). Not covered: `scripts/**`
-  (#1729) and `apps/*/vite.config.ts` (which lint *does* cover). Build console:
+  list here is how `apps/console` came to be missed (#1726). `tests/unit/root-typecheck-coverage.test.ts`
+  fails if a TypeScript file outside the workspace packages lands in none of the root
+  projects (#1729). Not covered: `apps/*/vite.config.ts` — reachable only via a project
+  reference, which plain `tsc --noEmit` does not build (lint *does* cover it). Build console:
   `pnpm --filter @curia/console run build`.
 - Tests: `pnpm test` (vitest). Integration tests **require `DATABASE_URL`** and applied
   migrations; they `describe.skip` when it is unset. Mirror CI by using a separate

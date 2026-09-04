@@ -21,7 +21,7 @@
     "test:shell": "bash tests/setup/test-setup-functions.sh && bash tests/docker/test-pnpm-retry.sh",
     "test:postgres-image": "bash tests/docker/test-postgres-init.sh",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.skills.json && tsc --noEmit -p tsconfig.tests.json && pnpm -r run typecheck",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.skills.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json && pnpm -r run typecheck",
     "lint": "eslint src/ tests/ apps/",
     "migrate": "tsx --env-file=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql",
     "smoke": "tsx --env-file=.env tests/smoke/cli.ts",

@@ -17,8 +17,7 @@
 import pg from 'pg';
 import { createLogger } from '../src/logger.js';
 import { classifyPair, type PairClassification } from '../src/contacts/dedup-classifier.js';
-import type { Contact, ChannelIdentity, ContactKind } from '../src/contacts/types.js';
-import { meetsMinimumTier } from '../src/contacts/types.js';
+import { meetsMinimumTier, type Contact, type ChannelIdentity, type ContactKind } from '../src/contacts/types.js';
 import {
   canonicalPairKey,
   dedupPairTag,
