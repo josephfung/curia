@@ -1,0 +1,29 @@
+{
+  // Type-check the scripts/ tree, which sits outside the main tsconfig's `src/**`
+  // rootDir, outside tsconfig.skills.json's `skills/**`, and outside
+  // tsconfig.tests.json's `tests/**`. scripts/ is also not a workspace package, so
+  // the recursive `pnpm -r run typecheck` pass added in #1726 never reached it
+  // either — the whole tree was checked by nothing. This is #1729.
+  //
+  // These are operational maintenance tools that get run against production, so they
+  // keep the base project's STRICT settings (noUncheckedIndexedAccess, noUnusedLocals,
+  // noUnusedParameters) rather than inheriting the relaxations in tsconfig.tests.json.
+  // Their *tests* are a different matter and live in tsconfig.tests.json, where the
+  // mock-heavy relaxations apply.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // declaration/declarationMap/outDir are meaningless for a noEmit check and the
+    // base values (rootDir: src) conflict with this wider rootDir — null them out.
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "composite": false
+  },
+  // Scripts import from ../src, so tsc follows those references automatically.
+  "include": ["scripts/**/*.ts"],
+  // scripts/**/*.test.ts is covered by tsconfig.tests.json instead — test code needs
+  // the relaxed indexed-access/unused-locals rules that project provides.
+  "exclude": ["node_modules", "dist", "scripts/**/*.test.ts"]
+}

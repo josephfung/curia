@@ -31,19 +31,28 @@ Always run `pnpm -C <worktree> run typecheck` (not raw `tsc --noEmit`) —
 CI uses `pnpm run typecheck` which may resolve a different tsconfig chain than
 a bare `tsc` invocation. Run this before every commit that touches `.ts` files.
 
-What it covers: `src/`, `skills/` and `tests/` (three tsconfig projects) plus
-**every workspace package** under `apps/*` and `packages/*`, via `pnpm -r run
-typecheck`. No workspace package needs checking separately, and new ones are
-picked up automatically — they only need their own `typecheck` script, which
-`tests/unit/workspace-typecheck-coverage.test.ts` requires of any package
+What it covers: `src/`, `skills/`, `tests/` and `scripts/` (four tsconfig
+projects) plus **every workspace package** under `apps/*` and `packages/*`, via
+`pnpm -r run typecheck`. No workspace package needs checking separately, and new
+ones are picked up automatically — they only need their own `typecheck` script,
+which `tests/unit/workspace-typecheck-coverage.test.ts` requires of any package
 shipping `.ts` sources (`pnpm -r` silently *skips* a package that lacks the
 script, so that test is what keeps the skip loud).
 
+The root projects have the mirror-image failure mode: a file in no project at
+all is checked by nothing and reports green forever (that was `scripts/**` and
+`vitest.config.ts`, with 13 live errors, until #1729).
+`tests/unit/root-typecheck-coverage.test.ts` keeps that loud too — it fails if
+any TypeScript file outside the workspace packages is absent from every root
+project. A new top-level tree therefore needs a home in a tsconfig on day one.
+
+Non-test files under `scripts/**` live in `tsconfig.scripts.json`, which keeps
+the base project's strict settings — they are maintenance tools run against
+production. `scripts/**/*.test.ts` and `vitest.config.ts` are in
+`tsconfig.tests.json` with the relaxations mock-heavy test code needs.
+
 What it does **not** cover, so don't read the green as total:
 
-- `scripts/**` — outside all three tsconfig projects. `vitest.config.ts` runs
-  `scripts/**/*.test.ts` as tests, so those files are executed by CI but never
-  typechecked. 13 real errors are sitting there today (#1729).
 - `apps/*/vite.config.ts` — reachable only through a project reference, and
   plain `tsc --noEmit` does not build references (that needs `tsc -b`).
 
