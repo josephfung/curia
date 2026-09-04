@@ -2,8 +2,11 @@
  * Helpers for dispatcher-relayed outbound replies blocked by the content filter (#1355).
  * When an agent.response is auto-sent via outbound.message and the gateway blocks it,
  * the agent turn is already over — these utilities support a bounded rewrite retry
- * and a salvage-draft fallback on final failure.
+ * and a salvage-draft fallback on final failure. The rewrite prompt also offers
+ * NO_REPLY so the agent can abandon send instead of polishing a blocked draft (#1732).
  */
+
+import { NO_REPLY_SENTINEL } from './no-reply.js';
 
 /** Maximum rewrite retries after the first content-filter block (2 retries → 3 send attempts). */
 export const CONTENT_BLOCK_MAX_RETRIES = 2;
@@ -39,20 +42,36 @@ export function summarizeBlockFindings(findings: Array<{ rule: string; detail: s
     .join('\n');
 }
 
-/** Task body instructing the agent to rewrite a blocked dispatcher-relayed reply. */
+/** Task body instructing the agent to rewrite a blocked dispatcher-relayed reply, or abandon send. */
 export function buildContentBlockRewriteTask(
   blockedContent: string,
   findings: Array<{ rule: string; detail: string }>,
 ): string {
   const reasonSummary = summarizeBlockFindings(findings);
   const ruleNames = findings.map((f) => f.rule).join(', ');
-  return [
+  const audienceLeak = findings.some((f) => f.rule === 'llm-judge-audience-leak');
+  const lines = [
     '[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]',
     '',
-    'Your previous reply was blocked before delivery. Rewrite it to satisfy the findings below,',
-    'applying your normal audience and voice rules. Return ONLY the corrected reply text —',
-    'no preamble about the block.',
+    'Your previous reply was blocked before delivery. You have two options:',
     '',
+    '1. Rewrite it to satisfy the findings below, applying your normal audience and voice rules.',
+    '   Return ONLY the corrected reply text — no preamble about the block.',
+    '',
+    `2. Return exactly ${NO_REPLY_SENTINEL} (and nothing else) if this message should not have been`,
+    '   addressed to this recipient at all — for example an audience-leak finding, an automated',
+    '   notification that needs no acknowledgement, or anything whose correct outcome is silence.',
+    `   ${NO_REPLY_SENTINEL} abandons delivery: no send, no salvage draft, no further retry.`,
+    '',
+  ];
+  if (audienceLeak) {
+    lines.push(
+      'This block includes an audience-leak finding: the draft was not appropriate for this',
+      `recipient. Prefer ${NO_REPLY_SENTINEL} unless you can rewrite a message that is genuinely for them.`,
+      '',
+    );
+  }
+  lines.push(
     `Block reason: ${reasonSummary}`,
     `Rules triggered: ${ruleNames}`,
     '',
@@ -60,5 +79,6 @@ export function buildContentBlockRewriteTask(
     '---',
     blockedContent,
     '---',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }

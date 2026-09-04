@@ -1,6 +1,6 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import {
@@ -23,6 +23,7 @@ import {
   isContentFilterRewriteable,
   type RelayOutboundContext,
 } from './content-block-relay.js';
+import { isNoReplyContent } from './no-reply.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
 function redactSenderId(value: string): string {
@@ -94,7 +95,8 @@ export interface DispatcherConfig {
  * The Dispatcher connects the channel layer to the agent layer via the bus.
  * It does two things:
  * 1. Converts inbound.message → agent.task (routes to Coordinator)
- * 2. Converts agent.response → outbound.message (routes back to the originating channel)
+ * 2. Converts agent.response → outbound.message (or outbound.no_reply when the
+ *    agent returns the NO_REPLY sentinel — silence is a first-class outcome)
  *
  * It does NOT hold a reference to the agent runtime — all communication is
  * through bus events. This enforces the architectural boundary and ensures
@@ -989,6 +991,35 @@ export class Dispatcher {
         parentEventId: event.id,
       });
       await this.bus.publish('dispatch', suppressed);
+      this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+      return;
+    }
+
+    // Explicit no-reply (#1732): the agent declined to send. Honour it before publishing
+    // outbound.message so silence is representable — including on the content-block rewrite
+    // path, where returning NO_REPLY abandons delivery without a salvage draft.
+    if (isNoReplyContent(event.payload.content)) {
+      const reason = (routing.contentBlockRetryAttempt ?? 0) > 0
+        ? 'content_block_abandoned'
+        : 'agent_declined';
+      this.logger.info(
+        {
+          agentId: event.payload.agentId,
+          conversationId: routing.conversationId,
+          routingTaskId: event.parentEventId,
+          reason,
+        },
+        'Dispatcher no-reply: agent declined outbound delivery',
+      );
+      const noReply = createOutboundNoReply({
+        routingTaskId: event.parentEventId!,
+        agentId: event.payload.agentId,
+        conversationId: routing.conversationId,
+        channelId: routing.channelId,
+        reason,
+        parentEventId: event.id,
+      });
+      await this.bus.publish('dispatch', noReply);
       this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
       return;
     }

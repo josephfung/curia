@@ -200,6 +200,23 @@ same routing task. The suppression emits an `outbound.suppressed_duplicate` audi
 reason `'human_reply_already_sent'`, preventing the principal (or an external recipient) from
 receiving the same content twice.
 
+### Explicit no-reply (#1732)
+
+Silence is a first-class outcome. If an agent's entire `agent.response` content is the sentinel
+`NO_REPLY` (optional surrounding whitespace or a single layer of quotes/backticks),
+`handleAgentResponse` publishes `outbound.no_reply` instead of `outbound.message`. Nothing is
+delivered. This is distinct from `outbound.suppressed_duplicate`: the reply-lock fires after a
+human-facing skill already succeeded; no-reply means this turn sent nothing.
+
+The content-block rewrite prompt (#1355) offers the same sentinel as an abandon-send option. When
+the agent returns `NO_REPLY` on a rewrite task, the dispatcher does not salvage a draft and does
+not retry. An `llm-judge-audience-leak` block that the agent abandons therefore produces no
+delivered message.
+
+Use `NO_REPLY` when nothing should go out (automated notification, archive-only FYI). Do not
+narrate that decision — narration becomes the outbound payload. The coordinator prompt documents
+the mechanism; the dispatcher is what honours it.
+
 ### Triage watermark moved to code (#866)
 
 The ceo-inbox triage `last_processed_at` watermark is managed in code (via `ConfigStore`) rather

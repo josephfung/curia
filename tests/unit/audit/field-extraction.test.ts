@@ -86,4 +86,26 @@ describe('extractStructuredFields', () => {
       logger,
     ).target_id).toBe('email-send');
   });
+
+  it('maps outbound.no_reply as suppress/success on the conversation', () => {
+    expect(extractStructuredFields(
+      'outbound.no_reply',
+      {
+        routingTaskId: 'task-1',
+        agentId: 'coordinator',
+        conversationId: 'email:thread-abc',
+        channelId: 'email',
+        reason: 'agent_declined',
+      },
+      'evt-6',
+      logger,
+    )).toEqual({
+      action: 'suppress',
+      outcome: 'success',
+      target_type: 'conversation',
+      target_id: 'email:thread-abc',
+      initiator_type: 'system',
+      initiator_id: 'dispatch',
+    });
+  });
 });

@@ -50,6 +50,7 @@ The audit logger extracts structured fields from each event payload before INSER
 | `agent.task` | `delegate` | `pending` | `agent` / agentId | `system` / `dispatch` |
 | `agent.response` | `respond` | `success` | `conversation` / conversationId | `agent` / agentId |
 | `outbound.message` | `send` | `success` | `conversation` / conversationId | `system` / `dispatch` |
+| `outbound.no_reply` | `suppress` | `success` | `conversation` / conversationId | `system` / `dispatch` |
 | `outbound.delivered` | `deliver` | `success` | `conversation` / conversationId | `channel` / channelId |
 | `tool.invoke` | `execute` | `pending` | `skill` / toolName | `agent` / agentId |
 | `tool.result` | `execute` | from `result.success` | `skill` / toolName | `agent` / agentId |
@@ -88,6 +89,7 @@ A controlled vocabulary for the `action` column. Inspired by CADF and FHIR Audit
 | `delegate` | Task routed to an agent |
 | `respond` | Agent produced a response |
 | `send` | Outbound message delivered |
+| `suppress` | Outbound delivery explicitly declined (`NO_REPLY`) or otherwise withheld by policy |
 | `receive` | Inbound message accepted |
 | `resolve` | Identity or contact resolution attempted |
 | `hold` | Message held pending human review |
