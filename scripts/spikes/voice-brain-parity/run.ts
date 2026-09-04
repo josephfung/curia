@@ -902,11 +902,15 @@ function aggregateVariance(reps: RepSummary[], arms: ArmId[]) {
     byCategory: {},
   };
 
-  const pairs: Array<{ key: string; a: ArmId; b: ArmId }> = [
+  // The annotation has to sit on the array literal, not on the result of .filter():
+  // with it on `pairs`, the literal gets no contextual type, the arm names widen to
+  // `string`, and the assignment back to ArmId fails.
+  const allPairs: Array<{ key: string; a: ArmId; b: ArmId }> = [
     { key: 'shared-hardening−baseline', a: 'shared-hardening', b: 'baseline' },
     { key: 'shared-hardening−full-consolidation', a: 'shared-hardening', b: 'full-consolidation' },
     { key: 'baseline−full-consolidation', a: 'baseline', b: 'full-consolidation' },
-  ].filter(p => arms.includes(p.a) && arms.includes(p.b));
+  ];
+  const pairs = allPairs.filter(p => arms.includes(p.a) && arms.includes(p.b));
 
   for (const { key, a, b } of pairs) {
     const checkDeltas = reps.map(rep => {
