@@ -78,7 +78,10 @@ Two patterns that pass local checks but fail CI regularly:
 
 ### Logging
 - pino for all logging (structured JSON)
-- No `console.log` anywhere — enforced by lint rule
+- No `console.log` in backend code (`src/`, `tests/`) — enforced by the `no-console` lint rule
+- The browser apps under `apps/` are exempt: pino is a Node logger, so `no-console` is
+  deliberately not set on their `eslint.config.js` block. Antfarm has `clientWarn`
+  (`apps/antfarm/src/client-log.ts`); the console app uses `console.error` directly
 - Log levels: error, warn, info, debug
 
 ### Testing

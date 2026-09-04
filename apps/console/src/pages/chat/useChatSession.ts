@@ -158,8 +158,10 @@ export function useChatSession(): ChatSession {
   // Run once on mount; conversationId.current is a ref, not a reactive dep.
   }, []);
 
-  // Auto-send the onboarding kickoff message once on first mount.
-  // send is captured from this render; deps omitted intentionally (one-shot).
+  // Auto-send the onboarding kickoff message once on first mount. The one-shot guarantee comes
+  // from the pendingKickoff ref below, not from the empty dep array. `send` reads only refs and
+  // uses functional setState, so it holds no render-varying value and exhaustive-deps does not
+  // flag its omission — no disable directive needed here.
   useEffect(() => {
     if (!pendingKickoff.current) return;
     void send(KICKOFF_TEXT);
