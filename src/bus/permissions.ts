@@ -35,6 +35,9 @@ import type { Layer, EventType } from './events.js';
 //          subscribes to tool.result to detect the reply and set the reply-lock flag.
 // #1732 (dispatcher no-reply): dispatch layer publishes outbound.no_reply when an
 //          agent.response is the NO_REPLY sentinel — silence is auditable, not a drop.
+// #1733 (dispatcher relay Gate C): dispatch layer publishes authorization.decision for
+//          Gate C allow/escalate on the auto-reply relay; subscribes to authorization.decision
+//          (and tool.result failures) so a reply-skill Gate C escalate suppresses the relay.
 // #972 (secret-capture resume): system layer publishes secret.captured when a one-time capture
 //          link is redeemed (carries name/routing only, never the value); the resume subscriber
 //          and audit logger subscribe via the system layer.
@@ -63,12 +66,14 @@ const publishAllowlist: Record<Layer, Set<EventType>> = {
 // tool.result subscribe for 'dispatch': used by Dispatcher reply-lock (#847) to detect successful
 //          email-reply / email-send calls and set humanReplySent on the routing entry before
 //          handleAgentResponse fires.
+// authorization.decision subscribe for 'dispatch': used by Dispatcher (#1733) to mark
+//          replySkillGateCBlocked when Gate C escalates a reply skill on a routed task.
 // #1355 (content-block relay retry): dispatch layer subscribes to outbound.blocked and
 //          outbound.delivered to retry or salvage dispatcher-relayed replies blocked by
 //          the content filter after the agent turn has ended.
 const subscribeAllowlist: Record<Layer, Set<EventType>> = {
   channel: new Set(['outbound.message', 'outbound.blocked', 'outbound.notification', 'message.rejected']),
-  dispatch: new Set(['inbound.message', 'inbound.reaction', 'agent.response', 'agent.error', 'agent.discuss', 'tool.result', 'outbound.blocked', 'outbound.delivered', 'autonomy.send_blocked']),
+  dispatch: new Set(['inbound.message', 'inbound.reaction', 'agent.response', 'agent.error', 'agent.discuss', 'tool.result', 'authorization.decision', 'outbound.blocked', 'outbound.delivered', 'autonomy.send_blocked']),
   agent: new Set(['agent.task', 'tool.result']),
   execution: new Set(['tool.invoke']),
   system: new Set(['inbound.message', 'inbound.reaction', 'agent.task', 'agent.response', 'agent.error', 'outbound.message', 'outbound.blocked', 'outbound.delivered', 'export.delivered', 'outbound.pii_redacted', 'outbound.suppressed_duplicate', 'outbound.no_reply', 'outbound.notification', 'tool.invoke', 'tool.result', 'memory.store', 'memory.query', 'memory.decay_warning', 'contact.resolved', 'contact.unknown', 'message.rejected', 'schedule.created', 'schedule.fired', 'schedule.suspended', 'schedule.recovered', 'schedule.drift_paused', 'config.change', 'contact.duplicate_detected', 'contact.merged', 'contact.elevated', 'agent.discuss', 'conversation.checkpoint', 'checkpoint.extraction_skipped', 'llm.call', 'llm.error', 'embedding.call', 'embedding.error', 'context.budget', 'model.fallback', 'human.decision', 'authorization.decision', 'secret.accessed', 'secret.captured', 'autonomy.tool_blocked', 'autonomy.send_blocked', 'channel.poll', 'channel.stalled', 'channel.disconnected', 'channel.reconnect', 'task.created', 'task.updated', 'task.completed', 'task.resumable_throughput', 'voice.session.started', 'voice.session.ended']),

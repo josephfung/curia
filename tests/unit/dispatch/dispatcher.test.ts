@@ -22,14 +22,19 @@ const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model
  * Creates a mock ContactResolver that returns a resolved contact with the given trust inputs.
  * Used to exercise trust scoring paths without a real database.
  */
-function makeResolverWithContact(opts: { contactConfidence: number; tier?: ContactTier; kind?: ContactKind }): ContactResolver {
+function makeResolverWithContact(opts: {
+  contactConfidence: number;
+  tier?: ContactTier;
+  kind?: ContactKind;
+  systemRole?: 'principal' | 'agent' | 'system' | null;
+}): ContactResolver {
   return {
     resolve: async (_channel: string, _senderId: string) => ({
       resolved: true,
       contactId: 'test-contact-id',
       displayName: 'Test Contact',
       role: null,
-      systemRole: null,
+      systemRole: opts.systemRole ?? null,
       tier: opts.tier ?? 'known',
       kind: opts.kind ?? 'person',
       verified: true,
@@ -80,8 +85,17 @@ describe('Dispatcher', () => {
     });
     coordinator.register();
 
-    // Register dispatcher (subscribes to inbound.message + agent.response)
-    const dispatcher = new Dispatcher({ bus, logger });
+    // Default harness resolves the CLI sender as the principal so Gate C on the
+    // relay (#1733) allows delivery — mirroring production CLI/principal turns.
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: makeResolverWithContact({
+        contactConfidence: 1,
+        tier: 'principal',
+        systemRole: 'principal',
+      }),
+    });
     dispatcher.register();
 
     // Capture outbound messages
@@ -143,7 +157,19 @@ describe('Dispatcher.registerExternalTaskRouting (#972 resume path)', () => {
       parentEventId: 'task-evt-9',
     });
     // Seed routing BEFORE publishing the synthetic task (mirrors the resume subscriber).
-    dispatcher.registerExternalTaskRouting(task.id, { channelId: 'email', conversationId: 'conv-1', senderId: 'ceo' });
+    // Principal originator so Gate C on the relay allows (#1733) — resume is CEO-facing.
+    dispatcher.registerExternalTaskRouting(task.id, {
+      channelId: 'email',
+      conversationId: 'conv-1',
+      senderId: 'ceo',
+      originator: {
+        contactId: 'principal-1',
+        systemRole: 'principal',
+        channel: 'email',
+        initiatedAt: new Date().toISOString(),
+        tier: 'principal',
+      },
+    });
     await bus.publish('system', task);
 
     expect(outbound).toHaveLength(1);
@@ -1075,7 +1101,17 @@ describe('Dispatcher message size limit', () => {
    */
   function makeDispatcher(bus: EventBus, maxMessageBytes: number) {
     const logger = createLogger('error');
-    const dispatcher = new Dispatcher({ bus, logger, maxMessageBytes });
+    // Principal resolver so Gate C on the relay allows delivery (#1733).
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      maxMessageBytes,
+      contactResolver: makeResolverWithContact({
+        contactConfidence: 1,
+        tier: 'principal',
+        systemRole: 'principal',
+      }),
+    });
     dispatcher.register();
     return dispatcher;
   }
@@ -1240,7 +1276,15 @@ describe('Dispatcher — outbound.message recipientId', () => {
     });
     coordinator.register();
 
-    const dispatcher = new Dispatcher({ bus, logger });
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: makeResolverWithContact({
+        contactConfidence: 1,
+        tier: 'principal',
+        systemRole: 'principal',
+      }),
+    });
     dispatcher.register();
 
     const outboundEvents: OutboundMessageEvent[] = [];

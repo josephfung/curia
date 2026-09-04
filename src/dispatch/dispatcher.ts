@@ -1,5 +1,5 @@
 import type { EventBus } from '../bus/bus.js';
-import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent } from '../bus/events.js';
+import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent, AuthorizationDecisionEvent } from '../bus/events.js';
 import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createOutboundNotification, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
@@ -7,7 +7,7 @@ import {
   summarizeAuthorizationDecision,
   formatAuthorizationSubjectSummary,
 } from '../contacts/authorization.js';
-import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, PrincipalEmailRef } from '../contacts/types.js';
+import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, PrincipalEmailRef, TaskOriginator } from '../contacts/types.js';
 import { isAutomatedKind, resolvePrincipalEmail } from '../contacts/types.js';
 import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
 import type { InboundScanner } from './inbound-scanner.js';
@@ -24,6 +24,14 @@ import {
   type RelayOutboundContext,
 } from './content-block-relay.js';
 import { classifyNoReply, containsStandaloneNoReplyToken } from './no-reply.js';
+import {
+  decideRelayGateC,
+  isGateCBlockError,
+  RELAY_ACTION_RISK,
+  RELAY_GATE_C_ACTION,
+  REPLY_SKILLS_GATE_C,
+} from './relay-gate-c.js';
+import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
 function redactSenderId(value: string): string {
@@ -95,6 +103,12 @@ export interface DispatcherConfig {
    * absent/empty, principal no-reply is still honoured but the CEO is not emailed.
    */
   ceoEmail?: string | PrincipalEmailRef;
+  /**
+   * Approval trigger for Gate C escalations on the dispatcher relay path (#1733).
+   * When absent, the relay still blocks on escalate but does not create a
+   * pending_approval row (same fail-open-on-wiring as the execution layer).
+   */
+  approvalTrigger?: ApprovalTriggerService;
 }
 
 /**
@@ -134,6 +148,13 @@ export class Dispatcher {
       /** Set to true when a human-facing reply skill (email-reply, email-send) succeeds
        *  during this task. handleAgentResponse suppresses outbound.message when true. */
       humanReplySent: boolean;
+      /**
+       * Set when a reply skill on this turn was blocked by Gate C (#1733). The relay
+       * must not deliver — denying the audited path must not open an ungated one.
+       */
+      replySkillGateCBlocked: boolean;
+      /** Originator stamped at inbound — used for Gate C on the relay path (#1733). */
+      originator?: TaskOriginator;
       /** Rewrite attempts for dispatcher-relayed replies blocked by the content filter (#1355). */
       contentBlockRetryAttempt?: number;
       /** Salvage-only publish — save as draft instead of sending (#1355). */
@@ -162,6 +183,7 @@ export class Dispatcher {
   /** Contact service for automatic tier elevation (issue #951). */
   private contactService?: import('../contacts/contact-service.js').ContactService;
   private ceoEmail?: string | PrincipalEmailRef;
+  private approvalTrigger?: ApprovalTriggerService;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -179,6 +201,7 @@ export class Dispatcher {
     this._outboundContextService = config.outboundContextService;
     this.contactService = config.contactService;
     this.ceoEmail = config.ceoEmail;
+    this.approvalTrigger = config.approvalTrigger;
   }
 
   /**
@@ -200,6 +223,7 @@ export class Dispatcher {
       senderId: string;
       accountId?: string;
       liveTurn?: boolean;
+      originator?: TaskOriginator;
     },
   ): void {
     this.taskRouting.set(taskEventId, {
@@ -208,7 +232,9 @@ export class Dispatcher {
       senderId: routing.senderId,
       accountId: routing.accountId,
       humanReplySent: false,
+      replySkillGateCBlocked: false,
       liveTurn: routing.liveTurn,
+      originator: routing.originator,
     });
   }
 
@@ -238,8 +264,16 @@ export class Dispatcher {
 
     // tool.result → reply-lock: detect successful email-reply / email-send calls so
     // handleAgentResponse can suppress the duplicate outbound.message. See #847.
+    // Also detects Gate C blocks on reply skills so the relay cannot deliver (#1733).
     this.bus.subscribe('tool.result', 'dispatch', async (event) => {
       await this.handleToolResult(event as ToolResultEvent);
+    });
+
+    // authorization.decision → mark replySkillGateCBlocked when Gate C escalates a
+    // reply skill on a routed task (#1733). Covers the direct-coordinator case where
+    // taskEventId matches the routing key; tool.result covers conversationId match.
+    this.bus.subscribe('authorization.decision', 'dispatch', async (event) => {
+      await this.handleAuthorizationDecision(event as AuthorizationDecisionEvent);
     });
 
     // outbound.blocked → bounded rewrite retry or salvage draft for dispatcher-relayed replies (#1355)
@@ -874,6 +908,8 @@ export class Dispatcher {
       senderId: payload.senderId,
       accountId: payload.accountId,
       humanReplySent: false,
+      replySkillGateCBlocked: false,
+      originator,
       liveTurn,
     });
 
@@ -909,8 +945,38 @@ export class Dispatcher {
   private async handleToolResult(event: ToolResultEvent): Promise<void> {
     const { toolName, conversationId, result } = event.payload;
 
+    if (!REPLY_SKILLS_GATE_C.has(toolName)) return;
+
+    // Gate C block on a reply skill (#1733): mark every routing entry for this
+    // conversation so the relay cannot deliver. Match by conversationId (same as
+    // the success reply-lock) so delegated specialists that share the inbound
+    // conversation still suppress the coordinator's relay.
+    if (!result.success) {
+      if (isGateCBlockError(result.error)) {
+        let marked = false;
+        for (const [taskId, routing] of this.taskRouting.entries()) {
+          if (routing.conversationId === conversationId) {
+            routing.replySkillGateCBlocked = true;
+            marked = true;
+            this.logger.info(
+              { taskId, conversationId, toolName },
+              'Dispatcher Gate C: reply skill escalated — relay will be suppressed',
+            );
+          }
+        }
+        if (!marked) {
+          this.logger.debug(
+            { toolName, conversationId, routingMapSize: this.taskRouting.size },
+            'Dispatcher Gate C: reply skill escalated but no routing entry matched',
+          );
+        }
+      }
+      return;
+    }
+
+    // Success path: reply-lock (#847). Only email-reply / email-send return { to }
+    // today; other reply skills in REPLY_SKILLS_GATE_C are Gate C–tracked only.
     if (toolName !== 'email-reply' && toolName !== 'email-send') return;
-    if (!result.success) return;
 
     // Extract outbound recipients from result.data.
     // email-reply returns { to: string } (single address).
@@ -977,6 +1043,27 @@ export class Dispatcher {
     }
   }
 
+  /**
+   * When Gate C escalates a reply skill, mark the matching routing entry so the
+   * relay cannot deliver (#1733). taskEventId match covers the direct-coordinator
+   * path; conversationId match via tool.result covers delegated specialists.
+   */
+  private async handleAuthorizationDecision(event: AuthorizationDecisionEvent): Promise<void> {
+    const { gate, decision, action, taskEventId } = event.payload;
+    if (gate !== 'gate_c' || decision !== 'escalate') return;
+    if (!action || !REPLY_SKILLS_GATE_C.has(action)) return;
+    if (!taskEventId) return;
+
+    const routing = this.taskRouting.get(taskEventId);
+    if (!routing) return;
+
+    routing.replySkillGateCBlocked = true;
+    this.logger.info(
+      { taskEventId, action, conversationId: routing.conversationId },
+      'Dispatcher Gate C: authorization.decision escalate on reply skill — relay will be suppressed',
+    );
+  }
+
   private async handleAgentResponse(event: AgentResponseEvent): Promise<void> {
     const routing = event.parentEventId
       ? this.taskRouting.get(event.parentEventId)
@@ -1034,6 +1121,74 @@ export class Dispatcher {
       return;
     }
 
+    // Gate C on the relay path (#1733): a reply skill escalate must not divert onto
+    // an ungated auto-send, and the relay itself is subject to the same tier policy
+    // as an equivalent medium-risk reply-to-sender skill.
+    if (routing.replySkillGateCBlocked) {
+      this.logger.info(
+        {
+          agentId: event.payload.agentId,
+          conversationId: routing.conversationId,
+          routingTaskId: event.parentEventId,
+          channelId: routing.channelId,
+        },
+        'Dispatcher Gate C: suppressing relay — reply skill already escalated on this turn',
+      );
+      // Do not create a second approval — the skill path already requested one.
+      this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+      return;
+    }
+
+    const gateOutcome = decideRelayGateC(routing.originator);
+    if (gateOutcome.kind === 'decide') {
+      const audited = await this.publishRelayGateCDecision({
+        decision: gateOutcome.decision,
+        tier: gateOutcome.tier,
+        originator: routing.originator,
+        channelId: routing.channelId,
+        agentId: event.payload.agentId,
+        taskEventId: event.parentEventId!,
+        parentEventId: event.id,
+      });
+      if (!audited) {
+        // Fail closed: cannot prove the authorization decision was recorded.
+        this.logger.warn(
+          {
+            agentId: event.payload.agentId,
+            conversationId: routing.conversationId,
+            routingTaskId: event.parentEventId,
+            decision: gateOutcome.decision,
+          },
+          'Dispatcher Gate C: authorization.decision publish failed — suppressing relay (fail-closed)',
+        );
+        this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+        return;
+      }
+
+      if (gateOutcome.decision === 'escalate') {
+        this.logger.info(
+          {
+            agentId: event.payload.agentId,
+            conversationId: routing.conversationId,
+            routingTaskId: event.parentEventId,
+            tier: gateOutcome.tier,
+            reason: gateOutcome.reason,
+          },
+          'Dispatcher Gate C: relay escalated — withholding outbound.message',
+        );
+        await this.requestRelayGateCApproval({
+          taskEventId: event.parentEventId!,
+          conversationId: routing.conversationId,
+          channelId: routing.channelId,
+          senderId: routing.senderId,
+          content: event.payload.content,
+          tier: gateOutcome.tier,
+        });
+        this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+        return;
+      }
+    }
+
     // Publish outbound.message to the bus — the email adapter will pick it up
     // and route it through OutboundGateway (blocked-contact check + content filter).
     // No filter logic lives here anymore; it all runs inside the gateway.
@@ -1064,6 +1219,7 @@ export class Dispatcher {
         content: event.payload.content,
         contentBlockRetryAttempt: routing.contentBlockRetryAttempt ?? 0,
         liveTurn: routing.liveTurn,
+        originator: routing.originator,
       });
     }
 
@@ -1072,6 +1228,104 @@ export class Dispatcher {
     // Schedule a checkpoint for this conversation — resets the debounce timer if
     // already running, so only fires after a full window of inactivity.
     this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+  }
+
+  /**
+   * Publish authorization.decision for a Gate C allow/escalate on the relay path (#1733).
+   * Returns false when the write-ahead publish rejects so the caller can fail closed.
+   */
+  private async publishRelayGateCDecision(args: {
+    decision: 'allow' | 'escalate';
+    tier: import('../contacts/types.js').ContactTier | 'unresolved';
+    originator: TaskOriginator | undefined;
+    channelId: string;
+    agentId: string;
+    taskEventId: string;
+    parentEventId: string;
+  }): Promise<boolean> {
+    const contactId = args.originator?.contactId;
+    const channel = args.originator?.channel ?? args.channelId;
+    try {
+      await this.bus.publish('dispatch', createAuthorizationDecision({
+        decision: args.decision,
+        gate: 'gate_c',
+        contactId,
+        tier: args.tier,
+        channel,
+        action: RELAY_GATE_C_ACTION,
+        subjectSummary: formatAuthorizationSubjectSummary({
+          decision: args.decision,
+          gate: 'gate_c',
+          contactId,
+          tier: args.tier,
+          channel,
+          action: RELAY_GATE_C_ACTION,
+        }),
+        agentId: args.agentId,
+        taskEventId: args.taskEventId,
+        parentEventId: args.parentEventId,
+        sourceLayer: 'dispatch',
+      }));
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        { err, taskEventId: args.taskEventId, decision: args.decision },
+        'Dispatcher Gate C: failed to publish authorization.decision',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Create (or join) a pending approval when the relay itself escalates (#1733).
+   * Uses toolName dispatcher-relay so a prior email-reply approval on the same
+   * task is a different row — but when replySkillGateCBlocked is set we never
+   * reach here. Dedup inside ApprovalTriggerService still collapses identical
+   * relay re-requests on the same task + payload.
+   */
+  private async requestRelayGateCApproval(args: {
+    taskEventId: string;
+    conversationId: string;
+    channelId: string;
+    senderId: string;
+    content: string;
+    tier: import('../contacts/types.js').ContactTier | 'unresolved';
+  }): Promise<void> {
+    if (!this.approvalTrigger) return;
+    try {
+      const result = await this.approvalTrigger.request({
+        taskId: args.taskEventId,
+        conversationId: args.conversationId,
+        toolName: RELAY_GATE_C_ACTION,
+        actionRisk: RELAY_ACTION_RISK,
+        input: {
+          channelId: args.channelId,
+          to: args.senderId,
+          body: args.content,
+          source: RELAY_GATE_C_ACTION,
+        },
+        currentScore: 0,
+        requiredScore: 0,
+        dedupeAnyPendingOnTask: true,
+        reason:
+          `Curia wanted to relay a reply on ${args.channelId}, but the initiating ` +
+          `contact's tier ('${args.tier}') requires approval for ${RELAY_ACTION_RISK}-risk actions.`,
+      });
+      if (!result.created) {
+        this.logger.info(
+          {
+            taskEventId: args.taskEventId,
+            existingShortRef: result.existingShortRef,
+          },
+          'Dispatcher Gate C: relay escalate joined existing pending approval',
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        { err, taskEventId: args.taskEventId },
+        'Dispatcher Gate C: approval trigger failed — relay still withheld',
+      );
+    }
   }
 
   /**
@@ -1120,6 +1374,8 @@ export class Dispatcher {
         senderId: ctx.senderId,
         accountId: ctx.accountId,
         humanReplySent: false,
+        replySkillGateCBlocked: false,
+        originator: ctx.originator,
         contentBlockRetryAttempt: nextAttempt,
         liveTurn: ctx.liveTurn,
         blockedDraft: ctx.content,

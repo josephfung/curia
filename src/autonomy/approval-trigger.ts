@@ -141,10 +141,27 @@ export class ApprovalTriggerService {
     /** Optional override for the CEO notification body. When absent, the default
      *  score-based message is used. Provide this for non-score gate blocks (e.g. tier gate). */
     reason?: string;
+    /**
+     * When true, treat any pending_approval on this task as a duplicate (#1733) —
+     * used by the dispatcher relay so it joins a reply-skill approval already
+     * pending on the same turn instead of creating a second request.
+     */
+    dedupeAnyPendingOnTask?: boolean;
   }): Promise<ApprovalRequestResult> {
     const { taskId, conversationId, toolName, actionRisk, input, currentScore, requiredScore } = opts;
 
     // Step 1: Dedup check
+    if (opts.dedupeAnyPendingOnTask) {
+      const anyPending = await this.actionLogRepo.findAnyPendingByTask(taskId);
+      if (anyPending) {
+        const existingShortRef = anyPending.shortRef ?? 'unknown';
+        this.logger.info(
+          { taskId, toolName, existingShortRef },
+          'approval-trigger: duplicate request — pending_approval already exists on this task',
+        );
+        return { created: false, reason: 'duplicate', existingShortRef };
+      }
+    }
     const existing = await this.actionLogRepo.findPendingByTaskAndSkill(taskId, toolName, input);
     if (existing) {
       const existingShortRef = existing.shortRef ?? 'unknown';

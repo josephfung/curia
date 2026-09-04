@@ -178,6 +178,10 @@ describe('Bus Permissions', () => {
     expect(canSubscribe('system', 'authorization.decision')).toBe(true);
   });
 
+  it('dispatch layer can subscribe to authorization.decision for relay Gate C (#1733)', () => {
+    expect(canSubscribe('dispatch', 'authorization.decision')).toBe(true);
+  });
+
   it('allows dispatch to publish outbound.no_reply and system to subscribe', () => {
     expect(canPublish('dispatch', 'outbound.no_reply')).toBe(true);
     expect(canPublish('system', 'outbound.no_reply')).toBe(true);
