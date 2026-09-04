@@ -72,13 +72,19 @@ function parseOriginator(raw: Record<string, unknown> | undefined): TaskOriginat
   ) {
     return undefined;
   }
-  return {
+  const result: TaskOriginator = {
     contactId: raw.contactId,
     systemRole: (systemRole ?? null) as SystemRole | null,
     channel: raw.channel,
     initiatedAt: raw.initiatedAt,
-    tier: (tier ?? null) as ContactTier | null | undefined,
   };
+  // Preserve absent tier as absent (don't coerce to null) so round-tripped bags
+  // match production stampOriginator shape when tier was present, and fixtures
+  // without tier stay equal to the input bag.
+  if (tier !== undefined) {
+    result.tier = tier as ContactTier | null;
+  }
+  return result;
 }
 
 /** Fail-closed originator when the capture token carried none (#1733 / #1059). */
