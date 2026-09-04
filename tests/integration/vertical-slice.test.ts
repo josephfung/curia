@@ -7,6 +7,7 @@ import type { LLMProvider } from '../../src/agents/llm/provider.js';
 const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
 import { createLogger } from '../../src/logger.js';
 import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
+import { makePrincipalContactResolver } from '../helpers/principal-contact-resolver.js';
 
 describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => {
   it('routes an inbound message through the full pipeline', async () => {
@@ -45,10 +46,13 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
     });
     coordinator.register();
 
-    // Wire up the dispatcher.
-    // register() subscribes to inbound.message AND agent.response.
-    // It converts inbound.message → agent.task, and agent.response → outbound.message.
-    const dispatcher = new Dispatcher({ bus, logger });
+    // Wire up the dispatcher with a principal resolver so Gate C on the relay
+    // (#1733) allows delivery — CLI is a principal surface in production.
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactResolver: makePrincipalContactResolver(),
+    });
     dispatcher.register();
 
     // Capture outbound messages.
@@ -86,19 +90,21 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
     expect(outbound[0]?.payload.channelId).toBe('cli');
     expect(outbound[0]?.payload.conversationId).toBe('cli:local:default');
 
-    // -- Assert the complete 6-event audit trail --
-    // This sequence is the spec-mandated message flow from 00-overview.md.
+    // -- Assert the complete 7-event audit trail --
+    // This sequence is the spec-mandated message flow from 00-overview.md,
+    // plus Gate C authorization.decision on the relay (#1733).
     // The order is guaranteed because the bus awaits each publish before returning.
     // context.budget is published after assembly, before the LLM call (#24).
     // llm.call is published inside agent task processing (between agent.task and agent.response).
-    expect(auditLog).toHaveLength(6);
+    expect(auditLog).toHaveLength(7);
     expect(auditLog.map((e) => e.type)).toEqual([
-      'inbound.message',  // 1. Channel publishes user input
-      'agent.task',       // 2. Dispatcher converts inbound.message to a task for the coordinator
-      'context.budget',   // 3. Runtime publishes context budget telemetry after assembly (#24)
-      'llm.call',         // 4. Runtime publishes LLM provenance after the API call (spec 10)
-      'agent.response',   // 5. Coordinator publishes the LLM result
-      'outbound.message', // 6. Dispatcher converts agent.response back to a channel message
+      'inbound.message',         // 1. Channel publishes user input
+      'agent.task',              // 2. Dispatcher converts inbound.message to a task for the coordinator
+      'context.budget',          // 3. Runtime publishes context budget telemetry after assembly (#24)
+      'llm.call',                // 4. Runtime publishes LLM provenance after the API call (spec 10)
+      'agent.response',          // 5. Coordinator publishes the LLM result
+      'authorization.decision',  // 6. Dispatcher Gate C allow on the relay (#1733)
+      'outbound.message',        // 7. Dispatcher converts agent.response back to a channel message
     ]);
 
     // -- Assert the causal chain is intact --
