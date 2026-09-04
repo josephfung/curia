@@ -68,7 +68,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Root `typecheck` coverage** — the script enumerated packages by hand and skipped `apps/console`, reporting success over real errors; it now runs `pnpm -r run typecheck`, and a guard test fails if a workspace package would be silently skipped. (#1726)
+- **Root `typecheck` coverage** — now recurses over every workspace package; `apps/console` was silently skipped. (#1726)
 - **`docker-publish` `:latest`** — pinned `flavor: latest=false`; a dispatched re-publish no longer moves `latest` backwards. (#1718)
 - **`docker-publish` re-publish** — the ref-dropdown form now resolves and validates its tag like the input form. (#1718)
 - **`docker-publish` dispatch** — a dispatch that would publish nothing, or name a tag from an unrelated branch, is refused. (#1718)

@@ -31,12 +31,21 @@ Always run `pnpm -C <worktree> run typecheck` (not raw `tsc --noEmit`) —
 CI uses `pnpm run typecheck` which may resolve a different tsconfig chain than
 a bare `tsc` invocation. Run this before every commit that touches `.ts` files.
 
-This one command is complete: it covers `src/`, `skills/` and `tests/` (three
-tsconfig projects) plus every workspace package under `apps/*` and `packages/*`
-via `pnpm -r run typecheck`. Nothing needs to be checked separately, and new
-workspace packages are picked up automatically — they only need their own
-`typecheck` script, which `tests/unit/workspace-typecheck-coverage.test.ts`
-enforces.
+What it covers: `src/`, `skills/` and `tests/` (three tsconfig projects) plus
+**every workspace package** under `apps/*` and `packages/*`, via `pnpm -r run
+typecheck`. No workspace package needs checking separately, and new ones are
+picked up automatically — they only need their own `typecheck` script, which
+`tests/unit/workspace-typecheck-coverage.test.ts` requires of any package
+shipping `.ts` sources (`pnpm -r` silently *skips* a package that lacks the
+script, so that test is what keeps the skip loud).
+
+What it does **not** cover, so don't read the green as total:
+
+- `scripts/**` — outside all three tsconfig projects. `vitest.config.ts` runs
+  `scripts/**/*.test.ts` as tests, so those files are executed by CI but never
+  typechecked. 13 real errors are sitting there today (#1729).
+- `apps/*/vite.config.ts` — reachable only through a project reference, and
+  plain `tsc --noEmit` does not build references (that needs `tsc -b`).
 
 Use `-C`, not `--prefix`: for pnpm (unlike npm) `--prefix` sets only the install
 location, so workspace resolution still comes from the process CWD and can
