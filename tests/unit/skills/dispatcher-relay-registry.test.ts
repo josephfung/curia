@@ -59,8 +59,8 @@ describe('dispatcher-relay registry enrollment (#1733)', () => {
         body: 'Approved body',
         conversationId: 'email:thread-1',
       },
-      'approve-action',
-      { humanApproved: true, taskEventId: 'task-approve-1' },
+      { contactId: 'primary-user', role: 'ceo', channel: 'cli' },
+      { humanApproved: true, taskEventId: 'task-approve-1', agentId: 'approve-action' },
     );
 
     expect(result.success).toBe(true);
