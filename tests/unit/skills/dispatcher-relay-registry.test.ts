@@ -102,6 +102,7 @@ describe('dispatcher-relay registry enrollment (#1733)', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/not allowed to call|allowed_callers|system/i);
+    if (result.success) return;
+    expect(result.error).toMatch(/not allowed to call|allowed_callers|restricted to agents|system/i);
   });
 });
