@@ -219,7 +219,11 @@ Silence is a first-class outcome. Dispatch publishes `outbound.no_reply` instead
   non-principal auto-generated mail (so bounce/payment/security/deadline can still
   escalate) but suppresses the relay. Principal-originated mail that merely *looks*
   auto-generated (e.g. a forwarded OOO) is dispatched normally. Body-keyword
-  "carve-outs" do not select a privileged path at dispatch.
+  "carve-outs" do not select a privileged path at dispatch. When the agent
+  returns `NO_REPLY`, the audit reason is `agent_declined` (preamble worked);
+  when it narrates a reply the backstop catches, the reason is `auto_generated`
+  with the narrated body on `abandonedContent` — so "how often does the
+  coordinator ignore the preamble" is answerable from the audit log.
 
 This is distinct from `outbound.suppressed_duplicate`: the reply-lock fires after a
 human-facing skill already succeeded; no-reply means this turn sent nothing.
