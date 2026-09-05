@@ -260,12 +260,15 @@ interface OutboundNoReplyPayload {
    * `empty_response` = whitespace-only content (a blank email is not a reply).
    * `ambiguous_decline` = near-miss sentinel (fenced token plus prose, or the
    * token appearing as a standalone word) — send suppressed, draft salvaged.
-   * `auto_generated` = inbound was message-derived auto-generated mail; the
-   * agent ran (so escalation remains possible) but the dispatcher relay is
-   * suppressed so a narrated closing cannot email the sender (#1734).
+   * `auto_generated` = inbound was message-derived auto-generated mail and the
+   * agent produced relay text instead of declining; the dispatcher suppressed
+   * delivery and recorded the narrated body on `abandonedContent` so audit can
+   * distinguish preamble compliance (`agent_declined`) from backstop catches
+   * (#1734). Agent always ran — `routingTaskId` / `agentId` are real.
    */
   reason: 'agent_declined' | 'content_block_abandoned' | 'empty_response' | 'ambiguous_decline' | 'auto_generated';
-  /** Raw text preserved for recoverability (blocked draft or near-miss body). */
+  /** Raw text preserved for recoverability (blocked draft, near-miss body, or
+   *  narrated auto-gen reply caught by the relay backstop). */
   abandonedContent?: string;
 }
 
