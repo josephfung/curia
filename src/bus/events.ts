@@ -248,7 +248,12 @@ interface OutboundSuppressedDuplicatePayload {
 // on this turn, whereas the reply-lock fires after a human-facing skill already succeeded.
 // See #1732.
 interface OutboundNoReplyPayload {
-  routingTaskId: string;   // agent.task event ID whose routing entry was skipped
+  /**
+   * agent.task event ID whose routing entry was skipped — or, when
+   * `reason === 'auto_generated'` and no task was created, the inbound.message
+   * event id (#1734).
+   */
+  routingTaskId: string;
   agentId: string;
   conversationId: string;
   channelId: string;
@@ -258,8 +263,12 @@ interface OutboundNoReplyPayload {
    * `empty_response` = whitespace-only content (a blank email is not a reply).
    * `ambiguous_decline` = near-miss sentinel (fenced token plus prose, or the
    * token appearing as a standalone word) — send suppressed, draft salvaged.
+   * `auto_generated` = inbound mail classified as machine-generated with no
+   * actionable carve-out; dispatch skipped the agent and sent nothing (#1734).
+   * When reason is `auto_generated`, `routingTaskId` is the inbound.message
+   * event id (no agent.task was created).
    */
-  reason: 'agent_declined' | 'content_block_abandoned' | 'empty_response' | 'ambiguous_decline';
+  reason: 'agent_declined' | 'content_block_abandoned' | 'empty_response' | 'ambiguous_decline' | 'auto_generated';
   /** Raw text preserved for recoverability (blocked draft or near-miss body). */
   abandonedContent?: string;
 }

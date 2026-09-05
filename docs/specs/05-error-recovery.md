@@ -200,7 +200,7 @@ same routing task. The suppression emits an `outbound.suppressed_duplicate` audi
 reason `'human_reply_already_sent'`, preventing the principal (or an external recipient) from
 receiving the same content twice.
 
-### Explicit no-reply (#1732)
+### Explicit no-reply (#1732, #1734)
 
 Silence is a first-class outcome. Dispatch publishes `outbound.no_reply` instead of
 `outbound.message` when:
@@ -212,7 +212,12 @@ Silence is a first-class outcome. Dispatch publishes `outbound.no_reply` instead
   a control token), or
 - the response is whitespace-only (`empty_response` — a blank email is not a reply), or
 - the response is a near-miss (starts with the token plus prose, or contains it as a
-  standalone word) — `ambiguous_decline`, send suppressed, email draft salvaged.
+  standalone word) — `ambiguous_decline`, send suppressed, email draft salvaged, or
+- inbound email was classified as **auto-generated** from message signals (headers,
+  calendar `method=REPLY`, OOO subject, etc.) with no actionable carve-out
+  (`auto_generated`) — dispatch skips `agent.task` entirely. Actionable carve-outs
+  (bounce, payment failure, security alert, hard deadline) still dispatch the
+  coordinator but the relay remains suppressed.
 
 This is distinct from `outbound.suppressed_duplicate`: the reply-lock fires after a
 human-facing skill already succeeded; no-reply means this turn sent nothing.

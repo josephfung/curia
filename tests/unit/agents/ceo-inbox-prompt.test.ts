@@ -131,7 +131,7 @@ describe('ceo-inbox consult-timeout self-healing', () => {
   it('schedules consult-timeout on formal invite park', () => {
     const prompt = loadCeoInboxPrompt();
     const inviteStart = posIn(prompt, '### 4d-invite. Formal meeting invitation path');
-    const inviteEnd = posIn(prompt, '### 4e-pre. Automated sender check');
+    const inviteEnd = posIn(prompt, '### 4e-pre. Automated / auto-generated mail check');
     const inviteSection = prompt.slice(inviteStart, inviteEnd);
     expect(inviteSection).toContain('Schedule consult-timeout safety wake');
     expect(inviteSection).toContain('consult_kind=invite');
@@ -335,7 +335,7 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
   it('parks formal invites for calendar consults instead of archiving as handled', () => {
     const prompt = loadCeoInboxPrompt();
     const inviteStart = posIn(prompt, '### 4d-invite. Formal meeting invitation path');
-    const inviteEnd = posIn(prompt, '### 4e-pre. Automated sender check');
+    const inviteEnd = posIn(prompt, '### 4e-pre. Automated / auto-generated mail check');
     expect(inviteStart).toBeGreaterThan(-1);
     expect(inviteEnd).toBeGreaterThan(inviteStart);
     const inviteSection = prompt.slice(inviteStart, inviteEnd);
