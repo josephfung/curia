@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Auto-generated mail detection** — inbound email is classified from message signals, not contact `kind`. (#1734)
 - **`apps/*` lint coverage** — ESLint now checks console and antfarm; `no-console` stays backend-only. (#1727)
 - **React hooks linting** — `rules-of-hooks` and `exhaustive-deps` now gate the browser apps. (#1727)
 - **Skill bundle registry UI** — `/tools` now enables/disables bundles and flags unresolved agent pins. (#1724)

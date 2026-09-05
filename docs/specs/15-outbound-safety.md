@@ -77,9 +77,11 @@ The dispatcher translates every `agent.response` with a routing entry into `outb
 1. **Reply-lock** (`outbound.suppressed_duplicate`) — a human-facing reply skill already
    succeeded on this task (#847).
 2. **Explicit no-reply** (`outbound.no_reply`) — the agent's entire response is the sentinel
-   `NO_REPLY`. Nothing is published to the channel. Reasons: `'agent_declined'` on a normal
-   turn, `'content_block_abandoned'` when the agent returns the sentinel on a content-filter
-   rewrite task.
+   `NO_REPLY`, or inbound email was classified as auto-generated (#1734). Nothing is
+   published to the channel. Reasons: `'agent_declined'` on a normal turn,
+   `'content_block_abandoned'` when the agent returns the sentinel on a content-filter
+   rewrite task, `'auto_generated'` when dispatch suppresses machine mail (message-derived;
+   independent of contact `kind`).
 3. **Gate C on the relay** (#1733) — the relay is subject to the same contact-tier action
    gate as an equivalent medium-risk reply skill. A known-tier ambiguous cell consults the
    EscalationJudge (email may reply-all). Escalate withholds the real `outbound.message`,
