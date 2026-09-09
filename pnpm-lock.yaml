@@ -80,11 +80,11 @@ importers:
         specifier: ^5.10.0
         version: 5.10.0
       cytoscape:
-        specifier: ^3.34.1
-        version: 3.34.1
+        specifier: ^3.34.2
+        version: 3.34.2
       cytoscape-fcose:
         specifier: ^2.2.0
-        version: 2.2.0(cytoscape@3.34.1)
+        version: 2.2.0(cytoscape@3.34.2)
       fastify:
         specifier: ^5.12.1
         version: 5.12.1
@@ -98,8 +98,8 @@ importers:
         specifier: ^2.0.1
         version: 2.0.1
       libphonenumber-js:
-        specifier: ^1.13.11
-        version: 1.13.11
+        specifier: ^1.13.12
+        version: 1.13.12
       livekit-server-sdk:
         specifier: ^2.17.0
         version: 2.17.0
@@ -3265,8 +3265,8 @@ packages:
     peerDependencies:
       cytoscape: ^3.2.0
 
-  cytoscape@3.34.1:
-    resolution: {integrity: sha512-Lr0RvH9H75y9ar8h9Toy6u4lxRSCcxUq+hHcQ26sVWo6BnaQp1gwEZOYqwuYTZhyW7npyKnNLP8oJ2p1/3OZ7g==}
+  cytoscape@3.34.2:
+    resolution: {integrity: sha512-Cm2jaj1X/PBNlzV9yH8zcfGOxO7U+CJ/+mxSBVPSchLaugdp4jtlGx5qaHtPRZ6tgiZ5P+o1XoRfJA+ba6KM3g==}
     engines: {node: '>=0.10'}
 
   data-uri-to-buffer@4.0.1:
@@ -4393,8 +4393,8 @@ packages:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
 
-  libphonenumber-js@1.13.11:
-    resolution: {integrity: sha512-ETER2kMaIFTI/Nh1a8Gk03dUF/SL0VZqtI+CcVHZxp5WIHYwNS7S+uiYZDYCvLy3lOR4/DAD5jf0h5WkePPpqg==}
+  libphonenumber-js@1.13.12:
+    resolution: {integrity: sha512-uLVeV1c9OTk6qkdqnj+mpMD+ZdnZ0szVyWu58HwMmpwkHA1gCEkyjd3veZQXDnuw9KEwSRjcc9B1pS9XKIN1fA==}
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
@@ -9278,12 +9278,12 @@ snapshots:
 
   csv-stringify@6.8.3: {}
 
-  cytoscape-fcose@2.2.0(cytoscape@3.34.1):
+  cytoscape-fcose@2.2.0(cytoscape@3.34.2):
     dependencies:
       cose-base: 2.2.0
-      cytoscape: 3.34.1
+      cytoscape: 3.34.2
 
-  cytoscape@3.34.1: {}
+  cytoscape@3.34.2: {}
 
   data-uri-to-buffer@4.0.1: {}
 
@@ -10533,7 +10533,7 @@ snapshots:
       prelude-ls: 1.2.1
       type-check: 0.4.0
 
-  libphonenumber-js@1.13.11: {}
+  libphonenumber-js@1.13.12: {}
 
   libsql@0.5.29:
     dependencies:
