@@ -110,8 +110,8 @@ importers:
         specifier: ^15.0.0
         version: 15.0.0
       node-html-parser:
-        specifier: ^9.0.1
-        version: 9.0.1
+        specifier: ^9.0.2
+        version: 9.0.2
       node-pg-migrate:
         specifier: ^9.0.0
         version: 9.0.0(@types/pg@8.23.1)(pg@8.23.0)
@@ -2425,8 +2425,16 @@ packages:
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
     engines: {node: '>=18.0.0'}
 
+  '@smithy/fetch-http-handler@5.7.2':
+    resolution: {integrity: sha512-nZyWTmSpJEXl6VtWVMBJve/7x12DZu6sIX1z1a+ZMaHlQQRs9Zpu6NbTe/gmxYXVRpkjxyDYpZ5gx2IM6f/Wkw==}
+    engines: {node: '>=18.0.0'}
+
   '@smithy/fetch-http-handler@5.8.0':
     resolution: {integrity: sha512-ycSJu3tFAQ4v04CBB0agqFMVsSQ1iG3yw+SpgxRqKfaURpQD4CZ8Wn0zPMmSnOuTpTh65Vz+EA0rMrw089wvkA==}
+    engines: {node: '>=18.0.0'}
+
+  '@smithy/node-http-handler@4.11.3':
+    resolution: {integrity: sha512-2jY1tSpERfPfWqyBV2pH+iGFaghVsIJszJNsT7hxtQYhVJpWDyc0LqOWI+nXOxOAHaEfZ4PXXtp1wW1TGpHhkA==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/node-http-handler@4.12.1':
@@ -2435,6 +2443,10 @@ packages:
 
   '@smithy/signature-v4@5.7.3':
     resolution: {integrity: sha512-7ImGm+FkHRLcBaRttIAMZ6bzJZWb2cJGoYjq46F2UjycujWzrL9GEN9h4w7eQyXJYnltrUhxbbieBAIRrdqpow==}
+    engines: {node: '>=18.0.0'}
+
+  '@smithy/types@4.17.2':
+    resolution: {integrity: sha512-FOKpVZob9MPTn2znRzGrnsMHv7BOsKVw3XiP/cOyYLDVZ9qKp4nifIiSCuUU/fIj5Vu0UOAxCFr+qRAtG0NUkA==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/types@4.18.0':
@@ -4742,8 +4754,8 @@ packages:
     resolution: {integrity: sha512-LarFH0+6VfriEhqMMcLX2F7SwSXeWwnEAJEsYm5QKWchiVYVvJyV9v7UDvUv+w5HO23ZpQTXDv/GxdDdMyOuoQ==}
     engines: {node: '>= 6.13.0'}
 
-  node-html-parser@9.0.1:
-    resolution: {integrity: sha512-QrdiYYm1NnLRXsMXThUgVcF/syWfWIgHFmy8hylWMGFbHFtnRuXLBxxGQvIm3xaIJMUDJ0ayOmT/FGJYT3pZIw==}
+  node-html-parser@9.0.2:
+    resolution: {integrity: sha512-XhM0CTeF4Hkw3el7VCyasGJCEvp500Xf0s1J3ZigYfTOkVqZRQRY3EiAw1CbJzNrxaKSDthXiT9c/4CBwIJyfw==}
 
   node-int64@0.4.0:
     resolution: {integrity: sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw==}
@@ -6343,7 +6355,7 @@ snapshots:
       '@aws/lambda-invoke-store': 0.3.0
       '@smithy/core': 3.33.3
       '@smithy/signature-v4': 5.7.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       bowser: 2.14.1
       tslib: 2.8.1
     optional: true
@@ -6353,7 +6365,7 @@ snapshots:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6362,9 +6374,9 @@ snapshots:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.18.0
+      '@smithy/fetch-http-handler': 5.7.2
+      '@smithy/node-http-handler': 4.11.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6381,7 +6393,7 @@ snapshots:
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/credential-provider-imds': 4.5.2
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6391,7 +6403,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.44
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6406,7 +6418,7 @@ snapshots:
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/credential-provider-imds': 4.5.2
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6415,7 +6427,7 @@ snapshots:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6426,7 +6438,7 @@ snapshots:
       '@aws-sdk/token-providers': 3.1116.0
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6436,7 +6448,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.44
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6483,9 +6495,9 @@ snapshots:
       '@aws-sdk/signature-v4-multi-region': 3.996.46
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
-      '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.12.1
-      '@smithy/types': 4.18.0
+      '@smithy/fetch-http-handler': 5.7.2
+      '@smithy/node-http-handler': 4.11.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6503,7 +6515,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.44
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -6519,13 +6531,13 @@ snapshots:
 
   '@aws-sdk/types@3.974.5':
     dependencies:
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
   '@aws-sdk/xml-builder@3.972.40':
     dependencies:
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -8390,14 +8402,21 @@ snapshots:
 
   '@smithy/core@3.33.3':
     dependencies:
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
   '@smithy/credential-provider-imds@4.5.2':
     dependencies:
       '@smithy/core': 3.33.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
+      tslib: 2.8.1
+    optional: true
+
+  '@smithy/fetch-http-handler@5.7.2':
+    dependencies:
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -8405,6 +8424,13 @@ snapshots:
     dependencies:
       '@smithy/core': 3.33.3
       '@smithy/types': 4.18.0
+      tslib: 2.8.1
+    optional: true
+
+  '@smithy/node-http-handler@4.11.3':
+    dependencies:
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
     optional: true
 
@@ -8418,7 +8444,12 @@ snapshots:
   '@smithy/signature-v4@5.7.3':
     dependencies:
       '@smithy/core': 3.33.3
-      '@smithy/types': 4.18.0
+      '@smithy/types': 4.17.2
+      tslib: 2.8.1
+    optional: true
+
+  '@smithy/types@4.17.2':
+    dependencies:
       tslib: 2.8.1
     optional: true
 
@@ -10866,7 +10897,7 @@ snapshots:
   node-forge@1.4.0:
     optional: true
 
-  node-html-parser@9.0.1:
+  node-html-parser@9.0.2:
     dependencies:
       css-select: 5.2.2
       entities: 8.0.0
