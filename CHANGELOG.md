@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`signal_voice` health check** — `/api/health` now probes the Signal call audio socket by connecting, not stat'ing. (#1760)
 - **Auto-generated mail detection** — classifies inbound email from message signals and suppresses replies at dispatch. (#1734)
 - **`apps/*` lint coverage** — ESLint now checks console and antfarm; `no-console` stays backend-only. (#1727)
 - **React hooks linting** — `rules-of-hooks` and `exhaustive-deps` now gate the browser apps. (#1727)

@@ -2004,7 +2004,11 @@ async function main(): Promise<void> {
           // most often missing LiveKit creds, since VoiceRuntime is built inside
           // the LiveKit-gated block (see the voiceRuntimeRef note above).
           hasVoiceRuntime: !!voiceRuntimeRef,
-          hasPulseSocket: !!config.signalPulseSocketPath,
+          // Named for what it actually is: the CONFIG VALUE being present, not the
+          // socket being alive. Conflating those is what let curia-deploy#221 run for
+          // hours with a dead audio stack and a green dashboard. Liveness now has its
+          // own probe — the `signal_voice` check in /api/health (#1760).
+          hasPulseSocketPath: !!config.signalPulseSocketPath,
           hasSignalChannel: channelShouldStart.has('signal'),
         },
         'SIGNAL_VOICE_CALLS_ENABLED is set but prerequisites are missing (needs the Signal channel + the full voice channel incl. LiveKit/Deepgram/Cartesia + the Pulse socket path); Signal voice calls disabled',
@@ -2225,6 +2229,13 @@ async function main(): Promise<void> {
           }),
         }
       : undefined,
+    // Gated on the BRIDGE existing, not on the config value (#1760). The bridge is
+    // what carries call audio over this socket; if it was never constructed there is
+    // nothing to be unhealthy about, so health reports `skipped`. Keying off
+    // `config.signalPulseSocketPath` instead would report `fail` on any instance that
+    // merely has the env var set — the same conflation of "configured" with "alive"
+    // that let curia-deploy#221 sit green for hours.
+    signalPulseSocketPath: signalCallBridge ? config.signalPulseSocketPath : undefined,
     mcpSessions,
     mcpServerStatuses,
     modelRoutingConfig,
