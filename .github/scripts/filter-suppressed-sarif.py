@@ -18,9 +18,9 @@ that classification to a consumer that would otherwise discard it.
 Nothing is dropped quietly. Every removed finding is printed with its rule ID and location.
 
 Fail closed. A missing, unparseable, or non-SARIF input exits non-zero so the workflow step
-fails loudly. Exiting 0 on a broken file would hand a stale or truncated SARIF to
-``upload-sarif``, which reads "no findings" as "everything was fixed" and would close real
-alerts across the repo.
+fails loudly -- including the sharpest case, a document that parses cleanly but carries zero
+runs. Exiting 0 on any of those would hand a stale or degenerate SARIF to ``upload-sarif``,
+which reads a missing finding as a FIXED finding and would close real alerts across the repo.
 
 Usage: filter-suppressed-sarif.py <path-to-sarif>
 """
@@ -68,10 +68,45 @@ def main(argv):
         print("{} is not valid JSON: {}".format(path, err), file=sys.stderr)
         return 1
 
-    runs = sarif.get("runs") if isinstance(sarif, dict) else None
+    # Validate the document before touching it. A `runs` list alone does not make
+    # something SARIF, and the cost of getting this wrong is asymmetric: a file that
+    # parses but is not a real scan result gets forwarded to upload-sarif, which reads a
+    # missing finding as a FIXED finding and closes real alerts across the repo. Every
+    # check below therefore rejects rather than repairs.
+    if not isinstance(sarif, dict):
+        print("{} is not a JSON object — not a SARIF document".format(path), file=sys.stderr)
+        return 1
+
+    # `version` is required on the root sarifLog (SARIF 2.1.0 §3.13). Its exact value is
+    # deliberately NOT pinned: upload-sarif rejects a revision it cannot consume on its
+    # own, loudly, whereas pinning "2.1.0" here would hard-fail this job the day Semgrep
+    # starts emitting a newer one. Presence is the signal that this came from a scanner.
+    if not sarif.get("version"):
+        print("{} has no 'version' — not a SARIF document".format(path), file=sys.stderr)
+        return 1
+
+    runs = sarif.get("runs")
     if not isinstance(runs, list):
         print("{} has no 'runs' array — not a SARIF document".format(path), file=sys.stderr)
         return 1
+
+    # Zero runs is the shape that would do the most damage, because it is structurally
+    # valid and semantically catastrophic. Semgrep never emits it: a scan that found
+    # nothing is ONE run carrying an empty `results` array (verified against
+    # `semgrep --sarif` over a file with no findings). Zero runs therefore means
+    # something went wrong upstream, and forwarding it would tell GitHub that every
+    # open alert in the repo has been fixed.
+    if not runs:
+        print("{} carries zero runs — refusing to forward it as a clean scan".format(path),
+              file=sys.stderr)
+        return 1
+
+    for index, run in enumerate(runs):
+        # `tool` is required on every run (SARIF 2.1.0 §3.14).
+        if not isinstance(run, dict) or "tool" not in run:
+            print("{} run[{}] is not a SARIF run object (no 'tool')".format(path, index),
+                  file=sys.stderr)
+            return 1
 
     dropped = []
     for run in runs:

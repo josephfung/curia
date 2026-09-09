@@ -125,6 +125,47 @@ check_eq "fails on JSON that is not SARIF (no runs)" "1" "$?"
 python3 "$SCRIPT" >/dev/null 2>&1
 check_eq "fails when given no path" "1" "$?"
 
+# `runs` being a list is not enough to call a document SARIF. `version` is required on
+# the root sarifLog and `tool` is required on every run (SARIF 2.1.0 §3.13, §3.14), so a
+# document missing either is something other than a scanner result — most likely a stub
+# or a half-written file — and must not be forwarded as if it were a clean scan.
+printf '{"runs":[{"tool":{"driver":{"name":"x"}},"results":[]}]}' > "$tmpdir/noversion.sarif"
+python3 "$SCRIPT" "$tmpdir/noversion.sarif" >/dev/null 2>&1
+check_eq "fails on a document with no 'version'" "1" "$?"
+
+printf '{"version":"2.1.0","runs":[{"results":[]}]}' > "$tmpdir/notool.sarif"
+python3 "$SCRIPT" "$tmpdir/notool.sarif" >/dev/null 2>&1
+check_eq "fails on a run with no 'tool'" "1" "$?"
+
+printf '{"version":"2.1.0","runs":["not-an-object"]}' > "$tmpdir/badrun.sarif"
+python3 "$SCRIPT" "$tmpdir/badrun.sarif" >/dev/null 2>&1
+check_eq "fails on a run that is not an object" "1" "$?"
+
+# The shape that would do the most damage: structurally valid SARIF carrying no runs at
+# all. Semgrep never emits this — a clean scan is ONE run with an empty `results` array
+# (verified against `semgrep --sarif` on a file with no findings) — so zero runs means
+# something went wrong upstream. upload-sarif would read it as "every finding is fixed"
+# and close real alerts across the repo.
+printf '{"version":"2.1.0","runs":[]}' > "$tmpdir/noruns-array.sarif"
+python3 "$SCRIPT" "$tmpdir/noruns-array.sarif" >/dev/null 2>&1
+check_eq "fails on valid SARIF carrying zero runs" "1" "$?"
+
+# --- the strictness must not reject a legitimately clean scan ---------------------
+# A scan that found nothing is one run, with `tool`, and an empty `results` array. This
+# is the single most common real input; failing it would break every green Semgrep run.
+f="$tmpdir/cleanscan.sarif"
+write_sarif "$f" "[]"
+python3 "$SCRIPT" "$f" >/dev/null 2>&1
+check_eq "accepts a clean scan (one run, empty results)" "0" "$?"
+
+# `version` is required to be PRESENT, but its exact value is deliberately not pinned:
+# upload-sarif rejects a version it cannot consume on its own, loudly, whereas pinning
+# here would hard-fail the job the day Semgrep emits a newer SARIF revision.
+printf '{"version":"2.2.0","runs":[{"tool":{"driver":{"name":"x"}},"results":[]}]}' \
+  > "$tmpdir/future.sarif"
+python3 "$SCRIPT" "$tmpdir/future.sarif" >/dev/null 2>&1
+check_eq "accepts a future SARIF version rather than pinning 2.1.0" "0" "$?"
+
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
