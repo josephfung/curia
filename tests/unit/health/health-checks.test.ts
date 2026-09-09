@@ -1,13 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   checkDb,
   checkBus,
   checkBrowser,
   checkEmail,
   checkScheduler,
+  checkSignal,
   checkSlack,
   checkSms,
   checkVoice,
+  withTimeout,
 } from '../../../src/health/health-checks.js';
 import type { Logger } from '../../../src/logger.js';
 
@@ -75,6 +77,68 @@ describe('checkBrowser', () => {
     await checkBrowser({ browserContext: { cookies: spy } }, stubLogger);
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0]![0]).toBeTruthy();
+  });
+});
+
+// PR #1763 review. `Promise.race([work, timeoutPromise])` does NOT cancel the losing
+// timer: when `work` wins, the setTimeout stays scheduled until it fires. Every racing
+// probe in this module used that pattern, and /api/health is hit every 30s by the
+// Docker healthcheck, so each request left a handful of timers pending. Individually
+// harmless; collectively the same slow-accumulation shape as the Ajv leak that
+// OOM-restarted prod (#1663). These tests pin the fix at both levels.
+describe('withTimeout', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('clears the losing timer when the work settles first', async () => {
+    vi.useFakeTimers();
+    await withTimeout(Promise.resolve('done'), 5_000);
+    // Without the clearTimeout this is 1 — the old behaviour, once per probe per request.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('returns the work result untouched', async () => {
+    expect(await withTimeout(Promise.resolve('value'), 1_000)).toBe('value');
+  });
+
+  it('rejects when the work outlives the budget', async () => {
+    await expect(withTimeout(new Promise(() => {}), 5)).rejects.toThrow('timeout');
+  });
+
+  it('propagates the work rejection rather than masking it as a timeout', async () => {
+    // A probe that reports every failure as "timeout" loses the actual cause in the log.
+    await expect(withTimeout(Promise.reject(new Error('ECONNREFUSED')), 5_000))
+      .rejects.toThrow('ECONNREFUSED');
+  });
+
+  it('leaves no timer pending after the work rejects', async () => {
+    vi.useFakeTimers();
+    await expect(withTimeout(Promise.reject(new Error('boom')), 5_000)).rejects.toThrow('boom');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('probe timer hygiene (PR #1763 review)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('leaves no timer pending after a successful checkBrowser probe', async () => {
+    vi.useFakeTimers();
+    const svc = { browserContext: { cookies: vi.fn().mockResolvedValue([]) } };
+    expect(await checkBrowser(svc, stubLogger)).toBe('ok');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('leaves no timer pending after a successful checkSignal probe', async () => {
+    // Same pattern, pre-existing. Fixing only the function under review would have left
+    // four known instances behind and made the new one the odd style out.
+    vi.useFakeTimers();
+    expect(await checkSignal({ listGroups: vi.fn().mockResolvedValue([]) }, stubLogger)).toBe('ok');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('leaves no timer pending after a successful checkVoice probe', async () => {
+    vi.useFakeTimers();
+    expect(await checkVoice({ listRooms: vi.fn().mockResolvedValue([]) }, stubLogger)).toBe('ok');
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
