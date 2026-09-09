@@ -162,9 +162,6 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 #     `createTokenAuth("ghp_…")` documentation snippet alone produced twelve CRITICAL
 #     github-pat / github-app-token findings (code-scanning #271-#282). False positives,
 #     but they were the only CRITICALs in the Security tab and buried everything else.
-#   - /root/.local/share/pnpm — the content-addressable store and pnpm's global bin dir.
-#     node_modules entries are hardlinks INTO the store, so unlinking the store paths
-#     leaves those inodes referenced by node_modules; the installed tree is untouched.
 #   - /root/.cache/node/corepack and /root/.cache/corepack — corepack's cached pnpm
 #     tarballs. Node 24's bundled corepack pre-caches pnpm@11.0.8 during `corepack
 #     enable` even though this project pins pnpm@11.7.0, and 11.0.8 bundles tar@7.5.13
@@ -176,6 +173,20 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 # None of it is reachable at runtime: CMD invokes ./node_modules/.bin/tsx directly and
 # no install ever runs inside the container.
 #
+# What is deliberately KEPT: /root/.local/share/pnpm, the content-addressable store.
+# An earlier revision of this step deleted it too. That was wrong, and it broke the
+# deploy. curia-deploy's thin downstream image (deploy/compose/Dockerfile.curia) builds
+# FROM this one, switches to root, and runs `pnpm add` with an inline HOME=/root
+# specifically so pnpm resolves the store to /root/.local/share/pnpm/store/v11 — the
+# path THIS stage creates. Removing it left that build with an empty store, so every
+# tarball was re-downloaded ("reused 0") instead of hardlinked, turning a deploy into a
+# full re-fetch of the dependency graph against a flaky registry.
+#
+# Keeping the store costs nothing here. All twelve secret findings were in the metadata
+# cache above (/root/.cache/pnpm/v11/metadata-full/*.jsonl); not one was in the store,
+# which shipped in this image for its whole history without ever tripping a Trivy rule.
+# The store holds content-addressed blobs, not per-package README text.
+#
 # Why one RUN. Deleting these in a LATER layer is not enough. Trivy's secret scanner
 # reports matches from any layer in the image, not just the whiteout-applied final
 # filesystem — which is the correct stance, since the content is still extractable from
@@ -186,16 +197,15 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 # which is why the earlier later-layer corepack cleanup did clear its tar CVE.)
 #
 # Fail closed. `rm -rf` exits 0 whether or not it removed anything, so a future pnpm or
-# base-image change that relocated the store would silently turn this into a no-op — or,
-# worse, a store layout that COPIED instead of hardlinking would leave a broken tsx
-# behind a green build. Executing tsx after the removal proves the runtime entry point
-# still resolves, which is the one property this cleanup must not break. This mirrors
-# the assertions around the npm/npx removal above.
+# base-image change that relocated any of these paths would silently turn this into a
+# no-op while the build stayed green. Executing tsx afterwards proves the runtime entry
+# point still resolves — the one property this cleanup must not break — and mirrors the
+# assertions around the npm/npx removal above.
 RUN set -e; \
     pnpm-retry pnpm install --frozen-lockfile --prod; \
     pnpm-retry pnpm add -w --save-prod --prod tsx; \
     rm -rf /root/.cache/node/corepack /root/.cache/corepack \
-           /root/.cache/pnpm /root/.local/share/pnpm \
+           /root/.cache/pnpm \
            /usr/local/bin/pnpm-retry; \
     ./node_modules/.bin/tsx --version
 
