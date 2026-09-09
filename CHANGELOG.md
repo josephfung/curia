@@ -132,6 +132,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Docker image** — keep pnpm's metadata cache; removing it timed out the deploy's lockfile verification. (#1758)
 - **Docker image** — keep pnpm's store; removing it made the deploy build re-download every package. (#1756)
 - **Semgrep SARIF** — `# nosemgrep`-suppressed findings no longer upload as open code-scanning alerts. (#1754)
 - **Dependency pins** — `qs`, `hono`, and `fflate` raised to patched releases, clearing six advisories. (#1752)

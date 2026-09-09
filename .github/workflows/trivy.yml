@@ -159,6 +159,30 @@ jobs:
           output: 'trivy-image.sarif'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
+          # /root/.cache/pnpm is pnpm's registry METADATA cache. Its
+          # v11/metadata-full/*.jsonl files hold one JSONL per package containing every
+          # published version's manifest — README text included. The secret scanner reads
+          # those READMEs and reports the example tokens in them as leaked credentials:
+          # @octokit/auth-token's `createTokenAuth("ghp_…")` documentation snippet alone
+          # produced twelve CRITICAL github-pat / github-app-token findings
+          # (code-scanning #271-#282), which were the only CRITICALs in the tab and buried
+          # everything else.
+          #
+          # This is scanner scoping, not an exception for real findings. The content is
+          # public npm README prose in a build cache, and nothing in this directory is
+          # reachable at runtime — CMD invokes ./node_modules/.bin/tsx directly.
+          #
+          # The cache was deleted from the image first, which is the fix we would prefer.
+          # It broke the deploy: curia-deploy's downstream image re-resolves the entire
+          # workspace and verifies ~1300 lockfile entries, and without this cache it does
+          # that over the network. drizzle-orm's 64 MB packument then exceeded
+          # fetchTimeout, and fail-closed trustPolicy verification turned that into
+          # ERR_PNPM_TRUST_DOWNGRADE (#1758). Narrow the scanner until the downstream
+          # stops needing the cache (curia-deploy#220), then delete it for real.
+          #
+          # Deliberately scoped to this one path — NOT /root or /root/.cache — so a
+          # secret written anywhere else in the image is still caught.
+          skip-dirs: '/root/.cache/pnpm'
           exit-code: '0'  # findings surfaced via SARIF, not exit code
 
       - name: Upload SARIF
