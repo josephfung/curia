@@ -88,10 +88,21 @@ fetchTimeout: 90000
 #     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
 #     is ESM-only and would break `require('uuid')`.
 overrides:
-  hono: '>=4.12.27'
+  # Three MED GHSAs, all fixed in 4.13.5. Consumers are @hono/node-server and
+  # @modelcontextprotocol/sdk, which had both resolved 4.13.1 under the old >=4.12.27 floor:
+  #   - GHSA-crvj-82cr-hjcx: query parser reads parameters after the URL fragment
+  #     (cache-key / proxy interpretation differential)
+  #   - GHSA-g6gw-c38x-mqfc: unbounded dot-notation nesting in parseBody() exhausts memory
+  #   - GHSA-gqvv-2mrq-wpjv: toSSG() still writes outside the output dir (incomplete fix
+  #     for CVE-2026-39408)
+  hono: '>=4.13.5'
   fast-uri: '>=4.1.2'  # GHSA-7p8r-x3mc-p8w7 / CVE-2026-18446 (host confusion via backslash authority introducer, HIGH)
   vite: '>=8.0.5'
-  qs: '>=6.15.2'
+  # Two DoS advisories, both fixed in 6.16.0. The prior >=6.15.2 floor was satisfied by
+  # 6.15.3, so googleapis-common stayed on the vulnerable version:
+  #   - CVE-2026-82417 / GHSA-4mjr-xmp4-gh2g: stringify() DoS via attacker-controlled isBuffer
+  #   - CVE-2026-82562 / GHSA-x5fp-wj9c-mxmx: array-limit bypass via bracket-key comma parsing
+  qs: '>=6.16.0'
   ip-address: '>=10.1.1'
   uuid: '^11.1.1'
   # Security pins for v0.35 release gate (HIGH CVEs flagged by Trivy image scan):
@@ -117,6 +128,18 @@ overrides:
   # rimraf@6 uses glob@11+/minimatch@10 which consume brace-expansion@5; gaxios only needs
   # rimraf for temp cleanup and the v6 API is compatible for that call site.
   'gaxios>rimraf': '>=6.1.2'
+  # MED CVEs from Scorecard, 2026-09-09 (#1752):
+  fflate: '>=0.8.3'                         # GHSA-px8p-9vwx-vf98 (unzipSync infinite loop on malformed ZIP64); only consumer is @openai/codex-security via promptfoo (dev-only), which pinned 0.8.2
+  #
+  # Two Scorecard GHSAs deliberately have NO override because no fixed release exists
+  # (re-check before assuming they were missed):
+  #   - adm-zip GHSA-vwc7-r8mq-g2x9 (extraction follows destination symlinks -> arbitrary
+  #     file overwrite). Affects <=0.6.0, which is the latest publish; the >=0.6.0 pin above
+  #     is for the separate GHSA-xcpc-8h2w-3j85. Reached only via optional onnxruntime-node.
+  #   - extract-zip GHSA-7pqw-9j4j-h8q3 and GHSA-jmr9-qjv8-65gv (symlink archive entries ->
+  #     arbitrary file write). Affect <=2.0.1, the latest publish. Dev-only, via promptfoo.
+  # Both are archive-extraction bugs in dev-only paths that never process untrusted zips at
+  # runtime, so they stay as accepted Scorecard warnings until upstream ships a fix.
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
