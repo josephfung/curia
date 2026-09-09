@@ -27,19 +27,54 @@ describe('checkDb', () => {
   });
 });
 
+// #1762. This check used to be `browserContext !== null` — an object-reference
+// existence test. Chrome is out-of-process, so a reference proves nothing about the
+// process behind it; that is the same shape that let a dead PulseAudio daemon read as
+// healthy (#1760). It now round-trips to the browser.
 describe('checkBrowser', () => {
-  it('returns skipped when no service provided', () => {
-    expect(checkBrowser(undefined)).toBe('skipped');
+  /** A context whose cookies() resolves — stands in for a live browser. */
+  const live = { browserContext: { cookies: vi.fn().mockResolvedValue([]) } };
+
+  it('returns skipped when no service provided', async () => {
+    expect(await checkBrowser(undefined, stubLogger)).toBe('skipped');
   });
 
-  it('returns ok when browserContext is a live object', () => {
-    // BrowserService uses launchPersistentContext — liveness = context object exists.
-    // No .browser() call needed; the context object itself is the liveness signal.
-    expect(checkBrowser({ browserContext: {} })).toBe('ok');
+  it('returns ok when the browser answers the round-trip', async () => {
+    expect(await checkBrowser(live, stubLogger)).toBe('ok');
   });
 
-  it('returns fail when browserContext is null (service stopped or relaunch failed)', () => {
-    expect(checkBrowser({ browserContext: null })).toBe('fail');
+  it('returns fail when browserContext is null (service stopped or relaunch failed)', async () => {
+    expect(await checkBrowser({ browserContext: null }, stubLogger)).toBe('fail');
+  });
+
+  it('returns fail when the browser is gone but the context reference survives', async () => {
+    // THE case the old check could not see. Playwright throws "Target closed" /
+    // "Browser has been closed" once the process dies; BrowserService only nulls its
+    // reference if crash recovery runs AND its relaunch fails, so between the crash
+    // and that point the reference is a live object pointing at a corpse.
+    const dead = {
+      browserContext: { cookies: vi.fn().mockRejectedValue(new Error('Target page, context or browser has been closed')) },
+    };
+    expect(await checkBrowser(dead, stubLogger)).toBe('fail');
+  });
+
+  it('returns fail when the browser is wedged rather than dead', async () => {
+    // A hung renderer keeps the transport open, so isConnected() — what the
+    // browserContext getter's comment claimed this probe used — still reports true.
+    // Only a bounded round-trip catches it. Unlike a Unix-socket connect, a hang is
+    // deterministically reproducible here because the mock never settles.
+    const wedged = { browserContext: { cookies: vi.fn().mockReturnValue(new Promise(() => {})) } };
+    expect(await checkBrowser(wedged, stubLogger, 10)).toBe('fail');
+  });
+
+  it('scopes the cookie read to one URL rather than dumping the whole jar', async () => {
+    // The persistent profile is a real browsing profile. Reading every cookie every 30s
+    // to answer "is it alive?" pulls session tokens into memory for no reason; a single
+    // narrow URL is the same round-trip with none of that.
+    const spy = vi.fn().mockResolvedValue([]);
+    await checkBrowser({ browserContext: { cookies: spy } }, stubLogger);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toBeTruthy();
   });
 });
 

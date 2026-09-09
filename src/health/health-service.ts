@@ -220,18 +220,25 @@ export class HealthService {
     const mcpServerStatuses = this.deps.mcpServerStatuses ?? new Map();
 
     // Run all async probes concurrently to keep p99 latency low.
-    const [db_check, signal_check, mcp_checks, nylas_cal, voice_check, signal_voice_check] = await Promise.all([
+    const [
+      db_check, signal_check, mcp_checks, nylas_cal, voice_check, signal_voice_check,
+      // Moved out of the synchronous block in #1762: checkBrowser now round-trips to
+      // Chrome instead of testing an object reference, so it must be awaited. It joins
+      // the concurrent set rather than being awaited on its own — every probe here has
+      // its own timeout, so the whole block stays bounded by the slowest single probe.
+      browser_check,
+    ] = await Promise.all([
       checkDb(db, this.deps.logger),
       checkSignal(signalRpcClient, this.deps.logger),
       checkMcpServers(mcpServerStatuses, mcpSessions, this.deps.logger),
       checkNylasCalendar(nylasCalendarClient, this.deps.logger),
       checkVoice(voiceLiveKit, this.deps.logger),
       checkSignalVoice(signalPulseSocketPath, this.deps.logger),
+      checkBrowser(browserService, this.deps.logger),
     ]);
 
     // Synchronous probes — no need to await.
     const bus_check = checkBus(bus);
-    const browser_check = checkBrowser(browserService);
     const email_check = checkEmail(emailAdapter, liveness.emailStallFactor, this.startedAt);
     const slack_check = checkSlack(slackClient, this.startedAt);
     const sms_check = checkSms(smsHealth);
