@@ -2,10 +2,12 @@
 //
 // Each function is independent, has a hard timeout for async probes, and returns
 // CheckResult. 'skipped' means the service is not configured — never affects the
-// overall health status. Probe-based checks (db, bus, signal, browser, mcp) run
+// overall health status. Probe-based checks (db, bus, signal, signal_voice, browser,
+// mcp) run
 // on every request. Time-based checks (email, scheduler) use startedAt as a
 // grace-period anchor so they don't fail immediately at boot.
 
+import { connect as netConnect } from 'node:net';
 import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { CheckResult } from './types.js';
@@ -352,6 +354,76 @@ export async function checkVoice(
     logger.warn({ err }, 'checkVoice: LiveKit management probe failed');
     return 'fail';
   }
+}
+
+/** Default budget for the Signal-voice socket probe. Local Unix socket — connect is
+ * either immediate or the daemon is not there. */
+export const SIGNAL_VOICE_PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Signal voice audio path liveness (#1760). Non-critical.
+ *
+ * Distinct from both neighbours, which is the whole point of it existing:
+ *   - `signal` probes the JSON-RPC socket  → Signal MESSAGING
+ *   - `voice` probes LiveKit `listRooms()` → console / WebRTC voice
+ *   - this probes the shared PulseAudio socket → Signal voice CALLS
+ *
+ * During curia-deploy#221 the PulseAudio daemon failed to start for hours (a stale
+ * pid file made it believe one was already running). Signal calls could not carry
+ * audio, and `/api/health` reported everything ok because nothing covered this path.
+ *
+ * Probes by CONNECTING, not by stat'ing. `existsSync` / `test -S` cannot tell a live
+ * daemon from a corpse: the #221 container held a socket inode written by a daemon
+ * that had been dead for a week. A connect gets ECONNREFUSED against that inode and
+ * succeeds only when something is actually accepting.
+ *
+ * No PulseAudio protocol handshake is attempted. "Something is accepting on the
+ * socket the call bridge was configured to use" is the property worth asserting;
+ * anything deeper couples a liveness endpoint to a wire format that is not ours.
+ *
+ * Known tradeoff: connecting and closing without a handshake may make PulseAudio log a
+ * short-lived client on each probe, and the Docker healthcheck hits /api/health every
+ * 30s. Accepted deliberately — a handshake-free connect cannot desync from a protocol
+ * change, and the alternative (stat) is what let a dead daemon read as healthy. If that
+ * log noise ever obscures debugging, raise the probe interval rather than weaken it
+ * back to an existence check.
+ *
+ * `skipped` when no path is given — the Signal call bridge was not constructed, so
+ * there is nothing to be unhealthy about. Matches `checkVoice`'s convention.
+ */
+export async function checkSignalVoice(
+  pulseSocketPath: string | undefined,
+  logger: Logger,
+  timeoutMs: number = SIGNAL_VOICE_PROBE_TIMEOUT_MS,
+): Promise<CheckResult> {
+  if (!pulseSocketPath) return 'skipped';
+
+  return new Promise<CheckResult>((resolve) => {
+    // settle() guarantees exactly one resolve and exactly one destroy, whichever of
+    // connect / error / timeout fires first. A probe that leaks a socket per call
+    // would exhaust descriptors under the 30s Docker healthcheck — the same shape as
+    // the listTools() Ajv leak that OOM-restarted prod (#1663).
+    let settled = false;
+    const socket = netConnect({ path: pulseSocketPath });
+
+    const settle = (result: CheckResult, err?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (result === 'fail') {
+        logger.warn({ err, pulseSocketPath }, 'checkSignalVoice: PulseAudio socket probe failed');
+      }
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => settle('fail', new Error('timeout')), timeoutMs);
+    // Do not hold the process open for a health probe.
+    if (typeof timer.unref === 'function') timer.unref();
+
+    socket.once('connect', () => settle('ok'));
+    socket.once('error', (err) => settle('fail', err));
+  });
 }
 
 /**

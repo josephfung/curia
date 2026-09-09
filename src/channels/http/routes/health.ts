@@ -45,6 +45,7 @@ export async function healthRoutes(
           slack: 'skipped' as const,
           sms: 'skipped' as const,
           voice: 'skipped' as const,
+          signal_voice: 'skipped' as const,
           scheduler: 'fail' as const,
         },
       });

@@ -90,6 +90,29 @@ describe('HealthService.getStatus()', () => {
     expect(result.checks.voice).toBe('fail');
   });
 
+  // #1760. Two separate wiring mistakes are easy to make here and neither is caught
+  // by the probe's own unit tests: forgetting to surface the check in `checks`, and
+  // forgetting to add it to aggregateStatus's `nonCritical` list — that list is
+  // enumerated by hand, so a new key renders a console chip while the overall status
+  // dot stays green. That is the exact failure mode #1760 was filed about.
+  it('returns degraded when the Signal voice audio socket is dead (#1760)', async () => {
+    const svc = new HealthService(makeDeps({
+      // Path that cannot connect — stands in for a dead PulseAudio daemon.
+      signalPulseSocketPath: '/nonexistent/pulse-shared/native',
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.checks.signal_voice).toBe('fail');
+    expect(result.status).toBe('degraded');
+  });
+
+  it('skips the Signal voice check when the call bridge was not constructed (#1760)', async () => {
+    // Instances without Signal voice must not show a permanently failing chip.
+    const svc = new HealthService(makeDeps({}) as never);
+    const result = await svc.getStatus();
+    expect(result.checks.signal_voice).toBe('skipped');
+    expect(result.status).toBe('ok');
+  });
+
   it('reports ok for healthy Slack/SMS/Voice probes (#1567)', async () => {
     const svc = new HealthService(makeDeps({
       slackClient: {

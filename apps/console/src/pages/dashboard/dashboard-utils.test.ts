@@ -60,6 +60,24 @@ describe('formatUptime', () => {
 });
 
 describe('flattenHealthChecks', () => {
+  // #1760 relies on this being fully dynamic: a check added to /api/health must render
+  // as a chip with NO console change. During curia-deploy#221 the dashboard showed
+  // "All systems nominal" while Signal voice audio was dead, and the backend fix was a
+  // new `signal_voice` check. If this function (or HealthResponse['checks']) is ever
+  // narrowed to a fixed key set, that contract breaks silently — the backend reports a
+  // failure the operator never sees. This test is the tripwire.
+  it('renders a chip for a check key it has never seen before (#1760)', () => {
+    const pills = flattenHealthChecks({
+      db: 'ok',
+      signal: 'ok',
+      voice: 'ok',
+      signal_voice: 'fail',
+    });
+    expect(pills).toContainEqual({ name: 'signal_voice', result: 'fail' });
+    // And the failing one must be visually distinct, not merely present.
+    expect(healthCheckPillClass('fail')).toBe('blocked');
+  });
+
   it('flattens top-level checks and expands nested mcp.*', () => {
     const pills = flattenHealthChecks({
       db: 'ok',

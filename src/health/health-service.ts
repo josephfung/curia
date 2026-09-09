@@ -23,7 +23,7 @@ import { LlmOutcomeTracker } from './llm-outcome-tracker.js';
 import {
   checkDb, checkBus, checkEmail, checkSignal, checkBrowser,
   checkMcpServers, checkNylasCalendar, checkSlack, checkSms, checkVoice,
-  checkScheduler,
+  checkSignalVoice, checkScheduler,
   type EmailAdapterHealth, type SignalRpcClientHealth, type BrowserServiceHealth,
   type SlackClientHealth, type SmsChannelHealth, type VoiceLiveKitHealth,
 } from './health-checks.js';
@@ -47,6 +47,15 @@ export interface HealthServiceDeps {
    */
   nylasCalendarClient?: Pick<NylasCalendarClient, 'listCalendars'>;
   signalRpcClient?: SignalRpcClientHealth;
+  /**
+   * Path to the PulseAudio socket shared from the signal-cli container (#1760).
+   *
+   * Set ONLY when the Signal call bridge was actually constructed, so health mirrors
+   * what is running: absent → `skipped` (feature off, nothing to be unhealthy about),
+   * present → probed on every request. Passing the raw config value instead would
+   * report `fail` on instances that merely have the env var set.
+   */
+  signalPulseSocketPath?: string;
   browserService?: BrowserServiceHealth;
   /**
    * Slack Socket Mode client when the Slack adapter was constructed (#1567).
@@ -205,18 +214,19 @@ export class HealthService {
     const {
       db, bus, emailAdapter, signalRpcClient, browserService,
       mcpSessions, scheduler, config, nylasCalendarClient,
-      slackClient, smsHealth, voiceLiveKit,
+      slackClient, smsHealth, voiceLiveKit, signalPulseSocketPath,
     } = this.deps;
     const { liveness } = config;
     const mcpServerStatuses = this.deps.mcpServerStatuses ?? new Map();
 
     // Run all async probes concurrently to keep p99 latency low.
-    const [db_check, signal_check, mcp_checks, nylas_cal, voice_check] = await Promise.all([
+    const [db_check, signal_check, mcp_checks, nylas_cal, voice_check, signal_voice_check] = await Promise.all([
       checkDb(db, this.deps.logger),
       checkSignal(signalRpcClient, this.deps.logger),
       checkMcpServers(mcpServerStatuses, mcpSessions, this.deps.logger),
       checkNylasCalendar(nylasCalendarClient, this.deps.logger),
       checkVoice(voiceLiveKit, this.deps.logger),
+      checkSignalVoice(signalPulseSocketPath, this.deps.logger),
     ]);
 
     // Synchronous probes — no need to await.
@@ -238,6 +248,7 @@ export class HealthService {
       slack: slack_check,
       sms: sms_check,
       voice: voice_check,
+      signal_voice: signal_voice_check,
       scheduler: scheduler_check,
     };
 
@@ -387,6 +398,7 @@ export class HealthService {
       checks.slack,
       checks.sms,
       checks.voice,
+      checks.signal_voice,
       checks.scheduler,
     ];
     if (nonCritical.some(c => c === 'fail')) return 'degraded';
