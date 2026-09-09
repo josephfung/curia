@@ -45,6 +45,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`browser` health check** — probes Chrome with a bounded round-trip instead of testing an object reference. (#1762)
+- **Health probe timeouts** — every probe clears its losing timer instead of leaving one pending per request. (#1762)
 - **Spec 15** — blocked-body audit placement matches the event contract. (#1732)
 - **`DreamEngine`** — contact-anchored nodes no longer decay or archive; their facts still do. (#1694)
 - **Decay warnings** — anchored nodes are never listed for re-confirmation nor archived by dismissal. (#1694)

@@ -100,6 +100,42 @@ export interface VoiceLiveKitHealth {
 export const SLACK_CONNECT_GRACE_MS = 60_000;
 
 // ---------------------------------------------------------------------------
+// Shared probe plumbing
+// ---------------------------------------------------------------------------
+
+/**
+ * Await `work`, rejecting with `timeout` if it outlives `ms`.
+ *
+ * Every async probe here needs a hard bound, and each used to inline
+ * `Promise.race([work, new Promise((_, reject) => setTimeout(reject, ms))])`. That
+ * pattern leaks the losing timer: when `work` wins, the setTimeout stays scheduled
+ * until it fires. The Docker healthcheck hits /api/health every 30s and each request
+ * ran several probes, so every request left a handful of timers pending for seconds
+ * (PR #1763 review). Individually harmless, but it is the same slow-accumulation shape
+ * as the MCP Ajv leak that OOM-restarted prod (#1663), and clearing in `finally` costs
+ * nothing.
+ *
+ * A rejection from `work` propagates unchanged rather than being flattened into a
+ * timeout, so callers still log the real cause (ECONNREFUSED, Target closed, ...).
+ *
+ * The timeout does NOT cancel `work` — nothing here can. A probe that loses the race
+ * is abandoned, not aborted; it settles later and is ignored.
+ */
+export async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Probe implementations
 // ---------------------------------------------------------------------------
 
@@ -109,12 +145,7 @@ export const SLACK_CONNECT_GRACE_MS = 60_000;
  */
 export async function checkDb(pool: Pool, logger: Logger): Promise<CheckResult> {
   try {
-    await Promise.race([
-      pool.query('SELECT 1'),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 2_000),
-      ),
-    ]);
+    await withTimeout(pool.query('SELECT 1'), 2_000);
     return 'ok';
   } catch (err) {
     logger.warn({ err }, 'checkDb: DB liveness probe failed');
@@ -189,12 +220,7 @@ export async function checkSignal(
 ): Promise<CheckResult> {
   if (!client) return 'skipped';
   try {
-    await Promise.race([
-      client.listGroups(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 3_000),
-      ),
-    ]);
+    await withTimeout(client.listGroups(), 3_000);
     return 'ok';
   } catch (err) {
     logger.warn({ err }, 'checkSignal: Signal liveness probe failed');
@@ -244,13 +270,8 @@ export async function checkBrowser(
   if (context === null) return 'fail';
 
   try {
-    await Promise.race([
-      // Any well-formed URL works; nothing is expected to match. The call is the point.
-      context.cookies('http://127.0.0.1/'),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), timeoutMs),
-      ),
-    ]);
+    // Any well-formed URL works; nothing is expected to match. The call is the point.
+    await withTimeout(context.cookies('http://127.0.0.1/'), timeoutMs);
     return 'ok';
   } catch (err) {
     logger.warn({ err }, 'checkBrowser: browser liveness probe failed');
@@ -296,12 +317,7 @@ export async function checkMcpServers(
         // JSON-RPC. Zero-tools/unavailable servers were already failed by the boot
         // gate above, so we don't re-count tools here (and must not — see the
         // McpSessionHealth doc: listTools() leaks compiled validators, #1663).
-        await Promise.race([
-          session.client.ping(),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), 3_000),
-          ),
-        ]);
+        await withTimeout(session.client.ping(), 3_000);
         return [key, 'ok'];
       } catch (err) {
         logger.warn({ err, server: serverName }, 'checkMcpServers: MCP probe failed');
@@ -333,12 +349,7 @@ export async function checkNylasCalendar(
 ): Promise<NylasCalendarProbe> {
   if (!calendarClient) return { status: 'skipped', authFailure: false };
   try {
-    await Promise.race([
-      calendarClient.listCalendars(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 5_000),
-      ),
-    ]);
+    await withTimeout(calendarClient.listCalendars(), 5_000);
     return { status: 'ok', authFailure: false };
   } catch (err) {
     logger.warn({ err }, 'checkNylasCalendar: calendar grant probe failed');
@@ -414,12 +425,7 @@ export async function checkVoice(
 ): Promise<CheckResult> {
   if (!livekit) return 'skipped';
   try {
-    await Promise.race([
-      livekit.listRooms(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 5_000),
-      ),
-    ]);
+    await withTimeout(livekit.listRooms(), 5_000);
     return 'ok';
   } catch (err) {
     logger.warn({ err }, 'checkVoice: LiveKit management probe failed');
