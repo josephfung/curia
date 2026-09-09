@@ -130,18 +130,15 @@ COPY --from=build /app/packages/shared-types ./packages/shared-types
 # Same transient-network guard as the build stage (#1699).
 COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 
-# Install prod deps, add the runtime tsx, and delete every build-only artifact —
-# all in ONE layer. The single-layer part is load-bearing, not stylistic: see the
-# "Why one RUN" note below.
-#
 # tsx is needed at runtime: skill handlers are .ts files loaded via dynamic
 # import(), and they use ESM .js extension mapping (e.g., import from './foo.js'
 # resolving to foo.ts). Node's --experimental-strip-types doesn't handle this;
 # tsx does, and it's already used for dev (pnpm dev).
-#
-# Three flags on the `pnpm add` are load-bearing (verified against pnpm 11.7.0, the
-# pinned pkg mgr). Since packages/shared-types made this a real workspace, this dir is
-# now a workspace ROOT and a bare `pnpm add tsx` fails a chain of guards:
+RUN pnpm-retry pnpm install --frozen-lockfile --prod
+
+# Three flags are load-bearing (verified against pnpm 11.7.0, the pinned pkg mgr).
+# Since packages/shared-types made this a real workspace, this dir is now a workspace
+# ROOT and a bare `pnpm add tsx` fails a chain of guards:
 #   -w: without it, a `pnpm add` at a workspace root is rejected with
 #     ERR_PNPM_ADDING_TO_ROOT. tsx is a genuine root-level runtime dep, so the root is
 #     the correct target (the shared-types member copied above lets it re-resolve).
@@ -152,16 +149,10 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 #   --save-prod: tsx is declared as a *devDependency* in package.json, so --prod alone
 #     would leave it there and never install it — no ./node_modules/.bin/tsx, which the
 #     CMD below invokes. --save-prod promotes tsx into `dependencies` so it installs.
-#
-# What gets deleted, and why each one:
-#   - /root/.cache/pnpm — pnpm's registry METADATA cache (v11/metadata-full/*.jsonl):
-#     one JSONL per package holding every published version's manifest, README included.
-#     The `pnpm add` re-resolves the whole workspace, so this covers devDependencies
-#     too, not just what ships. Trivy's secret scanner reads those READMEs and reports
-#     the example tokens in them as leaked credentials — @octokit/auth-token's
-#     `createTokenAuth("ghp_…")` documentation snippet alone produced twelve CRITICAL
-#     github-pat / github-app-token findings (code-scanning #271-#282). False positives,
-#     but they were the only CRITICALs in the Security tab and buried everything else.
+RUN pnpm-retry pnpm add -w --save-prod --prod tsx
+
+# Remove build-only artifacts that are unreachable at runtime (CMD invokes
+# ./node_modules/.bin/tsx directly; no install ever runs inside the container):
 #   - /root/.cache/node/corepack and /root/.cache/corepack — corepack's cached pnpm
 #     tarballs. Node 24's bundled corepack pre-caches pnpm@11.0.8 during `corepack
 #     enable` even though this project pins pnpm@11.7.0, and 11.0.8 bundles tar@7.5.13
@@ -170,31 +161,32 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 #     Trivy alert path), the second is the older corepack layout, kept so this stays
 #     correct across base-image bumps.
 #   - /usr/local/bin/pnpm-retry — build-only tooling (#1699); this is its last use.
-# None of it is reachable at runtime: CMD invokes ./node_modules/.bin/tsx directly and
-# no install ever runs inside the container.
 #
-# What is deliberately KEPT: /root/.local/share/pnpm, the content-addressable store.
-# An earlier revision of this step deleted it too. That was wrong, and it broke the
-# deploy. curia-deploy's thin downstream image (deploy/compose/Dockerfile.curia) builds
-# FROM this one, switches to root, and runs `pnpm add` with an inline HOME=/root
-# specifically so pnpm resolves the store to /root/.local/share/pnpm/store/v11 — the
-# path THIS stage creates. Removing it left that build with an empty store, so every
-# tarball was re-downloaded ("reused 0") instead of hardlinked, turning a deploy into a
-# full re-fetch of the dependency graph against a flaky registry.
+# -- Two pnpm directories are deliberately KEPT. Do not "clean them up". (#1758) --
 #
-# Keeping the store costs nothing here. All twelve secret findings were in the metadata
-# cache above (/root/.cache/pnpm/v11/metadata-full/*.jsonl); not one was in the store,
-# which shipped in this image for its whole history without ever tripping a Trivy rule.
-# The store holds content-addressed blobs, not per-package README text.
+# curia-deploy's thin downstream image (deploy/compose/Dockerfile.curia) builds FROM
+# this one, switches to root, and runs `pnpm add` to layer in its own extensions. That
+# `pnpm add` forces a strict re-resolution of the ENTIRE workspace — devDependencies
+# included — and then verifies all ~1300 lockfile entries against pnpm's supply-chain
+# policies. Both directories are what let it do that from disk instead of from the
+# network:
 #
-# Why one RUN. Deleting these in a LATER layer is not enough. Trivy's secret scanner
-# reports matches from any layer in the image, not just the whiteout-applied final
-# filesystem — which is the correct stance, since the content is still extractable from
-# the image tarball. A separate cleanup layer was tried first and left all twelve
-# findings in place even though the removal demonstrably ran. Creating and deleting the
-# cache inside a single RUN means it is never committed to any layer. (The per-layer
-# behaviour is specific to secret scanning; the package analyzer does honour whiteouts,
-# which is why the earlier later-layer corepack cleanup did clear its tar CVE.)
+#   - /root/.cache/pnpm — the registry METADATA cache. Without it the downstream build
+#     fetches a packument per lockfile entry. drizzle-orm's alone is 64 MB (a promptfoo
+#     dev transitive), which on a saturated link exceeds fetchTimeout; trustPolicy
+#     verification is fail-closed, so "could not be checked" becomes
+#     ERR_PNPM_TRUST_DOWNGRADE and the deploy dies on a package that has nothing wrong
+#     with it. Verification measured 15m 44s on the VPS versus ~18s in CI.
+#   - /root/.local/share/pnpm — the content-addressable store. node_modules entries are
+#     hardlinks into it; without it the downstream re-downloads tarballs it already has.
+#
+# The metadata cache is why code-scanning #271-#282 exist: its v11/metadata-full/*.jsonl
+# files embed each package's README, and Trivy's secret scanner reads @octokit/auth-
+# token's `createTokenAuth("ghp_…")` documentation snippet as a leaked credential. Those
+# are false positives over public README text sitting in a build cache, so the scanner
+# is scoped past this path in .github/workflows/trivy.yml rather than the cache being
+# deleted out from under the deploy. Deleting it is only safe once Dockerfile.curia
+# stops re-resolving the whole workspace (curia-deploy#220).
 #
 # Fail closed. `rm -rf` exits 0 whether or not it removed anything, so a future pnpm or
 # base-image change that relocated any of these paths would silently turn this into a
@@ -202,10 +194,7 @@ COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 # point still resolves — the one property this cleanup must not break — and mirrors the
 # assertions around the npm/npx removal above.
 RUN set -e; \
-    pnpm-retry pnpm install --frozen-lockfile --prod; \
-    pnpm-retry pnpm add -w --save-prod --prod tsx; \
     rm -rf /root/.cache/node/corepack /root/.cache/corepack \
-           /root/.cache/pnpm \
            /usr/local/bin/pnpm-retry; \
     ./node_modules/.bin/tsx --version
 
