@@ -165,7 +165,32 @@ RUN pnpm-retry pnpm add -w --save-prod --prod tsx
 # pnpm-retry is build-only tooling; the last runtime-stage use is the `pnpm add` above.
 # Drop it here so it doesn't ship in the published image, consistent with this stage
 # already stripping unused npm/npx and the corepack cache (#1699).
-RUN rm -rf /root/.cache/node/corepack /root/.cache/corepack /usr/local/bin/pnpm-retry
+#
+# pnpm's own caches are removed for the same reason, and they are the larger problem:
+#   - /root/.cache/pnpm holds the registry METADATA cache (v11/metadata-full/*.jsonl),
+#     one JSONL per package containing every published version's manifest — including
+#     each package's README. The `pnpm add` above re-resolves the whole workspace, so
+#     this cache covers devDependencies too, not just what ships. Trivy's secret scanner
+#     reads those READMEs and reports the example tokens in them as leaked credentials:
+#     @octokit/auth-token's `createTokenAuth("ghp_…")` snippet alone produced twelve
+#     CRITICAL github-pat / github-app-token findings against the published image.
+#     They are false positives, but they bury real findings in the Security tab.
+#   - /root/.local/share/pnpm is the content-addressable store (plus pnpm's global bin
+#     dir). node_modules entries are hardlinks INTO that store, so unlinking the store
+#     paths leaves the node_modules inodes intact — the data is still referenced.
+# Neither is used at runtime: CMD invokes ./node_modules/.bin/tsx directly and no
+# install runs inside the container.
+#
+# Fail closed. `rm -rf` exits 0 whether or not it removed anything, so a future pnpm or
+# base-image change that relocates the store would silently turn this into a no-op —
+# or, worse, a store layout that COPIES instead of hardlinking would leave a broken
+# tsx behind a green build. Executing tsx after the removal proves the runtime entry
+# point still resolves, which is the only property this cleanup must not break.
+RUN set -e; \
+    rm -rf /root/.cache/node/corepack /root/.cache/corepack \
+           /root/.cache/pnpm /root/.local/share/pnpm \
+           /usr/local/bin/pnpm-retry; \
+    ./node_modules/.bin/tsx --version
 
 # Copy compiled output from build stage
 COPY --from=build /app/dist ./dist

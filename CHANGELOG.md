@@ -132,6 +132,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Docker image** — drop pnpm's metadata cache and store from the runtime image; they aren't used at runtime. (#1750)
 - **Docker image** — remove unused global npm so bundled brace-expansion/tar CVEs clear. (#1568)
 
 ## [0.42.0] — 2026-07-26 — "KITT"
