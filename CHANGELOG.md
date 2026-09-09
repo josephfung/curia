@@ -132,6 +132,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Semgrep SARIF** — `# nosemgrep`-suppressed findings no longer upload as open code-scanning alerts. (#1754)
 - **Dependency pins** — `qs`, `hono`, and `fflate` raised to patched releases, clearing six advisories. (#1752)
 - **Docker image** — drop pnpm's metadata cache and store from the runtime image; they aren't used at runtime. (#1750)
 - **Docker image** — remove unused global npm so bundled brace-expansion/tar CVEs clear. (#1568)

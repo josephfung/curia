@@ -47,6 +47,28 @@ jobs:
             --exclude 'pnpm-lock.yaml' \
             --exclude 'tests/**/*.snap'
 
+      # GitHub code scanning ignores SARIF `suppressions`. Semgrep honours an in-tree
+      # `# nosemgrep` comment — it drops the finding from its console output and emits it
+      # with `"suppressions": [{"state": "accepted"}]` — but upload-sarif surfaces it as an
+      # OPEN alert anyway. Every deliberately-accepted finding then has to be dismissed by
+      # hand in the Security tab, and that dismissal is keyed to the finding's fingerprint:
+      # editing a comment near the suppressed line resurrects it as a fresh, undismissed
+      # alert. Alert #192 came back as #262 on pnpm-workspace.yaml exactly that way, with
+      # the `# nosemgrep` comment sitting right above the line the whole time.
+      #
+      # Filtering here makes that comment the single source of truth for what is accepted:
+      # in the tree, in code review, next to the reason it was accepted. The step decides
+      # nothing on its own — Semgrep already classified these findings as suppressed, and
+      # this only forwards that classification to a consumer that would otherwise discard
+      # it. Each dropped finding is named in the job log.
+      #
+      # Deliberately NOT continue-on-error: a missing or malformed SARIF must fail the job.
+      # upload-sarif reads an empty result set as "everything was fixed" and would close
+      # real alerts across the repo.
+      - name: Drop nosemgrep-suppressed findings before upload
+        if: always()
+        run: python3 .github/scripts/filter-suppressed-sarif.py semgrep.sarif
+
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
