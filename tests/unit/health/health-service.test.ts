@@ -113,6 +113,29 @@ describe('HealthService.getStatus()', () => {
     expect(result.status).toBe('ok');
   });
 
+  // #1762 moved checkBrowser from the synchronous block into the awaited Promise.all,
+  // because it now round-trips to Chrome. A mis-wire there (an un-awaited promise
+  // landing in `checks.browser`) would not be a type error at the call site's edges,
+  // and would read as truthy — i.e. permanently healthy. This pins the real value.
+  it('returns degraded when the browser probe fails (#1762)', async () => {
+    const svc = new HealthService(makeDeps({
+      browserService: {
+        browserContext: { cookies: vi.fn().mockRejectedValue(new Error('Target closed')) },
+      },
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.checks.browser).toBe('fail');
+    expect(result.status).toBe('degraded');
+  });
+
+  it('reports ok when the browser answers the probe (#1762)', async () => {
+    const svc = new HealthService(makeDeps({
+      browserService: { browserContext: { cookies: vi.fn().mockResolvedValue([]) } },
+    }) as never);
+    const result = await svc.getStatus();
+    expect(result.checks.browser).toBe('ok');
+  });
+
   it('reports ok for healthy Slack/SMS/Voice probes (#1567)', async () => {
     const svc = new HealthService(makeDeps({
       slackClient: {

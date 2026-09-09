@@ -33,11 +33,14 @@ export interface SignalRpcClientHealth {
 export interface BrowserServiceHealth {
   /**
    * The persistent browser context, or null when the service is stopped.
-   * BrowserService uses launchPersistentContext — context.browser() always returns
-   * null for these contexts (Playwright behavior, not an error). Liveness is
-   * checked by whether the context object exists: stop() sets it to null.
+   *
+   * Only `cookies()` is required: it is the cheapest read-only call that actually
+   * crosses the process boundary into Chrome (a `Storage.getCookies` protocol
+   * round-trip), which is what makes it a liveness probe rather than a reference check.
    */
-  browserContext: object | null;
+  browserContext: {
+    cookies(urls?: string): Promise<unknown[]>;
+  } | null;
 }
 
 export interface McpSessionHealth {
@@ -199,17 +202,60 @@ export async function checkSignal(
   }
 }
 
+/** Default budget for the browser round-trip. Local Chrome over a pipe — a healthy
+ * browser answers in single-digit ms; anything near this is wedged. */
+export const BROWSER_PROBE_TIMEOUT_MS = 3_000;
+
 /**
- * Check Playwright browser context liveness. Non-critical.
- * Synchronous — liveness is determined by whether the context object exists.
- * Skipped when no service is provided (browser not configured).
+ * Playwright/Patchright browser liveness (#1762). Non-critical.
+ *
+ * This used to be `service.browserContext !== null` — an object-reference existence
+ * test. Chrome runs in a separate process, so holding a reference proves nothing about
+ * whether that process is alive: exactly the shape that let a dead PulseAudio daemon
+ * report healthy (#1760), and this subsystem has form for silent death (the stale
+ * Chrome SingletonLock, #1017).
+ *
+ * The old comment justified the shortcut by asserting that `context.browser()` always
+ * returns null for persistent contexts, so no probe was possible. That was wrong, and
+ * it mattered — it is the stated reason the check was never strengthened. Production
+ * disproves it: `attachDisconnectedHandler` logs "crash recovery disabled" on a null
+ * `browser()`, and that warning has never appeared on an instance that logged
+ * "Persistent browser context launched". A third comment, on the `browserContext`
+ * getter, claimed this probe called `isConnected()`, which it never did. All three
+ * claims are now reconciled by making the probe real.
+ *
+ * `cookies()` is used rather than `isConnected()`: the latter is synchronous cached
+ * transport state, so a wedged-but-connected renderer still reports true. A bounded
+ * round-trip catches both a dead process (the call rejects) and a hung one (it never
+ * settles, and the timeout fires).
+ *
+ * Scoped to a single URL so a routine liveness check does not pull an entire real
+ * browsing profile's cookie jar — session tokens included — into memory every 30s.
  */
-export function checkBrowser(service: BrowserServiceHealth | undefined): CheckResult {
+export async function checkBrowser(
+  service: BrowserServiceHealth | undefined,
+  logger: Logger,
+  timeoutMs: number = BROWSER_PROBE_TIMEOUT_MS,
+): Promise<CheckResult> {
   if (!service) return 'skipped';
-  // BrowserService uses launchPersistentContext: context.browser() always returns null
-  // for persistent contexts (it's not an error). Liveness = context object exists;
-  // BrowserService sets context to null on stop() and during failed relaunch.
-  return service.browserContext !== null ? 'ok' : 'fail';
+  const context = service.browserContext;
+  // Null means stopped, or a crash-recovery relaunch that failed. Already definitive —
+  // no probe needed, and nothing to probe.
+  if (context === null) return 'fail';
+
+  try {
+    await Promise.race([
+      // Any well-formed URL works; nothing is expected to match. The call is the point.
+      context.cookies('http://127.0.0.1/'),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), timeoutMs),
+      ),
+    ]);
+    return 'ok';
+  } catch (err) {
+    logger.warn({ err }, 'checkBrowser: browser liveness probe failed');
+    return 'fail';
+  }
 }
 
 /**
@@ -310,6 +356,13 @@ export async function checkNylasCalendar(
  * Skipped when the Slack adapter was not constructed (disabled / no credentials).
  * Allows a short boot grace before the first `connected` event; after that,
  * a disconnected socket is `fail` (Socket Mode reconnects are visible as degraded).
+ *
+ * Cached state rather than a round-trip, and deliberately so (#1762): the flag is
+ * maintained by the Socket Mode client from real socket events, and Socket Mode runs
+ * its own ping/pong underneath, so this is event-driven liveness rather than an
+ * existence check. A half-open socket could still read as connected; the exposure was
+ * judged small enough not to warrant an extra probe. Recorded so a later audit knows
+ * this was considered rather than overlooked.
  */
 export function checkSlack(
   client: SlackClientHealth | undefined,
@@ -324,8 +377,26 @@ export function checkSlack(
 
 /**
  * SMS (Telnyx) adapter readiness (#1567). Non-critical.
- * Skipped when the SMS adapter was not constructed. Healthy when the webhook
- * handler is installed (adapter started) — no outbound send.
+ * Skipped when the SMS adapter was not constructed.
+ *
+ * WHAT `ok` MEANS HERE: the inbound webhook handler is installed in this process.
+ * Nothing more. It does NOT mean Telnyx can reach us, that the credentials are still
+ * valid, or that the DID is still routed to this instance. Each of those can break
+ * with this reporting `ok`. Read it as "the adapter started", never as end-to-end SMS
+ * health (#1762).
+ *
+ * Why no probe, unlike its neighbours: the audit in #1762 asked whether this should
+ * round-trip to Telnyx the way `voice` and `nylas_calendar` do. It should not, and the
+ * reason is worth recording so the question is not reopened blind. The property that
+ * actually matters here is INBOUND reachability — Telnyx delivering a webhook to us —
+ * and no outbound API call can assert that. A read-only "list phone numbers" would
+ * upgrade `ok` from "handler installed" to "handler installed and our credentials
+ * work", while adding a third-party network dependency to a liveness endpoint hit
+ * every 30s. That is a poor trade for a partial answer. An outbound send WOULD prove
+ * more, and is rejected outright: a health check must never cost money or emit traffic.
+ *
+ * If inbound reachability needs real coverage, it belongs in a periodic canary
+ * (like the Nylas grant canary), not in the synchronous liveness path.
  */
 export function checkSms(health: SmsChannelHealth | undefined): CheckResult {
   if (!health) return 'skipped';

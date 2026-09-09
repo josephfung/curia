@@ -214,9 +214,11 @@ export class BrowserService {
         this.attachDisconnectedHandler(ctx);
       }).catch(err => {
         this.logger.error({ err }, 'Browser restart failed');
-        // Clear the stale crashed context so checkBrowser() returns 'fail' during
-        // crash recovery. Without this, browserContext remains the dead reference
-        // and the health check would falsely report 'ok'.
+        // Clear the stale crashed context: a failed relaunch means there is no browser,
+        // and the getter must not hand out a reference to a corpse. Since #1762
+        // checkBrowser round-trips rather than trusting the reference, so it would
+        // report 'fail' here regardless — this is no longer the health check's only
+        // line of defence, but leaving a dead reference reachable would still be wrong.
         this.context = null;
       });
     });
@@ -410,8 +412,12 @@ export class BrowserService {
 
   /**
    * Expose the persistent browser context for liveness probes. Null when the service
-   * has not been started or has been stopped. The probe calls isConnected() to confirm
-   * the browser process is still alive.
+   * has not been started or has been stopped.
+   *
+   * The probe (`checkBrowser`) does a bounded `cookies()` round-trip into Chrome. It
+   * deliberately does NOT use `isConnected()`, which this comment previously claimed:
+   * that is synchronous cached transport state, so a wedged-but-connected renderer
+   * still reports true (#1762).
    */
   get browserContext(): BrowserContext | null {
     return this.context;
