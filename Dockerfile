@@ -129,16 +129,19 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --from=build /app/packages/shared-types ./packages/shared-types
 # Same transient-network guard as the build stage (#1699).
 COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
-RUN pnpm-retry pnpm install --frozen-lockfile --prod
 
+# Install prod deps, add the runtime tsx, and delete every build-only artifact —
+# all in ONE layer. The single-layer part is load-bearing, not stylistic: see the
+# "Why one RUN" note below.
+#
 # tsx is needed at runtime: skill handlers are .ts files loaded via dynamic
 # import(), and they use ESM .js extension mapping (e.g., import from './foo.js'
 # resolving to foo.ts). Node's --experimental-strip-types doesn't handle this;
 # tsx does, and it's already used for dev (pnpm dev).
 #
-# Three flags are load-bearing (verified against pnpm 11.7.0, the pinned pkg mgr).
-# Since packages/shared-types made this a real workspace, this dir is now a workspace
-# ROOT and a bare `pnpm add tsx` fails a chain of guards:
+# Three flags on the `pnpm add` are load-bearing (verified against pnpm 11.7.0, the
+# pinned pkg mgr). Since packages/shared-types made this a real workspace, this dir is
+# now a workspace ROOT and a bare `pnpm add tsx` fails a chain of guards:
 #   -w: without it, a `pnpm add` at a workspace root is rejected with
 #     ERR_PNPM_ADDING_TO_ROOT. tsx is a genuine root-level runtime dep, so the root is
 #     the correct target (the shared-types member copied above lets it re-resolve).
@@ -149,44 +152,48 @@ RUN pnpm-retry pnpm install --frozen-lockfile --prod
 #   --save-prod: tsx is declared as a *devDependency* in package.json, so --prod alone
 #     would leave it there and never install it — no ./node_modules/.bin/tsx, which the
 #     CMD below invokes. --save-prod promotes tsx into `dependencies` so it installs.
-RUN pnpm-retry pnpm add -w --save-prod --prod tsx
-
-# Remove corepack's cached pnpm tarballs. Node 24's bundled corepack pre-caches
-# pnpm@11.0.8 (the version shipped with Node 24) during `corepack enable`, even
-# though this project uses pnpm@11.7.0. pnpm@11.0.8 bundles tar@7.5.13 which is
-# vulnerable to CVE-2026-53655 (PAX size override / tar parser interpretation
-# differential). Upgrading packageManager to pnpm@11.7.0 is not sufficient on
-# its own because the old cached tarball remains on disk and Trivy flags it.
-# pnpm is not used at runtime (CMD calls tsx directly), so the cache is safe to
-# remove entirely. Both paths are removed: Node 24's corepack writes to
-# /root/.cache/node/corepack (confirmed by the Trivy alert path); the alternate
-# layout /root/.cache/corepack (used by older corepack versions) is removed too
-# so this stays correct across future base-image bumps.
-# pnpm-retry is build-only tooling; the last runtime-stage use is the `pnpm add` above.
-# Drop it here so it doesn't ship in the published image, consistent with this stage
-# already stripping unused npm/npx and the corepack cache (#1699).
 #
-# pnpm's own caches are removed for the same reason, and they are the larger problem:
-#   - /root/.cache/pnpm holds the registry METADATA cache (v11/metadata-full/*.jsonl),
-#     one JSONL per package containing every published version's manifest — including
-#     each package's README. The `pnpm add` above re-resolves the whole workspace, so
-#     this cache covers devDependencies too, not just what ships. Trivy's secret scanner
-#     reads those READMEs and reports the example tokens in them as leaked credentials:
-#     @octokit/auth-token's `createTokenAuth("ghp_…")` snippet alone produced twelve
-#     CRITICAL github-pat / github-app-token findings against the published image.
-#     They are false positives, but they bury real findings in the Security tab.
-#   - /root/.local/share/pnpm is the content-addressable store (plus pnpm's global bin
-#     dir). node_modules entries are hardlinks INTO that store, so unlinking the store
-#     paths leaves the node_modules inodes intact — the data is still referenced.
-# Neither is used at runtime: CMD invokes ./node_modules/.bin/tsx directly and no
-# install runs inside the container.
+# What gets deleted, and why each one:
+#   - /root/.cache/pnpm — pnpm's registry METADATA cache (v11/metadata-full/*.jsonl):
+#     one JSONL per package holding every published version's manifest, README included.
+#     The `pnpm add` re-resolves the whole workspace, so this covers devDependencies
+#     too, not just what ships. Trivy's secret scanner reads those READMEs and reports
+#     the example tokens in them as leaked credentials — @octokit/auth-token's
+#     `createTokenAuth("ghp_…")` documentation snippet alone produced twelve CRITICAL
+#     github-pat / github-app-token findings (code-scanning #271-#282). False positives,
+#     but they were the only CRITICALs in the Security tab and buried everything else.
+#   - /root/.local/share/pnpm — the content-addressable store and pnpm's global bin dir.
+#     node_modules entries are hardlinks INTO the store, so unlinking the store paths
+#     leaves those inodes referenced by node_modules; the installed tree is untouched.
+#   - /root/.cache/node/corepack and /root/.cache/corepack — corepack's cached pnpm
+#     tarballs. Node 24's bundled corepack pre-caches pnpm@11.0.8 during `corepack
+#     enable` even though this project pins pnpm@11.7.0, and 11.0.8 bundles tar@7.5.13
+#     (CVE-2026-53655, PAX size override / parser interpretation differential). Both
+#     paths are removed: Node 24's corepack writes the first (confirmed by the original
+#     Trivy alert path), the second is the older corepack layout, kept so this stays
+#     correct across base-image bumps.
+#   - /usr/local/bin/pnpm-retry — build-only tooling (#1699); this is its last use.
+# None of it is reachable at runtime: CMD invokes ./node_modules/.bin/tsx directly and
+# no install ever runs inside the container.
+#
+# Why one RUN. Deleting these in a LATER layer is not enough. Trivy's secret scanner
+# reports matches from any layer in the image, not just the whiteout-applied final
+# filesystem — which is the correct stance, since the content is still extractable from
+# the image tarball. A separate cleanup layer was tried first and left all twelve
+# findings in place even though the removal demonstrably ran. Creating and deleting the
+# cache inside a single RUN means it is never committed to any layer. (The per-layer
+# behaviour is specific to secret scanning; the package analyzer does honour whiteouts,
+# which is why the earlier later-layer corepack cleanup did clear its tar CVE.)
 #
 # Fail closed. `rm -rf` exits 0 whether or not it removed anything, so a future pnpm or
-# base-image change that relocates the store would silently turn this into a no-op —
-# or, worse, a store layout that COPIES instead of hardlinking would leave a broken
-# tsx behind a green build. Executing tsx after the removal proves the runtime entry
-# point still resolves, which is the only property this cleanup must not break.
+# base-image change that relocated the store would silently turn this into a no-op — or,
+# worse, a store layout that COPIED instead of hardlinking would leave a broken tsx
+# behind a green build. Executing tsx after the removal proves the runtime entry point
+# still resolves, which is the one property this cleanup must not break. This mirrors
+# the assertions around the npm/npx removal above.
 RUN set -e; \
+    pnpm-retry pnpm install --frozen-lockfile --prod; \
+    pnpm-retry pnpm add -w --save-prod --prod tsx; \
     rm -rf /root/.cache/node/corepack /root/.cache/corepack \
            /root/.cache/pnpm /root/.local/share/pnpm \
            /usr/local/bin/pnpm-retry; \
