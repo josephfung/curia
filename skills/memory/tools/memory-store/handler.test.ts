@@ -329,7 +329,7 @@ describe('MemoryStoreHandler', () => {
         input: VALID_INPUT,
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
-        entityMemory: makeMockEntityMemory({ stored: false, action: 'rate_limited', conflict: 'Memory write rate limit exceeded (50 per agent per task)' }),
+        entityMemory: makeMockEntityMemory({ stored: false, action: 'rate_limited', reason: 'Memory write rate limit exceeded (50 per agent per task)' }),
       } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
@@ -348,7 +348,7 @@ describe('MemoryStoreHandler', () => {
         input: VALID_INPUT,
         secret: () => 'test-key',
         log: pino({ level: 'silent' }),
-        entityMemory: makeMockEntityMemory({ stored: false, action: 'entity_not_found', conflict: 'Entity node not found: entity-1' }),
+        entityMemory: makeMockEntityMemory({ stored: false, action: 'entity_not_found', reason: 'Entity node not found: entity-1' }),
       } as unknown as ToolContext;
 
       const result = await handler.execute(ctx);
@@ -358,6 +358,37 @@ describe('MemoryStoreHandler', () => {
       expect(data.stored).toBe(false);
       expect(data.action).toBe('entity_not_found');
       expect(String(data.reason)).toMatch(/entity node not found/i);
+    });
+  });
+
+  // #472 regression: the handler must source the agent-visible reason from
+  // StoreFactResult.reason for operational rejections. Before the split these two
+  // outcomes carried their reason on `conflict`; reading the wrong field would
+  // silently return `reason: undefined` to the agent.
+  describe('operational rejections read StoreFactResult.reason (#472)', () => {
+    it.each([
+      ['rate_limited', 'Memory write rate limit exceeded (50 per agent per task)'],
+      ['entity_not_found', 'Entity node not found: entity-1'],
+    ])('surfaces the %s reason and ignores a stray conflict value', async (action, reason) => {
+      const ctx = {
+        input: VALID_INPUT,
+        secret: () => 'test-key',
+        log: pino({ level: 'silent' }),
+        // `conflict` is deliberately set to a decoy: if the handler still read it,
+        // the decoy would leak into the agent-visible result instead of `reason`.
+        entityMemory: makeMockEntityMemory({
+          stored: false,
+          action,
+          reason,
+          conflict: 'DECOY — contradiction carrier must not be read for this action',
+        }),
+      } as unknown as ToolContext;
+
+      const result = await handler.execute(ctx);
+
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.action).toBe(action);
+      expect(data.reason).toBe(reason);
     });
   });
 
@@ -944,7 +975,7 @@ describe('MemoryStoreHandler', () => {
       const entityMemory = mockMem({
         stored: false,
         action: 'entity_not_found',
-        conflict: 'Entity node not found: entity-1',
+        reason: 'Entity node not found: entity-1',
       });
       const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
 
@@ -959,7 +990,7 @@ describe('MemoryStoreHandler', () => {
       const entityMemory = mockMem({
         stored: false,
         action: 'rate_limited',
-        conflict: 'Memory write rate limit exceeded (50 per agent per task)',
+        reason: 'Memory write rate limit exceeded (50 per agent per task)',
       });
       const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
 

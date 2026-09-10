@@ -281,7 +281,7 @@ describe('ExtractFactsHandler', () => {
 
     const storeFact = vi.spyOn(entityMemory, 'storeFact')
       .mockResolvedValueOnce({ stored: true, action: 'created' })
-      .mockResolvedValueOnce({ stored: false, action: 'rate_limited', conflict: '50-write limit reached' });
+      .mockResolvedValueOnce({ stored: false, action: 'rate_limited', reason: '50-write limit reached' });
 
     const ctx = makeCtx(entityMemory, { text: 'Jane Doe is the Canadian CEO based in Toronto.', source: 'test' }, infraLlm);
     const result = await handler.execute(ctx);
@@ -795,7 +795,7 @@ describe('ExtractFactsHandler', () => {
       vi.spyOn(entityMemory, 'storeFact').mockResolvedValueOnce({
         stored: false,
         action: 'rate_limited',
-        conflict: '50-write limit reached',
+        reason: '50-write limit reached',
       });
       const ctx = makeCtx(
         entityMemory,
@@ -811,6 +811,9 @@ describe('ExtractFactsHandler', () => {
       const nodes = await entityMemory.findEntities(PII_SUBJECT);
       expect(call![0]).toHaveProperty('entityNodeId', nodes[0]!.id);
       expect(call![0]).toHaveProperty('attribute', 'dietary_preference');
+      // Sourced from StoreFactResult.reason since #472 — asserting it keeps this test
+      // from passing vacuously if the handler ever reads the wrong carrier again.
+      expect(call![0]).toHaveProperty('reason', '50-write limit reached');
     });
 
     it('fact-not-stored warn', async () => {

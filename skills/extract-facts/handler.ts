@@ -400,14 +400,17 @@ ${text}`,
             // in this batch will also fail, so break immediately rather than burning
             // through the rest of the loop and mis-reporting them as conflicts.
             ctx.log.error(
-              { entityNodeId: entityNode.id, ...logSafeAttribute(attribute), source: effectiveSource, reason: result.conflict },
+              { entityNodeId: entityNode.id, ...logSafeAttribute(attribute), source: effectiveSource, reason: result.reason },
               'extract-facts: write rate limit exceeded — aborting remaining facts in batch',
             );
             failed++;
             break;
           } else {
             // conflict, auto_rejected, or entity_not_found — expected semantic outcomes, not infra failures.
-            ctx.log.warn({ entityNodeId: entityNode.id, ...logSafeAttribute(attribute), conflict: result.conflict, action: result.action, source: effectiveSource }, 'extract-facts: fact not stored');
+            // The two carriers are disjoint (#472): contradictions populate `conflict`,
+            // operational rejections populate `reason`. Log both so the branch stays
+            // one log line regardless of which outcome landed here.
+            ctx.log.warn({ entityNodeId: entityNode.id, ...logSafeAttribute(attribute), conflict: result.conflict, reason: result.reason, action: result.action, source: effectiveSource }, 'extract-facts: fact not stored');
           }
         } catch (err) {
           // Re-throw programming errors — these indicate bugs in this handler (wrong

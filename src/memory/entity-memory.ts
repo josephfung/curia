@@ -58,8 +58,15 @@ export interface StoreFactResult {
    *  The emitted audit event sensitivity may differ from what is stored on the node.
    *  The caller should log a warning when this is true. */
   sensitivityFallback?: boolean;
-  /** Human-readable reason for a conflict or rate-limit rejection. */
+  /** Human-readable contradiction message. Set only for the contradiction outcomes
+   *  (`conflict` and `auto_rejected`) — never for operational rejections, so that a caller
+   *  can treat a truthy `conflict` as "there is a contradiction to surface to the CEO".
+   *  See #472: this field used to double as the reason carrier for entity_not_found and
+   *  rate_limited, which made that check fire on outcomes that are not contradictions. */
   conflict?: string;
+  /** Human-readable operational reason for a non-contradiction rejection — set for
+   *  `entity_not_found` and `rate_limited`. Kept separate from `conflict` (see #472). */
+  reason?: string;
   /** The ID of the existing fact node involved in a contradiction.
    *  Populated when action === 'conflict' or action === 'auto_rejected' — lets
    *  the caller surface details or record the superseded node. */
@@ -547,7 +554,8 @@ export class EntityMemory {
    * Returns:
    * - { stored: true, nodeId, sensitivity } on create (new fact node + edge persisted)
    * - { stored: true, nodeId, sensitivity } on update (duplicate merged into existing node)
-   * - { stored: false, conflict } on rate-limit rejection or contradiction
+   * - { stored: false, conflict } on contradiction (conflict / auto_rejected)
+   * - { stored: false, reason } on operational rejection (rate_limited / entity_not_found)
    *
    * The sensitivity field in the result is what was actually assigned to the node —
    * the execution layer uses this to populate memory.store audit events.
@@ -675,10 +683,12 @@ export class EntityMemory {
         };
 
       case 'entity_not_found':
-        return { stored: false, action: 'entity_not_found', conflict: result.reason };
+        // Operational rejection, not a contradiction — reason rides on `reason` (#472).
+        return { stored: false, action: 'entity_not_found', reason: result.reason };
 
       case 'rate_limited':
-        return { stored: false, action: 'rate_limited', conflict: result.reason };
+        // Operational rejection, not a contradiction — reason rides on `reason` (#472).
+        return { stored: false, action: 'rate_limited', reason: result.reason };
 
       case 'auto_rejected':
         // Spec line 121: incoming confidence was lower — write dropped, no store update.
