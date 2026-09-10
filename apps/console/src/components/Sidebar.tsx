@@ -241,18 +241,18 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
                 MCP Skills
               </button>
               <button
-                className={`nav-sub-item${activeView === 'system' ? ' active' : ''}`}
-                onClick={() => go('system')}
-              >
-                <IconServer />
-                System
-              </button>
-              <button
                 className={`nav-sub-item${activeView === 'settings' ? ' active' : ''}`}
                 onClick={() => go('settings')}
               >
                 <IconBrain />
                 Personality
+              </button>
+              <button
+                className={`nav-sub-item${activeView === 'system' ? ' active' : ''}`}
+                onClick={() => go('system')}
+              >
+                <IconServer />
+                System
               </button>
             </div>
           )}
