@@ -256,8 +256,8 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
   it('bumps calendar agent version for scheduling-rules capability', async () => {
     const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
     // Exact-version tripwire: bump this alongside `agents/calendar.yaml`'s version on any
-    // meaningful prompt/capability change. 0.7.1 = calendar-update-event cannot set RSVP status (#1735).
-    expect(config.version).toBe('0.7.1');
+    // meaningful prompt/capability change. 0.7.2 = RSVP prompt no longer states unverified vendor claims (#1735).
+    expect(config.version).toBe('0.7.2');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {
@@ -268,9 +268,9 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     expect(rsvpEnd).toBeGreaterThan(rsvpStart);
     const rsvpSection = prompt.slice(rsvpStart, rsvpEnd);
     expect(rsvpSection).toContain('Never update a participants array to RSVP');
-    expect(rsvpSection).toContain('Nylas rejects organizer-set participant');
     expect(rsvpSection).toContain('calendar-update-event');
-    expect(rsvpSection).toContain('cannot');
-    expect(rsvpSection).toMatch(/patch one person's RSVP/i);
+    expect(rsvpSection).toContain('calendar-respond-to-invite');
+    expect(rsvpSection).not.toMatch(/Nylas rejects organizer-set/i);
+    expect(rsvpSection).not.toMatch(/Microsoft Graph cannot/i);
   });
 });

@@ -4,63 +4,17 @@
 // Checks the read-only flag before attempting the update.
 //
 // Guest-list writes replace the entire attendee array (email + optional name).
-// Organizer-set RSVP status is not supported: Nylas rejects it on PUT, and
-// Microsoft Graph cannot set another attendee's response. First-person RSVP
-// is calendar-respond-to-invite (sendRsvp).
+// This Nylas tool does not set RSVP status; first-person RSVP is
+// calendar-respond-to-invite (sendRsvp).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import type { CalendarAttendeeInput, CreateEventInput } from '../../../../src/channels/calendar/nylas-calendar-client.js';
+import type { CreateEventInput } from '../../../../src/channels/calendar/nylas-calendar-client.js';
+import {
+  parseWritableAttendees,
+  collectGuestListMismatches,
+  guestListMismatchWarnings,
+} from '../../../../src/channels/calendar/attendee-input.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
-
-const RSVP_STATUS_KEYS = ['status', 'responseStatus', 'participationStatus'] as const;
-
-const ATTENDEE_STATUS_UNSUPPORTED =
-  'Attendee response status cannot be set through calendar-update-event. ' +
-  'Nylas rejects organizer-set participant status on event update; Microsoft Graph cannot set another attendee\'s response; ' +
-  'only the authenticated principal can RSVP, via calendar-respond-to-invite. ' +
-  'Pass attendees as email and optional name to replace the guest list.';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function parseAttendees(raw: unknown): { ok: true; attendees: CalendarAttendeeInput[] } | { ok: false; error: string } {
-  if (!Array.isArray(raw)) {
-    return { ok: false, error: 'Invalid input: attendees must be an array' };
-  }
-  const attendees: CalendarAttendeeInput[] = [];
-  for (const item of raw) {
-    if (!isRecord(item)) {
-      return { ok: false, error: 'Invalid input: each attendee must be an object with email and optional name' };
-    }
-    if (RSVP_STATUS_KEYS.some((key) => key in item)) {
-      return { ok: false, error: ATTENDEE_STATUS_UNSUPPORTED };
-    }
-    if (typeof item.email !== 'string' || item.email.trim() === '') {
-      return { ok: false, error: 'Invalid input: each attendee must have a non-empty email' };
-    }
-    if (item.name !== undefined && typeof item.name !== 'string') {
-      return { ok: false, error: 'Invalid input: attendee name must be a string when provided' };
-    }
-    const attendee: CalendarAttendeeInput = { email: item.email.trim() };
-    if (typeof item.name === 'string') attendee.name = item.name;
-    attendees.push(attendee);
-  }
-  return { ok: true, attendees };
-}
-
-function missingRequestedEmails(
-  requested: CalendarAttendeeInput[],
-  returned: Array<{ email: string }>,
-): string[] {
-  const returnedSet = new Set(returned.map((p) => p.email.trim().toLowerCase()));
-  const missing: string[] = [];
-  for (const attendee of requested) {
-    const email = attendee.email.trim().toLowerCase();
-    if (!returnedSet.has(email)) missing.push(email);
-  }
-  return missing;
-}
 
 export class CalendarUpdateEventHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -113,7 +67,7 @@ export class CalendarUpdateEventHandler implements ToolHandler {
       if (description !== undefined) changes.description = description;
       if (location !== undefined) changes.location = location;
       if (attendees !== undefined) {
-        const parsed = parseAttendees(attendees);
+        const parsed = parseWritableAttendees(attendees);
         if (!parsed.ok) return { success: false, error: parsed.error };
         changes.attendees = parsed.attendees;
       }
@@ -131,32 +85,27 @@ export class CalendarUpdateEventHandler implements ToolHandler {
         notifyAttendees,
       );
 
+      const warnings: string[] = [];
       if (changes.attendees) {
-        const missing = missingRequestedEmails(changes.attendees, event.participants);
-        if (missing.length > 0) {
-          ctx.log.error(
-            { calendarId, eventId, missingCount: missing.length },
-            'calendar-update-event: provider response omitted requested attendees',
+        const { missing, extra } = collectGuestListMismatches(changes.attendees, event.participants);
+        warnings.push(...guestListMismatchWarnings(missing, extra));
+        if (missing.length > 0 || extra.length > 0) {
+          ctx.log.warn(
+            { calendarId, eventId, missingCount: missing.length, extraCount: extra.length },
+            'calendar-update-event: provider guest list did not match the request',
           );
-          return {
-            success: false,
-            error:
-              `Failed to update event: provider response did not include ${missing.length} requested attendee(s). ` +
-              'The guest list replace may not have applied. Re-read the event before retrying.',
-          };
         }
+      }
+      if (notifyAttendees === false) {
+        warnings.push(
+          'notifyAttendees=false is honoured by Google Calendar; Microsoft and iCloud ignore it and still email attendees.',
+        );
       }
 
       ctx.log.info({ calendarId, eventId }, 'Updated calendar event');
       // Format timestamps in the user's local timezone so the confirmation matches
       // what calendar-list-events returns. toLocalIso handles null/invalid values internally.
       const tz = ctx.timezone;
-      const warnings: string[] = [];
-      if (notifyAttendees === false) {
-        warnings.push(
-          'notifyAttendees=false is honoured by Google Calendar; Microsoft and iCloud ignore it and still email attendees.',
-        );
-      }
       return {
         success: true,
         data: {

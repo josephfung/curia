@@ -1,6 +1,6 @@
 {
   "name": "calendar-update-event",
-  "description": "Modify an existing calendar event. Partial updates: send only the fields that change (title, start, end, description, location, attendees, conferencing). attendees replaces the entire guest list with email and optional name — not a per-person patch, and it cannot set RSVP status (Nylas rejects organizer-set participant status; Microsoft Graph cannot set another attendee's response). Use calendar-respond-to-invite for the principal's own RSVP. Guest-list and time changes send invitation emails by default. Set notifyAttendees=false to suppress those emails on Google; Microsoft and iCloud always notify.",
+  "description": "Modify an existing calendar event. Partial updates: send only the fields that change (title, start, end, description, location, attendees, conferencing). attendees replaces the entire guest list with email and optional name — not a per-person patch, and this Nylas tool cannot set RSVP status (use calendar-respond-to-invite for the principal's own RSVP). Whether existing RSVPs are preserved on a guest-list replace is unverified; re-read the event after changing attendees. Guest-list and time changes send invitation emails by default. Set notifyAttendees=false to suppress those emails on Google; Microsoft and iCloud always notify.",
   "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "high",
@@ -12,13 +12,13 @@
     "end": "timestamp? (new event end time)",
     "description": "string?",
     "location": "string?",
-    "attendees": "object[]? (full guest-list replacement: each { email, name? }. Cannot set RSVP status. Replaces every attendee, it does not patch one.)",
+    "attendees": "object[]? (full guest-list replacement: each { email, name? }. Cannot set RSVP status. Replaces membership; RSVP preservation on retained guests is unverified — re-read after writing.)",
     "conferencing": "object?",
     "notifyAttendees": "boolean? (default true. false suppresses invitation emails on Google only; Microsoft and iCloud always notify.)"
   },
   "outputs": {
     "event": "object",
-    "warnings": "string[]? (present when notifyAttendees=false, noting Microsoft/iCloud still notify)"
+    "warnings": "string[]? (notifyAttendees=false caveat, and guest-list mismatches after a write that already applied)"
   },
   "permissions": [],
   "secrets": [],

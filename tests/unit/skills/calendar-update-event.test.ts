@@ -155,7 +155,7 @@ describe('CalendarUpdateEventHandler', () => {
     }
   });
 
-  it('fails when the provider response omits a requested attendee', async () => {
+  it('warns when the provider response omits a requested attendee without claiming the write failed', async () => {
     const nylasCalendarClient = {
       updateEvent: vi.fn().mockResolvedValue(makeEvent({
         participants: [{ email: 'a@example.test', name: 'A', status: 'noreply' }],
@@ -172,10 +172,35 @@ describe('CalendarUpdateEventHandler', () => {
       },
       { nylasCalendarClient: nylasCalendarClient as never },
     ));
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error).toMatch(/did not include/i);
-      expect(result.error).not.toMatch(/success/i);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { warnings?: string[] };
+      expect(data.warnings?.some((w) => /omitted/i.test(w) && /do not retry/i.test(w))).toBe(true);
+    }
+  });
+
+  it('warns on extra returned participants and does not throw when a participant has no email', async () => {
+    const nylasCalendarClient = {
+      updateEvent: vi.fn().mockResolvedValue(makeEvent({
+        participants: [
+          { email: 'a@example.test', name: 'A', status: 'noreply' },
+          { email: undefined as unknown as string, name: 'Room', status: 'noreply' },
+          { email: 'organizer@example.test', name: 'Org', status: 'yes' },
+        ],
+      })),
+    };
+    const result = await handler.execute(makeCtx(
+      {
+        calendarId: 'cal-1',
+        eventId: 'evt-1',
+        attendees: [{ email: 'a@example.test', name: 'A' }],
+      },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { warnings?: string[] };
+      expect(data.warnings?.some((w) => /extra participant/i.test(w))).toBe(true);
     }
   });
 

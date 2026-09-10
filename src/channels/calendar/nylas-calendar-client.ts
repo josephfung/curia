@@ -9,6 +9,10 @@
 
 import NylasDefault from 'nylas';
 import type { Logger } from '../../logger.js';
+import { ATTENDEE_RSVP_STATUS_KEYS } from './attendee-input.js';
+import type { CalendarAttendeeInput } from './attendee-input.js';
+
+export type { CalendarAttendeeInput } from './attendee-input.js';
 
 /**
  * Minimal typed interface for the Nylas SDK calendar surface.
@@ -184,14 +188,6 @@ export type NylasRsvpStatus = 'yes' | 'no' | 'maybe';
 export interface NylasRsvpResult {
   requestId: string | null;
   sendIcsError: unknown | null;
-}
-
-/** Guest-list entry for create/update. RSVP `status` is intentionally absent:
- *  Nylas rejects organizer-set participant status on PUT ("Updating the status
- *  for participants is not allowed"). First-person RSVP is `sendRsvp` only. */
-export interface CalendarAttendeeInput {
-  email: string;
-  name?: string;
 }
 
 export interface CreateEventInput {
@@ -493,19 +489,29 @@ export class NylasCalendarClient {
   /**
    * Map Curia attendees to the Nylas write shape (email + name only).
    *
-   * Nylas `Participant.status` is required on the *read* type and reused on
-   * Create/UpdateEventRequest, but sending it on PUT is rejected:
-   * "Updating the status for participants is not allowed, only participants
-   * can rsvp or change the status of an event". Google Calendar can write
-   * `attendees[].responseStatus` as organizer; Microsoft Graph cannot; Nylas
-   * fails closed for both. First-person RSVP is `sendRsvp`.
+   * Why status is omitted (Nylas path, not a live PUT in this repo):
+   * - Nylas support (updated 2024-04-24) documents PUT /events rejecting
+   *   organizer-set participant status with
+   *   "Updating the status for participants is not allowed, only participants
+   *   can rsvp or change the status of an event":
+   *   https://support.nylas.com/hc/en-us/articles/4429255774865-Updating-the-status-for-participants-is-not-allowed-only-participants-can-rsvp-or-change-the-status-of-an-event
+   *   That article is v2-shaped (`PUT /events`); it has not been re-verified
+   *   against v3 on a live grant here.
+   * - v3 send-rsvp is the documented RSVP write:
+   *   https://developer.nylas.com/docs/reference/api/events/send-rsvp/
+   * - v3 PUT example participants are email/name/comment only (no status):
+   *   https://developer.nylas.com/docs/reference/api/events/put-events-id/
+   *
+   * Google Calendar API can write attendees[].responseStatus as organizer; that
+   * is a different integration than this Nylas client. First-person RSVP here
+   * is sendRsvp.
    */
   private toWritableParticipants(
     attendees: CalendarAttendeeInput[],
   ): Array<{ email: string; name: string }> {
     return attendees.map((a) => {
       const extra = a as unknown as Record<string, unknown>;
-      if ('status' in extra || 'responseStatus' in extra || 'participationStatus' in extra) {
+      if (ATTENDEE_RSVP_STATUS_KEYS.some((key) => key in extra)) {
         throw new Error(
           'Cannot set attendee response status on create/update; Nylas allows RSVP only via sendRsvp',
         );

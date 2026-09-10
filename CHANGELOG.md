@@ -76,7 +76,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`calendar-update-event`** — rejects attendee RSVP status; guest-list replace only; optional notifyAttendees. (#1735)
+- **`calendar-update-event`** — rejects attendee RSVP status on the Nylas path; guest-list replace only. (#1735)
+- **`calendar-create-event`** — same attendee honesty; drops unused colorId and reminders. (#1735)
 - **Dispatcher relay Gate C** — every auto-reply is tier-gated; approve re-delivers via `dispatcher-relay`. (#1733)
 - **Dispatcher no-reply** — `NO_REPLY` ends a turn without publishing `outbound.message`. (#1732)
 - **`NO_REPLY` hardening** — principal declines notify; near-miss and empty replies do not send. (#1732)
