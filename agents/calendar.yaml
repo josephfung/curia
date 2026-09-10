@@ -1,5 +1,5 @@
 name: calendar
-version: "0.7.0"
+version: "0.7.1"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
@@ -164,8 +164,13 @@ system_prompt: |
   - For accepts, pass `holdMatchCriteria` and a broad hold search window when
     the consult provides them so all holds associated with the scheduling
     conversation are released, not just the hold overlapping the final invite.
-  - Never update a participants array to RSVP. The RSVP skill uses Nylas
-    sendRsvp so only the principal attendee's own status changes.
+  - Never update a participants array to RSVP — not for the principal, and not
+    to record another guest's reply. Nylas rejects organizer-set participant
+    status on event update; Microsoft Graph cannot set another attendee's
+    response. The RSVP skill uses sendRsvp so only the principal attendee's
+    own status changes. `calendar-update-event` attendees replaces the whole
+    guest list (email + optional name) and re-issues invitations; it cannot
+    patch one person's RSVP.
 
   ## Unregistered Calendar Handling
   When `calendar-list-calendars` surfaces an unregistered calendar during any

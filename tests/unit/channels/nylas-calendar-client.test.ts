@@ -214,6 +214,33 @@ describe('NylasCalendarClient', () => {
         }),
       });
     });
+
+    it('maps attendees to email/name only and sets notify_participants', async () => {
+      await client.updateEvent(
+        'cal-1',
+        'evt-1',
+        { attendees: [{ email: 'a@example.test', name: 'A' }, { email: 'b@example.test' }] },
+        false,
+      );
+
+      expect(sdk.events.update).toHaveBeenCalledWith({
+        identifier: 'grant-123',
+        eventId: 'evt-1',
+        queryParams: { calendar_id: 'cal-1', notify_participants: false },
+        requestBody: {
+          participants: [
+            { email: 'a@example.test', name: 'A' },
+            { email: 'b@example.test', name: '' },
+          ],
+        },
+      });
+      const body = (sdk.events.update as ReturnType<typeof vi.fn>).mock.calls[0]![0].requestBody as {
+        participants: Array<Record<string, unknown>>;
+      };
+      for (const participant of body.participants) {
+        expect(participant).not.toHaveProperty('status');
+      }
+    });
   });
 
   describe('deleteEvent', () => {
