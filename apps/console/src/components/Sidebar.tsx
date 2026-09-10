@@ -16,6 +16,8 @@ import {
   IconAutonomy,
   IconPlug,
   IconChevron,
+  IconServer,
+  IconBrain,
 } from './Icons';
 
 type Theme = 'light' | 'system' | 'dark';
@@ -37,6 +39,7 @@ const ROUTES: Record<string, string> = {
   agents:   '/agents',
   channels:   '/channels',
   'mcp-skills': '/mcp-skills',
+  system:     '/system',
   settings:   '/settings',
 };
 
@@ -78,7 +81,7 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
   // Expand the Settings group when on any of its pages (Skills/Agents are now
   // standalone pages but still live under the sidebar's Settings group).
   const [settingsOpen, setSettingsOpen] = useState(
-    activeView === 'settings' || activeView === 'tools' || activeView === 'agents' || activeView === 'channels' || activeView === 'mcp-skills',
+    activeView === 'settings' || activeView === 'tools' || activeView === 'agents' || activeView === 'channels' || activeView === 'mcp-skills' || activeView === 'system',
   );
   const [principalName, setPrincipalName] = useState<string | null>(null);
   // Real Curia release version from GET /api/system. The build-time __APP_VERSION__
@@ -238,10 +241,17 @@ export function Sidebar({ activeView, theme, onThemeChange }: SidebarProps) {
                 MCP Skills
               </button>
               <button
+                className={`nav-sub-item${activeView === 'system' ? ' active' : ''}`}
+                onClick={() => go('system')}
+              >
+                <IconServer />
+                System
+              </button>
+              <button
                 className={`nav-sub-item${activeView === 'settings' ? ' active' : ''}`}
                 onClick={() => go('settings')}
               >
-                <IconSettings />
+                <IconBrain />
                 Personality
               </button>
             </div>

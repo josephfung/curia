@@ -512,6 +512,15 @@ interface ConfigChangePayload {
   diff_summary: string;         // human-readable summary of what changed
 }
 
+// SystemRestartPayload — operator-initiated graceful process restart from the
+// console System page (#1765). Lands in audit_log via the write-ahead hook.
+interface SystemRestartPayload {
+  /** ISO timestamp of the process being shut down. */
+  bootedAt: string;
+  /** Who triggered it — 'operator' for the console Restart control. */
+  initiatedBy: string;
+}
+
 // LlmCallPayload — emitted by the agent runtime after every LLM API call completes.
 // Provides model provenance, token accounting, timing, and content fingerprints for audit.
 // Spec 10 (audit log hardening): required by NIST AI 600-1, EU AI Act Article 12, OWASP LLM10.
@@ -996,6 +1005,12 @@ export interface ConfigChangeEvent extends BaseEvent {
   payload: ConfigChangePayload;
 }
 
+export interface SystemRestartEvent extends BaseEvent {
+  type: 'system.restart';
+  sourceLayer: 'system';
+  payload: SystemRestartPayload;
+}
+
 /**
  * Full redacted LLM I/O for the `llm_call_archive` table. Carried on
  * `llm.call` as a non-persisted top-level field — AuditLogger omits it from
@@ -1372,6 +1387,7 @@ export type BusEvent =
   | ScheduleRecoveredEvent   // Scheduler: stuck job auto-recovered
   | ScheduleDriftPausedEvent  // Scheduler: job paused due to intent drift detection
   | ConfigChangeEvent        // System: config object changed (office identity, etc.)
+  | SystemRestartEvent       // System: operator-initiated process restart (#1765)
   | ConversationCheckpointEvent // Checkpoint pipeline: Dispatch fires after inactivity window
   | CheckpointExtractionSkippedEvent // Checkpoint pipeline: KG extraction skipped for trust policy (#1290)
   | LlmCallEvent             // Spec 10: LLM API call provenance (model, tokens, cost, hashes)
@@ -2152,6 +2168,16 @@ export function createChannelReconnect(payload: ChannelReconnectPayload): Channe
     timestamp: new Date(),
     type: 'channel.reconnect',
     sourceLayer: 'channel',
+    payload,
+  };
+}
+
+export function createSystemRestart(payload: SystemRestartPayload): SystemRestartEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'system.restart',
+    sourceLayer: 'system',
     payload,
   };
 }

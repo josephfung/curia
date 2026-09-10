@@ -2996,6 +2996,12 @@ async function main(): Promise<void> {
     smsWebhookBridge,
     memoryRetention,
     system: systemSnapshot,
+    // POST /api/system/restart (#1765) — SIGTERM so the graceful shutdown()
+    // handler registered below runs. Docker `restart: unless-stopped` brings
+    // the process back; no Docker socket is mounted.
+    scheduleShutdown: () => {
+      process.kill(process.pid, 'SIGTERM');
+    },
     voiceSessionBridge,
   });
 

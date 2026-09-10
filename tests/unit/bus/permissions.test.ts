@@ -190,4 +190,13 @@ describe('Bus Permissions', () => {
     expect(canPublish('channel', 'outbound.no_reply')).toBe(false);
     expect(canSubscribe('channel', 'outbound.no_reply')).toBe(false);
   });
+
+  it('allows system layer to publish and subscribe to system.restart', () => {
+    expect(canPublish('system', 'system.restart')).toBe(true);
+    expect(canSubscribe('system', 'system.restart')).toBe(true);
+    expect(canPublish('channel', 'system.restart')).toBe(false);
+    expect(canPublish('dispatch', 'system.restart')).toBe(false);
+    expect(canPublish('agent', 'system.restart')).toBe(false);
+    expect(canPublish('execution', 'system.restart')).toBe(false);
+  });
 });

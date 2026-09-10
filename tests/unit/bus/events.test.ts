@@ -10,6 +10,7 @@ import {
   createVoiceSessionStarted,
   createVoiceSessionEnded,
   createOutboundNoReply,
+  createSystemRestart,
   type BusEvent,
 } from '../../../src/bus/events.js';
 
@@ -155,6 +156,17 @@ describe('Event Types', () => {
     expect(event.parentEventId).toBe('response-1');
     expect(event.payload.reason).toBe('agent_declined');
     expect(event.payload.channelId).toBe('email');
+  });
+
+  it('creates a system.restart event', () => {
+    const event = createSystemRestart({
+      bootedAt: '2026-09-10T12:00:00.000Z',
+      initiatedBy: 'operator',
+    });
+    expect(event.type).toBe('system.restart');
+    expect(event.sourceLayer).toBe('system');
+    expect(event.payload.bootedAt).toBe('2026-09-10T12:00:00.000Z');
+    expect(event.payload.initiatedBy).toBe('operator');
   });
 
   it('type narrows via discriminated union', () => {

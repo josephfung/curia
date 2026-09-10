@@ -141,10 +141,19 @@ const memoryRoute = createRoute({
   component: MemoryPage,
 });
 
+// System is a standalone top-level page (peer to Tools/Agents/Channels), no
+// longer rendered inside the settings shell. Preserve old /settings/system
+// bookmarks by redirecting to /system (#1765).
 const systemRoute = createRoute({
-  getParentRoute: () => settingsRoute,
+  getParentRoute: () => authedRoute,
   path: '/system',
   component: SystemPage,
+});
+
+const systemSettingsRedirect = createRoute({
+  getParentRoute: () => settingsRoute,
+  path: '/system',
+  beforeLoad: () => { throw redirect({ to: '/system' }); },
 });
 
 // Tools and Agents are standalone top-level pages (peer to Contacts/Tasks),
@@ -265,13 +274,14 @@ const routeTree = rootRoute.addChildren([
     channelsRoute,
     mcpSkillsRoute,
     kgRoute,
+    systemRoute,
     settingsRoute.addChildren([
       personalityRoute,
       ghostwritingRoute,
       postureRoute,
       autonomyRoute,
       memoryRoute,
-      systemRoute,
+      systemSettingsRedirect,
       assistantRedirect,
       workspaceRedirect,
       skillsSettingsRedirect,

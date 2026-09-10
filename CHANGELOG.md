@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **System restart** — console System page can restart the app container in-place. (#1765)
+- **`system.restart` event** — operator-initiated process restart is recorded in `audit_log`. (#1765)
 - **ADR-041 (Proposed)** — AWS Bedrock as an LLM provider, preserved from unmerged #1349. (#1766)
 - **`signal_voice` health check** — `/api/health` now probes the Signal call audio socket by connecting, not stat'ing. (#1760)
 - **Auto-generated mail detection** — classifies inbound email from message signals and suppresses replies at dispatch. (#1734)
@@ -45,6 +47,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **System page** — moved to `/system`; Personality icon is a brain, not a gear. (#1765)
 - **`browser` health check** — probes Chrome with a bounded round-trip instead of testing an object reference. (#1762)
 - **Health probe timeouts** — every probe clears its losing timer instead of leaving one pending per request. (#1762)
 - **Spec 15** — blocked-body audit placement matches the event contract. (#1732)
