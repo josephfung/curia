@@ -37,14 +37,207 @@ const DEFAULT_EXPECTED_DURATION_SECONDS = 600; // 10 minutes
 const RECOVERY_TIMEOUT_MULTIPLIER = 7.5;
 const RECOVERY_TIMEOUT_CAP_SECONDS = 3600;
 
+// Hard caps on the prior-run fields injected into agent.task content (#243).
+//
+// NOTE: this is currently the ONLY cap, not a backstop. `scheduler-report` was meant to
+// be the write-time boundary, but its handler validates only presence of job_id/summary
+// and its manifest declares `context` as a bare `object?` — nothing bounds what gets
+// written. So an agent can write a 20 KB blob, be told `success: true`, and have it cut
+// here a day later. Other readers of the same columns are still unbounded — the drift
+// detector and `ops-lookup` both pass the raw `lastRunSummary` to an LLM.
+// @TODO: add a write-time cap in scheduler-report so the agent learns at write time.
+//
+// Exported for unit testing.
+export const MAX_PRIOR_SUMMARY_CHARS = 2_000;
+export const MAX_PRIOR_CONTEXT_CHARS = 4_000;
+
+// Per-value budget when reducing an oversized context object. A value that serialises
+// within this is kept verbatim, so the small scalars that carry continuity state — an
+// offset cursor, a count, a flag — always survive. Anything larger becomes a marker.
+export const MAX_PRIOR_CONTEXT_VALUE_CHARS = 160;
+
+// Base name for the metadata key added to a reduced context when keys had to be dropped.
+// last_run_context is opaque JSONB written from caller-supplied context, so this name is
+// not reserved — a caller can legitimately hold it. See pickOmissionKey.
+const CONTEXT_OMITTED_KEY = '__truncated__';
+
+// Marker appended to any value that had to be cut. Its length is counted *against* the
+// cap rather than added on top, so a truncated value never exceeds its own limit.
+// Exported for unit testing.
+export const TRUNCATED_MARKER = '…[truncated]';
+
+/** A truncation that happened while building the block, for the caller to log. */
+interface TruncationRecord {
+  field: 'lastRunSummary' | 'lastRunContext';
+  originalChars: number;
+  cappedAt: number;
+  /** Top-level keys whose value was replaced by an elision marker (context only). */
+  elidedValues?: number;
+  /** Top-level keys (or array entries) dropped outright — unrecoverable, worth alerting on. */
+  omittedKeys?: number;
+}
+
+/**
+ * Cut prose to `maxChars` and mark it, so a reader can tell it is a fragment rather than
+ * silently receiving a partial summary as if it were the whole thing.
+ *
+ * NOTE: `slice` counts UTF-16 code units, so a cut can split a surrogate pair (an emoji)
+ * and falls short of the intent for CJK content. Acceptable for a size guard on prose.
+ */
+function truncateText(
+  value: string,
+  maxChars: number,
+  field: TruncationRecord['field'],
+  into: TruncationRecord[],
+): string {
+  if (value.length <= maxChars) return value;
+  into.push({ field, originalChars: value.length, cappedAt: maxChars });
+  // Reserve room for the marker rather than appending past the cap. The marker is itself
+  // sliced so an absurdly small cap still yields a string within it.
+  const contentLimit = Math.max(0, maxChars - TRUNCATED_MARKER.length);
+  return `${value.slice(0, contentLimit)}${TRUNCATED_MARKER.slice(0, maxChars)}`;
+}
+
+/** Replace a value with a marker when its serialised form exceeds the per-value budget. */
+function elideValue(value: unknown): { out: unknown; elided: boolean } {
+  const serialised = JSON.stringify(value) ?? 'null';
+  if (serialised.length <= MAX_PRIOR_CONTEXT_VALUE_CHARS) return { out: value, elided: false };
+  return { out: `…[elided ${serialised.length} chars]`, elided: true };
+}
+
+/**
+ * Pick a metadata key for the omission count that no caller key already occupies, suffixing
+ * until it is free. Uses hasOwnProperty so an inherited name (e.g. 'constructor') cannot
+ * push it into a needless suffix.
+ */
+function pickOmissionKey(reduced: Record<string, unknown>): string {
+  let key = CONTEXT_OMITTED_KEY;
+  for (let n = 2; Object.prototype.hasOwnProperty.call(reduced, key); n++) {
+    key = `${CONTEXT_OMITTED_KEY}${n}`;
+  }
+  return key;
+}
+
+/**
+ * Serialise a prior-run context, reducing it per-value rather than cutting the serialised
+ * string. The result is always valid JSON and always within `maxChars`.
+ *
+ * Cutting the string would drop whatever sorts last, and `JSON.stringify` emits keys in
+ * insertion order — so a verbose key written before a cursor takes the cursor with it.
+ * That matters because `last_run_context` carries continuity state (spec 05 §"Contacts
+ * promotion sweep batching" persists the sweep's offset there) and no skill reads the
+ * column back — `scheduler-list` deliberately omits it. A cut cursor is therefore
+ * unrecoverable, and would surface only as a sweep that re-scans the same batch forever.
+ *
+ * Reduction is two-stage, each stage recorded in `into` so the caller can log it:
+ *   1. Replace over-budget values with `…[elided N chars]`, keeping every entry.
+ *   2. Only if that still overflows (very many entries), drop entries from the tail and
+ *      count them. This stage can lose a cursor; stage 1 cannot.
+ *
+ * The column is JSONB, so despite the `Record<string, unknown>` type it can hold an array
+ * or a scalar at runtime. Arrays get the same two-stage treatment element-wise; a scalar
+ * has no structure to preserve, so it keeps a prefix inside a valid JSON string.
+ */
+function truncateContext(
+  context: Record<string, unknown>,
+  maxChars: number,
+  into: TruncationRecord[],
+): string {
+  const full = JSON.stringify(context, null, 2);
+  if (full.length <= maxChars) return full;
+
+  // --- Scalar: nothing structural to keep, so keep a prefix as a valid JSON string. ---
+  if (typeof context !== 'object' || context === null) {
+    into.push({ field: 'lastRunContext', originalChars: full.length, cappedAt: maxChars });
+    const text = typeof context === 'string' ? context : String(context);
+    // Escaping can expand the result past the cap (quotes, newlines, control chars),
+    // so shrink until the *serialised* form fits rather than assuming a fixed overhead.
+    let budget = Math.max(0, maxChars - TRUNCATED_MARKER.length - 2);
+    let out = JSON.stringify(`${text.slice(0, budget)}${TRUNCATED_MARKER}`);
+    while (out.length > maxChars && budget > 0) {
+      budget = Math.floor(budget / 2);
+      out = JSON.stringify(`${text.slice(0, budget)}${TRUNCATED_MARKER}`);
+    }
+    return out;
+  }
+
+  // --- Array: reduce element-wise, then shed from the tail. ---
+  if (Array.isArray(context)) {
+    const reduced: unknown[] = [];
+    let elidedValues = 0;
+    for (const value of context) {
+      const { out, elided } = elideValue(value);
+      reduced.push(out);
+      if (elided) elidedValues++;
+    }
+
+    let omittedEntries = 0;
+    let out = JSON.stringify(reduced, null, 2);
+    while (out.length > maxChars && reduced.length > 0) {
+      reduced.pop();
+      omittedEntries++;
+      out = JSON.stringify([...reduced, `…[${omittedEntries} entries omitted]`], null, 2);
+    }
+
+    into.push({
+      field: 'lastRunContext',
+      originalChars: full.length,
+      cappedAt: maxChars,
+      elidedValues,
+      omittedKeys: omittedEntries,
+    });
+    return out;
+  }
+
+  // --- Object: reduce per key, then shed keys from the tail. ---
+  // Null-prototype target: pg parses JSONB with JSON.parse, which creates `__proto__` as an
+  // own data property. Assigning that onto a plain `{}` would invoke the legacy prototype
+  // setter instead of creating a property, so the key would vanish here while a context
+  // under the cap kept it — the same data surviving or not depending on its size.
+  const reduced = Object.create(null) as Record<string, unknown>;
+  let elidedValues = 0;
+  for (const [key, value] of Object.entries(context)) {
+    const { out, elided } = elideValue(value);
+    reduced[key] = out;
+    if (elided) elidedValues++;
+  }
+
+  // Settle on a metadata key that cannot collide with caller data before shedding starts.
+  // Writing the count over a caller's own '__truncated__' would destroy exactly the
+  // continuity state this reduction exists to preserve.
+  const omissionKey = pickOmissionKey(reduced);
+
+  // Earliest keys are likeliest to be the stable ones, so shed from the tail.
+  const keys = Object.keys(reduced);
+  let omittedKeys = 0;
+  let out = JSON.stringify(reduced, null, 2);
+  while (out.length > maxChars && keys.length > 0) {
+    delete reduced[keys.pop()!];
+    omittedKeys++;
+    reduced[omissionKey] = `${omittedKeys} keys omitted`;
+    out = JSON.stringify(reduced, null, 2);
+  }
+
+  into.push({
+    field: 'lastRunContext',
+    originalChars: full.length,
+    cappedAt: maxChars,
+    elidedValues,
+    omittedKeys,
+  });
+  return out;
+}
+
 /**
  * Build a structured text block summarising the previous run's outcome.
  * Injected into the agent.task content so the agent can avoid repeating work
  * or adjust its approach based on what happened last time.
  *
+ * Both prior-run fields are size-capped — see MAX_PRIOR_SUMMARY_CHARS / MAX_PRIOR_CONTEXT_CHARS.
+ *
  * Returns an empty string when there is no prior-run data (first run ever).
  */
-function buildPriorRunBlock(job: JobRow): string {
+function buildPriorRunBlock(job: JobRow, truncations: TruncationRecord[] = []): string {
   if (!job.lastRunOutcome) return '';
 
   const lastRanStr = job.lastRunAt
@@ -59,11 +252,14 @@ function buildPriorRunBlock(job: JobRow): string {
   ];
 
   if (job.lastRunSummary) {
-    parts.push(`Summary: ${job.lastRunSummary}`);
+    parts.push(`Summary: ${truncateText(job.lastRunSummary, MAX_PRIOR_SUMMARY_CHARS, 'lastRunSummary', truncations)}`);
   }
 
-  if (job.lastRunContext) {
-    parts.push(`Agent context: ${JSON.stringify(job.lastRunContext, null, 2)}`);
+  // `!= null`, not truthiness: last_run_context is JSONB and accepts 0, false and "".
+  // The row loader preserves those (`?? null` only collapses null/undefined), so a
+  // truthiness check here would silently drop continuity state that was really written.
+  if (job.lastRunContext != null) {
+    parts.push(`Agent context: ${truncateContext(job.lastRunContext, MAX_PRIOR_CONTEXT_CHARS, truncations)}`);
   }
 
   return parts.join('\n');
@@ -494,9 +690,19 @@ export class Scheduler {
 
     // Prepend prior-run context so the agent knows what happened last time
     // and can avoid repeating work or adjust its approach accordingly.
-    const priorRunBlock = buildPriorRunBlock(job);
+    const truncations: TruncationRecord[] = [];
+    const priorRunBlock = buildPriorRunBlock(job, truncations);
     if (priorRunBlock) {
       content = `${priorRunBlock}\n\n${content}`;
+    }
+    for (const cut of truncations) {
+      // warn, not debug: a repeatedly-cut lastRunContext means the job is losing
+      // continuity state on every run, which is otherwise invisible to operators.
+      // omittedKeys > 0 is the serious case — whole keys are gone, possibly a cursor.
+      this.logger.warn(
+        { jobId: job.id, agentId: job.agentId, ...cut },
+        'scheduler: prior-run field truncated before injection — agent sees a fragment',
+      );
     }
 
     // Publish schedule.fired for audit trail.

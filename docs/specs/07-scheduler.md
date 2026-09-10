@@ -157,6 +157,34 @@ Agent context: {"events_sent": 6}
 
 If the job has never run, no prior-run block is injected.
 
+Both fields are size-capped on the read path, and every cut is logged at `warn` with the job
+id and the original length.
+
+The summary is prose, so it is cut at 2,000 characters and marked `…[truncated]`. The marker
+counts against the cap rather than being appended past it, so the injected value is never
+longer than the limit.
+
+The context is reduced **per value** rather than cut as a string, and is always valid JSON
+and always within the cap.
+`JSON.stringify` emits keys in insertion order, so cutting the serialised form would drop
+whatever sorts last — and `last_run_context` carries continuity state, such as the promotion
+sweep's offset cursor (see [spec 05](05-error-recovery.md)), which no skill can read back.
+Reduction runs in two stages: values over 160 characters are replaced with
+`…[elided N chars]` while every key is kept, and only if the result still exceeds 4,000
+characters are keys dropped from the tail and counted under `__truncated__` (suffixed if a
+caller key already holds that name, since the column is opaque JSONB and the name is not
+reserved). Stage one
+cannot lose a cursor; stage two can, which is why the log records `elidedValues` and
+`omittedKeys` separately.
+
+The column is JSONB, so it can hold an array or a scalar despite the declared object type.
+Arrays get the same two-stage treatment element-wise; a scalar keeps a prefix inside a valid
+JSON string. The falsy JSON values `0`, `false` and `""` are injected like any other context —
+only a genuinely absent (`null`) context omits the line.
+
+There is currently no write-time cap in `scheduler-report`, so this read cap is the only
+bound on what the column holds.
+
 ### What gets written and by whom
 
 | Field | Written by | When |
