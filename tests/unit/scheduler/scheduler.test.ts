@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Scheduler, POLL_INTERVAL_MS, WATCHDOG_INTERVAL_MS, computeRecoveryTimeout } from '../../../src/scheduler/scheduler.js';
+import { Scheduler, POLL_INTERVAL_MS, WATCHDOG_INTERVAL_MS, computeRecoveryTimeout, MAX_PRIOR_SUMMARY_CHARS, MAX_PRIOR_CONTEXT_CHARS, TRUNCATED_MARKER } from '../../../src/scheduler/scheduler.js';
 import type { AgentYamlConfig } from '../../../src/agents/loader.js';
 
 // -- Mock helpers --
@@ -572,6 +572,381 @@ describe('Scheduler', () => {
       expect(content).toContain('Summary: Sent schedule');
       expect(content).toContain('Agent context:');
       expect(content).toContain('"events_sent": 6');
+    });
+
+    it('truncates an oversized prior-run summary and context (#243)', async () => {
+      const jobId = 'job-oversized-prior-run';
+      const taskEvent = { payload: { content: '' } };
+
+      // scheduler-report is the intended write-time boundary, but blobs written by an
+      // older agent version (or a future handler missing the check) can still be read
+      // back oversized — the read path must bound them too.
+      const hugeSummary = 'S'.repeat(5_000);
+      // The verbose key is ordered FIRST and the cursor LAST. JSON.stringify emits keys in
+      // insertion order, so cutting the serialised string would drop the cursor — spec 05
+      // persists the promotion sweep's offset there, and no skill reads that column back,
+      // so the sweep would silently restart at offset 0 every run.
+      const hugeContext = { notes: 'C'.repeat(10_000), offset: 40, batch_size: 10 };
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed',
+            last_run_summary: hugeSummary,
+            last_run_context: hugeContext,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+
+      // Both fields are cut to their cap and marked, so a reader can tell the block
+      // is incomplete rather than silently receiving a partial summary.
+      const summaryLine = content.split('\n').find(l => l.startsWith('Summary: '))!;
+      const summaryValue = summaryLine.slice('Summary: '.length);
+      // The marker is counted against the cap, not added on top of it — a cap the output
+      // can exceed is not a cap.
+      expect(summaryValue).toBe('S'.repeat(MAX_PRIOR_SUMMARY_CHARS - TRUNCATED_MARKER.length) + TRUNCATED_MARKER);
+      expect(summaryValue).toHaveLength(MAX_PRIOR_SUMMARY_CHARS);
+
+      // Pin the context cap directly. Asserting only that *some* '…[truncated]' appears
+      // would pass on the summary line above and prove nothing about the context.
+      const contextStart = content.indexOf('Agent context: ');
+      expect(contextStart).toBeGreaterThanOrEqual(0);
+      // The block is prepended to the task payload with a blank-line separator, and
+      // pretty-printed JSON never contains one — so this isolates the context value.
+      const contextValue = content
+        .slice(contextStart + 'Agent context: '.length)
+        .split('\n\n')[0]!;
+      expect(contextValue.length).toBeLessThanOrEqual(MAX_PRIOR_CONTEXT_CHARS);
+
+      // The context is truncated per-value, not as a string, so it stays parseable and —
+      // the point of the exercise — every top-level key survives with its cursor intact.
+      const parsed = JSON.parse(contextValue);
+      expect(Object.keys(parsed)).toEqual(['notes', 'offset', 'batch_size']);
+      expect(parsed.offset).toBe(40);
+      expect(parsed.batch_size).toBe(10);
+      expect(String(parsed.notes)).toMatch(/^…\[elided 10\d{3} chars\]$/);
+
+      // Truncation must not be silent — an unrecoverable cut to lastRunContext (it can
+      // carry a pagination cursor, and no skill reads that column back) would otherwise
+      // surface only as a sweep that re-scans the same batch forever.
+      const truncationWarnings = logger.warn.mock.calls.filter(
+        c => typeof c[1] === 'string' && /prior-run field truncated/.test(c[1] as string),
+      );
+      expect(truncationWarnings.map(c => (c[0] as { field: string }).field).sort())
+        .toEqual(['lastRunContext', 'lastRunSummary']);
+      expect(truncationWarnings[0]![0]).toHaveProperty('jobId', jobId);
+    });
+
+    it('drops trailing context keys only when eliding every value is still not enough (#243)', async () => {
+      const jobId = 'job-many-key-context';
+      const taskEvent = { payload: { content: '' } };
+
+      // 800 keys: even reduced to elision markers the object cannot fit the cap, so keys
+      // must be dropped. That is unrecoverable, hence the explicit marker and the warn log.
+      const manyKeys: Record<string, number> = {};
+      for (let i = 0; i < 800; i++) manyKeys[`key_${i}`] = i;
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed', last_run_summary: null, last_run_context: manyKeys,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      const contextValue = content
+        .slice(content.indexOf('Agent context: ') + 'Agent context: '.length)
+        .split('\n\n')[0]!;
+
+      expect(contextValue.length).toBeLessThanOrEqual(MAX_PRIOR_CONTEXT_CHARS);
+      const parsed = JSON.parse(contextValue);
+      // Earliest keys are kept; the tail is dropped and counted.
+      expect(parsed.key_0).toBe(0);
+      expect(parsed.key_799).toBeUndefined();
+      expect(String(parsed.__truncated__)).toMatch(/^\d+ keys omitted$/);
+
+      const warn = logger.warn.mock.calls.find(
+        c => typeof c[1] === 'string' && /prior-run field truncated/.test(c[1] as string),
+      );
+      expect((warn![0] as { omittedKeys: number }).omittedKeys).toBeGreaterThan(0);
+    });
+
+    it.each([
+      ['array', Array.from({ length: 300 }, (_, i) => ({ id: i, blob: 'B'.repeat(100) }))],
+      ['scalar string', 'X'.repeat(10_000)],
+    ])('keeps an oversized %s context valid JSON (#243)', async (shape, oversized) => {
+      const jobId = `job-nonobject-${String(shape).replace(' ', '-')}`;
+      const taskEvent = { payload: { content: '' } };
+
+      // The column is JSONB, so despite the Record<string, unknown> type it can hold an
+      // array or a scalar. Slicing their serialised text would cut mid-structure and
+      // leave the Agent context block unparseable.
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed', last_run_summary: null,
+            last_run_context: oversized as unknown as Record<string, unknown>,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      const contextValue = content
+        .slice(content.indexOf('Agent context: ') + 'Agent context: '.length)
+        .split('\n\n')[0]!;
+
+      expect(contextValue.length).toBeLessThanOrEqual(MAX_PRIOR_CONTEXT_CHARS);
+      expect(() => JSON.parse(contextValue)).not.toThrow();
+
+      // And the cut is still reported, same as the object path.
+      const warn = logger.warn.mock.calls.find(
+        c => typeof c[1] === 'string' && /prior-run field truncated/.test(c[1] as string),
+      );
+      expect((warn![0] as { field: string }).field).toBe('lastRunContext');
+    });
+
+    it.each([
+      ['zero', 0, '0'],
+      ['false', false, 'false'],
+      ['empty string', '', '""'],
+    ])('injects a falsy %s context rather than dropping it (#243)', async (_label, stored, expected) => {
+      const jobId = `job-falsy-context-${String(_label).replace(' ', '-')}`;
+      const taskEvent = { payload: { content: '' } };
+
+      // last_run_context is JSONB, which accepts 0, false and "". The row loader preserves
+      // them (`?? null` only collapses null/undefined), so a truthiness guard here would
+      // silently drop continuity state the agent was told had been written.
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed', last_run_summary: null,
+            last_run_context: stored as unknown as Record<string, unknown>,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      expect(content).toContain(`Agent context: ${expected}`);
+    });
+
+    it('omits the context line entirely when last_run_context is null (#243)', async () => {
+      const jobId = 'job-null-context';
+      const taskEvent = { payload: { content: '' } };
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed', last_run_summary: 'done', last_run_context: null,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      expect(content).toContain('Summary: done');
+      expect(content).not.toContain('Agent context:');
+    });
+
+    it('does not overwrite a caller key that collides with the omission marker (#243)', async () => {
+      const jobId = 'job-colliding-omission-key';
+      const taskEvent = { payload: { content: '' } };
+
+      // last_run_context is opaque JSONB written from caller-supplied context, so the
+      // metadata key name is not reserved — a caller can legitimately hold '__truncated__'.
+      // Overwriting it would destroy exactly the continuity state this reduction exists
+      // to preserve. Ordered first so tail-shedding cannot account for its survival.
+      const colliding: Record<string, unknown> = { __truncated__: 'cursor-abc123' };
+      for (let i = 0; i < 800; i++) colliding[`key_${i}`] = i;
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed', last_run_summary: null, last_run_context: colliding,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      const contextValue = content
+        .slice(content.indexOf('Agent context: ') + 'Agent context: '.length)
+        .split('\n\n')[0]!;
+
+      const parsed = JSON.parse(contextValue);
+      // The caller's value survives untouched...
+      expect(parsed.__truncated__).toBe('cursor-abc123');
+      // ...and the omission count lands on a distinct, non-colliding key.
+      const omissionEntry = Object.entries(parsed).find(
+        ([key, value]) => key !== '__truncated__' && /^\d+ keys omitted$/.test(String(value)),
+      );
+      expect(omissionEntry).toBeDefined();
+    });
+
+    it('preserves an own __proto__ key while reducing an oversized context (#243)', async () => {
+      const jobId = 'job-proto-key-context';
+      const taskEvent = { payload: { content: '' } };
+
+      // pg parses JSONB with JSON.parse, which creates `__proto__` as an *own* data
+      // property rather than invoking the legacy prototype setter. Copying that onto a
+      // plain `{}` does invoke the setter, so the key vanishes from the output — meaning a
+      // context under the cap would keep it and one over the cap would silently drop it.
+      const withOwnProto = JSON.parse(
+        `{"__proto__":"cursor-xyz","notes":${JSON.stringify('N'.repeat(10_000))},"offset":7}`,
+      ) as Record<string, unknown>;
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed', last_run_summary: null, last_run_context: withOwnProto,
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      const contextValue = content
+        .slice(content.indexOf('Agent context: ') + 'Agent context: '.length)
+        .split('\n\n')[0]!;
+
+      const parsed = JSON.parse(contextValue) as Record<string, unknown>;
+      // Read via the descriptor — `parsed.__proto__` would be ambiguous with the accessor.
+      expect(Object.getOwnPropertyDescriptor(parsed, '__proto__')?.value).toBe('cursor-xyz');
+      expect(parsed.offset).toBe(7);
+    });
+
+    it('leaves prior-run summary and context intact when within limits (#243)', async () => {
+      const jobId = 'job-small-prior-run';
+      const taskEvent = { payload: { content: '' } };
+
+      pool.query
+        .mockResolvedValueOnce({
+          rows: [{
+            id: jobId, agent_id: 'coordinator', cron_expr: '0 9 * * *',
+            run_at: null, task_payload: { task: 'do work' }, status: 'pending',
+            last_run_at: new Date('2026-04-08T11:30:00Z'), next_run_at: new Date(),
+            last_error: null, consecutive_failures: 0, created_by: 'system',
+            created_at: new Date(), timezone: 'America/Toronto',
+            agent_task_id: null, intent_anchor: null, progress: null,
+            run_started_at: null, expected_duration_seconds: null,
+            last_run_outcome: 'completed',
+            last_run_summary: 'Sent schedule',
+            last_run_context: { events_sent: 6 },
+          }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 });
+
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
+        if (event.type === 'agent.task') Object.assign(taskEvent, event);
+        return Promise.resolve();
+      });
+
+      await scheduler.pollDueJobs();
+
+      const content: string = (taskEvent as { payload: { content: string } }).payload.content;
+      expect(content).toContain('Summary: Sent schedule');
+      expect(content).toContain('"events_sent": 6');
+      expect(content).not.toContain('[truncated]');
+      expect(logger.warn.mock.calls.filter(
+        c => typeof c[1] === 'string' && /prior-run field truncated/.test(c[1] as string),
+      )).toHaveLength(0);
     });
 
     it('does not inject prior-run block when last_run_outcome is null (first run)', async () => {
