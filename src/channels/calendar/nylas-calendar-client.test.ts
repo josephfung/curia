@@ -97,6 +97,70 @@ describe('NylasCalendarClient — metadata/status/busy plumbing', () => {
   });
 });
 
+describe('NylasCalendarClient — updateEvent attendee writes', () => {
+  it('sends the full guest list as email and name and omits participant status', async () => {
+    const update = vi.fn().mockResolvedValue({
+      data: {
+        id: 'evt_1',
+        participants: [
+          { email: 'a@example.test', name: 'A', status: 'noreply' },
+          { email: 'b@example.test', name: 'B', status: 'yes' },
+        ],
+        when: { startTime: 1000, endTime: 2000 },
+      },
+    });
+    const client = makeClientWith({ events: { update } as unknown as NylasCalendarLike['events'] });
+
+    await client.updateEvent('cal_1', 'evt_1', {
+      attendees: [
+        { email: 'a@example.test', name: 'A' },
+        { email: 'b@example.test', name: 'B' },
+      ],
+    });
+
+    const call = update.mock.calls[0]![0] as {
+      requestBody: { participants: Array<Record<string, unknown>> };
+      queryParams: Record<string, unknown>;
+    };
+    expect(call.requestBody.participants).toEqual([
+      { email: 'a@example.test', name: 'A' },
+      { email: 'b@example.test', name: 'B' },
+    ]);
+    for (const participant of call.requestBody.participants) {
+      expect(participant).not.toHaveProperty('status');
+    }
+    expect(call.queryParams).toEqual({ calendar_id: 'cal_1' });
+  });
+
+  it('throws rather than forwarding organizer-set participant status', async () => {
+    const update = vi.fn();
+    const client = makeClientWith({ events: { update } as unknown as NylasCalendarLike['events'] });
+
+    await expect(
+      client.updateEvent('cal_1', 'evt_1', {
+        attendees: [{ email: 'a@example.test', name: 'A', status: 'no' } as { email: string; name: string }],
+      }),
+    ).rejects.toThrow(/sendRsvp/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('sets notify_participants when notifyAttendees is provided', async () => {
+    const update = vi.fn().mockResolvedValue({
+      data: { id: 'evt_1', when: { startTime: 1000, endTime: 2000 } },
+    });
+    const client = makeClientWith({ events: { update } as unknown as NylasCalendarLike['events'] });
+
+    await client.updateEvent('cal_1', 'evt_1', { title: 'Quiet' }, false);
+
+    expect(update).toHaveBeenCalledWith({
+      identifier: 'grant_test',
+      eventId: 'evt_1',
+      queryParams: { calendar_id: 'cal_1', notify_participants: false },
+      requestBody: { title: 'Quiet' },
+    });
+  });
+});
+
 describe('NylasCalendarClient — RSVP plumbing', () => {
   it('sends RSVP status through the Nylas sendRsvp endpoint', async () => {
     const sendRsvp = vi.fn().mockResolvedValue({

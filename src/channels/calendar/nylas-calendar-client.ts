@@ -186,13 +186,21 @@ export interface NylasRsvpResult {
   sendIcsError: unknown | null;
 }
 
+/** Guest-list entry for create/update. RSVP `status` is intentionally absent:
+ *  Nylas rejects organizer-set participant status on PUT ("Updating the status
+ *  for participants is not allowed"). First-person RSVP is `sendRsvp` only. */
+export interface CalendarAttendeeInput {
+  email: string;
+  name?: string;
+}
+
 export interface CreateEventInput {
   title: string;
   start: string;
   end: string;
   description?: string;
   location?: string;
-  attendees?: Array<{ email: string; name?: string }>;
+  attendees?: CalendarAttendeeInput[];
   conferencing?: Record<string, unknown>;
   /** Arbitrary string key/value pairs to attach to the event (e.g. `{ "curia-hold": "true" }`). Values must be strings (Nylas requirement). */
   metadata?: Record<string, string>;
@@ -315,10 +323,7 @@ export class NylasCalendarClient {
       if (event.description) requestBody.description = event.description;
       if (event.location) requestBody.location = event.location;
       if (event.attendees) {
-        requestBody.participants = event.attendees.map((a) => ({
-          email: a.email,
-          name: a.name ?? '',
-        }));
+        requestBody.participants = this.toWritableParticipants(event.attendees);
       }
       if (event.conferencing) requestBody.conferencing = event.conferencing;
       // Conditionally include metadata/status/busy so existing create calls are byte-for-byte unchanged.
@@ -338,13 +343,21 @@ export class NylasCalendarClient {
     }
   }
 
-  /** Update an existing event. */
+  /**
+   * Update an existing event.
+   *
+   * `notifyAttendees` maps to Nylas `notify_participants`. Default (omit) is
+   * provider-true: Google emails guests; Microsoft and iCloud always notify and
+   * ignore `false`. Guest-list writes replace the entire `participants` array
+   * (Nylas PUT nested-object replace) with email/name only — never RSVP status.
+   */
   async updateEvent(
     calendarId: string,
     eventId: string,
     changes: Partial<CreateEventInput>,
+    notifyAttendees?: boolean,
   ): Promise<NylasCalendarEvent> {
-    this.log.debug({ calendarId, eventId }, 'Updating event');
+    this.log.debug({ calendarId, eventId, notifyAttendees }, 'Updating event');
     try {
       const requestBody: Record<string, unknown> = {};
       if (changes.title !== undefined) requestBody.title = changes.title;
@@ -357,10 +370,7 @@ export class NylasCalendarClient {
         };
       }
       if (changes.attendees) {
-        requestBody.participants = changes.attendees.map((a) => ({
-          email: a.email,
-          name: a.name ?? '',
-        }));
+        requestBody.participants = this.toWritableParticipants(changes.attendees);
       }
       if (changes.conferencing !== undefined) requestBody.conferencing = changes.conferencing;
       // Conditionally include metadata/status/busy so existing update calls are byte-for-byte unchanged.
@@ -368,10 +378,15 @@ export class NylasCalendarClient {
       if (changes.status) requestBody.status = changes.status;
       if (typeof changes.busy === 'boolean') requestBody.busy = changes.busy;
 
+      const queryParams: Record<string, unknown> = { calendar_id: calendarId };
+      if (notifyAttendees !== undefined) {
+        queryParams.notify_participants = notifyAttendees;
+      }
+
       const response = await this.nylas.events.update({
         identifier: this.grantId,
         eventId,
-        queryParams: { calendar_id: calendarId },
+        queryParams,
         requestBody,
       });
       return this.normalizeEvent(response.data);
@@ -474,6 +489,30 @@ export class NylasCalendarClient {
   }
 
   // -- Helpers --
+
+  /**
+   * Map Curia attendees to the Nylas write shape (email + name only).
+   *
+   * Nylas `Participant.status` is required on the *read* type and reused on
+   * Create/UpdateEventRequest, but sending it on PUT is rejected:
+   * "Updating the status for participants is not allowed, only participants
+   * can rsvp or change the status of an event". Google Calendar can write
+   * `attendees[].responseStatus` as organizer; Microsoft Graph cannot; Nylas
+   * fails closed for both. First-person RSVP is `sendRsvp`.
+   */
+  private toWritableParticipants(
+    attendees: CalendarAttendeeInput[],
+  ): Array<{ email: string; name: string }> {
+    return attendees.map((a) => {
+      const extra = a as unknown as Record<string, unknown>;
+      if ('status' in extra || 'responseStatus' in extra || 'participationStatus' in extra) {
+        throw new Error(
+          'Cannot set attendee response status on create/update; Nylas allows RSVP only via sendRsvp',
+        );
+      }
+      return { email: a.email, name: a.name ?? '' };
+    });
+  }
 
   /** Convert an ISO 8601 string to Unix seconds, throwing on unparseable input. */
   private toUnixSeconds(iso: string, label: string): number {
