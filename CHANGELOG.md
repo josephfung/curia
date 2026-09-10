@@ -49,6 +49,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **System page** — moved to `/system`; Personality icon is a brain, not a gear. (#1765)
 - **System restart cooldown** — 3/5min cap survives process restart via `audit_log`. (#1765)
+- **`StoreFactResult`** — operational rejections now carry `reason`; `conflict` is contradictions only. (#472)
+- **`memory-store`** — entity resolution, contact redirect, and fact storage log distinct errors. (#473)
 - **`browser` health check** — probes Chrome with a bounded round-trip instead of testing an object reference. (#1762)
 - **Health probe timeouts** — every probe clears its losing timer instead of leaving one pending per request. (#1762)
 - **Spec 15** — blocked-body audit placement matches the event contract. (#1732)
@@ -81,6 +83,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **System restart poll** — a hung GET `/api/system` now hits the 90s ceiling. (#1765)
+- **Scheduler prior-run block** — caps injected summary and context per-value, preserving keys; logs every cut. (#243)
 - **`calendar-update-event`** — rejects attendee RSVP status on the Nylas path; guest-list replace only. (#1735)
 - **`calendar-create-event`** — same attendee honesty; drops unused colorId and reminders. (#1735)
 - **Dispatcher relay Gate C** — every auto-reply is tier-gated; approve re-delivers via `dispatcher-relay`. (#1733)
