@@ -1041,14 +1041,14 @@ describe('MemoryStoreHandler', () => {
       expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
     });
 
-    it('unexpected-error after resolution', async () => {
+    it('write-path failure logs as fact storage, not a generic unexpected error', async () => {
       const entityMemory = mockMem({});
       entityMemory.storeFact.mockRejectedValue(new Error(`DB connection lost for ${PII_ENTITY}`));
       const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
 
       await handler.execute(ctx);
 
-      const call = findCall(log.error, /memory-store: unexpected error/);
+      const call = findCall(log.error, /memory-store: fact storage failed/);
       expectNoPii(call);
       expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
       expect(call![0]).not.toHaveProperty('entity');
@@ -1057,19 +1057,84 @@ describe('MemoryStoreHandler', () => {
       expect(call![0]).toHaveProperty('errorName', 'Error');
     });
 
-    it('unexpected-error before resolution', async () => {
+    it('read-path failure logs as entity resolution, not a generic unexpected error', async () => {
       const entityMemory = mockMem({});
       entityMemory.resolveOrCreate.mockRejectedValue(new Error(`DB connection lost for ${PII_ENTITY}`));
       const { ctx, log } = ctxFor(entityMemory, piiInput());
 
       await handler.execute(ctx);
 
-      const call = findCall(log.error, /memory-store: unexpected error/);
+      const call = findCall(log.error, /memory-store: entity resolution failed/);
       expectNoPii(call);
       expect((call![0] as Record<string, unknown>).entityNodeId).toBeUndefined();
       expect(call![0]).not.toHaveProperty('err');
       expect(call![0]).not.toHaveProperty('error');
       expect(call![0]).toHaveProperty('errorName', 'Error');
+    });
+    // #473: the handler used to wrap entity resolution, the canonical-contact redirect,
+    // and fact storage in one try/catch that logged 'unexpected error' for all three, so
+    // an operator could not tell a KG read failure from a KG write failure. Each phase
+    // now has its own catch and its own message.
+    describe('phase-specific error messages (#473)', () => {
+      // Phase 2 ('canonical contact redirect failed') is deliberately not exercised:
+      // both DB calls inside the guard have their own inner catches, and `value` is
+      // type-validated as a string before the guard runs, so the outer catch is
+      // reachable only via a genuine programming error inside buildCanonicalPatch
+      // (which re-raises non-ParseError failures rather than masking them). It is
+      // listed here so the other cases assert it did NOT also fire.
+      const PHASE_MESSAGES = [
+        /memory-store: entity resolution failed/,
+        /memory-store: canonical contact redirect failed/,
+        /memory-store: fact storage failed/,
+      ];
+
+      function expectOnlyPhase(log: { error: { mock: { calls: unknown[][] } } }, expected: RegExp) {
+        const matched = PHASE_MESSAGES.filter(re =>
+          log.error.mock.calls.some(c => typeof c[1] === 'string' && re.test(c[1] as string)),
+        );
+        expect(matched).toEqual([expected]);
+      }
+
+      it('a resolution failure does not also log the write-path message', async () => {
+        const entityMemory = mockMem({});
+        entityMemory.resolveOrCreate.mockRejectedValue(new Error('KG read failed'));
+        const { ctx, log } = ctxFor(entityMemory, piiInput());
+
+        const result = await handler.execute(ctx);
+
+        expect(result.success).toBe(false);
+        expectOnlyPhase(log, /memory-store: entity resolution failed/);
+      });
+
+      it('a storeFact failure does not also log the read-path message', async () => {
+        const entityMemory = mockMem({});
+        entityMemory.storeFact.mockRejectedValue(new Error('KG write failed'));
+        const { ctx, log } = ctxFor(entityMemory, piiInput(), { memoryWriteSource: 'agent:test/task:1' });
+
+        const result = await handler.execute(ctx);
+
+        expect(result.success).toBe(false);
+        expectOnlyPhase(log, /memory-store: fact storage failed/);
+      });
+
+      it('an alias-write failure is absorbed by addAlias and never reaches a phase catch', async () => {
+        // EntityMemory.addAlias declares a non-throwing contract and logs its own
+        // failures, so no phase message should fire and the fact still stores. A mock
+        // that rejects would be testing a contract violation, not the real path.
+        const entityMemory = mockMem({ stored: true, action: 'created', nodeId: 'fact-1' });
+        entityMemory.addAlias = vi.fn().mockResolvedValue(undefined);
+        const { ctx, log } = ctxFor(entityMemory, { ...piiInput(), alias_for: 'the boss' });
+
+        const result = await handler.execute(ctx);
+
+        expect(result.success).toBe(true);
+        expect(entityMemory.addAlias).toHaveBeenCalledWith(NODE_ID, 'the boss');
+        const anyPhaseFired = PHASE_MESSAGES.some(re =>
+          log.error.mock.calls.some(c => typeof c[1] === 'string' && re.test(c[1] as string)),
+        );
+        expect(anyPhaseFired).toBe(false);
+      });
+
     });
   });
 });

@@ -102,8 +102,17 @@ export class MemoryStoreHandler implements ToolHandler {
       return { success: false, error: 'Entity memory not available — database not configured' };
     }
 
-    // Hoisted so catch can log entityNodeId when resolution completed.
-    // Never log the raw `entity` name — it is PII and the pino redact list does not cover it.
+    // The handler runs in three phases, each with its own try/catch and its own error
+    // message, so an operator can tell a KG read failure from a contact-redirect failure
+    // from a KG write failure without correlating against caller logs (#473):
+    //
+    //   1. entity resolution        → 'memory-store: entity resolution failed'
+    //   2. canonical contact guard  → 'memory-store: canonical contact redirect failed'
+    //   3. fact storage             → 'memory-store: fact storage failed'
+    //
+    // entityNode is hoisted across all three so later phases (and the phase-1 catch, for
+    // an alias-learning failure) can log entityNodeId. Never log the raw `entity` name —
+    // it is PII and the pino redact list does not cover it.
     let entityNode: KgNode | undefined;
 
     try {
@@ -143,6 +152,10 @@ export class MemoryStoreHandler implements ToolHandler {
         // Learn alias from disambiguation: coordinator confirmed this UUID
         // for the original name variant carried in alias_for.
         if (alias_for && typeof alias_for === 'string') {
+          // Best-effort by contract: EntityMemory.addAlias swallows its own failures
+          // (see its "Non-throwing contract" comment) and logs them under its own
+          // 'addAlias: …' messages, so a failed alias write neither reaches the phase-1
+          // catch below nor blocks the fact write. Nothing to attribute here.
           await ctx.entityMemory.addAlias(entityNode.id, alias_for);
         }
       } else {
@@ -175,10 +188,33 @@ export class MemoryStoreHandler implements ToolHandler {
         // path already adds options.label as an alias, but alias_for is a different
         // string — the variant the CEO actually said — so it needs explicit learning here.
         if (alias_for && typeof alias_for === 'string' && resolved.kind === 'found') {
+          // Best-effort by contract: EntityMemory.addAlias swallows its own failures
+          // (see its "Non-throwing contract" comment) and logs them under its own
+          // 'addAlias: …' messages, so a failed alias write neither reaches the phase-1
+          // catch below nor blocks the fact write. Nothing to attribute here.
           await ctx.entityMemory.addAlias(entityNode.id, alias_for);
         }
       }
 
+    } catch (err) {
+      ctx.log.error(
+        {
+          // errorName, not the raw Error: pino serializes err.message, which can
+          // echo the caller-supplied entity name. The skill result still returns
+          // the message to the agent.
+          errorName: err instanceof Error ? err.name : typeof err,
+          // Never the raw entity name. Undefined means the failure landed before the
+          // node was resolved; set means resolution succeeded and a follow-on read
+          // (alias learning) is what threw.
+          entityNodeId: entityNode?.id,
+          field,
+        },
+        'memory-store: entity resolution failed',
+      );
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+
+    try {
       // --- Canonical contact attribute guard ---
       //
       // If the entity is a person node linked to a contact record, and the field
@@ -239,6 +275,22 @@ export class MemoryStoreHandler implements ToolHandler {
         }
       }
 
+    } catch (err) {
+      ctx.log.error(
+        {
+          // errorName, not the raw Error: pino serializes err.message, which can
+          // echo the caller-supplied entity name. The skill result still returns
+          // the message to the agent.
+          errorName: err instanceof Error ? err.name : typeof err,
+          entityNodeId: entityNode.id,
+          field,
+        },
+        'memory-store: canonical contact redirect failed',
+      );
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+
+    try {
       // --- Fact storage ---
       //
       // Label format "<field>: <value>" is the canonical convention used by
@@ -380,12 +432,10 @@ export class MemoryStoreHandler implements ToolHandler {
           // echo the caller-supplied entity name. The skill result still returns
           // the message to the agent.
           errorName: err instanceof Error ? err.name : typeof err,
-          // Never the raw entity name. entityNodeId is set after resolution
-          // succeeds; undefined here is the pre-resolve signal.
-          entityNodeId: entityNode?.id,
+          entityNodeId: entityNode.id,
           field,
         },
-        'memory-store: unexpected error',
+        'memory-store: fact storage failed',
       );
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
