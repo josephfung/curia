@@ -10,6 +10,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { CreateEventInput } from '../../../../src/channels/calendar/nylas-calendar-client.js';
+import { parseWritableAttendees } from '../../../../src/channels/calendar/attendee-input.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { isHoldEvent, eventsOverlap } from '../../../../src/channels/calendar/holds.js';
 
@@ -26,7 +27,7 @@ export class CalendarCreateEventHandler implements ToolHandler {
       end?: string;
       description?: string;
       location?: string;
-      attendees?: Array<{ email: string; name?: string }>;
+      attendees?: unknown;
       conferencing?: Record<string, unknown>;
     };
 
@@ -51,8 +52,11 @@ export class CalendarCreateEventHandler implements ToolHandler {
     if (new Date(end) <= new Date(start)) {
       return { success: false, error: 'Invalid input: end must be after start' };
     }
-    if (attendees !== undefined && !Array.isArray(attendees)) {
-      return { success: false, error: 'Invalid input: attendees must be an array' };
+    let parsedAttendees: CreateEventInput['attendees'];
+    if (attendees !== undefined) {
+      const parsed = parseWritableAttendees(attendees);
+      if (!parsed.ok) return { success: false, error: parsed.error };
+      parsedAttendees = parsed.attendees;
     }
 
     try {
@@ -69,7 +73,7 @@ export class CalendarCreateEventHandler implements ToolHandler {
       const eventData: CreateEventInput = { title, start, end };
       if (description) eventData.description = description;
       if (location) eventData.location = location;
-      if (attendees) eventData.attendees = attendees;
+      if (parsedAttendees) eventData.attendees = parsedAttendees;
       if (conferencing) eventData.conferencing = conferencing;
 
       const event = await ctx.nylasCalendarClient.createEvent(calendarId, eventData);

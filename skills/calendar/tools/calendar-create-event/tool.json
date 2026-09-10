@@ -1,7 +1,7 @@
 {
   "name": "calendar-create-event",
-  "description": "Create a new calendar event with title, time, attendees, and optional description/location/conferencing. Attendees will receive invitation emails automatically.",
-  "version": "1.0.1",
+  "description": "Create a new calendar event with title, time, and optional description/location/conferencing. attendees is a guest list of { email, name? } — this Nylas tool cannot set RSVP status. Attendees receive invitation emails automatically.",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "high",
   "inputs": {
@@ -11,10 +11,8 @@
     "end": "timestamp (event end time)",
     "description": "string?",
     "location": "string?",
-    "attendees": "object[]?",
-    "conferencing": "object?",
-    "colorId": "string?",
-    "reminders": "object?"
+    "attendees": "object[]? (each { email, name? }. Cannot set RSVP status; use calendar-respond-to-invite for the principal's own RSVP.)",
+    "conferencing": "object?"
   },
   "outputs": {
     "event": "object"
