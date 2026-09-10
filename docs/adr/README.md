@@ -62,6 +62,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [038](038-voice-brain-shared-hardening.md) | Voice brain parity via shared-hardening prompt modules — reject full coordinator consolidation; text may use `stream()` (#1563) | Accepted |
 | [039](039-decisions-in-the-ledger-not-the-knowledge-graph.md) | Operational decisions live in the relational ledger, not the KG — dedup exclusions move to `contact_dedup_exclusions` (#1625) | Accepted |
 | [040](040-contact-anchored-kg-node-identity.md) | Contact-anchored KG node identity — a contact's node is keyed on the contact, not its label; unanchored nodes stay label-keyed (#1694) | Accepted |
+| [041](041-aws-bedrock-llm-provider.md) | AWS Bedrock as a third `LLMProvider` via the Converse API — preserved from unmerged #1349; no implementation in `main` (#1766) | Proposed |
 
 ## Adding new ADRs
 
