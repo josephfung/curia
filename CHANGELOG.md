@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **ADR-041 (Proposed)** — AWS Bedrock as an LLM provider, preserved from unmerged #1349. (#1766)
 - **`signal_voice` health check** — `/api/health` now probes the Signal call audio socket by connecting, not stat'ing. (#1760)
 - **Auto-generated mail detection** — classifies inbound email from message signals and suppresses replies at dispatch. (#1734)
 - **`apps/*` lint coverage** — ESLint now checks console and antfarm; `no-console` stays backend-only. (#1727)
