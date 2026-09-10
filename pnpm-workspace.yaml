@@ -130,6 +130,8 @@ overrides:
   'gaxios>rimraf': '>=6.1.2'
   # MED CVEs from Scorecard, 2026-09-09 (#1752):
   fflate: '>=0.8.3'                         # GHSA-px8p-9vwx-vf98 (unzipSync infinite loop on malformed ZIP64); only consumer is @openai/codex-security via promptfoo (dev-only), which pinned 0.8.2
+  # HIGH CVE from Dependabot, 2026-09-09:
+  smol-toml: '>=1.7.1'                      # GHSA-7w5x-hrqm-74c2 / CVE-2026-85730 (DoS via malformed TOML); same story as fflate above - only consumer is @openai/codex-security via promptfoo (dev-only), which pins an exact 1.6.1, so nothing but an override moves it
   #
   # Two Scorecard GHSAs deliberately have NO override because no fixed release exists
   # (re-check before assuming they were missed):
