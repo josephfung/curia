@@ -316,13 +316,13 @@ export class MemoryStoreHandler implements ToolHandler {
           ctx.log.warn({ entityNodeId: entityNode.id, field }, 'memory-store: entity node gone at write time — validator race');
           return {
             success: true,
-            data: { stored: false, action: 'entity_not_found', reason: result.conflict },
+            data: { stored: false, action: 'entity_not_found', reason: result.reason },
           };
         case 'rate_limited':
-          ctx.log.warn({ entityNodeId: entityNode.id, field, reason: result.conflict }, 'memory-store: write rate limit reached');
+          ctx.log.warn({ entityNodeId: entityNode.id, field, reason: result.reason }, 'memory-store: write rate limit reached');
           return {
             success: true,
-            data: { stored: false, action: 'rate_limited', reason: result.conflict },
+            data: { stored: false, action: 'rate_limited', reason: result.reason },
           };
         case 'auto_rejected':
           // Auto-rejected: existing fact had higher confidence — write was dropped.
