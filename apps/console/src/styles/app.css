@@ -800,6 +800,38 @@ input:focus, textarea:focus, select:focus {
   border-left-color: var(--app-fg-muted);
   background: color-mix(in srgb, var(--app-fg-muted) 10%, transparent);
 }
+.settings-callout-success {
+  border-left-color: var(--app-green);
+  background: color-mix(in srgb, var(--app-green) 8%, transparent);
+}
+.settings-callout-danger {
+  border-left-color: var(--app-destructive);
+  background: color-mix(in srgb, var(--app-destructive) 10%, transparent);
+}
+@keyframes restart-spin {
+  to { transform: rotate(360deg); }
+}
+.restart-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: restart-spin 0.7s linear infinite;
+  flex: none;
+}
+.restart-confirm p {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--app-fg);
+  max-width: 520px;
+}
+.restart-confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .settings-history-summary {
   font-weight: 400;
   font-size: 12px;

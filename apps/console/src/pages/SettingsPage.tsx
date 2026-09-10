@@ -293,15 +293,14 @@ function AutonomySection() {
 // ── Settings layout ───────────────────────────────────────────────────────────
 
 // In-page settings nav (#1376). Order: Personality → Ghostwriting → Posture →
-// Autonomy → Memory → System.
-// Skills / Agents / Channels live as standalone sidebar pages outside this shell.
+// Autonomy → Memory. System lives as a standalone sidebar page outside this
+// shell (#1765), same as Skills / Agents / Channels.
 const SETTINGS_SECTIONS = [
   { id: 'personality',  label: 'Personality',  href: '/settings/personality' },
   { id: 'ghostwriting', label: 'Ghostwriting', href: '/settings/ghostwriting' },
   { id: 'posture',      label: 'Posture',      href: '/settings/posture' },
   { id: 'autonomy',     label: 'Autonomy',     href: '/settings/autonomy' },
   { id: 'memory',       label: 'Memory',       href: '/settings/memory' },
-  { id: 'system',       label: 'System',       href: '/settings/system' },
 ] as const;
 
 interface SettingsLayoutProps {

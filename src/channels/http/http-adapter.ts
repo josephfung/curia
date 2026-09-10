@@ -162,6 +162,12 @@ export interface HttpAdapterConfig {
    */
   system?: SystemSnapshot;
   /**
+   * Triggers graceful process shutdown for POST /api/system/restart (#1765).
+   * Defaults to SIGTERM so the existing shutdown(0) handler in src/index.ts
+   * runs. Tests inject a spy to avoid killing the process.
+   */
+  scheduleShutdown?: () => void;
+  /**
    * Voice session bridge — HttpAdapter mounts /api/voice/* and delegates to the
    * handler installed by VoiceAdapter.start() (ADR-037).
    */
@@ -461,12 +467,19 @@ export class HttpAdapter implements Channel {
       });
     }
 
-    // System snapshot (read-only) — console System settings page (#1376).
+    // System snapshot + restart — console System page (#1376, #1765).
     if (webAppBootstrapSecret && this.config.system) {
       await this.app.register(systemRoutes, {
         system: this.config.system,
         webAppBootstrapSecret,
         sessions,
+        bus,
+        logger,
+        // SIGTERM is the same path Docker stop / `docker restart` already take
+        // (`process.on('SIGTERM', () => void shutdown())` in src/index.ts).
+        scheduleShutdown: this.config.scheduleShutdown ?? (() => {
+          process.kill(process.pid, 'SIGTERM');
+        }),
       });
     }
 
