@@ -390,10 +390,16 @@ function asFlag(value: unknown): 0 | 1 | undefined {
   return undefined;
 }
 
+const JUDGE_FIELD_STRING_PREVIEW_CHARS = 40;
+
 function describeJudgeField(value: unknown): string {
   if (value === undefined) return 'absent';
   if (value === null) return 'null';
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') {
+  if (typeof value === 'string') {
+    return JSON.stringify(value.slice(0, JUDGE_FIELD_STRING_PREVIEW_CHARS))
+      + (value.length > JUDGE_FIELD_STRING_PREVIEW_CHARS ? `…(${value.length})` : '');
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
     return JSON.stringify(value);
   }
   return typeof value;
