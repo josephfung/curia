@@ -1,9 +1,11 @@
-// handler.ts — secret-capture-request skill (#971).
+// handler.ts — secret-capture-request skill (#971, #1497).
 //
-// Mints a one-time tokenized link the user clicks to enter a NEW personal secret. The name
-// is auto-namespaced to `user.<slug>` by the minter, so this skill structurally cannot target
-// a system/channel/protected key. The skill returns ONLY the link — it has no code path that
-// reads a value, which is the structural form of the "LLM never sees secrets" guarantee.
+// Mints a one-time tokenized link the user clicks to enter a personal secret. The name
+// is resolved to a canonical `user.*` key (with fingerprint dedup against existing
+// keys) by the minter, so this skill structurally cannot target a system/channel/
+// protected key and will not fork a second slug for the same secret. The skill
+// returns ONLY the link — it has no code path that reads a value, which is the
+// structural form of the "LLM never sees secrets" guarantee.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import type { CaptureValueFormat } from '../../src/secrets/secret-capture-service.js';
@@ -63,7 +65,7 @@ export class SecretCaptureRequestHandler implements ToolHandler {
     const origin = buildCaptureOrigin(ctx, resumeIntent);
 
     try {
-      const { rawToken, secretName, expiresAt } = await ctx.secretCapture.mintUserSecret({
+      const { rawToken, secretName, expiresAt, reusedExisting } = await ctx.secretCapture.mintUserSecret({
         rawName: secret_name,
         label: labelStr,
         valueFormat,
@@ -71,6 +73,9 @@ export class SecretCaptureRequestHandler implements ToolHandler {
       });
       const captureUrl = buildCaptureUrl(ctx, rawToken);
       const expiresLocal = toLocalIso(Math.floor(expiresAt.getTime() / 1000), ctx.timezone);
+      const reuseNote = reusedExisting
+        ? `This updates the existing vault key "${secretName}" in place rather than creating a new one.`
+        : `The value is stored under "${secretName}".`;
 
       return {
         success: true,
@@ -78,13 +83,14 @@ export class SecretCaptureRequestHandler implements ToolHandler {
           capture_url: captureUrl,
           expires_at: expiresLocal,
           secret_name: secretName,
+          reused_existing: reusedExisting === true,
           displayTimezone: ctx.timezone ? formatDisplayTimezone(ctx.timezone, new Date()) : undefined,
           summary:
             `Reply to the user with the capture_url EXACTLY as given, including the full token — ` +
             `do not redact, mask, shorten, or alter any part of it, and do not replace it with ` +
             `a placeholder. The link itself is safe to share; it is not a secret. (The secret is ` +
-            `the value the user types into the form, which goes straight to the vault under ` +
-            `"${secretName}" and never reaches you.) Tell them it is one-time and expires in 30 minutes.`,
+            `the value the user types into the form, which goes straight to the vault and never ` +
+            `reaches you.) ${reuseNote} Tell them it is one-time and expires in 30 minutes.`,
         },
       };
     } catch (err) {

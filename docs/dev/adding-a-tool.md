@@ -192,6 +192,7 @@ Valid capability names and what they grant:
 | `outboundContext` | `ScopedOutboundContext` | Register/release outbound-context entries (delegation-aware reply correlation). Used by send skills and any agent that wants to claim a reply thread. See [spec 11 §Outbound Context Bridge](../specs/11-entity-context-enrichment.md#outbound-context-bridge). |
 | `secretCapture` | `SecretCaptureMinter` (`ctx.secretCapture`) | Mint a one-time vault capture link so a user can add a new secret mid-conversation. The skill never sees the submitted value. Declaring this capability is also what unlocks the `skip_secret_redaction` manifest field (see below). |
 | `secretResolver` | `ctx.resolveSecretRef(ref)` | Resolve a `user.*` secret by reference at runtime (the value is returned to the handler for immediate use, never placed in LLM-facing output). Additionally hard-allowlisted in the execution layer to `web-browser` only — declaring it elsewhere has no effect. |
+| `userSecretIndex` | `ctx.listUserSecretNames()` | List `user.*` vault key names only (never values, never system/channel keys). Hard-allowlisted to `list-user-secrets`. |
 
 Services NOT in this list (`contactService`, `entityContextAssembler`, `agentPersona`) are **universal** — available to every skill without declaration. Omit `capabilities` entirely if your skill only uses universal services.
 
@@ -416,6 +417,10 @@ interface ToolContext {
    *  (additionally hard-allowlisted to web-browser). The value is for immediate runtime
    *  use only and must never be placed into LLM-facing output. */
   resolveSecretRef?(ref: string): Promise<string>;
+
+  /** List `user.*` vault key names — declare "userSecretIndex" in capabilities
+   *  (hard-allowlisted to list-user-secrets). Names only; never values. */
+  listUserSecretNames?: () => Promise<string[]>;
 
   // --- Universal fields (available to all skills) ---
 

@@ -69,6 +69,21 @@ export class SecretsService {
     return result.rows.map(r => r.name);
   }
 
+  /** Names of `user.*` secrets only — never values, never system/channel keys.
+   *  Ordered oldest-first so capture dedup reuses the original key (#1497).
+   *  Uses a prefix predicate (not list()+filter) so the full keyspace never
+   *  enters this path. */
+  async listUserNames(): Promise<string[]> {
+    const result = await this.pool.query<{ name: string }>(
+      `SELECT name FROM secrets
+        WHERE starts_with(name, 'user.')
+        ORDER BY created_at ASC, name ASC`,
+    );
+    // Defense in depth: the SQL predicate is the real filter; this drop-guard
+    // keeps a mismatched driver/mock from leaking a non-user name.
+    return result.rows.map(r => r.name).filter(n => n.startsWith('user.'));
+  }
+
   /** Remove a secret. No error if it does not exist. */
   async delete(name: string): Promise<void> {
     await this.pool.query('DELETE FROM secrets WHERE name = $1', [name]);

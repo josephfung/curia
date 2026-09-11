@@ -97,6 +97,7 @@ function resolveAgent(agentFile: string): string[] {
     'activity-log',
     'approval-expiry-sweep',
     'secret-capture-request',
+    'list-user-secrets',
     'create_doc',
     'search_drive_files',
   ]) {
@@ -204,5 +205,13 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(tools).toEqual(
       expect.arrayContaining(['query-relationships', 'delete-relationship']),
     );
+  });
+
+  it('coordinator pins list-user-secrets alongside secret-capture-request (#1497)', () => {
+    const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
+    expect(config.pinned_skills).toContain('list-user-secrets');
+    expect(config.pinned_skills).toContain('secret-capture-request');
+    const tools = resolveAgent('coordinator.yaml');
+    expect(tools).toEqual(expect.arrayContaining(['list-user-secrets', 'secret-capture-request']));
   });
 });

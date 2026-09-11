@@ -1,0 +1,16 @@
+{
+  "name": "list-user-secrets",
+  "description": "List the names of personal secrets stored in the vault under the `user.*` namespace. Returns key names only — never values, and never system, channel, or API-key secrets. Call this BEFORE secret-capture-request or before filling a browser form with a secret_ref, so you reuse an existing key instead of guessing names or asking the user to re-enter a secret that is already stored. If a listed name matches what you need, pass that exact name to secret-capture-request to update it in place.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {},
+  "outputs": {
+    "keys": "string[] (user.* vault key names only, alphabetical, never values)",
+    "count": "number (how many user.* keys exist)"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["userSecretIndex"]
+}

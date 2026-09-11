@@ -66,6 +66,7 @@ import {
 } from '../security/export-controls.js';
 import { createExportDelivered } from '../bus/events.js';
 import { isDbUnavailableError } from '../db/resilience.js';
+import { USER_SECRET_PREFIX } from '../secrets/user-secret-name.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -78,14 +79,11 @@ const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 // trust boundary established by #971: it cannot name a system key (snake_case, e.g.
 // `anthropic_api_key`) or a channel credential (`channel.*`), so form-fill material is
 // structurally separated from privileged secrets.
-const USER_SECRET_PREFIX = 'user.';
-
-// Hard allowlist of skills permitted to declare and use the `secretResolver` capability.
-// Mirrors the executionLayer→approve-action restriction below: declaring the capability in
-// tool.json is necessary but NOT sufficient — the skill name must also appear here. Kept as
-// a set so sibling skills that legitimately need by-reference injection (e.g. a future
-// http-request skill) can be added deliberately rather than by manifest edit alone.
 export const SECRET_RESOLVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['web-browser']);
+
+// Names-only `user.*` index (#1497) — see ctx.listUserSecretNames.
+// Hard-allowlisted to list-user-secrets: declaring userSecretIndex elsewhere has no effect.
+export const USER_SECRET_INDEX_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['list-user-secrets']);
 
 /** Options passed to ExecutionLayer.invoke() by the agent runtime. */
 export interface InvokeOptions {
@@ -1353,6 +1351,10 @@ export class ExecutionLayer {
       // loop below. Backed by secretsService — listed here so the missing-cap guard fails
       // closed when a skill declares the capability but no vault is wired.
       secretResolver: this.secretsService,
+      // userSecretIndex injects the names-only `user.*` listing closure (#1497). Backed
+      // by secretsService.listUserNames() — listed here so the missing-cap guard fails
+      // closed. The actual injection is a scoped closure; this map entry is presence only.
+      userSecretIndex: this.secretsService,
       // sensitivityClassifier (#1419) — plain field injection, no special-casing needed.
       // Classifies free text against config sensitivity_rules; shared with EntityMemory.
       sensitivityClassifier: this.sensitivityClassifier,
@@ -1392,6 +1394,23 @@ export class ExecutionLayer {
         success: false,
         error: this.wrapSkillError(
           `Tool '${toolName}' declares capability 'secretResolver' but is not on the resolver allowlist`,
+        ),
+      };
+    }
+
+    // Hard-restrict userSecretIndex to the allowlist (#1497).
+    // listUserSecretNames enumerates user.* key names (never values). Declaring the
+    // capability is necessary but not sufficient; the skill name must also be on
+    // USER_SECRET_INDEX_ALLOWED_TOOLS.
+    if (caps.includes('userSecretIndex') && !USER_SECRET_INDEX_ALLOWED_TOOLS.has(manifest.name)) {
+      skillLogger.error(
+        { toolName, manifestName: manifest.name },
+        'SECURITY: userSecretIndex capability is restricted to an allowlist — refusing to run skill',
+      );
+      return {
+        success: false,
+        error: this.wrapSkillError(
+          `Tool '${toolName}' declares capability 'userSecretIndex' but is not on the user-secret index allowlist`,
         ),
       };
     }
@@ -1544,6 +1563,18 @@ export class ExecutionLayer {
           // Debug log records the NAME only, never the value.
           skillLogger.debug({ secretName: ref, source: 'vault', byReference: true }, 'Secret resolved by reference');
           return value;
+        };
+      } else if (cap === 'userSecretIndex') {
+        // Names-only `user.*` listing (#1497). Two guardrails on top of the skill allowlist:
+        //   1. Calls listUserNames() (prefix query), never list() — system/channel keys
+        //      never enter this path.
+        //   2. Filters startsWith(user.) again so a mismatched mock cannot leak names.
+        ctx.listUserSecretNames = async (): Promise<string[]> => {
+          if (!this.secretsService) {
+            throw new Error('listUserSecretNames: secrets service is not configured');
+          }
+          const names = await this.secretsService.listUserNames();
+          return names.filter(n => n.startsWith(USER_SECRET_PREFIX));
         };
       } else {
         (ctx as unknown as Record<string, unknown>)[cap] = capabilityServices[cap];

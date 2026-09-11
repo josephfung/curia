@@ -196,8 +196,23 @@ describe('applyChannelVaultSecrets', () => {
       'channel.voice.livekit_api_secret',
       'channel.voice.livekit_url',
     ]);
-    // No list() method should even be invoked (the fake doesn't have one).
+    // No list() / listUserNames() method should even be invoked (the fake doesn't have them).
     expect('list' in secrets).toBe(false);
+    expect('listUserNames' in secrets).toBe(false);
+  });
+
+  it('never calls list() even when the vault port exposes it', async () => {
+    const config = baseConfig();
+    const secrets = {
+      get: vi.fn(async () => null),
+      list: vi.fn(async () => ['user.should_not_be_seen', 'anthropic_api_key']),
+      listUserNames: vi.fn(async () => ['user.should_not_be_seen']),
+    };
+
+    await applyChannelVaultSecrets(config, secrets, {}, logger);
+
+    expect(secrets.list).not.toHaveBeenCalled();
+    expect(secrets.listUserNames).not.toHaveBeenCalled();
   });
 });
 

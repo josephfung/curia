@@ -30,7 +30,7 @@ function makePool(
 }
 
 /** A fake vault port that records writes so tests can assert what was stored. */
-function makeSecretsPort(): CaptureSecretsPort & {
+function makeSecretsPort(existingUserNames: string[] = []): CaptureSecretsPort & {
   setCalls: Array<{ name: string; value: string }>;
   setJSONCalls: Array<{ name: string; obj: unknown }>;
   failNextWrite: () => void;
@@ -50,6 +50,9 @@ function makeSecretsPort(): CaptureSecretsPort & {
       if (fail) { fail = false; throw new Error('vault write failed'); }
       setJSONCalls.push({ name, obj });
     },
+    async listUserNames() {
+      return existingUserNames;
+    },
   };
 }
 
@@ -58,44 +61,25 @@ const SYSTEM_ALLOWED = new Set(['anthropic_api_key', 'channel.email.nylas_api_ke
 // Default handler: the mint INSERT now uses RETURNING expires_at (DB-clock TTL), so echo a
 // row back for it; everything else returns no rows unless a test overrides the handler.
 function makeService(
-  poolHandler: (sql: string, params: unknown[]) => { rows: Record<string, unknown>[]; rowCount?: number } =
-    (sql) => sql.includes('INSERT INTO secret_capture_tokens')
-      ? { rows: [{ expires_at: new Date(Date.now() + 30 * 60_000) }] }
-      : { rows: [] },
+  poolHandler?: (sql: string, params: unknown[]) => { rows: Record<string, unknown>[]; rowCount?: number },
+  existingUserNames: string[] = [],
 ) {
-  const { pool, queries } = makePool(poolHandler);
-  const secrets = makeSecretsPort();
+  const handler = poolHandler ?? ((sql: string) => sql.includes('INSERT INTO secret_capture_tokens')
+    ? { rows: [{ expires_at: new Date(Date.now() + 30 * 60_000) }] }
+    : { rows: [] });
+  const { pool, queries } = makePool(handler);
+  const secrets = makeSecretsPort(existingUserNames);
   const svc = new SecretCaptureService(pool, secrets, {
     getAllowedSystemNames: () => SYSTEM_ALLOWED,
   });
   return { svc, secrets, queries };
 }
 
-describe('resolveUserSecretName', () => {
-  it('slugifies and prefixes with user.', () => {
-    expect(resolveUserSecretName('My Flight Site Password')).toBe('user.my_flight_site_password');
-  });
-
-  it('collapses non-alphanumeric runs and trims edge underscores', () => {
-    expect(resolveUserSecretName('  Foo--Bar!! ')).toBe('user.foo_bar');
-  });
-
-  it('rejects empty / whitespace input', () => {
-    expect(() => resolveUserSecretName('   ')).toThrow();
-  });
-
-  it('rejects input with no usable alphanumeric characters', () => {
-    expect(() => resolveUserSecretName('!!!')).toThrow();
-  });
-
-  it('rejects over-long input', () => {
-    expect(() => resolveUserSecretName('x'.repeat(200))).toThrow();
-  });
-
-  it('structurally cannot produce a protected system or channel name', () => {
-    // A user trying to overwrite a system key still lands inside the user. namespace.
+describe('resolveUserSecretName (re-export)', () => {
+  it('still namespaces under user. and cannot produce a protected name', () => {
     expect(resolveUserSecretName('anthropic_api_key')).toBe('user.anthropic_api_key');
-    expect(resolveUserSecretName('channel.email.nylas_api_key')).toBe('user.channel_email_nylas_api_key');
+    expect(resolveUserSecretName('channel.email.nylas_api_key').startsWith('user.')).toBe(true);
+    expect(resolveUserSecretName('channel.email.nylas_api_key')).not.toBe('channel.email.nylas_api_key');
   });
 });
 
@@ -191,8 +175,27 @@ describe('SecretCaptureService.mintUserSecret / mintSystemSecret', () => {
   it('mintUserSecret namespaces the resolved key under user.', async () => {
     const { svc } = makeService();
     const res = await svc.mintUserSecret({ rawName: 'Flight Site Password' });
-    expect(res.secretName).toBe('user.flight_site_password');
+    expect(res.secretName).toBe('user.flight_password');
+    expect(res.reusedExisting).toBe(false);
     expect(res.rawToken).toMatch(/^[A-Za-z0-9_-]{20,24}$/);
+  });
+
+  it('mintUserSecret reuses an existing fingerprint-matching user.* key (#1497)', async () => {
+    const existing = ['user.x_com_password', 'user.x_twitter_password_for_josephfung'];
+    const { svc, queries } = makeService(undefined, existing);
+    const res = await svc.mintUserSecret({ rawName: 'my Twitter/X password' });
+    expect(res.secretName).toBe('user.x_com_password');
+    expect(res.reusedExisting).toBe(true);
+    const insert = queries.find(q => q.sql.includes('INSERT INTO secret_capture_tokens'));
+    expect(insert!.params).toContain('user.x_com_password');
+    expect(insert!.params).not.toContain('user.my_twitter_x_password');
+  });
+
+  it('mintUserSecret of the same description twice binds both tokens to one key', async () => {
+    const { svc } = makeService(undefined, ['user.flight_password']);
+    const res = await svc.mintUserSecret({ rawName: 'My Flight Site Password' });
+    expect(res.secretName).toBe('user.flight_password');
+    expect(res.reusedExisting).toBe(true);
   });
 
   it('mintSystemSecret accepts an allowed key and rejects an unknown one', async () => {

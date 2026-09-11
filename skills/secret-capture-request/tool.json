@@ -1,11 +1,11 @@
 {
   "name": "secret-capture-request",
-  "description": "Mint a one-time, single-use, 30-minute link the user can click to enter a NEW personal secret (e.g. a website password). The value is typed by the user into a secure web form and written straight to the vault under a `user.<slug>` key. You never see the value — this skill returns only the link, never the secret. Relay the returned capture_url to the user verbatim. When the user fills the link, you are automatically brought back into this conversation to continue. Use when a task needs a secret the vault does not yet have.",
-  "version": "0.2.1",
+  "description": "Mint a one-time, single-use, 30-minute link the user can click to enter a personal secret (e.g. a website password). The value is typed into a secure web form and written straight to the vault under a deterministic `user.*` key — repeat captures of the same secret update that key in place instead of minting a new slug. Call list-user-secrets first; if a matching key already exists, pass that exact name as secret_name. You never see the value — this skill returns only the link. Relay the returned capture_url to the user verbatim. When the user fills the link, you are automatically brought back into this conversation to continue.",
+  "version": "0.3.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
-    "secret_name": "string (human description of the secret, e.g. 'my flight site password'; auto-namespaced to user.<slug>)",
+    "secret_name": "string (human description of the secret, e.g. 'twitter password'; canonicalized to user.<slug>. Pass an exact existing user.* key from list-user-secrets to update that key in place)",
     "label": "string? (text shown to the user on the form; defaults to the secret_name)",
     "value_format": "string? ('string' (default) or 'json')",
     "resume_intent": "string? (a short description of what you are trying to do, e.g. 'check the user's Aeroplan balance'; surfaced back to you when the secret is captured so you can continue)"
@@ -13,7 +13,8 @@
   "outputs": {
     "capture_url": "string (the one-time link to send the user)",
     "expires_at": "string (local ISO timestamp when the link expires)",
-    "secret_name": "string (the resolved user.<slug> vault key the value will be stored under)"
+    "secret_name": "string (the resolved user.<slug> vault key the value will be stored under)",
+    "reused_existing": "boolean (true when this capture will update an already-stored user.* key)"
   },
   "permissions": [],
   "secrets": [],
