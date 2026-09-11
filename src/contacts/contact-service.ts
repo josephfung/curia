@@ -179,7 +179,8 @@ interface ContactServiceBackend {
   revokeAuthOverride(contactId: string, permission: string): Promise<boolean>;
 
   // -- Grant recommendations (issue #952) --
-  createGrantRecommendation(rec: GrantRecommendation): Promise<void>;
+  /** Insert a recommendation. Returns true if a row was written, false if the unique pair already existed. */
+  createGrantRecommendation(rec: GrantRecommendation): Promise<boolean>;
   getGrantRecommendation(id: string): Promise<GrantRecommendation | null>;
   findGrantRecommendation(contactId: string, permission: string): Promise<GrantRecommendation | null>;
   listGrantRecommendations(filters?: { status?: GrantRecommendationStatus; limit?: number }): Promise<GrantRecommendation[]>;
@@ -1411,19 +1412,15 @@ export class ContactService {
 
   /**
    * Create a new grant recommendation for a contact+permission pair.
-   * Returns false (no-op) when a recommendation already exists for this pair —
-   * the caller must check first if dedup is desired at the service layer.
+   * The insert is the source of truth: `created: true` is returned only when
+   * this call persisted a row. A concurrent (or sequential) duplicate for the
+   * same pair is conflict-skipped and returns the persisted winner.
    */
   async createGrantRecommendation(
     contactId: string,
     permission: string,
     reasoning: string,
   ): Promise<{ created: boolean; recommendation: GrantRecommendation }> {
-    const existing = await this.backend.findGrantRecommendation(contactId, permission);
-    if (existing) {
-      return { created: false, recommendation: existing };
-    }
-
     const rec: GrantRecommendation = {
       id: randomUUID(),
       contactId,
@@ -1434,7 +1431,22 @@ export class ContactService {
       resolvedAt: null,
       resolvedBy: null,
     };
-    await this.backend.createGrantRecommendation(rec);
+
+    const inserted = await this.backend.createGrantRecommendation(rec);
+    if (!inserted) {
+      const winner = await this.backend.findGrantRecommendation(contactId, permission);
+      if (!winner) {
+        this.logger?.error(
+          { contactId, permission },
+          'contacts: grant recommendation insert skipped but no existing row found',
+        );
+        throw new Error(
+          `Grant recommendation conflict for ${contactId}/${permission} but no existing row found`,
+        );
+      }
+      return { created: false, recommendation: winner };
+    }
+
     this.logger?.info({ contactId, permission }, 'contacts: grant recommendation created');
     return { created: true, recommendation: rec };
   }
@@ -2520,14 +2532,15 @@ class PostgresContactBackend implements ContactServiceBackend {
 
   // ---- Grant recommendations (issue #952) ----
 
-  async createGrantRecommendation(rec: GrantRecommendation): Promise<void> {
-    await this.pool.query(
+  async createGrantRecommendation(rec: GrantRecommendation): Promise<boolean> {
+    const result = await this.pool.query(
       `INSERT INTO grant_recommendations
          (id, contact_id, permission, reasoning, status, suggested_at, resolved_at, resolved_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (contact_id, permission) DO NOTHING`,
       [rec.id, rec.contactId, rec.permission, rec.reasoning, rec.status, rec.suggestedAt, rec.resolvedAt, rec.resolvedBy],
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async getGrantRecommendation(id: string): Promise<GrantRecommendation | null> {
@@ -3434,7 +3447,7 @@ class InMemoryContactBackend implements ContactServiceBackend {
 
   private recommendations = new Map<string, GrantRecommendation>();
 
-  async createGrantRecommendation(rec: GrantRecommendation): Promise<void> {
+  async createGrantRecommendation(rec: GrantRecommendation): Promise<boolean> {
     // Mimic Postgres FK constraint: contact must exist
     if (!this.contacts.has(rec.contactId)) {
       throw new Error(`Foreign key violation: contact '${rec.contactId}' does not exist`);
@@ -3442,9 +3455,10 @@ class InMemoryContactBackend implements ContactServiceBackend {
     const key = `${rec.contactId}:${rec.permission}`;
     // Mimic ON CONFLICT DO NOTHING
     for (const r of this.recommendations.values()) {
-      if (r.contactId === rec.contactId && r.permission === rec.permission) return;
+      if (r.contactId === rec.contactId && r.permission === rec.permission) return false;
     }
     this.recommendations.set(key, rec);
+    return true;
   }
 
   async getGrantRecommendation(id: string): Promise<GrantRecommendation | null> {
