@@ -1,6 +1,6 @@
 // scoring-pass.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { AutonomyScoringPass } from './scoring-pass.js';
+import { AutonomyScoringPass, parseLlmJudgeFlags } from './scoring-pass.js';
 import type { ActionLogRepo } from './action-log-repo.js';
 import type { AutonomyService } from './autonomy-service.js';
 import type { LLMProvider } from '../agents/llm/provider.js';
@@ -166,6 +166,60 @@ describe('AutonomyScoringPass', () => {
       await pass.run();
 
       expect(repo.updateScoringFlags).not.toHaveBeenCalled();
+    });
+
+    it('leaves row unscored when LLM returns valid JSON with wrong field types', async () => {
+      const row = makeRow({ id: 15, outcome: 'success' });
+      const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });
+      const llm = {
+        id: 'anthropic',
+        chat: vi.fn().mockResolvedValue({
+          type: 'text',
+          content: JSON.stringify({ competence_flag: 'yes', commitment_flag: '1', compatibility: true }),
+          usage: { inputTokens: 100, outputTokens: 50 },
+        }),
+      } as unknown as LLMProvider;
+      const pass = new AutonomyScoringPass(repo, makeAutonomyService(), llm, createSilentLogger(), defaultConfig);
+
+      const result = await pass.run();
+
+      expect(repo.updateScoringFlags).not.toHaveBeenCalled();
+      expect(result.llmCallsFailed).toBe(1);
+      expect(result.rowsScored).toBe(0);
+    });
+  });
+
+  describe('parseLlmJudgeFlags', () => {
+    it('accepts numeric 0/1 flags', () => {
+      expect(parseLlmJudgeFlags(JSON.stringify({
+        competence_flag: 1,
+        commitment_flag: 0,
+        compatibility: 1,
+      }))).toEqual({
+        competenceFlag: 1,
+        commitmentFlag: 0,
+        compatibility: 1,
+        scoredBy: 'llm-judge',
+      });
+    });
+
+    it('throws when required fields are missing', () => {
+      expect(() => parseLlmJudgeFlags('{}')).toThrow(/missing or non-numeric fields/);
+      expect(() => parseLlmJudgeFlags('{}')).toThrow(/competence_flag=absent/);
+    });
+
+    it('throws when required fields are non-numeric', () => {
+      expect(() => parseLlmJudgeFlags(JSON.stringify({
+        competence_flag: 'yes',
+        commitment_flag: 1,
+        compatibility: 0,
+      }))).toThrow(/competence_flag=string/);
+    });
+
+    it('throws when JSON is not an object', () => {
+      expect(() => parseLlmJudgeFlags('[]')).toThrow(/non-object JSON/);
+      expect(() => parseLlmJudgeFlags('null')).toThrow(/non-object JSON/);
+      expect(() => parseLlmJudgeFlags('1')).toThrow(/non-object JSON/);
     });
   });
 
