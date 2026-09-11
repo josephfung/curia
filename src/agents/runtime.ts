@@ -984,9 +984,9 @@ export class AgentRuntime {
     const rawHistory = memory
       ? await memory.getHistory(conversationId, agentId)
       : [];
-    // Failed LLM calls persist a marker assistant turn (#1767). Strip those
-    // pairs (and any trailing orphaned user turn) so the provider never sees
-    // consecutive user messages or the failed prompt's stale text.
+    // getHistory already rewrote failure markers (#1775). historyForLlm still
+    // collapses consecutive same-role turns and drops a trailing `user` so the
+    // provider never sees an orphaned prompt; the current user is appended below.
     const history = historyForLlm(rawHistory);
 
     const budgetedHistory = ctxBudget.allocateHistory(
@@ -2560,7 +2560,8 @@ export class AgentRuntime {
     const { memory, agentId, logger } = this.config;
     if (!memory) return;
     try {
-      const history = await memory.getHistory(conversationId, agentId);
+      // Pairing check against stored content, not the sanitized rewrite (#1775).
+      const history = await memory.getHistory(conversationId, agentId, { raw: true });
       const last = history[history.length - 1];
       if (last?.role !== 'user') return;
       if (last.content !== expectedUserContent) {

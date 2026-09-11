@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
+import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src/memory/llm-failure-turn.js';
 
 describe('WorkingMemory', () => {
   let memory: WorkingMemory;
@@ -45,5 +46,27 @@ describe('WorkingMemory', () => {
     // Should be the LAST 10 (most recent), in chronological order
     expect(history[0]?.content).toBe('Message 15');
     expect(history[9]?.content).toBe('Message 24');
+  });
+
+  it('rewrites LLM-failure marker turns by default (#1775)', async () => {
+    await memory.addTurn('conv-1', 'coordinator', { role: 'user', content: 'failed question' });
+    await memory.addTurn('conv-1', 'coordinator', { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT });
+
+    const history = await memory.getHistory('conv-1', 'coordinator');
+    expect(history).toEqual([
+      { role: 'user', content: 'failed question' },
+      { role: 'assistant', content: LLM_FAILURE_USER_MESSAGE },
+    ]);
+  });
+
+  it('returns stored protocol envelopes when raw: true (#1775)', async () => {
+    await memory.addTurn('conv-1', 'coordinator', { role: 'user', content: 'failed question' });
+    await memory.addTurn('conv-1', 'coordinator', { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT });
+
+    const stored = await memory.getHistory('conv-1', 'coordinator', { raw: true });
+    expect(stored).toEqual([
+      { role: 'user', content: 'failed question' },
+      { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT },
+    ]);
   });
 });

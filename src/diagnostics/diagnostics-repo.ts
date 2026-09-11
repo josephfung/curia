@@ -385,6 +385,11 @@ export class DiagnosticsRepo {
    * Read working_memory turns for a conversation/agent, INCLUDING archived rows
    * (retained past TTL for audit). `content` is the most sensitive field in the
    * system — the handler scrubs + truncates it before it leaves the skill.
+   *
+   * Deliberately unsanitized: protocol envelopes such as
+   * `_curia_protocol: llm_failure` are returned verbatim. This path bypasses
+   * `rewriteLlmFailureTurns` / `WorkingMemory.getHistory` on purpose (#1775)
+   * so an investigator sees what is stored, not the display rewrite.
    */
   async getWorkingMemory(query: DiagnosticsQuery): Promise<WorkingMemoryRow[]> {
     const params: unknown[] = [];

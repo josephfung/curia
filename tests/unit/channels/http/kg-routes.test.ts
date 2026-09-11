@@ -7,6 +7,7 @@ import type { ContactService } from '../../../../src/contacts/contact-service.js
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { knowledgeGraphRoutes } from '../../../../src/channels/http/routes/kg.js';
 import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../../src/memory/llm-failure-turn.js';
+import { VOICE_GREETING_USER_MESSAGE } from '../../../../src/channels/voice/greeting.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { EventRouter } from '../../../../src/channels/http/event-router.js';
 
@@ -395,6 +396,56 @@ describe('knowledgeGraphRoutes', () => {
     expect(body.messages.some((m) => m.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
 
     await app.close();
+  });
+
+  it('keeps scanning when a raw page is entirely filtered so older display messages remain reachable (#1775)', async () => {
+    const cueRows = Array.from({ length: 6 }, (_, i) => ({
+      id: `cue-${i}`,
+      role: 'user',
+      content: VOICE_GREETING_USER_MESSAGE,
+      created_at: new Date(`2026-01-01T00:01:0${i}Z`),
+    }));
+    const older = [
+      { id: 'keep-2', role: 'assistant', content: 'hi', created_at: new Date('2026-01-01T00:00:01Z') },
+      { id: 'keep-1', role: 'user', content: 'hello', created_at: new Date('2026-01-01T00:00:00Z') },
+    ];
+    const allNewestFirst = [...cueRows].reverse().concat(older);
+
+    (pool.query as ReturnType<typeof vi.fn>).mockImplementation((_sql: string, params: unknown[]) => {
+      const before = params[1] as string | null;
+      const fetchLimit = params[2] as number;
+      const filtered = before
+        ? allNewestFirst.filter((r) => r.created_at.getTime() < new Date(before).getTime())
+        : allNewestFirst;
+      return { rows: filtered.slice(0, fetchLimit) };
+    });
+
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/kg/chat/history?conversationId=c1&limit=2',
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { messages: Array<{ content: string }>; hasMore: boolean };
+    expect(body.messages.map((m) => m.content)).toEqual(['hello', 'hi']);
+    expect(body.hasMore).toBe(false);
+    expect(body.messages).toHaveLength(2);
+
+    await app.close();
+    vi.mocked(pool.query).mockReset();
   });
 
   // ── Tier / kind validation (issue #1055) ────────────────────────────────────

@@ -37,7 +37,22 @@ export function isLlmFailureTurn(turn: { role: string; content: string }): boole
   return turn.role === 'assistant' && parseLlmFailureTurn(turn.content) !== null;
 }
 
-/** Replace marker assistant content with the user-facing error text. */
+/**
+ * Default working-memory sanitizer: rewrite marker envelopes to the
+ * user-facing error text. `WorkingMemory.getHistory` applies this unless
+ * the caller passes `{ raw: true }`. Adding a new all-consumer filter
+ * rule belongs here — not at individual readers.
+ *
+ * Consumers that intentionally bypass this (raw protocol envelopes):
+ * - `DiagnosticsRepo.getWorkingMemory` — dumps the table verbatim
+ * - `AgentRuntime.persistLlmFailureTurn` — pairing check against stored content
+ * - storage-inspection tests (`getHistory(..., { raw: true })`)
+ *
+ * Raw-SQL readers that cannot use `getHistory` must call this explicitly:
+ * - `Dispatcher.fireCheckpoint`
+ * - `GET /api/kg/chat/history` (via `toChatHistoryMessage`)
+ * - working-memory summarization (archive-window transcript)
+ */
 export function rewriteLlmFailureTurns<T extends { role: string; content: string }>(turns: T[]): T[] {
   return turns.map((turn) => {
     const parsed = turn.role === 'assistant' ? parseLlmFailureTurn(turn.content) : null;
@@ -48,6 +63,11 @@ export function rewriteLlmFailureTurns<T extends { role: string; content: string
 
 /**
  * History that is safe to send to an LLM provider.
+ *
+ * Rewrite of failure markers is also the `getHistory` default (#1775); this
+ * helper still rewrites so it is correct when given raw turns. The collapse
+ * and trailing-user drop stay here — they are LLM-assembly only and must not
+ * be the `getHistory` default (chat history has to render the latest user turn).
  *
  * 1. Rewrites failure markers to the user-facing error text so the failed
  *    question stays in context (paired with an assistant turn, not glued).
