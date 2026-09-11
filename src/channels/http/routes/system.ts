@@ -16,6 +16,11 @@ import { createSystemRestart } from '../../../bus/events.js';
 import type { Logger } from '../../../logger.js';
 import { assertSecret, type SessionStore } from '../session-auth.js';
 
+/** Max operator restarts in {@link RESTART_WINDOW_MS}. In-process Fastify
+ *  limiter plus a durable audit_log count so the window survives SIGTERM. */
+export const RESTART_MAX = 3;
+export const RESTART_WINDOW_MS = 5 * 60 * 1000;
+
 /** One capability tier and the concrete model it currently routes to. */
 export interface SystemModelTier {
   tier: string;
@@ -52,20 +57,28 @@ export interface SystemRouteOptions {
    * shutdown(0) path in src/index.ts.
    */
   scheduleShutdown: () => void;
+  /**
+   * Count `system.restart` audit rows in the current cooldown window.
+   * Fastify's in-memory limiter resets on process exit; this is the
+   * durable half of the 3/5min cap. Tests inject a stub; production
+   * reads audit_log. Omit to skip the durable check (unit tests that
+   * only exercise the in-process limiter).
+   */
+  countRecentRestarts?: () => Promise<number>;
 }
 
 export async function systemRoutes(
   app: FastifyInstance,
   options: SystemRouteOptions,
 ): Promise<void> {
-  const { system, webAppBootstrapSecret, sessions, bus, logger, scheduleShutdown } = options;
+  const { system, webAppBootstrapSecret, sessions, bus, logger, scheduleShutdown, countRecentRestarts } = options;
 
   function requireAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     return assertSecret(request, reply, webAppBootstrapSecret, sessions);
   }
 
   const AUTH_RATE = { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } };
-  const RESTART_RATE = { config: { rateLimit: { max: 3, timeWindow: '5 minutes' } } };
+  const RESTART_RATE = { config: { rateLimit: { max: RESTART_MAX, timeWindow: RESTART_WINDOW_MS } } };
 
   // -- GET /api/system — read-only environment snapshot --
 
@@ -84,6 +97,23 @@ export async function systemRoutes(
 
   app.post('/api/system/restart', RESTART_RATE, async (request, reply) => {
     if (!requireAuth(request, reply)) return;
+
+    if (countRecentRestarts) {
+      let recent: number;
+      try {
+        recent = await countRecentRestarts();
+      } catch (err) {
+        logger.error({ err }, 'POST /api/system/restart: failed to read restart cooldown — process not restarted');
+        return reply.status(500).send({
+          error: 'Failed to check restart cooldown. The process was not restarted.',
+        });
+      }
+      if (recent >= RESTART_MAX) {
+        return reply.status(429).send({
+          error: 'Too many restart attempts. Try again in a few minutes.',
+        });
+      }
+    }
 
     try {
       await bus.publish('system', createSystemRestart({

@@ -80,6 +80,7 @@ describe('system routes', () => {
     bus?: EventBus;
     scheduleShutdown?: () => void;
     withRateLimit?: boolean;
+    countRecentRestarts?: () => Promise<number>;
   } = {}) {
     const app = Fastify();
     await app.register(cookie);
@@ -91,6 +92,7 @@ describe('system routes', () => {
       bus: opts.bus ?? makeFakeBus(),
       logger: createSilentLogger(),
       scheduleShutdown: opts.scheduleShutdown ?? (() => { /* no-op */ }),
+      countRecentRestarts: opts.countRecentRestarts,
     });
     return app;
   }
@@ -215,6 +217,65 @@ describe('system routes', () => {
       expect(statuses[3]).toBe(429);
       await new Promise<void>(resolve => setImmediate(resolve));
       expect(scheduleShutdown).toHaveBeenCalledTimes(3);
+      await app.close();
+    });
+
+    it('rejects when audit_log already has 3 restarts in the window (survives process restart)', async () => {
+      const scheduleShutdown = vi.fn();
+      const bus = makeFakeBus();
+      const app = await buildApp({
+        bus,
+        scheduleShutdown,
+        countRecentRestarts: async () => 3,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/system/restart',
+        headers: { 'x-web-bootstrap-secret': SECRET },
+      });
+      expect(res.statusCode).toBe(429);
+      expect(bus.published).toHaveLength(0);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(scheduleShutdown).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it('allows a restart when audit_log has fewer than 3 in the window', async () => {
+      const scheduleShutdown = vi.fn();
+      const app = await buildApp({
+        scheduleShutdown,
+        countRecentRestarts: async () => 2,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/system/restart',
+        headers: { 'x-web-bootstrap-secret': SECRET },
+      });
+      expect(res.statusCode).toBe(202);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(scheduleShutdown).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it('does not restart when the cooldown query fails', async () => {
+      const scheduleShutdown = vi.fn();
+      const bus = makeFakeBus();
+      const app = await buildApp({
+        bus,
+        scheduleShutdown,
+        countRecentRestarts: async () => {
+          throw new Error('db down');
+        },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/system/restart',
+        headers: { 'x-web-bootstrap-secret': SECRET },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(bus.published).toHaveLength(0);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(scheduleShutdown).not.toHaveBeenCalled();
       await app.close();
     });
   });

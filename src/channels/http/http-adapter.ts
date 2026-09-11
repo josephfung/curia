@@ -46,6 +46,8 @@ import {
   type MemoryRetentionSnapshot,
 } from './routes/memory-retention.js';
 import {
+  RESTART_MAX,
+  RESTART_WINDOW_MS,
   systemRoutes,
   type SystemSnapshot,
 } from './routes/system.js';
@@ -469,6 +471,7 @@ export class HttpAdapter implements Channel {
 
     // System snapshot + restart — console System page (#1376, #1765).
     if (webAppBootstrapSecret && this.config.system) {
+      const auditLogRepo = this.config.auditLogRepo;
       await this.app.register(systemRoutes, {
         system: this.config.system,
         webAppBootstrapSecret,
@@ -480,6 +483,18 @@ export class HttpAdapter implements Channel {
         scheduleShutdown: this.config.scheduleShutdown ?? (() => {
           process.kill(process.pid, 'SIGTERM');
         }),
+        // Durable half of the 3/5min restart cap: count system.restart rows in
+        // audit_log so the window survives the process exit Fastify's in-memory
+        // limiter does not. Skip when the repo is not wired (tests).
+        countRecentRestarts: auditLogRepo
+          ? async () => {
+              const page = await auditLogRepo.findByEventTypes(['system.restart'], {
+                from: new Date(Date.now() - RESTART_WINDOW_MS),
+                limit: RESTART_MAX,
+              });
+              return page.rows.length;
+            }
+          : undefined,
       });
     }
 
