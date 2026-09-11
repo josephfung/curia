@@ -98,6 +98,15 @@ export function elapsedSeconds(startedAtMs: number, nowMs: number): number {
   return Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
 }
 
+/** Milliseconds left on the restart poll ceiling. 0 means the deadline has passed. */
+export function restartPollRemainingMs(
+  startedAtMs: number,
+  nowMs: number,
+  timeoutMs: number,
+): number {
+  return Math.max(0, timeoutMs - (nowMs - startedAtMs));
+}
+
 export function formatRestartSuccess(elapsedMs: number): string {
   const seconds = Math.max(1, Math.round(elapsedMs / 1000));
   return `Restarted, back up in ${seconds}s`;

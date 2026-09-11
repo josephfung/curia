@@ -6,6 +6,7 @@ import {
   evaluateRestartPoll,
   elapsedSeconds,
   formatRestartSuccess,
+  restartPollRemainingMs,
   type SystemInfo,
 } from './system-utils.js';
 
@@ -166,5 +167,16 @@ describe('elapsedSeconds / formatRestartSuccess', () => {
   it('formats the success copy with a whole-second count, minimum 1', () => {
     expect(formatRestartSuccess(12_400)).toBe('Restarted, back up in 12s');
     expect(formatRestartSuccess(200)).toBe('Restarted, back up in 1s');
+  });
+});
+
+describe('restartPollRemainingMs', () => {
+  it('returns the unused portion of the ceiling', () => {
+    expect(restartPollRemainingMs(1_000, 4_000, 10_000)).toBe(7_000);
+  });
+
+  it('clamps to 0 once the ceiling is reached', () => {
+    expect(restartPollRemainingMs(1_000, 11_000, 10_000)).toBe(0);
+    expect(restartPollRemainingMs(1_000, 12_000, 10_000)).toBe(0);
   });
 });

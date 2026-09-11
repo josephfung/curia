@@ -13,6 +13,7 @@ import {
   formatRestartSuccess,
   isSystemInfo,
   parseSystemPollResponse,
+  restartPollRemainingMs,
   type SystemInfo,
 } from './system-utils.js';
 
@@ -65,17 +66,33 @@ function SystemSection() {
 
   // Poll GET /api/system until bootedAt changes or the ceiling is hit.
   // Connection errors are expected (the server is down) and never surface.
+  // A hung GET must not block the ceiling: abort the in-flight request and
+  // flip to failed when RESTART_TIMEOUT_MS elapses (#1765 / CodeRabbit).
   useEffect(() => {
     if (restartUi.kind !== 'restarting') return;
     const { previousBootedAt, startedAtMs } = restartUi;
     let cancelled = false;
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
+
+    const remaining = restartPollRemainingMs(startedAtMs, Date.now(), RESTART_TIMEOUT_MS);
+    if (remaining === 0) {
+      setRestartUi({ kind: 'failed' });
+      return;
+    }
+
+    const deadlineTimer = setTimeout(() => {
+      cancelled = true;
+      controller?.abort();
+      setRestartUi({ kind: 'failed' });
+    }, remaining);
 
     async function pollOnce() {
       if (cancelled) return;
+      controller = new AbortController();
       let fetchResult: ReturnType<typeof parseSystemPollResponse> | { kind: 'transport_error' };
       try {
-        const res = await apiFetch('/api/system');
+        const res = await apiFetch('/api/system', { signal: controller.signal });
         let body: unknown = null;
         try {
           body = await res.json();
@@ -95,21 +112,25 @@ function SystemSection() {
         fetch: fetchResult,
       });
       if (decision.kind === 'succeeded') {
+        clearTimeout(deadlineTimer);
         setInfo(decision.snapshot);
         setRestartUi({ kind: 'succeeded', elapsedMs: Date.now() - startedAtMs });
         return;
       }
       if (decision.kind === 'timeout') {
+        clearTimeout(deadlineTimer);
         setRestartUi({ kind: 'failed' });
         return;
       }
-      timeoutHandle = setTimeout(() => void pollOnce(), RESTART_POLL_INTERVAL_MS);
+      pollTimer = setTimeout(() => void pollOnce(), RESTART_POLL_INTERVAL_MS);
     }
 
     void pollOnce();
     return () => {
       cancelled = true;
-      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      clearTimeout(deadlineTimer);
+      if (pollTimer !== undefined) clearTimeout(pollTimer);
+      controller?.abort();
     };
   }, [restartUi]);
 
