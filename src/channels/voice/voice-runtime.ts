@@ -116,6 +116,17 @@ function stringTurns(messages: Message[]): Array<{ role: Message['role']; conten
   return out;
 }
 
+/** True when `prefix` is the leading role/content sequence of `full`. */
+function isHistoryPrefix(prefix: Message[], full: Message[]): boolean {
+  if (prefix.length > full.length) return false;
+  for (let i = 0; i < prefix.length; i += 1) {
+    const a = prefix[i]!;
+    const b = full[i]!;
+    if (a.role !== b.role || a.content !== b.content) return false;
+  }
+  return true;
+}
+
 /**
  * Spoken-style guidance shared by every voice audience. The audience line
  * ("You are speaking to …") is composed separately by buildVoiceAudienceLine()
@@ -1137,12 +1148,13 @@ export class VoiceRuntime {
       }
       // A prior addTurn may have failed (warn-only), leaving the store behind
       // the in-process copy (including a store that sanitizes to empty because
-      // it still ends on an unpaired user). Prefer the longer sanitized prefix
-      // so we do not drop a completed in-process exchange (#1776).
+      // it still ends on an unpaired user). Prefer the longer in-process copy
+      // only when it continues the store as a prefix — otherwise the store
+      // wins so an earlier process's turns are not dropped (#1776).
       const sanitized = spokenHistoryForLlm(outcome);
       if (session.history.length > 0) {
         const fb = fallback();
-        if (fb.length > sanitized.length) return fb;
+        if (fb.length > sanitized.length && isHistoryPrefix(sanitized, fb)) return fb;
       }
       return sanitized;
     } catch (err) {
@@ -1164,7 +1176,13 @@ export class VoiceRuntime {
    */
   private async persistIncompleteAssistantTurn(
     session: ActiveSession,
-    contents: { inProcessContent: string; storedContent: string; spokenText?: string },
+    contents: {
+      inProcessContent: string;
+      storedContent: string;
+      spokenText?: string;
+      /** False when this turn's user `addTurn` failed — do not pair an older same-text row. */
+      persistToStore: boolean;
+    },
   ): Promise<void> {
     const assistantContent =
       contents.spokenText && contents.spokenText.length > 0
@@ -1180,7 +1198,7 @@ export class VoiceRuntime {
       this.trimSessionHistory(session);
     }
 
-    if (!this.config.workingMemory) return;
+    if (!contents.persistToStore || !this.config.workingMemory) return;
     try {
       // Pairing check against stored content, not the sanitized rewrite (#1775).
       const history = await this.config.workingMemory.getHistory(
@@ -1238,12 +1256,14 @@ export class VoiceRuntime {
     const storedUserContent = sanitizeOutput(utterance);
 
     // Persist user turn to working_memory so console history can show it.
+    let userTurnPersisted = false;
     if (this.config.workingMemory) {
       try {
         await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
           role: 'user',
           content: storedUserContent,
         });
+        userTurnPersisted = true;
       } catch (err) {
         this.log.warn({ sessionId: session.sessionId, err }, 'failed to persist voice user turn to working memory');
       }
@@ -1267,6 +1287,7 @@ export class VoiceRuntime {
         inProcessContent: utterance,
         storedContent: storedUserContent,
         spokenText,
+        persistToStore: userTurnPersisted,
       }),
       assembleMessages: ({ systemPrompt, priorHistory: prior }) => [
         { role: 'system', content: systemPrompt },
