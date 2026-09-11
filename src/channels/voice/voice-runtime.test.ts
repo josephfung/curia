@@ -7,6 +7,10 @@ import { createSilentLogger } from '../../logger.js';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, Message } from '../../agents/llm/provider.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../agents/prompts/date-resolve-guardrail.js';
 import { VOICE_ASYNC_OFFRAMP_GUIDANCE } from '../../agents/prompts/voice-async-offramp.js';
+import {
+  LLM_FAILURE_TURN_CONTENT,
+  LLM_FAILURE_USER_MESSAGE,
+} from '../../memory/llm-failure-turn.js';
 import { WorkingMemory } from '../../memory/working-memory.js';
 import {
   VoiceRuntime,
@@ -1133,6 +1137,200 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     expect(system.content).toBe(SLIM_VOICE_PROMPT);
     expect(system.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
+  });
+});
+
+describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
+  const reply = (text: string): LLMStreamEvent[] => [
+    { type: 'text_delta', text: `${text} ` },
+    { type: 'message_end', content: text, usage, provenance },
+  ];
+
+  function consecutiveUserPairs(msgs: Message[]): number {
+    let n = 0;
+    for (let i = 1; i < msgs.length; i += 1) {
+      if (msgs[i]!.role === 'user' && msgs[i - 1]!.role === 'user') n += 1;
+    }
+    return n;
+  }
+
+  /** LLM that throws on the first stream() then replies — models a failed assistant persist. */
+  class ThrowThenReplyProvider implements LLMProvider {
+    readonly id = 'throw-then-reply';
+    readonly seenMessages: Message[][] = [];
+    private call = 0;
+    constructor(private readonly replyEvents: LLMStreamEvent[]) {}
+    async chat(): Promise<LLMResponse> {
+      return { type: 'text', content: '', usage, provenance };
+    }
+    async *stream(params: { messages?: Message[]; options?: Record<string, unknown> }): AsyncIterable<LLMStreamEvent> {
+      this.seenMessages.push(params.messages ?? []);
+      if (this.call === 0) {
+        this.call += 1;
+        throw new Error('provider validation');
+      }
+      this.call += 1;
+      for (const event of this.replyEvents) yield event;
+    }
+  }
+
+  it('drops a stored trailing user turn so the next utterance is not consecutive-user', async () => {
+    const wm = WorkingMemory.createInMemory();
+    await wm.addTurn('voice:orphan1', 'coordinator', { role: 'user', content: 'remember the budget is 50k' });
+    await wm.addTurn('voice:orphan1', 'coordinator', { role: 'assistant', content: 'Noted: the budget is 50k.' });
+    await wm.addTurn('voice:orphan1', 'coordinator', { role: 'user', content: 'abandoned utterance' });
+
+    const llm = new FakeStreamProvider([reply('It is 50k.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await runtime.startSession({
+      sessionId: 'orphan1',
+      conversationId: 'voice:orphan1',
+      roomName: 'voice-orphan1',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'what was the budget again', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('orphan1');
+
+    const messages = llm.seenMessages[0]!;
+    expect(consecutiveUserPairs(messages)).toBe(0);
+    expect(messages.map(m => m.content)).not.toContain('abandoned utterance');
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: 'what was the budget again',
+    });
+    expect(messages.map(m => m.content)).toContain('remember the budget is 50k');
+    expect(messages.map(m => m.content)).toContain('Noted: the budget is 50k.');
+  });
+
+  it('greeting cue is not consecutive-user when prior history ends on an orphan', async () => {
+    const wm = WorkingMemory.createInMemory();
+    await wm.addTurn('voice:g-orphan', 'coordinator', { role: 'user', content: 'hung up mid-reply last call' });
+
+    const llm = new FakeStreamProvider([replyScript('Hey boss.')]);
+    const { runtime } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await runtime.startSession({
+      sessionId: 'g-orphan',
+      conversationId: 'voice:g-orphan',
+      roomName: 'voice-g-orphan',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: true,
+    });
+    await runtime.awaitIdle('g-orphan');
+
+    expect(llm.seenMessages).toHaveLength(1);
+    const messages = llm.seenMessages[0]!;
+    expect(consecutiveUserPairs(messages)).toBe(0);
+    expect(messages.map(m => m.content)).not.toContain('hung up mid-reply last call');
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: VOICE_GREETING_USER_MESSAGE,
+    });
+  });
+
+  it('never sends a coordinator-bucket failure marker as literal _curia_protocol JSON', async () => {
+    const workingMemory = {
+      addTurn: vi.fn(async () => {}),
+      getHistory: vi.fn(async () => [
+        { role: 'user' as const, content: 'console question' },
+        { role: 'assistant' as const, content: LLM_FAILURE_TURN_CONTENT },
+      ]),
+      purgeExpired: vi.fn(async () => 0),
+    } as unknown as WorkingMemory;
+
+    const llm = new FakeStreamProvider([reply('Still here.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory,
+    });
+    await runtime.startSession({
+      sessionId: 'marker1',
+      conversationId: 'voice:marker1',
+      roomName: 'voice-marker1',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'are you there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('marker1');
+
+    const messages = llm.seenMessages[0]!;
+    const contents = messages.map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)));
+    expect(contents.some(c => c.includes('_curia_protocol'))).toBe(false);
+    expect(contents).toContain(LLM_FAILURE_USER_MESSAGE);
+    expect(contents).toContain('console question');
+    expect(consecutiveUserPairs(messages)).toBe(0);
+    expect(messages[messages.length - 1]).toEqual({ role: 'user', content: 'are you there' });
+  });
+
+  it('sanitizes the in-process fallback after a failed persistSuccess leaves an orphan', async () => {
+    // addTurn fails and getHistory is empty, so the next turn reads session.history
+    // (the :1073 empty-store fallback). First LLM throws → persistSuccess skipped.
+    const failingWrites = {
+      addTurn: vi.fn(async () => {
+        throw new Error('insert failed');
+      }),
+      getHistory: vi.fn(async () => []),
+      purgeExpired: vi.fn(async () => 0),
+    } as unknown as WorkingMemory;
+
+    const llm = new ThrowThenReplyProvider(reply('Second answer.'));
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: failingWrites,
+    });
+    await runtime.startSession({
+      sessionId: 'fb-orphan',
+      conversationId: 'voice:fb-orphan',
+      roomName: 'voice-fb-orphan',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: 'first question', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('fb-orphan');
+    stt.emit({ text: 'second question', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('fb-orphan');
+
+    expect(llm.seenMessages).toHaveLength(2);
+    const second = llm.seenMessages[1]!;
+    expect(consecutiveUserPairs(second)).toBe(0);
+    expect(second.map(m => m.content)).not.toContain('first question');
+    expect(second[second.length - 1]).toEqual({ role: 'user', content: 'second question' });
+  });
+
+  it('does not drop turns from a well-formed conversation', async () => {
+    const wm = WorkingMemory.createInMemory();
+    await wm.addTurn('voice:healthy', 'coordinator', { role: 'user', content: 'remember the budget is 50k' });
+    await wm.addTurn('voice:healthy', 'coordinator', { role: 'assistant', content: 'Noted: the budget is 50k.' });
+
+    const llm = new FakeStreamProvider([reply('It is 50k.')]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await runtime.startSession({
+      sessionId: 'healthy',
+      conversationId: 'voice:healthy',
+      roomName: 'voice-healthy',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'what was the budget again', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('healthy');
+
+    const messages = llm.seenMessages[0]!;
+    const contents = messages.map(m => m.content);
+    expect(contents).toContain('remember the budget is 50k');
+    expect(contents).toContain('Noted: the budget is 50k.');
+    expect(consecutiveUserPairs(messages)).toBe(0);
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: 'what was the budget again',
+    });
   });
 });
 
