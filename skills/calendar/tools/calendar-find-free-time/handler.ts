@@ -4,7 +4,7 @@
 // the busy periods returned by the Nylas free/busy API.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
+import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds } from '../../../../src/time/timestamp.js';
 
 export class CalendarFindFreeTimeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -50,6 +50,15 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
           // which prevents re-offering a held slot. Only `free` is non-blocking (overlap
           // with free events is allowed). See #1137.
           if (slot.status === 'free') continue;
+          // Epoch-zero / non-finite timestamps from Nylas are never real busy times.
+          // Using them in inversion would treat 1970→end as busy and hide free windows (#370).
+          if (!isPlausibleUnixSeconds(slot.startTime) || !isPlausibleUnixSeconds(slot.endTime)) {
+            ctx.log.warn(
+              { startTime: slot.startTime, endTime: slot.endTime },
+              'calendar-find-free-time: skipping free/busy slot with suspicious Unix timestamp',
+            );
+            continue;
+          }
           allBusy.push({ start: slot.startTime, end: slot.endTime });
         }
       }

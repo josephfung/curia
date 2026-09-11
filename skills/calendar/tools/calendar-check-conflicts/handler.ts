@@ -5,7 +5,7 @@
 // Returns an empty array (clear=true) if the time is free.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
+import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds } from '../../../../src/time/timestamp.js';
 import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../../../src/channels/calendar/holds.js';
 
 export class CalendarCheckConflictsHandler implements ToolHandler {
@@ -89,6 +89,15 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
         for (const slot of result.timeSlots) {
           // Free events do not conflict; only non-free (busy/tentative) slots are conflicts. See #1137.
           if (slot.status === 'free') continue;
+          // Skip corrupt Nylas timestamps rather than emitting 1970 dates or matching
+          // overlap against epoch-zero / NaN (#370).
+          if (!isPlausibleUnixSeconds(slot.startTime) || !isPlausibleUnixSeconds(slot.endTime)) {
+            ctx.log.warn(
+              { startTime: slot.startTime, endTime: slot.endTime },
+              'calendar-check-conflicts: skipping free/busy slot with suspicious Unix timestamp',
+            );
+            continue;
+          }
           const ignoredHoldWindows =
             ignoredHoldWindowsByCalendar.get(result.email) ??
             ignoredHoldWindowsByCalendar.get(queriedCalendarId);
