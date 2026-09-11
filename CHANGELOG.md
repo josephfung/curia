@@ -86,12 +86,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-<<<<<<< HEAD
+- **`calendar-find-free-time` / `calendar-check-conflicts`** — skip and warn on epoch-zero free/busy slots. (#370)
 - **`createGrantRecommendation`** — conflict-skipped inserts now return the persisted winner, not a phantom id. (#1067)
 - **`scan-grant-recommendations`** — a conflict-skip throw no longer aborts the rest of the scan. (#1067)
-=======
-- **`calendar-find-free-time` / `calendar-check-conflicts`** — skip and warn on epoch-zero free/busy slots. (#370)
->>>>>>> d9bb9b95 (fix(calendar): skip epoch-zero free/busy slots in conflict and free-time skills)
 - **Autonomy scoring pass** — LLM judge flags must be 0 or 1; unparseable rows dead-letter after a retry floor. (#442)
 - **Chat history API** — pages fill to `limit` after display filters, not raw rows. (#1775)
 - **Voice** — barge-in pairs the heard reply; empty or failed turns get a marker. (#1776)

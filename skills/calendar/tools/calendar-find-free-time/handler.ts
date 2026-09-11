@@ -4,7 +4,7 @@
 // the busy periods returned by the Nylas free/busy API.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds } from '../../../../src/time/timestamp.js';
+import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange } from '../../../../src/time/timestamp.js';
 
 export class CalendarFindFreeTimeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -41,6 +41,9 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
     try {
       const freeBusyResults = await ctx.nylasCalendarClient.getFreeBusy(calendarIds, timeMin, timeMax);
 
+      const rangeStart = Math.floor(new Date(timeMin).getTime() / 1000);
+      const rangeEnd = Math.floor(new Date(timeMax).getTime() / 1000);
+
       // Collect all busy periods across all calendars
       const allBusy: Array<{ start: number; end: number }> = [];
       for (const result of freeBusyResults) {
@@ -50,16 +53,25 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
           // which prevents re-offering a held slot. Only `free` is non-blocking (overlap
           // with free events is allowed). See #1137.
           if (slot.status === 'free') continue;
-          // Epoch-zero / non-finite timestamps from Nylas are never real busy times.
-          // Using them in inversion would treat 1970→end as busy and hide free windows (#370).
-          if (!isPlausibleUnixSeconds(slot.startTime) || !isPlausibleUnixSeconds(slot.endTime)) {
+          // One-sided epoch-zero / non-finite / millisecond timestamps: clamp the
+          // corrupt endpoint to the queried window so a valid end still blocks.
+          // Drop only when neither endpoint is usable (#370).
+          const repaired = repairQueriedUnixRange(slot.startTime, slot.endTime, rangeStart, rangeEnd);
+          if (!repaired) {
             ctx.log.warn(
               { startTime: slot.startTime, endTime: slot.endTime },
               'calendar-find-free-time: skipping free/busy slot with suspicious Unix timestamp',
             );
             continue;
           }
-          allBusy.push({ start: slot.startTime, end: slot.endTime });
+          if (!isPlausibleUnixSeconds(slot.startTime) || !isPlausibleUnixSeconds(slot.endTime)) {
+            ctx.log.warn(
+              { startTime: slot.startTime, endTime: slot.endTime, repairedStart: repaired.start, repairedEnd: repaired.end },
+              'calendar-find-free-time: clamping free/busy slot with suspicious Unix timestamp to query window',
+            );
+          }
+          if (repaired.end <= rangeStart || repaired.start >= rangeEnd) continue;
+          allBusy.push(repaired);
         }
       }
 
@@ -78,9 +90,6 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
       }
 
       // Invert: compute free windows within the requested range
-      const rangeStart = Math.floor(new Date(timeMin).getTime() / 1000);
-      const rangeEnd = Math.floor(new Date(timeMax).getTime() / 1000);
-
       const freeWindows: Array<{ start: number; end: number }> = [];
       let cursor = rangeStart;
       for (const busy of merged) {

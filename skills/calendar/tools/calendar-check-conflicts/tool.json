@@ -1,7 +1,7 @@
 {
   "name": "calendar-check-conflicts",
   "description": "Check whether a proposed time slot conflicts with existing events on one or more calendars. Only non-free events (busy/tentative) are conflicts; free slots do not block the proposal. When ignoreHoldCriteria is provided, matching Curia HOLD (TBC) events are excluded so a hold placed for this scheduling conversation does not block the resulting invite. Returns conflicting events with details so you can assess severity.",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

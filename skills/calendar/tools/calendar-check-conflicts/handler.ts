@@ -5,7 +5,7 @@
 // Returns an empty array (clear=true) if the time is free.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds } from '../../../../src/time/timestamp.js';
+import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange } from '../../../../src/time/timestamp.js';
 import { eventsOverlap, findMatchingHolds, type HoldMatchCriteria } from '../../../../src/channels/calendar/holds.js';
 
 export class CalendarCheckConflictsHandler implements ToolHandler {
@@ -89,31 +89,42 @@ export class CalendarCheckConflictsHandler implements ToolHandler {
         for (const slot of result.timeSlots) {
           // Free events do not conflict; only non-free (busy/tentative) slots are conflicts. See #1137.
           if (slot.status === 'free') continue;
-          // Skip corrupt Nylas timestamps rather than emitting 1970 dates or matching
-          // overlap against epoch-zero / NaN (#370).
-          if (!isPlausibleUnixSeconds(slot.startTime) || !isPlausibleUnixSeconds(slot.endTime)) {
+          // One-sided epoch-zero / non-finite / millisecond timestamps: clamp the
+          // corrupt endpoint to the proposed window so a valid end still conflicts.
+          // Drop only when neither endpoint is usable (#370).
+          const repaired = repairQueriedUnixRange(slot.startTime, slot.endTime, proposedStartTs, proposedEndTs);
+          if (!repaired) {
             ctx.log.warn(
               { startTime: slot.startTime, endTime: slot.endTime },
               'calendar-check-conflicts: skipping free/busy slot with suspicious Unix timestamp',
             );
             continue;
           }
+          if (!isPlausibleUnixSeconds(slot.startTime) || !isPlausibleUnixSeconds(slot.endTime)) {
+            ctx.log.warn(
+              { startTime: slot.startTime, endTime: slot.endTime, repairedStart: repaired.start, repairedEnd: repaired.end },
+              'calendar-check-conflicts: clamping free/busy slot with suspicious Unix timestamp to query window',
+            );
+          }
           const ignoredHoldWindows =
             ignoredHoldWindowsByCalendar.get(result.email) ??
             ignoredHoldWindowsByCalendar.get(queriedCalendarId);
           if (ignoredHoldWindows && ignoredHoldWindows.length > 0) {
             const overlapsIgnoredHold = ignoredHoldWindows.some((event) =>
-              eventsOverlap(slot.startTime, slot.endTime, event.startTime, event.endTime),
+              eventsOverlap(repaired.start, repaired.end, event.startTime, event.endTime),
             );
             if (overlapsIgnoredHold) continue;
           }
           // Check overlap: busy slot overlaps the proposed range
-          if (slot.startTime < proposedEndTs && slot.endTime > proposedStartTs) {
-            const startTime = toLocalIso(slot.startTime, tz);
-            const endTime = toLocalIso(slot.endTime, tz);
-            // Skip corrupt slots — a conflict entry with no timestamps is not actionable.
-            if (startTime === null || endTime === null) continue;
-            conflicts.push({ calendarId: result.email, contactName, startTime, endTime, status: slot.status });
+          if (repaired.start < proposedEndTs && repaired.end > proposedStartTs) {
+            // repaired endpoints are plausible by construction, so toLocalIso is non-null.
+            conflicts.push({
+              calendarId: result.email,
+              contactName,
+              startTime: toLocalIso(repaired.start, tz)!,
+              endTime: toLocalIso(repaired.end, tz)!,
+              status: slot.status,
+            });
           }
         }
       }

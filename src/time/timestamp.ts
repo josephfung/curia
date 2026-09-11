@@ -73,20 +73,53 @@ export function normalizeTimestamp(iso: string, defaultZone: string): string {
 }
 
 /**
- * True when `unix` is a usable event timestamp: finite and after the Unix epoch.
- * Unix 0 (1970-01-01) and negatives are never valid calendar times; NaN / Infinity
- * are API corruption. Shared by toLocalIso() and the calendar free/busy skills.
+ * 2100-01-01T00:00:00Z in Unix seconds. Past any real calendar booking, and far
+ * below millisecond-scale epoch values (~1.7e12 in 2026) from API unit confusion.
+ */
+export const MAX_PLAUSIBLE_UNIX_SECONDS = 4_102_444_800;
+
+/**
+ * True when `unix` is a usable event timestamp: finite, after the Unix epoch,
+ * and not past {@link MAX_PLAUSIBLE_UNIX_SECONDS}. Unix 0 (1970-01-01) and
+ * negatives are never valid calendar times; NaN / Infinity are API corruption;
+ * values in the 1e12 range are almost always milliseconds-as-seconds.
  */
 export function isPlausibleUnixSeconds(unix: number): boolean {
-  return Number.isFinite(unix) && unix > 0;
+  return Number.isFinite(unix) && unix > 0 && unix <= MAX_PLAUSIBLE_UNIX_SECONDS;
+}
+
+/**
+ * Repair a free/busy slot against the queried window.
+ *
+ * Nylas only returns slots that overlap the queried range, so a single valid
+ * endpoint is enough to keep the window busy: the corrupt side is clamped to
+ * `rangeStart` / `rangeEnd`. Returns null only when neither endpoint is usable
+ * (or the repaired range is empty) — dropping the slot in that case, rather
+ * than inventing a 1970 bound (#370).
+ */
+export function repairQueriedUnixRange(
+  startTime: number,
+  endTime: number,
+  rangeStart: number,
+  rangeEnd: number,
+): { start: number; end: number } | null {
+  const startOk = isPlausibleUnixSeconds(startTime);
+  const endOk = isPlausibleUnixSeconds(endTime);
+  if (!startOk && !endOk) return null;
+  const start = startOk ? startTime : rangeStart;
+  const end = endOk ? endTime : rangeEnd;
+  if (!isPlausibleUnixSeconds(start) || !isPlausibleUnixSeconds(end) || start >= end) {
+    return null;
+  }
+  return { start, end };
 }
 
 /**
  * Convert Unix seconds to an ISO 8601 string in the given IANA timezone,
  * with the local UTC offset baked in.
  *
- * Returns null for null, non-finite, or non-positive inputs — these are never
- * valid event timestamps (Unix 0 = 1970, negatives = before epoch).
+ * Returns null for null, non-finite, non-positive, or post-2100 inputs — these
+ * are never valid event timestamps (Unix 0 = 1970; ~1e12 = milliseconds).
  *
  * When timezone is omitted, falls back to a UTC Z-suffix string via new Date().
  *

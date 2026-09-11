@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds } from '../../../src/time/timestamp.js';
+import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds, repairQueriedUnixRange, MAX_PLAUSIBLE_UNIX_SECONDS } from '../../../src/time/timestamp.js';
 
 describe('isPlausibleUnixSeconds', () => {
   it('accepts finite timestamps after the Unix epoch', () => {
@@ -7,11 +7,55 @@ describe('isPlausibleUnixSeconds', () => {
     expect(isPlausibleUnixSeconds(1775489400)).toBe(true);
   });
 
-  it('rejects epoch-zero, negatives, and non-finite values', () => {
+  it('rejects epoch-zero, negatives, non-finite, and millisecond-scale values', () => {
     expect(isPlausibleUnixSeconds(0)).toBe(false);
     expect(isPlausibleUnixSeconds(-1)).toBe(false);
     expect(isPlausibleUnixSeconds(Number.NaN)).toBe(false);
     expect(isPlausibleUnixSeconds(Number.POSITIVE_INFINITY)).toBe(false);
+    expect(isPlausibleUnixSeconds(1_775_480_400_000)).toBe(false);
+    expect(isPlausibleUnixSeconds(MAX_PLAUSIBLE_UNIX_SECONDS + 1)).toBe(false);
+  });
+
+  it('accepts the 2100-01-01 inclusive ceiling', () => {
+    expect(isPlausibleUnixSeconds(MAX_PLAUSIBLE_UNIX_SECONDS)).toBe(true);
+  });
+});
+
+describe('repairQueriedUnixRange', () => {
+  const rangeStart = 1_775_476_800; // 2026-04-06T12:00:00Z
+  const rangeEnd = 1_775_491_200;   // 2026-04-06T16:00:00Z
+  const slotEnd = 1_775_480_400;    // 2026-04-06T13:00:00Z
+  const slotStart = 1_775_478_600;  // 2026-04-06T12:30:00Z
+
+  it('passes through a fully plausible slot', () => {
+    expect(repairQueriedUnixRange(slotStart, slotEnd, rangeStart, rangeEnd)).toEqual({
+      start: slotStart,
+      end: slotEnd,
+    });
+  });
+
+  it('clamps a corrupt start to rangeStart when end is usable', () => {
+    expect(repairQueriedUnixRange(0, slotEnd, rangeStart, rangeEnd)).toEqual({
+      start: rangeStart,
+      end: slotEnd,
+    });
+  });
+
+  it('clamps a corrupt end to rangeEnd when start is usable', () => {
+    expect(repairQueriedUnixRange(slotStart, Number.NaN, rangeStart, rangeEnd)).toEqual({
+      start: slotStart,
+      end: rangeEnd,
+    });
+  });
+
+  it('returns null when neither endpoint is usable', () => {
+    expect(repairQueriedUnixRange(0, -1, rangeStart, rangeEnd)).toBeNull();
+    expect(repairQueriedUnixRange(1_775_480_400_000, 1_775_484_000_000, rangeStart, rangeEnd)).toBeNull();
+  });
+
+  it('returns null when clamping produces an empty range', () => {
+    // end is before rangeStart, so clamping start to rangeStart inverts the slot
+    expect(repairQueriedUnixRange(0, rangeStart - 60, rangeStart, rangeEnd)).toBeNull();
   });
 });
 
@@ -53,6 +97,10 @@ describe('toLocalIso', () => {
   it('returns null for non-positive input', () => {
     expect(toLocalIso(0, 'America/Toronto')).toBeNull();
     expect(toLocalIso(-1, 'America/Toronto')).toBeNull();
+  });
+
+  it('returns null for millisecond-scale input', () => {
+    expect(toLocalIso(1_775_489_400_000, 'America/Toronto')).toBeNull();
   });
 
   it('falls back to UTC when timezone is omitted', () => {
