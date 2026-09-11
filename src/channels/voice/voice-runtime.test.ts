@@ -1355,6 +1355,53 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     expect(stored.some(t => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(true);
   });
 
+  it('pairs a mid-reply stream error with the heard fragment, not the failure marker', async () => {
+    const wm = WorkingMemory.createInMemory();
+    const llm = new FakeStreamProvider([
+      [
+        { type: 'text_delta', text: 'You have three things today. ' },
+        {
+          type: 'error',
+          error: {
+            type: 'PROVIDER_ERROR',
+            source: 'fake-stream',
+            message: 'boom',
+            retryable: true,
+            context: {},
+            timestamp: new Date(),
+          },
+        },
+      ],
+      reply('Your afternoon is clear.'),
+    ]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await runtime.startSession({
+      sessionId: 'stream-err',
+      conversationId: 'voice:stream-err',
+      roomName: 'voice-stream-err',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('stream-err');
+    stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('stream-err');
+
+    expect(llm.seenMessages).toHaveLength(2);
+    const second = llm.seenMessages[1]!;
+    expect(consecutiveUserPairs(second)).toBe(0);
+    expect(second.map(m => m.content)).toContain("what's on my calendar?");
+    expect(second.map(m => m.content)).toContain('You have three things today.');
+    expect(second.map(m => m.content)).not.toContain(LLM_FAILURE_USER_MESSAGE);
+    expect(second[second.length - 1]).toEqual({ role: 'user', content: 'just the afternoon' });
+
+    const stored = await wm.getHistory('voice:stream-err', 'coordinator', { raw: true });
+    expect(stored.some(t => t.content === 'You have three things today.')).toBe(true);
+    expect(stored.some(t => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
+  });
+
   it('falls back to in-process history when the store sanitizes to empty after a failed assistant write', async () => {
     const turns: Array<{ role: string; content: string }> = [];
     const wm = {

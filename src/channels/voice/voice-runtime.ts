@@ -47,7 +47,7 @@ import {
 import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from '../../speech/index.js';
 import { TtsHttpError } from '../../speech/index.js';
 import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
-import { VoiceTurnRunner } from './turn-runner.js';
+import { VoiceTurnError, VoiceTurnRunner } from './turn-runner.js';
 
 export {
   VOICE_GREETING_INSTRUCTION,
@@ -713,7 +713,7 @@ export class VoiceRuntime {
     },
   ): Promise<void> {
     if (session.ending) {
-      await this.safePersistIncomplete(opts.persistIncomplete);
+      await this.safePersistIncomplete(opts.persistIncomplete, session);
       return;
     }
 
@@ -822,16 +822,20 @@ export class VoiceRuntime {
       completed = true;
     } catch (err) {
       this.log.warn({ sessionId: session.sessionId, err }, opts.failureLogMessage);
+      if (err instanceof VoiceTurnError && err.spokenText.length > 0) {
+        spokenForPairing = err.spokenText;
+      }
     } finally {
       this.clearTurnState(session, controller);
       if (!completed) {
-        await this.safePersistIncomplete(opts.persistIncomplete, spokenForPairing);
+        await this.safePersistIncomplete(opts.persistIncomplete, session, spokenForPairing);
       }
     }
   }
 
   private async safePersistIncomplete(
-    persistIncomplete?: (spokenText?: string) => Promise<void>,
+    persistIncomplete: ((spokenText?: string) => Promise<void>) | undefined,
+    session: ActiveSession,
     spokenText?: string,
   ): Promise<void> {
     if (!persistIncomplete) return;
@@ -839,7 +843,7 @@ export class VoiceRuntime {
       await persistIncomplete(spokenText);
     } catch (persistErr) {
       this.log.warn(
-        { err: persistErr },
+        { sessionId: session.sessionId, err: persistErr },
         'voice incomplete-turn persist threw',
       );
     }
