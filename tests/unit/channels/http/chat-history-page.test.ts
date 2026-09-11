@@ -2,10 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   fetchChatHistoryPage,
   toChatHistoryMessage,
+  type ChatHistoryMessage,
   type ChatHistoryRow,
-} from '../../../src/channels/http/chat-history-page.js';
-import { VOICE_GREETING_USER_MESSAGE } from '../../../src/channels/voice/greeting.js';
-import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src/memory/llm-failure-turn.js';
+} from '../../../../src/channels/http/chat-history-page.js';
+import { VOICE_GREETING_USER_MESSAGE } from '../../../../src/channels/voice/greeting.js';
+import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../../src/memory/llm-failure-turn.js';
 
 function row(
   id: string,
@@ -35,7 +36,7 @@ describe('toChatHistoryMessage', () => {
   it('rewrites LLM-failure marker turns to the user-facing error text', () => {
     const message = toChatHistoryMessage(
       row('1', 'assistant', LLM_FAILURE_TURN_CONTENT, 1),
-      (content) => `<p>${content}</p>`,
+      (content: string) => `<p>${content}</p>`,
     );
     expect(message?.content).toBe(LLM_FAILURE_USER_MESSAGE);
     expect(message?.html).toBe(`<p>${LLM_FAILURE_USER_MESSAGE}</p>`);
@@ -69,9 +70,9 @@ describe('fetchChatHistoryPage', () => {
     const page = await fetchChatHistoryPage({
       limit: 3,
       load: loadFrom(rows),
-      renderAssistantHtml: (c) => c,
+      renderAssistantHtml: (c: string) => c,
     });
-    expect(page.messages.map((m) => m.content)).toEqual(['c', 'd', 'e']);
+    expect(page.messages.map((m: ChatHistoryMessage) => m.content)).toEqual(['c', 'd', 'e']);
     expect(page.messages).toHaveLength(3);
     expect(page.hasMore).toBe(true);
   });
@@ -84,9 +85,9 @@ describe('fetchChatHistoryPage', () => {
     const page = await fetchChatHistoryPage({
       limit: 3,
       load: loadFrom(rows),
-      renderAssistantHtml: (c) => c,
+      renderAssistantHtml: (c: string) => c,
     });
-    expect(page.messages.map((m) => m.content)).toEqual(['a', 'b']);
+    expect(page.messages.map((m: ChatHistoryMessage) => m.content)).toEqual(['a', 'b']);
     expect(page.hasMore).toBe(false);
   });
 
@@ -107,10 +108,10 @@ describe('fetchChatHistoryPage', () => {
     const page = await fetchChatHistoryPage({
       limit: 2,
       load,
-      renderAssistantHtml: (c) => c,
+      renderAssistantHtml: (c: string) => c,
     });
 
-    expect(page.messages.map((m) => m.content)).toEqual(['hello', 'hi']);
+    expect(page.messages.map((m: ChatHistoryMessage) => m.content)).toEqual(['hello', 'hi']);
     expect(page.messages).toHaveLength(2);
     expect(page.hasMore).toBe(false);
     expect(load.mock.calls.length).toBeGreaterThan(1);
@@ -132,11 +133,11 @@ describe('fetchChatHistoryPage', () => {
     const page = await fetchChatHistoryPage({
       limit: 4,
       load: loadFrom(rows),
-      renderAssistantHtml: (c) => c,
+      renderAssistantHtml: (c: string) => c,
     });
 
     expect(page.messages).toHaveLength(4);
-    expect(page.messages.every((m) => m.content !== VOICE_GREETING_USER_MESSAGE)).toBe(true);
+    expect(page.messages.every((m: ChatHistoryMessage) => m.content !== VOICE_GREETING_USER_MESSAGE)).toBe(true);
     expect(page.hasMore).toBe(true);
   });
 });
