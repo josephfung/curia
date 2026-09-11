@@ -13,6 +13,7 @@ import type { ModelRegistry } from './llm/model-registry.js';
 import { createHash } from 'node:crypto';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
+import { historyForLlm, LLM_FAILURE_TURN_CONTENT } from '../memory/llm-failure-turn.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
@@ -980,9 +981,13 @@ export class AgentRuntime {
 
     // Load conversation history LAST — it has partial inclusion (truncation)
     // so it takes whatever budget remains after higher-priority tiers are secured.
-    const history = memory
+    const rawHistory = memory
       ? await memory.getHistory(conversationId, agentId)
       : [];
+    // Failed LLM calls persist a marker assistant turn (#1767). Strip those
+    // pairs (and any trailing orphaned user turn) so the provider never sees
+    // consecutive user messages or the failed prompt's stale text.
+    const history = historyForLlm(rawHistory);
 
     const budgetedHistory = ctxBudget.allocateHistory(
       history.map(t => ({ role: t.role, content: t.content }) as Message),
@@ -2524,6 +2529,10 @@ export class AgentRuntime {
   private async sendErrorResponse(taskEvent: AgentTaskEvent, agentErr?: AgentError): Promise<void> {
     const { agentId, bus } = this.config;
     const { conversationId } = taskEvent.payload;
+    // Close the user turn persisted before the LLM call so the next turn does
+    // not resume from two consecutive `user` messages (#1767). Must not throw:
+    // a memory failure here would re-enter handleTask's catch and double-publish.
+    await this.persistLlmFailureTurn(conversationId);
     const structuredFailure = agentErr ? mapAgentErrorToResponseFields(agentErr) : undefined;
     const responseEvent = createAgentResponse({
       agentId,
@@ -2536,6 +2545,30 @@ export class AgentRuntime {
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);
+  }
+
+  /**
+   * Persist a distinguishable assistant marker when history currently ends on
+   * a user turn. No-ops when memory is unset or the last turn is already
+   * assistant (e.g. the user persist itself failed).
+   */
+  private async persistLlmFailureTurn(conversationId: string): Promise<void> {
+    const { memory, agentId, logger } = this.config;
+    if (!memory) return;
+    try {
+      const history = await memory.getHistory(conversationId, agentId);
+      const last = history[history.length - 1];
+      if (last?.role !== 'user') return;
+      await memory.addTurn(conversationId, agentId, {
+        role: 'assistant',
+        content: LLM_FAILURE_TURN_CONTENT,
+      });
+    } catch (err) {
+      logger.error(
+        { err, agentId, conversationId },
+        'Failed to persist LLM failure marker turn — next turn may see consecutive user messages',
+      );
+    }
   }
 }
 

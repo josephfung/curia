@@ -19,6 +19,7 @@ import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
 import { isVoiceGreetingCueContent } from '../../voice/greeting.js';
+import { isLlmFailureTurn } from '../../../memory/llm-failure-turn.js';
 import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 
 export interface KnowledgeGraphRouteOptions {
@@ -1525,7 +1526,8 @@ export async function knowledgeGraphRoutes(
    * inserted by the summarisation pass) are excluded since they are internal
    * artifacts not intended for display. The synthetic voice opening cue
    * (`VOICE_GREETING_USER_MESSAGE`, #1596) is also excluded — it exists so
-   * Anthropic-safe user-first history, not for the principal to read.
+   * Anthropic-safe user-first history, not for the principal to read. LLM
+   * failure marker turns (#1767) are excluded for the same reason.
    */
   app.get('/api/kg/chat/history', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
@@ -1584,6 +1586,10 @@ export async function knowledgeGraphRoutes(
         // Voice opening cue is persisted so spoken-turn history stays user-first
         // for Anthropic, but must not surface as a chat bubble (#1596).
         if (row.role === 'user' && isVoiceGreetingCueContent(row.content)) {
+          return [];
+        }
+        // Failed-LLM marker — persisted so history stays alternating, never a real reply.
+        if (isLlmFailureTurn(row)) {
           return [];
         }
         // Per-row try/catch so one bad message doesn't fail the whole page.
