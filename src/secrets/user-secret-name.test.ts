@@ -50,6 +50,14 @@ describe('canonicalizeUserSecretName', () => {
     expect(canonicalizeUserSecretName('password for')).toBe('user.password_for');
   });
 
+  it('keeps single-letter brand initials instead of dropping every 1-char token', () => {
+    expect(canonicalizeUserSecretName('T-Mobile password')).toBe('user.t_mobile_password');
+    expect(canonicalizeUserSecretName('mobile password')).toBe('user.mobile_password');
+    expect(canonicalizeUserSecretName('E*TRADE password')).toBe('user.e_trade_password');
+    expect(canonicalizeUserSecretName('H&R Block login')).toBe('user.h_r_block_login');
+    expect(canonicalizeUserSecretName('Q password')).toBe('user.q_password');
+  });
+
   it('strips English possessives instead of treating leftover s as identity', () => {
     expect(canonicalizeUserSecretName("my account's password")).toBe('user.my_account_password');
     expect(canonicalizeUserSecretName("the website's password")).toBe('user.the_website_password');
@@ -144,6 +152,15 @@ describe('resolveUserSecretName', () => {
 
   it('matches a possessive description to the non-possessive canonical key', () => {
     expect(resolveUserSecretName("my bank's login", ['user.bank_login'])).toBe('user.bank_login');
+  });
+
+  it('does not collapse T-Mobile onto a generic mobile key', () => {
+    expect(resolveUserSecretName('mobile password', ['user.t_mobile_password'])).toBe(
+      'user.mobile_password',
+    );
+    expect(resolveUserSecretName('T-Mobile password', ['user.mobile_password'])).toBe(
+      'user.t_mobile_password',
+    );
   });
 
   it('does not collapse identity-less captures onto user.password or user.my_password', () => {

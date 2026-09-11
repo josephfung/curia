@@ -136,9 +136,6 @@ export function fingerprintUserSecret(input: string): UserSecretFingerprint {
       type = pickType(type, typeCanon);
       continue;
     }
-    // One-character leftovers (`s` from a missed possessive) are not service names.
-    // `x` is the Twitter rebrand token and is handled in foldTwitterRebrand.
-    if (raw.length === 1 && !TWITTER_REBRAND.has(raw)) continue;
     identity.push(raw);
   }
 
