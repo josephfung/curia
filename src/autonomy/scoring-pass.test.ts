@@ -285,6 +285,13 @@ describe('AutonomyScoringPass', () => {
       }))).toThrow(/competence_flag="yes"/);
     });
 
+    it('truncates long string flag values in the error', () => {
+      const long = 'x'.repeat(80);
+      expect(() => parseLlmJudgeFlags(JSON.stringify({
+        competence_flag: long, commitment_flag: 1, compatibility: 1,
+      }))).toThrow(/competence_flag="x{40}"…\(80\)/);
+    });
+
     it('throws on numeric flags outside 0/1', () => {
       expect(() => parseLlmJudgeFlags(JSON.stringify({
         competence_flag: 2, commitment_flag: 0.8, compatibility: -1,
