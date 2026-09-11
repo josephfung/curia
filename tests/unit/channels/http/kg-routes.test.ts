@@ -365,10 +365,10 @@ describe('knowledgeGraphRoutes', () => {
   it('rewrites LLM failure marker turns to the user-facing error in chat history (#1767)', async () => {
     (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       rows: [
-        { id: '4', role: 'assistant', content: 'Hi', created_at: new Date('2026-01-01T00:00:03Z') },
-        { id: '3', role: 'user', content: 'Retry', created_at: new Date('2026-01-01T00:00:02Z') },
-        { id: '2', role: 'assistant', content: LLM_FAILURE_TURN_CONTENT, created_at: new Date('2026-01-01T00:00:01Z') },
-        { id: '1', role: 'user', content: 'Hello', created_at: new Date('2026-01-01T00:00:00Z') },
+        { id: '4', role: 'assistant', content: 'Hi', created_at: new Date('2026-01-01T00:00:03Z'), created_at_iso: '2026-01-01T00:00:03.000000Z' },
+        { id: '3', role: 'user', content: 'Retry', created_at: new Date('2026-01-01T00:00:02Z'), created_at_iso: '2026-01-01T00:00:02.000000Z' },
+        { id: '2', role: 'assistant', content: LLM_FAILURE_TURN_CONTENT, created_at: new Date('2026-01-01T00:00:01Z'), created_at_iso: '2026-01-01T00:00:01.000000Z' },
+        { id: '1', role: 'user', content: 'Hello', created_at: new Date('2026-01-01T00:00:00Z'), created_at_iso: '2026-01-01T00:00:00.000000Z' },
       ],
     });
 
@@ -404,18 +404,24 @@ describe('knowledgeGraphRoutes', () => {
       role: 'user',
       content: VOICE_GREETING_USER_MESSAGE,
       created_at: new Date(`2026-01-01T00:01:0${i}Z`),
+      created_at_iso: `2026-01-01T00:01:0${i}.000000Z`,
     }));
     const older = [
-      { id: 'keep-2', role: 'assistant', content: 'hi', created_at: new Date('2026-01-01T00:00:01Z') },
-      { id: 'keep-1', role: 'user', content: 'hello', created_at: new Date('2026-01-01T00:00:00Z') },
+      { id: 'keep-2', role: 'assistant', content: 'hi', created_at: new Date('2026-01-01T00:00:01Z'), created_at_iso: '2026-01-01T00:00:01.000000Z' },
+      { id: 'keep-1', role: 'user', content: 'hello', created_at: new Date('2026-01-01T00:00:00Z'), created_at_iso: '2026-01-01T00:00:00.000000Z' },
     ];
     const allNewestFirst = [...cueRows].reverse().concat(older);
 
     (pool.query as ReturnType<typeof vi.fn>).mockImplementation((_sql: string, params: unknown[]) => {
       const before = params[1] as string | null;
-      const fetchLimit = params[2] as number;
+      const beforeId = params[2] as string | null;
+      const fetchLimit = params[3] as number;
       const filtered = before
-        ? allNewestFirst.filter((r) => r.created_at.getTime() < new Date(before).getTime())
+        ? allNewestFirst.filter((r) => {
+          if (r.created_at_iso < before) return true;
+          if (r.created_at_iso > before) return false;
+          return beforeId != null && r.id < beforeId;
+        })
         : allNewestFirst;
       return { rows: filtered.slice(0, fetchLimit) };
     });

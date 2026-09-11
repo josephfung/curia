@@ -1514,7 +1514,8 @@ export async function knowledgeGraphRoutes(
    *
    * Query params:
    *   - conversationId: string (required)
-   *   - before: string (optional ISO timestamp — returns messages older than this cursor)
+   *   - before: string (optional ISO timestamp — returns messages older than this cursor;
+   *     microseconds are preserved; do not round-trip through JS Date)
    *   - limit: number (optional, default 25, max 50)
    *
    * Returns messages in chronological order (oldest first) so the client can
@@ -1545,37 +1546,44 @@ export async function knowledgeGraphRoutes(
     const limit = isNaN(rawLimit) || rawLimit < 1 ? 25 : Math.min(rawLimit, 50);
 
     // Validate the before cursor: must be a parseable ISO date if provided.
-    let beforeDate: Date | undefined;
+    // Keep the original string for SQL — `new Date(...).toISOString()` drops
+    // microseconds and would skip same-millisecond rows (#1775 review).
+    let beforeCursor: { createdAtIso: string } | undefined;
     if (query.before !== undefined && query.before.trim().length > 0) {
-      beforeDate = new Date(query.before);
-      if (isNaN(beforeDate.getTime())) {
+      const beforeRaw = query.before.trim();
+      if (isNaN(new Date(beforeRaw).getTime())) {
         return reply.status(400).send({ error: 'Invalid before param: must be an ISO timestamp' });
       }
+      beforeCursor = { createdAtIso: beforeRaw };
     }
 
     try {
       // Keyset pagination over raw rows; fetchChatHistoryPage keeps scanning
       // until it has `limit` display messages (or the table is exhausted).
-      // The $2::timestamptz IS NULL check makes the before-cursor optional.
+      // Composite (created_at, id) cursor + microsecond text so internal
+      // batches do not skip rows that JS Date would collapse.
       const page = await fetchChatHistoryPage({
-        before: beforeDate,
+        before: beforeCursor,
         limit,
-        load: async (before, fetchLimit) => {
+        load: async (cursor, fetchLimit) => {
           const result = await pool.query<{
             id: string;
             role: string;
             content: string;
             created_at: Date;
+            created_at_iso: string;
           }>(
-            `SELECT id, role, content, created_at
+            `SELECT id, role, content, created_at,
+                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso
              FROM working_memory
              WHERE conversation_id = $1
                AND archived = false
                AND role IN ('user', 'assistant')
-               AND ($2::timestamptz IS NULL OR created_at < $2)
-             ORDER BY created_at DESC
-             LIMIT $3`,
-            [conversationId, before?.toISOString() ?? null, fetchLimit],
+               AND ($2::timestamptz IS NULL
+                    OR (created_at, id) < ($2::timestamptz, COALESCE($3::uuid, '00000000-0000-0000-0000-000000000000'::uuid)))
+             ORDER BY created_at DESC, id DESC
+             LIMIT $4`,
+            [conversationId, cursor?.createdAtIso ?? null, cursor?.id ?? null, fetchLimit],
           );
           return result.rows;
         },
@@ -1585,6 +1593,11 @@ export async function knowledgeGraphRoutes(
         },
       });
 
+      // JSON body (Fastify application/json), not HTML. Assistant `html` is
+      // produced by markdownToHtml → sanitize-html. `resp.render()` does not
+      // apply. Same send path as the other KG JSON routes; flagged because
+      // this line moved.
+      // nosemgrep: javascript.express.security.audit.xss.direct-response-write.direct-response-write
       return reply.send(page);
     } catch (err) {
       logger.error({ err, conversationId }, 'KG chat history fetch failed');
