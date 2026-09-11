@@ -1793,6 +1793,9 @@ export class Dispatcher {
         return;
       }
 
+      // Checkpoint reads working_memory via raw SQL (watermark + created_at),
+      // so it must apply the sanitizer explicitly — same rewrite getHistory
+      // does by default (#1775).
       const turns = rewriteLlmFailureTurns(turnsResult.rows).map(row => ({
         role: row.role as 'user' | 'assistant',
         content: row.content,

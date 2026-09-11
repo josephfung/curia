@@ -49,6 +49,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Working memory** — `getHistory` rewrites LLM-failure markers unless callers opt out. (#1775)
 - **`secret-capture-request`** — repeat captures reuse a matching `user.*` key. (#1497)
 - **System page** — moved to `/system`; Personality icon is a brain, not a gear. (#1765)
 - **System restart cooldown** — 3/5min cap survives process restart via `audit_log`. (#1765)
@@ -85,6 +86,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Chat history API** — pages fill to `limit` after display filters, not raw rows. (#1775)
 - **Working memory** — failed LLM calls persist a marker turn so the next prompt stays well-formed. (#1767)
 - **System restart poll** — a hung GET `/api/system` now hits the 90s ceiling. (#1765)
 - **Scheduler prior-run block** — caps injected summary and context per-value, preserving keys; logs every cut. (#243)

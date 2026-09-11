@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { DiagnosticsRepo } from './diagnostics-repo.js';
 import { createSilentLogger } from '../logger.js';
+import { LLM_FAILURE_TURN_CONTENT } from '../memory/llm-failure-turn.js';
 
 interface Captured {
   text: string;
@@ -79,6 +80,20 @@ describe('DiagnosticsRepo', () => {
     const rows = await repo.getWorkingMemory({ conversationId: 'conv-1' });
     expect(calls[0]!.text).not.toContain('archived = false');
     expect(rows[0]).toMatchObject({ id: 'wm-1', archived: true, role: 'assistant' });
+  });
+
+  it('getWorkingMemory returns LLM-failure protocol envelopes verbatim (#1775)', async () => {
+    const { repo } = repoWithRows([
+      {
+        id: 'wm-fail', conversation_id: 'conv-1', agent_id: 'coordinator', role: 'assistant',
+        content: LLM_FAILURE_TURN_CONTENT, archived: false,
+        created_at: '2026-07-07T08:00:00.000Z', expires_at: null,
+      },
+    ]);
+
+    const rows = await repo.getWorkingMemory({ conversationId: 'conv-1' });
+    expect(rows[0]?.content).toBe(LLM_FAILURE_TURN_CONTENT);
+    expect(rows[0]?.content).toContain('_curia_protocol');
   });
 
   it('getActionLog matches an id via id::text so a numeric bigserial id resolves', async () => {

@@ -17,9 +17,7 @@ import type { EventRouter } from '../event-router.js';
 import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../session-auth.js';
 import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
-import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
-import { isVoiceGreetingCueContent } from '../../voice/greeting.js';
-import { isLlmFailureTurn, parseLlmFailureTurn } from '../../../memory/llm-failure-turn.js';
+import { fetchChatHistoryPage } from '../chat-history-page.js';
 import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 
 export interface KnowledgeGraphRouteOptions {
@@ -1520,15 +1518,14 @@ export async function knowledgeGraphRoutes(
    *   - limit: number (optional, default 25, max 50)
    *
    * Returns messages in chronological order (oldest first) so the client can
-   * prepend them to the thread. Fetches one extra row to determine hasMore.
+   * prepend them to the thread. Pages fill to `limit` *display* messages;
+   * `hasMore` reflects displayable turns, not raw rows (#1775).
    *
    * Only user/assistant turns are returned — system turns (synthetic summaries
    * inserted by the summarisation pass) are excluded since they are internal
-   * artifacts not intended for display. The synthetic voice opening cue
-   * (`VOICE_GREETING_USER_MESSAGE`, #1596) is also excluded — it exists so
-   * Anthropic-safe user-first history, not for the principal to read. LLM
-   * failure marker turns (#1767) are rewritten to the user-facing error text
-   * so the protocol JSON never appears in a chat bubble.
+   * artifacts not intended for display. Display filters (voice greeting cue,
+   * LLM-failure rewrite, outbound-context preamble) live in
+   * `chat-history-page.ts`.
    */
   app.get('/api/kg/chat/history', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
@@ -1556,67 +1553,39 @@ export async function knowledgeGraphRoutes(
       }
     }
 
-    interface HistoryRow {
-      id: string;
-      role: string;
-      content: string;
-      created_at: Date;
-    }
-
     try {
-      // Fetch limit+1 rows so we can tell if there are more pages without a COUNT query.
-      // Rows arrive newest-first; we reverse after slicing to serve them chronologically.
-      // The $2::timestamptz IS NULL check makes the before-cursor optional in a single query.
-      const result = await pool.query<HistoryRow>(
-        `SELECT id, role, content, created_at
-         FROM working_memory
-         WHERE conversation_id = $1
-           AND archived = false
-           AND role IN ('user', 'assistant')
-           AND ($2::timestamptz IS NULL OR created_at < $2)
-         ORDER BY created_at DESC
-         LIMIT $3`,
-        [conversationId, beforeDate?.toISOString() ?? null, limit + 1],
-      );
-
-      const hasMore = result.rows.length > limit;
-      // Take at most `limit` rows, then restore chronological order.
-      const rows = result.rows.slice(0, limit).reverse();
-
-      const messages = rows.flatMap((row) => {
-        // Voice opening cue is persisted so spoken-turn history stays user-first
-        // for Anthropic, but must not surface as a chat bubble (#1596).
-        if (row.role === 'user' && isVoiceGreetingCueContent(row.content)) {
-          return [];
-        }
-        // Failed-LLM marker — show the same error text the user already saw live.
-        const failure = isLlmFailureTurn(row) ? parseLlmFailureTurn(row.content) : null;
-        const rawContent = failure ? failure.message : row.content;
-        // Per-row try/catch so one bad message doesn't fail the whole page.
-        let html: string | null = null;
-        // Strip dispatcher-injected outbound context preambles from user messages
-        // before serving them — the preamble is coordinator-internal and looks
-        // confusing inside the user's chat bubble.
-        const content = row.role === 'user'
-          ? stripOutboundContextPreamble(row.content)
-          : rawContent;
-        if (row.role === 'assistant') {
-          try {
-            html = markdownToHtml(content);
-          } catch (convErr) {
-            logger.warn({ err: convErr, messageId: row.id }, 'markdownToHtml failed for history row; falling back to plain text');
-          }
-        }
-        return [{
-          id: row.id,
-          role: row.role as 'user' | 'assistant',
-          content,
-          html,
-          timestamp: row.created_at.toISOString(),
-        }];
+      // Keyset pagination over raw rows; fetchChatHistoryPage keeps scanning
+      // until it has `limit` display messages (or the table is exhausted).
+      // The $2::timestamptz IS NULL check makes the before-cursor optional.
+      const page = await fetchChatHistoryPage({
+        before: beforeDate,
+        limit,
+        load: async (before, fetchLimit) => {
+          const result = await pool.query<{
+            id: string;
+            role: string;
+            content: string;
+            created_at: Date;
+          }>(
+            `SELECT id, role, content, created_at
+             FROM working_memory
+             WHERE conversation_id = $1
+               AND archived = false
+               AND role IN ('user', 'assistant')
+               AND ($2::timestamptz IS NULL OR created_at < $2)
+             ORDER BY created_at DESC
+             LIMIT $3`,
+            [conversationId, before?.toISOString() ?? null, fetchLimit],
+          );
+          return result.rows;
+        },
+        renderAssistantHtml: markdownToHtml,
+        onMarkdownError: (err, messageId) => {
+          logger.warn({ err, messageId }, 'markdownToHtml failed for history row; falling back to plain text');
+        },
       });
 
-      return reply.send({ messages, hasMore });
+      return reply.send(page);
     } catch (err) {
       logger.error({ err, conversationId }, 'KG chat history fetch failed');
       return reply.status(500).send({ error: 'Failed to fetch chat history' });

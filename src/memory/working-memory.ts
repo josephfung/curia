@@ -13,6 +13,16 @@ export interface ConversationTurn {
   content: string;
 }
 
+export interface GetHistoryOptions {
+  maxTurns?: number;
+  /**
+   * Skip {@link rewriteLlmFailureTurns} and return stored protocol envelopes.
+   * Default false — new call sites see the user-facing error text.
+   * Opt-out must be visible at the call site (`{ raw: true }`).
+   */
+  raw?: boolean;
+}
+
 /**
  * Configuration for rolling context summarization.
  * When the active turn count exceeds `threshold`, the oldest (count - keepWindow) turns
@@ -81,9 +91,14 @@ export class WorkingMemory {
   async getHistory(
     conversationId: string,
     agentId: string,
-    options?: { maxTurns?: number },
+    options?: GetHistoryOptions,
   ): Promise<ConversationTurn[]> {
-    return this.backend.get(conversationId, agentId, options?.maxTurns);
+    const turns = await this.backend.get(conversationId, agentId, options?.maxTurns);
+    // Default: rewrite `_curia_protocol: llm_failure` envelopes so LLM context,
+    // summarization, and new readers never see the raw marker (#1775). Callers
+    // that must inspect storage (persist pairing, diagnostics, tests) pass `{ raw: true }`.
+    if (options?.raw) return turns;
+    return rewriteLlmFailureTurns(turns);
   }
 
   /** Delete all turns whose expires_at is in the past. Called by DreamEngine nightly. */
@@ -280,8 +295,9 @@ class PostgresBackend implements StorageBackend {
 
     // Build the summarization prompt from the turns being archived.
     // Prior summaries (system role) are labelled distinctly so the LLM carries them forward.
-    // Failed-LLM markers (#1767) are rewritten to the user-facing error text so
-    // the protocol JSON is never condensed, while the user's question is kept.
+    // This path reads the archive window via raw SQL (oldest N, not getHistory),
+    // so it must apply the sanitizer explicitly — same rewrite getHistory does
+    // by default (#1775). Protocol JSON is never condensed; the question is kept.
     const forSummary = rewriteLlmFailureTurns(turnsToArchive);
     const transcript = forSummary
       .map((t) => {

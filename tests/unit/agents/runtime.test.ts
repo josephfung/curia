@@ -342,10 +342,14 @@ describe('AgentRuntime', () => {
     });
     await bus.publish('dispatch', task);
 
+    const stored = await memory.getHistory('conv-fail-1', 'coordinator', { raw: true });
+    expect(stored).toHaveLength(2);
+    expect(stored[0]).toEqual({ role: 'user', content: 'STALE_FAILED_PROMPT_xyz' });
+    expect(stored[1]).toEqual({ role: 'assistant', content: LLM_FAILURE_TURN_CONTENT });
     const history = await memory.getHistory('conv-fail-1', 'coordinator');
     expect(history).toHaveLength(2);
     expect(history[0]).toEqual({ role: 'user', content: 'STALE_FAILED_PROMPT_xyz' });
-    expect(history[1]).toEqual({ role: 'assistant', content: LLM_FAILURE_TURN_CONTENT });
+    expect(history[1]).toEqual({ role: 'assistant', content: LLM_FAILURE_USER_MESSAGE });
     for (let i = 1; i < history.length; i++) {
       expect(history[i]!.role).not.toBe(history[i - 1]!.role);
     }
@@ -531,8 +535,11 @@ describe('AgentRuntime', () => {
 
     expect(historyAtPublish).toHaveLength(1);
     expect(historyAtPublish[0]!.some((t) => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
-    const after = await memory.getHistory('conv-order', 'coordinator');
+    const after = await memory.getHistory('conv-order', 'coordinator', { raw: true });
     expect(after.some((t) => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(true);
+    const displayed = await memory.getHistory('conv-order', 'coordinator');
+    expect(displayed.some((t) => t.content === LLM_FAILURE_USER_MESSAGE)).toBe(true);
+    expect(displayed.some((t) => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
   });
 
   it('appends the autonomy block to the system prompt when autonomyService is provided', async () => {
