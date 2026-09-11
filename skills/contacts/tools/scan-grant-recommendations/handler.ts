@@ -158,11 +158,23 @@ export class ScanGrantRecommendationsHandler implements ToolHandler {
         continue;
       }
 
-      const { created: wasCreated, recommendation } = await svc.createGrantRecommendation(
-        contact.id,
-        CANDIDATE_PERMISSION,
-        verdict.reasoning,
-      );
+      let createdResult: Awaited<ReturnType<typeof svc.createGrantRecommendation>>;
+      try {
+        createdResult = await svc.createGrantRecommendation(
+          contact.id,
+          CANDIDATE_PERMISSION,
+          verdict.reasoning,
+        );
+      } catch (err) {
+        // createGrantRecommendation throws when ON CONFLICT skipped the insert
+        // but the winner vanished before re-fetch (e.g. ON DELETE CASCADE). Treat
+        // that like the other per-contact failures so earlier creates in this run
+        // still report (issue #1067).
+        ctx.log.warn({ err, contactId: contact.id }, 'scan-grant-recommendations: create failed, skipping contact');
+        skippedErrors++;
+        continue;
+      }
+      const { created: wasCreated, recommendation } = createdResult;
 
       if (wasCreated) {
         ctx.log.info({ contactId: contact.id, permission: CANDIDATE_PERMISSION }, 'scan-grant-recommendations: recommendation created');

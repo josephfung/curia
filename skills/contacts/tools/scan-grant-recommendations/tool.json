@@ -1,7 +1,7 @@
 {
   "name": "scan-grant-recommendations",
   "description": "Scan contacts and proactively suggest capability grants for contacts who have earned them through demonstrated trust patterns. Runs the LLM-judge recommendation engine. Returns a summary of new recommendations created. Invoke on a schedule — not in response to user requests.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
