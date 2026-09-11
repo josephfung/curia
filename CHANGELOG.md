@@ -86,6 +86,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`createGrantRecommendation`** — conflict-skipped inserts now return the persisted winner, not a phantom id. (#1067)
 - **Autonomy scoring pass** — LLM judge flags must be 0 or 1; unparseable rows dead-letter after a retry floor. (#442)
 - **Chat history API** — pages fill to `limit` after display filters, not raw rows. (#1775)
 - **Voice** — barge-in pairs the heard reply; empty or failed turns get a marker. (#1776)
