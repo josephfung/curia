@@ -284,7 +284,8 @@
             "halfLifeDays": { "type": "number", "minimum": 1 },
             "weakExpiredWeight": { "type": "number", "minimum": 0, "maximum": 1 },
             "ceoCooldownDays": { "type": "integer", "minimum": 0 },
-            "errorRateThreshold": { "type": "number", "minimum": 0, "maximum": 1 }
+            "errorRateThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+            "unparseableAfterDays": { "type": "integer", "minimum": 0 }
           }
         }
       }
