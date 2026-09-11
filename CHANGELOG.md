@@ -85,8 +85,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`secret-capture-request`** — possessives and trailing `for` no longer collide keys. (#1497)
-- **`secret-capture-request`** — keep single-letter brand initials in `user.*` keys. (#1497)
 - **System restart poll** — a hung GET `/api/system` now hits the 90s ceiling. (#1765)
 - **Scheduler prior-run block** — caps injected summary and context per-value, preserving keys; logs every cut. (#243)
 - **`calendar-update-event`** — rejects attendee RSVP status on the Nylas path; guest-list replace only. (#1735)
