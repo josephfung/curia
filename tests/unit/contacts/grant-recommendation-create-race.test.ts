@@ -11,6 +11,7 @@ import { ContactService } from '../../../src/contacts/contact-service.js';
 import {
   assertConcurrentCreateGrantRecommendationRace,
   assertSequentialCreateGrantRecommendationDedup,
+  assertCreateAgainstDeclinedGrantRecommendation,
 } from '../../helpers/grant-recommendation-create-race.js';
 
 describe('createGrantRecommendation race (issue #1067, in-memory)', () => {
@@ -34,5 +35,13 @@ describe('createGrantRecommendation race (issue #1067, in-memory)', () => {
       source: 'test',
     });
     await assertSequentialCreateGrantRecommendationDedup(service, contact.id);
+  });
+
+  it('create after decline returns the declined ledger row', async () => {
+    const contact = await service.createContact({
+      displayName: 'Grant Rec Declined Dedup',
+      source: 'test',
+    });
+    await assertCreateAgainstDeclinedGrantRecommendation(service, contact.id);
   });
 });

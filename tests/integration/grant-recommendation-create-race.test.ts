@@ -8,10 +8,12 @@ import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
 import pg from 'pg';
 import { ContactService } from '../../src/contacts/contact-service.js';
 import { createSilentLogger } from '../../src/logger.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 import {
   GRANT_REC_RACE_PERMISSION,
   assertConcurrentCreateGrantRecommendationRace,
   assertSequentialCreateGrantRecommendationDedup,
+  assertCreateAgainstDeclinedGrantRecommendation,
 } from '../helpers/grant-recommendation-create-race.js';
 
 const { Pool } = pg;
@@ -25,6 +27,7 @@ describeIf('createGrantRecommendation race (issue #1067, postgres)', () => {
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
     await pool.query('SELECT 1 FROM grant_recommendations LIMIT 0');
     service = ContactService.createWithPostgres(pool, undefined, createSilentLogger());
   });
@@ -60,5 +63,10 @@ describeIf('createGrantRecommendation race (issue #1067, postgres)', () => {
   it('sequential duplicate returns created:false with the persisted winner', async () => {
     const contactId = await makeContact('Grant Rec Sequential Dedup');
     await assertSequentialCreateGrantRecommendationDedup(service, contactId);
+  });
+
+  it('create after decline returns the declined ledger row', async () => {
+    const contactId = await makeContact('Grant Rec Declined Dedup');
+    await assertCreateAgainstDeclinedGrantRecommendation(service, contactId);
   });
 });
