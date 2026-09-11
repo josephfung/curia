@@ -79,6 +79,12 @@ const DEFAULT_SKILL_OUTPUT_MAX_LENGTH = 200_000;
 // trust boundary established by #971: it cannot name a system key (snake_case, e.g.
 // `anthropic_api_key`) or a channel credential (`channel.*`), so form-fill material is
 // structurally separated from privileged secrets.
+
+// Hard allowlist of skills permitted to declare and use the `secretResolver` capability.
+// Mirrors the executionLayer→approve-action restriction below: declaring the capability in
+// tool.json is necessary but NOT sufficient — the skill name must also appear here. Kept as
+// a set so sibling skills that legitimately need by-reference injection (e.g. a future
+// http-request skill) can be added deliberately rather than by manifest edit alone.
 export const SECRET_RESOLVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['web-browser']);
 
 // Names-only `user.*` index (#1497) — see ctx.listUserSecretNames.
