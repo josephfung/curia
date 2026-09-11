@@ -6,7 +6,7 @@ import pino from 'pino';
 const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
-  return { toolName: 'calendar-find-free-time', toolVersion: '1.1.0', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
+  return { toolName: 'calendar-find-free-time', toolVersion: '1.1.1', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
 }
 
 // Realistic Unix timestamps (seconds) on 2026-04-06.
@@ -64,33 +64,64 @@ describe('CalendarFindFreeTimeHandler', () => {
     }
   });
 
-  it('omits free windows with suspicious timestamps (epoch-zero guard)', async () => {
+  it('skips corrupt free/busy slots instead of treating epoch-zero as busy', async () => {
+    const warn = vi.spyOn(logger, 'warn');
     const nylasCalendarClient = {
       getFreeBusy: vi.fn().mockResolvedValue([{
         email: 'cal-1',
         timeSlots: [
-          // A corrupt slot with startTime=0 from Nylas would produce a free window starting at 0
-          { startTime: 0, endTime: 1775476800, status: 'busy' },
+          // startTime=0 with an in-range end would previously mark 1970→13:00Z busy
+          // and hide the 12:00Z–13:00Z window. Skip the slot so the range stays free.
+          { startTime: 0, endTime: 1775480400, status: 'busy' },
+          { startTime: Number.NaN, endTime: 1775484000, status: 'busy' },
+          { startTime: -1, endTime: 1775484000, status: 'busy' },
         ],
       }]),
     };
 
-    // Range: 12:00Z–13:00Z, entire range is "busy" from 0–12:00Z
-    // No free windows at all
     const result = await handler.execute(makeCtx(
-      { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T13:00:00Z' },
+      { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
       { nylasCalendarClient: nylasCalendarClient as never },
     ));
 
     expect(result.success).toBe(true);
     if (result.success) {
-      const data = result.data as { freeWindows: Array<{ start: string | null; end: string | null }> };
-      // The free window after the busy period (12:00Z–13:00Z) should have valid timestamps
-      // but there should be no window starting at epoch 0
-      for (const w of data.freeWindows) {
-        expect(w.start).not.toContain('1970');
-        expect(w.end).not.toContain('1970');
-      }
+      const data = result.data as { freeWindows: Array<{ start: string; end: string }> };
+      expect(data.freeWindows).toEqual([
+        { start: '2026-04-06T12:00:00.000Z', end: '2026-04-06T16:00:00.000Z' },
+      ]);
+    }
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ startTime: 0, endTime: 1775480400 }),
+      expect.stringContaining('suspicious Unix timestamp'),
+    );
+    expect(warn).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
+  });
+
+  it('still carves valid busy periods when mixed with a corrupt slot', async () => {
+    const nylasCalendarClient = {
+      getFreeBusy: vi.fn().mockResolvedValue([{
+        email: 'cal-1',
+        timeSlots: [
+          { startTime: 0, endTime: 1775480400, status: 'busy' }, // corrupt — skip
+          { startTime: 1775478600, endTime: 1775480400, status: 'busy' }, // 12:30Z–13:00Z
+        ],
+      }]),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { freeWindows: Array<{ start: string; end: string }> };
+      expect(data.freeWindows).toEqual([
+        { start: '2026-04-06T12:00:00.000Z', end: '2026-04-06T12:30:00.000Z' },
+        { start: '2026-04-06T13:00:00.000Z', end: '2026-04-06T16:00:00.000Z' },
+      ]);
     }
   });
 

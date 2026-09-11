@@ -73,6 +73,15 @@ export function normalizeTimestamp(iso: string, defaultZone: string): string {
 }
 
 /**
+ * True when `unix` is a usable event timestamp: finite and after the Unix epoch.
+ * Unix 0 (1970-01-01) and negatives are never valid calendar times; NaN / Infinity
+ * are API corruption. Shared by toLocalIso() and the calendar free/busy skills.
+ */
+export function isPlausibleUnixSeconds(unix: number): boolean {
+  return Number.isFinite(unix) && unix > 0;
+}
+
+/**
  * Convert Unix seconds to an ISO 8601 string in the given IANA timezone,
  * with the local UTC offset baked in.
  *
@@ -91,7 +100,7 @@ export function normalizeTimestamp(iso: string, defaultZone: string): string {
  * @param timezone     IANA timezone name (e.g. "America/Toronto"), or undefined for UTC
  */
 export function toLocalIso(unixSeconds: number | null, timezone?: string): string | null {
-  if (unixSeconds === null || !Number.isFinite(unixSeconds) || unixSeconds <= 0) return null;
+  if (unixSeconds === null || !isPlausibleUnixSeconds(unixSeconds)) return null;
   if (!timezone) return new Date(unixSeconds * 1000).toISOString();
   const dt = DateTime.fromSeconds(unixSeconds, { zone: timezone });
   if (!dt.isValid) {

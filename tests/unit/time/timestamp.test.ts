@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { toLocalIso, formatDisplayTimezone } from '../../../src/time/timestamp.js';
+import { toLocalIso, formatDisplayTimezone, isPlausibleUnixSeconds } from '../../../src/time/timestamp.js';
+
+describe('isPlausibleUnixSeconds', () => {
+  it('accepts finite timestamps after the Unix epoch', () => {
+    expect(isPlausibleUnixSeconds(1)).toBe(true);
+    expect(isPlausibleUnixSeconds(1775489400)).toBe(true);
+  });
+
+  it('rejects epoch-zero, negatives, and non-finite values', () => {
+    expect(isPlausibleUnixSeconds(0)).toBe(false);
+    expect(isPlausibleUnixSeconds(-1)).toBe(false);
+    expect(isPlausibleUnixSeconds(Number.NaN)).toBe(false);
+    expect(isPlausibleUnixSeconds(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+});
 
 describe('toLocalIso', () => {
   it('converts Unix seconds to local ISO with offset for America/Toronto in EDT', () => {
