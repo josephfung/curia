@@ -23,7 +23,6 @@ describe('canonicalizeUserSecretName', () => {
 
   it('folds X/Twitter synonyms and TLDs into one canonical key', () => {
     expect(canonicalizeUserSecretName('X.com password')).toBe('user.twitter_password');
-    expect(canonicalizeUserSecretName('X Twitter password for josephfung')).toBe('user.twitter_password');
     expect(canonicalizeUserSecretName('my Twitter/X password')).toBe('user.twitter_password');
     expect(canonicalizeUserSecretName('twitter password')).toBe('user.twitter_password');
   });
@@ -37,6 +36,28 @@ describe('canonicalizeUserSecretName', () => {
     expect(canonicalizeUserSecretName('password for work gmail')).toBe('user.work_gmail_password');
     expect(canonicalizeUserSecretName('password for aeroplan')).toBe('user.aeroplan_password');
     expect(canonicalizeUserSecretName('password for gmail')).toBe('user.gmail_password');
+  });
+
+  it('keeps a trailing qualifier after for rather than dropping it as an owner name', () => {
+    expect(canonicalizeUserSecretName('gmail password for work')).toBe('user.gmail_work_password');
+    expect(canonicalizeUserSecretName('gmail password for personal')).toBe('user.gmail_personal_password');
+    expect(canonicalizeUserSecretName('X Twitter password for josephfung')).toBe(
+      'user.twitter_josephfung_password',
+    );
+  });
+
+  it('falls back to the raw slug for a trailing for with no successor', () => {
+    expect(canonicalizeUserSecretName('password for')).toBe('user.password_for');
+  });
+
+  it('strips English possessives instead of treating leftover s as identity', () => {
+    expect(canonicalizeUserSecretName("my account's password")).toBe('user.my_account_password');
+    expect(canonicalizeUserSecretName("the website's password")).toBe('user.the_website_password');
+    expect(canonicalizeUserSecretName("our site's password")).toBe('user.our_site_password');
+    expect(canonicalizeUserSecretName("the user's password")).toBe('user.the_user_password');
+    expect(canonicalizeUserSecretName("my bank's login")).toBe('user.bank_login');
+    expect(canonicalizeUserSecretName('my bank login')).toBe('user.bank_login');
+    expect(canonicalizeUserSecretName('the website\u2019s password')).toBe('user.the_website_password');
   });
 
   it('falls back to the raw slug instead of a type-only key when identity is empty', () => {
@@ -105,6 +126,26 @@ describe('resolveUserSecretName', () => {
     expect(resolveUserSecretName('password for work gmail', existing)).toBe('user.work_gmail_password');
   });
 
+  it('does not overwrite gmail with a trailing-for qualifier', () => {
+    const existing = ['user.gmail_password'];
+    expect(resolveUserSecretName('gmail password for work', existing)).toBe('user.gmail_work_password');
+    expect(resolveUserSecretName('gmail password for personal', existing)).toBe(
+      'user.gmail_personal_password',
+    );
+  });
+
+  it('does not collapse two possessive filler-noun names onto one key', () => {
+    const first = resolveUserSecretName("my account's password");
+    expect(first).toBe('user.my_account_password');
+    expect(resolveUserSecretName("the website's password", [first])).toBe(
+      'user.the_website_password',
+    );
+  });
+
+  it('matches a possessive description to the non-possessive canonical key', () => {
+    expect(resolveUserSecretName("my bank's login", ['user.bank_login'])).toBe('user.bank_login');
+  });
+
   it('does not collapse identity-less captures onto user.password or user.my_password', () => {
     const existing = ['user.my_password', 'user.gmail_password'];
     expect(resolveUserSecretName('my account password', existing)).toBe('user.my_account_password');
@@ -128,14 +169,16 @@ describe('resolveUserSecretName', () => {
 });
 
 describe('fingerprintUserSecret', () => {
-  it('gives the three prod X-password slugs the same fingerprint', () => {
-    const keys = [
-      'user.x_com_password',
-      'user.x_twitter_password_for_josephfung',
-      'user.my_twitter_x_password',
-    ];
-    const fps = keys.map(k => fingerprintKey(fingerprintUserSecret(k)));
-    expect(new Set(fps).size).toBe(1);
-    expect(fps[0]).toBe('twitter|password');
+  it('gives the two prod X-password slugs the same fingerprint', () => {
+    expect(fingerprintKey(fingerprintUserSecret('user.x_com_password'))).toBe('twitter|password');
+    expect(fingerprintKey(fingerprintUserSecret('user.my_twitter_x_password'))).toBe(
+      'twitter|password',
+    );
+  });
+
+  it('keeps an owner suffix on the fingerprint so it does not collide with the service key', () => {
+    expect(fingerprintKey(fingerprintUserSecret('user.x_twitter_password_for_josephfung'))).toBe(
+      'josephfung_twitter|password',
+    );
   });
 });

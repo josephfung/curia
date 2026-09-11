@@ -23,10 +23,13 @@ const MAX_SECRET_NAME_INPUT = 128;
 
 const USER_KEY_RE = /^user\.[a-z0-9_]+$/;
 
-/** Filler tokens dropped from identity. `for` is handled separately as a trailing possessive. */
+/** Filler tokens dropped from identity. `for` is a preposition, not a discriminator —
+ *  skipping the *following* token would treat "gmail password for work" as `gmail` and
+ *  overwrite `user.gmail_password`. `s` is leftover from English possessives (`'s`). */
 const FILLER = new Set([
   'a', 'an', 'the', 'my', 'me', 'mine', 'our', 'your', 'their', 'his', 'her', 'its',
   'user', 'users', 'account', 'accounts', 'site', 'website', 'web', 'page',
+  'for', 's',
 ]);
 
 const TLDS = new Set(['com', 'org', 'net', 'io', 'www', 'http', 'https', 'html']);
@@ -77,10 +80,13 @@ export function fingerprintKey(fp: UserSecretFingerprint): string {
 }
 
 function slugifySecretName(input: string): string {
-  const stripped = input.trim().toLowerCase().startsWith(USER_SECRET_PREFIX)
-    ? input.trim().slice(USER_SECRET_PREFIX.length)
-    : input.trim();
-  return stripped.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  let stripped = input.trim();
+  if (stripped.toLowerCase().startsWith(USER_SECRET_PREFIX)) {
+    stripped = stripped.slice(USER_SECRET_PREFIX.length);
+  }
+  // English possessives (`account's`, `bank's`) must not become a standalone `s` token.
+  stripped = stripped.toLowerCase().replace(/['\u2018\u2019]s\b/g, '');
+  return stripped.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 function tokenize(slug: string): string[] {
@@ -123,18 +129,6 @@ export function fingerprintUserSecret(input: string): UserSecretFingerprint {
 
   for (let i = 0; i < tokens.length; i++) {
     const raw = tokens[i]!;
-    // Trailing "for <name>" is a possessive (the prod "password for josephfung" case).
-    // Only drop the successor when it is the last token AND a service identity already
-    // exists — otherwise "password for work gmail" / "password for aeroplan" would lose
-    // the service discriminator and collide.
-    if (raw === 'for' && i + 1 < tokens.length) {
-      const nextIsLast = i + 1 === tokens.length - 1;
-      if (nextIsLast && identity.length > 0) {
-        i += 1;
-        continue;
-      }
-      continue;
-    }
     if (FILLER.has(raw) || TLDS.has(raw)) continue;
 
     const typeCanon = TYPE_CANONICAL[raw];
@@ -142,6 +136,9 @@ export function fingerprintUserSecret(input: string): UserSecretFingerprint {
       type = pickType(type, typeCanon);
       continue;
     }
+    // One-character leftovers (`s` from a missed possessive) are not service names.
+    // `x` is the Twitter rebrand token and is handled in foldTwitterRebrand.
+    if (raw.length === 1 && !TWITTER_REBRAND.has(raw)) continue;
     identity.push(raw);
   }
 
