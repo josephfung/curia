@@ -72,7 +72,11 @@ export interface VoiceTurnResult {
 
 /** Thrown when the LLM stream yields a terminal error event. */
 export class VoiceTurnError extends Error {
-  constructor(public readonly agentError: AgentError) {
+  constructor(
+    public readonly agentError: AgentError,
+    /** Text already handed to TTS before the stream error, if any. */
+    public readonly spokenText: string = '',
+  ) {
     super(agentError.message);
     this.name = 'VoiceTurnError';
   }
@@ -155,7 +159,7 @@ export class VoiceTurnRunner {
         { streamId, error: result.error.type, source: result.error.source },
         'voice turn stream error',
       );
-      throw new VoiceTurnError(result.error);
+      throw new VoiceTurnError(result.error, spokenText);
     }
 
     if (result.stopReason === 'message_end') {

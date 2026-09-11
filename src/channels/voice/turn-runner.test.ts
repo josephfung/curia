@@ -206,9 +206,50 @@ describe('VoiceTurnRunner', () => {
       onSpeechText: async () => {},
     });
 
-    await expect(
-      runner.runTurn({ messages: [], signal: new AbortController().signal }),
-    ).rejects.toBeInstanceOf(VoiceTurnError);
+    const err = await runner.runTurn({
+      messages: [],
+      signal: new AbortController().signal,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(VoiceTurnError);
+    expect((err as VoiceTurnError).spokenText).toBe('');
+  });
+
+  it('attaches already-spoken text to VoiceTurnError on a mid-reply stream error', async () => {
+    const spoken: string[] = [];
+    const provider = new FakeStreamProvider([
+      [
+        { type: 'text_delta', text: 'You have three things today. ' },
+        {
+          type: 'error',
+          error: {
+            type: 'PROVIDER_ERROR',
+            source: 'fake-stream',
+            message: 'boom',
+            retryable: true,
+            context: {},
+            timestamp: new Date(),
+          },
+        },
+      ],
+    ]);
+    const runner = new VoiceTurnRunner({
+      provider,
+      model: 'fake',
+      logger,
+      onSpeechText: async (text) => {
+        spoken.push(text);
+      },
+    });
+
+    const err = await runner.runTurn({
+      messages: [],
+      signal: new AbortController().signal,
+    }).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      name: 'VoiceTurnError',
+      spokenText: 'You have three things today.',
+    });
+    expect(spoken).toEqual(['You have three things today.']);
   });
 
   it('converts a throwing invokeTool into a tool_result error and continues', async () => {
