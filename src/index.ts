@@ -2081,6 +2081,7 @@ async function main(): Promise<void> {
     weakExpiredWeight: yamlConfig.dreaming?.autonomy_scoring?.weakExpiredWeight ?? 0.3,
     ceoCooldownDays: yamlConfig.dreaming?.autonomy_scoring?.ceoCooldownDays ?? 7,
     errorRateThreshold: yamlConfig.dreaming?.autonomy_scoring?.errorRateThreshold ?? 0.20,
+    unparseableAfterDays: yamlConfig.dreaming?.autonomy_scoring?.unparseableAfterDays ?? 3,
   };
   // Resolve the provider from the registry so remapping the scoring tier to an
   // OpenRouter model routes LLM-judge calls through OpenRouterProvider. (#646)

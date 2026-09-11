@@ -326,6 +326,7 @@ dreaming:
     weakExpiredWeight: 0.3        # reduced weight for 'expired' compatibility signal
     ceoCooldownDays: 7            # days after CEO set-autonomy before auto-adjust resumes
     errorRateThreshold: 0.20      # competence error rate that blocks score increases
+    unparseableAfterDays: 3       # parse failures retry this many days, then dead-letter
 
 # Sensitivity classification rules for KG nodes (issue #200).
 # Rules are evaluated in descending sensitivity order — 'restricted' rules are

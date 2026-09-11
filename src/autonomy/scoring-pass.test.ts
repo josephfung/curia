@@ -91,6 +91,7 @@ const defaultConfig = {
   weakExpiredWeight: 0.3,
   ceoCooldownDays: 7,
   errorRateThreshold: 0.20,
+  unparseableAfterDays: 3,
 };
 
 describe('AutonomyScoringPass', () => {
@@ -187,6 +188,50 @@ describe('AutonomyScoringPass', () => {
       expect(result.llmCallsFailed).toBe(1);
       expect(result.rowsScored).toBe(0);
     });
+
+    it('dead-letters an old row when the judge JSON stays unparseable past the retry floor', async () => {
+      const row = makeRow({
+        id: 16,
+        outcome: 'success',
+        createdAt: new Date(Date.now() - 4 * 86_400_000),
+      });
+      const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });
+      const llm = {
+        id: 'anthropic',
+        chat: vi.fn().mockResolvedValue({
+          type: 'text',
+          content: JSON.stringify({ competence_flag: 2, commitment_flag: 0.8, compatibility: -1 }),
+          usage: { inputTokens: 100, outputTokens: 50 },
+        }),
+      } as unknown as LLMProvider;
+      const pass = new AutonomyScoringPass(repo, makeAutonomyService(), llm, createSilentLogger(), defaultConfig);
+
+      const result = await pass.run();
+
+      expect(repo.updateScoringFlags).toHaveBeenCalledWith(16, {
+        competenceFlag: null,
+        commitmentFlag: null,
+        compatibility: null,
+        scoredBy: 'llm-judge-unparseable',
+      });
+      expect(result.llmCallsFailed).toBe(1);
+      expect(result.rowsScored).toBe(1);
+    });
+
+    it('does not dead-letter an old row when the LLM call itself fails', async () => {
+      const row = makeRow({
+        id: 17,
+        outcome: 'failure',
+        createdAt: new Date(Date.now() - 10 * 86_400_000),
+      });
+      const repo = makeRepo({ findUnscoredTerminal: vi.fn().mockResolvedValue([row]) });
+      const llm = { id: 'anthropic', chat: vi.fn().mockRejectedValue(new Error('API timeout')) } as unknown as LLMProvider;
+      const pass = new AutonomyScoringPass(repo, makeAutonomyService(), llm, createSilentLogger(), defaultConfig);
+
+      await pass.run();
+
+      expect(repo.updateScoringFlags).not.toHaveBeenCalled();
+    });
   });
 
   describe('parseLlmJudgeFlags', () => {
@@ -203,9 +248,33 @@ describe('AutonomyScoringPass', () => {
       });
     });
 
+    it('coerces boolean flags to 0/1', () => {
+      expect(parseLlmJudgeFlags(JSON.stringify({
+        competence_flag: true,
+        commitment_flag: false,
+        compatibility: true,
+      }))).toEqual({
+        competenceFlag: 1,
+        commitmentFlag: 0,
+        compatibility: 1,
+        scoredBy: 'llm-judge',
+      });
+    });
+
+    it('strips a wrapping markdown code fence', () => {
+      const body = JSON.stringify({ competence_flag: 1, commitment_flag: 0, compatibility: 1 });
+      expect(parseLlmJudgeFlags('```json\n' + body + '\n```')).toEqual({
+        competenceFlag: 1,
+        commitmentFlag: 0,
+        compatibility: 1,
+        scoredBy: 'llm-judge',
+      });
+    });
+
     it('throws when required fields are missing', () => {
-      expect(() => parseLlmJudgeFlags('{}')).toThrow(/missing or non-numeric fields/);
+      expect(() => parseLlmJudgeFlags('{}')).toThrow(/missing or out-of-range flags/);
       expect(() => parseLlmJudgeFlags('{}')).toThrow(/competence_flag=absent/);
+      expect(() => parseLlmJudgeFlags('{}')).toThrow(/preview=/);
     });
 
     it('throws when required fields are non-numeric', () => {
@@ -213,7 +282,19 @@ describe('AutonomyScoringPass', () => {
         competence_flag: 'yes',
         commitment_flag: 1,
         compatibility: 0,
-      }))).toThrow(/competence_flag=string/);
+      }))).toThrow(/competence_flag="yes"/);
+    });
+
+    it('throws on numeric flags outside 0/1', () => {
+      expect(() => parseLlmJudgeFlags(JSON.stringify({
+        competence_flag: 2, commitment_flag: 0.8, compatibility: -1,
+      }))).toThrow(/competence_flag=2/);
+    });
+
+    it('throws when a field is explicitly null', () => {
+      expect(() => parseLlmJudgeFlags(JSON.stringify({
+        competence_flag: null, commitment_flag: 1, compatibility: 1,
+      }))).toThrow(/competence_flag=null/);
     });
 
     it('throws when JSON is not an object', () => {

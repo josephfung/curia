@@ -25,7 +25,18 @@ export interface ScoringPassConfig {
   weakExpiredWeight: number;
   ceoCooldownDays: number;
   errorRateThreshold: number;
+  /** Days an unscored row may retry a parse failure before it is dead-lettered. */
+  unparseableAfterDays: number;
 }
+
+const UNPARSEABLE_FLAGS: ScoringFlags = {
+  competenceFlag: null,
+  commitmentFlag: null,
+  compatibility: null,
+  scoredBy: 'llm-judge-unparseable',
+};
+
+const JUDGE_PAYLOAD_PREVIEW_CHARS = 300;
 
 export interface ScoringPassResult {
   rowsScored: number;
@@ -182,8 +193,21 @@ export class AutonomyScoringPass {
         return true;
       } catch (err) {
         result.llmCallsFailed++;
+        const rawPreview = err instanceof LlmJudgeParseError ? err.rawPreview : undefined;
+        const rawLength = err instanceof LlmJudgeParseError ? err.rawLength : undefined;
+        if (err instanceof LlmJudgeParseError && this.isPastUnparseableDeadline(row)) {
+          await this.repo.updateScoringFlags(row.id, UNPARSEABLE_FLAGS);
+          this.logger.warn(
+            { err, rowId: row.id, rawPreview, rawLength },
+            'AutonomyScoringPass: LLM judge unparseable — dead-lettering row',
+          );
+          return true;
+        }
         // Log and continue — this row will be retried on the next pass.
-        this.logger.warn({ err, rowId: row.id }, 'AutonomyScoringPass: LLM judge failed — row will be retried next pass');
+        this.logger.warn(
+          { err, rowId: row.id, rawPreview, rawLength },
+          'AutonomyScoringPass: LLM judge failed — row will be retried next pass',
+        );
         return false;
       }
     }
@@ -240,6 +264,12 @@ Respond with ONLY a JSON object: {"competence_flag": 0|1, "commitment_flag": 0|1
     return parseLlmJudgeFlags(response.content);
   }
 
+  /** True when the row is old enough that a parse failure should leave the unscored queue. */
+  private isPastUnparseableDeadline(row: ActionLogRow): boolean {
+    const ageDays = (Date.now() - row.createdAt.getTime()) / 86_400_000;
+    return ageDays >= this.config.unparseableAfterDays;
+  }
+
   private computeCapabilityScore(rows: ActionLogRow[]): number {
     const now = Date.now();
 
@@ -291,40 +321,80 @@ Respond with ONLY a JSON object: {"competence_flag": 0|1, "commitment_flag": 0|1
 }
 
 /**
- * Parse the LLM judge payload. Throws when JSON is structurally valid but
- * missing `competence_flag` / `commitment_flag` / `compatibility`, or when
- * any of those fields is non-numeric — so `scoreRow` can leave the row
- * unscored and retry on the next pass instead of writing silent zeros.
+ * Parse the LLM judge payload. Throws `LlmJudgeParseError` when the reply is
+ * not a JSON object with `competence_flag` / `commitment_flag` / `compatibility`
+ * each equal to `0`, `1`, or a boolean (`true`→1, `false`→0). `scoreRow` retries
+ * until `unparseableAfterDays`, then dead-letters with null flags.
  */
 export function parseLlmJudgeFlags(text: string): ScoringFlags {
-  const parsed: unknown = JSON.parse(text);
+  const stripped = stripCodeFence(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch {
+    throw new LlmJudgeParseError('LLM judge returned malformed JSON', text);
+  }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('LLM judge returned non-object JSON');
+    throw new LlmJudgeParseError('LLM judge returned non-object JSON', text);
   }
 
   const obj = parsed as Record<string, unknown>;
-  const competenceFlag = obj.competence_flag;
-  const commitmentFlag = obj.commitment_flag;
-  const compatibility = obj.compatibility;
+  const competenceFlag = asFlag(obj.competence_flag);
+  const commitmentFlag = asFlag(obj.commitment_flag);
+  const compatibility = asFlag(obj.compatibility);
 
-  if (
-    typeof competenceFlag !== 'number' ||
-    typeof commitmentFlag !== 'number' ||
-    typeof compatibility !== 'number'
-  ) {
-    throw new Error(
-      `LLM judge JSON missing or non-numeric fields: competence_flag=${describeJudgeField(competenceFlag)}, commitment_flag=${describeJudgeField(commitmentFlag)}, compatibility=${describeJudgeField(compatibility)}`,
+  if (competenceFlag === undefined || commitmentFlag === undefined || compatibility === undefined) {
+    throw new LlmJudgeParseError(
+      `LLM judge JSON has missing or out-of-range flags: competence_flag=${describeJudgeField(obj.competence_flag)}, commitment_flag=${describeJudgeField(obj.commitment_flag)}, compatibility=${describeJudgeField(obj.compatibility)}`,
+      text,
     );
   }
 
   return {
-    competenceFlag: competenceFlag === 1 ? 1 : 0,
-    commitmentFlag: commitmentFlag === 1 ? 1 : 0,
-    compatibility: compatibility === 1 ? 1 : 0,
+    competenceFlag,
+    commitmentFlag,
+    compatibility,
     scoredBy: 'llm-judge',
   };
 }
 
+export class LlmJudgeParseError extends Error {
+  readonly rawPreview: string;
+  readonly rawLength: number;
+
+  constructor(message: string, raw: string) {
+    const rawPreview = raw.slice(0, JUDGE_PAYLOAD_PREVIEW_CHARS);
+    super(`${message} (length=${raw.length}, preview=${JSON.stringify(rawPreview)})`);
+    this.name = 'LlmJudgeParseError';
+    this.rawPreview = rawPreview;
+    this.rawLength = raw.length;
+  }
+}
+
+/** Strip a wrapping ``` / ```json fence. Matches the sibling non-boundary judges. */
+function stripCodeFence(raw: string): string {
+  const trimmed = raw.trim();
+  const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  return fence ? fence[1]!.trim() : trimmed;
+}
+
+/**
+ * Accept 0/1 as the prompt requests. Also coerce booleans: models commonly
+ * return true/false for binary flags, and rejecting them would stall the
+ * unscored queue until the dead-letter floor.
+ */
+function asFlag(value: unknown): 0 | 1 | undefined {
+  if (value === 0 || value === 1) return value;
+  if (value === true) return 1;
+  if (value === false) return 0;
+  return undefined;
+}
+
 function describeJudgeField(value: unknown): string {
-  return value === undefined ? 'absent' : typeof value;
+  if (value === undefined) return 'absent';
+  if (value === null) return 'null';
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  return typeof value;
 }
