@@ -87,6 +87,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Chat history API** — pages fill to `limit` after display filters, not raw rows. (#1775)
+- **Voice** — spoken-turn history drops unpaired user turns before the provider call. (#1776)
 - **Working memory** — failed LLM calls persist a marker turn so the next prompt stays well-formed. (#1767)
 - **System restart poll** — a hung GET `/api/system` now hits the 90s ceiling. (#1765)
 - **Scheduler prior-run block** — caps injected summary and context per-value, preserving keys; logs every cut. (#243)

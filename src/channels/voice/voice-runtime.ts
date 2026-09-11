@@ -17,6 +17,8 @@
 // History: spoken-turn context reloads from working_memory (the same rows the
 // console chat history endpoint reads) each turn; the in-process session history
 // is only a fallback when the store is absent or the read fails (#1551).
+// Both paths run through historyForLlm before the provider call so consecutive
+// same-role turns and trailing unpaired user turns never reach the model (#1776).
 //
 // liveTurn scope (#1598 / #1126): voice stamps liveTurn once per *session* at
 // create time (a continuous call with one human), whereas every other channel
@@ -33,6 +35,7 @@ import { DATE_RESOLVE_GUARDRAIL } from '../../agents/prompts/date-resolve-guardr
 import { VOICE_ASYNC_OFFRAMP_GUIDANCE } from '../../agents/prompts/voice-async-offramp.js';
 import { TurnDateResolveTracker } from '../../agents/delegate-brief-date-validation.js';
 import type { WorkingMemory } from '../../memory/working-memory.js';
+import { historyForLlm } from '../../memory/llm-failure-turn.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
@@ -93,6 +96,24 @@ const HARD_TTS_STATUS_CODES = new Set([401, 403, 404]);
 /** Auth / missing-voice hard failures should not wait for the soft threshold. */
 function isHardTtsFailure(err: unknown): boolean {
   return err instanceof TtsHttpError && HARD_TTS_STATUS_CODES.has(err.statusCode);
+}
+
+/**
+ * Collapse consecutive same-role turns and drop a trailing unpaired `user`
+ * turn so the next utterance (or greeting cue) is appended onto a
+ * provider-safe prefix (#1767 / #1776). String-only: voice history never
+ * stores content-block arrays.
+ */
+function spokenHistoryForLlm(turns: Array<{ role: Message['role']; content: string }>): Message[] {
+  return historyForLlm(turns);
+}
+
+function stringTurns(messages: Message[]): Array<{ role: Message['role']; content: string }> {
+  const out: Array<{ role: Message['role']; content: string }> = [];
+  for (const m of messages) {
+    if (typeof m.content === 'string') out.push({ role: m.role, content: m.content });
+  }
+  return out;
 }
 
 /**
@@ -1036,9 +1057,15 @@ export class VoiceRuntime {
    * degraded slim turn beats failing — or stalling — the call. Callers invoke
    * this BEFORE persisting the current utterance, so the returned turns are
    * strictly prior history.
+   *
+   * Every return path is passed through {@link spokenHistoryForLlm}: voice does
+   * not persist a failure marker on a failed turn, so a hang-up / provider
+   * error leaves a trailing unpaired `user` row that would otherwise become
+   * two consecutive `user` messages on the next provider call (#1776).
    */
   private async loadTurnHistory(session: ActiveSession): Promise<Message[]> {
-    if (!this.config.workingMemory) return [...session.history];
+    const fallback = (): Message[] => spokenHistoryForLlm(stringTurns(session.history));
+    if (!this.config.workingMemory) return fallback();
     const timeoutMs = this.config.historyReadTimeoutMs ?? DEFAULT_HISTORY_READ_TIMEOUT_MS;
     const read = this.config.workingMemory.getHistory(
       session.conversationId,
@@ -1066,18 +1093,18 @@ export class VoiceRuntime {
           { sessionId: session.sessionId, timeoutMs },
           'working-memory history read exceeded the voice deadline; falling back to in-process history',
         );
-        return [...session.history];
+        return fallback();
       }
       // A prior addTurn may have failed (warn-only), leaving the store behind
       // the in-process copy. Prefer the fallback over starting the turn amnesiac.
-      if (outcome.length === 0 && session.history.length > 0) return [...session.history];
-      return outcome.map(t => ({ role: t.role, content: t.content }));
+      if (outcome.length === 0 && session.history.length > 0) return fallback();
+      return spokenHistoryForLlm(outcome);
     } catch (err) {
       this.log.warn(
         { sessionId: session.sessionId, err },
         'failed to load voice history from working memory; falling back to in-process history',
       );
-      return [...session.history];
+      return fallback();
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
