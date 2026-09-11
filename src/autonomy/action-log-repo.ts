@@ -117,10 +117,18 @@ export class ActionLogRepo {
     this.logger.debug({ id, scoredBy: flags.scoredBy }, 'action-log-repo: scoring flags updated');
   }
 
-  /** Count total scored rows (scored_by IS NOT NULL). */
+  /**
+   * Count evidence-bearing scored rows. Unparseable dead-letters write
+   * `scored_by` with all flags null so they leave the unscored queue; they
+   * must not count toward `minScoredActions`.
+   */
   async countScored(): Promise<number> {
     const result = await this.pool.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM autonomy_action_log WHERE scored_by IS NOT NULL`,
+      `SELECT COUNT(*) AS count FROM autonomy_action_log
+       WHERE scored_by IS NOT NULL
+         AND (competence_flag IS NOT NULL
+           OR commitment_flag IS NOT NULL
+           OR compatibility IS NOT NULL)`,
     );
     return parseInt(result.rows[0]!.count, 10);
   }

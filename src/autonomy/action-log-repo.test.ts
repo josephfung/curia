@@ -157,10 +157,13 @@ describe('ActionLogRepo', () => {
 
   describe('countScored', () => {
     it('returns the count of scored rows', async () => {
-      const { pool } = makePool([{ count: '47' }]);
+      const { pool, queries } = makePool([{ count: '47' }]);
       const repo = new ActionLogRepo(pool, createSilentLogger());
       const count = await repo.countScored();
       expect(count).toBe(47);
+      expect(queries[0]!.sql).toMatch(/competence_flag IS NOT NULL/);
+      expect(queries[0]!.sql).toMatch(/commitment_flag IS NOT NULL/);
+      expect(queries[0]!.sql).toMatch(/compatibility IS NOT NULL/);
     });
   });
 
