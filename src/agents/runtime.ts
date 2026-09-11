@@ -13,7 +13,7 @@ import type { ModelRegistry } from './llm/model-registry.js';
 import { createHash } from 'node:crypto';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
-import { historyForLlm, LLM_FAILURE_TURN_CONTENT } from '../memory/llm-failure-turn.js';
+import { historyForLlm, LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
@@ -2529,15 +2529,11 @@ export class AgentRuntime {
   private async sendErrorResponse(taskEvent: AgentTaskEvent, agentErr?: AgentError): Promise<void> {
     const { agentId, bus } = this.config;
     const { conversationId } = taskEvent.payload;
-    // Close the user turn persisted before the LLM call so the next turn does
-    // not resume from two consecutive `user` messages (#1767). Must not throw:
-    // a memory failure here would re-enter handleTask's catch and double-publish.
-    await this.persistLlmFailureTurn(conversationId);
     const structuredFailure = agentErr ? mapAgentErrorToResponseFields(agentErr) : undefined;
     const responseEvent = createAgentResponse({
       agentId,
       conversationId,
-      content: "I'm sorry, I was unable to process that request. Please try again.",
+      content: LLM_FAILURE_USER_MESSAGE,
       // Mark as an error response so consumers (e.g. the delegate skill) can distinguish
       // a failure from a real specialist result and surface it as { success: false }.
       isError: true,
@@ -2545,20 +2541,35 @@ export class AgentRuntime {
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);
+    // Marker only affects the next turn's history, so it must not delay the user's
+    // error reply — maybeSummarize inside addTurn can issue an LLM call (#1767).
+    // Must not throw: a memory failure here would re-enter handleTask's catch
+    // and double-publish.
+    await this.persistLlmFailureTurn(conversationId, taskEvent.payload.content);
   }
 
   /**
-   * Persist a distinguishable assistant marker when history currently ends on
-   * a user turn. No-ops when memory is unset or the last turn is already
-   * assistant (e.g. the user persist itself failed).
+   * Persist a distinguishable assistant marker when the last turn is the user
+   * message this task wrote. No-ops (with a warning) when memory is unset, the
+   * last turn is not that user message (concurrent writer), or persist fails.
    */
-  private async persistLlmFailureTurn(conversationId: string): Promise<void> {
+  private async persistLlmFailureTurn(
+    conversationId: string,
+    expectedUserContent: string,
+  ): Promise<void> {
     const { memory, agentId, logger } = this.config;
     if (!memory) return;
     try {
       const history = await memory.getHistory(conversationId, agentId);
       const last = history[history.length - 1];
       if (last?.role !== 'user') return;
+      if (last.content !== expectedUserContent) {
+        logger.warn(
+          { agentId, conversationId },
+          'LLM failure marker skipped — last user turn is not this task\'s message',
+        );
+        return;
+      }
       await memory.addTurn(conversationId, agentId, {
         role: 'assistant',
         content: LLM_FAILURE_TURN_CONTENT,

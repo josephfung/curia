@@ -241,8 +241,8 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 
   it('forwards a post-failure runtime sequence without consecutive user turns (#1767)', async () => {
-    // Shape the runtime now assembles after a failed call: prior completed pair
-    // (if any) then the new user message — never the failed prompt glued on.
+    // Shape the runtime now assembles after a failed call: the failed question
+    // paired with the user-facing error text, then the new user message.
     const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
       model: 'claude-sonnet-4-6',
@@ -250,6 +250,8 @@ describe('AnthropicProvider — prompt caching', () => {
         { role: 'system', content: 'You are helpful.' },
         { role: 'user', content: 'earlier question' },
         { role: 'assistant', content: 'earlier answer' },
+        { role: 'user', content: 'STALE_FAILED_PROMPT_xyz' },
+        { role: 'assistant', content: "I'm sorry, I was unable to process that request. Please try again." },
         { role: 'user', content: 'fresh follow-up question' },
       ],
     });
@@ -257,8 +259,8 @@ describe('AnthropicProvider — prompt caching', () => {
     const params = mockCreate.mock.calls[0]![0] as {
       messages: Array<{ role: string; content: string }>;
     };
-    expect(params.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
-    expect(params.messages.some((m) => m.content.includes('STALE_FAILED_PROMPT_xyz'))).toBe(false);
+    expect(params.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user']);
+    expect(params.messages.some((m) => m.content.includes('_curia_protocol'))).toBe(false);
     for (let i = 1; i < params.messages.length; i++) {
       expect(params.messages[i]!.role).not.toBe(params.messages[i - 1]!.role);
     }

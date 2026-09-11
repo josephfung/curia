@@ -4,6 +4,7 @@ import type { EventBus } from '../../../src/bus/bus.js';
 import type { DbPool } from '../../../src/db/connection.js';
 import type { Logger } from '../../../src/logger.js';
 import { createAgentResponse, type BusEvent, type ConversationCheckpointEvent } from '../../../src/bus/events.js';
+import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src/memory/llm-failure-turn.js';
 
 function isCheckpointEvent(e: BusEvent): e is ConversationCheckpointEvent {
   return e.type === 'conversation.checkpoint';
@@ -145,5 +146,53 @@ describe('Dispatcher checkpoint debounce', () => {
 
     await vi.advanceTimersByTimeAsync(1000);
     expect(publishedEvents.filter(isCheckpointEvent)).toHaveLength(0);
+  });
+
+  it('rewrites LLM failure marker turns in the checkpoint payload (#1767)', async () => {
+    const publishedEvents: BusEvent[] = [];
+    const subscribeHandlers = new Map<string, (event: BusEvent) => Promise<void>>();
+    const bus = {
+      subscribe: vi.fn((eventType: string, _layer: string, handler: (e: BusEvent) => Promise<void>) => {
+        subscribeHandlers.set(eventType, handler);
+      }),
+      publish: vi.fn(async (_layer: string, event: BusEvent) => {
+        publishedEvents.push(event);
+      }),
+    } as unknown as EventBus;
+
+    const queryMock = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          { role: 'user', content: 'failed question', created_at: '2026-01-01T00:00:00Z' },
+          { role: 'assistant', content: LLM_FAILURE_TURN_CONTENT, created_at: '2026-01-01T00:00:01Z' },
+        ],
+      });
+    const pool = { query: queryMock } as unknown as DbPool;
+    const logger = {
+      info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+    } as unknown as Logger;
+
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      pool,
+      conversationCheckpointDebounceMs: 500,
+    });
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-fail', 'email', 'email:thread-fail');
+    await fireAgentResponse(subscribeHandlers, {
+      taskEventId: 'task-fail',
+      conversationId: 'email:thread-fail',
+      agentId: 'coordinator',
+    });
+    await vi.advanceTimersByTimeAsync(600);
+
+    const checkpoints = publishedEvents.filter(isCheckpointEvent);
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]!.payload.turns).toEqual([
+      { role: 'user', content: 'failed question' },
+      { role: 'assistant', content: LLM_FAILURE_USER_MESSAGE },
+    ]);
   });
 });
