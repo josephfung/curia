@@ -518,6 +518,8 @@ export interface YamlConfig {
       weakExpiredWeight?: number;
       ceoCooldownDays?: number;
       errorRateThreshold?: number;
+      /** Days a parse failure may retry before null-flag dead-letter. Default: 3. */
+      unparseableAfterDays?: number;
     };
   };
   /**
@@ -1051,6 +1053,9 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       }
       if (autonomyScoring.errorRateThreshold !== undefined && (typeof autonomyScoring.errorRateThreshold !== 'number' || autonomyScoring.errorRateThreshold < 0 || autonomyScoring.errorRateThreshold > 1)) {
         throw new Error(`dreaming.autonomy_scoring.errorRateThreshold must be a number between 0 and 1, got: ${autonomyScoring.errorRateThreshold}`);
+      }
+      if (autonomyScoring.unparseableAfterDays !== undefined && (!Number.isInteger(autonomyScoring.unparseableAfterDays) || autonomyScoring.unparseableAfterDays < 0)) {
+        throw new Error(`dreaming.autonomy_scoring.unparseableAfterDays must be a non-negative integer, got: ${autonomyScoring.unparseableAfterDays}`);
       }
     }
   }

@@ -252,6 +252,7 @@ Key constraints:
 - Time-decay weighting (recent actions weighted more heavily via exponential half-life)
 - Score cannot increase if competence error rate exceeds the configured threshold (default 20%)
 - CEO cooldown: no auto-adjustment for 7 days after a manual CEO `set-autonomy`
+- Unparseable LLM-judge replies retry until `unparseableAfterDays` (default 3), then persist null flags with `scored_by: 'llm-judge-unparseable'` so they leave the queue without biasing the capability score
 - All automatic adjustments write to `autonomy_history` with `changed_by: "system"`
 - Delta capped at ±5 per daily pass; `get-autonomy` surfaces trend and scored action count
 
