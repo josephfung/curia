@@ -28,6 +28,24 @@ describe('canonicalizeUserSecretName', () => {
     expect(canonicalizeUserSecretName('twitter password')).toBe('user.twitter_password');
   });
 
+  it('does not rewrite a non-Twitter standalone x token', () => {
+    expect(canonicalizeUserSecretName('Mac OS X password')).toBe('user.mac_os_x_password');
+    expect(canonicalizeUserSecretName('x.example.com login')).toBe('user.x_example_login');
+  });
+
+  it('keeps the service token after for instead of swallowing it', () => {
+    expect(canonicalizeUserSecretName('password for work gmail')).toBe('user.work_gmail_password');
+    expect(canonicalizeUserSecretName('password for aeroplan')).toBe('user.aeroplan_password');
+    expect(canonicalizeUserSecretName('password for gmail')).toBe('user.gmail_password');
+  });
+
+  it('falls back to the raw slug instead of a type-only key when identity is empty', () => {
+    expect(canonicalizeUserSecretName('my account password')).toBe('user.my_account_password');
+    expect(canonicalizeUserSecretName('the website password')).toBe('user.the_website_password');
+    expect(canonicalizeUserSecretName('me.com password')).toBe('user.me_com_password');
+    expect(canonicalizeUserSecretName('my account')).toBe('user.my_account');
+  });
+
   it('does not collapse distinct typed secrets for the same service', () => {
     expect(canonicalizeUserSecretName('gmail password')).toBe('user.gmail_password');
     expect(canonicalizeUserSecretName('gmail app password')).toBe('user.gmail_app_password');
@@ -51,9 +69,13 @@ describe('resolveUserSecretName', () => {
   });
 
   it('rejects empty / whitespace / non-alphanumeric / over-long input', () => {
-    expect(() => resolveUserSecretName('   ')).toThrow();
-    expect(() => resolveUserSecretName('!!!')).toThrow();
-    expect(() => resolveUserSecretName('x'.repeat(200))).toThrow();
+    expect(() => resolveUserSecretName('   ')).toThrow(/empty/);
+    expect(() => resolveUserSecretName('!!!')).toThrow(/no usable alphanumeric characters/);
+    expect(() => resolveUserSecretName('x'.repeat(200))).toThrow(/exceeds/);
+  });
+
+  it('does not throw a false alphanumeric error for filler-only input', () => {
+    expect(resolveUserSecretName('my account')).toBe('user.my_account');
   });
 
   it('reuses an exact existing user.* key the agent passed through', () => {
@@ -76,6 +98,18 @@ describe('resolveUserSecretName', () => {
   it('does not reuse a fingerprint-unrelated existing key', () => {
     const existing = ['user.aeroplan_password'];
     expect(resolveUserSecretName('twitter password', existing)).toBe('user.twitter_password');
+  });
+
+  it('does not overwrite gmail with a "password for work gmail" capture', () => {
+    const existing = ['user.gmail_password'];
+    expect(resolveUserSecretName('password for work gmail', existing)).toBe('user.work_gmail_password');
+  });
+
+  it('does not collapse identity-less captures onto user.password or user.my_password', () => {
+    const existing = ['user.my_password', 'user.gmail_password'];
+    expect(resolveUserSecretName('my account password', existing)).toBe('user.my_account_password');
+    expect(resolveUserSecretName('the website password', existing)).toBe('user.the_website_password');
+    expect(resolveUserSecretName('me.com password', existing)).toBe('user.me_com_password');
   });
 
   it('reuses an existing key when identity tokens are the same in a different order', () => {
