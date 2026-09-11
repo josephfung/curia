@@ -1266,9 +1266,92 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     expect(messages[messages.length - 1]).toEqual({ role: 'user', content: 'are you there' });
   });
 
+  it('pairs an aborted barge-in turn so the next utterance keeps its referent', async () => {
+    const wm = WorkingMemory.createInMemory();
+    const llm = new FakeStreamProvider(
+      [
+        [
+          { type: 'text_delta', text: 'Booking a flight to Tokyo next Tuesday. ' },
+          { type: 'message_end', content: 'Booking a flight to Tokyo next Tuesday.', usage, provenance },
+        ],
+        reply('Business class to Tokyo next Tuesday — noted.'),
+      ],
+      3,
+    );
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(50, 5),
+      workingMemory: wm,
+    });
+    await runtime.startSession({
+      sessionId: 'barge-ref',
+      conversationId: 'voice:barge-ref',
+      roomName: 'voice-barge-ref',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: 'book me a flight to Tokyo next Tuesday', isFinal: true, speechFinal: true });
+    await delay(40);
+    stt.emit({ text: 'wait, make it business class', isFinal: true, speechFinal: true, confidence: 0.9 });
+    await runtime.awaitIdle('barge-ref');
+
+    expect(llm.seenMessages.length).toBeGreaterThanOrEqual(2);
+    const second = llm.seenMessages[1]!;
+    expect(consecutiveUserPairs(second)).toBe(0);
+    expect(second.map(m => m.content)).toContain('book me a flight to Tokyo next Tuesday');
+    expect(second.map(m => m.content)).toContain(LLM_FAILURE_USER_MESSAGE);
+    expect(second.map(m => m.content).some(c => typeof c === 'string' && c.includes('_curia_protocol'))).toBe(false);
+    expect(second[second.length - 1]).toEqual({
+      role: 'user',
+      content: 'wait, make it business class',
+    });
+
+    const stored = await wm.getHistory('voice:barge-ref', 'coordinator', { raw: true });
+    expect(stored.some(t => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(true);
+  });
+
+  it('falls back to in-process history when the store sanitizes to empty after a failed assistant write', async () => {
+    const turns: Array<{ role: string; content: string }> = [];
+    const wm = {
+      addTurn: vi.fn(async (_c: string, _a: string, t: { role: string; content: string }) => {
+        if (t.role === 'assistant') throw new Error('assistant insert failed');
+        turns.push(t);
+      }),
+      getHistory: vi.fn(async () => [...turns]),
+      purgeExpired: vi.fn(async () => 0),
+    } as unknown as WorkingMemory;
+
+    const llm = new FakeStreamProvider([
+      reply('You have a 3pm with Dana.'),
+      reply('Still Dana at 3.'),
+    ]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await runtime.startSession({
+      sessionId: 'san-empty',
+      conversationId: 'voice:san-empty',
+      roomName: 'voice-san-empty',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: "what's my 3pm?", isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('san-empty');
+    stt.emit({ text: 'and after that?', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('san-empty');
+
+    const second = llm.seenMessages[1]!;
+    expect(consecutiveUserPairs(second)).toBe(0);
+    expect(second.map(m => m.content)).toContain("what's my 3pm?");
+    expect(second.map(m => m.content)).toContain('You have a 3pm with Dana.');
+    expect(second[second.length - 1]).toEqual({ role: 'user', content: 'and after that?' });
+  });
+
   it('sanitizes the in-process fallback after a failed persistSuccess leaves an orphan', async () => {
-    // addTurn fails and getHistory is empty, so the next turn reads session.history
-    // (the :1073 empty-store fallback). First LLM throws → persistSuccess skipped.
+    // addTurn fails and getHistory is empty, so the next turn reads session.history.
+    // First LLM throws → persistIncomplete still pairs the in-process user turn.
     const failingWrites = {
       addTurn: vi.fn(async () => {
         throw new Error('insert failed');
@@ -1300,7 +1383,8 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     expect(llm.seenMessages).toHaveLength(2);
     const second = llm.seenMessages[1]!;
     expect(consecutiveUserPairs(second)).toBe(0);
-    expect(second.map(m => m.content)).not.toContain('first question');
+    expect(second.map(m => m.content)).toContain('first question');
+    expect(second.map(m => m.content)).toContain(LLM_FAILURE_USER_MESSAGE);
     expect(second[second.length - 1]).toEqual({ role: 'user', content: 'second question' });
   });
 

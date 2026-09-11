@@ -35,7 +35,7 @@ import { DATE_RESOLVE_GUARDRAIL } from '../../agents/prompts/date-resolve-guardr
 import { VOICE_ASYNC_OFFRAMP_GUIDANCE } from '../../agents/prompts/voice-async-offramp.js';
 import { TurnDateResolveTracker } from '../../agents/delegate-brief-date-validation.js';
 import type { WorkingMemory } from '../../memory/working-memory.js';
-import { historyForLlm } from '../../memory/llm-failure-turn.js';
+import { historyForLlm, LLM_FAILURE_TURN_CONTENT } from '../../memory/llm-failure-turn.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
@@ -703,6 +703,12 @@ export class VoiceRuntime {
       withTools: boolean;
       /** Persist a completed spoken reply (in-process + working_memory). */
       persistSuccess: (finalText: string) => Promise<void>;
+      /**
+       * Pair a user turn that was persisted before the assistant ran when the
+       * reply is aborted (barge-in / hangup), empty, or throws. Greeting omits
+       * this — its cue is written only on success.
+       */
+      persistIncomplete?: () => Promise<void>;
     },
   ): Promise<void> {
     if (session.ending) return;
@@ -801,11 +807,22 @@ export class VoiceRuntime {
       });
 
       const result = await runner.runTurn({ messages, signal: controller.signal });
-      if (result.aborted || session.ending || result.finalText.length === 0) return;
+      if (result.aborted || session.ending || result.finalText.length === 0) {
+        await opts.persistIncomplete?.();
+        return;
+      }
 
       await opts.persistSuccess(result.finalText);
     } catch (err) {
       this.log.warn({ sessionId: session.sessionId, err }, opts.failureLogMessage);
+      try {
+        await opts.persistIncomplete?.();
+      } catch (persistErr) {
+        this.log.warn(
+          { sessionId: session.sessionId, err: persistErr },
+          'voice incomplete-turn persist threw after a failed turn',
+        );
+      }
     } finally {
       this.clearTurnState(session, controller);
     }
@@ -1058,10 +1075,12 @@ export class VoiceRuntime {
    * this BEFORE persisting the current utterance, so the returned turns are
    * strictly prior history.
    *
-   * Every return path is passed through {@link spokenHistoryForLlm}: voice does
-   * not persist a failure marker on a failed turn, so a hang-up / provider
-   * error leaves a trailing unpaired `user` row that would otherwise become
-   * two consecutive `user` messages on the next provider call (#1776).
+   * Every return path is passed through {@link spokenHistoryForLlm} so leftover
+   * unpaired `user` rows (crash before the pairing marker, a previous process)
+   * cannot become two consecutive `user` messages. Barge-in, hang-up, empty
+   * reply, and provider errors pair the user turn with {@link LLM_FAILURE_TURN_CONTENT}
+   * in `persistIncompleteAssistantTurn` so the interrupted utterance stays in
+   * context (#1776).
    */
   private async loadTurnHistory(session: ActiveSession): Promise<Message[]> {
     const fallback = (): Message[] => spokenHistoryForLlm(stringTurns(session.history));
@@ -1096,9 +1115,15 @@ export class VoiceRuntime {
         return fallback();
       }
       // A prior addTurn may have failed (warn-only), leaving the store behind
-      // the in-process copy. Prefer the fallback over starting the turn amnesiac.
-      if (outcome.length === 0 && session.history.length > 0) return fallback();
-      return spokenHistoryForLlm(outcome);
+      // the in-process copy (including a store that sanitizes to empty because
+      // it still ends on an unpaired user). Prefer the longer sanitized prefix
+      // so we do not drop a completed in-process exchange (#1776).
+      const sanitized = spokenHistoryForLlm(outcome);
+      if (session.history.length > 0) {
+        const fb = fallback();
+        if (fb.length > sanitized.length) return fb;
+      }
+      return sanitized;
     } catch (err) {
       this.log.warn(
         { sessionId: session.sessionId, err },
@@ -1107,6 +1132,54 @@ export class VoiceRuntime {
       return fallback();
     } finally {
       if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Pair an unpaired user turn after barge-in, hang-up, empty reply, or a
+   * thrown provider call so the next spoken turn keeps the interrupted
+   * utterance as a referent (#1776 / #1767). Mirrors AgentRuntime.persistLlmFailureTurn.
+   */
+  private async persistIncompleteAssistantTurn(
+    session: ActiveSession,
+    contents: { inProcessContent: string; storedContent: string },
+  ): Promise<void> {
+    const lastInProcess = session.history[session.history.length - 1];
+    if (
+      lastInProcess?.role === 'user'
+      && typeof lastInProcess.content === 'string'
+      && lastInProcess.content === contents.inProcessContent
+    ) {
+      session.history.push({ role: 'assistant', content: LLM_FAILURE_TURN_CONTENT });
+      this.trimSessionHistory(session);
+    }
+
+    if (!this.config.workingMemory) return;
+    try {
+      // Pairing check against stored content, not the sanitized rewrite (#1775).
+      const history = await this.config.workingMemory.getHistory(
+        session.conversationId,
+        VOICE_HISTORY_AGENT_ID,
+        { raw: true, maxTurns: 1 },
+      );
+      const last = history[history.length - 1];
+      if (last?.role !== 'user') return;
+      if (last.content !== contents.storedContent) {
+        this.log.warn(
+          { sessionId: session.sessionId },
+          'voice incomplete-turn marker skipped — last user turn is not this utterance',
+        );
+        return;
+      }
+      await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
+        role: 'assistant',
+        content: LLM_FAILURE_TURN_CONTENT,
+      });
+    } catch (err) {
+      this.log.warn(
+        { sessionId: session.sessionId, err },
+        'failed to persist voice incomplete-turn marker — next turn may drop the unpaired user utterance',
+      );
     }
   }
 
@@ -1136,12 +1209,14 @@ export class VoiceRuntime {
     const priorHistory = await this.loadTurnHistory(session);
     if (session.ending) return;
 
+    const storedUserContent = sanitizeOutput(utterance);
+
     // Persist user turn to working_memory so console history can show it.
     if (this.config.workingMemory) {
       try {
         await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
           role: 'user',
-          content: sanitizeOutput(utterance),
+          content: storedUserContent,
         });
       } catch (err) {
         this.log.warn({ sessionId: session.sessionId, err }, 'failed to persist voice user turn to working memory');
@@ -1149,9 +1224,10 @@ export class VoiceRuntime {
     }
 
     const userMessage: Message = { role: 'user', content: utterance };
-    // Retain the user request even if barge-in aborts the assistant reply —
-    // otherwise the next turn loses conversational continuity. The in-process
-    // copy is only the fallback context source (see loadTurnHistory).
+    // Keep the user request in the in-process copy even if the assistant reply
+    // is aborted. Continuity for the next provider call comes from pairing it
+    // with a marker in persistIncomplete — historyForLlm would otherwise drop
+    // this trailing user turn (#1776).
     session.history.push(userMessage);
     this.trimSessionHistory(session);
 
@@ -1161,6 +1237,10 @@ export class VoiceRuntime {
       failureLogMessage: 'voice turn failed',
       priorHistory,
       withTools: true,
+      persistIncomplete: () => this.persistIncompleteAssistantTurn(session, {
+        inProcessContent: utterance,
+        storedContent: storedUserContent,
+      }),
       assembleMessages: ({ systemPrompt, priorHistory: prior }) => [
         { role: 'system', content: systemPrompt },
         ...prior,
