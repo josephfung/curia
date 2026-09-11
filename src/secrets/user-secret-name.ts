@@ -66,15 +66,15 @@ const TYPE_PRIORITY: Readonly<Record<string, number>> = {
 };
 
 export interface UserSecretFingerprint {
-  /** Sorted, de-duplicated identity tokens (service / site). */
+  /** De-duplicated identity tokens in first-seen order (used to build the canonical key). */
   identity: string[];
   /** Canonical type suffix, or null when the name had no type token. */
   type: string | null;
 }
 
-/** Stable string form used to compare two fingerprints. */
+/** Stable string form used to compare two fingerprints (sorted, so word order does not matter). */
 export function fingerprintKey(fp: UserSecretFingerprint): string {
-  return `${fp.identity.join('_')}|${fp.type ?? ''}`;
+  return `${[...fp.identity].sort().join('_')}|${fp.type ?? ''}`;
 }
 
 /**
@@ -124,7 +124,10 @@ export function fingerprintUserSecret(input: string): UserSecretFingerprint {
     identity.push(mapped);
   }
 
-  const unique = [...new Set(identity)].sort();
+  const unique: string[] = [];
+  for (const token of identity) {
+    if (!unique.includes(token)) unique.push(token);
+  }
   return { identity: unique, type };
 }
 

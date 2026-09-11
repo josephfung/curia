@@ -16,6 +16,11 @@ describe('canonicalizeUserSecretName', () => {
     expect(canonicalizeUserSecretName('  Foo--Bar!! ')).toBe('user.foo_bar');
   });
 
+  it('preserves first-seen identity order on new keys', () => {
+    expect(canonicalizeUserSecretName('Foo Bar')).toBe('user.foo_bar');
+    expect(canonicalizeUserSecretName('Bar Foo')).toBe('user.bar_foo');
+  });
+
   it('folds X/Twitter synonyms and TLDs into one canonical key', () => {
     expect(canonicalizeUserSecretName('X.com password')).toBe('user.twitter_password');
     expect(canonicalizeUserSecretName('X Twitter password for josephfung')).toBe('user.twitter_password');
@@ -25,7 +30,7 @@ describe('canonicalizeUserSecretName', () => {
 
   it('does not collapse distinct typed secrets for the same service', () => {
     expect(canonicalizeUserSecretName('gmail password')).toBe('user.gmail_password');
-    expect(canonicalizeUserSecretName('gmail app password')).toBe('user.app_gmail_password');
+    expect(canonicalizeUserSecretName('gmail app password')).toBe('user.gmail_app_password');
   });
 
   it('structurally cannot produce a protected system or channel name', () => {
@@ -71,6 +76,10 @@ describe('resolveUserSecretName', () => {
   it('does not reuse a fingerprint-unrelated existing key', () => {
     const existing = ['user.aeroplan_password'];
     expect(resolveUserSecretName('twitter password', existing)).toBe('user.twitter_password');
+  });
+
+  it('reuses an existing key when identity tokens are the same in a different order', () => {
+    expect(resolveUserSecretName('Bar Foo', ['user.foo_bar'])).toBe('user.foo_bar');
   });
 
   it('two captures of the same description mint the same key (deterministic)', () => {
