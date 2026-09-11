@@ -1402,6 +1402,72 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     expect(stored.some(t => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
   });
 
+  it('does not pair an older identical user row when this turn\'s addTurn failed', async () => {
+    const wm = WorkingMemory.createInMemory();
+    await wm.addTurn('voice:dup-hello', 'coordinator', { role: 'user', content: 'hello' });
+    const addTurn = vi.spyOn(wm, 'addTurn').mockRejectedValue(new Error('insert failed'));
+
+    const llm = new ThrowThenReplyProvider(reply('Hi again.'));
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await runtime.startSession({
+      sessionId: 'dup-hello',
+      conversationId: 'voice:dup-hello',
+      roomName: 'voice-dup-hello',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: 'hello', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('dup-hello');
+
+    addTurn.mockRestore();
+    const stored = await wm.getHistory('voice:dup-hello', 'coordinator', { raw: true });
+    expect(stored).toEqual([{ role: 'user', content: 'hello' }]);
+    expect(stored.some(t => t.role === 'assistant')).toBe(false);
+  });
+
+  it('keeps persisted history when in-process fallback is longer but not a continuation', async () => {
+    const persisted = WorkingMemory.createInMemory();
+    await persisted.addTurn('voice:prefix', 'coordinator', { role: 'user', content: 'old question' });
+    await persisted.addTurn('voice:prefix', 'coordinator', { role: 'assistant', content: 'old answer' });
+    const wm = {
+      addTurn: vi.fn(async () => {
+        throw new Error('insert failed');
+      }),
+      getHistory: vi.fn(async () => persisted.getHistory('voice:prefix', 'coordinator')),
+      purgeExpired: vi.fn(async () => 0),
+    } as unknown as WorkingMemory;
+
+    const llm = new FakeStreamProvider([
+      reply('First in-process.'),
+      reply('Second in-process.'),
+      reply('Third uses the store.'),
+    ]);
+    const { runtime, stt } = makeRuntime({ llm, tts: new SlowTtsProvider(2, 1), workingMemory: wm });
+    await runtime.startSession({
+      sessionId: 'prefix',
+      conversationId: 'voice:prefix',
+      roomName: 'voice-prefix',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: 'first live', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('prefix');
+    stt.emit({ text: 'second live', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('prefix');
+    stt.emit({ text: 'third live', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('prefix');
+
+    const third = llm.seenMessages[2]!;
+    expect(third.map(m => m.content)).toContain('old question');
+    expect(third.map(m => m.content)).toContain('old answer');
+    expect(third.map(m => m.content)).not.toContain('first live');
+    expect(third[third.length - 1]).toEqual({ role: 'user', content: 'third live' });
+  });
+
   it('falls back to in-process history when the store sanitizes to empty after a failed assistant write', async () => {
     const turns: Array<{ role: string; content: string }> = [];
     const wm = {
