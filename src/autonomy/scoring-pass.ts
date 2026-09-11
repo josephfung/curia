@@ -237,19 +237,7 @@ Respond with ONLY a JSON object: {"competence_flag": 0|1, "commitment_flag": 0|1
       throw new Error(`LLM judge returned unexpected response type: ${response.type}`);
     }
 
-    const text = response.content;
-    const parsed = JSON.parse(text) as {
-      competence_flag: number;
-      commitment_flag: number;
-      compatibility: number;
-    };
-
-    return {
-      competenceFlag: parsed.competence_flag === 1 ? 1 : 0,
-      commitmentFlag: parsed.commitment_flag === 1 ? 1 : 0,
-      compatibility: parsed.compatibility === 1 ? 1 : 0,
-      scoredBy: 'llm-judge',
-    };
+    return parseLlmJudgeFlags(response.content);
   }
 
   private computeCapabilityScore(rows: ActionLogRow[]): number {
@@ -300,4 +288,43 @@ Respond with ONLY a JSON object: {"competence_flag": 0|1, "commitment_flag": 0|1
       DIMENSION_WEIGHTS.compatibility * compatAvg
     );
   }
+}
+
+/**
+ * Parse the LLM judge payload. Throws when JSON is structurally valid but
+ * missing `competence_flag` / `commitment_flag` / `compatibility`, or when
+ * any of those fields is non-numeric — so `scoreRow` can leave the row
+ * unscored and retry on the next pass instead of writing silent zeros.
+ */
+export function parseLlmJudgeFlags(text: string): ScoringFlags {
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('LLM judge returned non-object JSON');
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const competenceFlag = obj.competence_flag;
+  const commitmentFlag = obj.commitment_flag;
+  const compatibility = obj.compatibility;
+
+  if (
+    typeof competenceFlag !== 'number' ||
+    typeof commitmentFlag !== 'number' ||
+    typeof compatibility !== 'number'
+  ) {
+    throw new Error(
+      `LLM judge JSON missing or non-numeric fields: competence_flag=${describeJudgeField(competenceFlag)}, commitment_flag=${describeJudgeField(commitmentFlag)}, compatibility=${describeJudgeField(compatibility)}`,
+    );
+  }
+
+  return {
+    competenceFlag: competenceFlag === 1 ? 1 : 0,
+    commitmentFlag: commitmentFlag === 1 ? 1 : 0,
+    compatibility: compatibility === 1 ? 1 : 0,
+    scoredBy: 'llm-judge',
+  };
+}
+
+function describeJudgeField(value: unknown): string {
+  return value === undefined ? 'absent' : typeof value;
 }
