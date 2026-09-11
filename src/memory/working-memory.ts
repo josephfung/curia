@@ -6,6 +6,7 @@ import {
   isDbUnavailableError,
   withDbRetry,
 } from '../db/resilience.js';
+import { omitLlmFailurePairs } from './llm-failure-turn.js';
 
 export interface ConversationTurn {
   role: 'user' | 'assistant' | 'system';
@@ -279,7 +280,8 @@ class PostgresBackend implements StorageBackend {
 
     // Build the summarization prompt from the turns being archived.
     // Prior summaries (system role) are labelled distinctly so the LLM carries them forward.
-    const transcript = turnsToArchive
+    // Failed-LLM marker pairs (#1767) are omitted so the protocol JSON is never condensed.
+    const transcript = omitLlmFailurePairs(turnsToArchive)
       .map((t) => {
         const label = t.role === 'system' ? 'PRIOR SUMMARY' : t.role.toUpperCase();
         return `[${label}]: ${t.content}`;

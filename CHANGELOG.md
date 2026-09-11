@@ -85,6 +85,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Working memory** — failed LLM calls persist a marker turn so the next prompt stays well-formed. (#1767)
 - **System restart poll** — a hung GET `/api/system` now hits the 90s ceiling. (#1765)
 - **Scheduler prior-run block** — caps injected summary and context per-value, preserving keys; logs every cut. (#243)
 - **`calendar-update-event`** — rejects attendee RSVP status on the Nylas path; guest-list replace only. (#1735)

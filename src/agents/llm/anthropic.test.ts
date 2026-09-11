@@ -218,6 +218,52 @@ describe('AnthropicProvider — prompt caching', () => {
     ]);
   });
 
+  it('passes user/assistant turns through 1:1 — consecutive user turns are not normalized (#1767)', async () => {
+    // The Anthropic adapter does not merge or drop consecutive same-role turns.
+    // The SDK will glue them silently; the runtime must not feed it this shape.
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model: 'claude-sonnet-4-6',
+      messages: [
+        { role: 'system', content: 'You are helpful.' },
+        { role: 'user', content: 'STALE_FAILED_PROMPT_xyz' },
+        { role: 'user', content: 'fresh follow-up question' },
+      ],
+    });
+
+    const params = mockCreate.mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(params.messages).toEqual([
+      { role: 'user', content: 'STALE_FAILED_PROMPT_xyz' },
+      { role: 'user', content: 'fresh follow-up question' },
+    ]);
+  });
+
+  it('forwards a post-failure runtime sequence without consecutive user turns (#1767)', async () => {
+    // Shape the runtime now assembles after a failed call: prior completed pair
+    // (if any) then the new user message — never the failed prompt glued on.
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model: 'claude-sonnet-4-6',
+      messages: [
+        { role: 'system', content: 'You are helpful.' },
+        { role: 'user', content: 'earlier question' },
+        { role: 'assistant', content: 'earlier answer' },
+        { role: 'user', content: 'fresh follow-up question' },
+      ],
+    });
+
+    const params = mockCreate.mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(params.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(params.messages.some((m) => m.content.includes('STALE_FAILED_PROMPT_xyz'))).toBe(false);
+    for (let i = 1; i < params.messages.length; i++) {
+      expect(params.messages[i]!.role).not.toBe(params.messages[i - 1]!.role);
+    }
+  });
+
   it('adds cache_control only to the last tool when multiple tools provided', async () => {
     const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
     await provider.chat({
