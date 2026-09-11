@@ -37,6 +37,7 @@ export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'skillRegistry',
   'actionLogRepo', 'auditLogRepo', 'executionLayer', 'confidencePipeline', 'tempFileStore',
   'infraLlm', 'outboundContext', 'taskRepo', 'workingDocs', 'secretCapture', 'secretResolver',
+  'userSecretIndex',
   'diagnosticsRepo', 'sensitivityClassifier',
 ]);
 

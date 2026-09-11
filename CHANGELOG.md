@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`list-user-secrets`** — agents can list `user.*` vault key names. (#1497)
+- **`userSecretIndex` capability (skill manifest schema, public API)** — names-only `user.*` listing, allowlisted to `list-user-secrets`. (#1497)
 - **System restart** — console System page can restart the app container in-place. (#1765)
 - **`system.restart` event** — operator-initiated process restart is recorded in `audit_log`. (#1765)
 - **ADR-041 (Proposed)** — AWS Bedrock as an LLM provider, preserved from unmerged #1349. (#1766)
@@ -47,6 +49,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`secret-capture-request`** — repeat captures reuse a matching `user.*` key. (#1497)
 - **System page** — moved to `/system`; Personality icon is a brain, not a gear. (#1765)
 - **System restart cooldown** — 3/5min cap survives process restart via `audit_log`. (#1765)
 - **`StoreFactResult`** — operational rejections now carry `reason`; `conflict` is contradictions only. (#472)

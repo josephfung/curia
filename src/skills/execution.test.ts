@@ -2659,6 +2659,138 @@ describe('secretResolver capability (resolveSecretRef)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// userSecretIndex capability — ctx.listUserSecretNames (names-only, #1497)
+// ---------------------------------------------------------------------------
+
+describe('userSecretIndex capability (listUserSecretNames)', () => {
+  function makeIndexManifest(name: string): ToolManifest {
+    return {
+      name,
+      description: `${name} description`,
+      version: '1.0.0',
+      sensitivity: 'normal',
+      action_risk: 'none',
+      inputs: {},
+      outputs: {},
+      permissions: [],
+      secrets: [],
+      timeout: 5000,
+      capabilities: ['userSecretIndex'],
+    };
+  }
+
+  it('injects ctx.listUserSecretNames and returns user.* names for an allowlisted skill', async () => {
+    const registry = new ToolRegistry();
+    let listed: string[] | undefined;
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
+        listed = await ctx.listUserSecretNames!();
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeIndexManifest('list-user-secrets'), handler);
+
+    const secretsService = {
+      listUserNames: vi.fn().mockResolvedValue(['user.aeroplan_password', 'user.x_com_password']),
+      list: vi.fn().mockResolvedValue(['anthropic_api_key', 'user.aeroplan_password', 'channel.email.nylas_api_key']),
+      get: vi.fn(),
+    } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    const result = await layer.invoke('list-user-secrets', {});
+
+    expect(result.success).toBe(true);
+    expect(listed).toEqual(['user.aeroplan_password', 'user.x_com_password']);
+    expect(secretsService.listUserNames).toHaveBeenCalledOnce();
+    expect(secretsService.list).not.toHaveBeenCalled();
+    expect(secretsService.get).not.toHaveBeenCalled();
+  });
+
+  it('drops any non-user.* name that a mismatched listUserNames implementation returns', async () => {
+    const registry = new ToolRegistry();
+    let listed: string[] | undefined;
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
+        listed = await ctx.listUserSecretNames!();
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register(makeIndexManifest('list-user-secrets'), handler);
+
+    const secretsService = {
+      listUserNames: vi.fn().mockResolvedValue([
+        'user.flight_password',
+        'anthropic_api_key',
+        'channel.email.nylas_api_key',
+      ]),
+      list: vi.fn(),
+      get: vi.fn(),
+    } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    await layer.invoke('list-user-secrets', {});
+
+    expect(listed).toEqual(['user.flight_password']);
+    expect(listed).not.toContain('anthropic_api_key');
+    expect(listed!.some(k => k.startsWith('channel.'))).toBe(false);
+  });
+
+  it('refuses to run a skill that declares userSecretIndex but is not on the allowlist', async () => {
+    const registry = new ToolRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeIndexManifest('rogue-skill'), handler);
+
+    const secretsService = { listUserNames: vi.fn(), list: vi.fn(), get: vi.fn() } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    const result = await layer.invoke('rogue-skill', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/userSecretIndex/);
+    }
+    expect(handler.execute).not.toHaveBeenCalled();
+    expect(secretsService.listUserNames).not.toHaveBeenCalled();
+    expect(secretsService.list).not.toHaveBeenCalled();
+  });
+
+  it('does NOT inject listUserSecretNames for skills without the capability', async () => {
+    const registry = new ToolRegistry();
+    let capturedCtx: ToolContext | undefined;
+    const handler: ToolHandler = {
+      execute: vi.fn(async (ctx): Promise<ToolResult> => {
+        capturedCtx = ctx;
+        return { success: true, data: 'ok' };
+      }),
+    };
+    registry.register({ ...makeIndexManifest('list-user-secrets'), capabilities: [] }, handler);
+    const secretsService = { listUserNames: vi.fn(), get: vi.fn() } as unknown as SecretsService;
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus(), secretsService });
+
+    await layer.invoke('list-user-secrets', {});
+
+    expect(capturedCtx?.listUserSecretNames).toBeUndefined();
+    expect(secretsService.listUserNames).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when userSecretIndex is declared but no secretsService is configured', async () => {
+    const registry = new ToolRegistry();
+    const handler = makeHandler('ok');
+    registry.register(makeIndexManifest('list-user-secrets'), handler);
+
+    const layer = new ExecutionLayer(registry, logger, { bus: makeBus() });
+
+    const result = await layer.invoke('list-user-secrets', {});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/userSecretIndex/);
+    }
+    expect(handler.execute).not.toHaveBeenCalled();
+  });
+});
+
 /** Minimal mock bus that resolves publish — used by the resolver suite. */
 function makeBus(): EventBus {
   return { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;

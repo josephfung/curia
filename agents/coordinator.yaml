@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.18.5"
+version: "0.19.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -417,6 +417,16 @@ system_prompt: |
   old). If the CEO asks to delete an entry, explain that it can be overwritten but
   not deleted outright.
 
+  ### Personal secrets
+  Before asking the CEO to type a password or other personal secret, call
+  `list-user-secrets` to see which `user.*` vault keys already exist. If a listed
+  name matches, reuse it: pass that exact name to `secret-capture-request` to
+  update the stored value in place, or to the browser as `secret_ref`. Never guess
+  key names, and never ask the CEO to re-enter a secret that is already stored.
+  Capture also canonicalizes descriptions (so "X.com password" and "twitter
+  password" resolve to the same key) and will reuse a fingerprint-matching key
+  even if you skip the list step.
+
   ### Scheduling and task management
 
   Two distinct tools for two distinct needs — do not mix them.
@@ -723,6 +733,7 @@ pinned_skills:
   - activity-log
   - approval-expiry-sweep
   - secret-capture-request
+  - list-user-secrets
 allow_discovery: true
 error_budget:
   max_turns: 40

@@ -22,7 +22,7 @@ describeIf('SecretsService', () => {
   });
 
   afterEach(async () => {
-    await pool.query("DELETE FROM secrets WHERE name LIKE 'test_%'");
+    await pool.query("DELETE FROM secrets WHERE name LIKE 'test_%' OR name LIKE 'user.test_%' OR name LIKE 'channel.test_%'");
   });
 
   afterAll(async () => {
@@ -91,5 +91,18 @@ describeIf('SecretsService', () => {
     // Values must never appear — list() returns names only.
     expect(names).not.toContain('secret-a');
     expect(JSON.stringify(names)).not.toContain('secret-b');
+  });
+
+  it('listUserNames returns only user.* keys, never values or system/channel names', async () => {
+    await service.set('user.test_listed', 'user-secret-value');
+    await service.set('test_anthropic_standin', 'sys-secret-value');
+    await service.set('channel.test_listed', 'channel-secret-value');
+    const names = await service.listUserNames();
+    expect(names).toContain('user.test_listed');
+    expect(names).not.toContain('test_anthropic_standin');
+    expect(names).not.toContain('channel.test_listed');
+    expect(names.every(n => n.startsWith('user.'))).toBe(true);
+    expect(JSON.stringify(names)).not.toContain('user-secret-value');
+    expect(JSON.stringify(names)).not.toContain('sys-secret-value');
   });
 });

@@ -58,7 +58,7 @@ export interface ToolManifest {
    *  schedulerService, entityMemory, nylasCalendarClient, autonomyService,
    *  executiveProfileService, officeIdentityService, browserService, bullpenService, toolSearch,
    *  actionLogRepo, auditLogRepo, executionLayer, confidencePipeline, tempFileStore, infraLlm, outboundContext,
-   *  taskRepo, workingDocs, secretCapture, secretResolver.
+   *  taskRepo, workingDocs, secretCapture, secretResolver, userSecretIndex.
    *
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
@@ -308,6 +308,10 @@ export interface ToolContext {
    *  byReference: true). The returned value is for runtime use only — handlers MUST NOT place
    *  it in ToolResult.data, error strings, or logs. */
   resolveSecretRef?: (ref: string) => Promise<string>;
+  /** List `user.*` vault key names (never values, never other namespaces) — available only
+   *  to skills declaring 'userSecretIndex' in capabilities AND on the execution-layer
+   *  allowlist (#1497). Backed by SecretsService.listUserNames(), not list(). */
+  listUserSecretNames?: () => Promise<string[]>;
   /** Operator-facing origin of the console (e.g. "https://curia.example.com"), used by the
    *  capture skills to build the magic-link URL. Undefined in local dev — fall back to
    *  http://localhost:{httpPort}. Sourced from config.appOrigin. */

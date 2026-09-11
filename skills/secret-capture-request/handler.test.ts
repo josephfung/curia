@@ -14,7 +14,7 @@ function fakeMinter(over: Partial<MintResult> = {}): SecretCaptureMinter & { use
     systemCalls,
     async mintUserSecret(args) {
       userCalls.push(args);
-      return { rawToken: 'abc123', secretName: 'user.flight', expiresAt: new Date(Date.now() + 30 * 60_000), ...over };
+      return { rawToken: 'abc123', secretName: 'user.flight', expiresAt: new Date(Date.now() + 30 * 60_000), reusedExisting: false, ...over };
     },
     async mintSystemSecret(args) {
       systemCalls.push(args);
@@ -44,6 +44,7 @@ describe('SecretCaptureRequestHandler', () => {
     const data = (result as { success: true; data: Record<string, unknown> }).data;
     expect(data.capture_url).toBe('https://curia.example.com/secret-capture/abc123');
     expect(data.secret_name).toBe('user.flight');
+    expect(data.reused_existing).toBe(false);
     // origin is always present (#972); with no routing on ctx its fields are undefined and
     // resumeIntent falls back to the label. toEqual ignores undefined-valued properties.
     expect(minter.userCalls).toEqual([{ rawName: 'my flight password', label: 'my flight password', valueFormat: 'string', origin: { resumeIntent: 'my flight password' } }]);
@@ -64,6 +65,16 @@ describe('SecretCaptureRequestHandler', () => {
     const result = await new SecretCaptureRequestHandler().execute(ctx);
     const data = (result as { success: true; data: Record<string, unknown> }).data;
     expect(data.capture_url).toBe('https://curia.example.com/secret-capture/abc123');
+  });
+
+  it('surfaces reused_existing when the minter bound an existing key', async () => {
+    const minter = fakeMinter({ secretName: 'user.x_com_password', reusedExisting: true });
+    const ctx = makeCtx({ secret_name: 'twitter password' }, { secretCapture: minter });
+    const result = await new SecretCaptureRequestHandler().execute(ctx);
+    const data = (result as { success: true; data: Record<string, unknown> }).data;
+    expect(data.secret_name).toBe('user.x_com_password');
+    expect(data.reused_existing).toBe(true);
+    expect(String(data.summary)).toMatch(/existing vault key/);
   });
 
   it('never returns the submitted value (mint surface has no read path)', async () => {

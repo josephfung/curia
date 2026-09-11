@@ -6,11 +6,11 @@
 // yields a URL), the user submits the value to the public form, and redeem() writes it
 // straight into the encrypted vault. The token store holds metadata only — never the value.
 //
-// Two name policies live here as pure functions so the two sibling skills can share one
-// service and differ only in WHICH policy they apply:
-//   - resolveUserSecretName   — slugifies to `user.<slug>`; an unprivileged agent literally
-//                               cannot name a system/channel key (no dot-free or `channel.`
-//                               output is possible), so it is sandboxed by construction.
+// Two name policies live here so the two sibling skills can share one service and
+// differ only in WHICH policy they apply:
+//   - resolveUserSecretName   — canonical `user.*` key with fingerprint dedup (#1497);
+//                               an unprivileged agent literally cannot name a system/channel
+//                               key (no dot-free or `channel.` output is possible).
 //   - resolveSystemSecretName — must be a declared skill secret or channel credential key
 //                               (the same allowlist the vault PUT route enforces).
 
@@ -18,37 +18,14 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import { hashToken } from '../channels/http/session-auth.js';
 import { randomBytes } from 'node:crypto';
+import { resolveUserSecretName } from './user-secret-name.js';
+
+export { resolveUserSecretName } from './user-secret-name.js';
 
 export type CaptureValueFormat = 'string' | 'json';
 
 /** Default link lifetime — short by design (single-use + 30 min, per #971). */
 export const DEFAULT_CAPTURE_TTL_MINUTES = 30;
-
-/** Upper bound on the raw user-supplied name before slugification. */
-const MAX_SECRET_NAME_INPUT = 128;
-
-/**
- * Slugify an arbitrary user description into a `user.<a-z0-9_>+` vault key.
- *
- * The `user.` namespace is the sandbox: the dot-separated prefix cannot be produced by
- * snake_case system keys (e.g. `anthropic_api_key`) or `channel.*` credential keys, so a
- * general-purpose capture can never overwrite a privileged secret — even if the agent
- * passes the literal name of one (it just becomes `user.anthropic_api_key`).
- */
-export function resolveUserSecretName(input: string): string {
-  if (typeof input !== 'string') throw new Error('secret_name must be a string');
-  const trimmed = input.trim();
-  if (trimmed.length === 0) throw new Error('secret_name must not be empty');
-  if (trimmed.length > MAX_SECRET_NAME_INPUT) {
-    throw new Error(`secret_name exceeds ${MAX_SECRET_NAME_INPUT} characters`);
-  }
-  // Lowercase, collapse every non-alphanumeric run to a single underscore, trim edge underscores.
-  const slug = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  if (slug.length === 0) {
-    throw new Error(`secret_name '${input}' has no usable alphanumeric characters`);
-  }
-  return `user.${slug}`;
-}
 
 /**
  * Validate a system secret name against the live allowlist (declared skill secrets ∪ known
@@ -69,10 +46,13 @@ export function resolveSystemSecretName(input: string, allowedNames: ReadonlySet
   return name;
 }
 
-/** The narrow slice of SecretsService that redeem() needs — write a value, never read one. */
+/** The narrow slice of SecretsService that capture needs — write a value, never read one.
+ *  `listUserNames` is names-only / `user.*`-only so mint can dedup without seeing values
+ *  or the rest of the keyspace (#1497). */
 export interface CaptureSecretsPort {
   set(name: string, value: string): Promise<void>;
   setJSON(name: string, obj: unknown): Promise<void>;
+  listUserNames(): Promise<string[]>;
 }
 
 /** The mint-only surface injected into skills as the `secretCapture` capability.
@@ -123,6 +103,8 @@ export interface MintResult {
   /** The fully resolved vault key the value will be written to. */
   secretName: string;
   expiresAt: Date;
+  /** True when mint bound the token to an already-stored `user.*` key (#1497). */
+  reusedExisting?: boolean;
 }
 
 export interface SecretCaptureServiceOptions {
@@ -223,9 +205,11 @@ export class SecretCaptureService implements SecretCaptureMinter {
   }
 
   async mintUserSecret(args: MintNameArgs): Promise<MintResult> {
-    const secretName = resolveUserSecretName(args.rawName);
+    const existing = await this.secrets.listUserNames();
+    const secretName = resolveUserSecretName(args.rawName, existing);
+    const reusedExisting = existing.includes(secretName);
     const { rawToken, expiresAt } = await this.mint(secretName, args.label, args.valueFormat ?? 'string', args.origin);
-    return { rawToken, secretName, expiresAt };
+    return { rawToken, secretName, expiresAt, reusedExisting };
   }
 
   async mintSystemSecret(args: MintNameArgs): Promise<MintResult> {

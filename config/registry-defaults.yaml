@@ -103,6 +103,9 @@ tools:
   - web-browser
   - drive-download-file
   - image-generate
+  # Personal vault (agent-captured user.* secrets)
+  - secret-capture-request
+  - list-user-secrets
   # Autonomy
   - get-autonomy
   - set-autonomy
