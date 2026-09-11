@@ -5,53 +5,69 @@
  * consecutive `user` messages and providers that merge them (Anthropic, OpenAI)
  * silently glue the failed prompt onto the new one (#1767).
  *
- * Distinguishable from a real reply: console history and LLM context both
- * filter these turns. Never replayed to the principal as something Curia said.
+ * The envelope is distinguishable from a real reply (`_curia_protocol`) but
+ * carries the same user-facing error text published on `agent.response`, so
+ * LLM context, chat history, and the live error stay in agreement.
  */
 export const LLM_FAILURE_PROTOCOL = 'llm_failure';
-export const LLM_FAILURE_TURN_CONTENT = `{"_curia_protocol":"${LLM_FAILURE_PROTOCOL}"}`;
+export const LLM_FAILURE_USER_MESSAGE =
+  "I'm sorry, I was unable to process that request. Please try again.";
+export const LLM_FAILURE_TURN_CONTENT =
+  `{"_curia_protocol":"${LLM_FAILURE_PROTOCOL}","message":${JSON.stringify(LLM_FAILURE_USER_MESSAGE)}}`;
+
+export function parseLlmFailureTurn(content: string): { message: string } | null {
+  if (!content.includes(LLM_FAILURE_PROTOCOL)) return null;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const rec = parsed as Record<string, unknown>;
+    if (rec['_curia_protocol'] !== LLM_FAILURE_PROTOCOL) return null;
+    const message = rec['message'];
+    return {
+      message: typeof message === 'string' && message.length > 0
+        ? message
+        : LLM_FAILURE_USER_MESSAGE,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function isLlmFailureTurn(turn: { role: string; content: string }): boolean {
-  return turn.role === 'assistant' && turn.content === LLM_FAILURE_TURN_CONTENT;
+  return turn.role === 'assistant' && parseLlmFailureTurn(turn.content) !== null;
 }
 
-export function isLlmFailureTurnContent(content: string): boolean {
-  return content === LLM_FAILURE_TURN_CONTENT;
-}
-
-/**
- * Drop (user, llm_failure marker) pairs and stray markers.
- * Used by summarization so the protocol JSON never enters a condensed transcript.
- */
-export function omitLlmFailurePairs<T extends { role: string; content: string }>(turns: T[]): T[] {
-  const out: T[] = [];
-  for (let i = 0; i < turns.length; i++) {
-    const turn = turns[i]!;
-    const next = turns[i + 1];
-    if (turn.role === 'user' && next && isLlmFailureTurn(next)) {
-      i++;
-      continue;
-    }
-    if (isLlmFailureTurn(turn)) {
-      continue;
-    }
-    out.push(turn);
-  }
-  return out;
+/** Replace marker assistant content with the user-facing error text. */
+export function rewriteLlmFailureTurns<T extends { role: string; content: string }>(turns: T[]): T[] {
+  return turns.map((turn) => {
+    const parsed = turn.role === 'assistant' ? parseLlmFailureTurn(turn.content) : null;
+    if (!parsed) return turn;
+    return { ...turn, content: parsed.message };
+  });
 }
 
 /**
  * History that is safe to send to an LLM provider.
  *
- * 1. Drops failed-call pairs so the failed user text is not replayed (and cannot
- *    be glued onto the next user message by a lenient provider).
- * 2. Drops trailing `user` turns that have no assistant reply yet — those are
- *    either the in-flight persist (runtime appends the current user separately)
- *    or a pre-fix orphan. Either way they must not precede the new user turn.
+ * 1. Rewrites failure markers to the user-facing error text so the failed
+ *    question stays in context (paired with an assistant turn, not glued).
+ * 2. Collapses consecutive same-role user/assistant turns anywhere in the
+ *    array, keeping the later one — heals mid-history orphans from crash /
+ *    silent-stop / failed-marker-persist paths.
+ * 3. Drops trailing `user` turns that have no assistant reply yet. The runtime
+ *    appends the current user separately.
  */
 export function historyForLlm<T extends { role: string; content: string }>(turns: T[]): T[] {
-  const withoutFailures = omitLlmFailurePairs(turns);
-  const out = [...withoutFailures];
+  const out: T[] = [];
+  for (const turn of rewriteLlmFailureTurns(turns)) {
+    if (turn.role !== 'system') {
+      const last = out[out.length - 1];
+      if (last && last.role === turn.role) {
+        out.pop();
+      }
+    }
+    out.push(turn);
+  }
   while (out.length > 0 && out[out.length - 1]!.role === 'user') {
     out.pop();
   }

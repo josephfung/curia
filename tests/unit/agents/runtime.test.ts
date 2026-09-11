@@ -6,7 +6,7 @@ import type { LLMProvider, ToolResult } from '../../../src/agents/llm/provider.j
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
-import { LLM_FAILURE_TURN_CONTENT } from '../../../src/memory/llm-failure-turn.js';
+import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src/memory/llm-failure-turn.js';
 import { BullpenService } from '../../../src/memory/bullpen.js';
 import type { AgentError } from '../../../src/errors/types.js';
 import { delegationKey } from '../../../src/agents/delegation-guard.js';
@@ -354,10 +354,11 @@ describe('AgentRuntime', () => {
     expect(responses).toHaveLength(1);
     expect(responses[0]?.payload.isError).toBe(true);
     expect(responses[0]?.payload.content).toContain('unable to process');
+    expect(responses[0]?.payload.content).toBe(LLM_FAILURE_USER_MESSAGE);
     expect(responses[0]?.payload.content).not.toBe(LLM_FAILURE_TURN_CONTENT);
   });
 
-  it("next turn's assembled messages omit the failed user text and stay alternating (#1767)", async () => {
+  it("next turn's assembled messages keep the failed question paired with the error text (#1767)", async () => {
     const nonRetryableError: AgentError = {
       type: 'AUTH_FAILURE',
       source: 'anthropic',
@@ -418,9 +419,13 @@ describe('AgentRuntime', () => {
     expect(captured).toHaveLength(2);
     const secondTurn = captured[1]!;
     const serialized = JSON.stringify(secondTurn);
-    expect(serialized).not.toContain('STALE_FAILED_PROMPT_xyz');
+    expect(serialized).toContain('STALE_FAILED_PROMPT_xyz');
     expect(serialized).not.toContain(LLM_FAILURE_TURN_CONTENT);
+    expect(secondTurn.some((m) => m.role === 'user' && m.content === 'STALE_FAILED_PROMPT_xyz')).toBe(true);
+    expect(secondTurn.some((m) => m.role === 'assistant' && m.content === LLM_FAILURE_USER_MESSAGE)).toBe(true);
     expect(secondTurn.some((m) => m.role === 'user' && m.content === 'fresh follow-up question')).toBe(true);
+    const fresh = secondTurn.find((m) => m.role === 'user' && m.content === 'fresh follow-up question');
+    expect(String(fresh?.content)).not.toContain('STALE_FAILED_PROMPT_xyz');
 
     const conversation = secondTurn.filter((m) => m.role === 'user' || m.role === 'assistant');
     for (let i = 1; i < conversation.length; i++) {
@@ -429,6 +434,105 @@ describe('AgentRuntime', () => {
     expect(responses).toHaveLength(2);
     expect(responses[0]?.payload.isError).toBe(true);
     expect(responses[1]?.payload.content).toBe('Fresh answer');
+  });
+
+  it('skips the failure marker when the last user turn is not this task (#1767)', async () => {
+    const nonRetryableError: AgentError = {
+      type: 'AUTH_FAILURE',
+      source: 'anthropic',
+      message: 'API failed',
+      retryable: false,
+      context: {},
+      timestamp: new Date(),
+    };
+    const added: Array<{ role: string; content: string }> = [];
+    let historyReads = 0;
+    const memory = {
+      addTurn: vi.fn(async (_c: string, _a: string, turn: { role: string; content: string }) => {
+        added.push(turn);
+      }),
+      getHistory: vi.fn(async () => {
+        historyReads += 1;
+        if (historyReads === 1) return [];
+        return [
+          { role: 'user' as const, content: 'this task' },
+          { role: 'user' as const, content: 'concurrent task' },
+        ];
+      }),
+    } as unknown as WorkingMemory;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({ type: 'error' as const, error: nonRetryableError }),
+    };
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      memory,
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-race',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'this task',
+      parentEventId: 'parent-race',
+    }));
+
+    expect(added.some((t) => t.role === 'assistant')).toBe(false);
+    expect(responses).toHaveLength(1);
+    expect(responses[0]?.payload.isError).toBe(true);
+  });
+
+  it('publishes the error response before persisting the failure marker (#1767)', async () => {
+    const nonRetryableError: AgentError = {
+      type: 'AUTH_FAILURE',
+      source: 'anthropic',
+      message: 'API failed',
+      retryable: false,
+      context: {},
+      timestamp: new Date(),
+    };
+    const memory = WorkingMemory.createInMemory();
+    const historyAtPublish: Array<{ role: string; content: string }>[] = [];
+    bus.subscribe('agent.response', 'system', async () => {
+      historyAtPublish.push(await memory.getHistory('conv-order', 'coordinator'));
+    });
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn().mockResolvedValue({ type: 'error' as const, error: nonRetryableError }),
+    };
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      memory,
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-order',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-order',
+    }));
+
+    expect(historyAtPublish).toHaveLength(1);
+    expect(historyAtPublish[0]!.some((t) => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
+    const after = await memory.getHistory('conv-order', 'coordinator');
+    expect(after.some((t) => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(true);
   });
 
   it('appends the autonomy block to the system prompt when autonomyService is provided', async () => {

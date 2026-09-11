@@ -15,6 +15,7 @@
  */
 import { describe, it, expect, vi, type MockedFunction } from 'vitest';
 import { WorkingMemory, type SummarizationConfig } from '../../../src/memory/working-memory.js';
+import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src/memory/llm-failure-turn.js';
 import type { LLMProvider } from '../../../src/agents/llm/provider.js';
 import type { DbPool } from '../../../src/db/connection.js';
 
@@ -160,6 +161,47 @@ describe('WorkingMemory — context summarization', () => {
     const promptContent = callArg.messages[0]!.content as string;
     expect(promptContent).toContain('Turn 0');
     expect(promptContent).toContain('Condense');
+  });
+
+  it('rewrites LLM failure markers in the summarization transcript (#1767)', async () => {
+    const now = new Date('2026-01-01T12:00:00Z');
+    const archivedRows = [
+      { id: makeId(0), role: 'user', content: 'failed question', created_at: now },
+      {
+        id: makeId(1),
+        role: 'assistant',
+        content: LLM_FAILURE_TURN_CONTENT,
+        created_at: new Date(now.getTime() + 1000),
+      },
+    ];
+    const mockProvider = buildMockProvider();
+    const queryHandler = (sql: string): QueryResult<unknown> => {
+      const normalized = sql.replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('INSERT INTO working_memory')) return { rows: [] };
+      if (normalized.startsWith('SELECT COUNT(*)')) return { rows: [{ count: '21' }] };
+      if (normalized.startsWith('SELECT id, role, content, created_at')) return { rows: archivedRows };
+      if (normalized.startsWith('SELECT created_at')) {
+        return { rows: [{ created_at: new Date(now.getTime() + 2000) }] };
+      }
+      return { rows: [] };
+    };
+    const pool = buildMockPool(queryHandler);
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
+    const config: SummarizationConfig = {
+      threshold: 20,
+      keepWindow: 10,
+      provider: mockProvider,
+      model: 'claude-3-5-haiku-20241022',
+    };
+    const memory = WorkingMemory.createWithPostgres(pool, logger, config);
+    await memory.addTurn(CONV, AGENT, { role: 'user', content: 'Trigger turn' });
+
+    expect(mockProvider.chat).toHaveBeenCalledOnce();
+    const callArg = (mockProvider.chat as MockedFunction<LLMProvider['chat']>).mock.calls[0]![0];
+    const promptContent = callArg.messages[0]!.content as string;
+    expect(promptContent).toContain('failed question');
+    expect(promptContent).toContain(LLM_FAILURE_USER_MESSAGE);
+    expect(promptContent).not.toContain('_curia_protocol');
   });
 
   it('archives old turns and inserts synthetic summary in a transaction', async () => {

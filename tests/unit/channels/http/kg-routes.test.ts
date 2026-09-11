@@ -6,7 +6,7 @@ import type { Logger } from '../../../../src/logger.js';
 import type { ContactService } from '../../../../src/contacts/contact-service.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { knowledgeGraphRoutes } from '../../../../src/channels/http/routes/kg.js';
-import { LLM_FAILURE_TURN_CONTENT } from '../../../../src/memory/llm-failure-turn.js';
+import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../../src/memory/llm-failure-turn.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 import type { EventRouter } from '../../../../src/channels/http/event-router.js';
 
@@ -361,7 +361,7 @@ describe('knowledgeGraphRoutes', () => {
     await app.close();
   });
 
-  it('omits LLM failure marker turns from chat history (#1767)', async () => {
+  it('rewrites LLM failure marker turns to the user-facing error in chat history (#1767)', async () => {
     (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       rows: [
         { id: '4', role: 'assistant', content: 'Hi', created_at: new Date('2026-01-01T00:00:03Z') },
@@ -391,7 +391,7 @@ describe('knowledgeGraphRoutes', () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json() as { messages: Array<{ role: string; content: string }> };
-    expect(body.messages.map((m) => m.content)).toEqual(['Hello', 'Retry', 'Hi']);
+    expect(body.messages.map((m) => m.content)).toEqual(['Hello', LLM_FAILURE_USER_MESSAGE, 'Retry', 'Hi']);
     expect(body.messages.some((m) => m.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
 
     await app.close();

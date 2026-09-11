@@ -6,7 +6,7 @@ import {
   isDbUnavailableError,
   withDbRetry,
 } from '../db/resilience.js';
-import { omitLlmFailurePairs } from './llm-failure-turn.js';
+import { rewriteLlmFailureTurns } from './llm-failure-turn.js';
 
 export interface ConversationTurn {
   role: 'user' | 'assistant' | 'system';
@@ -280,13 +280,24 @@ class PostgresBackend implements StorageBackend {
 
     // Build the summarization prompt from the turns being archived.
     // Prior summaries (system role) are labelled distinctly so the LLM carries them forward.
-    // Failed-LLM marker pairs (#1767) are omitted so the protocol JSON is never condensed.
-    const transcript = omitLlmFailurePairs(turnsToArchive)
+    // Failed-LLM markers (#1767) are rewritten to the user-facing error text so
+    // the protocol JSON is never condensed, while the user's question is kept.
+    const forSummary = rewriteLlmFailureTurns(turnsToArchive);
+    const transcript = forSummary
       .map((t) => {
         const label = t.role === 'system' ? 'PRIOR SUMMARY' : t.role.toUpperCase();
         return `[${label}]: ${t.content}`;
       })
       .join('\n\n');
+
+    if (!transcript.trim()) {
+      // An all-empty window (or one that rewrites to nothing) must still be
+      // archived so it is not reprocessed, but must not be sent to the
+      // summariser — that would store a hallucinated summary as real history.
+      const archiveIds = turnsToArchive.map((t) => t.id);
+      await withDbRetry(() => this.archiveTurnsOnly(archiveIds));
+      return;
+    }
 
     const summaryPrompt = [
       'You are a precise summarizer. Condense the following conversation excerpt into a concise narrative.',
@@ -327,6 +338,14 @@ class PostgresBackend implements StorageBackend {
         archiveIds,
         summaryContent,
       ),
+    );
+  }
+
+  /** Archive rows without inserting a synthetic summary (empty-window path). */
+  private async archiveTurnsOnly(archiveIds: string[]): Promise<void> {
+    await this.pool.query(
+      `UPDATE working_memory SET archived = true WHERE id = ANY($1::uuid[])`,
+      [archiveIds],
     );
   }
 

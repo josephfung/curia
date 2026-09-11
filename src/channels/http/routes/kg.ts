@@ -19,7 +19,7 @@ import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { stripOutboundContextPreamble } from '../../../dispatch/outbound-context.js';
 import { isVoiceGreetingCueContent } from '../../voice/greeting.js';
-import { isLlmFailureTurn } from '../../../memory/llm-failure-turn.js';
+import { isLlmFailureTurn, parseLlmFailureTurn } from '../../../memory/llm-failure-turn.js';
 import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 
 export interface KnowledgeGraphRouteOptions {
@@ -1527,7 +1527,8 @@ export async function knowledgeGraphRoutes(
    * artifacts not intended for display. The synthetic voice opening cue
    * (`VOICE_GREETING_USER_MESSAGE`, #1596) is also excluded — it exists so
    * Anthropic-safe user-first history, not for the principal to read. LLM
-   * failure marker turns (#1767) are excluded for the same reason.
+   * failure marker turns (#1767) are rewritten to the user-facing error text
+   * so the protocol JSON never appears in a chat bubble.
    */
   app.get('/api/kg/chat/history', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
@@ -1588,10 +1589,9 @@ export async function knowledgeGraphRoutes(
         if (row.role === 'user' && isVoiceGreetingCueContent(row.content)) {
           return [];
         }
-        // Failed-LLM marker — persisted so history stays alternating, never a real reply.
-        if (isLlmFailureTurn(row)) {
-          return [];
-        }
+        // Failed-LLM marker — show the same error text the user already saw live.
+        const failure = isLlmFailureTurn(row) ? parseLlmFailureTurn(row.content) : null;
+        const rawContent = failure ? failure.message : row.content;
         // Per-row try/catch so one bad message doesn't fail the whole page.
         let html: string | null = null;
         // Strip dispatcher-injected outbound context preambles from user messages
@@ -1599,7 +1599,7 @@ export async function knowledgeGraphRoutes(
         // confusing inside the user's chat bubble.
         const content = row.role === 'user'
           ? stripOutboundContextPreamble(row.content)
-          : row.content;
+          : rawContent;
         if (row.role === 'assistant') {
           try {
             html = markdownToHtml(content);
