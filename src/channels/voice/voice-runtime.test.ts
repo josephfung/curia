@@ -1301,7 +1301,8 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     const second = llm.seenMessages[1]!;
     expect(consecutiveUserPairs(second)).toBe(0);
     expect(second.map(m => m.content)).toContain('book me a flight to Tokyo next Tuesday');
-    expect(second.map(m => m.content)).toContain(LLM_FAILURE_USER_MESSAGE);
+    expect(second.map(m => m.content)).toContain('Booking a flight to Tokyo next Tuesday.');
+    expect(second.map(m => m.content)).not.toContain(LLM_FAILURE_USER_MESSAGE);
     expect(second.map(m => m.content).some(c => typeof c === 'string' && c.includes('_curia_protocol'))).toBe(false);
     expect(second[second.length - 1]).toEqual({
       role: 'user',
@@ -1309,6 +1310,48 @@ describe('VoiceRuntime orphaned-user history sanitization (#1776)', () => {
     });
 
     const stored = await wm.getHistory('voice:barge-ref', 'coordinator', { raw: true });
+    expect(stored.some(t => t.content === 'Booking a flight to Tokyo next Tuesday.')).toBe(true);
+    expect(stored.some(t => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(false);
+  });
+
+  it('pairs a prelude abort (before the runner) with the failure marker', async () => {
+    const wm = WorkingMemory.createInMemory();
+    const outbound = new OutboundContextService(
+      { query: async () => ({ rows: [] }) } as never,
+      logger,
+    );
+    outbound.getActive = () => new Promise(() => {});
+
+    const llm = new FakeStreamProvider([reply('Afternoon only.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: wm,
+      outboundContextService: outbound,
+      historyReadTimeoutMs: 80,
+    });
+    await runtime.startSession({
+      sessionId: 'prelude-abort',
+      conversationId: 'voice:prelude-abort',
+      roomName: 'voice-prelude-abort',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+
+    stt.emit({ text: "what's on my calendar?", isFinal: true, speechFinal: true });
+    await delay(20);
+    stt.emit({ text: 'just the afternoon', isFinal: true, speechFinal: true, confidence: 0.9 });
+    await runtime.awaitIdle('prelude-abort');
+
+    expect(llm.seenMessages).toHaveLength(1);
+    const messages = llm.seenMessages[0]!;
+    expect(consecutiveUserPairs(messages)).toBe(0);
+    expect(messages.map(m => m.content)).toContain("what's on my calendar?");
+    expect(messages.map(m => m.content)).toContain(LLM_FAILURE_USER_MESSAGE);
+    expect(messages[messages.length - 1]).toEqual({ role: 'user', content: 'just the afternoon' });
+
+    const stored = await wm.getHistory('voice:prelude-abort', 'coordinator', { raw: true });
     expect(stored.some(t => t.content === LLM_FAILURE_TURN_CONTENT)).toBe(true);
   });
 
