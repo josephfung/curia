@@ -86,7 +86,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`calendar-find-free-time` / `calendar-check-conflicts`** — skip and warn on epoch-zero free/busy slots. (#370)
+- **`calendar-find-free-time` / `calendar-check-conflicts`** — clamp one-sided corrupt slots to the query window; skip when both are junk. (#370)
 - **`createGrantRecommendation`** — conflict-skipped inserts now return the persisted winner, not a phantom id. (#1067)
 - **`scan-grant-recommendations`** — a conflict-skip throw no longer aborts the rest of the scan. (#1067)
 - **Autonomy scoring pass** — LLM judge flags must be 0 or 1; unparseable rows dead-letter after a retry floor. (#442)
