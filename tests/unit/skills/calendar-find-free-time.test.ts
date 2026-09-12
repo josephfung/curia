@@ -6,7 +6,7 @@ import pino from 'pino';
 const logger = pino({ level: 'silent' });
 
 function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext>): ToolContext {
-  return { toolName: 'calendar-find-free-time', toolVersion: '1.1.2', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
+  return { toolName: 'calendar-find-free-time', toolVersion: '1.1.3', input, secret: () => { throw new Error('no secrets'); }, log: logger, ...overrides };
 }
 
 // Realistic Unix timestamps (seconds) on 2026-04-06.
@@ -39,6 +39,26 @@ describe('CalendarFindFreeTimeHandler', () => {
     ));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain('timeMin');
+  });
+
+  it('rejects query bounds that toLocalIso cannot display', async () => {
+    const nylasCalendarClient = { getFreeBusy: vi.fn() };
+
+    const epoch = await handler.execute(makeCtx(
+      { calendarIds: ['cal-1'], timeMin: '1970-01-01T00:00:00Z', timeMax: '2026-04-06T16:00:00Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+    expect(epoch.success).toBe(false);
+    if (!epoch.success) expect(epoch.error).toContain('timeMin');
+    expect(nylasCalendarClient.getFreeBusy).not.toHaveBeenCalled();
+
+    const farFuture = await handler.execute(makeCtx(
+      { calendarIds: ['cal-1'], timeMin: '2026-04-06T12:00:00Z', timeMax: '2100-01-01T00:00:01Z' },
+      { nylasCalendarClient: nylasCalendarClient as never },
+    ));
+    expect(farFuture.success).toBe(false);
+    if (!farFuture.success) expect(farFuture.error).toContain('timeMax');
+    expect(nylasCalendarClient.getFreeBusy).not.toHaveBeenCalled();
   });
 
   it('returns free windows by inverting busy periods', async () => {

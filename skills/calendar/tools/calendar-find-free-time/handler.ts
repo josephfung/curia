@@ -38,11 +38,17 @@ export class CalendarFindFreeTimeHandler implements ToolHandler {
       return { success: false, error: 'Invalid input: timeMax must be after timeMin' };
     }
 
+    const rangeStart = Math.floor(new Date(timeMin).getTime() / 1000);
+    const rangeEnd = Math.floor(new Date(timeMax).getTime() / 1000);
+    if (!isPlausibleUnixSeconds(rangeStart)) {
+      return { success: false, error: 'Invalid input: timeMin is outside the supported calendar range (after 1970 through 2100-01-01)' };
+    }
+    if (!isPlausibleUnixSeconds(rangeEnd)) {
+      return { success: false, error: 'Invalid input: timeMax is outside the supported calendar range (after 1970 through 2100-01-01)' };
+    }
+
     try {
       const freeBusyResults = await ctx.nylasCalendarClient.getFreeBusy(calendarIds, timeMin, timeMax);
-
-      const rangeStart = Math.floor(new Date(timeMin).getTime() / 1000);
-      const rangeEnd = Math.floor(new Date(timeMax).getTime() / 1000);
 
       // Collect all busy periods across all calendars
       const allBusy: Array<{ start: number; end: number }> = [];
