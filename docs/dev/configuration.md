@@ -415,6 +415,9 @@ from `.env`.
 | `NYLAS_API_KEY` | Tier 2 | vault | Shared Nylas app key for the email channel. Per-account grants are managed in the console (Settings → Channels → Email) and stored in the vault at `channel.email.<name>.nylas_grant_id`. |
 | `SIGNAL_PHONE_NUMBER` | Tier 3 | vault | Enables Signal channel |
 | `TAVILY_API_KEY` | Tier 3 | vault | Gates `web-search` (`install.requires_secrets`). Provision `tavily_api_key` via the console (Settings → Skills → web-search); the env var is a fallback only and should be unset in production. |
+| `SIGNAL_VOICE_CALLS_ENABLED` | Optional | `.env` | Enables inbound Signal voice calls (default `false`). Requires the Signal channel, the fully configured Voice channel (LiveKit + Deepgram + Cartesia), `SIGNAL_PULSE_SOCKET_PATH`, and deploy-side infrastructure (signal-cli ≥ 0.14.7, `signal-call-tunnel`, PulseAudio in the signal-cli container). Missing prerequisites log a warning at boot and leave the bridge unstarted. See [voice-setup.md](voice-setup.md#signal-calls-experimental). |
+| `SIGNAL_PULSE_SOCKET_PATH` | Optional | `.env` | Path to the PulseAudio socket shared out of the signal-cli container (production compose: `/var/run/pulse-shared/native`). Required for Signal voice calls; also what the `signal_voice` health probe connects to. |
+| `SIGNAL_VOICE_MAX_CALL_SECONDS` | Optional | `.env` | Hard per-call duration cap in seconds (default `600`). The call is hung up on expiry with no spoken wrap-up. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Optional | `.env` | Path to service account JSON for Google Drive |
 | `CURIA_TEMPFILE_DIR` | Optional | `.env` | Base directory under which the `file-parse` skill resolves `temp_file_url` inputs. The skill rejects paths that escape this directory. Defaults to the OS temp dir when unset. |
 

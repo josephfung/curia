@@ -49,6 +49,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Docs synced for the release** — Signal voice calls, the System page, bundle management, and the full health-probe set now appear in `docs/specs/` and `docs/dev/`; shipped design/plan memos pruned from `docs/wip/`.
+- **`.env.example`** — documents the three Signal voice-call variables; they were undiscoverable. (#1672)
 - **Working memory** — `getHistory` rewrites LLM-failure markers unless callers opt out. (#1775)
 - **`secret-capture-request`** — repeat captures reuse a matching `user.*` key. (#1497)
 - **System page** — moved to `/system`; Personality icon is a brain, not a gear. (#1765)

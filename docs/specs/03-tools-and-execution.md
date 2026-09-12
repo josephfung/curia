@@ -213,6 +213,27 @@ POST   /api/registry/:kind/:name/disable
 DELETE /api/registry/:kind/:name
 ```
 
+### Managing bundles from the console (#1724)
+
+`/tools` renders tools, skills, and agents as one parent/child model: a bundle row with its
+member tools nested underneath, and any orphan (synthetic-owned) tool as a top-level row. A
+member declared in a manifest but absent from `tool_registry` discovery is rendered as
+*uninstalled* rather than silently dropped.
+
+- **Cascade.** Enabling or disabling a bundle from the UI goes through `BundleCascadeRepo`,
+  which writes `skill_registry` and `tool_registry` in a **single transaction**. A
+  half-applied cascade — bundle enabled, some members off — is worse than either end state,
+  because it is exactly the partial configuration the parent/child view exists to make
+  impossible. Any failure rolls back. The HTTP routes above are unchanged; the cascade is a
+  repo concern.
+- **Unresolved pins.** Bundle membership and pin consumers (`pinnedBy`) are propagated into
+  the registry API payload — they were previously dropped during discovery mapping. A bundle
+  that is **not enabled** but is pinned by an **enabled** agent is flagged in the UI as
+  unresolved for that agent. This is a real production failure mode and it is silent without
+  the flag: an un-enrolled bundle takes its whole tool set out of the pinning agent's hands,
+  and the only other signal is a startup warning (`unresolvedPins`, reasons `not_found` or
+  `member_tools_missing`).
+
 Channels have their own parallel registry — see [spec 04 — Channels](04-channels.md).
 
 ---
