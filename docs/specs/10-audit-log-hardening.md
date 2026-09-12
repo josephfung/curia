@@ -454,6 +454,7 @@ prioritized.
 - Hash chain on every write (`ORDER BY seq`); advisory-lock serialization; nested-publish deadlock assertion
 - Offline verify via `pnpm audit:verify` (`scripts/audit-verify.ts`) — not a `curia` CLI (no CLI harness exists)
 - Consumer adoption: `AuditLogRepo`, activity-log, diagnostics audit-query/audit-trace, trust-gate, antfarm interpreter, diagnostics agent prompt
+- `resolve-time-window` (#1592) — turns a natural-language time reference ("around 11:44am", "8-9am yesterday", "last 2 hours") into the strict zone-bearing ISO `since`/`until` pair `audit-query` requires, plus a human-readable `interpretation` so a wrong window is visible rather than silently searched. Read-only, `allowed_callers: ["diagnostics"]`. Without it the diagnostics agent could not query a past time window at all — hand-formatted timestamps were rejected and the failure read as "nothing happened".
 
 ### Outstanding work — later phases
 

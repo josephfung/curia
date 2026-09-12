@@ -280,6 +280,11 @@ container startup; operators enable the profile only when Voice is configured.
     "email": "ok",
     "browser": "skipped",
     "mcp": { "google_workspace": "ok" },
+    "nylas_calendar": "ok",
+    "slack": "skipped",
+    "sms": "skipped",
+    "voice": "skipped",
+    "signal_voice": "skipped",
     "scheduler": "ok"
   }
 }
@@ -287,8 +292,10 @@ container startup; operators enable the profile only when Voice is configured.
 
 `status` is one of:
 - `ok` (HTTP 200) — all enabled checks pass.
-- `degraded` (HTTP 200) — a *non-critical* service is down (`signal`, `email`, `browser`, `mcp.*`, or `scheduler`). A dead Signal socket should not page as a full outage when email still works.
+- `degraded` (HTTP 200) — a *non-critical* service is down (everything except `db` and `bus`). A dead Signal socket should not page as a full outage when email still works.
 - `down` (HTTP 503) — a *critical* service is unreachable (`db` or `bus`); Curia cannot function.
+
+**Probes assert a response, not an object's existence (#1762).** Holding a reference to a service proves nothing about a process running elsewhere. `browser` does a bounded `cookies()` round-trip against Chrome (a synchronous `isConnected()` reads cached transport state, so a wedged-but-connected renderer would still report true); `signal_voice` **connects** to the shared PulseAudio socket rather than stat'ing it — during curia-deploy#221 a dead daemon left a socket inode behind and `/api/health` reported everything green for hours while Signal calls carried no audio (#1760). `mcp` liveness uses `ping()`, not `listTools()`: the latter recompiled the MCP SDK's Ajv validators on every 30s healthcheck and leaked ~145 MB/hr into an OOM restart loop (#1663). The remaining shallow probes are called out in [spec 04's Known Deficiencies](04-channels.md#known-deficiencies).
 
 A `skipped` check means its underlying service is not configured (e.g. Signal disabled) and never affects the overall status. Docker HEALTHCHECK and Caddy upstream health both use this endpoint.
 
@@ -332,6 +339,32 @@ On SIGTERM/SIGINT:
 5. Exit
 
 This ensures Docker stop and process managers don't lose in-flight work.
+
+### System Page & Operator Restart
+
+The console's **System** page (`/system`, promoted out of Settings in #1765) is the read-only
+environment snapshot plus the one operator write the console offers.
+
+- **`GET /api/system`** returns a non-secret boot snapshot: app version, Node runtime version,
+  timezone, `bootedAt` (which powers the uptime display), and the capability-tier → model
+  routing map (ADR-014). It deliberately excludes API keys, the database URL, and vault
+  contents.
+- **`POST /api/system/restart`** triggers the *same* graceful-shutdown path SIGTERM takes
+  (above) and returns `202 { restarting: true }`. Docker's `restart: unless-stopped` brings the
+  process back — **no Docker socket is mounted**, so this is a process restart, not container
+  orchestration.
+- **Auth** is session-cookie / bootstrap-secret only. `/api/system` sits on the bearer-bypass
+  list, so `assertSecret` is the gate.
+- **Cooldown: 3 restarts per 5 minutes.** An in-process Fastify rate limiter is not enough,
+  because the thing being rate-limited destroys the process holding the counter. The durable
+  half counts `system.restart` rows in `audit_log` within the window, so the cooldown survives
+  the restart it is limiting. If that count cannot be read, or the audit event cannot be
+  published, the process is **not** restarted — the restart is refused rather than performed
+  unrecorded.
+- **`system.restart`** is written to `audit_log` before the shutdown is scheduled, so an
+  operator-initiated restart is always distinguishable from a crash or a deploy.
+- The console's post-restart poll of `GET /api/system` has a 90s ceiling, so a process that
+  never comes back surfaces as a failure instead of spinning forever.
 
 ### Web Console Chat API
 
@@ -407,10 +440,14 @@ curia/
 │   │   ├── events.ts           # typed event definitions (discriminated union)
 │   │   └── permissions.ts      # layer → event authorization map
 │   ├── channels/               # Channel adapters
+│   │   ├── calendar/
 │   │   ├── cli/
 │   │   ├── email/
+│   │   ├── http/               # HTTP API + console/antfarm routes
 │   │   ├── signal/
-│   │   └── http-api/
+│   │   ├── slack/
+│   │   ├── sms/
+│   │   └── voice/              # VoiceRuntime + livekit/ and signal/ transports
 │   ├── dispatch/               # Routing, policy enforcement
 │   │   ├── router.ts
 │   │   └── policy.ts
@@ -442,12 +479,20 @@ curia/
 │   ├── audit/
 │   │   ├── logger.ts           # write-ahead audit subscriber
 │   │   └── redaction.ts        # payload redaction
+│   ├── contacts/               # Unified contact ledger, resolution, dedup
+│   ├── entity-context/         # Entity context enrichment (spec 11)
+│   ├── health/                 # /api/health checks + daily canary
+│   ├── registry/               # Tool/skill/agent registry repos + bundle cascade
+│   ├── speech/                 # Batch STT/TTS media service (voice notes)
 │   ├── db/
 │   │   ├── connection.ts
 │   │   └── migrations/
 │   └── index.ts                # bootstrap & startup orchestrator
+├── apps/
+│   ├── console/                # React web console
+│   └── antfarm/                # Ant Farm audit-log replay UI (spec 21)
 ├── agents/                     # Agent config files (YAML + optional handlers)
-├── skills/                     # Local skill directories
+├── skills/                     # Local skill bundles and their tools
 ├── config/                     # Layered YAML config
 ├── tests/
 │   ├── unit/

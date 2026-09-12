@@ -254,7 +254,9 @@ model:
   needs: [vision, large_context]  # optional hints for routing decisions
 ```
 
-The `ModelRegistry` holds static metadata (pricing, context window, provider prefix) for all supported models. `ModelRouter` validates that each tier's configured model exists in the registry at startup. Cost estimation and token tracking delegate to registry data rather than hardcoded values.
+The `ModelRegistry` holds static metadata (pricing, context window, provider prefix, and declared capabilities) for all supported models. `ModelRouter` validates that each tier's configured model exists in the registry at startup. Cost estimation and token tracking delegate to registry data rather than hardcoded values.
+
+**Capabilities are the gate for capability-dependent subsystems (#1553).** A model declares what it can do (e.g. `streaming`, `tools`) and callers preflight against that, not against the provider interface. Voice is the first consumer: a spoken turn needs true streaming (ADR-037) and tool calls, and a provider merely *exposing* `stream()` does not prove either — OpenRouter implements `stream()` for every routed model, including ones that neither stream nor tool-call. Voice boot therefore resolves its model and refuses to start when the registry entry is missing `streaming` or `tools` (or when the model is unknown to the registry at all).
 
 ### Response Normalization
 

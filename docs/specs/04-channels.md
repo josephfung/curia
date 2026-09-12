@@ -21,7 +21,7 @@ interface Channel {
 
 Each channel:
 - Publishes `inbound.message` (normalized) when a platform message arrives
-- Has its outbound text responses delivered via the `OutboundGateway` (channels are no longer responsible for `send()`); Phase 1 voice is the exception because `VoiceRuntime` streams TTS audio through LiveKit
+- Has its outbound text responses delivered via the `OutboundGateway` (channels are no longer responsible for `send()`); voice is the exception because `VoiceRuntime` streams TTS audio directly through the active `AudioTransport` (LiveKit or Signal)
 - Handles its own connection lifecycle, authentication, and reconnection
 
 ### Channel Catalog & Registry
@@ -107,6 +107,7 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Conversation ID:** derived from Signal group or 1:1 conversation ID
 - Handles: text messages, attachments, reactions
 - **Voice notes (#1600):** inbound audio attachments (Signal voice notes / `audio/*`) are downloaded via signal-cli `getAttachment` and transcribed through `SpeechMediaService` into ordinary `inbound.message` content tagged `[transcribed-from-audio]`. 1:1 transcription is gated on known senders; downloads are capped at 5 MB. When STT credentials are absent, audio-only messages are ignored (existing text path).
+- **Voice calls (#1672):** anyone can place a native Signal voice call to Curia's number and hold a live spoken conversation through the same `VoiceRuntime` the console uses — see the Voice section below. signal-cli owns the RingRTC leg; Curia only speaks JSON-RPC and PCM.
 - **Reactions:** inbound reaction envelopes publish `inbound.reaction` (`targetMessageId` = stringified Signal target timestamp; `isRemove` in metadata). Outbound `outbound.delivered.messageId` is the signal-cli send timestamp so principal 👍/👎 can resolve approvals (#1479).
 - Secrets: `channel.signal.phone_number` — the canonical namespaced vault key (wired via `applyChannelVaultSecrets`, as above). The legacy flat `signal_phone_number` key was consolidated onto it and backfilled by migration; entering the phone number in the console alone now activates Signal (#1140).
 
@@ -125,13 +126,22 @@ Interactive terminal for local dev and testing. Reads from stdin, writes to stdo
 - **Trust:** `medium`, `unknown_sender: allow`, `threaded: false` (`config/channel-trust.yaml`).
 - **Voice:** orthogonal to #1414 Phase 1 LiveKit path; prefer the same Telnyx account/DID as Phase 2 PSTN SIP trunk.
 
-### Voice (console WebRTC via LiveKit)
+### Voice (console WebRTC via LiveKit; Signal RingRTC calls)
 - Toggleable channel: operator runs self-hosted LiveKit, vaults `channel.voice.livekit_url` (browser signaling) + `channel.voice.livekit_api_key` + `channel.voice.livekit_api_secret` + `channel.voice.deepgram_api_key` + `channel.voice.cartesia_api_key` + `channel.voice.cartesia_voice_id`, enables Voice in **Settings → Channels**, then restarts Curia. `channels.voice.model` may override the default fast-tier spoken-turn model. Server-side LiveKit RoomService (room delete on hangup) uses plain YAML `channels.voice.livekit_management_url` (compose default `http://livekit:7880`), not the public signaling URL.
-- **Transport:** the console creates a voice session through `POST /api/voice/sessions`, receives a LiveKit room token, and joins over WebRTC. Curia's `VoiceRuntime` joins the same room as the agent participant.
+- **Model preflight (#1553):** the resolved spoken-turn model must declare both `streaming` and `tools` in the `ModelRegistry`. A provider exposing `stream()` is necessary but not sufficient — OpenRouter implements `stream()` for every routed model, including ones that neither stream nor tool-call — so voice boot gates on registry capabilities, not on the provider interface.
+- **Transports:** `VoiceRuntime` is transport-agnostic behind the `AudioTransport` seam and now has two:
+  - **Console (WebRTC/LiveKit):** the console creates a voice session through `POST /api/voice/sessions`, receives a LiveKit room token, and joins over WebRTC. `VoiceRuntime` joins the same room as the agent participant.
+  - **Signal calls (#1672):** `SignalCallBridge` subscribes to signal-cli's `callEvent` stream over the existing JSON-RPC socket (`subscribeCallEvents` — without an active subscription signal-cli silently ignores incoming calls) and drives `acceptCall` / `rejectCall` / `hangupCall`. signal-cli answers by spawning one `signal-call-tunnel` process per call; the call's audio surfaces as per-call PulseAudio virtual devices, which `SignalAudioTransport` moves as 48 kHz mono s16le PCM through `parec` / `pacat` against a shared Pulse socket. `callId` is a signed 64-bit value that exceeds `Number.MAX_SAFE_INTEGER`, so it is `bigint` end-to-end. Everything downstream of the transport — STT, TTS, the turn loop, barge-in, the greeting — is reused unchanged.
+- **Signal call policy (#1672):** **answer everyone**. Both resolved contacts and unresolved strangers are admitted; only two conditions reject outright — a `blocked`-tier contact, and a caller with no E.164 number (uuid-only, nothing stable to resolve or later create a contact from). Callers resolve against the **`signal`** channel key — the same key inbound Signal texts use — so principal standing carries over from the text channel; a stranger gets `unknown` tier and `liveTurn: false`, and therefore still falls outside the elevated-skill and outbound-context gates even though the call is answered. Exactly one call is active at a time; a second concurrent call is rejected as busy. A hard per-call duration cap (`SIGNAL_VOICE_MAX_CALL_SECONDS`, default 600s) hangs the call up. Config-gated off: `SIGNAL_VOICE_CALLS_ENABLED` requires the Signal channel, the fully configured voice channel, and `SIGNAL_PULSE_SOCKET_PATH`; missing prerequisites log a warning and leave the bridge unstarted.
 - **Inbound:** Deepgram STT final transcripts publish ordinary `inbound.message` events with `channel_id: "voice"` and conversation id `voice:<sessionId>`. Session lifecycle publishes `voice.session.started` / `voice.session.ended` for audit and operations.
-- **Spoken replies:** `VoiceTurnRunner` uses `LLMProvider.stream()` and coordinator tool definitions, chunks assistant text into sentences, and sends audio through Cartesia TTS back to LiveKit. `VoiceRuntime` owns TTS egress; Phase 1 intentionally does **not** use `OutboundGateway`, `outbound-request.ts`, or `principal-rules.ts` for voice audio. If dispatch emits `outbound.message` for `voice`, delivery no-ops.
-- **Trust:** `high`, `unknown_sender: ignore`, `threaded: false` (`config/channel-trust.yaml`) because Phase 1 calls are console-authenticated as the principal.
-- **Scope:** Phase 1 is web-console duplex only. Signal RingRTC and PSTN/SIP are deferred Phase 2 transports that should reuse `VoiceRuntime`.
+- **Opening greeting (#1596):** on an inbound call, a synthetic cue message triggers Curia to speak first — a short greeting appropriate to the time of day, acknowledging active outbound context when present. The cue is hidden from console history and is not used for Curia-initiated outbound calls.
+- **Cross-channel awareness (#1594):** spoken turns read the active outbound-context bridge, so a call placed right after a send knows what was just sent on another channel.
+- **Async off-ramp (#1614):** a heavyweight ask made by voice is not attempted inside the spoken turn. The `async-offramp` tool dispatches it to the async coordinator and the principal is called back when it completes — the voice brain acknowledges and moves on rather than stalling the call.
+- **Spoken replies:** `VoiceTurnRunner` uses `LLMProvider.stream()` and coordinator tool definitions, chunks assistant text into sentences, and sends audio through Cartesia TTS back to the active transport. `VoiceRuntime` owns TTS egress; voice intentionally does **not** use `OutboundGateway`, `outbound-request.ts`, or `principal-rules.ts` for voice audio. If dispatch emits `outbound.message` for `voice`, delivery no-ops.
+- **Shared prompt modules (ADR-038, #1595):** voice and the text coordinator compose the same guardrail modules from `src/agents/prompts/` (the date-resolve guardrail first) rather than maintaining two drifting prompts. Only modules that measurably pay for themselves are composed; the rest stay on hold.
+- **Trust:** `high`, `unknown_sender: ignore`, `threaded: false` (`config/channel-trust.yaml`). Console calls are authenticated as the principal by the bootstrap secret; Signal calls carry the caller's own resolved tier as described above rather than inheriting the channel's `high`.
+- **Health:** three probes cover distinct failure modes — `signal` (Signal messaging RPC socket), `voice` (LiveKit management `listRooms()`), and `signal_voice` (a **connect** to the shared PulseAudio socket, #1760). See [spec 08](08-operations.md#health--monitoring).
+- **Scope:** PSTN/SIP remains a deferred transport that should reuse `VoiceRuntime`.
 
 ### HTTP API
 - REST endpoints for programmatic access
@@ -207,6 +217,6 @@ Each adapter implements reconnection with exponential backoff:
 - **Reply-To vs From header consistency check** — not yet implemented.
 - **Reconnection with exponential backoff** — partial; Signal has full backoff, email uses polling (no reconnect path needed), HTTP/CLI not applicable.
 - **`channel.disconnected` event emission** — Signal and Slack publish on socket close; SMS/email publish on adapter stop (#1380). Voice / http / cli omit it (not queueable).
-- **Health endpoint adapter status** — not yet implemented for all adapters (Slack/SMS/Voice probes landed separately; Signal connect state not yet a health check field).
+- **Health endpoint adapter status** — every adapter now has a probe (`signal`, `email`, `slack`, `sms`, `voice`, `signal_voice`), but their depth varies: `signal`/`voice`/`signal_voice` make a real round-trip, while `slack` reads cached socket state and `sms` only asserts the webhook handler is installed. Inbound SMS reachability in particular is unproven by the liveness path and belongs in a canary (#1762).
 
 Outbound messages for channels that opt into `Channel.supportsOutboundQueue` (Signal, Slack, SMS, email) are queued in Postgres while the transport is unavailable (max 100/channel, 24h TTL) and flushed on `channel.reconnect` (#1380). Voice does not opt in — delayed delivery is not meaningful for duplex audio.
