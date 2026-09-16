@@ -351,6 +351,8 @@ Review **GitHub → Security → Code Scanning** for the results of all scanners
 
 Don't merge other code PRs between clearing this gate and tagging. If code lands on `main` after the gate clears, re-run it — the release PR adds no code, so the gate is only meaningful if `main` hasn't moved underneath it.
 
+**Record the commit the scans ran against** (`git rev-parse origin/main`) — step 7 diffs against it to prove the gate still applies at tag time.
+
 The ZAP DAST scan (`zap-dast` category) is alert-only and review-only for now — until its first run is triaged into the `alertFilter` baseline in `.zap/plan.yaml`, its findings are informational and do not block a release. Once a triaged baseline exists (and `failOnError` flips), treat its unresolved CRITICALs the same as the other scanners.
 
 With docs synced and the security gate clear, cut the release:
@@ -362,6 +364,14 @@ Open `CHANGELOG.md` and review all entries under `## [Unreleased]`. Read for the
 **2. Name the release and determine the version bump**
 
 Name each release after a sci-fi character whose nature embodies the dominant theme of the changes. Choose characters that readers are likely to know; draw from a broad canon (films, novels, games — not just one franchise). The fit should be genuinely tight, not forced. If no character fits well, defer to a short evocative phrase.
+
+**Names are never reused. List the ones already taken before you pick:**
+
+```bash
+grep '^## \[' CHANGELOG.md
+```
+
+Every prior release name is in that output. Check the *character*, not the release theme — the same character can fit two releases for entirely different reasons, and it is still a collision (v0.31.0 and a proposed v0.43.0 both landed on TARS, one for carrying messages across the tesseract, one for the honesty setting). Also note which canons are already heavily drawn on; by twenty releases in, Star Trek and Dune will each have been used more than once, and reaching for an untouched canon usually produces a better name than squeezing a third character out of a used one.
 
 Use the bump table above to determine the version bump. If the unreleased batch mixes types, the highest applicable bump wins (any minor → minor; all patches → patch).
 
@@ -380,8 +390,11 @@ Use the bump table above to determine the version bump. If the unreleased batch 
 
 **4. Update version numbers**
 
+This is the **only** place the version is bumped. Day-to-day PRs never touch `package.json`'s version or the README badge — a feature branch that bumps it is wrong, and two unmerged branches that both bump it will conflict. The version moves once, here, in the release PR.
+
 - `package.json` → `"version": "X.Y.Z"`
-- `README.md` line 18 → update the shields.io badge URL (`version-X.Y.Z`) and its `alt` attribute (`Version: X.Y.Z`)
+- `README.md` → update the shields.io version badge: both the URL (`version-X.Y.Z`) and its `alt` attribute (`Version: X.Y.Z`). Find it rather than trusting a line number — `grep -n 'shields.io/badge/version' README.md`.
+- If this release changed a **runtime** requirement (Node, pnpm, Postgres), also update the matching README badge, `engines` in `package.json`, and any version named in this file.
 
 **5. Generate a release haiku**
 
@@ -397,17 +410,30 @@ Write a haiku thematically aligned with the release — drawn from the changes, 
 
 **7. Tag and publish**
 
-Confirm the merge landed, then tag `origin/main` directly (do not rely on local branch state — the release worktree is on `chore/release-X.Y.Z`, not `main`):
+Tag `origin/main` directly (do not rely on local branch state — the release worktree is on `chore/release-X.Y.Z`, not `main`).
+
+Two things must both be true before you tag: the release PR actually merged, and no code has landed since the security gate cleared. Check both explicitly. A bare `grep "X.Y.Z"` on `CHANGELOG.md` is a weak proxy for the first and says nothing about the second — it is an unanchored substring match, so it also hits the `[X.Y.Z]:` compare-link definitions at the bottom of the file and any bullet that happens to cite a version number, and the dots are regex wildcards. Anchor on the heading instead, and corroborate with `package.json`.
 
 ```bash
-# Confirm the merge landed — grep must return a result before proceeding
 git -C /path/to/repo fetch origin main
-git -C /path/to/repo show origin/main:CHANGELOG.md | grep "X.Y.Z"
+
+# 1. The merge landed: the version heading exists AND package.json agrees.
+#    Both must return a result before proceeding.
+git -C /path/to/repo show origin/main:CHANGELOG.md | grep '^## \[X.Y.Z\]'
+git -C /path/to/repo show origin/main:package.json | grep '"version": "X.Y.Z"'
+
+# 2. The gate still applies: nothing but the three release files changed
+#    since the commit the scans ran against. <gate-sha> is the commit that
+#    was on main when pre-flight B cleared.
+git -C /path/to/repo diff --stat <gate-sha> origin/main
+#    expect exactly: CHANGELOG.md, README.md, package.json
 
 # Tag origin/main directly — no checkout or pull needed
 git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Character Name" origin/main
 git -C /path/to/repo push origin vX.Y.Z
 ```
+
+If that diff shows anything else, code landed after the gate cleared. Re-run pre-flight B against the new `main` before tagging — this check is what makes the no-code release PR worth the ceremony, so skipping it forfeits the guarantee the whole ordering exists to provide.
 
 Then write the release notes (open with the character blockquote; rewrite the CHANGELOG bullets into natural, friendly prose — past tense, as if narrating what changed; prioritize what a user of Curia would care about; close with a horizontal rule and the haiku) and create the GitHub release:
 
@@ -462,6 +488,28 @@ cosign verify-blob --bundle sbom.spdx.json.sigstore \
   --certificate-identity-regexp '^https://github.com/<owner>/curia/.github/workflows/release.yml@' \
   sbom.spdx.json
 ```
+
+**9. Verify the image publish, then close out**
+
+Tagging also triggers `docker-publish.yml`. A green run is not enough — that workflow has historically published the *wrong* thing (retagged `:edge` backwards, moved `:latest` on a malformed tag). Check the registry itself:
+
+```bash
+gh api "users/<owner>/packages/container/curia/versions?per_page=10" \
+  --jq '.[] | "\(.updated_at)\t\(.metadata.container.tags | join(", "))"'
+# expect the new release to carry: vX.Y, vX.Y.Z, latest
+# `edge` should sit on main's own build, not on the release
+```
+
+Then close out the release:
+
+- **Close the milestone** — it should read 0 open. (`gh api -X PATCH repos/<owner>/curia/milestones/<n> -f state=closed`)
+- **Remove merged worktrees and branches** — the docs-sync and release worktrees are both disposable once merged:
+  ```bash
+  git -C /path/to/repo worktree remove /path/to/worktrees/<name>
+  git -C /path/to/repo branch -d <branch>
+  git -C /path/to/repo worktree list   # confirm only active work remains
+  ```
+- **`main` is unfrozen.** The gate's "don't merge code PRs" hold ends at the tag, so anything parked for the release window can go in now.
 
 ## Scope Discipline
 
