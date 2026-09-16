@@ -127,8 +127,8 @@ importers:
         specifier: ^1.1.5
         version: 1.1.5(express@5.2.1)(pdf-parse@2.4.5)(react@19.2.8)
       patchright:
-        specifier: 1.61.1
-        version: 1.61.1
+        specifier: 1.62.3
+        version: 1.62.3
       pdf-parse:
         specifier: ^2.4.5
         version: 2.4.5
@@ -5009,14 +5009,14 @@ packages:
     resolution: {integrity: sha512-0YNdUceMdaQwoKce1gatDScmMo5pu/tfABfnzEqeG0gtTmd7mh/WcwgUjtAeOU7N8nFFlbQBnFK2gXW5fGvmMA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
-  patchright-core@1.61.1:
-    resolution: {integrity: sha512-d6Ju67DE6OzqlEX3WPvUX2SLEs6iMY1WERit//mpsrT98VHcztaUo0CBw2Lpxq25VdufVEiWEdcc0HnLwdiq6A==}
-    engines: {node: '>=18'}
+  patchright-core@1.62.3:
+    resolution: {integrity: sha512-RQf0M2THMf4TL9HNNUxdYbd4Oe3DOVPni6G/bJYsEpD9F1cgqEpWiTJIh+pfuK9JwGRo4Du6lzagJosMUXbh/Q==}
+    engines: {node: '>=20'}
     hasBin: true
 
-  patchright@1.61.1:
-    resolution: {integrity: sha512-kZWNZ2tunsBMTBWtARFVWaNvB739GOybTlIPLT91eyx0YERjtUjESawomwO0hnOh6jt1L3Sru0PK62ylYOfqQw==}
-    engines: {node: '>=18'}
+  patchright@1.62.3:
+    resolution: {integrity: sha512-TMpWzcZVWUmOe1251PHWpk0gTP2d7+mvS00h1CLL2IQAUKX7UexKfPqEjdKkH8F2TT5AlyrSbwZKr5lu1dThAQ==}
+    engines: {node: '>=20'}
     hasBin: true
 
   path-case@3.0.4:
@@ -11172,11 +11172,11 @@ snapshots:
   patch-console@2.0.0:
     optional: true
 
-  patchright-core@1.61.1: {}
+  patchright-core@1.62.3: {}
 
-  patchright@1.61.1:
+  patchright@1.62.3:
     dependencies:
-      patchright-core: 1.61.1
+      patchright-core: 1.62.3
     optionalDependencies:
       fsevents: 2.3.2
 
