@@ -15,6 +15,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/contacts/principal.js';
+import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 
 export class CalendarListEventsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -51,7 +52,17 @@ export class CalendarListEventsHandler implements ToolHandler {
         calendarIds = [calendarId];
       } else if (contactId && typeof contactId === 'string') {
         // Explicit contactId provided — used by scheduled agents that don't have a
-        // real caller contact (e.g. pass ${principal_contact_id} to look up the CEO's calendars).
+        // real caller contact (they pass the principal's contact ID from their prompt
+        // to look up the CEO's calendars).
+        //
+        // Checked before the override gate below: a literal `${...}` token is not an
+        // attempt to read someone else's calendar, it's a prompt that never got
+        // interpolated (#1800). Answering "not allowed" would send the model hunting for
+        // permission it already has; naming the real fault lets it recover. The message
+        // discloses nothing about contacts or calendars, so ordering it first is safe.
+        if (isUnresolvedPlaceholder(contactId)) {
+          return { success: false, error: unresolvedPlaceholderError('contactId', contactId) };
+        }
         //
         // Only allow this override in two cases:
         //   1. System/scheduled context (caller contactId is not a UUID — it's 'system' etc.)
@@ -93,7 +104,7 @@ export class CalendarListEventsHandler implements ToolHandler {
         if (!UUID_RE.test(ctx.caller.contactId)) {
           ctx.log.warn(
             { contactId: ctx.caller.contactId },
-            'calendar-list-events: caller contactId is not a UUID — pass contactId (e.g. ${principal_contact_id}) for scheduled invocations',
+            "calendar-list-events: caller contactId is not a UUID — pass contactId (the principal's contact ID from the agent's system prompt) for scheduled invocations",
           );
           return {
             success: false,

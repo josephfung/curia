@@ -21,6 +21,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`calendar-list-events`** — `maxResults` above 200 now pages instead of failing; errors name the cause. (#1798)
 - **Delegate wait windows** — the coordinator's invented `timeout_ms` no longer shortens them into false timeouts. (#1797)
+- **`${principal_contact_id}` leaks** — the token no longer reaches agents as literal text from tool descriptions or scheduled-job payloads. (#1800)
+- **Scheduled-job payloads** — the scheduler resolves runtime placeholders at fire time and logs any it cannot. (#1800)
+- **`calendar-holds-sweep`** — rejects a non-UUID `contactId` instead of passing it to Postgres; skill v0.1.1. (#1800)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 

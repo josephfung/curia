@@ -19,6 +19,11 @@ import type { JobRow } from './scheduler-service.js';
 import type { OutboundContextService } from '../dispatch/outbound-context.js';
 import { classifyError } from '../errors/classify.js';
 
+// Mirrors UUID_FORMAT in src/agents/loader.ts — both gate a contact ID before it is
+// substituted into model-visible text. Kept local rather than imported so the scheduler
+// does not take a dependency on the agent loader for one regex.
+const UUID_FORMAT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
 
@@ -266,6 +271,54 @@ function buildPriorRunBlock(job: JobRow, truncations: TruncationRecord[] = []): 
 }
 
 /**
+ * Resolve runtime template placeholders in a scheduled job's agent.task content.
+ *
+ * Agent system prompts get `${principal_contact_id}` resolved by
+ * `interpolateRuntimeContext()` (src/agents/loader.ts) at bootstrap. Scheduled-job
+ * payloads are authored in the same voice — the `schedule:` block in agents/calendar.yaml
+ * sits a few hundred lines below a system prompt that does resolve the token — but nothing
+ * interpolated them on the way to the bus, so the model received the literal text and
+ * copied it straight into `contactId` tool arguments, which were then rejected as
+ * non-UUIDs (#1800).
+ *
+ * Runs on the serialised content rather than the payload object so it covers both payload
+ * shapes (top-level spread and the nested `task_payload` of a task-bound job) in one pass.
+ * That is safe because the only substituted value is a UUID-format string: it survives
+ * JSON encoding unchanged, so replacing inside the JSON text cannot produce invalid JSON.
+ *
+ * An unavailable or malformed principal ID substitutes the empty string, matching
+ * `interpolateRuntimeContext`. Leaving the token in place would simply re-deliver the bug
+ * this function exists to fix; the caller logs the substitution either way.
+ *
+ * Exported for unit testing.
+ */
+export function interpolateTaskContent(
+  content: string,
+  principalContactId: string | undefined,
+): { content: string; principalReplacements: number; principalResolved: boolean; unresolvedTokens: string[] } {
+  // Same defense-in-depth UUID check as interpolateRuntimeContext: never let a value from
+  // outside the UUID-generating path become free text inside a model-visible payload.
+  const resolved = UUID_FORMAT.test(principalContactId ?? '') ? (principalContactId ?? '') : '';
+  // Reports what was actually substituted, not merely whether an argument was supplied —
+  // a malformed ID is as unusable as a missing one and must warn the same way.
+  const principalResolved = resolved !== '';
+
+  let principalReplacements = 0;
+  // Regex literals are constructed per call, so no /g lastIndex state is shared.
+  const out = content.replace(/\$\{principal_contact_id\}/g, () => {
+    principalReplacements++;
+    return resolved;
+  });
+
+  // Any other `${...}` token is a payload nothing will ever resolve. We do not guess at a
+  // value for it — we surface it, so the next instance of this bug class is a log line
+  // rather than a month of silently degraded runs.
+  const unresolvedTokens = [...new Set(out.match(/\$\{[a-z_]+\}/gi) ?? [])];
+
+  return { content: out, principalReplacements, principalResolved, unresolvedTokens };
+}
+
+/**
  * Compute the recovery timeout for a job given its expected duration.
  * Exported for unit testing; the SQL query in recoverStuckJobs() mirrors this formula.
  */
@@ -309,6 +362,12 @@ export interface SchedulerConfig {
   /** Assumed task duration for jobs with no explicit expectedDurationSeconds.
    *  Sourced from config.scheduler.defaultExpectedDurationSeconds. Default: 600. */
   defaultExpectedDurationSeconds?: number;
+  /** The principal's contact ID, resolved once at bootstrap from
+   *  contactService.findContactBySystemRole('principal') — the same value agents receive
+   *  via interpolateRuntimeContext. Substituted into `${principal_contact_id}` in job
+   *  payloads at fire time (#1800). Undefined in setup-required mode (no principal yet),
+   *  in which case the token resolves to an empty string and the fire is logged. */
+  principalContactId?: string;
 }
 
 export class Scheduler {
@@ -320,6 +379,7 @@ export class Scheduler {
   private dreamEngine?: DreamEngine;
   private outboundContextService?: OutboundContextService;
   private defaultExpectedDurationSeconds: number;
+  private principalContactId?: string;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private watchdogHandle: ReturnType<typeof setInterval> | null = null;
   private cleanupHandle: ReturnType<typeof setInterval> | null = null;
@@ -348,6 +408,7 @@ export class Scheduler {
     this.dreamEngine = config.dreamEngine;
     this.outboundContextService = config.outboundContextService;
     this.defaultExpectedDurationSeconds = config.defaultExpectedDurationSeconds ?? DEFAULT_EXPECTED_DURATION_SECONDS;
+    this.principalContactId = config.principalContactId;
   }
 
   /**
@@ -686,6 +747,40 @@ export class Scheduler {
       // scheduler_job_id is placed last so it always wins if taskPayload coincidentally
       // contains the same key (e.g. a manually-crafted job row).
       content = JSON.stringify({ ...job.taskPayload, scheduler_job_id: job.id });
+    }
+
+    // Resolve runtime placeholders before the payload is ever visible to a model. Runs on
+    // the payload only — the prior-run block prepended below is agent-written prose, and
+    // substituting into it would let a prior run's text influence this run's arguments.
+    const interpolated = interpolateTaskContent(content, this.principalContactId);
+    content = interpolated.content;
+    if (interpolated.principalReplacements > 0) {
+      // info, not debug: these payloads are rare and each one is a job that was silently
+      // broken before #1800. Searchable on 'scheduler: resolved runtime placeholder'.
+      this.logger.info(
+        {
+          jobId: job.id,
+          agentId: job.agentId,
+          replacements: interpolated.principalReplacements,
+          resolved: interpolated.principalResolved,
+        },
+        'scheduler: resolved runtime placeholder ${principal_contact_id} in task payload',
+      );
+      if (!interpolated.principalResolved) {
+        this.logger.warn(
+          { jobId: job.id, agentId: job.agentId },
+          'scheduler: task payload references ${principal_contact_id} but no usable principal contact ID is available — substituted an empty string; complete onboarding at /setup',
+        );
+      }
+    }
+    if (interpolated.unresolvedTokens.length > 0) {
+      // Nothing downstream will ever fill these in, so the agent is about to read template
+      // syntax as if it were data. Warn rather than fail the fire: the rest of the payload
+      // is usually still actionable, and a dead job is worse than a degraded one.
+      this.logger.warn(
+        { jobId: job.id, agentId: job.agentId, tokens: interpolated.unresolvedTokens },
+        'scheduler: task payload contains unresolvable template tokens — the agent will read them as literal text',
+      );
     }
 
     // Prepend prior-run context so the agent knows what happened last time

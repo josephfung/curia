@@ -262,6 +262,41 @@ describe('CalendarHoldsSweepHandler — resilience', () => {
     expect((result as { error: string }).error).toContain('contactId');
   });
 
+  // #1800: the daily cron payload carried a literal ${principal_contact_id} and this
+  // handler had no UUID check, so the token reached a uuid column as a Postgres parse
+  // error rather than a message the agent could act on.
+  it('rejects a literal ${...} template token with a message naming the real fault', async () => {
+    const handler = new CalendarHoldsSweepHandler();
+    const getCalendarsForContact = vi.fn();
+    const ctx = makeCtx({
+      input: { contactId: '${principal_contact_id}', nowMs: NOW_MS },
+      contactService: { getCalendarsForContact } as unknown as ToolContext['contactService'],
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('Unresolved template placeholder');
+    expect((result as { error: string }).error).toContain('system prompt');
+    // Rejected before the lookup — a non-UUID must never reach the uuid column.
+    expect(getCalendarsForContact).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-UUID contactId before it reaches the contact lookup', async () => {
+    const handler = new CalendarHoldsSweepHandler();
+    const getCalendarsForContact = vi.fn();
+    const ctx = makeCtx({
+      input: { contactId: 'system', nowMs: NOW_MS },
+      contactService: { getCalendarsForContact } as unknown as ToolContext['contactService'],
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('must be a UUID');
+    expect(getCalendarsForContact).not.toHaveBeenCalled();
+  });
+
   it('returns success:true with scanned=0, expired=0 when getCalendarsForContact returns empty', async () => {
     const handler = new CalendarHoldsSweepHandler();
     const ctx = makeCtx({
