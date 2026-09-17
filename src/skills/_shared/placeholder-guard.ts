@@ -14,6 +14,22 @@
  */
 
 /**
+ * The shape of a template token: `${`, at least one character, `}`.
+ *
+ * Every consumer derives its regex from this one source so the three enforcement points —
+ * the input guard below, the scheduler's unresolved-token warning, and the manifest scan
+ * in tests/unit/skills/manifest-placeholder-free.test.ts — cannot drift apart. They did:
+ * the first accepted any token while the other two matched only `[a-z_]+`, so
+ * `${principal_contact_id_2}` was rejected as an input but invisible to the scan meant to
+ * stop it being written in the first place.
+ *
+ * Nothing about the token vocabulary is encoded here on purpose. The bug is that a model
+ * copies anything token-shaped out of text it was never meant to read literally, and it
+ * does that whether or not the name matches a placeholder the runtime actually defines.
+ */
+const TOKEN_SOURCE = String.raw`\$\{[^}]+\}`;
+
+/**
  * True when `value` is nothing but a `${...}` token — e.g. `"${principal_contact_id}"`.
  *
  * Deliberately anchored: a value that merely *contains* a token is a different (and much
@@ -21,7 +37,21 @@
  * free-text inputs such as a subject line quoting shell syntax.
  */
 export function isUnresolvedPlaceholder(value: unknown): value is string {
-  return typeof value === 'string' && /^\$\{.+\}$/.test(value.trim());
+  return typeof value === 'string' && new RegExp(`^${TOKEN_SOURCE}$`).test(value.trim());
+}
+
+/**
+ * Every distinct `${...}` token in `text`, in first-seen order.
+ *
+ * Unanchored, unlike `isUnresolvedPlaceholder`: this one is for scanning prose (a tool
+ * description, a job payload) where a token is embedded in a sentence rather than standing
+ * alone as a value.
+ *
+ * The regex is constructed per call rather than shared at module scope so no caller can
+ * inherit another's `lastIndex` from the `g` flag.
+ */
+export function findTemplateTokens(text: string): string[] {
+  return [...new Set(text.match(new RegExp(TOKEN_SOURCE, 'g')) ?? [])];
 }
 
 /**

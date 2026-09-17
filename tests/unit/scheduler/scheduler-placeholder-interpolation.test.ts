@@ -129,6 +129,18 @@ describe('interpolateTaskContent', () => {
     const result = interpolateTaskContent('${timezone} then ${timezone}', PRINCIPAL_ID);
     expect(result.unresolvedTokens).toEqual(['${timezone}']);
   });
+
+  it('reports tokens whose names contain digits or uppercase', () => {
+    // A local `[a-z_]+` regex missed these while the skill input guard still rejected
+    // them, so a payload could carry a token that warned about nothing and then failed at
+    // the tool call. All three sites now share findTemplateTokens().
+    const result = interpolateTaskContent('${principal_contact_id_2} and ${AGENT_ID}', PRINCIPAL_ID);
+
+    expect(result.unresolvedTokens).toEqual(['${principal_contact_id_2}', '${AGENT_ID}']);
+    // Near-misses of the real token are reported, never silently substituted.
+    expect(result.principalReplacements).toBe(0);
+    expect(result.content).toBe('${principal_contact_id_2} and ${AGENT_ID}');
+  });
 });
 
 describe('Scheduler fire path — placeholder resolution', () => {
