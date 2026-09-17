@@ -8,6 +8,12 @@
 // The claim (claimPendingDelegation) is the single gate every delivery path goes through.
 // Exactly-once rests on the conditional UPDATE, not on timing: subscriber and sweep can race
 // freely and only one of them gets the row back.
+//
+// The claim takes a LEASE ('claimed' + claimed_at) rather than marking the handle finished. The
+// side effects — annotating the review task, publishing the audit event — happen while the lease
+// is held, and finalizePendingDelegation closes it afterwards. A crash in between leaves an
+// expired lease that the sweep re-claims, so interrupted work is recoverable; marking the handle
+// resolved up front would have recorded work that never happened.
 
 import type { Pool } from 'pg';
 import type { LateDelegationResolution } from '../../bus/events.js';
@@ -29,12 +35,15 @@ interface DbPendingDelegationRow {
   scheduler_job_id: string | null;
   review_task_id: string | null;
   status: string;
+  claimed_at: Date | null;
   resolution: string | null;
   late_response_event_id: string | null;
   wake_task_event_id: string | null;
-  created_at: string;
-  expires_at: string;
-  resolved_at: string | null;
+  // TIMESTAMPTZ columns. pg's default parser returns Date for these (the pool installs no
+  // custom setTypeParser), so they are typed as Date rather than the string they are not.
+  created_at: Date;
+  expires_at: Date;
+  resolved_at: Date | null;
 }
 
 // -- Public camelCase shape --
@@ -56,20 +65,22 @@ export interface PendingDelegationRow {
   /** Scheduled job behind the originating turn, when there was one. */
   schedulerJobId: string | null;
   reviewTaskId: string | null;
-  status: 'pending' | 'resolved';
+  status: 'pending' | 'claimed' | 'resolved';
+  /** When the current actor took its lease; null while pending. */
+  claimedAt: Date | null;
   resolution: LateDelegationResolution | null;
   lateResponseEventId: string | null;
   wakeTaskEventId: string | null;
-  createdAt: string;
-  expiresAt: string;
-  resolvedAt: string | null;
+  createdAt: Date;
+  expiresAt: Date;
+  resolvedAt: Date | null;
 }
 
 const COLUMNS = `
   id, delegate_event_id, delegate_conversation_id, target_agent, delegate_task,
   origin_agent_id, origin_conversation_id, origin_channel_id, origin_sender_id,
   origin_task_event_id, originator, scheduler_job_id, review_task_id,
-  status, resolution, late_response_event_id, wake_task_event_id,
+  status, claimed_at, resolution, late_response_event_id, wake_task_event_id,
   created_at, expires_at, resolved_at
 `;
 
@@ -89,7 +100,8 @@ function mapRow(row: DbPendingDelegationRow): PendingDelegationRow {
     schedulerJobId: row.scheduler_job_id,
     reviewTaskId: row.review_task_id,
     // The CHECK constraint on the column keeps this cast honest.
-    status: row.status as 'pending' | 'resolved',
+    status: row.status as 'pending' | 'claimed' | 'resolved',
+    claimedAt: row.claimed_at,
     resolution: row.resolution as LateDelegationResolution | null,
     lateResponseEventId: row.late_response_event_id,
     wakeTaskEventId: row.wake_task_event_id,
@@ -182,15 +194,18 @@ export interface ClaimPendingDelegationParams {
   resolution: LateDelegationResolution;
   lateResponseEventId?: string;
   wakeTaskEventId?: string;
+  /** How long the lease is good for. A claim older than this is up for grabs again. */
+  leaseSeconds: number;
 }
 
 /**
- * Atomically resolve an open handle and return it. Returns null when the handle does not
- * exist or another path already resolved it — which is the whole point: this conditional
- * UPDATE, not ordering luck, is what makes a late response act on the originator at most once.
+ * Take the lease on a handle and return it. Returns null when the handle does not exist, is
+ * already resolved, or is held by a live lease — which is the point: this conditional UPDATE,
+ * not ordering luck, is what keeps a late response from being acted on twice.
  *
- * Callers pass the resolution up front because the classification is a pure function of the
- * late response; nothing between the claim and the side effect can change it.
+ * A lease older than `leaseSeconds` is re-claimable: its holder crashed or died mid-flight, so
+ * the work still needs doing. Callers pass the resolution up front because the classification is
+ * a pure function of the late response — a retry reaches the same verdict.
  */
 export async function claimPendingDelegation(
   pool: Pool,
@@ -198,22 +213,63 @@ export async function claimPendingDelegation(
 ): Promise<PendingDelegationRow | null> {
   const { rows } = await pool.query<DbPendingDelegationRow>(
     `UPDATE pending_delegations
-        SET status = 'resolved',
+        SET status = 'claimed',
+            claimed_at = now(),
             resolution = $2,
             late_response_event_id = COALESCE($3, late_response_event_id),
-            wake_task_event_id = COALESCE($4, wake_task_event_id),
-            resolved_at = now()
-      WHERE delegate_event_id = $1 AND status = 'pending'
+            wake_task_event_id = COALESCE($4, wake_task_event_id)
+      WHERE delegate_event_id = $1
+        AND (
+          status = 'pending'
+          OR (status = 'claimed' AND claimed_at < now() - make_interval(secs => $5::int))
+        )
       RETURNING ${COLUMNS}`,
     [
       params.delegateEventId,
       params.resolution,
       params.lateResponseEventId ?? null,
       params.wakeTaskEventId ?? null,
+      params.leaseSeconds,
     ],
   );
   const row = rows[0];
   return row ? mapRow(row) : null;
+}
+
+/**
+ * Close out a claimed handle once its side effects have landed. Guarded on `status = 'claimed'`
+ * so a lease that was stolen after expiry cannot be finalized by its previous holder.
+ */
+export async function finalizePendingDelegation(
+  pool: Pool,
+  delegateEventId: string,
+): Promise<PendingDelegationRow | null> {
+  const { rows } = await pool.query<DbPendingDelegationRow>(
+    `UPDATE pending_delegations
+        SET status = 'resolved', resolved_at = now()
+      WHERE delegate_event_id = $1 AND status = 'claimed'
+      RETURNING ${COLUMNS}`,
+    [delegateEventId],
+  );
+  const row = rows[0];
+  return row ? mapRow(row) : null;
+}
+
+/**
+ * Hand a claimed handle straight back for retry after a transient failure, instead of making the
+ * next attempt wait out the whole lease. Clears the verdict too: the retry re-reads the review
+ * task and re-classifies, which is what makes a human closing that task in the meantime win.
+ */
+export async function releasePendingDelegationClaim(
+  pool: Pool,
+  delegateEventId: string,
+): Promise<void> {
+  await pool.query(
+    `UPDATE pending_delegations
+        SET status = 'pending', claimed_at = NULL, resolution = NULL
+      WHERE delegate_event_id = $1 AND status = 'claimed'`,
+    [delegateEventId],
+  );
 }
 
 /** Record the wake event id on an already-claimed handle (Phase 2 publishes after claiming). */
@@ -228,17 +284,23 @@ export async function setPendingDelegationWakeEventId(
   );
 }
 
-/** Open handles, oldest expiry first. The sweep walks these on every tick. */
+/**
+ * Unfinished handles, oldest expiry first — what the sweep walks on every tick. Includes handles
+ * whose lease expired mid-flight: that is the crash-recovery path, and skipping them would leave
+ * the very work this table exists to protect half-done.
+ */
 export async function listOpenPendingDelegations(
   pool: Pool,
+  leaseSeconds: number,
   limit = 100,
 ): Promise<PendingDelegationRow[]> {
   const { rows } = await pool.query<DbPendingDelegationRow>(
     `SELECT ${COLUMNS} FROM pending_delegations
       WHERE status = 'pending'
+         OR (status = 'claimed' AND claimed_at < now() - make_interval(secs => $1::int))
       ORDER BY expires_at ASC
-      LIMIT $1`,
-    [limit],
+      LIMIT $2`,
+    [leaseSeconds, limit],
   );
   return rows.map(mapRow);
 }

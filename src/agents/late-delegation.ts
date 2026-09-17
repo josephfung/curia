@@ -22,6 +22,8 @@ import {
 } from '../bus/events.js';
 import {
   claimPendingDelegation,
+  finalizePendingDelegation,
+  releasePendingDelegationClaim,
   type PendingDelegationRow,
 } from '../db/queries/pending-delegations.js';
 import { EXECUTION_PAUSED_PROTOCOL } from './resumable-task.js';
@@ -44,6 +46,13 @@ const UNROUTABLE_ORIGIN_CHANNELS = new Set(['internal', 'bullpen']);
 
 /** Task statuses that mean a human already disposed of the review row. */
 const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
+
+/**
+ * How long one actor may hold a handle while it annotates the review task and publishes the
+ * audit event. Generously longer than two DB writes and a publish, short enough that a crashed
+ * actor's work is picked up on the next sweep tick rather than hours later.
+ */
+export const CLAIM_LEASE_SECONDS = 120;
 
 /** What the late response turned out to be. Maps 1:1 onto a resolution. `abandoned` is the one
  *  disposition classifyLateResponse never returns — it describes the absence of a response, and
@@ -369,18 +378,23 @@ export interface ResolveLateDelegationOptions {
 }
 
 export interface ResolveLateDelegationResult {
+  /** True only when the side effects landed AND the handle was closed out. */
   resolved: boolean;
   resolution?: LateDelegationResolution;
   reviewTaskOutcome?: LateDelegationReviewOutcome;
+  /** Set when the attempt failed in a way the sweep should retry. */
+  retryable?: boolean;
 }
 
 /**
- * Claim a handle and record the outcome: annotate the review task, then publish
- * delegation.late_resolved so every branch — delivered, recorded, or lost — is queryable in
- * audit_log instead of living only in a log line.
+ * Take the lease on a handle, record the outcome — annotate the review task, publish
+ * delegation.late_resolved so every branch is queryable in audit_log — then close the handle.
  *
- * Returns `{ resolved: false }` when another path claimed the handle first. That is a normal
- * race (the sweep tick and the live subscriber can both see the same response), not an error.
+ * Order matters. The handle is only marked resolved AFTER its side effects land, so a transient
+ * annotation failure or a crash mid-flight leaves an expired lease the sweep re-claims instead of
+ * a row that claims work which never happened. `{ resolved: false }` means either another actor
+ * holds the lease (a normal race between the live subscriber and a sweep tick) or this attempt
+ * failed and is being handed back; `retryable` distinguishes them.
  */
 export async function resolveLateDelegation(
   opts: ResolveLateDelegationOptions,
@@ -390,12 +404,13 @@ export async function resolveLateDelegation(
   const claimed = await claimPendingDelegation(pool, {
     delegateEventId: handle.delegateEventId,
     resolution: classification.resolution,
+    leaseSeconds: CLAIM_LEASE_SECONDS,
     ...(lateResponseEventId !== undefined && { lateResponseEventId }),
   });
   if (!claimed) {
     logger.debug(
       { delegateEventId: handle.delegateEventId },
-      'Late delegation: handle already resolved by another path — skipping',
+      'Late delegation: handle is resolved or held by a live lease — skipping',
     );
     return { resolved: false };
   }
@@ -407,6 +422,18 @@ export async function resolveLateDelegation(
     classification,
     note,
   });
+
+  // `update_failed` is the one non-terminal annotation outcome: the review task exists and is
+  // writable in principle, so the note is still owed. Hand the lease back and let the sweep try
+  // again rather than closing the handle over a result the principal never saw.
+  if (reviewTaskOutcome === 'update_failed') {
+    await releasePendingDelegationClaim(pool, claimed.delegateEventId);
+    logger.warn(
+      { delegateEventId: claimed.delegateEventId, reviewTaskId: claimed.reviewTaskId },
+      'Late delegation: could not record the outcome on the review task — released for retry',
+    );
+    return { resolved: false, retryable: true };
+  }
 
   try {
     await bus.publish('system', createDelegationLateResolved(
@@ -424,13 +451,25 @@ export async function resolveLateDelegation(
       opts.parentEventId,
     ));
   } catch (err) {
-    // The handle is already resolved and the review task already updated; losing the audit
-    // event would hide that, so log at error rather than swallow. Do not rethrow — the
-    // outcome itself stands.
+    // Deliberately NOT released for retry. The note is already on the review task, and a retry
+    // would append a second copy of it to recover an event whose facts (resolution, timing, the
+    // response id) are already durable on this row. Losing observability in a narrow DB-trouble
+    // window beats duplicating what the principal reads.
     logger.error(
       { err, delegateEventId: claimed.delegateEventId, resolution: classification.resolution },
       'Failed to publish delegation.late_resolved — the resolution is in pending_delegations only',
     );
+  }
+
+  // Close the lease now that the side effects have landed. A lost race here (another actor stole
+  // an expired lease mid-flight) means that actor owns the outcome, so report not-resolved.
+  const finalized = await finalizePendingDelegation(pool, claimed.delegateEventId);
+  if (!finalized) {
+    logger.warn(
+      { delegateEventId: claimed.delegateEventId },
+      'Late delegation: lease was no longer ours at finalize — another actor owns this handle',
+    );
+    return { resolved: false };
   }
 
   logger.info(

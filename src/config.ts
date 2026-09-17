@@ -1210,6 +1210,21 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         throw new Error(`delegate.lateDelivery.${field} must be a positive integer, got: ${value}`);
       }
     }
+    // sweepIntervalMinutes reaches setInterval as minutes × 60000. Node silently truncates a
+    // delay past 2^31-1 ms and then fires almost immediately, forever — so an operator asking
+    // for a very slow sweep would get the fastest possible one, hammering pending_delegations.
+    // Same pitfall the defaultTimeoutMs guard above exists for. ttlMinutes and maxResultChars
+    // need no ceiling: they feed date arithmetic and slice(), never a timer.
+    const MAX_SWEEP_INTERVAL_MINUTES = Math.floor(2_147_483_647 / 60_000);
+    if (
+      lateDelivery.sweepIntervalMinutes !== undefined &&
+      lateDelivery.sweepIntervalMinutes > MAX_SWEEP_INTERVAL_MINUTES
+    ) {
+      throw new Error(
+        `delegate.lateDelivery.sweepIntervalMinutes exceeds the Node.js timer limit `
+        + `(${MAX_SWEEP_INTERVAL_MINUTES} minutes), got: ${lateDelivery.sweepIntervalMinutes}`,
+      );
+    }
   }
 
   // Validate scheduler if present.

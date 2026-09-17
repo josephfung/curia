@@ -26,6 +26,7 @@ import {
   getPendingDelegationByDelegateEventId,
   recordPendingDelegation,
 } from '../../src/db/queries/pending-delegations.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -74,8 +75,14 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
   let taskRepo: TaskRepo;
   let subscriber: LateDelegationSubscriber;
   let sweep: LateDelegationSweep;
+  // Set true only after requireCuriaTestDatabase confirms we are on curia_test. The cleanup hooks
+  // gate on it: DATABASE_URL presence is the execution gate, not proof of which database the pool
+  // reached, and vitest still runs afterAll after a FAILED beforeAll — so without this flag a
+  // guard abort against a mispointed URL would still fire these DELETEs at a real database.
+  let onTestDb = false;
 
   async function cleanup(): Promise<void> {
+    if (!onTestDb) return;
     await pool.query(
       `DELETE FROM pending_delegations WHERE review_task_id IN (SELECT id FROM tasks WHERE title LIKE $1)
           OR delegate_event_id LIKE 'late-deleg-test-%'`,
@@ -136,6 +143,8 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
+    onTestDb = true;
     const auditLogger = new AuditLogger(pool, logger);
     // Write-ahead hook: every published event is persisted before delivery, exactly as in
     // production. This is what makes the sweep's audit_log recovery path real.
@@ -170,9 +179,9 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
   });
 
   afterAll(async () => {
-    sweep.stop();
+    sweep?.stop();
     await cleanup();
-    await pool.end();
+    if (pool) await pool.end();
   });
 
   beforeEach(async () => {
@@ -426,6 +435,84 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
       const audit = await lateResolvedAudit(delegateEventId);
       expect(audit?.outcome).toBe('failure');
       expect(audit?.payload['resolution']).toBe('abandoned_ttl');
+    });
+
+    it('re-claims a handle whose actor died mid-flight and finishes the work', async () => {
+      const reviewTaskId = await createReviewTask();
+      const delegateEventId = nextDelegateEventId();
+      await recordPendingDelegation(pool, {
+        delegateEventId,
+        delegateConversationId: 'delegate-conv-crash',
+        targetAgent: 'calendar',
+        delegateTask: 'Detect travel since Aug 17',
+        originAgentId: 'coordinator',
+        originConversationId: 'scheduler:crash-job:run-1',
+        originChannelId: 'scheduler',
+        originSenderId: 'scheduler',
+        reviewTaskId,
+        expiresAt: new Date(Date.now() + 3_600_000),
+      });
+      await pool.query(
+        `INSERT INTO audit_log (event_type, source_layer, source_id, payload, conversation_id, parent_event_id)
+         VALUES ('agent.response', 'agent', 'calendar', $1::jsonb, 'delegate-conv-crash', $2)`,
+        [
+          JSON.stringify({ agentId: 'calendar', content: 'Travel detected: YYZ→BOS Dec 1.' }),
+          delegateEventId,
+        ],
+      );
+      // An actor took the lease and died before annotating — exactly the state a crash leaves.
+      await pool.query(
+        `UPDATE pending_delegations
+            SET status = 'claimed', claimed_at = now() - interval '10 minutes',
+                resolution = 'annotated_result'
+          WHERE delegate_event_id = $1`,
+        [delegateEventId],
+      );
+
+      const result = await sweep.tick();
+      expect(result.recovered).toBe(1);
+
+      const handle = await getPendingDelegationByDelegateEventId(pool, delegateEventId);
+      expect(handle?.status).toBe('resolved');
+      // The work the dead actor owed is now actually done.
+      expect(await lastNote(reviewTaskId)).toContain('Travel detected: YYZ→BOS Dec 1.');
+    });
+
+    it('does not touch a handle whose lease is still live', async () => {
+      const reviewTaskId = await createReviewTask();
+      const delegateEventId = nextDelegateEventId();
+      await recordPendingDelegation(pool, {
+        delegateEventId,
+        delegateConversationId: 'delegate-conv-live',
+        targetAgent: 'calendar',
+        delegateTask: 'Detect travel',
+        originAgentId: 'coordinator',
+        originConversationId: 'scheduler:live-job:run-1',
+        originChannelId: 'scheduler',
+        originSenderId: 'scheduler',
+        reviewTaskId,
+        expiresAt: new Date(Date.now() + 3_600_000),
+      });
+      await pool.query(
+        `INSERT INTO audit_log (event_type, source_layer, source_id, payload, conversation_id, parent_event_id)
+         VALUES ('agent.response', 'agent', 'calendar', $1::jsonb, 'delegate-conv-live', $2)`,
+        [JSON.stringify({ agentId: 'calendar', content: 'In-flight result.' }), delegateEventId],
+      );
+      const notesBefore = await noteCount(reviewTaskId);
+      await pool.query(
+        `UPDATE pending_delegations
+            SET status = 'claimed', claimed_at = now(), resolution = 'annotated_result'
+          WHERE delegate_event_id = $1`,
+        [delegateEventId],
+      );
+
+      const result = await sweep.tick();
+
+      // Another actor is mid-flight; stealing the handle would double-annotate the review task.
+      expect(result.recovered).toBe(0);
+      expect(await noteCount(reviewTaskId)).toBe(notesBefore);
+      const handle = await getPendingDelegationByDelegateEventId(pool, delegateEventId);
+      expect(handle?.status).toBe('claimed');
     });
 
     it('leaves a young handle with no response alone', async () => {

@@ -401,7 +401,7 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "ttlMinutes": { "type": "integer", "minimum": 1 },
-            "sweepIntervalMinutes": { "type": "integer", "minimum": 1 },
+            "sweepIntervalMinutes": { "type": "integer", "minimum": 1, "maximum": 35791 },
             "maxResultChars": { "type": "integer", "minimum": 1 }
           }
         }

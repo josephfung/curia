@@ -10,6 +10,9 @@
 //   2. Expiry — nothing ever arrives when the specialist died with the process. The handle is
 //      abandoned and the review task is corrected, so the backlog stops promising a delivery
 //      that will never come.
+//   3. Abandoned leases — an actor that crashed (or failed transiently) between claiming a
+//      handle and finishing its side effects. listOpenPendingDelegations returns those once the
+//      lease expires, and the retry re-does the whole outcome from scratch.
 //
 // Shaped like BacklogHeartbeat: an interval with an in-flight guard, and a tick() that is safe
 // to call directly from tests.
@@ -22,7 +25,7 @@ import {
   findLateResponseInAuditLog,
   listOpenPendingDelegations,
 } from '../db/queries/pending-delegations.js';
-import { expireLateDelegation, handleLateResponse } from './late-delegation.js';
+import { CLAIM_LEASE_SECONDS, expireLateDelegation, handleLateResponse } from './late-delegation.js';
 
 export interface LateDelegationSweepOptions {
   pool: Pool;
@@ -43,7 +46,8 @@ export interface LateDelegationSweepResult {
   recovered: number;
   /** Handles resolved as abandoned because nothing arrived before they expired. */
   abandoned: number;
-  /** Handles still open (no response yet, not expired) or claimed by another path mid-tick. */
+  /** Handles still open (no response yet, not expired), held by another actor's live lease, or
+   *  handed back after a transient failure for a later tick. */
   untouched: number;
 }
 
@@ -86,7 +90,11 @@ export class LateDelegationSweep {
 
   /** One pass over the open handles. */
   async tick(now: Date = new Date()): Promise<LateDelegationSweepResult> {
-    const handles = await listOpenPendingDelegations(this.opts.pool, this.opts.maxPerTick ?? 100);
+    const handles = await listOpenPendingDelegations(
+      this.opts.pool,
+      CLAIM_LEASE_SECONDS,
+      this.opts.maxPerTick ?? 100,
+    );
     const result: LateDelegationSweepResult = {
       examined: handles.length,
       recovered: 0,
@@ -126,7 +134,7 @@ export class LateDelegationSweep {
           continue;
         }
 
-        if (new Date(handle.expiresAt).getTime() <= now.getTime()) {
+        if (handle.expiresAt.getTime() <= now.getTime()) {
           const outcome = await expireLateDelegation({
             pool: this.opts.pool,
             bus: this.opts.bus,
