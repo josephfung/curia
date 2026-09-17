@@ -160,16 +160,15 @@ RUN pnpm-retry pnpm add -w --save-prod --prod tsx
 #     paths are removed: Node 24's corepack writes the first (confirmed by the original
 #     Trivy alert path), the second is the older corepack layout, kept so this stays
 #     correct across base-image bumps.
-#   - /usr/local/bin/pnpm-retry — build-only tooling (#1699); this is its last use.
 #
-# -- Two pnpm directories are deliberately KEPT. Do not "clean them up". (#1758) --
+# -- Three things are deliberately KEPT. Do not "clean them up". (#1758) --
 #
 # curia-deploy's thin downstream image (deploy/compose/Dockerfile.curia) builds FROM
 # this one, switches to root, and runs `pnpm add` to layer in its own extensions. That
 # `pnpm add` forces a strict re-resolution of the ENTIRE workspace — devDependencies
 # included — and then verifies all ~1300 lockfile entries against pnpm's supply-chain
-# policies. Both directories are what let it do that from disk instead of from the
-# network:
+# policies. All three are what let it do that from disk instead of from the network,
+# and survive the network it still needs:
 #
 #   - /root/.cache/pnpm — the registry METADATA cache. Without it the downstream build
 #     fetches a packument per lockfile entry. drizzle-orm's alone is 64 MB (a promptfoo
@@ -179,6 +178,16 @@ RUN pnpm-retry pnpm add -w --save-prod --prod tsx
 #     with it. Verification measured 15m 44s on the VPS versus ~18s in CI.
 #   - /root/.local/share/pnpm — the content-addressable store. node_modules entries are
 #     hardlinks into it; without it the downstream re-downloads tarballs it already has.
+#   - /usr/local/bin/pnpm-retry — the retry wrapper the two installs above used. #1699
+#     deleted it here as build-only tooling, on the reasoning that this stage was its
+#     last use. That is no longer true. The downstream `pnpm add` goes to the registry
+#     too, and it is the step that died in curia-deploy#220 on an UND_ERR_SOCKET abort —
+#     the unhandled-stream failure that no `fetchRetries` value can catch, because Node
+#     kills the process before pnpm classifies anything (see docker/pnpm-retry.sh).
+#     Keeping it lets the downstream image wrap that command instead of vendoring a
+#     second copy that would drift from the one tests/docker/test-pnpm-retry.sh covers.
+#     The cost is ~4KB of POSIX sh that nothing at runtime invokes; the removal was
+#     image hygiene, never a security control.
 #
 # The metadata cache is why code-scanning #271-#282 exist: its v11/metadata-full/*.jsonl
 # files embed each package's README, and Trivy's secret scanner reads @octokit/auth-
@@ -188,14 +197,20 @@ RUN pnpm-retry pnpm add -w --save-prod --prod tsx
 # deleted out from under the deploy. Deleting it is only safe once Dockerfile.curia
 # stops re-resolving the whole workspace (curia-deploy#220).
 #
-# Fail closed. `rm -rf` exits 0 whether or not it removed anything, so a future pnpm or
-# base-image change that relocated any of these paths would silently turn this into a
-# no-op while the build stayed green. Executing tsx afterwards proves the runtime entry
-# point still resolves — the one property this cleanup must not break — and mirrors the
-# assertions around the npm/npx removal above.
+# Fail closed, in both directions. `rm -rf` exits 0 whether or not it removed anything,
+# so a future pnpm or base-image change that relocated any of these paths would silently
+# turn this into a no-op while the build stayed green. Executing tsx afterwards proves
+# the runtime entry point still resolves — the one property this cleanup must not break
+# — and mirrors the assertions around the npm/npx removal above.
+#
+# The `test -x` on pnpm-retry is the mirror image, and is the only thing holding the
+# downstream contract: without it, re-adding the wrapper to that `rm -rf` (an easy and
+# plausible cleanup, since it is build tooling by every local signal) still builds green
+# here and surfaces as `pnpm-retry: not found`, exit 127, in curia-deploy's image build
+# — a different repo, hours later. Fail it here instead, where the cause is on screen.
 RUN set -e; \
-    rm -rf /root/.cache/node/corepack /root/.cache/corepack \
-           /usr/local/bin/pnpm-retry; \
+    rm -rf /root/.cache/node/corepack /root/.cache/corepack; \
+    test -x /usr/local/bin/pnpm-retry; \
     ./node_modules/.bin/tsx --version
 
 # Copy compiled output from build stage
