@@ -39,10 +39,12 @@ export interface NylasCalendarLike {
   };
 
   events: {
+    // `nextCursor` is the page token for the following page; absent on the last
+    // page. Needed because Nylas caps a single page at 200 events (see listEvents).
     list(params: {
       identifier: string;
       queryParams?: Record<string, unknown>;
-    }): Promise<{ data: NylasRawEvent[] }>;
+    }): Promise<{ data: NylasRawEvent[]; nextCursor?: string }>;
 
     find(params: {
       identifier: string;
@@ -217,6 +219,18 @@ const NylasSDK = NylasDefault as unknown as new (config: { apiKey: string }) => 
 // NylasCalendarClient
 // ---------------------------------------------------------------------------
 
+/**
+ * Largest page Nylas v3 accepts. Sending more returns HTTP 400
+ * "limit must be lower than or equal to 200".
+ */
+export const NYLAS_MAX_PAGE_SIZE = 200;
+
+/**
+ * Ceiling on the total events one listEvents call will page for, so an
+ * oversized `maxResults` costs a bounded number of round trips.
+ */
+export const LIST_EVENTS_MAX_TOTAL = 1000;
+
 export class NylasCalendarClient {
   private readonly nylas: NylasCalendarLike;
   private readonly grantId: string;
@@ -254,7 +268,14 @@ export class NylasCalendarClient {
     }
   }
 
-  /** List events for a calendar within a time range. */
+  /**
+   * List events for a calendar within a time range.
+   *
+   * `opts.limit` is the **total** number of events wanted, not a page size.
+   * Nylas v3 rejects any page larger than 200 (`limit must be lower than or
+   * equal to 200`), so a bigger total is satisfied by paging with `pageToken`
+   * rather than by asking for a bigger page (#1798).
+   */
   async listEvents(
     calendarId: string,
     timeMin: string,
@@ -267,17 +288,44 @@ export class NylasCalendarClient {
     if (endUnix <= startUnix) {
       throw new Error(`Invalid time range: timeMax must be after timeMin (timeMin="${timeMin}", timeMax="${timeMax}")`);
     }
+
+    const requested = typeof opts?.limit === 'number' && opts.limit > 0
+      ? Math.floor(opts.limit)
+      : NYLAS_MAX_PAGE_SIZE;
+    // maxResults reaches us straight from an LLM tool call and is unbounded in
+    // the manifest, so cap the paging work a single call can trigger.
+    const wanted = Math.min(requested, LIST_EVENTS_MAX_TOTAL);
+    if (requested > LIST_EVENTS_MAX_TOTAL) {
+      this.log.warn(
+        { calendarId, requested, cap: LIST_EVENTS_MAX_TOTAL },
+        'listEvents limit exceeds the per-call cap — truncating',
+      );
+    }
+
     try {
-      const response = await this.nylas.events.list({
-        identifier: this.grantId,
-        queryParams: {
-          calendar_id: calendarId,
-          start: startUnix,
-          end: endUnix,
-          limit: opts?.limit ?? 200,
-        },
-      });
-      return (response?.data ?? []).map((evt) => this.normalizeEvent(evt));
+      const raw: NylasRawEvent[] = [];
+      let pageToken: string | undefined;
+      do {
+        const response = await this.nylas.events.list({
+          identifier: this.grantId,
+          queryParams: {
+            calendar_id: calendarId,
+            start: startUnix,
+            end: endUnix,
+            limit: Math.min(wanted - raw.length, NYLAS_MAX_PAGE_SIZE),
+            // Omitted on the first request — Nylas treats an empty page_token as invalid.
+            ...(pageToken ? { pageToken } : {}),
+          },
+        });
+        const page = response?.data ?? [];
+        raw.push(...page);
+        pageToken = response?.nextCursor;
+        // A cursor handed back with an empty page would loop forever — stop instead.
+        if (page.length === 0) break;
+      } while (raw.length < wanted && pageToken);
+
+      // The last page can overshoot if Nylas returns more than we asked for.
+      return raw.slice(0, wanted).map((evt) => this.normalizeEvent(evt));
     } catch (err) {
       this.log.error({ err, calendarId }, 'Nylas listEvents failed');
       throw err;

@@ -110,7 +110,8 @@ export class CalendarListEventsHandler implements ToolHandler {
         return { success: false, error: 'Missing required input: calendarId or contactId (and unable to resolve caller calendars)' };
       }
 
-      // Pass maxResults as the upstream fetch limit so callers asking for >200 events aren't silently capped.
+      // maxResults is the total wanted, not a page size — the client pages for it
+      // rather than sending an oversized (and 400-rejected) Nylas limit (#1798).
       const fetchLimit = typeof maxResults === 'number' && maxResults > 0 ? { limit: maxResults } : undefined;
 
       // Fetch events from all resolved calendars in parallel, then merge.
@@ -122,6 +123,9 @@ export class CalendarListEventsHandler implements ToolHandler {
 
       const failedCalendarIds: string[] = [];
       const rejectionReasons: unknown[] = [];
+      // "<calendarId>: <upstream message>" per failure, so the agent can see *why*
+      // a calendar failed and correct its own inputs instead of retrying blind (#1798).
+      const failureDetails: string[] = [];
       const successfulEvents: NylasCalendarEvent[][] = [];
       for (let i = 0; i < settled.length; i++) {
         // settled is mapped 1:1 from calendarIds and i is bounded by settled.length, so
@@ -135,6 +139,7 @@ export class CalendarListEventsHandler implements ToolHandler {
         } else {
           failedCalendarIds.push(calendarId);
           rejectionReasons.push(result.reason);
+          failureDetails.push(`${calendarId}: ${describeRejection(result.reason)}`);
           ctx.log.error({ err: result.reason, calendarId }, 'Failed to fetch events for calendar');
         }
       }
@@ -160,7 +165,7 @@ export class CalendarListEventsHandler implements ToolHandler {
         }
         return {
           success: false,
-          error: `Failed to list events from any calendar (${failedCalendarIds.length} failed: ${failedCalendarIds.join(', ')})`,
+          error: `Failed to list events from any calendar (${failedCalendarIds.length} failed: ${failureDetails.join('; ')})`,
         };
       }
 
@@ -218,7 +223,7 @@ export class CalendarListEventsHandler implements ToolHandler {
       };
       // Surface partial failures so the LLM can inform the user
       if (failedCalendarIds.length > 0) {
-        data.warnings = [`Failed to fetch events from ${failedCalendarIds.length} calendar(s): ${failedCalendarIds.join(', ')}`];
+        data.warnings = [`Failed to fetch events from ${failedCalendarIds.length} calendar(s): ${failureDetails.join('; ')}`];
       }
       return { success: true, data };
     } catch (err) {
@@ -227,6 +232,21 @@ export class CalendarListEventsHandler implements ToolHandler {
       return { success: false, error: `Failed to list events: ${message}` };
     }
   }
+}
+
+/**
+ * One-line reason for a rejected per-calendar fetch, for inclusion in the skill
+ * error. Errors are the normal case (NylasApiError extends Error); the other
+ * branches keep a non-Error rejection from rendering as "[object Object]".
+ */
+export function describeRejection(reason: unknown): string {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === 'string') return reason;
+  if (reason && typeof reason === 'object') {
+    const message = (reason as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return String(reason);
 }
 
 /** Nylas SDK uses `statusCode` (not `status`) on NylasApiError. */

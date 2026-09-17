@@ -13,6 +13,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`calendar-list-events`** — `maxResults` above 200 now pages instead of failing; errors name the cause. (#1798)
+
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 
 > **C-3PO** *(Star Wars, 1977, George Lucas)* — the protocol droid fluent in six million forms of communication, and the one who reports the true odds however unwelcome they are. This release is both halves: a voice you reach by phone, notes it transcribes, sends it holds until a channel returns — and probes, tools, and replies that stop claiming a success they cannot support.

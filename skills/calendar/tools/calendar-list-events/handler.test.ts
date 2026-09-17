@@ -4,6 +4,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { CalendarListEventsHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import { createSilentLogger } from '../../../../src/logger.js';
+import { NylasCalendarClient } from '../../../../src/channels/calendar/nylas-calendar-client.js';
+import type { NylasCalendarLike } from '../../../../src/channels/calendar/nylas-calendar-client.js';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -283,5 +285,192 @@ describe('CalendarListEventsHandler — auth-class all-fail (#1561)', () => {
       expect(data.count).toBe(1);
       expect(data.warnings?.[0]).toContain('cal-bad');
     }
+  });
+});
+
+// The agent looped on `maxResults: 250` in prod because the skill flattened the
+// upstream "limit must be lower than or equal to 200" away, leaving it nothing to
+// correct against (#1798).
+describe('CalendarListEventsHandler — failure reasons reach the caller', () => {
+  it('includes the upstream message in the total-failure error', async () => {
+    const handler = new CalendarListEventsHandler();
+    const listEvents = vi.fn().mockRejectedValue(
+      Object.assign(new Error('limit must be lower than or equal to 200'), { statusCode: 400 }),
+    );
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarId: 'joseph@josephfung.ca',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+        maxResults: 250,
+      },
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('1 failed: joseph@josephfung.ca: limit must be lower than or equal to 200');
+    }
+  });
+
+  it('names each failing calendar with its own reason', async () => {
+    const handler = new CalendarListEventsHandler();
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'cal-a' },
+        { nylasCalendarId: 'cal-b' },
+      ]),
+    } as unknown as ToolContext['contactService'];
+    const listEvents = vi.fn()
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockRejectedValueOnce(new Error('calendar not found'));
+
+    const result = await handler.execute(makeCtx({
+      caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'signal' },
+      contactService,
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('cal-a: timeout');
+      expect(result.error).toContain('cal-b: calendar not found');
+    }
+  });
+
+  it('includes the reason in the partial-failure warning too', async () => {
+    const handler = new CalendarListEventsHandler();
+    const contactService = {
+      getCalendarsForContact: vi.fn().mockResolvedValue([
+        { nylasCalendarId: 'cal-ok' },
+        { nylasCalendarId: 'cal-bad' },
+      ]),
+    } as unknown as ToolContext['contactService'];
+    const listEvents = vi.fn()
+      .mockResolvedValueOnce([{
+        id: 'e1', title: 'Standup', description: '', startTime: 1_700_000_000, endTime: 1_700_003_600,
+        startDate: null, endDate: null, attendees: [], location: null, htmlLink: null, status: 'confirmed',
+      }])
+      .mockRejectedValueOnce(new Error('upstream exploded'));
+
+    const result = await handler.execute(makeCtx({
+      caller: { contactId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', role: 'ceo', channel: 'signal' },
+      contactService,
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { warnings?: string[] };
+      expect(data.warnings?.[0]).toContain('cal-bad: upstream exploded');
+    }
+  });
+
+  it('keeps the dedicated auth message when every calendar fails on auth', async () => {
+    const handler = new CalendarListEventsHandler();
+    const listEvents = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Forbidden'), { statusCode: 403 }),
+    );
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarId: 'cal-primary',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorType).toBe('AUTH_FAILURE');
+      expect(result.error).toMatch(/Reconnect the grant/);
+    }
+  });
+
+  it('renders a non-Error rejection without "[object Object]"', async () => {
+    const handler = new CalendarListEventsHandler();
+    const listEvents = vi.fn().mockRejectedValue({ message: 'plain object failure' });
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarId: 'cal-primary',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('cal-primary: plain object failure');
+      expect(result.error).not.toContain('[object Object]');
+    }
+  });
+
+  it('passes maxResults through as a total for the client to page for', async () => {
+    const handler = new CalendarListEventsHandler();
+    const listEvents = vi.fn().mockResolvedValue([]);
+
+    await handler.execute(makeCtx({
+      input: {
+        calendarId: 'cal-primary',
+        timeMin: '2026-05-01T00:00:00Z',
+        timeMax: '2026-06-01T00:00:00Z',
+        maxResults: 250,
+      },
+      nylasCalendarClient: { listEvents } as unknown as ToolContext['nylasCalendarClient'],
+    }));
+
+    expect(listEvents).toHaveBeenCalledWith(
+      'cal-primary', '2026-05-01T00:00:00Z', '2026-06-01T00:00:00Z', { limit: 250 },
+    );
+  });
+});
+
+// End-to-end over the real client (only the Nylas SDK is mocked): the exact prod
+// call that failed — maxResults: 250 across a window holding more than 200 events.
+describe('CalendarListEventsHandler — maxResults > 200 end to end', () => {
+  function rawPage(from: number, count: number): { data: unknown[] } {
+    return {
+      data: Array.from({ length: count }, (_, i) => ({
+        id: `evt-${from + i}`,
+        title: `Event ${from + i}`,
+        calendarId: 'cal-primary',
+        status: 'confirmed',
+        busy: true,
+        when: { startTime: 1_700_000_000 + from + i, endTime: 1_700_003_600 + from + i, object: 'timespan' },
+      })),
+    };
+  }
+
+  it('returns 250 events over two pages, sending no Nylas limit above 200', async () => {
+    const list = vi.fn()
+      .mockResolvedValueOnce({ ...rawPage(0, 200), nextCursor: 'cursor-2' })
+      .mockResolvedValueOnce({ ...rawPage(200, 50) });
+    const sdk = {
+      calendars: { list: vi.fn(), find: vi.fn(), getFreeBusy: vi.fn() },
+      events: { list, find: vi.fn(), create: vi.fn(), update: vi.fn(), sendRsvp: vi.fn(), destroy: vi.fn() },
+    } as unknown as NylasCalendarLike;
+
+    const handler = new CalendarListEventsHandler();
+    const result = await handler.execute(makeCtx({
+      input: {
+        calendarId: 'cal-primary',
+        timeMin: '2026-09-01T00:00:00Z',
+        timeMax: '2026-09-30T00:00:00Z',
+        maxResults: 250,
+      },
+      nylasCalendarClient: NylasCalendarClient.createWithSdk(sdk, 'grant-123', createSilentLogger()),
+    }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as { count: number }).count).toBe(250);
+    }
+    const limits = list.mock.calls.map((c) => (c[0] as { queryParams: { limit: number } }).queryParams.limit);
+    expect(limits).toEqual([200, 50]);
+    expect(limits.every((l) => l <= 200)).toBe(true);
   });
 });
