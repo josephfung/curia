@@ -142,6 +142,60 @@ describe('CalendarListEventsHandler — explicit contactId input', () => {
     expect(contactService!.getCalendarsForContact).not.toHaveBeenCalled();
   });
 
+  // #1800: the social-media agent read `${principal_contact_id}` out of this tool's own
+  // description and passed it through verbatim, 10 times over eight weeks. "must be a
+  // UUID" reads as a malformed ID and invites another guess; naming the template fault
+  // tells the model where the value actually comes from.
+  it('rejects a literal ${...} template token with a message naming the real fault', async () => {
+    const handler = new CalendarListEventsHandler();
+    const contactService = {
+      getCalendarsForContact: vi.fn(),
+    } as unknown as ToolContext['contactService'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        contactId: '${principal_contact_id}',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      caller: { contactId: 'system', role: null, channel: 'internal' },
+      taskMetadata: { originator: { systemRole: 'system' } },
+      contactService,
+    }));
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('Unresolved template placeholder');
+    expect((result as { error: string }).error).toContain('system prompt');
+    expect(contactService!.getCalendarsForContact).not.toHaveBeenCalled();
+  });
+
+  it('names the template fault even for a caller not allowed to override contactId', async () => {
+    // A non-system, non-principal caller passing the token is not attempting to read
+    // someone else's calendar — it is a prompt that never got interpolated. Answering
+    // "override is not allowed" would send the model hunting for permission it already
+    // has, which is what prod showed it doing (12 such failures).
+    const handler = new CalendarListEventsHandler();
+    const contactService = {
+      getCalendarsForContact: vi.fn(),
+    } as unknown as ToolContext['contactService'];
+
+    const result = await handler.execute(makeCtx({
+      input: {
+        contactId: '${principal_contact_id}',
+        timeMin: '2026-05-26T00:00:00Z',
+        timeMax: '2026-05-26T23:59:59Z',
+      },
+      caller: { contactId: 'deadbeef-0000-0000-0000-000000000009', role: null, channel: 'internal' },
+      taskMetadata: { originator: { systemRole: 'agent' } },
+      contactService,
+    }));
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toContain('Unresolved template placeholder');
+    expect((result as { error: string }).error).not.toContain('not allowed');
+    expect(contactService!.getCalendarsForContact).not.toHaveBeenCalled();
+  });
+
   it('explicit contactId takes precedence over caller contactId when caller is principal', async () => {
     const handler = new CalendarListEventsHandler();
     const principalId = 'deadbeef-0000-0000-0000-000000000001';

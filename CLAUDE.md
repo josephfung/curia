@@ -210,6 +210,30 @@ For **other contacts** (third parties, external people), use `${principal_contac
 with `entity-context` or resolve via the contacts specialist — do not hardcode
 their addresses.
 
+#### Where the placeholder resolves — and where it does not
+
+Only two places interpolate `${principal_contact_id}`:
+
+- **`agents/*.yaml` `system_prompt`** — via `interpolateRuntimeContext()` at bootstrap.
+- **`agents/*.yaml` `schedule:` task payloads** — via the scheduler when it builds the
+  `agent.task` content at fire time (#1800).
+
+Everywhere else the token is inert text that the model reads as literal advice and
+copies straight into tool arguments, where it is rejected as a non-UUID. In particular:
+
+- **Never put `${...}` in a `tool.json`** — manifests are passed through verbatim to the
+  model. `tests/unit/skills/manifest-placeholder-free.test.ts` fails the build if one
+  appears. Describe the value instead: "the principal's contact ID as given in your
+  system prompt".
+- **Job payloads written by hand** (the `POST /api/jobs` route, or a `scheduler-create`
+  call) resolve the token at fire time like any other payload, but any *other* `${...}`
+  token in a payload resolves to nothing — the scheduler logs a warning naming it.
+
+Skills that take a contact ID should reject a bare token with
+`isUnresolvedPlaceholder()` / `unresolvedPlaceholderError()` from
+`src/skills/_shared/placeholder-guard.ts`, so a model that gets this wrong is told what
+actually went wrong rather than "must be a UUID".
+
 ## Creating Issues
 
 When creating a new GitHub issue:
