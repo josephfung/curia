@@ -570,7 +570,9 @@ export interface YamlConfig {
   };
 
   delegate?: {
-    /** Default timeout in ms for specialist delegations when no timeout_ms is passed. Default: 90000.
+    /** Default timeout in ms for specialist delegations when the runtime resolves no
+     *  expected duration (neither a scheduled task's expectedDurationSeconds nor the target
+     *  agent's expected_duration_seconds). Default: 90000.
      *  Override in local.yaml to match your deployment's standard-tier model latency. */
     defaultTimeoutMs?: number;
   };

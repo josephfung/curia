@@ -3,6 +3,8 @@ import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import type { ToolContext } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { EventBus } from '../../../src/bus/bus.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import pino from 'pino';
 
@@ -487,5 +489,21 @@ describe('DelegateHandler', () => {
       expect(data.total).toBe(1300);
       expect(data.message).toContain('25 of 1300');
     }
+  });
+});
+
+describe('delegate manifest', () => {
+  const manifest = JSON.parse(
+    readFileSync(join(import.meta.dirname, '../../../skills/delegate/tool.json'), 'utf8'),
+  ) as { inputs: Record<string, string>; description: string };
+
+  // #1797: the coordinator kept inventing short timeouts (20–120s) for specialists that
+  // needed 44–356s, so the wait window is runtime-resolved and not an LLM-facing input.
+  it('does not expose timeout_ms to the LLM', () => {
+    expect(manifest.inputs).not.toHaveProperty('timeout_ms');
+  });
+
+  it('tells the model the wait window is not its to set', () => {
+    expect(manifest.description).toContain('do not pass a timeout');
   });
 });
