@@ -49,6 +49,15 @@ interface StructuredDelegateFailure {
   reason: AgentResponseFailureReason;
   retryable: boolean;
   errorType?: string;
+  /** Timeout only (#1799): the delegate agent.task event id. The abandoned specialist stamps
+   *  this as parentEventId on the response it publishes after the wait gave up, so it is the
+   *  only key that can correlate that late response back to this delegation. Without it
+   *  leaving the handler the response is unmatchable and the work is silently lost. */
+  delegateEventId?: string;
+  /** Timeout only (#1799): the conversation the specialist is running in. */
+  delegateConversationId?: string;
+  /** Timeout only (#1799): the wait that elapsed, in ms — sets the handle's TTL floor. */
+  waitTimeoutMs?: number;
 }
 
 function isStructuredDelegateFailure(err: unknown): err is StructuredDelegateFailure {
@@ -339,6 +348,11 @@ export class DelegateHandler implements ToolHandler {
             // escalating a task that turned out dead. Auto-retry would only help the rare
             // "specialist actually died" case at the cost of duplicate emails in prod.
             retryable: false,
+            // Correlation ids for late delivery (#1799) — the run we are abandoning here keeps
+            // going, so hand the runtime what it needs to recognise its eventual response.
+            delegateEventId: taskEvent.id,
+            delegateConversationId: conversationId,
+            waitTimeoutMs: specialistTimeoutMs,
           } satisfies StructuredDelegateFailure);
         }
       }, specialistTimeoutMs);
@@ -514,7 +528,13 @@ export class DelegateHandler implements ToolHandler {
       if (isStructuredDelegateFailure(err)) {
         const message = formatStructuredFailureMessage(err.agent, err.reason);
         ctx.log.error(
-          { targetAgent: err.agent, reason: err.reason, retryable: err.retryable, errorType: err.errorType },
+          {
+            targetAgent: err.agent,
+            reason: err.reason,
+            retryable: err.retryable,
+            errorType: err.errorType,
+            delegateEventId: err.delegateEventId,
+          },
           'Delegation failed with structured specialist error',
         );
         return {
@@ -527,6 +547,13 @@ export class DelegateHandler implements ToolHandler {
             ...(err.errorType !== undefined && { errorType: err.errorType }),
             message,
             ...(err.reason === 'timeout' && { possibly_succeeded: true }),
+            // #1799: only the timeout branch sets these — they let the runtime open a pending
+            // delegation handle so the specialist's late response is not orphaned.
+            ...(err.delegateEventId !== undefined && { delegate_event_id: err.delegateEventId }),
+            ...(err.delegateConversationId !== undefined && {
+              delegate_conversation_id: err.delegateConversationId,
+            }),
+            ...(err.waitTimeoutMs !== undefined && { wait_timeout_ms: err.waitTimeoutMs }),
           },
         };
       }

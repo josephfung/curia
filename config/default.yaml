@@ -130,6 +130,16 @@ skillOutput:
 delegate:
   defaultTimeoutMs: 90000   # 90s — appropriate for interactive delegations with Sonnet-class models
 
+  # Late delivery (#1799). A delegate wait that times out does NOT stop the specialist: it keeps
+  # running and eventually publishes a result. These settings control the handle that keeps that
+  # late result from being orphaned — it is correlated back to the delegation, recorded on the
+  # escalation review task, and audited.
+  lateDelivery:
+    enabled: true
+    ttlMinutes: 60            # how long to keep waiting for the abandoned specialist
+    sweepIntervalMinutes: 5   # restart recovery from audit_log + expiry of dead handles
+    maxResultChars: 8000      # cap on the result text copied into the review task note
+
 # Scheduler configuration.
 # Controls runtime defaults for the scheduler watchdog and recovery logic.
 scheduler:

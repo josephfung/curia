@@ -394,7 +394,17 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "defaultTimeoutMs": { "type": "integer", "minimum": 1 }
+        "defaultTimeoutMs": { "type": "integer", "minimum": 1 },
+        "lateDelivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "ttlMinutes": { "type": "integer", "minimum": 1 },
+            "sweepIntervalMinutes": { "type": "integer", "minimum": 1 },
+            "maxResultChars": { "type": "integer", "minimum": 1 }
+          }
+        }
       }
     },
     "scheduler": {

@@ -4770,6 +4770,176 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).toMatch(/follow.?up|logged/i);
   });
 
+  it('publishes delegation.timed_out with the origin routing and review task so a late response can be delivered (#1799)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') {
+          return { success: true, data: { task_id: 'review-task-1799' } };
+        }
+        if (toolName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(delegationKey(delegateAgent, delegateTask));
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'timeout',
+              retryable: false,
+              possibly_succeeded: true,
+              message: `Specialist '${delegateAgent}' did not respond within the delegate wait window — the task may still be running`,
+              delegate_event_id: 'delegate-task-evt-1',
+              delegate_conversation_id: 'delegate-conv-1',
+              wait_timeout_ms: 750_000,
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'tool_use' as const,
+        toolCalls: [
+          { id: 'call-late-1', name: 'delegate', input: { agent: 'calendar', task: 'Detect travel since Aug 17' } },
+        ],
+        usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      })),
+    };
+
+    const timedOut: Array<import('../../../src/bus/events.js').DelegationTimedOutEvent> = [];
+    bus.subscribe('delegation.timed_out', 'system', (event) => {
+      timedOut.push(event as import('../../../src/bus/events.js').DelegationTimedOutEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    const originTask = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'scheduler:job-travel-1:run-4',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Detect travel since Aug 17',
+      metadata: {
+        originator: {
+          contactId: 'contact-ceo',
+          systemRole: 'principal',
+          channel: 'scheduler',
+          initiatedAt: '2026-09-14T12:00:00.000Z',
+        },
+      },
+      parentEventId: 'schedule-fired-1',
+    });
+    await bus.publish('dispatch', originTask);
+
+    expect(timedOut).toHaveLength(1);
+    const payload = timedOut[0]!.payload;
+    expect(payload.delegateEventId).toBe('delegate-task-evt-1');
+    expect(payload.delegateConversationId).toBe('delegate-conv-1');
+    expect(payload.targetAgent).toBe('calendar');
+    expect(payload.delegateTask).toBe('Detect travel since Aug 17');
+    // Origin routing is what a later resume needs — and what links the late response to the
+    // conversation (here, the scheduled run) that asked for the work.
+    expect(payload.agentId).toBe('coordinator');
+    expect(payload.conversationId).toBe('scheduler:job-travel-1:run-4');
+    expect(payload.channelId).toBe('scheduler');
+    expect(payload.senderId).toBe('scheduler');
+    expect(payload.originTaskEventId).toBe(originTask.id);
+    expect(payload.originator?.['contactId']).toBe('contact-ceo');
+    expect(payload.reviewTaskId).toBe('review-task-1799');
+    expect(payload.waitTimeoutMs).toBe(750_000);
+    // Causal chain: the handle traces back to the turn that delegated.
+    expect(timedOut[0]!.parentEventId).toBe(originTask.id);
+  });
+
+  it('does not publish delegation.timed_out for a failure that is not a possibly-running timeout (#1799)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'review-task-maxturns' } };
+        if (toolName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(delegationKey(delegateAgent, delegateTask));
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'maxTurns',
+              retryable: false,
+              message: 'exceeded turn budget',
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'tool_use' as const,
+        toolCalls: [{ id: 'call-late-2', name: 'delegate', input: { agent: 'social-media', task: 'Post' } }],
+        usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      })),
+    };
+
+    const timedOut: unknown[] = [];
+    bus.subscribe('delegation.timed_out', 'system', (event) => { timedOut.push(event); });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-maxturns',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Post something',
+      parentEventId: 'inbound-maxturns',
+    }));
+
+    // A specialist that already failed has no late response coming — opening a handle for it
+    // would guarantee an abandoned row an hour later.
+    expect(timedOut).toHaveLength(0);
+  });
+
   it('humanizes delegation failure for the top-level coordinator — no _curia_protocol in output (#1329)', async () => {
     // When isCoordinator=true the runtime must emit plain language instead of the
     // _curia_protocol JSON signal. The signal has no parent above the coordinator to

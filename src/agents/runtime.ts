@@ -5,7 +5,7 @@ import {
   type StreamingTurnOpenStreamParams,
 } from './llm/streaming-turn.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
@@ -1694,17 +1694,80 @@ export class AgentRuntime {
                   const dKey = delegationKey(delegateFailure.agent, delegateTask);
                   delegationGuard.recordFailure(dKey, delegateFailure);
                   if (delegationGuard.shouldEscalate(dKey)) {
-                    const escalated = await escalateDelegationFailure(
+                    const escalation = await escalateDelegationFailure(
                       executionLayer,
                       caller,
                       invokeOptions,
                       { ...delegateFailure, task: delegateTask },
                       logger,
                     );
-                    if (escalated) {
+                    if (escalation.escalated) {
                       delegationGuard.markEscalated(dKey);
                     }
-                    pendingDelegationEscalation = { ...delegateFailure, task: delegateTask, escalated };
+                    pendingDelegationEscalation = {
+                      ...delegateFailure,
+                      task: delegateTask,
+                      escalated: escalation.escalated,
+                    };
+
+                    // Open a pending delegation handle (#1799). The specialist we just gave up
+                    // waiting for is still running and will publish an agent.response nobody is
+                    // listening for. Publishing the correlation ids here — rather than writing a
+                    // row — keeps the runtime database-free (spec 06 Layer 3): the system-layer
+                    // LateDelegationSubscriber owns persistence and delivery.
+                    //
+                    // Fires even when the escalation failed: a missing review task makes the
+                    // handle less useful, not useless, and the response still must not vanish.
+                    if (
+                      delegateFailure.reason === 'timeout' &&
+                      delegateFailure.possiblySucceeded === true &&
+                      delegateFailure.delegateEventId !== undefined
+                    ) {
+                      try {
+                        await bus.publish('agent', createDelegationTimedOut(
+                          {
+                            delegateEventId: delegateFailure.delegateEventId,
+                            // The handler sets both ids together on the timeout branch, so the
+                            // fallback is unreachable — it exists because the column is NOT NULL.
+                            delegateConversationId: delegateFailure.delegateConversationId ?? '',
+                            targetAgent: delegateFailure.agent,
+                            delegateTask,
+                            agentId,
+                            conversationId,
+                            channelId: taskEvent.payload.channelId,
+                            senderId: taskEvent.payload.senderId,
+                            originTaskEventId: taskEvent.id,
+                            // Forward the VALIDATED originator (never the raw metadata bag): a
+                            // malformed lineage persisted on the handle would resurface as a
+                            // fabricated one on a later resume.
+                            ...(originator !== undefined && {
+                              originator: originator as unknown as Record<string, unknown>,
+                            }),
+                            ...(escalation.reviewTaskId !== undefined && {
+                              reviewTaskId: escalation.reviewTaskId,
+                            }),
+                            ...(delegateFailure.waitTimeoutMs !== undefined && {
+                              waitTimeoutMs: delegateFailure.waitTimeoutMs,
+                            }),
+                          },
+                          taskEvent.id,
+                        ));
+                      } catch (err) {
+                        // Never fail the turn over the handle: the escalation has already landed
+                        // and the turn is about to stop either way. Log loudly — a swallowed
+                        // publish here is exactly the silent orphaning #1799 exists to end.
+                        logger.error(
+                          {
+                            err,
+                            agentId,
+                            conversationId,
+                            targetAgent: delegateFailure.agent,
+                            delegateEventId: delegateFailure.delegateEventId,
+                          },
+                          'Failed to publish delegation.timed_out — a late specialist response will not be delivered',
+                        );
+                      }
+                    }
                   }
                 }
               }

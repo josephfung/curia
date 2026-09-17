@@ -77,6 +77,85 @@ describe('DelegateHandler', () => {
     }
   });
 
+  it('surfaces the delegate correlation ids on timeout so a late response can be matched (#1799)', async () => {
+    const { vi } = await import('vitest');
+    vi.useFakeTimers();
+
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('slow-specialist', { role: 'specialist', description: 'Slow' });
+    const bus = new EventBus(logger);
+
+    // Capture the delegate agent.task the handler publishes — its id is the correlation key the
+    // abandoned specialist will stamp on its late response, so the returned id must equal it.
+    let publishedTaskEventId: string | undefined;
+    let publishedConversationId: string | undefined;
+    bus.subscribe('agent.task', 'agent', (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'slow-specialist') {
+        publishedTaskEventId = event.id;
+        publishedConversationId = event.payload.conversationId;
+      }
+    });
+
+    const executePromise = handler.execute(makeCtx(
+      { agent: 'slow-specialist', task: 'Detect travel', timeout_ms: 1000 },
+      { bus, agentRegistry },
+    ));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await executePromise;
+    vi.useRealTimers();
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as {
+        delegate_event_id?: string;
+        delegate_conversation_id?: string;
+        wait_timeout_ms?: number;
+      };
+      expect(data.delegate_event_id).toBe(publishedTaskEventId);
+      expect(data.delegate_conversation_id).toBe(publishedConversationId);
+      expect(data.wait_timeout_ms).toBe(1000);
+    }
+  });
+
+  it('omits the correlation ids on a non-timeout failure (#1799)', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('broken-specialist', { role: 'specialist', description: 'Errors' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'broken-specialist') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'broken-specialist',
+          conversationId: event.payload.conversationId,
+          content: 'budget exhausted',
+          isError: true,
+          reason: 'maxTurns',
+          retryable: false,
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'broken-specialist', task: 'Something' },
+      { bus, agentRegistry },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as Record<string, unknown>;
+      expect(data['reason']).toBe('maxTurns');
+      // The specialist is already done — there is no late response to wait for, so no handle
+      // should be opened for it.
+      expect(data['delegate_event_id']).toBeUndefined();
+      expect(data['possibly_succeeded']).toBeUndefined();
+    }
+  });
+
   it('returns failure when bus is not available', async () => {
     const result = await handler.execute(makeCtx({ agent: 'research-analyst', task: 'do something' }));
     expect(result.success).toBe(false);

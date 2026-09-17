@@ -203,6 +203,29 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: INITIATOR_ID_DISPATCH,
   }),
 
+  // Late delegation (#1799). `outcome` stays inside spec 10's enum:
+  //   pending  — the delegation's fate is genuinely unknown at timeout time
+  //   success  — the handle resolved as designed (delivered, or recorded for a human)
+  //   failure  — abandoned: nothing arrived before the handle expired, so work was lost
+  // The fine-grained resolution stays queryable at payload->>'resolution'.
+  'delegation.timed_out': (p, fail) => ({
+    action: 'delegate',
+    outcome: 'pending',
+    target_type: 'delegation',
+    target_id: str(p, 'delegateEventId', fail),
+    initiator_type: 'agent',
+    initiator_id: str(p, 'agentId', fail),
+  }),
+
+  'delegation.late_resolved': (p, fail) => ({
+    action: 'resolve',
+    outcome: p.resolution === 'abandoned_ttl' ? 'failure' : 'success',
+    target_type: 'delegation',
+    target_id: str(p, 'delegateEventId', fail),
+    initiator_type: INITIATOR_TYPE_SYSTEM,
+    initiator_id: 'late-delegation',
+  }),
+
   // Spec lists message.held; the event type is reserved but not yet emitted.
   // Keep the mapping ready so structured columns populate the day it ships.
   'message.held': (p, fail) => ({

@@ -13,9 +13,15 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Added
+
+- **Late delegation handles** — a timed-out delegation now records the specialist's eventual result instead of losing it. (#1799)
+- **`delegation.timed_out` / `delegation.late_resolved` bus events (public API)** — audit trail for an abandoned delegation's fate. (#1799)
+
 ### Changed
 
 - **`delegate` input schema (public API)** — `timeout_ms` removed; the runtime is its only source. Skill v1.4.0. (#1797)
+- **`delegate` outputs (public API)** — timeouts now return the delegate event and conversation ids. Skill v1.5.0. (#1799)
 
 ### Fixed
 
@@ -24,6 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`${principal_contact_id}` leaks** — the token no longer reaches agents as literal text from tool descriptions or scheduled-job payloads. (#1800)
 - **Scheduled-job payloads** — the scheduler resolves runtime placeholders at fire time and logs any it cannot. (#1800)
 - **`calendar-holds-sweep`** — rejects a non-UUID `contactId` instead of passing it to Postgres; skill v0.1.1. (#1800)
+- **Stale delegation reviews** — the CEO backlog row now says whether the specialist ever delivered. (#1799)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 

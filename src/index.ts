@@ -20,7 +20,7 @@
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
@@ -159,6 +159,8 @@ import {
 import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps } from './skills/pin-resolution.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
+import { LateDelegationSubscriber } from './agents/late-delegation-subscriber.js';
+import { LateDelegationSweep } from './agents/late-delegation-sweep.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
 import {
   DeliverableKgPromotionSubscriber,
@@ -2797,6 +2799,42 @@ async function main(): Promise<void> {
   });
   planFrontierSubscriber.start();
 
+  // Late delegation delivery (#1799): a delegate wait that times out abandons a specialist that
+  // keeps running. The subscriber opens a durable handle at timeout and matches the specialist's
+  // eventual agent.response back to it; the sweep covers what an in-process subscriber cannot —
+  // a response that landed while we were down (recovered from audit_log) and a handle whose
+  // specialist never delivered at all.
+  const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
+  let lateDelegationSweep: LateDelegationSweep | undefined;
+  if (lateDeliveryConfig.enabled) {
+    const lateDelegationSubscriber = new LateDelegationSubscriber({
+      pool,
+      bus,
+      logger,
+      taskRepo,
+      ttlMinutes: lateDeliveryConfig.ttlMinutes,
+      maxResultChars: lateDeliveryConfig.maxResultChars,
+      timezone: config.timezone,
+    });
+    lateDelegationSubscriber.start();
+
+    lateDelegationSweep = new LateDelegationSweep({
+      pool,
+      bus,
+      logger,
+      taskRepo,
+      intervalMinutes: lateDeliveryConfig.sweepIntervalMinutes,
+      ttlMinutes: lateDeliveryConfig.ttlMinutes,
+      maxResultChars: lateDeliveryConfig.maxResultChars,
+      timezone: config.timezone,
+    });
+    lateDelegationSweep.start();
+  } else {
+    logger.warn(
+      'delegate.lateDelivery.enabled is false — late specialist responses will be orphaned (#1799 disabled)',
+    );
+  }
+
   if (workingDocsRepo) {
     const deliverableKgPromotionSubscriber = new DeliverableKgPromotionSubscriber({
       bus,
@@ -3095,6 +3133,13 @@ async function main(): Promise<void> {
       backlogHeartbeat.stop();
     } catch (err) {
       logger.error({ err }, 'Error stopping backlog heartbeat during shutdown');
+    }
+    if (lateDelegationSweep) {
+      try {
+        lateDelegationSweep.stop();
+      } catch (err) {
+        logger.error({ err }, 'Error stopping late delegation sweep during shutdown');
+      }
     }
     if (browserService) {
       try {

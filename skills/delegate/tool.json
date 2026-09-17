@@ -1,7 +1,7 @@
 {
   "name": "delegate",
   "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description. How long to wait for the specialist is set by the runtime — do not pass a timeout.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -24,7 +24,10 @@
     "errorType": "string?",
     "message": "string?",
     "possibly_succeeded": "boolean?",
-    "escalated": "boolean?"
+    "escalated": "boolean?",
+    "delegate_event_id": "string?",
+    "delegate_conversation_id": "string?",
+    "wait_timeout_ms": "number?"
   },
   "permissions": [],
   "secrets": [],
