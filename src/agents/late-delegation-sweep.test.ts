@@ -30,12 +30,13 @@ interface FakeHandleRow {
   scheduler_job_id: string | null;
   review_task_id: string | null;
   status: string;
+  claimed_at: Date | null;
   resolution: string | null;
   late_response_event_id: string | null;
   wake_task_event_id: string | null;
-  created_at: string;
-  expires_at: string;
-  resolved_at: string | null;
+  created_at: Date;
+  expires_at: Date;
+  resolved_at: Date | null;
 }
 
 function handleRow(overrides: Partial<FakeHandleRow> = {}): FakeHandleRow {
@@ -54,11 +55,12 @@ function handleRow(overrides: Partial<FakeHandleRow> = {}): FakeHandleRow {
     scheduler_job_id: 'job-1',
     review_task_id: null,
     status: 'pending',
+    claimed_at: null,
     resolution: null,
     late_response_event_id: null,
     wake_task_event_id: null,
-    created_at: '2026-09-14T12:00:00.000Z',
-    expires_at: '2026-09-14T13:00:00.000Z',
+    created_at: new Date('2026-09-14T12:00:00.000Z'),
+    expires_at: new Date('2026-09-14T13:00:00.000Z'),
     resolved_at: null,
     ...overrides,
   };
@@ -68,14 +70,25 @@ interface FakePoolOptions {
   open: FakeHandleRow[];
   /** audit_log hit per delegate_event_id, when the specialist did respond. */
   auditHits?: Record<string, { id: string; payload: Record<string, unknown>; timestamp: string }>;
-  /** delegate_event_ids whose claim loses the race (another path resolved it first). */
+  /** delegate_event_ids whose claim loses the race (another actor holds a live lease). */
   claimLoses?: Set<string>;
   /** delegate_event_ids whose audit lookup throws. */
   auditThrows?: Set<string>;
 }
 
-function fakePool(opts: FakePoolOptions): { pool: pg.Pool; claims: Array<{ id: string; resolution: string }> } {
+interface FakePoolResult {
+  pool: pg.Pool;
+  claims: Array<{ id: string; resolution: string }>;
+  /** delegate_event_ids whose lease was closed out after the side effects landed. */
+  finalized: string[];
+  /** delegate_event_ids handed back for retry. */
+  released: string[];
+}
+
+function fakePool(opts: FakePoolOptions): FakePoolResult {
   const claims: Array<{ id: string; resolution: string }> = [];
+  const finalized: string[] = [];
+  const released: string[] = [];
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     if (sql.includes('FROM pending_delegations') && sql.includes("status = 'pending'")) {
       return { rows: opts.open };
@@ -86,17 +99,27 @@ function fakePool(opts: FakePoolOptions): { pool: pg.Pool; claims: Array<{ id: s
       const hit = opts.auditHits?.[id];
       return { rows: hit ? [hit] : [] };
     }
-    if (sql.includes('UPDATE pending_delegations') && sql.includes("SET status = 'resolved'")) {
+    if (sql.includes('UPDATE pending_delegations') && sql.includes("SET status = 'claimed'")) {
       const id = params[0] as string;
       const resolution = params[1] as string;
       if (opts.claimLoses?.has(id)) return { rows: [] };
       claims.push({ id, resolution });
       const row = opts.open.find((r) => r.delegate_event_id === id) ?? handleRow({ delegate_event_id: id });
-      return { rows: [{ ...row, status: 'resolved', resolution, resolved_at: '2026-09-14T12:30:00.000Z' }] };
+      return { rows: [{ ...row, status: 'claimed', claimed_at: new Date(), resolution }] };
+    }
+    if (sql.includes('UPDATE pending_delegations') && sql.includes("SET status = 'resolved'")) {
+      const id = params[0] as string;
+      finalized.push(id);
+      const row = opts.open.find((r) => r.delegate_event_id === id) ?? handleRow({ delegate_event_id: id });
+      return { rows: [{ ...row, status: 'resolved', resolved_at: new Date() }] };
+    }
+    if (sql.includes('UPDATE pending_delegations') && sql.includes("SET status = 'pending'")) {
+      released.push(params[0] as string);
+      return { rows: [] };
     }
     throw new Error(`unexpected query: ${sql.slice(0, 80)}`);
   });
-  return { pool: { query } as unknown as pg.Pool, claims };
+  return { pool: { query } as unknown as pg.Pool, claims, finalized, released };
 }
 
 /** Duck-typed TaskRepo: no review task on these handles unless a test says otherwise. */
@@ -107,12 +130,20 @@ function fakeTaskRepo(): TaskRepo {
   } as unknown as TaskRepo;
 }
 
-function makeSweep(pool: pg.Pool, bus: EventBus) {
+/** A repo whose annotation fails transiently — the retryable branch. */
+function failingTaskRepo(): TaskRepo {
+  return {
+    getTask: vi.fn(async () => ({ id: 'review-1', status: 'open' })),
+    updateTask: vi.fn(async () => { throw new Error('connection terminated'); }),
+  } as unknown as TaskRepo;
+}
+
+function makeSweep(pool: pg.Pool, bus: EventBus, taskRepo: TaskRepo = fakeTaskRepo()) {
   return new LateDelegationSweep({
     pool,
     bus,
     logger,
-    taskRepo: fakeTaskRepo(),
+    taskRepo,
     intervalMinutes: 5,
     ttlMinutes: 60,
     maxResultChars: 500,
@@ -156,7 +187,7 @@ describe('LateDelegationSweep.tick (#1799)', () => {
   it('prefers recovery over expiry when a response exists on an expired handle', async () => {
     // A real result is worth more than a tidy abandonment, so the audit_log check comes first.
     const { pool, claims } = fakePool({
-      open: [handleRow({ expires_at: '2026-09-14T12:00:00.000Z' })],
+      open: [handleRow({ expires_at: new Date('2026-09-14T12:00:00.000Z') })],
       auditHits: {
         'delegate-evt-1': {
           id: 'response-evt-late',
@@ -175,7 +206,7 @@ describe('LateDelegationSweep.tick (#1799)', () => {
   });
 
   it('abandons an expired handle with no response', async () => {
-    const { pool, claims } = fakePool({ open: [handleRow({ expires_at: '2026-09-14T12:00:00.000Z' })] });
+    const { pool, claims } = fakePool({ open: [handleRow({ expires_at: new Date('2026-09-14T12:00:00.000Z') })] });
     const bus = new EventBus(logger);
     const resolved = collectResolved(bus);
 
@@ -187,7 +218,7 @@ describe('LateDelegationSweep.tick (#1799)', () => {
   });
 
   it('leaves an unexpired handle with no response alone', async () => {
-    const { pool, claims } = fakePool({ open: [handleRow({ expires_at: '2026-09-14T14:00:00.000Z' })] });
+    const { pool, claims } = fakePool({ open: [handleRow({ expires_at: new Date('2026-09-14T14:00:00.000Z') })] });
     const bus = new EventBus(logger);
 
     const result = await makeSweep(pool, bus).tick(NOW);
@@ -225,7 +256,7 @@ describe('LateDelegationSweep.tick (#1799)', () => {
         handleRow({
           id: 'h-good',
           delegate_event_id: 'delegate-good',
-          expires_at: '2026-09-14T12:00:00.000Z',
+          expires_at: new Date('2026-09-14T12:00:00.000Z'),
         }),
       ],
       auditThrows: new Set(['delegate-bad']),
@@ -238,6 +269,78 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     expect(result.abandoned).toBe(1);
     expect(result.untouched).toBe(1);
     expect(claims).toEqual([{ id: 'delegate-good', resolution: 'abandoned_ttl' }]);
+  });
+
+  it('closes the lease only after the side effects land', async () => {
+    const { pool, claims, finalized } = fakePool({
+      open: [handleRow()],
+      auditHits: {
+        'delegate-evt-1': {
+          id: 'response-evt-1',
+          payload: { agentId: 'calendar', content: 'result' },
+          timestamp: '2026-09-14T12:06:43.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+
+    await makeSweep(pool, bus).tick(NOW);
+
+    // Claim → side effects → finalize, in that order. A handle marked resolved before its note
+    // and audit event landed would record work that never happened.
+    expect(claims).toHaveLength(1);
+    expect(finalized).toEqual(['delegate-evt-1']);
+  });
+
+  it('hands the lease back instead of closing it when the review task cannot be annotated', async () => {
+    const { pool, claims, finalized, released } = fakePool({
+      open: [handleRow({ review_task_id: 'review-1' })],
+      auditHits: {
+        'delegate-evt-1': {
+          id: 'response-evt-1',
+          payload: { agentId: 'calendar', content: 'Travel detected: one trip.' },
+          timestamp: '2026-09-14T12:06:43.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+    const resolved = collectResolved(bus);
+
+    const result = await makeSweep(pool, bus, failingTaskRepo()).tick(NOW);
+
+    // The principal never saw the result, so the handle must stay open for another attempt —
+    // and nothing may claim the outcome was recorded.
+    expect(claims).toHaveLength(1);
+    expect(released).toEqual(['delegate-evt-1']);
+    expect(finalized).toEqual([]);
+    expect(resolved).toHaveLength(0);
+    expect(result).toMatchObject({ recovered: 0, abandoned: 0, untouched: 1 });
+  });
+
+  it('re-claims a handle whose lease was abandoned mid-flight', async () => {
+    // What the listing returns after a crash: still 'claimed', lease long expired. The retry
+    // re-does the whole outcome rather than trusting the dead actor's progress.
+    const { pool, claims, finalized } = fakePool({
+      open: [handleRow({
+        status: 'claimed',
+        claimed_at: new Date('2026-09-14T12:00:00.000Z'),
+        resolution: 'annotated_result',
+      })],
+      auditHits: {
+        'delegate-evt-1': {
+          id: 'response-evt-1',
+          payload: { agentId: 'calendar', content: 'Travel detected: one trip.' },
+          timestamp: '2026-09-14T12:06:43.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+
+    const result = await makeSweep(pool, bus).tick(NOW);
+
+    expect(result.recovered).toBe(1);
+    expect(claims).toEqual([{ id: 'delegate-evt-1', resolution: 'annotated_result' }]);
+    expect(finalized).toEqual(['delegate-evt-1']);
   });
 
   it('reports an empty pass without touching anything', async () => {

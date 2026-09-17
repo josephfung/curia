@@ -8,7 +8,14 @@
 -- delegate_event_id is the delegate agent.task event id. The specialist stamps it as
 -- parent_event_id on its response, so it is the correlation key and is UNIQUE: one handle per
 -- delegation, which is also what makes "deliver at most once" enforceable by the database
--- rather than by timing (claim = UPDATE ... WHERE status = 'pending' RETURNING).
+-- rather than by timing.
+--
+-- Status is a three-step lease, not a two-step flip. 'claimed' + claimed_at is what makes the
+-- work recoverable: the actor takes a lease, performs the side effects (annotate the review
+-- task, publish the audit event), and only then marks the handle 'resolved'. A crash or a
+-- transient failure in between leaves an expired lease the sweep picks back up, whereas a
+-- straight flip to 'resolved' would have recorded the work as done and dropped it. Only one
+-- actor can hold a live lease, so recovery does not reintroduce concurrent duplicates.
 
 CREATE TABLE pending_delegations (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -32,8 +39,11 @@ CREATE TABLE pending_delegations (
   -- treatment of scheduled_jobs.task_id: a deleted task must not strand or delete the handle.
   review_task_id           UUID REFERENCES tasks(id) ON DELETE SET NULL,
   status                   TEXT NOT NULL DEFAULT 'pending'
-                             CHECK (status IN ('pending', 'resolved')),
-  -- LateDelegationResolution (src/bus/events.ts); NULL while pending.
+                             CHECK (status IN ('pending', 'claimed', 'resolved')),
+  -- When the current actor took its lease. NULL unless status is 'claimed'/'resolved'.
+  claimed_at               TIMESTAMPTZ,
+  -- LateDelegationResolution (src/bus/events.ts); set when the lease is taken, because the
+  -- classification is a pure function of the response and cannot change under a retry.
   resolution               TEXT,
   -- The agent.response that resolved the handle; NULL when it expired unresolved.
   late_response_event_id   TEXT,
@@ -42,16 +52,19 @@ CREATE TABLE pending_delegations (
   created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at               TIMESTAMPTZ NOT NULL,
   resolved_at              TIMESTAMPTZ,
-  -- A resolved handle must always say how, and a pending one must not claim a resolution.
+  -- Each status carries exactly the fields it has earned: a pending handle claims nothing, a
+  -- claimed one knows its verdict and holds a lease, a resolved one is finished.
   CONSTRAINT pending_delegations_resolution_shape CHECK (
-    (status = 'pending'  AND resolution IS NULL     AND resolved_at IS NULL) OR
-    (status = 'resolved' AND resolution IS NOT NULL AND resolved_at IS NOT NULL)
+    (status = 'pending'  AND resolution IS NULL     AND claimed_at IS NULL     AND resolved_at IS NULL) OR
+    (status = 'claimed'  AND resolution IS NOT NULL AND claimed_at IS NOT NULL AND resolved_at IS NULL) OR
+    (status = 'resolved' AND resolution IS NOT NULL AND claimed_at IS NOT NULL AND resolved_at IS NOT NULL)
   )
 );
 
--- The only hot query: open handles, oldest expiry first (subscriber match + sweep tick).
+-- The only hot query: unfinished handles, oldest expiry first (sweep tick). Covers both a
+-- pending handle and one whose lease was abandoned mid-flight.
 CREATE INDEX idx_pending_delegations_open
   ON pending_delegations (expires_at)
-  WHERE status = 'pending';
+  WHERE status IN ('pending', 'claimed');
 
 -- Rollback: DROP TABLE pending_delegations;

@@ -31,6 +31,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Scheduled-job payloads** — the scheduler resolves runtime placeholders at fire time and logs any it cannot. (#1800)
 - **`calendar-holds-sweep`** — rejects a non-UUID `contactId` instead of passing it to Postgres; skill v0.1.1. (#1800)
 - **Stale delegation reviews** — the CEO backlog row now says whether the specialist ever delivered. (#1799)
+- **`audit_log.parent_event_id`** — indexed, so causal-chain reads stop scanning the whole table. (#1799)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 

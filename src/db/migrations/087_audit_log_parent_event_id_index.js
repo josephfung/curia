@@ -17,8 +17,25 @@
  */
 
 /** @param {import('node-pg-migrate').MigrationBuilder} pgm */
-export function up(pgm) {
+export async function up(pgm) {
   pgm.noTransaction();
+
+  // A CREATE INDEX CONCURRENTLY that fails partway (deadlock, cancelled session, a crashed
+  // deploy) leaves the index behind marked INVALID: unusable for queries, still maintained on
+  // every write. On the retry, IF NOT EXISTS would see the name, skip the build, and report
+  // success — leaving audit_log with the write cost of an index and none of the benefit. Drop
+  // that carcass first. The check is narrow on purpose: only an invalid index is dropped, so a
+  // healthy one is never rebuilt.
+  const invalid = await pgm.db.select(`
+    SELECT 1 FROM pg_class c
+      JOIN pg_index i ON i.indexrelid = c.oid
+     WHERE c.relname = 'idx_audit_log_parent_event_id' AND NOT i.indisvalid
+  `);
+  if (invalid.length > 0) {
+    // DROP INDEX CONCURRENTLY cannot run inside a transaction or a DO block, which is the other
+    // reason this migration is .js with noTransaction() rather than plain .sql.
+    pgm.sql(`DROP INDEX CONCURRENTLY IF EXISTS idx_audit_log_parent_event_id`);
+  }
 
   pgm.sql(`
     CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_log_parent_event_id
