@@ -143,6 +143,8 @@ delegate:
 
 Override in `config/local.yaml` to match the deployment's model latency profile. The value is validated at startup; non-numeric or non-positive values cause a hard startup failure.
 
+This is the **fallback**, used when the runtime resolves no expected duration for the delegation. The runtime resolves the wait window in priority order: a scheduled task's `expectedDurationSeconds`, then the target agent's `expected_duration_seconds` (both plus bounded headroom), then this default. The coordinator LLM is not a source — `timeout_ms` is not in the `delegate` input schema, and the runtime discards any value the model emits (#1797).
+
 ---
 
 ### `scheduler`

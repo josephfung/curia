@@ -11,8 +11,9 @@ export interface AgentRegistryEntry {
   role: string;
   description: string;
   /** Expected wall-clock duration for delegate calls targeting this agent, in seconds.
-   *  When set, the runtime injects timeout_ms into delegate calls that don't already
-   *  carry an explicit timeout. See issue #387. */
+   *  When set, the runtime injects timeout_ms into delegate calls, overriding anything the
+   *  model emitted (#1797). Used only when the scheduler supplied no expectedDurationSeconds.
+   *  See issue #387. */
   expectedDurationSeconds?: number;
 }
 

@@ -35,8 +35,10 @@ import {
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 
 // Default wait for the specialist to respond — appropriate for interactive tasks.
-// Long-running scheduled tasks should pass timeout_ms explicitly (injected by the runtime
-// from the originating agent.task event's expectedDurationSeconds).
+// Used only when neither config.delegate.defaultTimeoutMs nor a runtime-resolved
+// timeout_ms is available. Long-running work gets a longer window from the runtime,
+// which resolves timeout_ms from the originating agent.task event's
+// expectedDurationSeconds or the target agent's expected_duration_seconds (#1797).
 const DEFAULT_SPECIALIST_TIMEOUT_MS = 90000;
 
 /** Sentinel shape rejected by the response promise when a specialist returns isError with
@@ -94,10 +96,11 @@ export class DelegateHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: task (string)' };
     }
 
-    // Use caller-supplied timeout if it's a valid positive finite integer; fall back to default.
-    // Invalid values fall back silently so a bad LLM-supplied value never breaks the call.
-    // When the runtime injects timeout_ms from expectedDurationSeconds (scheduled tasks), the
-    // value should always be valid — a warn here helps distinguish LLM garbage from a runtime bug.
+    // timeout_ms is NOT part of this skill's LLM-facing input schema — the runtime is its only
+    // source, and it discards anything the model emits before the call reaches here (#1797).
+    // Use the caller-supplied timeout if it's a valid positive finite integer; fall back to the
+    // configured default otherwise. Invalid values fall back silently rather than failing the
+    // call, and the warn below flags a runtime bug (the injected value should always be valid).
     const isValidTimeout =
       typeof timeout_ms === 'number' &&
       Number.isInteger(timeout_ms) &&

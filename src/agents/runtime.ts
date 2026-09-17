@@ -161,7 +161,7 @@ export interface AgentConfig {
    *  bootstrap placeholder are unaffected. */
   availableSpecialists?: string;
   /** Agent registry — used to look up target agent's expectedDurationSeconds when a delegate
-   *  call is made, so the runtime can inject an appropriate timeout_ms. See #387. */
+   *  call is made, so the runtime can inject an appropriate timeout_ms. See #387, #1797. */
   agentRegistry?: AgentRegistry;
   /** Error budget config — turn and consecutive error limits per task.
    * maxTurns is checked at the start of each tool-use iteration, so
@@ -1345,11 +1345,17 @@ export class AgentRuntime {
           logger.info({ agentId, skill: toolCall.name, callId: toolCall.id }, 'Invoking skill');
           skillsCalled.push(toolCall.name);
 
-          // For delegate calls: inject timeout_ms so the specialist gets an appropriate wait
-          // window. Two sources, checked in priority order:
+          // For delegate calls: the runtime is the SOLE source of timeout_ms, so the
+          // specialist gets an appropriate wait window. Sources, in priority order:
           //   1. Scheduled task: the task event's expectedDurationSeconds (from the scheduler)
           //   2. Target agent config: the target agent's expected_duration_seconds (from YAML)
-          // The LLM's explicit timeout_ms always wins if provided.
+          //   3. Neither — the key is left absent and the delegate handler falls back to
+          //      config delegate.defaultTimeoutMs.
+          // Any timeout_ms the LLM emits is discarded (#1797). `timeout_ms` is no longer in the
+          // delegate input schema, but models still invent one, and the guessed values (20-120s)
+          // were routinely shorter than the specialist needed — turning healthy delegations into
+          // timeout escalations. The model has no visibility into specialist latency, so it is
+          // not a source for this value.
           // This is transparent to the LLM — it doesn't need to know about scheduling internals.
           let skillInput = toolCall.input;
           if (toolCall.name === 'delegate') {
@@ -1375,48 +1381,60 @@ export class AgentRuntime {
                 );
               }
 
-              if (!('timeout_ms' in inputRecord) || inputRecord['timeout_ms'] === undefined) {
-                // Source 1: scheduler's expectedDurationSeconds on the task event
-                let durationSeconds = taskEvent.payload.expectedDurationSeconds;
+              // The model is not a source for the wait window (#1797). Drop anything it
+              // emitted before resolving, so a guessed value can never shorten the wait
+              // below what the scheduler, the agent config, or the deployment default says.
+              const llmTimeoutMs = inputRecord['timeout_ms'];
+              const resolvedInput: Record<string, unknown> = { ...inputRecord };
+              delete resolvedInput['timeout_ms'];
+              if (llmTimeoutMs !== undefined) {
+                logger.warn(
+                  { agentId, taskEventId: taskEvent.id, targetAgent: inputRecord['agent'], llmTimeoutMs },
+                  'delegate call supplied timeout_ms — discarding; the runtime resolves the delegate wait window',
+                );
+              }
 
-                // Source 2: target agent's expected_duration_seconds from agent YAML config
-                // Only used when the scheduler didn't provide a value.
-                if (durationSeconds === undefined && this.config.agentRegistry) {
-                  const rawAgent = inputRecord['agent'];
-                  if (typeof rawAgent !== 'string') {
-                    // LLM produced a malformed delegate call — agent field missing or non-string.
-                    // Warn so the audit log shows the root cause rather than a silent timeout miss.
+              // Source 1: scheduler's expectedDurationSeconds on the task event
+              let durationSeconds = taskEvent.payload.expectedDurationSeconds;
+
+              // Source 2: target agent's expected_duration_seconds from agent YAML config
+              // Only used when the scheduler didn't provide a value.
+              if (durationSeconds === undefined && this.config.agentRegistry) {
+                const rawAgent = inputRecord['agent'];
+                if (typeof rawAgent !== 'string') {
+                  // LLM produced a malformed delegate call — agent field missing or non-string.
+                  // Warn so the audit log shows the root cause rather than a silent timeout miss.
+                  logger.warn(
+                    { agentId, taskEventId: taskEvent.id, agentFieldType: typeof rawAgent },
+                    'delegate call has non-string agent field — cannot look up expected_duration_seconds; delegate will use default timeout',
+                  );
+                } else {
+                  const targetEntry = this.config.agentRegistry.get(rawAgent);
+                  if (targetEntry === undefined) {
+                    // Agent name is valid but unknown to the registry — likely a YAML typo or a
+                    // newly added agent that hasn't been registered yet.
                     logger.warn(
-                      { agentId, taskEventId: taskEvent.id, agentFieldType: typeof rawAgent },
-                      'delegate call has non-string agent field — cannot look up expected_duration_seconds; delegate will use default timeout',
+                      { agentId, taskEventId: taskEvent.id, targetAgent: rawAgent },
+                      'delegate target agent not found in registry — cannot look up expected_duration_seconds; delegate will use default timeout',
                     );
                   } else {
-                    const targetEntry = this.config.agentRegistry.get(rawAgent);
-                    if (targetEntry === undefined) {
-                      // Agent name is valid but unknown to the registry — likely a YAML typo or a
-                      // newly added agent that hasn't been registered yet.
-                      logger.warn(
-                        { agentId, taskEventId: taskEvent.id, targetAgent: rawAgent },
-                        'delegate target agent not found in registry — cannot look up expected_duration_seconds; delegate will use default timeout',
-                      );
-                    } else {
-                      durationSeconds = targetEntry.expectedDurationSeconds;
-                    }
-                  }
-                }
-
-                if (durationSeconds !== undefined) {
-                  try {
-                    const timeoutMs = computeDelegateTimeoutMs(durationSeconds);
-                    skillInput = { ...inputRecord, timeout_ms: timeoutMs };
-                  } catch (err) {
-                    logger.warn(
-                      { err, agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds },
-                      'Could not compute delegate timeout from expectedDurationSeconds — skipping injection; delegate will use default timeout',
-                    );
+                    durationSeconds = targetEntry.expectedDurationSeconds;
                   }
                 }
               }
+
+              if (durationSeconds !== undefined) {
+                try {
+                  resolvedInput['timeout_ms'] = computeDelegateTimeoutMs(durationSeconds);
+                } catch (err) {
+                  logger.warn(
+                    { err, agentId, taskEventId: taskEvent.id, expectedDurationSeconds: durationSeconds },
+                    'Could not compute delegate timeout from expectedDurationSeconds — skipping injection; delegate will use default timeout',
+                  );
+                }
+              }
+
+              skillInput = resolvedInput;
             }
           }
 

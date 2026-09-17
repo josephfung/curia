@@ -3361,6 +3361,73 @@ describe('AgentRuntime chatWithRetry', () => {
   // ---------------------------------------------------------------------------
 
   describe('delegate timeout injection from agent registry', () => {
+    /** Drive one delegate call through the runtime and hand back the execution-layer spy.
+     *  `llmInput` is the raw tool_use input the model produced; omit
+     *  `expectedDurationSeconds` to register the target agent with no YAML duration hint. */
+    async function runDelegateTimeoutCase(opts: {
+      conversationId: string;
+      llmInput: Record<string, unknown>;
+      expectedDurationSeconds?: number;
+    }): Promise<{ mockExecution: ExecutionLayer }> {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+
+      let callCount = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [{ id: `call-${opts.conversationId}`, name: 'delegate', input: opts.llmInput }],
+              usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
+            };
+          }
+          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
+        }),
+      };
+
+      const { AgentRegistry } = await import('../../../src/agents/agent-registry.js');
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('essay-editor', {
+        role: 'specialist',
+        description: 'Essay editor',
+        ...(opts.expectedDurationSeconds !== undefined
+          ? { expectedDurationSeconds: opts.expectedDurationSeconds }
+          : {}),
+      });
+
+      const mockExecution = {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: { response: 'Polished!', agent: 'essay-editor' } }),
+      } as unknown as ExecutionLayer;
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        skillToolDefs: [{ name: 'delegate', description: 'Delegate', input_schema: { type: 'object' as const, properties: { agent: { type: 'string' }, task: { type: 'string' } }, required: ['agent', 'task'] } }],
+        agentRegistry,
+      });
+      agent.register();
+
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: opts.conversationId,
+        channelId: 'cli',
+        senderId: 'user',
+        content: 'Polish essay',
+        parentEventId: `parent-${opts.conversationId}`,
+      }));
+
+      return { mockExecution };
+    }
+
     it('injects timeout_ms from target agent expectedDurationSeconds', async () => {
       const logger = createLogger('error');
       const bus = new EventBus(logger);
@@ -3424,70 +3491,59 @@ describe('AgentRuntime chatWithRetry', () => {
       );
     });
 
-    it('does not inject timeout_ms when LLM already provides one', async () => {
-      const logger = createLogger('error');
-      const bus = new EventBus(logger);
-
-      let callCount = 0;
-      const provider: LLMProvider = {
-        id: 'mock',
-        chat: vi.fn().mockImplementation(async () => {
-          callCount++;
-          if (callCount === 1) {
-            return {
-              type: 'tool_use' as const,
-              toolCalls: [{ id: 'call-delegate-2', name: 'delegate', input: { agent: 'essay-editor', task: 'polish', timeout_ms: 30000 } }],
-              usage: { inputTokens: 100, outputTokens: 50, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
-              provenance: MOCK_PROVENANCE,
-            };
-          }
-          return { type: 'text' as const, content: 'Done', usage: { inputTokens: 200, outputTokens: 60, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }, provenance: MOCK_PROVENANCE };
-        }),
-      };
-
-      const { AgentRegistry } = await import('../../../src/agents/agent-registry.js');
-      const agentRegistry = new AgentRegistry();
-      agentRegistry.register('essay-editor', { role: 'specialist', description: 'Essay editor', expectedDurationSeconds: 600 });
-
-      const mockExecution = {
-        invoke: vi.fn().mockResolvedValue({ success: true, data: { response: 'Polished!', agent: 'essay-editor' } }),
-      } as unknown as ExecutionLayer;
-
-      const agent = new AgentRuntime({
-        agentId: 'coordinator',
-        systemPrompt: 'You are an assistant.',
-        provider,
-        resolvedModel: "mock-model",
-        bus,
-        logger,
-        executionLayer: mockExecution,
-        skillToolDefs: [{ name: 'delegate', description: 'Delegate', input_schema: { type: 'object' as const, properties: {}, required: [] } }],
-        agentRegistry,
+    // #1797: the model used to be able to shorten the wait window by inventing a
+    // timeout_ms (20–120s against specialists that needed 44–356s), which turned healthy
+    // delegations into timeout escalations. The runtime is now the sole source.
+    it('discards an LLM-supplied timeout_ms lower than the resolved value', async () => {
+      const { mockExecution } = await runDelegateTimeoutCase({
+        conversationId: 'conv-timeout-llm-low',
+        llmInput: { agent: 'essay-editor', task: 'polish', timeout_ms: 30000 },
+        expectedDurationSeconds: 600,
       });
-      agent.register();
 
-      const task = createAgentTask({
-        agentId: 'coordinator',
-        conversationId: 'conv-timeout-2',
-        channelId: 'cli',
-        senderId: 'user',
-        content: 'Polish essay',
-        parentEventId: 'parent-timeout-2',
-      });
-      await bus.publish('dispatch', task);
-
-      // LLM's explicit timeout_ms should be preserved, not overwritten
+      // Agent YAML's 600s (+25% headroom) wins over the LLM's 30s guess
       expect(mockExecution.invoke).toHaveBeenCalledWith(
         'delegate',
-        expect.objectContaining({ timeout_ms: 30000 }),
+        expect.objectContaining({ timeout_ms: 750_000 }),
         undefined,
         expect.any(Object),
       );
     });
 
+    it('discards an LLM-supplied timeout_ms higher than the resolved value', async () => {
+      // Option A policy (#1797): the runtime is the ONLY source, so a higher LLM value is
+      // dropped too — not max()'d in. The model has no visibility into specialist latency.
+      const { mockExecution } = await runDelegateTimeoutCase({
+        conversationId: 'conv-timeout-llm-high',
+        llmInput: { agent: 'essay-editor', task: 'polish', timeout_ms: 880_000 },
+        expectedDurationSeconds: 600,
+      });
+
+      expect(mockExecution.invoke).toHaveBeenCalledWith(
+        'delegate',
+        expect.objectContaining({ timeout_ms: 750_000 }),
+        undefined,
+        expect.any(Object),
+      );
+    });
+
+    it('strips an LLM-supplied timeout_ms when nothing resolves, so the handler default applies', async () => {
+      // No scheduler duration and no agent expected_duration_seconds — the key must be
+      // absent so the delegate handler falls back to config delegate.defaultTimeoutMs.
+      const { mockExecution } = await runDelegateTimeoutCase({
+        conversationId: 'conv-timeout-llm-nores',
+        llmInput: { agent: 'essay-editor', task: 'polish', timeout_ms: 20000 },
+      });
+
+      const invokeCall = (mockExecution.invoke as ReturnType<typeof vi.fn>).mock.calls[0];
+      const inputArg = invokeCall?.[1] as Record<string, unknown>;
+      expect(inputArg).not.toHaveProperty('timeout_ms');
+    });
+
     it('task scheduler expectedDurationSeconds takes precedence over agent YAML', async () => {
-      // Priority chain: LLM explicit > task scheduler > agent YAML > default.
-      // This test verifies the scheduler slot (source 1) beats the agent YAML slot (source 2).
+      // Priority chain: task scheduler > agent YAML > handler default (the LLM is not a
+      // source — #1797). This test verifies the scheduler slot (source 1) beats the agent
+      // YAML slot (source 2).
       const logger = createLogger('error');
       const bus = new EventBus(logger);
 

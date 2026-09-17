@@ -119,10 +119,13 @@ skillOutput:
   maxLength: 200000  # 200k characters (~50k tokens at 4 chars/token)
 
 # Delegate skill configuration.
-# Controls the default timeout for specialist agent delegations when no explicit
-# timeout_ms is provided by the caller or runtime. Deployment-specific model
-# latency (e.g. switching the standard tier to a higher-latency model) can be
-# accommodated here without a code change or release.
+# Controls the default timeout for specialist agent delegations when the runtime
+# resolves no expected duration for the target (no scheduled-task
+# expectedDurationSeconds and no agent expected_duration_seconds). The coordinator
+# LLM cannot set this — timeout_ms is not in the delegate input schema and the
+# runtime discards any value the model emits. Deployment-specific model latency
+# (e.g. switching the standard tier to a higher-latency model) can be accommodated
+# here without a code change or release.
 # Override in config/local.yaml to match your deployment's model latency.
 delegate:
   defaultTimeoutMs: 90000   # 90s — appropriate for interactive delegations with Sonnet-class models

@@ -41,8 +41,9 @@ export interface AgentYamlConfig {
     intent_anchor?: string;
   }>;
   /** Expected wall-clock duration for delegate calls targeting this agent, in seconds.
-   *  When set, the runtime injects timeout_ms = expected_duration_seconds * 1000 into
-   *  delegate calls that don't already carry an explicit timeout. */
+   *  When set, the runtime injects timeout_ms (duration + bounded headroom) into delegate
+   *  calls, overriding anything the model emitted (#1797). Used only when the scheduler
+   *  supplied no expectedDurationSeconds. */
   expected_duration_seconds?: number;
   error_budget?: {
     max_turns?: number;
