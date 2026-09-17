@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from './placeholder-guard.js';
+import { isUnresolvedPlaceholder, unresolvedPlaceholderError, findTemplateTokens } from './placeholder-guard.js';
 
 describe('isUnresolvedPlaceholder', () => {
   it('matches a bare runtime token', () => {
@@ -33,6 +33,36 @@ describe('isUnresolvedPlaceholder', () => {
     expect(isUnresolvedPlaceholder(undefined)).toBe(false);
     expect(isUnresolvedPlaceholder(null)).toBe(false);
     expect(isUnresolvedPlaceholder(42)).toBe(false);
+  });
+});
+
+describe('findTemplateTokens', () => {
+  it('finds tokens embedded in prose', () => {
+    expect(findTemplateTokens('pass ${principal_contact_id} to the skill'))
+      .toEqual(['${principal_contact_id}']);
+  });
+
+  it('deduplicates, preserving first-seen order', () => {
+    expect(findTemplateTokens('${b} then ${a} then ${b}')).toEqual(['${b}', '${a}']);
+  });
+
+  it('returns an empty array when there is nothing token-shaped', () => {
+    expect(findTemplateTokens('a normal description')).toEqual([]);
+    expect(findTemplateTokens('costs $50 for {approx} items')).toEqual([]);
+  });
+
+  it('agrees with isUnresolvedPlaceholder on what counts as a token', () => {
+    // The two drifted once: this scan matched only `[a-z_]+` while the guard accepted any
+    // token, so a name with a digit was rejected as an argument but invisible to the scan
+    // meant to stop it being authored. Both now derive from one pattern.
+    for (const token of ['${principal_contact_id}', '${principal_contact_id_2}', '${user2}', '${AGENT_ID}']) {
+      expect(isUnresolvedPlaceholder(token), token).toBe(true);
+      expect(findTemplateTokens(`see ${token} here`), token).toEqual([token]);
+    }
+  });
+
+  it('does not match an empty brace expression', () => {
+    expect(findTemplateTokens('${}')).toEqual([]);
   });
 });
 

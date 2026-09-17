@@ -18,6 +18,7 @@ import type { DreamEngine } from '../memory/dream-engine.js';
 import type { JobRow } from './scheduler-service.js';
 import type { OutboundContextService } from '../dispatch/outbound-context.js';
 import { classifyError } from '../errors/classify.js';
+import { findTemplateTokens } from '../skills/_shared/placeholder-guard.js';
 
 // Mirrors UUID_FORMAT in src/agents/loader.ts — both gate a contact ID before it is
 // substituted into model-visible text. Kept local rather than imported so the scheduler
@@ -310,10 +311,14 @@ export function interpolateTaskContent(
     return resolved;
   });
 
-  // Any other `${...}` token is a payload nothing will ever resolve. We do not guess at a
-  // value for it — we surface it, so the next instance of this bug class is a log line
-  // rather than a month of silently degraded runs.
-  const unresolvedTokens = [...new Set(out.match(/\$\{[a-z_]+\}/gi) ?? [])];
+  // Any other `${...}` token is a payload nothing will ever resolve. The text is passed
+  // through unchanged — we do not guess at a value — and surfaced to the caller, so the
+  // next instance of this bug class is a log line rather than a month of degraded runs.
+  //
+  // Shares findTemplateTokens() with the skill input guard and the manifest scan so all
+  // three agree on what counts as a token; a local regex here previously matched only
+  // `[a-z_]+` and so missed any name containing a digit.
+  const unresolvedTokens = findTemplateTokens(out);
 
   return { content: out, principalReplacements, principalResolved, unresolvedTokens };
 }

@@ -18,6 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { findTemplateTokens } from '../../../src/skills/_shared/placeholder-guard.js';
 
 // tests/unit/skills/ → ../../../skills/
 const SKILLS_DIR = path.join(import.meta.dirname, '../../../skills');
@@ -84,10 +85,11 @@ describe('tool manifests are free of runtime template placeholders', () => {
       const relative = path.relative(SKILLS_DIR, manifestPath);
 
       for (const { field, text } of stringFields(manifest)) {
-        // `[a-z_]+` rather than `.+` — matches the token vocabulary the runtime actually
-        // defines, and keeps legitimate prose mentioning shell or JS syntax from tripping
-        // the guard. Case-insensitive so an uppercased variant is not a silent bypass.
-        for (const token of text.match(/\$\{[a-z_]+\}/gi) ?? []) {
+        // Shares findTemplateTokens() with the skill input guard and the scheduler, so a
+        // token this scan permits can never be one the guard rejects at runtime. Matching
+        // only `[a-z_]+` here let `${principal_contact_id_2}` through the scan while
+        // isUnresolvedPlaceholder() still rejected it as an argument.
+        for (const token of findTemplateTokens(text)) {
           violations.push(`${relative} → ${field}: ${token}`);
         }
       }

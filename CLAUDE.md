@@ -226,8 +226,9 @@ copies straight into tool arguments, where it is rejected as a non-UUID. In part
   appears. Describe the value instead: "the principal's contact ID as given in your
   system prompt".
 - **Job payloads written by hand** (the `POST /api/jobs` route, or a `scheduler-create`
-  call) resolve the token at fire time like any other payload, but any *other* `${...}`
-  token in a payload resolves to nothing — the scheduler logs a warning naming it.
+  call) resolve the token at fire time like any other payload. Any *other* `${...}` token
+  is left as literal text — the scheduler substitutes nothing and logs a warning naming
+  the token, because inventing a value would be worse than the agent seeing the tokens.
 
 Skills that take a contact ID should reject a bare token with
 `isUnresolvedPlaceholder()` / `unresolvedPlaceholderError()` from
