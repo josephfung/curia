@@ -179,6 +179,93 @@ describe('NylasCalendarClient', () => {
         endDate: '2026-04-10',
       });
     });
+
+    // Nylas v3 returns HTTP 400 "limit must be lower than or equal to 200" for a
+    // bigger page, so a >200 total has to come from paging (#1798).
+    describe('paging past the 200-event Nylas page cap', () => {
+      /** A page of `count` distinct raw timed events, numbered from `from`. */
+      function page(from: number, count: number): { data: unknown[] } {
+        return {
+          data: Array.from({ length: count }, (_, i) => ({
+            id: `evt-${from + i}`,
+            title: `Event ${from + i}`,
+            calendarId: 'cal-1',
+            status: 'confirmed',
+            busy: true,
+            when: { startTime: 1744027500 + from + i, endTime: 1744029300 + from + i, object: 'timespan' },
+          })),
+        };
+      }
+
+      function limitsSentToNylas(): unknown[] {
+        return (sdk.events.list as ReturnType<typeof vi.fn>).mock.calls
+          .map((call) => (call[0] as { queryParams: { limit: unknown } }).queryParams.limit);
+      }
+
+      it('never sends limit > 200, and returns up to maxResults across pages', async () => {
+        (sdk.events.list as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce({ ...page(0, 200), nextCursor: 'cursor-2' })
+          .mockResolvedValueOnce({ ...page(200, 50) });
+
+        const events = await client.listEvents(
+          'cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 250 },
+        );
+
+        expect(events).toHaveLength(250);
+        expect(events[0]?.id).toBe('evt-0');
+        expect(events[249]?.id).toBe('evt-249');
+        expect(limitsSentToNylas()).toEqual([200, 50]);
+      });
+
+      it('passes the cursor as pageToken on follow-up requests only', async () => {
+        (sdk.events.list as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce({ ...page(0, 200), nextCursor: 'cursor-2' })
+          .mockResolvedValueOnce({ ...page(200, 50) });
+
+        await client.listEvents('cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 250 });
+
+        const calls = (sdk.events.list as ReturnType<typeof vi.fn>).mock.calls;
+        expect(calls[0]![0].queryParams).not.toHaveProperty('pageToken');
+        expect(calls[1]![0].queryParams).toMatchObject({ pageToken: 'cursor-2' });
+      });
+
+      it('stops early when Nylas runs out of events before maxResults', async () => {
+        (sdk.events.list as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce({ ...page(0, 200) }); // no nextCursor — last page
+
+        const events = await client.listEvents(
+          'cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 250 },
+        );
+
+        expect(events).toHaveLength(200);
+        expect(sdk.events.list).toHaveBeenCalledTimes(1);
+      });
+
+      it('stops on an empty page even when a cursor is still returned', async () => {
+        (sdk.events.list as ReturnType<typeof vi.fn>)
+          .mockResolvedValue({ data: [], nextCursor: 'cursor-forever' });
+
+        const events = await client.listEvents(
+          'cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 250 },
+        );
+
+        expect(events).toHaveLength(0);
+        expect(sdk.events.list).toHaveBeenCalledTimes(1);
+      });
+
+      it('caps the total an oversized limit can page for', async () => {
+        (sdk.events.list as ReturnType<typeof vi.fn>)
+          .mockResolvedValue({ ...page(0, 200), nextCursor: 'more' });
+
+        const events = await client.listEvents(
+          'cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 50_000 },
+        );
+
+        expect(events).toHaveLength(1000);
+        expect(sdk.events.list).toHaveBeenCalledTimes(5);
+        expect(limitsSentToNylas().every((l) => (l as number) <= 200)).toBe(true);
+      });
+    });
   });
 
   describe('createEvent', () => {
