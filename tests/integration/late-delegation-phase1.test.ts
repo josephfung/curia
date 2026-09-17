@@ -199,10 +199,13 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
     expect(new Date(handle!.expiresAt).getTime()).toBeGreaterThan(Date.now());
   });
 
-  it('is idempotent on a re-delivered delegation.timed_out', async () => {
+  it('opens no second handle when the same delegation times out again', async () => {
     const event = timedOutEvent();
     await bus.publish('agent', event);
-    await bus.publish('agent', event);
+    // A DISTINCT event carrying the same delegate id — an operator replay or a re-emit. The same
+    // event object cannot be published twice: audit_log is keyed on the event id, so a literal
+    // duplicate is rejected before any subscriber sees it.
+    await bus.publish('agent', timedOutEvent({ delegateEventId: event.payload.delegateEventId }));
 
     const { rows } = await pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM pending_delegations WHERE delegate_event_id = $1`,
@@ -264,15 +267,16 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
       parentEventId: event.payload.delegateEventId,
     });
     await bus.publish('agent', late);
-    await bus.publish('agent', late);
-    // A second, distinct response for the same delegation (a chatty specialist) must not
-    // re-annotate either — the handle is already resolved.
-    await bus.publish('agent', createAgentResponse({
-      agentId: 'calendar',
-      conversationId: 'delegate-conv-1',
-      content: 'Travel detected: one trip (again).',
-      parentEventId: event.payload.delegateEventId,
-    }));
+    // Two more responses for the same delegation — a chatty specialist, or a second run of one.
+    // Each is its own event; only the first may act on the handle.
+    for (const content of ['Travel detected: one trip (again).', 'Still one trip.']) {
+      await bus.publish('agent', createAgentResponse({
+        agentId: 'calendar',
+        conversationId: 'delegate-conv-1',
+        content,
+        parentEventId: event.payload.delegateEventId,
+      }));
+    }
 
     expect(await noteCount(reviewTaskId)).toBe(before + 1);
     // And the sweep, seeing the same response in audit_log, does not re-open the question.
