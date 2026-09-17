@@ -631,6 +631,101 @@ interface SecretCapturedPayload {
   resumeToken?: string;
 }
 
+// -- Late delegation (#1799) --
+//
+// A delegate wait that times out leaves the specialist running: it finishes later and
+// publishes an agent.response nothing consumes (#1288 keeps the run alive by design).
+// These two events make that lifecycle observable and correlatable. `delegation.timed_out`
+// carries the one key that identifies the eventual response — the delegate agent.task event
+// id the specialist stamps as its parentEventId — plus the originating routing needed to act
+// on it. `delegation.late_resolved` records what was ultimately done with the late response.
+//
+// Field naming is deliberate: `agentId` and `conversationId` describe the ORIGINATING
+// (delegating) agent and conversation, because AuditLogger derives source_id from agentId and
+// the indexed conversation_id column from conversationId. That is what links a late response
+// back to the conversation or scheduled job that asked for the work.
+
+/** How a pending delegation handle was ultimately resolved (#1799). */
+export type LateDelegationResolution =
+  /** Late result was delivered back to the originating agent (Phase 2). */
+  | 'delivered'
+  /** Late result recorded on the escalation review task for a human to act on. */
+  | 'annotated_result'
+  /** The specialist ultimately failed — recorded, nothing to deliver. */
+  | 'annotated_error'
+  /** Originator was itself a delegated specialist on an internal channel — nowhere to deliver. */
+  | 'annotated_unroutable'
+  /** A human already closed the review task; their intervention wins. */
+  | 'annotated_review_closed'
+  /** The specialist came back asking a question, not with a result. */
+  | 'annotated_clarification'
+  /** The specialist paused mid-task; the resumable continuation path owns it. */
+  | 'annotated_paused'
+  /** Nothing arrived before the handle expired — the work was lost. */
+  | 'abandoned_ttl';
+
+/** What happened to the escalation review task while resolving the handle (#1799). */
+export type LateDelegationReviewOutcome =
+  | 'closed'
+  | 'annotated'
+  | 'no_review_task'
+  | 'review_task_terminal'
+  | 'update_failed';
+
+// DelegationTimedOutPayload — published by the agent layer (runtime) when a delegate wait
+// times out with the specialist possibly still running, right after the failure is escalated
+// to the CEO backlog. The LateDelegationSubscriber turns this into a durable handle.
+interface DelegationTimedOutPayload {
+  /** The delegate agent.task event id — the specialist stamps it as parentEventId on its
+   *  eventual agent.response, so it is the correlation key for the whole mechanism. */
+  delegateEventId: string;
+  /** Throwaway conversation the delegated specialist ran in (delegate-<uuid>). */
+  delegateConversationId: string;
+  /** The specialist that was delegated to. */
+  targetAgent: string;
+  /** The raw `task` input as passed to the delegate skill — rebuilds delegationKey(). */
+  delegateTask: string;
+  /** The delegating agent (audit source_id). */
+  agentId: string;
+  /** The delegating conversation (indexed audit conversation_id). */
+  conversationId: string;
+  /** Channel of the originating turn — 'scheduler', 'signal', 'internal', … */
+  channelId: string;
+  /** Sender of the originating agent.task. */
+  senderId: string;
+  /** The originating agent.task event id. */
+  originTaskEventId: string;
+  /** TaskOriginator of the originating turn, forwarded opaquely so a later resume can
+   *  restore lineage rather than fabricate one. */
+  originator?: Record<string, unknown>;
+  /** CEO review task created by the escalation. Absent when task-create failed. */
+  reviewTaskId?: string;
+  /** The delegate wait that elapsed, in ms — sets the handle's TTL floor. */
+  waitTimeoutMs?: number;
+}
+
+// DelegationLateResolvedPayload — published by the system layer when a pending delegation
+// handle reaches a terminal state, whether the late response was delivered, recorded for a
+// human, or never arrived. Every branch emits one so suppressed and abandoned outcomes are
+// queryable in audit_log rather than living only in logs.
+interface DelegationLateResolvedPayload {
+  delegateEventId: string;
+  targetAgent: string;
+  resolution: LateDelegationResolution;
+  reviewTaskOutcome: LateDelegationReviewOutcome;
+  /** The delegating agent (audit source_id). */
+  agentId: string;
+  /** The delegating conversation (indexed audit conversation_id). */
+  conversationId: string;
+  reviewTaskId?: string;
+  /** The late agent.response that resolved the handle. Absent for abandoned_ttl. */
+  lateResponseEventId?: string;
+  /** The wake agent.task published back to the originator (Phase 2 / 'delivered' only). */
+  wakeTaskEventId?: string;
+  /** Short machine-readable note for the non-delivered branches. */
+  note?: string;
+}
+
 // AuthorizationDecisionPayload — published when an authorization gate decides
 // allow / deny / escalate (#1379, spec 09). Emitted by the dispatch layer after
 // AuthorizationService.evaluate (Gate-1 + three-layer check) and by the
@@ -1163,6 +1258,23 @@ export interface SecretAccessedEvent extends BaseEvent {
   payload: SecretAccessedPayload;
 }
 
+// DelegationTimedOutEvent — published by the agent layer: the runtime owns the escalation
+// decision and already holds the originating routing, and it stays database-free (spec 06
+// Layer 3 containment) by handing persistence to a system-layer subscriber (#1799).
+export interface DelegationTimedOutEvent extends BaseEvent {
+  type: 'delegation.timed_out';
+  sourceLayer: 'agent';
+  payload: DelegationTimedOutPayload;
+}
+
+// DelegationLateResolvedEvent — published by the system layer (LateDelegationSubscriber /
+// sweep) when a pending delegation handle is resolved (#1799).
+export interface DelegationLateResolvedEvent extends BaseEvent {
+  type: 'delegation.late_resolved';
+  sourceLayer: 'system';
+  payload: DelegationLateResolvedPayload;
+}
+
 // SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
 // one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
 // self-authorizes via the token and writes to the vault, like the scheduler emitting its
@@ -1398,6 +1510,8 @@ export type BusEvent =
   | AuthorizationDecisionEvent // Spec 09 / #1379: authorization gate allow/deny/escalate audit
   | SecretAccessedEvent      // Spec 06: secrets isolation audit trail (name only, never value)
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
+  | DelegationTimedOutEvent     // #1799: delegate wait timed out, specialist possibly still running
+  | DelegationLateResolvedEvent // #1799: a late specialist response was delivered, recorded, or lost
   | AutonomyToolBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
@@ -2004,6 +2118,34 @@ export function createSecretCaptured(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'secret.captured',
+    sourceLayer: 'system',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createDelegationTimedOut(
+  payload: DelegationTimedOutPayload,
+  parentEventId?: string,
+): DelegationTimedOutEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'delegation.timed_out',
+    sourceLayer: 'agent',
+    payload,
+    parentEventId,
+  };
+}
+
+export function createDelegationLateResolved(
+  payload: DelegationLateResolvedPayload,
+  parentEventId?: string,
+): DelegationLateResolvedEvent {
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'delegation.late_resolved',
     sourceLayer: 'system',
     payload,
     parentEventId,

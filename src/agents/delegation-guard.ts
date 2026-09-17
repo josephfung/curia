@@ -20,6 +20,14 @@ export interface DelegationFailureInfo {
   message: string;
   /** Set when a delegate wait timed out but the specialist may still be running (#1288). */
   possiblySucceeded?: boolean;
+  /** Timeout only (#1799): the delegate agent.task event id, which the still-running specialist
+   *  will stamp as parentEventId on its late response. Carried through so the runtime can open a
+   *  pending delegation handle instead of leaving that response unmatchable. */
+  delegateEventId?: string;
+  /** Timeout only (#1799): the conversation the abandoned specialist is running in. */
+  delegateConversationId?: string;
+  /** Timeout only (#1799): the delegate wait that elapsed, in ms. */
+  waitTimeoutMs?: number;
 }
 
 interface DelegationEntry {
@@ -118,7 +126,46 @@ export function parseDelegateFailureData(data: unknown, logger?: Logger): Delega
     ...(record['blocked'] === true && { blocked: true }),
     ...(record['escalated'] === true && { escalated: true }),
     ...(record['possibly_succeeded'] === true && { possiblySucceeded: true }),
+    // #1799 correlation ids — present only on the timeout branch. Typed individually rather
+    // than spread wholesale so a malformed payload cannot inject non-string ids.
+    ...(typeof record['delegate_event_id'] === 'string' && {
+      delegateEventId: record['delegate_event_id'],
+    }),
+    ...(typeof record['delegate_conversation_id'] === 'string' && {
+      delegateConversationId: record['delegate_conversation_id'],
+    }),
+    ...(typeof record['wait_timeout_ms'] === 'number'
+      && Number.isFinite(record['wait_timeout_ms'])
+      && record['wait_timeout_ms'] > 0
+      && { waitTimeoutMs: record['wait_timeout_ms'] }),
   };
+}
+
+/** Outcome of an escalation attempt. `reviewTaskId` is present only when task-create both
+ *  succeeded and returned a parseable id — #1799 links the pending delegation handle to that
+ *  row so the late result can close or annotate it. */
+export interface DelegationEscalationResult {
+  escalated: boolean;
+  reviewTaskId?: string;
+}
+
+/** Read the created task id out of a task-create result payload (string or object data). */
+function parseCreatedTaskId(data: unknown, logger: Logger): string | undefined {
+  let record: Record<string, unknown>;
+  if (typeof data === 'string') {
+    try {
+      record = JSON.parse(data) as Record<string, unknown>;
+    } catch (err) {
+      logger.warn({ err }, 'Could not parse task-create result — escalation review task id unavailable');
+      return undefined;
+    }
+  } else if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    record = data as Record<string, unknown>;
+  } else {
+    return undefined;
+  }
+  const id = record['task_id'];
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
 /** Surface a non-retryable delegation failure on the CEO backlog via task-create (#1171, #1267). */
@@ -128,7 +175,7 @@ export async function escalateDelegationFailure(
   options: InvokeOptions,
   failure: DelegationFailureInfo & { task: string },
   logger: Logger,
-): Promise<boolean> {
+): Promise<DelegationEscalationResult> {
   // Structured, principal-facing payload (#1267): reason 'blocked' → blocked_on_human,
   // anything else → agent_incomplete. Rendered into the CEO task's progress note (the digest's
   // data source) + description, and stored as the structured progress.escalation block.
@@ -171,18 +218,19 @@ export async function escalateDelegationFailure(
         { agent: failure.agent, reason: failure.reason, error: result.error },
         'Failed to escalate delegation failure to CEO backlog via task-create',
       );
-      return false;
+      return { escalated: false };
     }
+    const reviewTaskId = parseCreatedTaskId(result.data, logger);
     logger.info(
-      { agent: failure.agent, reason: failure.reason },
+      { agent: failure.agent, reason: failure.reason, reviewTaskId },
       'Escalated delegation failure to CEO backlog via task-create',
     );
-    return true;
+    return { escalated: true, ...(reviewTaskId !== undefined && { reviewTaskId }) };
   } catch (err) {
     logger.error(
       { err, agent: failure.agent, reason: failure.reason },
       'Unexpected error escalating delegation failure to CEO backlog',
     );
-    return false;
+    return { escalated: false };
   }
 }

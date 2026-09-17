@@ -159,6 +159,35 @@ function resolveResumableCeilings(yaml: YamlConfig['tasks']): ResumableCeilingsC
   };
 }
 
+// ---------------------------------------------------------------------------
+// Late delegation delivery config (#1799)
+// ---------------------------------------------------------------------------
+
+export interface LateDeliveryConfig {
+  enabled: boolean;
+  ttlMinutes: number;
+  sweepIntervalMinutes: number;
+  maxResultChars: number;
+}
+
+const DEFAULT_LATE_DELIVERY_CONFIG: LateDeliveryConfig = {
+  enabled: true,
+  ttlMinutes: 60,
+  sweepIntervalMinutes: 5,
+  maxResultChars: 8000,
+};
+
+/** Resolve the optional delegate.lateDelivery block to a fully-populated config. */
+export function resolveLateDeliveryConfig(yaml: YamlConfig['delegate']): LateDeliveryConfig {
+  const l = yaml?.lateDelivery;
+  return {
+    enabled: l?.enabled ?? DEFAULT_LATE_DELIVERY_CONFIG.enabled,
+    ttlMinutes: l?.ttlMinutes ?? DEFAULT_LATE_DELIVERY_CONFIG.ttlMinutes,
+    sweepIntervalMinutes: l?.sweepIntervalMinutes ?? DEFAULT_LATE_DELIVERY_CONFIG.sweepIntervalMinutes,
+    maxResultChars: l?.maxResultChars ?? DEFAULT_LATE_DELIVERY_CONFIG.maxResultChars,
+  };
+}
+
 /** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
 export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
   return {
@@ -575,6 +604,19 @@ export interface YamlConfig {
      *  agent's expected_duration_seconds). Default: 90000.
      *  Override in local.yaml to match your deployment's standard-tier model latency. */
     defaultTimeoutMs?: number;
+    /** Late delivery of specialist responses that arrive after the wait timed out (#1799). */
+    lateDelivery?: {
+      /** Master switch. When false no handles are opened, matched, or swept — the pre-#1799
+       *  behaviour, where a late response is simply orphaned. Default: true. */
+      enabled?: boolean;
+      /** Minutes a pending handle stays open before it is abandoned. The effective window is
+       *  at least twice the delegate wait that elapsed. Default: 60. */
+      ttlMinutes?: number;
+      /** Sweep interval in minutes (restart recovery + expiry). Default: 5. */
+      sweepIntervalMinutes?: number;
+      /** Cap on how much of a late result is copied into the review task note. Default: 8000. */
+      maxResultChars?: number;
+    };
   };
   scheduler?: {
     /** Default assumed duration in seconds for scheduled jobs that declare no expectedDurationSeconds.
@@ -1148,6 +1190,25 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       throw new Error(
         `delegate.defaultTimeoutMs exceeds Node.js timer limit (${NODE_MAX_TIMER_MS} ms), got: ${delegateTimeoutMs}`,
       );
+    }
+  }
+
+  // Validate delegate.lateDelivery if present (#1799). Same scalar-config guard as above: a
+  // mis-shaped block must fail loudly rather than silently dropping the override.
+  const lateDelivery = config.delegate?.lateDelivery;
+  if (lateDelivery !== undefined) {
+    if (typeof lateDelivery !== 'object' || Array.isArray(lateDelivery) || lateDelivery === null) {
+      throw new Error(`delegate.lateDelivery must be a YAML mapping, got: ${typeof lateDelivery}`);
+    }
+    if (lateDelivery.enabled !== undefined && typeof lateDelivery.enabled !== 'boolean') {
+      throw new Error(`delegate.lateDelivery.enabled must be a boolean, got: ${typeof lateDelivery.enabled}`);
+    }
+    for (const field of ['ttlMinutes', 'sweepIntervalMinutes', 'maxResultChars'] as const) {
+      const value = lateDelivery[field];
+      if (value === undefined) continue;
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`delegate.lateDelivery.${field} must be a positive integer, got: ${value}`);
+      }
     }
   }
 

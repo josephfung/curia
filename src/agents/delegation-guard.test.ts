@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { DelegationGuard, delegationKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS } from './delegation-guard.js';
+import { DelegationGuard, delegationKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData } from './delegation-guard.js';
+import pino from 'pino';
 
 describe('DelegationGuard', () => {
   const key = delegationKey('social-media', 'Post to Bluesky');
@@ -109,5 +110,60 @@ describe('DelegationGuard', () => {
       message: 'final attempt',
     });
     expect(guard.canAttempt(key)).toBe(false);
+  });
+});
+
+describe('parseDelegateFailureData — late-delivery correlation ids (#1799)', () => {
+  const logger = pino({ level: 'silent' });
+
+  it('carries the delegate event id, conversation, and elapsed wait from a timeout payload', () => {
+    const parsed = parseDelegateFailureData({
+      agent: 'calendar',
+      failed: true,
+      reason: 'timeout',
+      retryable: false,
+      message: 'did not respond within the delegate wait window',
+      possibly_succeeded: true,
+      delegate_event_id: 'evt-delegate-1',
+      delegate_conversation_id: 'delegate-abc',
+      wait_timeout_ms: 750_000,
+    }, logger);
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.possiblySucceeded).toBe(true);
+    expect(parsed?.delegateEventId).toBe('evt-delegate-1');
+    expect(parsed?.delegateConversationId).toBe('delegate-abc');
+    expect(parsed?.waitTimeoutMs).toBe(750_000);
+  });
+
+  it('drops mistyped correlation ids rather than passing them through', () => {
+    const parsed = parseDelegateFailureData({
+      agent: 'calendar',
+      failed: true,
+      reason: 'timeout',
+      retryable: false,
+      message: 'timed out',
+      delegate_event_id: 42,
+      delegate_conversation_id: null,
+      wait_timeout_ms: -1,
+    }, logger);
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.delegateEventId).toBeUndefined();
+    expect(parsed?.delegateConversationId).toBeUndefined();
+    expect(parsed?.waitTimeoutMs).toBeUndefined();
+  });
+
+  it('leaves the ids absent for failures that are not timeouts', () => {
+    const parsed = parseDelegateFailureData({
+      agent: 'social-media',
+      failed: true,
+      reason: 'maxTurns',
+      retryable: false,
+      message: 'exceeded turn budget',
+    }, logger);
+
+    expect(parsed?.delegateEventId).toBeUndefined();
+    expect(parsed?.waitTimeoutMs).toBeUndefined();
   });
 });
