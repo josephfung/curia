@@ -241,21 +241,58 @@ describe('NylasCalendarClient', () => {
         expect(sdk.events.list).toHaveBeenCalledTimes(1);
       });
 
-      it('stops on an empty page even when a cursor is still returned', async () => {
+      // nextCursor — not an empty page — is Nylas's end-of-results signal, so an
+      // empty page followed by a populated one must not cut the fetch short.
+      it('keeps paging past an empty page when a cursor is still returned', async () => {
         (sdk.events.list as ReturnType<typeof vi.fn>)
-          .mockResolvedValue({ data: [], nextCursor: 'cursor-forever' });
+          .mockResolvedValueOnce({ data: [], nextCursor: 'cursor-2' })
+          .mockResolvedValueOnce({ ...page(0, 10) });
+
+        const events = await client.listEvents(
+          'cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 250 },
+        );
+
+        expect(sdk.events.list).toHaveBeenCalledTimes(2);
+        expect(events).toHaveLength(10);
+        expect(events[0]?.id).toBe('evt-0');
+      });
+
+      it('stops when Nylas hands back a cursor it already gave', async () => {
+        (sdk.events.list as ReturnType<typeof vi.fn>)
+          .mockResolvedValue({ data: [], nextCursor: 'same-cursor' });
 
         const events = await client.listEvents(
           'cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 250 },
         );
 
         expect(events).toHaveLength(0);
-        expect(sdk.events.list).toHaveBeenCalledTimes(1);
+        // First response registers the cursor; the second repeats it and breaks.
+        expect(sdk.events.list).toHaveBeenCalledTimes(2);
+      });
+
+      // A fresh cursor every time with nothing behind it never grows the result,
+      // so only the page cap can end this loop.
+      it('stops at the page cap when empty pages keep yielding new cursors', async () => {
+        let n = 0;
+        (sdk.events.list as ReturnType<typeof vi.fn>)
+          .mockImplementation(() => Promise.resolve({ data: [], nextCursor: `cursor-${++n}` }));
+
+        const events = await client.listEvents(
+          'cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 250 },
+        );
+
+        expect(events).toHaveLength(0);
+        expect(sdk.events.list).toHaveBeenCalledTimes(25);
       });
 
       it('caps the total an oversized limit can page for', async () => {
+        let n = 0;
         (sdk.events.list as ReturnType<typeof vi.fn>)
-          .mockResolvedValue({ ...page(0, 200), nextCursor: 'more' });
+          .mockImplementation(() => {
+            const from = n * 200;
+            n++;
+            return Promise.resolve({ ...page(from, 200), nextCursor: `cursor-${n}` });
+          });
 
         const events = await client.listEvents(
           'cal-1', '2026-04-01T00:00:00Z', '2026-05-01T00:00:00Z', { limit: 50_000 },

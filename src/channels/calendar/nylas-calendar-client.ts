@@ -231,6 +231,13 @@ export const NYLAS_MAX_PAGE_SIZE = 200;
  */
 export const LIST_EVENTS_MAX_TOTAL = 1000;
 
+/**
+ * Hard bound on requests per listEvents call. A full 1000-event fetch needs 5
+ * pages; the slack covers sparse pages, and the bound is what guarantees the
+ * loop ends when a cursor keeps arriving with nothing behind it.
+ */
+export const LIST_EVENTS_MAX_PAGES = 25;
+
 export class NylasCalendarClient {
   private readonly nylas: NylasCalendarLike;
   private readonly grantId: string;
@@ -304,7 +311,14 @@ export class NylasCalendarClient {
 
     try {
       const raw: NylasRawEvent[] = [];
+      // `nextCursor` is Nylas's end-of-results signal, not the page contents: an
+      // empty page can still be followed by one holding events, so paging stops
+      // on a missing cursor rather than on an empty page. Both guards below exist
+      // because that alone cannot terminate — a cursor returned forever alongside
+      // empty pages never grows `raw`, so the `raw.length < wanted` test never trips.
+      const seenCursors = new Set<string>();
       let pageToken: string | undefined;
+      let pages = 0;
       do {
         const response = await this.nylas.events.list({
           identifier: this.grantId,
@@ -317,11 +331,23 @@ export class NylasCalendarClient {
             ...(pageToken ? { pageToken } : {}),
           },
         });
-        const page = response?.data ?? [];
-        raw.push(...page);
+        raw.push(...(response?.data ?? []));
+        pages++;
         pageToken = response?.nextCursor;
-        // A cursor handed back with an empty page would loop forever — stop instead.
-        if (page.length === 0) break;
+
+        if (pageToken && seenCursors.has(pageToken)) {
+          this.log.warn({ calendarId, pageToken }, 'Nylas repeated a page cursor — stopping');
+          break;
+        }
+        if (pageToken) seenCursors.add(pageToken);
+
+        if (pageToken && pages >= LIST_EVENTS_MAX_PAGES) {
+          this.log.warn(
+            { calendarId, pages, collected: raw.length },
+            'listEvents hit the page cap — returning partial results',
+          );
+          break;
+        }
       } while (raw.length < wanted && pageToken);
 
       // The last page can overshoot if Nylas returns more than we asked for.
