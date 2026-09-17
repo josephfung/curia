@@ -212,23 +212,23 @@ their addresses.
 
 #### Where the placeholder resolves — and where it does not
 
-Only two places interpolate `${principal_contact_id}`:
+Two places interpolate `${principal_contact_id}`:
 
-- **`agents/*.yaml` `system_prompt`** — via `interpolateRuntimeContext()` at bootstrap.
-- **`agents/*.yaml` `schedule:` task payloads** — via the scheduler when it builds the
-  `agent.task` content at fire time (#1800).
+- **Agent system prompts** — `interpolateRuntimeContext()` at bootstrap.
+- **Scheduled-job payloads** — the scheduler, when it builds the `agent.task` content at
+  fire time (#1800). One rule covers every job whatever created it: a `schedule:` block in
+  `agents/*.yaml`, a `POST /api/jobs` request, and a `scheduler-create` call all land in
+  the same `task_payload` column and fire through the same path.
 
-Everywhere else the token is inert text that the model reads as literal advice and
-copies straight into tool arguments, where it is rejected as a non-UUID. In particular:
+Any *other* `${...}` token in a payload is left as literal text. The scheduler substitutes
+nothing and logs a warning naming the token — inventing a value would be worse than the
+agent seeing the token it was handed.
 
-- **Never put `${...}` in a `tool.json`** — manifests are passed through verbatim to the
-  model. `tests/unit/skills/manifest-placeholder-free.test.ts` fails the build if one
-  appears. Describe the value instead: "the principal's contact ID as given in your
-  system prompt".
-- **Job payloads written by hand** (the `POST /api/jobs` route, or a `scheduler-create`
-  call) resolve the token at fire time like any other payload. Any *other* `${...}` token
-  is left as literal text — the scheduler substitutes nothing and logs a warning naming
-  the token, because inventing a value would be worse than the agent seeing the tokens.
+Everywhere else the token is inert text that the model reads as literal advice and copies
+straight into tool arguments, where it is rejected as a non-UUID. In particular, **never
+put `${...}` in a `tool.json`** — manifests are passed through verbatim to the model, and
+`tests/unit/skills/manifest-placeholder-free.test.ts` fails the build if one appears.
+Describe the value instead: "the principal's contact ID as given in your system prompt".
 
 Skills that take a contact ID should reject a bare token with
 `isUnresolvedPlaceholder()` / `unresolvedPlaceholderError()` from
