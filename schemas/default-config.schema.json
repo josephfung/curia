@@ -65,7 +65,7 @@
       "additionalProperties": false,
       "properties": {
         "sessionTtlMs": { "type": "integer", "minimum": 1 },
-        "sweepIntervalMs": { "type": "integer", "minimum": 1 },
+        "sweepIntervalMs": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "profileDir": { "type": "string" },
         "channel": { "type": "string" },
         "proxy": { "type": "string" },
@@ -257,7 +257,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "intervalMs": { "type": "integer", "minimum": 1 },
+            "intervalMs": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
             "archiveThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
             "halfLifeDays": {
               "type": "object",
@@ -277,7 +277,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "intervalMs": { "type": "integer", "minimum": 1 },
+            "intervalMs": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
             "model_tier": { "type": "string", "enum": ["fast", "standard", "powerful"] },
             "batchSize": { "type": "integer", "minimum": 1 },
             "minScoredActions": { "type": "integer", "minimum": 1 },
@@ -418,7 +418,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "heartbeatIntervalMinutes": { "type": "integer", "minimum": 1 },
+        "heartbeatIntervalMinutes": { "type": "integer", "minimum": 1, "maximum": 35791 },
         "heartbeatMaxWakesPerTick": { "type": "integer", "minimum": 1 },
         "idleThresholdHours": { "type": "number", "minimum": 0 },
         "staleWaitThresholdHours": { "type": "number", "minimum": 0 },

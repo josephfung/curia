@@ -738,6 +738,41 @@ function deepMerge(
   return result;
 }
 
+// Node stores a timer delay in a signed 32-bit int: setTimeout/setInterval silently
+// truncate anything past 2^31-1 ms and then fire almost immediately, forever. An operator
+// who raises an interval to slow a background pass down would get the fastest possible pass
+// instead, with nothing in the logs to say why (#1797, #1799, #1807).
+const NODE_MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Reject an operator-set interval or timeout large enough to overflow a Node timer.
+ *
+ * Only for values that reach setTimeout/setInterval. Keys that feed date arithmetic or SQL
+ * intervals (tasks.idleThresholdHours, delegate.lateDelivery.ttlMinutes, ...) have no such
+ * ceiling and must not be passed here.
+ *
+ * @param key - Dotted config key, reproduced verbatim in the error so an operator reading a
+ *   startup failure knows which line of YAML to edit.
+ * @param value - The configured value, or undefined (no-op). Callers check that it is a
+ *   positive integer first; this only enforces the upper bound.
+ * @param msPerUnit - Milliseconds per unit of `value`: 1 for a `...Ms` key, 60_000 for a
+ *   `...Minutes` one. The ceiling is reported in the key's own unit, not in milliseconds.
+ * @param unit - Name of that unit, for the error message.
+ * @throws If `value` exceeds what Node can hold as a timer delay.
+ */
+function assertFitsNodeTimer(
+  key: string,
+  value: number | undefined,
+  msPerUnit = 1,
+  unit = 'ms',
+): void {
+  if (value === undefined) return;
+  const max = Math.floor(NODE_MAX_TIMER_MS / msPerUnit);
+  if (value > max) {
+    throw new Error(`${key} exceeds the Node.js timer limit (${max} ${unit}), got: ${value}`);
+  }
+}
+
 /**
  * Load and parse config/default.yaml, then deep-merge config/local.yaml on
  * top if it exists. local.yaml is gitignored in this repo and supplied by
@@ -860,6 +895,9 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     if (sweepIntervalMs !== undefined && (!Number.isInteger(sweepIntervalMs) || sweepIntervalMs <= 0)) {
       throw new Error(`browser.sweepIntervalMs must be a positive integer, got: ${sweepIntervalMs}`);
     }
+    // Reaches BrowserService's sweep timer directly. sessionTtlMs needs no such ceiling:
+    // it is only compared against elapsed time, never used as a timer delay.
+    assertFitsNodeTimer('browser.sweepIntervalMs', sweepIntervalMs);
     for (const [key, value] of [['profileDir', profileDir], ['channel', channel], ['proxy', proxy], ['locale', locale]] as const) {
       if (value !== undefined && typeof value !== 'string') {
         throw new Error(`browser.${key} must be a string, got: ${typeof value}`);
@@ -1033,6 +1071,8 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (decay.intervalMs !== undefined && (!Number.isInteger(decay.intervalMs) || decay.intervalMs <= 0)) {
         throw new Error(`dreaming.decay.intervalMs must be a positive integer, got: ${decay.intervalMs}`);
       }
+      // Reaches DreamEngine.start()'s decay interval directly.
+      assertFitsNodeTimer('dreaming.decay.intervalMs', decay.intervalMs);
       if (decay.archiveThreshold !== undefined && (typeof decay.archiveThreshold !== 'number' || decay.archiveThreshold < 0 || decay.archiveThreshold > 1)) {
         throw new Error(`dreaming.decay.archiveThreshold must be a number between 0 and 1, got: ${decay.archiveThreshold}`);
       }
@@ -1077,6 +1117,8 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       if (autonomyScoring.intervalMs !== undefined && (!Number.isInteger(autonomyScoring.intervalMs) || autonomyScoring.intervalMs <= 0)) {
         throw new Error(`dreaming.autonomy_scoring.intervalMs must be a positive integer, got: ${autonomyScoring.intervalMs}`);
       }
+      // Reaches DreamEngine.start()'s scoring interval directly.
+      assertFitsNodeTimer('dreaming.autonomy_scoring.intervalMs', autonomyScoring.intervalMs);
       if (autonomyScoring.model_tier !== undefined && (typeof autonomyScoring.model_tier !== 'string' || autonomyScoring.model_tier.trim().length === 0)) {
         throw new Error(`dreaming.autonomy_scoring.model_tier must be a non-empty string, got: ${String(autonomyScoring.model_tier)}`);
       }
@@ -1184,13 +1226,7 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     if (!Number.isInteger(delegateTimeoutMs) || delegateTimeoutMs <= 0) {
       throw new Error(`delegate.defaultTimeoutMs must be a positive integer (milliseconds), got: ${delegateTimeoutMs}`);
     }
-    // Node.js setTimeout silently overflows values > 2^31-1, treating them as ~0 ms.
-    const NODE_MAX_TIMER_MS = 2_147_483_647;
-    if (delegateTimeoutMs > NODE_MAX_TIMER_MS) {
-      throw new Error(
-        `delegate.defaultTimeoutMs exceeds Node.js timer limit (${NODE_MAX_TIMER_MS} ms), got: ${delegateTimeoutMs}`,
-      );
-    }
+    assertFitsNodeTimer('delegate.defaultTimeoutMs', delegateTimeoutMs);
   }
 
   // Validate delegate.lateDelivery if present (#1799). Same scalar-config guard as above: a
@@ -1210,21 +1246,15 @@ export function loadYamlConfig(configDir: string): YamlConfig {
         throw new Error(`delegate.lateDelivery.${field} must be a positive integer, got: ${value}`);
       }
     }
-    // sweepIntervalMinutes reaches setInterval as minutes × 60000. Node silently truncates a
-    // delay past 2^31-1 ms and then fires almost immediately, forever — so an operator asking
-    // for a very slow sweep would get the fastest possible one, hammering pending_delegations.
-    // Same pitfall the defaultTimeoutMs guard above exists for. ttlMinutes and maxResultChars
-    // need no ceiling: they feed date arithmetic and slice(), never a timer.
-    const MAX_SWEEP_INTERVAL_MINUTES = Math.floor(2_147_483_647 / 60_000);
-    if (
-      lateDelivery.sweepIntervalMinutes !== undefined &&
-      lateDelivery.sweepIntervalMinutes > MAX_SWEEP_INTERVAL_MINUTES
-    ) {
-      throw new Error(
-        `delegate.lateDelivery.sweepIntervalMinutes exceeds the Node.js timer limit `
-        + `(${MAX_SWEEP_INTERVAL_MINUTES} minutes), got: ${lateDelivery.sweepIntervalMinutes}`,
-      );
-    }
+    // sweepIntervalMinutes reaches setInterval as minutes × 60000; an overflowed delay would
+    // hammer pending_delegations. ttlMinutes and maxResultChars need no ceiling: they feed
+    // date arithmetic and slice(), never a timer.
+    assertFitsNodeTimer(
+      'delegate.lateDelivery.sweepIntervalMinutes',
+      lateDelivery.sweepIntervalMinutes,
+      60_000,
+      'minutes',
+    );
   }
 
   // Validate scheduler if present.
@@ -1253,6 +1283,12 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     )) {
       throw new Error(`tasks.heartbeatIntervalMinutes must be a positive integer, got: ${String(t.heartbeatIntervalMinutes)}`);
     }
+    // BacklogHeartbeat.start() multiplies this by 60_000 and hands it to setInterval. A
+    // truncated delay here is the worst of the four: every tick enqueues task wakes, so an
+    // overflowed interval is a wake-enqueue loop, not just a wasted query. The other tasks.*
+    // durations (idleThresholdHours, staleWaitThresholdHours, resumableContinuationSeconds)
+    // feed date arithmetic and SQL intervals, so they take no ceiling.
+    assertFitsNodeTimer('tasks.heartbeatIntervalMinutes', t.heartbeatIntervalMinutes, 60_000, 'minutes');
     if (t.heartbeatMaxWakesPerTick !== undefined && (
       !Number.isInteger(t.heartbeatMaxWakesPerTick) || t.heartbeatMaxWakesPerTick < 1
     )) {
