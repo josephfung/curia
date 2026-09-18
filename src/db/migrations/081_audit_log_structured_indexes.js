@@ -35,13 +35,20 @@
  *     JOIN pg_namespace n ON n.oid = c.relnamespace
  *    WHERE t.relname = 'audit_log' AND NOT i.indisvalid;
  *
- * To repair each name it returns — one at a time, OUTSIDE a transaction, since
- * neither statement can run inside one:
+ * To repair each row it returns — one at a time, OUTSIDE a transaction, since
+ * neither statement can run inside one. Use the `schema` column the query
+ * returns to qualify BOTH the index and the table: the detection query spans
+ * every schema on purpose, but a bare name resolves through search_path, so an
+ * unqualified repair can drop a healthy same-named index and rebuild it on the
+ * wrong audit_log. Re-issue the index's own CREATE from INDEXES below, changing
+ * nothing but the qualification:
  *
- *   DROP INDEX CONCURRENTLY IF EXISTS <index_name>;
- *   -- then re-issue that index's CREATE from INDEXES below, verbatim, e.g.
+ *   DROP INDEX CONCURRENTLY IF EXISTS <schema>.<index_name>;
  *   CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_action
- *     ON audit_log (action) WHERE action IS NOT NULL;
+ *     ON <schema>.audit_log (action) WHERE action IS NOT NULL;
+ *
+ * On a single-schema deployment — which is every entry point this repo ships,
+ * none of which passes --schema — <schema> is `public` for all six.
  *
  * Re-run the detection query afterwards: the rebuilt index must come back
  * `indisvalid = true`. If a repair is ever needed across the fleet rather than on
@@ -133,17 +140,29 @@ export async function up(pgm) {
   // of how they are batched — and nothing this migration does can invalidate an index mid-run
   // (a failed CREATE aborts the migration outright).
   //
-  // pg_table_is_visible pins the catalog read to the same index the unqualified DROP below will
-  // resolve to. Without it the read spans every schema, so an invalid index of the same name on
-  // an audit_log in a schema OFF the search path would make this drop and rebuild the healthy,
-  // visible one — while the invalid index it matched survives untouched.
+  // Both statements below name their objects WITHOUT a schema, so each resolves through
+  // search_path. A catalog read does not — it spans every schema — so the two clauses that look
+  // redundant are what keep the read and the statements pointed at the same objects:
+  //
+  //   pg_table_is_visible(c.oid)      the index this DROP will resolve to
+  //   i.indrelid = 'audit_log'::regclass   the table this CREATE will build on
+  //
+  // Drop either one and the check can match an index the statements cannot address. Without the
+  // first, an invalid index of the same name on an audit_log in a schema OFF the path makes this
+  // drop and rebuild the healthy, visible one while the invalid match survives. Without the
+  // second, a multi-schema search_path (node-pg-migrate takes repeated --schema) can put the
+  // visible invalid index on a different audit_log than the unqualified `ON audit_log` targets —
+  // so the DROP removes a real index and the CREATE rebuilds it on the wrong table.
+  //
+  // The regclass cast is what makes that second clause exact: it resolves the bare name the same
+  // way the CREATE does, to one OID. It subsumes a `t.relname = 'audit_log'` name match, which is
+  // why there is no join to pg_class for the table.
   const invalid = await pgm.db.select(
     `SELECT c.relname
        FROM pg_class c
        JOIN pg_index i ON i.indexrelid = c.oid
-       JOIN pg_class t ON t.oid = i.indrelid
-      WHERE t.relname = 'audit_log'
-        AND c.relname = ANY($1)
+      WHERE c.relname = ANY($1)
+        AND i.indrelid = 'audit_log'::regclass
         AND pg_catalog.pg_table_is_visible(c.oid)
         AND NOT i.indisvalid`,
     [INDEXES.map((index) => index.name)],
