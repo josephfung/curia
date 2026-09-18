@@ -41,16 +41,38 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git'])
 // the durable trees really do contain them — the CI and docker test harnesses under
 // `tests/`, and skill fixture scripts — and a comment in one can cite a design doc exactly
 // like a comment in a `.ts` file can. Binary formats (`.pdf`) are excluded; they carry no
-// hand-written citations. Keep this in sync with the extension census in
-// `scans every text format present in the durable trees` below, which fails if a new
-// format appears in the repo without being listed here.
-const SCANNED_EXTENSION = /\.(?:[cm]?tsx?|js|mjs|cjs|sql|md|ya?ml|json|sh|py)$/;
+// hand-written citations.
+//
+// This list is not maintained by hand alone: the census test below walks the durable trees
+// and fails if any format present is neither matched here nor waived in
+// UNSCANNED_EXTENSIONS. Case-insensitive so `README.MD` is scanned like `readme.md`.
+const SCANNED_EXTENSION = /\.(?:[cm]?tsx?|js|mjs|cjs|sql|md|ya?ml|json|sh|py)$/i;
 
 /** Extensions deliberately not scanned, with the reason. Asserted against the repo below. */
 const UNSCANNED_EXTENSIONS = new Set([
   'pdf', // binary
   'gitkeep', // empty placeholder
 ]);
+
+/**
+ * Whether a file is scanned for citations — the single decision point.
+ *
+ * Both the scanner and the census assertion route through this rather than each testing
+ * the pattern their own way. Two call sites disagreeing about what "scanned" means is the
+ * bug this shape prevents: the census once compared a case-folded extension while the
+ * scanner matched case-sensitively, so a `guide.MD` would have been reported as covered
+ * and skipped at the same time.
+ */
+function isScannedFile(name: string): boolean {
+  return SCANNED_EXTENSION.test(name);
+}
+
+/** A file's extension, case-folded. `null` for extensionless names, which are unclassifiable. */
+function extensionOf(name: string): string | null {
+  const dot = name.lastIndexOf('.');
+  // `.gitkeep` and friends sit at index 0 — still an extension for classification purposes.
+  return dot < 0 ? null : name.slice(dot + 1).toLowerCase();
+}
 
 /**
  * Both ways a durable file cites a WIP artifact, each capturing the bare filename:
@@ -82,7 +104,7 @@ function collectFiles(dir: string, out: string[] = []): string[] {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
       collectFiles(full, out);
-    } else if (SCANNED_EXTENSION.test(entry.name)) {
+    } else if (isScannedFile(entry.name)) {
       out.push(full);
     }
   }
@@ -165,24 +187,34 @@ describe('wip reference integrity', () => {
     // against omissions that quietly omits is worse than none, so rather than trusting the
     // extension list to stay complete, derive the real census and require every format to
     // be either scanned or explicitly waived.
-    const present = new Set<string>();
+    //
+    // Each real filename is put through `isScannedFile` — the same predicate the scanner
+    // uses — rather than a synthetic name rebuilt from its extension. Reconstructing the
+    // name is what let the case-sensitivity gap hide: `guide.MD` census-folds to `md` and
+    // looked covered, while the scanner skipped the actual file.
+    let inspected = 0;
+    const unaccounted = new Map<string, string>();
     for (const tree of DURABLE_TREES) {
       for (const file of collectAllFiles(join(REPO_ROOT, tree))) {
-        const ext = file.split('.').pop();
-        if (ext && ext !== file) present.add(ext.toLowerCase());
+        const name = file.split(sep).pop()!;
+        const ext = extensionOf(name);
+        if (ext === null) continue;
+        inspected++;
+        if (UNSCANNED_EXTENSIONS.has(ext) || isScannedFile(name)) continue;
+        if (!unaccounted.has(ext)) unaccounted.set(ext, relative(REPO_ROOT, file).split(sep).join('/'));
       }
     }
-    expect(present.size, 'no extensions found — the census itself is broken').toBeGreaterThan(0);
+    expect(inspected, 'no files inspected — the census itself is broken').toBeGreaterThan(0);
 
-    const unaccounted = [...present]
-      .filter((ext) => !SCANNED_EXTENSION.test(`f.${ext}`) && !UNSCANNED_EXTENSIONS.has(ext))
-      .sort();
+    const report = [...unaccounted].sort(([a], [b]) => a.localeCompare(b)).map(
+      ([ext, example]) => `.${ext} (e.g. ${example})`,
+    );
 
     expect(
-      unaccounted,
+      report,
       `these formats exist in the durable trees but are neither scanned nor listed as ` +
         `deliberately unscanned, so a docs/wip citation in one would slip through: ` +
-        `${unaccounted.join(', ')}. Add each to SCANNED_EXTENSION, or to ` +
+        `${report.join(', ')}. Add each to SCANNED_EXTENSION, or to ` +
         `UNSCANNED_EXTENSIONS with the reason.`,
     ).toEqual([]);
   });
