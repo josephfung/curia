@@ -1,10 +1,10 @@
-// late-delegation-phase1.test.ts — end-to-end correlation of a late specialist response (#1799).
+// late-delegation.test.ts — end-to-end handling of a late specialist response (#1799).
 //
 // The prod failure this covers: the weekly travel sweep delegated to calendar, the wait timed
 // out, the coordinator's turn stopped, and calendar delivered a full result minutes later that
 // nothing consumed — four weeks running, with a "Review: … could not complete delegated work"
-// row piling up each time. Phase 1's contract is that the late response is matched back to the
-// delegation, lands on that review row, and is auditable.
+// row piling up each time. The contract here is that the late response is matched back to the
+// delegation, handed to the originating agent so the follow-up actually runs, and auditable.
 //
 // Real Postgres and a real EventBus with the real AuditLogger attached as the write-ahead hook:
 // the sweep's restart recovery reads audit_log, so a mocked audit layer would test nothing.
@@ -20,6 +20,7 @@ import { LateDelegationSweep } from '../../src/agents/late-delegation-sweep.js';
 import {
   createAgentResponse,
   createDelegationTimedOut,
+  type AgentTaskEvent,
   type DelegationTimedOutEvent,
 } from '../../src/bus/events.js';
 import {
@@ -72,12 +73,14 @@ function timedOutEvent(
   );
 }
 
-describeIf('Late delegation phase 1 — correlation, review-task record, audit (#1799)', () => {
+describeIf('Late delegation — delivery, records, audit (#1799)', () => {
   let pool: pg.Pool;
   let bus: EventBus;
   let taskRepo: TaskRepo;
   let subscriber: LateDelegationSubscriber;
   let sweep: LateDelegationSweep;
+  /** Wake tasks published back to originating agents during a test. */
+  let wakes: AgentTaskEvent[] = [];
   // Set true only after requireCuriaTestDatabase confirms we are on curia_test. The cleanup hooks
   // gate on it: DATABASE_URL presence is the execution gate, not proof of which database the pool
   // reached, and vitest still runs afterAll after a FAILED beforeAll — so without this flag a
@@ -158,6 +161,9 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
     );
     taskRepo = new TaskRepo(pool, bus, logger, 'America/Toronto');
 
+    // No agent runtimes in this suite, so the wake has no real consumer — capture it instead.
+    bus.subscribe('agent.task', 'system', (event) => { wakes.push(event as AgentTaskEvent); });
+
     subscriber = new LateDelegationSubscriber({
       pool,
       bus,
@@ -166,6 +172,7 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
       ttlMinutes: 60,
       maxResultChars: 500,
       timezone: 'America/Toronto',
+      knownAgents: new Set(['coordinator', 'calendar']),
     });
     subscriber.start();
 
@@ -178,6 +185,7 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
       ttlMinutes: 60,
       maxResultChars: 500,
       timezone: 'America/Toronto',
+      knownAgents: new Set(['coordinator', 'calendar']),
     });
   });
 
@@ -189,6 +197,7 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
 
   beforeEach(async () => {
     await cleanup();
+    wakes = [];
   });
 
   it('opens one durable handle per timed-out delegation, with the origin routing intact', async () => {
@@ -226,7 +235,7 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
     expect(rows[0]!.count).toBe('1');
   });
 
-  it('matches the late response, records the result on the review task, and audits it', async () => {
+  it('hands the late result to the originating agent and closes the review task', async () => {
     const reviewTaskId = await createReviewTask();
     const event = timedOutEvent({ reviewTaskId });
     await bus.publish('agent', event);
@@ -242,19 +251,33 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
 
     const handle = await getPendingDelegationByDelegateEventId(pool, event.payload.delegateEventId);
     expect(handle?.status).toBe('resolved');
-    expect(handle?.resolution).toBe('annotated_result');
+    expect(handle?.resolution).toBe('delivered');
     expect(handle?.lateResponseEventId).toBe(late.id);
     expect(handle?.resolvedAt).not.toBeNull();
 
-    // The result itself lands on the row the digest reads — the point of the annotate floor.
-    const note = await lastNote(reviewTaskId);
-    expect(note).toContain('Travel detected: YYZ→SFO Oct 2–5');
-    expect(note).toContain('have NOT run yet');
+    // The originating turn is re-entered in its OWN conversation, carrying the result — this is
+    // what lets the follow-up steps (create the trip tasks, advance the cursor) finally run.
+    expect(wakes).toHaveLength(1);
+    const wake = wakes[0]!;
+    expect(wake.payload.agentId).toBe('coordinator');
+    expect(wake.payload.conversationId).toBe('scheduler:cff7f3bb-job:run-1');
+    expect(wake.payload.content).toContain('Travel detected: YYZ→SFO Oct 2–5');
+    expect(wake.payload.content).toContain('scheduler-report');
+    expect(wake.payload.content).toContain('cff7f3bb-job');
+    expect(wake.payload.metadata?.lateDelegation)
+      .toEqual({ agent: 'calendar', task: 'Detect travel since Aug 17' });
+    expect((wake.payload.metadata?.originator as Record<string, unknown>)?.contactId).toBe('contact-ceo');
+    expect(wake.payload.metadata?.wakeContext).toEqual({ derived: true });
+    expect(wake.payload.liveTurn).toBeUndefined();
+    expect(handle?.wakeTaskEventId).toBe(wake.id);
 
-    // Phase 1 does not close the row: a recorded result still needs a human to run the
-    // follow-up steps, so closing it here would hide real work.
+    // The review row asked "check whether it already delivered". Something finally checked, so it
+    // is closed rather than left to rot on the backlog.
     const task = await taskRepo.getTask(reviewTaskId);
-    expect(task?.status).toBe('open');
+    expect(task?.status).toBe('done');
+    const note = await lastNote(reviewTaskId);
+    expect(note).toContain('calendar delivered at');
+    expect(note).toContain('scheduler:cff7f3bb-job:run-1');
 
     const audit = await lateResolvedAudit(event.payload.delegateEventId);
     expect(audit).not.toBeNull();
@@ -262,8 +285,9 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
     expect(audit?.outcome).toBe('success');
     // The audit row links the late response to the conversation that asked for the work.
     expect(audit?.conversation_id).toBe('scheduler:cff7f3bb-job:run-1');
-    expect(audit?.payload['resolution']).toBe('annotated_result');
-    expect(audit?.payload['reviewTaskOutcome']).toBe('annotated');
+    expect(audit?.payload['resolution']).toBe('delivered');
+    expect(audit?.payload['reviewTaskOutcome']).toBe('closed');
+    expect(audit?.payload['wakeTaskEventId']).toBe(wake.id);
   });
 
   it('acts on a late response at most once, however many times it is replayed', async () => {
@@ -290,10 +314,14 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
       }));
     }
 
+    // One wake, whatever the specialist says afterwards — the originating agent must not be
+    // re-entered twice over the same delegation.
+    expect(wakes).toHaveLength(1);
     expect(await noteCount(reviewTaskId)).toBe(before + 1);
     // And the sweep, seeing the same response in audit_log, does not re-open the question.
     const result = await sweep.tick();
     expect(result.recovered).toBe(0);
+    expect(wakes).toHaveLength(1);
   });
 
   it('records a specialist that ultimately failed as work that did not happen', async () => {
@@ -313,6 +341,8 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
 
     const handle = await getPendingDelegationByDelegateEventId(pool, event.payload.delegateEventId);
     expect(handle?.resolution).toBe('annotated_error');
+    // Nothing to deliver, so nobody is woken.
+    expect(wakes).toHaveLength(0);
     const note = await lastNote(reviewTaskId);
     expect(note).toContain('maxTurns');
     expect(note).toContain('did not happen');
@@ -337,6 +367,8 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
 
     const handle = await getPendingDelegationByDelegateEventId(pool, event.payload.delegateEventId);
     expect(handle?.resolution).toBe('annotated_review_closed');
+    // The human took over; re-entering the agent now could duplicate whatever they did by hand.
+    expect(wakes).toHaveLength(0);
     const audit = await lateResolvedAudit(event.payload.delegateEventId);
     // A closed row cannot be annotated (append-only guard on terminal tasks), and that is
     // reported rather than forced.
@@ -363,6 +395,7 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
     const handle = await getPendingDelegationByDelegateEventId(pool, event.payload.delegateEventId);
     expect(handle?.resolution).toBe('annotated_unroutable');
     expect(handle?.schedulerJobId).toBeNull();
+    expect(wakes).toHaveLength(0);
     expect(await lastNote(reviewTaskId)).toContain('Inner result.');
   });
 
@@ -403,8 +436,11 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
 
       const handle = await getPendingDelegationByDelegateEventId(pool, delegateEventId);
       expect(handle?.status).toBe('resolved');
-      expect(handle?.resolution).toBe('annotated_result');
-      expect(await lastNote(reviewTaskId)).toContain('Travel detected after restart');
+      expect(handle?.resolution).toBe('delivered');
+      // Recovery delivers exactly as the live path does — the result reaches the originating turn.
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]!.payload.content).toContain('Travel detected after restart');
+      expect((await taskRepo.getTask(reviewTaskId))?.status).toBe('done');
     });
 
     it('abandons an expired handle and corrects the review task', async () => {
@@ -477,8 +513,10 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
 
       const handle = await getPendingDelegationByDelegateEventId(pool, delegateEventId);
       expect(handle?.status).toBe('resolved');
-      // The work the dead actor owed is now actually done.
-      expect(await lastNote(reviewTaskId)).toContain('Travel detected: YYZ→BOS Dec 1.');
+      // The work the dead actor owed is now actually done: the originator got the result.
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]!.payload.content).toContain('Travel detected: YYZ→BOS Dec 1.');
+      expect((await taskRepo.getTask(reviewTaskId))?.status).toBe('done');
     });
 
     it('does not touch a handle whose lease is still live', async () => {
@@ -512,8 +550,9 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
 
       const result = await sweep.tick();
 
-      // Another actor is mid-flight; stealing the handle would double-annotate the review task.
+      // Another actor is mid-flight; stealing the handle would re-enter the originator twice.
       expect(result.recovered).toBe(0);
+      expect(wakes).toHaveLength(0);
       expect(await noteCount(reviewTaskId)).toBe(notesBefore);
       const handle = await getPendingDelegationByDelegateEventId(pool, delegateEventId);
       expect(handle?.status).toBe('claimed');

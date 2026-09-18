@@ -1,11 +1,11 @@
 // late-delegation.ts — what to do with a specialist response that arrives after the delegate
 // wait gave up (#1799).
 //
-// Phase 1 (this module) makes the late response *visible and correlated*: it is matched to the
-// handle the runtime opened, recorded on the escalation review task, and audited. It does not
-// yet re-enter the originating agent — that is Phase 2, and `disposition: 'deliverable'` is the
-// branch it will take over. Until then a deliverable result resolves as `annotated_result`: the
-// CEO gets the finished work on the review task instead of a note telling them to go find it.
+// A deliverable result re-enters the originating agent in its ORIGINAL conversation, carrying the
+// specialist's output, so the follow-up steps that died with the timed-out turn actually run. The
+// review task the escalation created is then closed with the delivery time. Every other outcome —
+// the specialist ultimately failed, came back with a question, has nowhere to be delivered, or a
+// human already took over — is recorded on that review task instead and leaves it open.
 //
 // The classification is a pure function of the late response plus two facts about the origin,
 // so the live subscriber and the restart sweep cannot disagree about what a given response
@@ -16,14 +16,18 @@ import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import {
+  createAgentTask,
   createDelegationLateResolved,
   type LateDelegationResolution,
   type LateDelegationReviewOutcome,
 } from '../bus/events.js';
+import { makeWakeContext } from '../autonomy/effective-standing.js';
+import type { ContactTier, SystemRole, TaskOriginator } from '../contacts/types.js';
 import {
   claimPendingDelegation,
   finalizePendingDelegation,
   releasePendingDelegationClaim,
+  setPendingDelegationWakeEventId,
   type PendingDelegationRow,
 } from '../db/queries/pending-delegations.js';
 import { EXECUTION_PAUSED_PROTOCOL } from './resumable-task.js';
@@ -43,6 +47,73 @@ const CLARIFICATION_PROTOCOL = 'clarification_request';
  * this mechanism exists to rescue.
  */
 const UNROUTABLE_ORIGIN_CHANNELS = new Set(['internal', 'bullpen']);
+
+/**
+ * Origins where a woken agent's REPLY has nobody waiting for it, even though the wake itself is
+ * worth publishing. A scheduled run is the motivating case: the side effects (create the trip
+ * tasks, advance the cursor) are the point, and there is no conversation to answer into — so no
+ * dispatcher routing is registered and the response is simply not relayed.
+ */
+const NON_REPLYABLE_ORIGIN_CHANNELS = new Set(['scheduler', 'internal', 'bullpen']);
+
+/**
+ * Registers dispatcher routing for a wake task so the woken agent's reply reaches the principal.
+ * In production this is `Dispatcher.registerExternalTaskRouting`; tests inject a spy. Mirrors the
+ * secret-capture resume path (#972), which has the same problem: a synthetic task the dispatcher
+ * never saw arrive has no routing entry, so its response would be dropped.
+ */
+export type LateWakeRoutingRegistrar = (
+  taskEventId: string,
+  routing: {
+    channelId: string;
+    conversationId: string;
+    senderId: string;
+    originator: TaskOriginator;
+  },
+) => void;
+
+/** Narrow the stored originator bag into a TaskOriginator; undefined when it cannot be trusted. */
+export function parseStoredOriginator(
+  raw: Record<string, unknown> | null,
+): TaskOriginator | undefined {
+  if (!raw) return undefined;
+  if (typeof raw['contactId'] !== 'string' || typeof raw['channel'] !== 'string') return undefined;
+  if (typeof raw['initiatedAt'] !== 'string') return undefined;
+  const systemRole = raw['systemRole'];
+  if (
+    systemRole !== null && systemRole !== undefined
+    && systemRole !== 'principal' && systemRole !== 'system' && systemRole !== 'agent'
+  ) {
+    return undefined;
+  }
+  const tier = raw['tier'];
+  if (
+    tier !== undefined && tier !== null
+    && tier !== 'principal' && tier !== 'trusted' && tier !== 'known'
+    && tier !== 'unknown' && tier !== 'blocked'
+  ) {
+    return undefined;
+  }
+  const result: TaskOriginator = {
+    contactId: raw['contactId'],
+    systemRole: (systemRole ?? null) as SystemRole | null,
+    channel: raw['channel'],
+    initiatedAt: raw['initiatedAt'],
+  };
+  if (tier !== undefined) result.tier = tier as ContactTier | null;
+  return result;
+}
+
+/** Fail-closed originator for routing when the handle carried none (#1733 / #1059). */
+function unresolvedOriginator(channelId: string, now: Date): TaskOriginator {
+  return {
+    contactId: 'unresolved',
+    systemRole: null,
+    channel: channelId,
+    initiatedAt: now.toISOString(),
+    tier: null,
+  };
+}
 
 /** Task statuses that mean a human already disposed of the review row. */
 const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
@@ -66,6 +137,9 @@ export type LateDelegationDisposition =
   | 'paused'
   | 'abandoned';
 
+/** The dispositions that end up recorded on the review task rather than delivered. */
+export type RecordedDisposition = Exclude<LateDelegationDisposition, 'deliverable'>;
+
 export interface LateResponseFacts {
   /** The late agent.response payload (bus event payload, or the audit_log row's payload). */
   payload: Record<string, unknown>;
@@ -73,6 +147,8 @@ export interface LateResponseFacts {
   originChannelId: string;
   /** Status of the escalation review task, or null when there is no linked task. */
   reviewTaskStatus: string | null;
+  /** False when the originating agent is no longer registered, so a wake would reach nobody. */
+  originAgentRegistered?: boolean;
 }
 
 export interface LateResponseClassification {
@@ -147,10 +223,20 @@ export function classifyLateResponse(facts: LateResponseFacts): LateResponseClas
     };
   }
 
+  // An agent that has since been removed from the roster cannot be woken: the task would be
+  // published to a type nobody subscribes to and vanish. Recording it beats publishing into the void.
+  if (facts.originAgentRegistered === false) {
+    return {
+      disposition: 'unroutable',
+      resolution: 'annotated_unroutable',
+      note: 'originating agent is no longer registered — nothing to re-enter',
+    };
+  }
+
   return {
     disposition: 'deliverable',
-    resolution: 'annotated_result',
-    note: 'late result recorded for the principal (re-entry lands in phase 2)',
+    resolution: 'delivered',
+    note: 'late result handed back to the originating turn',
   };
 }
 
@@ -191,8 +277,11 @@ export function capResult(content: string, maxChars: number): string {
   return `${content.slice(0, maxChars)}\n…[truncated ${content.length - maxChars} chars — full result is on the agent.response audit event]`;
 }
 
-/** The classification for a handle that expired with nothing having arrived. */
-export function abandonedClassification(ttlMinutes: number): LateResponseClassification {
+/** The classification for a handle that expired with nothing having arrived. Typed as a recorded
+ *  disposition because there is, by definition, nothing to deliver. */
+export function abandonedClassification(
+  ttlMinutes: number,
+): LateResponseClassification & { disposition: RecordedDisposition } {
   return {
     disposition: 'abandoned',
     resolution: 'abandoned_ttl',
@@ -202,7 +291,8 @@ export function abandonedClassification(ttlMinutes: number): LateResponseClassif
 
 export interface RenderLateNoteParams {
   targetAgent: string;
-  classification: LateResponseClassification;
+  /** Narrowed to the recorded outcomes: a delivered result uses renderDeliveredNote instead. */
+  classification: LateResponseClassification & { disposition: RecordedDisposition };
   /** The late response body; absent for an expired handle. */
   content?: string;
   /** When the specialist delivered, already formatted for the principal's timezone. */
@@ -221,12 +311,6 @@ export function renderLateNote(params: RenderLateNoteParams): string {
   const when = deliveredAtDisplay ? ` at ${deliveredAtDisplay}` : '';
 
   switch (classification.disposition) {
-    case 'deliverable':
-      return [
-        `${targetAgent} finished after the delegate wait timed out and delivered${when}. Its result is below — the follow-up steps have NOT run yet.`,
-        '',
-        capResult(content ?? '', maxResultChars),
-      ].join('\n');
     case 'error':
       return `${targetAgent} kept running after the timeout and then failed${when} (${classification.failureReason ?? 'unknown'}). The delegated work did not happen.`;
     case 'unroutable':
@@ -254,6 +338,72 @@ export function renderLateNote(params: RenderLateNoteParams): string {
   }
 }
 
+export interface LateResultBriefParams {
+  targetAgent: string;
+  /** The specialist's result, verbatim (capped). */
+  content: string;
+  /** Delivery time, formatted for the principal's timezone. */
+  deliveredAtDisplay: string;
+  maxResultChars: number;
+  /** Scheduled job behind the originating turn, when there was one. */
+  schedulerJobId?: string;
+}
+
+/**
+ * The brief for the wake task that re-enters the originating agent.
+ *
+ * It deliberately does NOT restate the original delegated brief. #1064 is the precedent: a
+ * notify `agent.task` that echoed the original intent made the coordinator re-execute the work it
+ * was reporting on and send a duplicate message. The original brief is already in the agent's
+ * conversation history, because the wake re-enters the SAME conversationId — so restating it here
+ * would add nothing except an instruction the model might act on twice.
+ *
+ * What it does carry: the result, the fact that the work is already done, and what remains.
+ * `scheduler_job_id` is stated explicitly rather than left to history, because the context budget
+ * can truncate the original prompt away and the cursor update depends on that id (#1799).
+ */
+export function buildLateResultBrief(params: LateResultBriefParams): string {
+  const { targetAgent, content, deliveredAtDisplay, maxResultChars, schedulerJobId } = params;
+
+  // One complete sentence per element — never hard-wrapped mid-sentence. A model reads either
+  // shape, but an unbroken sentence survives being grepped for, quoted in a log, or asserted on.
+  const lines = [
+    `[Late specialist result — ${targetAgent}, delivered ${deliveredAtDisplay}]`,
+    '',
+    `The work you delegated to '${targetAgent}' timed out from your side, but the specialist kept running, finished, and returned this result:`,
+    '',
+    capResult(content, maxResultChars),
+    '',
+    `This is the real result. Do NOT delegate this work again — a repeat delegation to '${targetAgent}' is blocked for this turn.`,
+    '',
+    'Before acting, check this conversation for steps you already completed, and do not repeat a side effect that already happened (messages sent, tasks created, cursors advanced).',
+    'Then complete only the follow-up steps that are still outstanding.',
+  ];
+
+  if (schedulerJobId) {
+    lines.push(
+      '',
+      `When you are done, record the outcome with scheduler-report for job ${schedulerJobId} so the next scheduled run starts from the right place.`,
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/** Note put on the review task when the late result was handed back to the originating agent. */
+export function renderDeliveredNote(params: {
+  targetAgent: string;
+  deliveredAtDisplay: string;
+  originConversationId: string;
+}): string {
+  return (
+    `${params.targetAgent} delivered at ${params.deliveredAtDisplay}, after the delegate wait had `
+    + `timed out. The result was handed back to the originating turn (${params.originConversationId}), `
+    + 'which is completing the follow-up steps. Closing this review — no action needed unless that '
+    + 'turn reports a problem.'
+  );
+}
+
 export interface HandleLateResponseOptions {
   pool: Pool;
   bus: EventBus;
@@ -268,6 +418,10 @@ export interface HandleLateResponseOptions {
   respondedAt: Date;
   maxResultChars: number;
   timezone?: string;
+  /** Registered agent names. When provided, an unknown origin agent is recorded, not woken. */
+  knownAgents?: Set<string>;
+  /** Seeds dispatcher routing for a wake whose origin can receive a reply. */
+  registerRouting?: LateWakeRoutingRegistrar;
 }
 
 /**
@@ -301,16 +455,42 @@ export async function handleLateResponse(
     payload: responsePayload,
     originChannelId: handle.originChannelId,
     reviewTaskStatus,
+    ...(opts.knownAgents !== undefined && {
+      originAgentRegistered: opts.knownAgents.has(handle.originAgentId),
+    }),
   });
 
   const content = typeof responsePayload['content'] === 'string' ? responsePayload['content'] : '';
-  const note = renderLateNote({
-    targetAgent: handle.targetAgent,
-    classification,
-    content,
-    deliveredAtDisplay: formatDeliveredAt(opts.respondedAt, opts.timezone, logger),
-    maxResultChars: opts.maxResultChars,
-  });
+  const deliveredAtDisplay = formatDeliveredAt(opts.respondedAt, opts.timezone, logger);
+
+  // The deliver branch hands the result back to the originating agent and closes the review task.
+  // Every other disposition records the outcome on that task and leaves it open for a human.
+  if (classification.disposition === 'deliverable') {
+    return resolveLateDelegation({
+      pool,
+      bus,
+      taskRepo,
+      logger,
+      handle,
+      classification,
+      lateResponseEventId: responseEventId,
+      note: renderDeliveredNote({
+        targetAgent: handle.targetAgent,
+        deliveredAtDisplay,
+        originConversationId: handle.originConversationId,
+      }),
+      parentEventId: responseEventId,
+      wakeBrief: buildLateResultBrief({
+        targetAgent: handle.targetAgent,
+        content,
+        deliveredAtDisplay,
+        maxResultChars: opts.maxResultChars,
+        ...(handle.schedulerJobId !== null && { schedulerJobId: handle.schedulerJobId }),
+      }),
+      closeReviewTask: true,
+      ...(opts.registerRouting !== undefined && { registerRouting: opts.registerRouting }),
+    });
+  }
 
   return resolveLateDelegation({
     pool,
@@ -320,7 +500,16 @@ export async function handleLateResponse(
     handle,
     classification,
     lateResponseEventId: responseEventId,
-    note,
+    note: renderLateNote({
+      targetAgent: handle.targetAgent,
+      // The deliverable branch returned above, so the disposition here is a recorded one.
+      // LateResponseClassification is a single interface rather than a discriminated union, so
+      // that guarantee has to be stated rather than inferred.
+      classification: classification as LateResponseClassification & { disposition: RecordedDisposition },
+      content,
+      deliveredAtDisplay,
+      maxResultChars: opts.maxResultChars,
+    }),
     parentEventId: responseEventId,
   });
 }
@@ -375,6 +564,12 @@ export interface ResolveLateDelegationOptions {
   note: string;
   /** Threads the audit chain to the late response (or the sweep's own trigger). */
   parentEventId?: string;
+  /** Deliver branch only: re-enter the originating agent with this brief before closing out. */
+  wakeBrief?: string;
+  /** Deliver branch only: seeds dispatcher routing when the origin can receive a reply. */
+  registerRouting?: LateWakeRoutingRegistrar;
+  /** Deliver branch only: close the review task rather than leaving it open with a note. */
+  closeReviewTask?: boolean;
 }
 
 export interface ResolveLateDelegationResult {
@@ -384,6 +579,8 @@ export interface ResolveLateDelegationResult {
   reviewTaskOutcome?: LateDelegationReviewOutcome;
   /** Set when the attempt failed in a way the sweep should retry. */
   retryable?: boolean;
+  /** The wake agent.task published back to the originating agent, on the deliver branch. */
+  wakeTaskEventId?: string;
 }
 
 /**
@@ -415,18 +612,58 @@ export async function resolveLateDelegation(
     return { resolved: false };
   }
 
-  const reviewTaskOutcome = await annotateReviewTask({
+  // Publish the wake FIRST on the deliver branch. It is the one irreversible step here — a second
+  // one would re-enter the coordinator twice over the same result — so everything after it is
+  // treated as bookkeeping that must not trigger a retry.
+  let wakeTaskEventId = claimed.wakeTaskEventId ?? undefined;
+  if (opts.wakeBrief !== undefined) {
+    if (wakeTaskEventId) {
+      // A previous attempt already woke the originator and then died before finalizing. Re-waking
+      // would duplicate the follow-up work; finish the bookkeeping instead.
+      logger.warn(
+        { delegateEventId: claimed.delegateEventId, wakeTaskEventId },
+        'Late delegation: wake was already published by an earlier attempt — not publishing a second',
+      );
+    } else {
+      try {
+        wakeTaskEventId = await publishLateWake({
+          bus,
+          logger,
+          handle: claimed,
+          brief: opts.wakeBrief,
+          parentEventId: opts.parentEventId ?? lateResponseEventId,
+          ...(opts.registerRouting !== undefined && { registerRouting: opts.registerRouting }),
+        });
+        // Record it immediately: a crash between publish and finalize must not look like a handle
+        // that never woke anyone, or the retry would wake them again.
+        await setPendingDelegationWakeEventId(pool, claimed.delegateEventId, wakeTaskEventId);
+      } catch (err) {
+        // Nothing irreversible happened yet, so hand the lease back for a clean retry.
+        if (claimed.claimToken) {
+          await releasePendingDelegationClaim(pool, claimed.delegateEventId, claimed.claimToken);
+        }
+        logger.error(
+          { err, delegateEventId: claimed.delegateEventId, originAgentId: claimed.originAgentId },
+          'Late delegation: failed to wake the originating agent — released for retry',
+        );
+        return { resolved: false, retryable: true };
+      }
+    }
+  }
+
+  const reviewTaskOutcome = await recordOnReviewTask({
     taskRepo,
     logger,
     handle: claimed,
-    classification,
     note,
+    close: opts.closeReviewTask === true,
   });
 
-  // `update_failed` is the one non-terminal annotation outcome: the review task exists and is
-  // writable in principle, so the note is still owed. Hand the lease back and let the sweep try
-  // again rather than closing the handle over a result the principal never saw.
-  if (reviewTaskOutcome === 'update_failed') {
+  // `update_failed` is the one non-terminal review-task outcome: the row exists and is writable in
+  // principle, so the note is still owed. Hand the lease back so the sweep retries — UNLESS the
+  // wake already went out, in which case a retry would re-enter the originating agent a second
+  // time. A review row missing its closing note is a far smaller problem than duplicate work.
+  if (reviewTaskOutcome === 'update_failed' && wakeTaskEventId === undefined) {
     // Token-guarded: if this lease already expired and another actor took over, the release is a
     // no-op rather than a yank of their in-flight work.
     if (claimed.claimToken) {
@@ -437,6 +674,12 @@ export async function resolveLateDelegation(
       'Late delegation: could not record the outcome on the review task — released for retry',
     );
     return { resolved: false, retryable: true };
+  }
+  if (reviewTaskOutcome === 'update_failed') {
+    logger.error(
+      { delegateEventId: claimed.delegateEventId, reviewTaskId: claimed.reviewTaskId, wakeTaskEventId },
+      'Late delegation: the originator was woken but the review task could not be updated — not retrying',
+    );
   }
 
   try {
@@ -450,6 +693,7 @@ export async function resolveLateDelegation(
         conversationId: claimed.originConversationId,
         ...(claimed.reviewTaskId !== null && { reviewTaskId: claimed.reviewTaskId }),
         ...(lateResponseEventId !== undefined && { lateResponseEventId }),
+        ...(wakeTaskEventId !== undefined && { wakeTaskEventId }),
         note: classification.note,
       },
       opts.parentEventId,
@@ -485,33 +729,121 @@ export async function resolveLateDelegation(
       targetAgent: claimed.targetAgent,
       resolution: classification.resolution,
       reviewTaskOutcome,
+      wakeTaskEventId,
       originConversationId: claimed.originConversationId,
       schedulerJobId: claimed.schedulerJobId,
     },
     'Late delegation resolved',
   );
 
-  return { resolved: true, resolution: classification.resolution, reviewTaskOutcome };
+  return {
+    resolved: true,
+    resolution: classification.resolution,
+    reviewTaskOutcome,
+    ...(wakeTaskEventId !== undefined && { wakeTaskEventId }),
+  };
 }
 
-interface AnnotateReviewTaskOptions {
-  taskRepo: TaskRepo;
+interface PublishLateWakeOptions {
+  bus: EventBus;
   logger: Logger;
   handle: PendingDelegationRow;
-  classification: LateResponseClassification;
-  note: string;
+  brief: string;
+  parentEventId?: string;
+  registerRouting?: LateWakeRoutingRegistrar;
 }
 
 /**
- * Put the outcome on the escalation review task. Phase 1 never closes it — a recorded result
- * still needs a human to run the follow-up steps, so closing it here would hide real work.
+ * Re-enter the originating agent with the late result, in its ORIGINAL conversation — which is
+ * what makes the follow-up possible at all: the agent's own history still holds the brief it was
+ * working from and whatever it had already done before the wait timed out.
  *
- * A review task that reached a terminal state cannot be annotated at all: updateTask's guard
- * rejects writes to done/cancelled rows (and throws on the race), so that case is reported as
+ * Three properties of this event matter beyond the content:
+ *   - `originator` is restored from the handle, so the follow-up steps still pass the autonomy
+ *     gate. Without it `isPrincipalOriginated()` goes false and creating the trip tasks this
+ *     mechanism exists to produce would be blocked.
+ *   - `wakeContext` marks it derived, so the standing ladder can only DOWNGRADE the lineage's
+ *     authority against the live autonomy score, never grant it.
+ *   - `liveTurn` is deliberately absent. This crosses an async boundary (#1126), so the elevated
+ *     self-approval signal of the original turn must not be resurrected minutes later.
+ */
+async function publishLateWake(opts: PublishLateWakeOptions): Promise<string> {
+  const { bus, logger, handle, brief } = opts;
+  const now = new Date();
+  const originator = parseStoredOriginator(handle.originator);
+
+  if (!originator && handle.originator) {
+    logger.warn(
+      { delegateEventId: handle.delegateEventId },
+      'Late delegation: stored originator is malformed — waking without a lineage rather than fabricating one',
+    );
+  }
+
+  const task = createAgentTask({
+    agentId: handle.originAgentId,
+    conversationId: handle.originConversationId,
+    channelId: handle.originChannelId,
+    senderId: handle.originSenderId,
+    content: brief,
+    metadata: {
+      ...(originator !== undefined && { originator }),
+      wakeContext: makeWakeContext(true),
+      // Consumed by the runtime to seed DelegationGuard, so the woken turn cannot re-delegate
+      // work that has already been done (#1799 / #1310).
+      lateDelegation: { agent: handle.targetAgent, task: handle.delegateTask },
+    },
+    // Chain to the late response, so audit_log links that response to the turn it restarted.
+    parentEventId: opts.parentEventId ?? handle.delegateEventId,
+  });
+
+  // Routing must exist BEFORE publish: the bus awaits subscribers, so the woken agent can respond
+  // inside publish() and the dispatcher would find no entry for a task it never saw arrive.
+  if (opts.registerRouting && !NON_REPLYABLE_ORIGIN_CHANNELS.has(handle.originChannelId)) {
+    opts.registerRouting(task.id, {
+      channelId: handle.originChannelId,
+      conversationId: handle.originConversationId,
+      senderId: handle.originSenderId,
+      originator: originator ?? unresolvedOriginator(handle.originChannelId, now),
+    });
+  }
+
+  await bus.publish('system', task);
+
+  logger.info(
+    {
+      delegateEventId: handle.delegateEventId,
+      wakeTaskEventId: task.id,
+      originAgentId: handle.originAgentId,
+      originConversationId: handle.originConversationId,
+      hadOriginator: originator !== undefined,
+    },
+    'Late delegation: woke the originating agent with the late result',
+  );
+
+  return task.id;
+}
+
+interface RecordOnReviewTaskOptions {
+  taskRepo: TaskRepo;
+  logger: Logger;
+  handle: PendingDelegationRow;
+  note: string;
+  /** True on the deliver branch: the follow-up is running, so the review is finished. */
+  close: boolean;
+}
+
+/**
+ * Put the outcome on the escalation review task — closing it when the result was handed back to
+ * the originating agent, annotating and leaving it open otherwise. Closing on delivery is the
+ * point of the whole mechanism: the row said "check whether it already delivered", something
+ * finally checked, and leaving it open would recreate the backlog rot #1799 opened with.
+ *
+ * A review task that reached a terminal state cannot be written at all: updateTask's guard
+ * rejects done/cancelled rows (and throws on the race), so that case is reported as
  * `review_task_terminal` rather than forced through.
  */
-async function annotateReviewTask(
-  opts: AnnotateReviewTaskOptions,
+async function recordOnReviewTask(
+  opts: RecordOnReviewTaskOptions,
 ): Promise<LateDelegationReviewOutcome> {
   const { taskRepo, logger, handle, note } = opts;
 
@@ -542,12 +874,16 @@ async function annotateReviewTask(
       return 'review_task_terminal';
     }
 
+    if (opts.close) {
+      await taskRepo.completeTask(handle.reviewTaskId, note, 'late-delegation');
+      return 'closed';
+    }
     await taskRepo.updateTask(handle.reviewTaskId, { progressNote: note }, 'late-delegation');
     return 'annotated';
   } catch (err) {
     logger.error(
-      { err, delegateEventId: handle.delegateEventId, reviewTaskId: handle.reviewTaskId },
-      'Late delegation: failed to annotate the review task',
+      { err, delegateEventId: handle.delegateEventId, reviewTaskId: handle.reviewTaskId, close: opts.close },
+      'Late delegation: failed to record the outcome on the review task',
     );
     return 'update_failed';
   }

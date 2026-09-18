@@ -1,6 +1,6 @@
 // late-delegation-subscriber.test.ts — handle creation and response matching (#1799).
 //
-// DB-backed behaviour lives in tests/integration/late-delegation-phase1.test.ts. Here the pool
+// DB-backed behaviour lives in tests/integration/late-delegation.test.ts. Here the pool
 // is a fake, so what is under test is the wiring: what gets written when a delegation times out,
 // which responses are even looked at, and that a broken review-task reference costs the link
 // rather than the handle.
@@ -10,7 +10,7 @@ import pino from 'pino';
 import type pg from 'pg';
 import { EventBus } from '../bus/bus.js';
 import type { TaskRepo } from '../db/task-repo.js';
-import { createAgentResponse, createDelegationTimedOut } from '../bus/events.js';
+import { createAgentResponse, createDelegationTimedOut, type AgentTaskEvent } from '../bus/events.js';
 import { LateDelegationSubscriber } from './late-delegation-subscriber.js';
 
 const logger = pino({ level: 'silent' });
@@ -45,17 +45,27 @@ function fakePool(opts: FakePoolOptions = {}): { pool: pg.Pool; queries: Recorde
       return { rows: opts.existingHandle ? [opts.existingHandle] : [] };
     }
     if (sql.includes('UPDATE pending_delegations')) {
-      return { rows: [{ ...(opts.existingHandle ?? {}), status: 'resolved' }] };
+      return { rows: [{ ...(opts.existingHandle ?? {}), status: 'claimed', claim_token: 'tok-1' }] };
     }
     throw new Error(`unexpected query: ${sql.slice(0, 80)}`);
   });
   return { pool: { query } as unknown as pg.Pool, queries };
 }
 
+/** A duck-typed repo for tests that construct the subscriber directly. */
+function startSubscriberTaskRepo(): TaskRepo {
+  return {
+    getTask: vi.fn(async () => null),
+    updateTask: vi.fn(async () => null),
+    completeTask: vi.fn(async () => null),
+  } as unknown as TaskRepo;
+}
+
 function startSubscriber(pool: pg.Pool, bus: EventBus): { taskRepo: TaskRepo } {
   const taskRepo = {
     getTask: vi.fn(async () => null),
     updateTask: vi.fn(async () => null),
+    completeTask: vi.fn(async () => null),
   } as unknown as TaskRepo;
   new LateDelegationSubscriber({
     pool,
@@ -249,10 +259,173 @@ describe('LateDelegationSubscriber — agent.response matching (#1799)', () => {
     });
     await bus.publish('agent', late);
 
-    const claim = queries.find((q) => q.sql.includes('UPDATE pending_delegations'));
+    const claim = queries.find((q) => q.sql.includes("SET status = 'claimed'"));
     expect(claim).toBeDefined();
     expect(claim!.params[0]).toBe('delegate-evt-1');
-    expect(claim!.params[1]).toBe('annotated_result');
+    expect(claim!.params[1]).toBe('delivered');
     expect(claim!.params[2]).toBe(late.id);
+  });
+
+  it('wakes the originating agent with the result and blocks re-delegation', async () => {
+    const { pool } = fakePool({
+      existingHandle: {
+        delegate_event_id: 'delegate-evt-1',
+        status: 'pending',
+        resolution: null,
+        origin_channel_id: 'scheduler',
+        origin_agent_id: 'coordinator',
+        origin_conversation_id: 'scheduler:job-7:run-2',
+        origin_sender_id: 'scheduler',
+        review_task_id: null,
+        target_agent: 'calendar',
+        delegate_task: 'Detect travel since Aug 17',
+        scheduler_job_id: 'job-7',
+        originator: {
+          contactId: 'contact-ceo',
+          systemRole: 'principal',
+          channel: 'scheduler',
+          initiatedAt: '2026-09-14T12:00:00.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+    const wakes: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'system', (e) => { wakes.push(e as AgentTaskEvent); });
+    startSubscriber(pool, bus);
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'calendar',
+      conversationId: 'delegate-conv-1',
+      content: 'Travel detected: YYZ→SFO Oct 2.',
+      parentEventId: 'delegate-evt-1',
+    }));
+
+    expect(wakes).toHaveLength(1);
+    const wake = wakes[0]!;
+    expect(wake.payload.agentId).toBe('coordinator');
+    expect(wake.payload.conversationId).toBe('scheduler:job-7:run-2');
+    expect(wake.payload.content).toContain('Travel detected: YYZ→SFO Oct 2.');
+    // The scheduled job is named so the woken turn can advance the cursor.
+    expect(wake.payload.content).toContain('scheduler-report');
+    expect(wake.payload.content).toContain('job-7');
+    // Lineage restored, so the follow-up steps still clear the autonomy gate.
+    expect((wake.payload.metadata?.originator as Record<string, unknown>)?.contactId).toBe('contact-ceo');
+    expect(wake.payload.metadata?.wakeContext).toEqual({ derived: true });
+    expect(wake.payload.liveTurn).toBeUndefined();
+  });
+
+  it('does not register reply routing for a scheduler origin', async () => {
+    // Nobody is waiting on a reply to a scheduled run; the side effects are the point.
+    const { pool } = fakePool({
+      existingHandle: {
+        delegate_event_id: 'delegate-evt-1',
+        status: 'pending',
+        resolution: null,
+        origin_channel_id: 'scheduler',
+        origin_agent_id: 'coordinator',
+        origin_conversation_id: 'scheduler:job-7:run-2',
+        origin_sender_id: 'scheduler',
+        review_task_id: null,
+        target_agent: 'calendar',
+        delegate_task: 'Detect travel',
+        originator: null,
+      },
+    });
+    const bus = new EventBus(logger);
+    const registerRouting = vi.fn();
+    new LateDelegationSubscriber({
+      pool, bus, logger, taskRepo: startSubscriberTaskRepo(), ttlMinutes: 60, maxResultChars: 500,
+      registerRouting,
+    }).start();
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'calendar',
+      conversationId: 'delegate-conv-1',
+      content: 'result',
+      parentEventId: 'delegate-evt-1',
+    }));
+
+    expect(registerRouting).not.toHaveBeenCalled();
+  });
+
+  it('registers reply routing for a user-facing origin', async () => {
+    const { pool } = fakePool({
+      existingHandle: {
+        delegate_event_id: 'delegate-evt-1',
+        status: 'pending',
+        resolution: null,
+        origin_channel_id: 'signal',
+        origin_agent_id: 'coordinator',
+        origin_conversation_id: 'signal:+15551234567',
+        origin_sender_id: '+15551234567',
+        review_task_id: null,
+        target_agent: 'calendar',
+        delegate_task: 'Detect travel',
+        originator: {
+          contactId: 'contact-ceo',
+          systemRole: 'principal',
+          channel: 'signal',
+          initiatedAt: '2026-09-14T12:00:00.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+    const registerRouting = vi.fn();
+    const wakes: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'system', (e) => { wakes.push(e as AgentTaskEvent); });
+    new LateDelegationSubscriber({
+      pool, bus, logger, taskRepo: startSubscriberTaskRepo(), ttlMinutes: 60, maxResultChars: 500,
+      registerRouting,
+    }).start();
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'calendar',
+      conversationId: 'delegate-conv-1',
+      content: 'result',
+      parentEventId: 'delegate-evt-1',
+    }));
+
+    // Registered BEFORE publish, or the woken agent's reply would find no routing and be dropped.
+    expect(registerRouting).toHaveBeenCalledTimes(1);
+    const [taskEventId, routing] = registerRouting.mock.calls[0]!;
+    expect(taskEventId).toBe(wakes[0]!.id);
+    expect(routing).toMatchObject({ channelId: 'signal', conversationId: 'signal:+15551234567' });
+  });
+
+  it('records instead of waking when the origin agent is no longer registered', async () => {
+    const { pool, queries } = fakePool({
+      existingHandle: {
+        delegate_event_id: 'delegate-evt-1',
+        status: 'pending',
+        resolution: null,
+        origin_channel_id: 'scheduler',
+        origin_agent_id: 'retired-agent',
+        origin_conversation_id: 'scheduler:job-7:run-2',
+        origin_sender_id: 'scheduler',
+        review_task_id: null,
+        target_agent: 'calendar',
+        delegate_task: 'Detect travel',
+        originator: null,
+      },
+    });
+    const bus = new EventBus(logger);
+    const wakes: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'system', (e) => { wakes.push(e as AgentTaskEvent); });
+    new LateDelegationSubscriber({
+      pool, bus, logger, taskRepo: startSubscriberTaskRepo(), ttlMinutes: 60, maxResultChars: 500,
+      knownAgents: new Set(['coordinator', 'calendar']),
+    }).start();
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'calendar',
+      conversationId: 'delegate-conv-1',
+      content: 'result',
+      parentEventId: 'delegate-evt-1',
+    }));
+
+    // Publishing to an agent nobody subscribes to would drop the result silently.
+    expect(wakes).toHaveLength(0);
+    const claim = queries.find((q) => q.sql.includes("SET status = 'claimed'"));
+    expect(claim!.params[1]).toBe('annotated_unroutable');
   });
 });

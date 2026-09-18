@@ -24,6 +24,7 @@ import {
   computeLateDeliveryExpiry,
   handleLateResponse,
   parseSchedulerJobId,
+  type LateWakeRoutingRegistrar,
 } from './late-delegation.js';
 
 /** Postgres error codes that mean the review task reference — not the handle — is the problem:
@@ -46,6 +47,10 @@ export interface LateDelegationSubscriberOptions {
   maxResultChars: number;
   /** IANA timezone for principal-facing timestamps. */
   timezone?: string;
+  /** Registered agent names. An origin agent no longer on the roster is recorded, not woken. */
+  knownAgents?: Set<string>;
+  /** Seeds dispatcher routing so a woken agent's reply reaches the principal (#972 pattern). */
+  registerRouting?: LateWakeRoutingRegistrar;
 }
 
 export class LateDelegationSubscriber {
@@ -178,6 +183,8 @@ export class LateDelegationSubscriber {
         respondedAt: event.timestamp,
         maxResultChars: this.opts.maxResultChars,
         ...(this.opts.timezone !== undefined && { timezone: this.opts.timezone }),
+        ...(this.opts.knownAgents !== undefined && { knownAgents: this.opts.knownAgents }),
+        ...(this.opts.registerRouting !== undefined && { registerRouting: this.opts.registerRouting }),
       });
     } catch (err) {
       // Leave the handle pending: the sweep finds this same response in audit_log on a later

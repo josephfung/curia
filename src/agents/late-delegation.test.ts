@@ -7,14 +7,27 @@
 import { describe, it, expect } from 'vitest';
 import {
   abandonedClassification,
+  buildLateResultBrief,
   capResult,
   classifyLateResponse,
   computeLateDeliveryExpiry,
   formatDeliveredAt,
   parseSchedulerJobId,
+  parseStoredOriginator,
+  renderDeliveredNote,
   renderLateNote,
+  type LateResponseClassification,
   type LateResponseFacts,
+  type RecordedDisposition,
 } from './late-delegation.js';
+
+/** renderLateNote only covers the recorded dispositions; a delivered result has its own note. */
+function recorded(
+  c: LateResponseClassification,
+): LateResponseClassification & { disposition: RecordedDisposition } {
+  if (c.disposition === 'deliverable') throw new Error('expected a recorded disposition');
+  return c as LateResponseClassification & { disposition: RecordedDisposition };
+}
 import { EXECUTION_PAUSED_PROTOCOL } from './resumable-task.js';
 
 function facts(overrides: Partial<LateResponseFacts> = {}): LateResponseFacts {
@@ -30,7 +43,7 @@ describe('classifyLateResponse (#1799)', () => {
   it('treats a normal late result from a routable origin as deliverable', () => {
     const c = classifyLateResponse(facts());
     expect(c.disposition).toBe('deliverable');
-    expect(c.resolution).toBe('annotated_result');
+    expect(c.resolution).toBe('delivered');
   });
 
   it('classifies a structured specialist failure as an error with its reason', () => {
@@ -178,35 +191,12 @@ describe('capResult (#1799)', () => {
 describe('renderLateNote (#1799)', () => {
   const base = { targetAgent: 'calendar', maxResultChars: 100, deliveredAtDisplay: '2026-09-14T12:06:43-04:00' };
 
-  it('includes the result and states that follow-up has not run, for a deliverable', () => {
-    const note = renderLateNote({
-      ...base,
-      classification: classifyLateResponse(facts()),
-      content: 'Trip: YYZ→SFO Oct 2',
-    });
-    expect(note).toContain('Trip: YYZ→SFO Oct 2');
-    expect(note).toContain('2026-09-14T12:06:43-04:00');
-    expect(note).toContain('have NOT run yet');
-  });
-
-  it('does not restate the original delegated brief (#1064 re-execution precedent)', () => {
-    // The note lands on a task description a coordinator may later read. Echoing the original
-    // instruction is what made the drift-pause notice re-execute the work it was reporting on.
-    const brief = 'Detect travel from the calendar and create trip tasks';
-    const note = renderLateNote({
-      ...base,
-      classification: classifyLateResponse(facts()),
-      content: 'Found 1 trip',
-    });
-    expect(note).not.toContain(brief);
-  });
-
   it('says plainly that the work did not happen when the specialist errored', () => {
     const note = renderLateNote({
       ...base,
-      classification: classifyLateResponse(facts({
+      classification: recorded(classifyLateResponse(facts({
         payload: { content: 'nope', isError: true, reason: 'maxTurns' },
-      })),
+      }))),
       content: 'nope',
     });
     expect(note).toContain('maxTurns');
@@ -222,7 +212,7 @@ describe('renderLateNote (#1799)', () => {
     });
     const note = renderLateNote({
       ...base,
-      classification: classifyLateResponse(facts({ payload: { content } })),
+      classification: recorded(classifyLateResponse(facts({ payload: { content } }))),
       content,
     });
     expect(note).toContain('needing a decision');
@@ -253,11 +243,122 @@ describe('renderLateNote (#1799)', () => {
   it('truncates an oversized result at the configured cap', () => {
     const note = renderLateNote({
       ...base,
-      classification: classifyLateResponse(facts()),
+      classification: recorded(classifyLateResponse(facts({ originChannelId: 'internal' }))),
       content: 'y'.repeat(500),
       maxResultChars: 20,
     });
     expect(note).toContain('truncated 480 chars');
+  });
+});
+
+describe('buildLateResultBrief (#1799)', () => {
+  const base = {
+    targetAgent: 'calendar',
+    content: 'Travel detected: YYZ→SFO Oct 2–5.',
+    deliveredAtDisplay: '2026-09-14T12:06:43-04:00',
+    maxResultChars: 500,
+  };
+
+  it('carries the result, the delivery time, and that the work is already done', () => {
+    const brief = buildLateResultBrief(base);
+    expect(brief).toContain('Travel detected: YYZ→SFO Oct 2–5.');
+    expect(brief).toContain('2026-09-14T12:06:43-04:00');
+    expect(brief).toContain('calendar');
+    expect(brief).toMatch(/kept\s+running/);
+  });
+
+  it('tells the agent not to re-delegate, and that a repeat is blocked', () => {
+    // Prompt wording is the second line of defence; the runtime's guard seed is the first. Both
+    // exist because a coordinator handed a result it did not fetch will otherwise try to fetch it.
+    const brief = buildLateResultBrief(base);
+    expect(brief).toContain('Do NOT delegate this work again');
+    expect(brief).toContain('blocked');
+  });
+
+  it('does NOT restate the original delegated brief (#1064 re-execution precedent)', () => {
+    // #1064: a notify agent.task that echoed the original intent made the coordinator re-execute
+    // the work it was reporting on and send a duplicate. The brief lives in conversation history —
+    // the wake re-enters the same conversationId — so restating it only invites a second run.
+    const originalBrief = 'Detect travel from the calendar and create trip tasks for each trip';
+    const brief = buildLateResultBrief(base);
+    expect(brief).not.toContain(originalBrief);
+    expect(brief).not.toContain('create trip tasks');
+  });
+
+  it('tells the agent to check for work it already did before acting', () => {
+    const brief = buildLateResultBrief(base);
+    expect(brief).toMatch(/check this conversation/i);
+    expect(brief).toMatch(/do not repeat a side effect/i);
+  });
+
+  it('names the scheduled job when there is one, so the cursor can be advanced', () => {
+    const brief = buildLateResultBrief({ ...base, schedulerJobId: 'cff7f3bb-job' });
+    expect(brief).toContain('scheduler-report');
+    expect(brief).toContain('cff7f3bb-job');
+  });
+
+  it('omits the scheduler line for a non-scheduled origin', () => {
+    expect(buildLateResultBrief(base)).not.toContain('scheduler-report');
+  });
+
+  it('caps an oversized result', () => {
+    const brief = buildLateResultBrief({ ...base, content: 'z'.repeat(900), maxResultChars: 50 });
+    expect(brief).toContain('truncated 850 chars');
+  });
+});
+
+describe('renderDeliveredNote (#1799)', () => {
+  it('names the delivery time and where the follow-up is running', () => {
+    const note = renderDeliveredNote({
+      targetAgent: 'calendar',
+      deliveredAtDisplay: '2026-09-14T12:06:43-04:00',
+      originConversationId: 'scheduler:cff7f3bb-job:run-1',
+    });
+    expect(note).toContain('calendar delivered at 2026-09-14T12:06:43-04:00');
+    expect(note).toContain('scheduler:cff7f3bb-job:run-1');
+    // The row existed to ask "did it deliver?" — the closing note has to answer that.
+    expect(note).toMatch(/closing this review/i);
+  });
+});
+
+describe('parseStoredOriginator (#1799)', () => {
+  const valid = {
+    contactId: 'contact-ceo',
+    systemRole: 'principal',
+    channel: 'scheduler',
+    initiatedAt: '2026-09-14T12:00:00.000Z',
+    tier: 'principal',
+  };
+
+  it('round-trips a complete bag', () => {
+    expect(parseStoredOriginator(valid)).toEqual(valid);
+  });
+
+  it('accepts a bag with no tier and preserves its absence', () => {
+    const noTier: Record<string, unknown> = { ...valid };
+    delete noTier['tier'];
+    const parsed = parseStoredOriginator(noTier);
+    expect(parsed).toEqual(noTier);
+    expect('tier' in (parsed ?? {})).toBe(false);
+  });
+
+  it('rejects a bag missing required fields rather than fabricating a lineage', () => {
+    // A fabricated lineage would hand the woken turn authority the original never had.
+    expect(parseStoredOriginator(null)).toBeUndefined();
+    expect(parseStoredOriginator({ channel: 'scheduler', initiatedAt: valid.initiatedAt })).toBeUndefined();
+    expect(parseStoredOriginator({ contactId: 'c', initiatedAt: valid.initiatedAt })).toBeUndefined();
+    expect(parseStoredOriginator({ contactId: 'c', channel: 'scheduler' })).toBeUndefined();
+  });
+
+  it('rejects out-of-range systemRole and tier values', () => {
+    expect(parseStoredOriginator({ ...valid, systemRole: 'superuser' })).toBeUndefined();
+    expect(parseStoredOriginator({ ...valid, tier: 'platinum' })).toBeUndefined();
+  });
+
+  it('accepts an explicit null systemRole and tier', () => {
+    const parsed = parseStoredOriginator({ ...valid, systemRole: null, tier: null });
+    expect(parsed?.systemRole).toBeNull();
+    expect(parsed?.tier).toBeNull();
   });
 });
 
