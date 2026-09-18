@@ -1991,6 +1991,7 @@ async function main(): Promise<void> {
         sessionStore: voiceSessionStore,
         pulseServer: config.signalPulseSocketPath,
         maxCallSeconds: config.signalVoiceMaxCallSeconds,
+        channelPolicies: authConfig?.channelPolicies,
       });
       // Constructed here (needs voiceRuntimeRef), but NOT started here: start()
       // subscribes to call events and would answer a call. It must run after

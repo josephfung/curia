@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`delegate` input schema (public API)** — `timeout_ms` removed; the runtime is its only source. Skill v1.4.0. (#1797)
 - **`delegate` outputs (public API)** — timeouts now return the delegate event and conversation ids. Skill v1.5.0. (#1799)
 - **Published image** — now keeps `pnpm-retry`, so downstream images can retry their own network installs. (curia-deploy#220)
+- **Voice caller policy** — unknown-sender and blocked gates now read `channel-trust.yaml`. (#1626)
 
 ### Fixed
 

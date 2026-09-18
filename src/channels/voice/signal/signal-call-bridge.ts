@@ -2,11 +2,12 @@
 // voice calls (via SignalRpcClient's callEvent stream) to VoiceRuntime sessions
 // (#1672).
 //
-// Policy: "answer everyone" — v1 admits both known contacts and unresolved
-// strangers (unknown tier, liveTurn=false), rejecting only blocked contacts and
-// callers with no stable identifier (uuid-only, no E.164 number). Exactly one
-// call is ever active at a time; a second incoming call while one is active (or
-// mid-accept) is rejected as busy.
+// Policy: unknown-caller admission follows `channels.signal.unknown_sender` in
+// channel-trust.yaml (currently `allow` — known contacts and unresolved
+// strangers are answered; a stranger is unknown-tier / liveTurn=false). Rejects
+// blocked contacts, uuid-only callers (no E.164), and — if the YAML is flipped
+// to `ignore` — unresolved numbers. Exactly one call is ever active at a time;
+// a second incoming call while one is active (or mid-accept) is rejected as busy.
 //
 // Two pieces of local state track this:
 //   - `pending`: callId -> resolved caller, from RINGING_INCOMING (accepted) to
@@ -22,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../../../bus/bus.js';
 import { createVoiceSessionStarted } from '../../../bus/events.js';
 import type { ContactResolver } from '../../../contacts/contact-resolver.js';
+import type { ChannelPolicyConfig } from '../../../contacts/types.js';
 import type { Logger } from '../../../logger.js';
 import type { SignalCallEvent } from '../../signal/call-types.js';
 import type { SignalRpcClient } from '../../signal/signal-rpc-client.js';
@@ -65,6 +67,8 @@ export interface SignalCallBridgeConfig {
   voiceRuntime: VoiceRuntime;
   sessionStore: VoiceSessionStore;
   pulseServer: string;
+  /** Same channelPolicies map the dispatcher uses (`loadAuthConfig`). */
+  channelPolicies?: Record<string, ChannelPolicyConfig>;
   /** Hard cap per call; default 600. */
   maxCallSeconds?: number;
   /** Injected for tests; defaults to (opts) => new SignalAudioTransport(opts). */
@@ -301,6 +305,7 @@ export class SignalCallBridge {
         result = await resolveSignalVoiceCaller({
           contactResolver: this.config.contactResolver,
           callerNumber: ev.number,
+          channelPolicies: this.config.channelPolicies ?? {},
           logger: this.log,
         });
       } catch (err) {
