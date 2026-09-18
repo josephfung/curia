@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`memory-store` outputs (public API)** — skipped canonical redirects now flag `canonical_redirect_skipped` with a reason. Skill v1.2.0. (#1772)
 - **`calendar-list-events`** — `maxResults` above 200 now pages instead of failing; errors name the cause. (#1798)
 - **Delegate wait windows** — the coordinator's invented `timeout_ms` no longer shortens them into false timeouts. (#1797)
 - **`${principal_contact_id}` leaks** — the token no longer reaches agents as literal text from tool descriptions or scheduled-job payloads. (#1800)

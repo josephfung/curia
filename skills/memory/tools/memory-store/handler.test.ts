@@ -486,6 +486,8 @@ describe('MemoryStoreHandler', () => {
       expect(data.stored).toBe(false);
       expect(data.action).toBe('redirected_to_contact');
       expect(data.contact_id).toBe('contact-1');
+      expect(data).not.toHaveProperty('canonical_redirect_skipped');
+      expect(data).not.toHaveProperty('canonical_redirect_skip_reason');
       // storeFact must not have been called
       expect(mockMem.storeFact).not.toHaveBeenCalled();
       // updateContactFields should have been called with the canonical field
@@ -539,6 +541,8 @@ describe('MemoryStoreHandler', () => {
       const data = (result as { success: true; data: Record<string, unknown> }).data;
       expect(data.stored).toBe(true);
       expect(data.action).toBe('created');
+      expect(data.canonical_redirect_skipped).toBe(true);
+      expect(data.canonical_redirect_skip_reason).toBe('normalization_failed');
       expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
     });
 
@@ -565,10 +569,14 @@ describe('MemoryStoreHandler', () => {
 
       const result = await handler.execute(ctx);
 
-      // DB error during contact lookup → falls through to KG write, not a skill error
+      // DB error during contact lookup → falls through to KG write, not a skill error.
+      // The skip is flagged so the agent can tell this apart from a real contact write (#1772).
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: Record<string, unknown> }).data;
       expect(data.stored).toBe(true);
+      expect(data.action).toBe('created');
+      expect(data.canonical_redirect_skipped).toBe(true);
+      expect(data.canonical_redirect_skip_reason).toBe('lookup_failed');
       expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
       expect(contactService.updateContactFields).not.toHaveBeenCalled();
     });
@@ -591,10 +599,12 @@ describe('MemoryStoreHandler', () => {
 
       const result = await handler.execute(ctx);
 
-      // No contact → falls through to KG write
+      // No contact → falls through to KG write. Distinct from lookup_failed (#1772).
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: Record<string, unknown> }).data;
       expect(data.stored).toBe(true);
+      expect(data.canonical_redirect_skipped).toBe(true);
+      expect(data.canonical_redirect_skip_reason).toBe('no_contact_record');
       expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
     });
 
@@ -619,6 +629,7 @@ describe('MemoryStoreHandler', () => {
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: Record<string, unknown> }).data;
       expect(data.stored).toBe(true);
+      expect(data).not.toHaveProperty('canonical_redirect_skipped');
       expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
     });
 
@@ -643,6 +654,7 @@ describe('MemoryStoreHandler', () => {
       expect(result.success).toBe(true);
       const data = (result as { success: true; data: Record<string, unknown> }).data;
       expect(data.stored).toBe(true);
+      expect(data).not.toHaveProperty('canonical_redirect_skipped');
       expect(mockMem.storeFact).toHaveBeenCalledTimes(1);
     });
 
@@ -846,14 +858,18 @@ describe('MemoryStoreHandler', () => {
       expect(call![0]).toHaveProperty('reason', 'phone_normalization_failed');
     });
 
-    it('findContactByKgNodeId-failed warn', async () => {
+    it('findContactByKgNodeId-failed error', async () => {
       const entityMemory = mockMem({ stored: true, action: 'created', nodeId: 'fact-1' });
       const { ctx, log } = ctxFor(
         entityMemory,
         piiInput({ field: 'timezone', value: 'America/Toronto' }),
         {
           contactService: {
-            findContactByKgNodeId: vi.fn().mockRejectedValue(new Error('connection timeout')),
+            // Message echoes the entity name the way a driver error can — the
+            // log must use errorName, not the raw Error (#1772).
+            findContactByKgNodeId: vi.fn().mockRejectedValue(
+              new Error(`connection timeout looking up ${PII_ENTITY}`),
+            ),
             updateContactFields: vi.fn(),
           },
         },
@@ -861,10 +877,38 @@ describe('MemoryStoreHandler', () => {
 
       await handler.execute(ctx);
 
-      const call = findCall(log.warn, /findContactByKgNodeId failed/);
+      const call = findCall(log.error, /findContactByKgNodeId failed/);
       expectNoPii(call);
       expect(call![0]).toHaveProperty('entityNodeId', NODE_ID);
       expect(call![0]).toHaveProperty('field', 'timezone');
+      expect(call![0]).toHaveProperty('errorName', 'Error');
+      expect(call![0]).not.toHaveProperty('err');
+      expect(call![0]).not.toHaveProperty('error');
+      // Lookup failure is not the phase-2 catch, and it is not a warn.
+      expect(findCall(log.warn, /findContactByKgNodeId failed/)).toBeUndefined();
+      expect(findCall(log.error, /canonical contact redirect failed/)).toBeUndefined();
+    });
+
+    it('no-contact-record does not log an error', async () => {
+      const entityMemory = mockMem({ stored: true, action: 'created', nodeId: 'fact-1' });
+      const { ctx, log } = ctxFor(
+        entityMemory,
+        piiInput({ field: 'timezone', value: 'America/Toronto' }),
+        {
+          contactService: {
+            findContactByKgNodeId: vi.fn().mockResolvedValue(null),
+            updateContactFields: vi.fn(),
+          },
+        },
+      );
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(log.error).not.toHaveBeenCalled();
+      const data = (result as { success: true; data: Record<string, unknown> }).data;
+      expect(data.canonical_redirect_skipped).toBe(true);
+      expect(data.canonical_redirect_skip_reason).toBe('no_contact_record');
     });
 
     it('canonical-redirected info', async () => {
