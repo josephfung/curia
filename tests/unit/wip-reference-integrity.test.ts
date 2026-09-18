@@ -37,8 +37,20 @@ const WIP_DIR = join(REPO_ROOT, 'docs/wip');
 const DURABLE_TREES = ['src', 'tests', 'skills', 'scripts', 'docs/specs', 'docs/adr', 'docs/dev'];
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git']);
-// Text files worth scanning. Binary and generated trees carry no hand-written citations.
-const SCANNED_EXTENSION = /\.(?:[cm]?tsx?|js|mjs|cjs|sql|md|ya?ml|json)$/;
+// Every hand-written text format in the durable trees. `.sh` and `.py` are here because
+// the durable trees really do contain them — the CI and docker test harnesses under
+// `tests/`, and skill fixture scripts — and a comment in one can cite a design doc exactly
+// like a comment in a `.ts` file can. Binary formats (`.pdf`) are excluded; they carry no
+// hand-written citations. Keep this in sync with the extension census in
+// `scans every text format present in the durable trees` below, which fails if a new
+// format appears in the repo without being listed here.
+const SCANNED_EXTENSION = /\.(?:[cm]?tsx?|js|mjs|cjs|sql|md|ya?ml|json|sh|py)$/;
+
+/** Extensions deliberately not scanned, with the reason. Asserted against the repo below. */
+const UNSCANNED_EXTENSIONS = new Set([
+  'pdf', // binary
+  'gitkeep', // empty placeholder
+]);
 
 /**
  * Both ways a durable file cites a WIP artifact, each capturing the bare filename:
@@ -71,6 +83,21 @@ function collectFiles(dir: string, out: string[] = []): string[] {
       if (SKIP_DIRS.has(entry.name)) continue;
       collectFiles(full, out);
     } else if (SCANNED_EXTENSION.test(entry.name)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/** Every file under `dir` regardless of extension — the census the guard is checked against. */
+function collectAllFiles(dir: string, out: string[] = []): string[] {
+  if (!existsSync(dir)) return out;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      collectAllFiles(full, out);
+    } else {
       out.push(full);
     }
   }
@@ -130,6 +157,34 @@ describe('wip reference integrity', () => {
       expect(collectFiles(join(REPO_ROOT, tree)).length, `no files scanned under ${tree}`)
         .toBeGreaterThan(0);
     }
+  });
+
+  it('scans every text format present in the durable trees', () => {
+    // The first version of this guard listed only the formats the #1483 audit happened to
+    // touch, silently skipping the `.sh` and `.py` files that live under tests/. A guard
+    // against omissions that quietly omits is worse than none, so rather than trusting the
+    // extension list to stay complete, derive the real census and require every format to
+    // be either scanned or explicitly waived.
+    const present = new Set<string>();
+    for (const tree of DURABLE_TREES) {
+      for (const file of collectAllFiles(join(REPO_ROOT, tree))) {
+        const ext = file.split('.').pop();
+        if (ext && ext !== file) present.add(ext.toLowerCase());
+      }
+    }
+    expect(present.size, 'no extensions found — the census itself is broken').toBeGreaterThan(0);
+
+    const unaccounted = [...present]
+      .filter((ext) => !SCANNED_EXTENSION.test(`f.${ext}`) && !UNSCANNED_EXTENSIONS.has(ext))
+      .sort();
+
+    expect(
+      unaccounted,
+      `these formats exist in the durable trees but are neither scanned nor listed as ` +
+        `deliberately unscanned, so a docs/wip citation in one would slip through: ` +
+        `${unaccounted.join(', ')}. Add each to SCANNED_EXTENSION, or to ` +
+        `UNSCANNED_EXTENSIONS with the reason.`,
+    ).toEqual([]);
   });
 
   it('matches both citation forms and ignores directory-only mentions', () => {
