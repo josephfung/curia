@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DelegationGuard, delegationKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData } from './delegation-guard.js';
+import { ALREADY_DELIVERED_REASON, DelegationGuard, delegationKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData } from './delegation-guard.js';
 import pino from 'pino';
 
 describe('DelegationGuard', () => {
@@ -165,5 +165,38 @@ describe('parseDelegateFailureData — late-delivery correlation ids (#1799)', (
 
     expect(parsed?.delegateEventId).toBeUndefined();
     expect(parsed?.waitTimeoutMs).toBeUndefined();
+  });
+});
+
+describe('DelegationGuard.isAlreadyDelivered (#1799)', () => {
+  const key = delegationKey('calendar', 'Detect travel since Aug 17');
+
+  it('is true only for an already-delivered record', () => {
+    const guard = new DelegationGuard();
+    expect(guard.isAlreadyDelivered(key)).toBe(false);
+
+    guard.recordFailure(key, {
+      agent: 'calendar',
+      reason: ALREADY_DELIVERED_REASON,
+      retryable: false,
+      message: 'already completed this work',
+    });
+    expect(guard.isAlreadyDelivered(key)).toBe(true);
+  });
+
+  it('is false for other non-retryable failures, which a resume_token may still continue', () => {
+    const guard = new DelegationGuard();
+    guard.recordFailure(key, {
+      agent: 'calendar',
+      reason: 'blocked',
+      retryable: false,
+      message: 'waiting on a person',
+    });
+    expect(guard.canAttempt(key)).toBe(false);
+    expect(guard.isAlreadyDelivered(key)).toBe(false);
+  });
+
+  it('is false for an unknown key', () => {
+    expect(new DelegationGuard().isAlreadyDelivered(delegationKey('x', 'y'))).toBe(false);
   });
 });

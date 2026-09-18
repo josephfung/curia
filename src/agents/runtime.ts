@@ -69,6 +69,7 @@ import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { encodeResumeToken } from './resume-token.js';
 import {
+  ALREADY_DELIVERED_REASON,
   DelegationGuard,
   delegationKey,
   escalateDelegationFailure,
@@ -1110,7 +1111,7 @@ export class AgentRuntime {
       if (typeof lateAgent === 'string' && lateAgent !== '' && typeof lateTask === 'string' && lateTask !== '') {
         delegationGuard.recordFailure(delegationKey(lateAgent, lateTask), {
           agent: lateAgent,
-          reason: 'already_delivered',
+          reason: ALREADY_DELIVERED_REASON,
           retryable: false,
           message: `'${lateAgent}' already completed this work — its result is included in your task. Do not delegate it again.`,
         });
@@ -1505,9 +1506,14 @@ export class AgentRuntime {
             const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
             const hasResumeToken =
               typeof delegateInput['resume_token'] === 'string' && delegateInput['resume_token'] !== '';
-            if (!hasResumeToken && delegateAgent && delegateTask) {
+            if (delegateAgent && delegateTask) {
               const dKey = delegationKey(delegateAgent, delegateTask);
-              if (!delegationGuard.canAttempt(dKey)) {
+              // A resume continuation is normally exempt (#1171): it carries new CEO direction, so
+              // it is not a repeat of the same request. `already_delivered` is the exception — that
+              // work is finished, not paused, so resuming it would re-run the side effects the late
+              // delivery exists to avoid repeating (#1799).
+              const exemptByResumeToken = hasResumeToken && !delegationGuard.isAlreadyDelivered(dKey);
+              if (!exemptByResumeToken && !delegationGuard.canAttempt(dKey)) {
                 delegateBlocked = true;
                 const prior = delegationGuard.getFailure(dKey);
                 logger.warn(

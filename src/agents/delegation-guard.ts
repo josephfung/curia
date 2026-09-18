@@ -13,6 +13,17 @@ import { buildDelegationEscalation, renderEscalation } from './task-escalation.j
 /** Total identical delegate calls allowed when the specialist failure was retryable. */
 export const MAX_RETRYABLE_IDENTICAL_DELEGATIONS = 2;
 
+/**
+ * Guard reason seeded on a late-delivery wake (#1799): this agent+task already ran to completion
+ * and its result is in the woken turn's task content.
+ *
+ * It is the one reason a `resume_token` cannot talk its way past. The resume exemption (#1171)
+ * exists because a continuation carries new CEO direction, so it is not a repeat of the same
+ * request — but "already delivered" is not a failure to continue from, it is finished work, and
+ * resuming it would redo the side effects the delivery exists to avoid repeating.
+ */
+export const ALREADY_DELIVERED_REASON = 'already_delivered';
+
 export interface DelegationFailureInfo {
   agent: string;
   reason: AgentResponseFailureReason | string;
@@ -84,6 +95,11 @@ export class DelegationGuard {
 
   isEscalated(key: string): boolean {
     return this.entries.get(key)?.escalated === true;
+  }
+
+  /** Whether this agent+task was recorded as already completed by a late delivery (#1799). */
+  isAlreadyDelivered(key: string): boolean {
+    return this.entries.get(key)?.lastFailure?.reason === ALREADY_DELIVERED_REASON;
   }
 }
 

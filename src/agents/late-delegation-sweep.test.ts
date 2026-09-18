@@ -76,6 +76,8 @@ interface FakePoolOptions {
   claimLoses?: Set<string>;
   /** delegate_event_ids whose audit lookup throws. */
   auditThrows?: Set<string>;
+  /** When true, the write that records the wake id fails (transient pool error / timeout). */
+  wakeIdPersistFails?: boolean;
 }
 
 interface FakePoolResult {
@@ -126,6 +128,7 @@ function fakePool(opts: FakePoolOptions): FakePoolResult {
       return { rows: [] };
     }
     if (sql.includes('UPDATE pending_delegations') && sql.includes('SET wake_task_event_id')) {
+      if (opts.wakeIdPersistFails) throw new Error('connection terminated unexpectedly');
       wakeIdsRecorded.push({ id: params[0] as string, wakeTaskEventId: params[1] as string });
       return { rows: [] };
     }
@@ -474,6 +477,65 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     expect(claims).toEqual([{ id: 'delegate-evt-1', resolution: 'delivered' }]);
     // The re-claim mints its OWN token, so the finalize cannot be mistaken for the dead actor's.
     expect(finalized).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
+  });
+
+  it('closes the handle when the wake went out but recording its id failed', async () => {
+    // The dangerous shape: publish succeeds, the persist fails. Releasing the lease here would
+    // send the row back to pending with wake_task_event_id still NULL, and the duplicate guard
+    // reads that same column — so the sweep would wake the originating agent a SECOND time and
+    // the follow-up would run twice. The handle must close instead.
+    const { pool, finalized, released, wakeIdsRecorded } = fakePool({
+      open: [handleRow()],
+      auditHits: {
+        'delegate-evt-1': {
+          id: 'response-evt-1',
+          payload: { agentId: 'calendar', content: 'Travel detected: one trip.' },
+          timestamp: '2026-09-14T12:06:43.000Z',
+        },
+      },
+      wakeIdPersistFails: true,
+    });
+    const bus = new EventBus(logger);
+    const wakes = collectWakes(bus);
+    const resolved = collectResolved(bus);
+
+    const result = await makeSweep(pool, bus).tick(NOW);
+
+    expect(wakes).toHaveLength(1);
+    expect(wakeIdsRecorded).toEqual([]);
+    expect(released).toEqual([]);
+    expect(finalized).toHaveLength(1);
+    expect(result.recovered).toBe(1);
+    // The id is not on the row, so the audit event is where it survives.
+    expect(resolved[0]!.payload.wakeTaskEventId).toBe(wakes[0]!.id);
+  });
+
+  it('releases the lease when the wake itself fails to publish', async () => {
+    // The mirror case: nothing irreversible happened, so a retry is not only safe but required.
+    const { pool, finalized, released } = fakePool({
+      open: [handleRow()],
+      auditHits: {
+        'delegate-evt-1': {
+          id: 'response-evt-1',
+          payload: { agentId: 'calendar', content: 'Travel detected: one trip.' },
+          timestamp: '2026-09-14T12:06:43.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+    // A publish-time failure: the audit write-ahead hook rejects.
+    const failingBus = new EventBus(logger, async (event) => {
+      if (event.type === 'agent.task') throw new Error('audit write failed');
+    });
+    const wakes = collectWakes(failingBus);
+    void bus;
+
+    const result = await makeSweep(pool, failingBus).tick(NOW);
+
+    expect(wakes).toHaveLength(0);
+    expect(released).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
+    expect(finalized).toEqual([]);
+    expect(result).toMatchObject({ recovered: 0, untouched: 1 });
   });
 
   it('reports an empty pass without touching anything', async () => {

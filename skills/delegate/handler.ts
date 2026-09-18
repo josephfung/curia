@@ -173,9 +173,16 @@ export class DelegateHandler implements ToolHandler {
     // Identical-delegation guard (#1171): resume continuations are exempt — they carry new
     // CEO direction and a different effective brief. Without a resume_token, block when the
     // runtime has already recorded a non-retryable failure for this agent+task pair.
-    if (!hasResumeToken && ctx.delegationGuard) {
+    //
+    // One reason overrides that exemption: `already_delivered` (#1799). The runtime seeds it when
+    // this turn was woken with a late result already in hand, and a resume of finished work would
+    // re-run its side effects. This handler is the second gate — it is what actually publishes the
+    // specialist task, and it validates only the token's agent, never the task — so the check has
+    // to live here too, not only in the runtime.
+    if (ctx.delegationGuard) {
       const dKey = delegationKey(agent, task);
-      if (!ctx.delegationGuard.canAttempt(dKey)) {
+      const exemptByResumeToken = hasResumeToken && !ctx.delegationGuard.isAlreadyDelivered(dKey);
+      if (!exemptByResumeToken && !ctx.delegationGuard.canAttempt(dKey)) {
         const prior = ctx.delegationGuard.getFailure(dKey);
         ctx.log.warn(
           { targetAgent: agent, reason: prior?.reason },
@@ -194,7 +201,10 @@ export class DelegateHandler implements ToolHandler {
           },
         };
       }
-      ctx.delegationGuard.recordInvocation(dKey);
+      // A resume continuation does not consume an attempt — unchanged from #1171.
+      if (!hasResumeToken) {
+        ctx.delegationGuard.recordInvocation(dKey);
+      }
     }
 
     // Resume flow: when resume_token is provided, decode it and construct a

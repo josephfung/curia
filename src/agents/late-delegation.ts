@@ -625,6 +625,11 @@ export async function resolveLateDelegation(
         'Late delegation: wake was already published by an earlier attempt — not publishing a second',
       );
     } else {
+      // The publish and the write that records it are kept in SEPARATE try blocks on purpose.
+      // Collapsing them means a persist failure after a successful publish looks like a failed
+      // wake: the lease goes back to pending with wake_task_event_id still NULL, the sweep
+      // re-claims, the duplicate guard above reads that same NULL, and the originating agent runs
+      // the follow-up a second time — a second message, a second task, a second cursor advance.
       try {
         wakeTaskEventId = await publishLateWake({
           bus,
@@ -634,11 +639,8 @@ export async function resolveLateDelegation(
           parentEventId: opts.parentEventId ?? lateResponseEventId,
           ...(opts.registerRouting !== undefined && { registerRouting: opts.registerRouting }),
         });
-        // Record it immediately: a crash between publish and finalize must not look like a handle
-        // that never woke anyone, or the retry would wake them again.
-        await setPendingDelegationWakeEventId(pool, claimed.delegateEventId, wakeTaskEventId);
       } catch (err) {
-        // Nothing irreversible happened yet, so hand the lease back for a clean retry.
+        // Only here is nothing irreversible done yet, so only here is a retry safe.
         if (claimed.claimToken) {
           await releasePendingDelegationClaim(pool, claimed.delegateEventId, claimed.claimToken);
         }
@@ -647,6 +649,19 @@ export async function resolveLateDelegation(
           'Late delegation: failed to wake the originating agent — released for retry',
         );
         return { resolved: false, retryable: true };
+      }
+
+      try {
+        // Recording the wake id is what makes a crash before finalize recoverable without a second
+        // wake. If the write itself fails the id stays in memory for this pass, so the bookkeeping
+        // below still runs and finalize still closes the handle — the sweep must not see this row
+        // again.
+        await setPendingDelegationWakeEventId(pool, claimed.delegateEventId, wakeTaskEventId);
+      } catch (err) {
+        logger.error(
+          { err, delegateEventId: claimed.delegateEventId, wakeTaskEventId },
+          'Late delegation: woke the originating agent but could not record the wake id — closing the handle anyway to avoid a duplicate wake (the id is on the delegation.late_resolved event)',
+        );
       }
     }
   }
