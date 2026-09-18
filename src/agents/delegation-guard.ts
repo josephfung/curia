@@ -5,6 +5,7 @@
 // failures allow a bounded number of attempts before blocking.
 
 import type { AgentResponseFailureReason } from '../bus/events.js';
+import { decodeResumeToken } from './resume-token.js';
 import type { ExecutionLayer, InvokeOptions } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
 import type { Logger } from '../logger.js';
@@ -101,6 +102,36 @@ export class DelegationGuard {
   isAlreadyDelivered(key: string): boolean {
     return this.entries.get(key)?.lastFailure?.reason === ALREADY_DELIVERED_REASON;
   }
+}
+
+/**
+ * The guard key carrying an `already_delivered` record for this delegate call, or undefined.
+ *
+ * Checking only `delegationKey(agent, task)` is not enough for a resume. A resume call's `task` is
+ * the CEO's new DIRECTION — the original brief lives inside the token — so its key differs from the
+ * one the late-delivery wake seeded, and the block would silently not apply to the shape a resume
+ * normally takes. That is the whole bypass: different key, same work, specialist runs again.
+ *
+ * Shared by the runtime's pre-invoke gate and DelegateHandler so the two cannot drift: the handler
+ * is what actually publishes the specialist task, and it validates only the token's agent.
+ */
+export function findAlreadyDeliveredKey(
+  guard: DelegationGuard,
+  agent: string,
+  task: string,
+  resumeToken?: string,
+): string | undefined {
+  const taskKey = delegationKey(agent, task);
+  if (guard.isAlreadyDelivered(taskKey)) return taskKey;
+
+  if (resumeToken === undefined || resumeToken === '') return undefined;
+  // decodeResumeToken never throws — a malformed token yields null, and is handled later by the
+  // handler's own validation. Here an undecodable token simply cannot prove anything.
+  const originalTask = decodeResumeToken(resumeToken)?.original_task;
+  if (typeof originalTask !== 'string' || originalTask === '') return undefined;
+
+  const originalKey = delegationKey(agent, originalTask);
+  return guard.isAlreadyDelivered(originalKey) ? originalKey : undefined;
 }
 
 export interface DelegateFailureResult extends DelegationFailureInfo {

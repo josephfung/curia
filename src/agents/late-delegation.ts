@@ -11,6 +11,7 @@
 // so the live subscriber and the restart sweep cannot disagree about what a given response
 // means. Everything with I/O lives in resolveLateDelegation, behind the atomic claim.
 
+import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
@@ -22,6 +23,7 @@ import {
   type LateDelegationReviewOutcome,
 } from '../bus/events.js';
 import { makeWakeContext } from '../autonomy/effective-standing.js';
+import { isPgUniqueViolation } from './resumable-continuation.js';
 import type { ContactTier, SystemRole, TaskOriginator } from '../contacts/types.js';
 import {
   claimPendingDelegation,
@@ -124,6 +126,42 @@ const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
  * actor's work is picked up on the next sweep tick rather than hours later.
  */
 export const CLAIM_LEASE_SECONDS = 120;
+
+/** Namespace for the derived wake event id — changing it would un-fence every existing handle. */
+const WAKE_EVENT_ID_NAMESPACE = 'curia:late-delegation-wake';
+
+/**
+ * The wake event id for a handle, derived from its delegate event id rather than random.
+ *
+ * This is the fence that makes waking the originator idempotent no matter how the lease behaves.
+ * `EventBus.publish()` awaits its subscribers, and one of those subscribers is the woken agent's
+ * whole turn — minutes of LLM rounds and tool calls. That routinely outlives the 120s lease, so a
+ * sweep can re-claim the row while the first turn is still running and try to wake it again. With a
+ * derived id the second attempt carries the SAME event id, and the audit logger's write-ahead hook
+ * — which inserts into audit_log before any subscriber sees the event — rejects it on the primary
+ * key. The duplicate never reaches AgentRuntime.
+ *
+ * Not a true RFC-4122 v5 (that requires SHA-1); SHA-256 truncated to 16 bytes with the version and
+ * variant bits set. The requirement here is stability and UUID shape — audit_log.id is a UUID
+ * column — not interoperability with other v5 generators.
+ */
+export function deterministicWakeEventId(delegateEventId: string): string {
+  const bytes = createHash('sha256')
+    .update(`${WAKE_EVENT_ID_NAMESPACE}:${delegateEventId}`)
+    .digest()
+    .subarray(0, 16);
+  const b = Buffer.from(bytes);
+  b[6] = (b[6]! & 0x0f) | 0x50;
+  b[8] = (b[8]! & 0x3f) | 0x80;
+  const hex = b.toString('hex');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join('-');
+}
 
 /** What the late response turned out to be. Maps 1:1 onto a resolution. `abandoned` is the one
  *  disposition classifyLateResponse never returns — it describes the absence of a response, and
@@ -612,57 +650,55 @@ export async function resolveLateDelegation(
     return { resolved: false };
   }
 
-  // Publish the wake FIRST on the deliver branch. It is the one irreversible step here — a second
-  // one would re-enter the coordinator twice over the same result — so everything after it is
-  // treated as bookkeeping that must not trigger a retry.
+  // Wake the originator FIRST on the deliver branch: it is the only irreversible step here, so
+  // everything after it is bookkeeping that must not trigger a retry.
+  //
+  // The wake's event id is DERIVED from the handle rather than random, which is what makes this
+  // safe against the lease expiring underneath a slow turn. `EventBus.publish()` awaits its
+  // subscribers, and one of them is the woken agent's entire turn — easily longer than the 120s
+  // lease — so another actor can re-claim this row while that turn is still running. Its attempt
+  // carries the same id, and the audit logger's write-ahead insert rejects it before any subscriber
+  // sees it. The stored id below is therefore a record, not the guarantee.
   let wakeTaskEventId = claimed.wakeTaskEventId ?? undefined;
   if (opts.wakeBrief !== undefined) {
-    if (wakeTaskEventId) {
-      // A previous attempt already woke the originator and then died before finalizing. Re-waking
-      // would duplicate the follow-up work; finish the bookkeeping instead.
-      logger.warn(
-        { delegateEventId: claimed.delegateEventId, wakeTaskEventId },
-        'Late delegation: wake was already published by an earlier attempt — not publishing a second',
-      );
-    } else {
-      // The publish and the write that records it are kept in SEPARATE try blocks on purpose.
-      // Collapsing them means a persist failure after a successful publish looks like a failed
-      // wake: the lease goes back to pending with wake_task_event_id still NULL, the sweep
-      // re-claims, the duplicate guard above reads that same NULL, and the originating agent runs
-      // the follow-up a second time — a second message, a second task, a second cursor advance.
-      try {
-        wakeTaskEventId = await publishLateWake({
-          bus,
-          logger,
-          handle: claimed,
-          brief: opts.wakeBrief,
-          parentEventId: opts.parentEventId ?? lateResponseEventId,
-          ...(opts.registerRouting !== undefined && { registerRouting: opts.registerRouting }),
-        });
-      } catch (err) {
-        // Only here is nothing irreversible done yet, so only here is a retry safe.
-        if (claimed.claimToken) {
-          await releasePendingDelegationClaim(pool, claimed.delegateEventId, claimed.claimToken);
-        }
-        logger.error(
-          { err, delegateEventId: claimed.delegateEventId, originAgentId: claimed.originAgentId },
-          'Late delegation: failed to wake the originating agent — released for retry',
-        );
-        return { resolved: false, retryable: true };
-      }
+    const wakeEventId = deterministicWakeEventId(claimed.delegateEventId);
 
-      try {
-        // Recording the wake id is what makes a crash before finalize recoverable without a second
-        // wake. If the write itself fails the id stays in memory for this pass, so the bookkeeping
-        // below still runs and finalize still closes the handle — the sweep must not see this row
-        // again.
-        await setPendingDelegationWakeEventId(pool, claimed.delegateEventId, wakeTaskEventId);
-      } catch (err) {
-        logger.error(
-          { err, delegateEventId: claimed.delegateEventId, wakeTaskEventId },
-          'Late delegation: woke the originating agent but could not record the wake id — closing the handle anyway to avoid a duplicate wake (the id is on the delegation.late_resolved event)',
-        );
+    // Record the id BEFORE publishing. A crash in between is then recoverable either way: the row
+    // names the wake, and re-publishing that same id is inert if it already went out.
+    try {
+      await setPendingDelegationWakeEventId(pool, claimed.delegateEventId, wakeEventId);
+    } catch (err) {
+      logger.warn(
+        { err, delegateEventId: claimed.delegateEventId, wakeEventId },
+        'Late delegation: could not record the wake id before publishing — proceeding, the derived id still fences a duplicate',
+      );
+    }
+
+    try {
+      const outcome = await publishLateWake({
+        bus,
+        logger,
+        handle: claimed,
+        brief: opts.wakeBrief,
+        wakeEventId,
+        parentEventId: opts.parentEventId ?? lateResponseEventId,
+        ...(opts.registerRouting !== undefined && { registerRouting: opts.registerRouting }),
+      });
+      // Either this attempt delivered it or an earlier one did; both mean the originator has the
+      // result, and both must close the handle rather than leave it for another pass.
+      void outcome;
+      wakeTaskEventId = wakeEventId;
+    } catch (err) {
+      // Nothing was delivered (the write-ahead hook rejects before subscribers), so a retry is safe
+      // — and necessary, or the result is lost.
+      if (claimed.claimToken) {
+        await releasePendingDelegationClaim(pool, claimed.delegateEventId, claimed.claimToken);
       }
+      logger.error(
+        { err, delegateEventId: claimed.delegateEventId, originAgentId: claimed.originAgentId },
+        'Late delegation: failed to wake the originating agent — released for retry',
+      );
+      return { resolved: false, retryable: true };
     }
   }
 
@@ -764,6 +800,8 @@ interface PublishLateWakeOptions {
   logger: Logger;
   handle: PendingDelegationRow;
   brief: string;
+  /** Derived from the handle, so a duplicate attempt is rejected by audit_log's primary key. */
+  wakeEventId: string;
   parentEventId?: string;
   registerRouting?: LateWakeRoutingRegistrar;
 }
@@ -782,7 +820,9 @@ interface PublishLateWakeOptions {
  *   - `liveTurn` is deliberately absent. This crosses an async boundary (#1126), so the elevated
  *     self-approval signal of the original turn must not be resurrected minutes later.
  */
-async function publishLateWake(opts: PublishLateWakeOptions): Promise<string> {
+type PublishLateWakeOutcome = 'published' | 'already_published';
+
+async function publishLateWake(opts: PublishLateWakeOptions): Promise<PublishLateWakeOutcome> {
   const { bus, logger, handle, brief } = opts;
   const now = new Date();
   const originator = parseStoredOriginator(handle.originator);
@@ -794,7 +834,7 @@ async function publishLateWake(opts: PublishLateWakeOptions): Promise<string> {
     );
   }
 
-  const task = createAgentTask({
+  const minted = createAgentTask({
     agentId: handle.originAgentId,
     conversationId: handle.originConversationId,
     channelId: handle.originChannelId,
@@ -810,6 +850,9 @@ async function publishLateWake(opts: PublishLateWakeOptions): Promise<string> {
     // Chain to the late response, so audit_log links that response to the turn it restarted.
     parentEventId: opts.parentEventId ?? handle.delegateEventId,
   });
+  // The factory mints a random id; this event's identity must instead be a function of the handle
+  // so that a re-publication is recognisable as the same event. See deterministicWakeEventId.
+  const task = { ...minted, id: opts.wakeEventId };
 
   // Routing must exist BEFORE publish: the bus awaits subscribers, so the woken agent can respond
   // inside publish() and the dispatcher would find no entry for a task it never saw arrive.
@@ -822,7 +865,22 @@ async function publishLateWake(opts: PublishLateWakeOptions): Promise<string> {
     });
   }
 
-  await bus.publish('system', task);
+  try {
+    await bus.publish('system', task);
+  } catch (err) {
+    // A primary-key collision on audit_log means this exact wake was already published — by an
+    // earlier attempt whose lease expired while the woken turn was still running inside publish().
+    // The write-ahead hook runs BEFORE subscriber delivery, so the duplicate reached no subscriber
+    // and no second agent turn started. That is the fence working, not a failure.
+    if (isPgUniqueViolation(err)) {
+      logger.info(
+        { delegateEventId: handle.delegateEventId, wakeTaskEventId: task.id },
+        'Late delegation: wake was already published (audit id collision) — not delivering a second',
+      );
+      return 'already_published';
+    }
+    throw err;
+  }
 
   logger.info(
     {
@@ -835,7 +893,7 @@ async function publishLateWake(opts: PublishLateWakeOptions): Promise<string> {
     'Late delegation: woke the originating agent with the late result',
   );
 
-  return task.id;
+  return 'published';
 }
 
 interface RecordOnReviewTaskOptions {

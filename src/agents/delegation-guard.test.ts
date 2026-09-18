@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ALREADY_DELIVERED_REASON, DelegationGuard, delegationKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData } from './delegation-guard.js';
+import { ALREADY_DELIVERED_REASON, DelegationGuard, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData } from './delegation-guard.js';
+import { encodeResumeToken } from './resume-token.js';
 import pino from 'pino';
 
 describe('DelegationGuard', () => {
@@ -198,5 +199,67 @@ describe('DelegationGuard.isAlreadyDelivered (#1799)', () => {
 
   it('is false for an unknown key', () => {
     expect(new DelegationGuard().isAlreadyDelivered(delegationKey('x', 'y'))).toBe(false);
+  });
+});
+
+describe('findAlreadyDeliveredKey (#1799)', () => {
+  const ORIGINAL = 'Detect travel since Aug 17';
+  const DIRECTION = 'Also include the Boston leg';
+
+  function guardWithDelivered(task: string): DelegationGuard {
+    const guard = new DelegationGuard();
+    guard.recordFailure(delegationKey('calendar', task), {
+      agent: 'calendar',
+      reason: ALREADY_DELIVERED_REASON,
+      retryable: false,
+      message: 'already completed',
+    });
+    return guard;
+  }
+
+  it('finds the record when the call repeats the delivered task', () => {
+    const guard = guardWithDelivered(ORIGINAL);
+    expect(findAlreadyDeliveredKey(guard, 'calendar', ORIGINAL))
+      .toBe(delegationKey('calendar', ORIGINAL));
+  });
+
+  it("finds it via the token's original_task when the call carries new direction", () => {
+    // The bypass this exists to close: a resume's `task` is the direction, so its own key has no
+    // record and a check limited to that key would exempt the call and re-run finished work.
+    const guard = guardWithDelivered(ORIGINAL);
+    const token = encodeResumeToken({ agent: 'calendar', originalTask: ORIGINAL, context: 'so far' });
+    expect(findAlreadyDeliveredKey(guard, 'calendar', DIRECTION, token))
+      .toBe(delegationKey('calendar', ORIGINAL));
+  });
+
+  it('returns undefined when neither key was delivered', () => {
+    const guard = guardWithDelivered('some other task');
+    const token = encodeResumeToken({ agent: 'calendar', originalTask: ORIGINAL, context: 'so far' });
+    expect(findAlreadyDeliveredKey(guard, 'calendar', DIRECTION, token)).toBeUndefined();
+  });
+
+  it('returns undefined for an undecodable token rather than throwing', () => {
+    const guard = guardWithDelivered(ORIGINAL);
+    expect(findAlreadyDeliveredKey(guard, 'calendar', DIRECTION, 'not-a-token')).toBeUndefined();
+  });
+
+  it('ignores a token for a different agent', () => {
+    // The key includes the agent, so a token naming another specialist cannot match this call's
+    // delivered record.
+    const guard = guardWithDelivered(ORIGINAL);
+    const token = encodeResumeToken({ agent: 'research', originalTask: ORIGINAL, context: 'so far' });
+    expect(findAlreadyDeliveredKey(guard, 'research', DIRECTION, token)).toBeUndefined();
+  });
+
+  it('does not treat other failure reasons as delivered', () => {
+    const guard = new DelegationGuard();
+    guard.recordFailure(delegationKey('calendar', ORIGINAL), {
+      agent: 'calendar',
+      reason: 'blocked',
+      retryable: false,
+      message: 'waiting on a person',
+    });
+    const token = encodeResumeToken({ agent: 'calendar', originalTask: ORIGINAL, context: 'so far' });
+    expect(findAlreadyDeliveredKey(guard, 'calendar', DIRECTION, token)).toBeUndefined();
   });
 });

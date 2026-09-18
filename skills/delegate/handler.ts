@@ -25,7 +25,7 @@ import { createAgentTask, type AgentResponseEvent, type AgentResponseFailureReas
 // Resume-token format lives in ONE place (#995): decode + version via the shared helper, so a
 // future format change can't silently desync this handler from runtime.ts and the resume subscriber.
 import { decodeResumeToken, RESUME_TOKEN_VERSION } from '../../src/agents/resume-token.js';
-import { delegationKey } from '../../src/agents/delegation-guard.js';
+import { delegationKey, findAlreadyDeliveredKey } from '../../src/agents/delegation-guard.js';
 import { clampDelegateWaitTimeoutMs } from '../../src/agents/delegate-timeout.js';
 import {
   EXECUTION_PAUSED_PROTOCOL,
@@ -181,11 +181,21 @@ export class DelegateHandler implements ToolHandler {
     // to live here too, not only in the runtime.
     if (ctx.delegationGuard) {
       const dKey = delegationKey(agent, task);
-      const exemptByResumeToken = hasResumeToken && !ctx.delegationGuard.isAlreadyDelivered(dKey);
-      if (!exemptByResumeToken && !ctx.delegationGuard.canAttempt(dKey)) {
-        const prior = ctx.delegationGuard.getFailure(dKey);
+      // The delivered record is keyed on the ORIGINAL task. A resume's `task` is the CEO's new
+      // direction, so the key has to be resolved from the token too — otherwise the block misses
+      // exactly the shape a resume normally takes and this handler publishes the work again.
+      const deliveredKey = findAlreadyDeliveredKey(
+        ctx.delegationGuard,
+        agent,
+        task,
+        hasResumeToken ? resume_token : undefined,
+      );
+      const blockKey = deliveredKey
+        ?? (!hasResumeToken && !ctx.delegationGuard.canAttempt(dKey) ? dKey : undefined);
+      if (blockKey !== undefined) {
+        const prior = ctx.delegationGuard.getFailure(blockKey);
         ctx.log.warn(
-          { targetAgent: agent, reason: prior?.reason },
+          { targetAgent: agent, reason: prior?.reason, viaResumeToken: hasResumeToken },
           'Blocked identical re-delegation at delegate handler',
         );
         return {
@@ -197,7 +207,7 @@ export class DelegateHandler implements ToolHandler {
             reason: prior?.reason ?? 'blocked',
             retryable: false,
             message: prior?.message ?? formatStructuredFailureMessage(agent, 'blocked'),
-            escalated: ctx.delegationGuard.isEscalated(dKey),
+            escalated: ctx.delegationGuard.isEscalated(blockKey),
           },
         };
       }

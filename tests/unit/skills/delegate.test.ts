@@ -156,7 +156,7 @@ describe('DelegateHandler', () => {
     }
   });
 
-  it('blocks a resume_token delegation of already-delivered work (#1799)', async () => {
+  it('blocks a resume_token delegation of already-delivered work, keyed on the token\'s original_task (#1799)', async () => {
     // The handler is the gate that actually publishes the specialist task, and it validates only
     // the token's agent — never the task — so the already-delivered check has to live here too.
     const { DelegationGuard, delegationKey, ALREADY_DELIVERED_REASON } =
@@ -179,11 +179,19 @@ describe('DelegateHandler', () => {
       message: "'calendar' already completed this work — its result is included in your task.",
     });
 
+    // A REAL resume: a well-formed token carrying the original brief, and a `task` holding the
+    // CEO's new direction. That shape is the bypass — its delegationKey differs from the delivered
+    // record's, so a check that only looked at `task` would exempt it and re-run the work.
+    const { encodeResumeToken } = await import('../../../src/agents/resume-token.js');
     const result = await handler.execute(makeCtx(
       {
         agent: 'calendar',
-        task: 'Detect travel since Aug 17',
-        resume_token: 'eyJ2IjoxLCJhZ2VudCI6ImNhbGVuZGFyIn0=',
+        task: 'Also include the Boston leg',
+        resume_token: encodeResumeToken({
+          agent: 'calendar',
+          originalTask: 'Detect travel since Aug 17',
+          context: 'found 2 trips so far',
+        }),
       },
       { bus, agentRegistry, delegationGuard: guard },
     ));
@@ -195,6 +203,40 @@ describe('DelegateHandler', () => {
       expect(data.reason).toBe(ALREADY_DELIVERED_REASON);
     }
     // No specialist task reached the bus, so no side effect can repeat.
+    expect(publishedTasks).toEqual([]);
+  });
+
+  it('blocks a resume_token delegation whose task matches the delivered record directly (#1799)', async () => {
+    const { DelegationGuard, delegationKey, ALREADY_DELIVERED_REASON } =
+      await import('../../../src/agents/delegation-guard.js');
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+    const bus = new EventBus(logger);
+    const publishedTasks: string[] = [];
+    bus.subscribe('agent.task', 'agent', (event) => {
+      if (event.type === 'agent.task') publishedTasks.push(event.payload.agentId);
+    });
+
+    const guard = new DelegationGuard();
+    guard.recordFailure(delegationKey('calendar', 'Detect travel since Aug 17'), {
+      agent: 'calendar',
+      reason: ALREADY_DELIVERED_REASON,
+      retryable: false,
+      message: 'already completed',
+    });
+
+    // Undecodable token, task identical to the delivered record — blocked on the task key alone,
+    // before any decode is attempted.
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Detect travel since Aug 17', resume_token: 'not-a-valid-token' },
+      { bus, agentRegistry, delegationGuard: guard },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as { blocked?: boolean }).blocked).toBe(true);
+    }
     expect(publishedTasks).toEqual([]);
   });
 

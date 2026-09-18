@@ -10,6 +10,7 @@ import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src
 import { BullpenService } from '../../../src/memory/bullpen.js';
 import type { AgentError } from '../../../src/errors/types.js';
 import { delegationKey } from '../../../src/agents/delegation-guard.js';
+import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 
 // Minimal provenance block for mock LLM responses — satisfies the required field
 // without tying tests to specific model names.
@@ -4898,8 +4899,15 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
               name: 'delegate',
               input: {
                 agent: 'calendar',
-                task: 'Detect travel since Aug 17',
-                resume_token: 'eyJ2IjoxLCJhZ2VudCI6ImNhbGVuZGFyIn0=',
+                // A real resume: new direction in `task`, the original brief inside the token. Its
+                // delegationKey differs from the delivered record's, which is exactly why the gate
+                // has to resolve the key from the token rather than assume `task`.
+                task: 'Also include the Boston leg',
+                resume_token: encodeResumeToken({
+                  agent: 'calendar',
+                  originalTask: 'Detect travel since Aug 17',
+                  context: 'found 2 trips so far',
+                }),
               },
             }],
             usage: { inputTokens: 40, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },

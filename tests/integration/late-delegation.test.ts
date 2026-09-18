@@ -31,6 +31,7 @@ import {
   releasePendingDelegationClaim,
 } from '../../src/db/queries/pending-delegations.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
+import { deterministicWakeEventId } from '../../src/agents/late-delegation.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -517,6 +518,44 @@ describeIf('Late delegation — delivery, records, audit (#1799)', () => {
       expect(wakes).toHaveLength(1);
       expect(wakes[0]!.payload.content).toContain('Travel detected: YYZ→BOS Dec 1.');
       expect((await taskRepo.getTask(reviewTaskId))?.status).toBe('done');
+    });
+
+    it('cannot deliver a second wake once one is in audit_log, even on a re-claim', async () => {
+      // The real-Postgres form of the fence. The wake's event id is derived from the handle, so a
+      // second attempt — which is what a lease expiring under a slow woken turn produces — collides
+      // with the audit_log primary key. The write-ahead hook runs before subscriber delivery, so the
+      // duplicate reaches no agent runtime.
+      const reviewTaskId = await createReviewTask();
+      const event = timedOutEvent({ reviewTaskId });
+      await bus.publish('agent', event);
+
+      await bus.publish('agent', createAgentResponse({
+        agentId: 'calendar',
+        conversationId: 'delegate-conv-1',
+        content: 'Travel detected: YYZ→SEA Jan 8.',
+        parentEventId: event.payload.delegateEventId,
+      }));
+      expect(wakes).toHaveLength(1);
+      const firstWakeId = wakes[0]!.id;
+      expect(firstWakeId).toBe(deterministicWakeEventId(event.payload.delegateEventId));
+
+      // Force the row back to an expired claim, as a stalled actor would leave it, and sweep.
+      await pool.query(
+        `UPDATE pending_delegations
+            SET status = 'claimed', claimed_at = now() - interval '10 minutes',
+                claim_token = gen_random_uuid(), resolution = 'delivered', resolved_at = NULL
+          WHERE delegate_event_id = $1`,
+        [event.payload.delegateEventId],
+      );
+
+      const result = await sweep.tick();
+
+      // The attempt happened and was fenced: still exactly one wake delivered.
+      expect(wakes).toHaveLength(1);
+      expect(result.recovered).toBe(1);
+      const handle = await getPendingDelegationByDelegateEventId(pool, event.payload.delegateEventId);
+      expect(handle?.status).toBe('resolved');
+      expect(handle?.wakeTaskEventId).toBe(firstWakeId);
     });
 
     it('does not touch a handle whose lease is still live', async () => {
