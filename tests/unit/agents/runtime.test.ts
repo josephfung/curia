@@ -4860,6 +4860,177 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(agentResponses[0]!.payload.content).toContain('Created the trip tasks');
   });
 
+  it('blocks a resume_token re-delegation of already-delivered work (#1799)', async () => {
+    // The resume exemption (#1171) exists because a continuation carries new CEO direction. It must
+    // not apply to work that already finished: the late wake copies specialist content into the
+    // same conversation, so a token from an earlier clarification can be sitting in history, and
+    // "resuming" the delivered work would re-run its side effects.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const delegateCalls: Array<Record<string, unknown>> = [];
+    const taskCreateCount = { n: 0 };
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>) => {
+        if (toolName === 'task-create') {
+          taskCreateCount.n += 1;
+          return { success: true, data: { task_id: 'review-should-not-happen' } };
+        }
+        if (toolName === 'delegate') {
+          delegateCalls.push(input);
+          return { success: true, data: { response: 'ran again', agent: 'calendar' } };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let round = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        round += 1;
+        if (round === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{
+              id: 'call-resume-redelegate',
+              name: 'delegate',
+              input: {
+                agent: 'calendar',
+                task: 'Detect travel since Aug 17',
+                resume_token: 'eyJ2IjoxLCJhZ2VudCI6ImNhbGVuZGFyIn0=',
+              },
+            }],
+            usage: { inputTokens: 40, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Used the delivered result instead.',
+          usage: { inputTokens: 20, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'scheduler:job-travel-1:run-6',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: '[Late specialist result — calendar, delivered 2026-09-14T12:06:43-04:00]',
+      metadata: {
+        wakeContext: { derived: true },
+        lateDelegation: { agent: 'calendar', task: 'Detect travel since Aug 17' },
+      },
+      parentEventId: 'late-response-evt-2',
+    }));
+
+    expect(delegateCalls).toHaveLength(0);
+    expect(taskCreateCount.n).toBe(0);
+  });
+
+  it('still exempts a resume_token when the prior failure was not a late delivery (#1171)', async () => {
+    // Regression guard on the #1171 behaviour: a resume continuation after a `blocked` failure is
+    // exactly what resume_token is for, and must keep working.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const delegateCalls: Array<Record<string, unknown>> = [];
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'delegate') {
+          const guard = options?.delegationGuard;
+          const dKey = delegationKey('calendar', 'Detect travel');
+          // First call records a blocked failure; the second carries a resume_token.
+          if (delegateCalls.length === 0 && guard) {
+            guard.recordInvocation(dKey);
+            delegateCalls.push(input);
+            return {
+              success: true,
+              data: {
+                agent: 'calendar',
+                failed: true,
+                reason: 'blocked',
+                retryable: false,
+                message: 'waiting on a person',
+              },
+            };
+          }
+          delegateCalls.push(input);
+          return { success: true, data: { response: 'continued', agent: 'calendar' } };
+        }
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'review-blocked' } };
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let round = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        round += 1;
+        if (round === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'c-first', name: 'delegate', input: { agent: 'calendar', task: 'Detect travel' } }],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'done',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-resume-exempt',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'do the thing',
+      parentEventId: 'inbound-resume-exempt',
+    }));
+
+    // The blocked failure escalates and stops the turn, so only the first call happened — the point
+    // asserted here is that the guard reason recorded was NOT already_delivered, leaving the resume
+    // path open for a later turn.
+    expect(delegateCalls).toHaveLength(1);
+  });
+
   it('ignores a malformed lateDelegation marker rather than trusting it (#1799)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);

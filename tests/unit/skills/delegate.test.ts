@@ -156,6 +156,99 @@ describe('DelegateHandler', () => {
     }
   });
 
+  it('blocks a resume_token delegation of already-delivered work (#1799)', async () => {
+    // The handler is the gate that actually publishes the specialist task, and it validates only
+    // the token's agent — never the task — so the already-delivered check has to live here too.
+    const { DelegationGuard, delegationKey, ALREADY_DELIVERED_REASON } =
+      await import('../../../src/agents/delegation-guard.js');
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+    const bus = new EventBus(logger);
+
+    const publishedTasks: string[] = [];
+    bus.subscribe('agent.task', 'agent', (event) => {
+      if (event.type === 'agent.task') publishedTasks.push(event.payload.agentId);
+    });
+
+    const guard = new DelegationGuard();
+    guard.recordFailure(delegationKey('calendar', 'Detect travel since Aug 17'), {
+      agent: 'calendar',
+      reason: ALREADY_DELIVERED_REASON,
+      retryable: false,
+      message: "'calendar' already completed this work — its result is included in your task.",
+    });
+
+    const result = await handler.execute(makeCtx(
+      {
+        agent: 'calendar',
+        task: 'Detect travel since Aug 17',
+        resume_token: 'eyJ2IjoxLCJhZ2VudCI6ImNhbGVuZGFyIn0=',
+      },
+      { bus, agentRegistry, delegationGuard: guard },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { blocked?: boolean; reason?: string };
+      expect(data.blocked).toBe(true);
+      expect(data.reason).toBe(ALREADY_DELIVERED_REASON);
+    }
+    // No specialist task reached the bus, so no side effect can repeat.
+    expect(publishedTasks).toEqual([]);
+  });
+
+  it('still honours a resume_token after a blocked failure (#1171 behaviour preserved)', async () => {
+    const { DelegationGuard, delegationKey } = await import('../../../src/agents/delegation-guard.js');
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'calendar') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'calendar',
+          conversationId: event.payload.conversationId,
+          content: 'continued and finished',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const guard = new DelegationGuard();
+    guard.recordFailure(delegationKey('calendar', 'Detect travel'), {
+      agent: 'calendar',
+      reason: 'blocked',
+      retryable: false,
+      message: 'waiting on a person',
+    });
+
+    const result = await handler.execute(makeCtx(
+      {
+        agent: 'calendar',
+        task: 'The CEO says use the work calendar',
+        // A token minted for calendar; the guard entry is for a different task text, and the
+        // reason is `blocked`, so the resume exemption still applies.
+        resume_token: Buffer.from(JSON.stringify({
+          v: 1,
+          agent: 'calendar',
+          original_task: 'Detect travel',
+          context: 'found two calendars',
+        })).toString('base64'),
+      },
+      { bus, agentRegistry, delegationGuard: guard },
+    ));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { response?: string; blocked?: boolean };
+      expect(data.blocked).toBeUndefined();
+      expect(data.response).toContain('continued and finished');
+    }
+  });
+
   it('returns failure when bus is not available', async () => {
     const result = await handler.execute(makeCtx({ agent: 'research-analyst', task: 'do something' }));
     expect(result.success).toBe(false);
