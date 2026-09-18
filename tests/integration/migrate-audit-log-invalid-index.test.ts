@@ -79,14 +79,20 @@ describeIf('migration 081: invalid-index recovery', () => {
     return { steps, transactional };
   }
 
-  /** `indisvalid` per index name, plus the OID, which changes if and only if the index was rebuilt. */
+  /**
+   * `indisvalid` per index name, plus the OID, which changes if and only if the index was rebuilt.
+   * Scoped to search-path-visible indexes, like the migration — otherwise the shadow-schema case
+   * below would collapse two same-named rows into one and the Map would report whichever came last.
+   */
   async function indexState(): Promise<Map<string, { oid: string; valid: boolean }>> {
     const { rows } = await pool.query<{ relname: string; oid: string; indisvalid: boolean }>(
       `SELECT c.relname, c.oid::text AS oid, i.indisvalid
          FROM pg_class c
          JOIN pg_index i ON i.indexrelid = c.oid
          JOIN pg_class t ON t.oid = i.indrelid
-        WHERE t.relname = 'audit_log' AND c.relname = ANY($1)`,
+        WHERE t.relname = 'audit_log'
+          AND c.relname = ANY($1)
+          AND pg_catalog.pg_table_is_visible(c.oid)`,
       [INDEX_NAMES],
     );
     return new Map(rows.map((r) => [r.relname, { oid: r.oid, valid: r.indisvalid }]));
@@ -205,6 +211,60 @@ describeIf('migration 081: invalid-index recovery', () => {
     for (const name of INDEX_NAMES.filter((n) => n !== 'idx_audit_action')) {
       expect(after.get(name)?.oid).toBe(before.get(name)?.oid);
       expect(after.get(name)?.valid).toBe(true);
+    }
+  }, 60_000);
+
+  it('ignores an invalid same-named index on an audit_log outside the search path', async () => {
+    // `DROP INDEX <name>` resolves through search_path, but a catalog read does not — it spans
+    // every schema. So an unfiltered check can match an invalid index the DROP would never reach,
+    // and the DROP then lands on the healthy visible one instead: a rebuild of a good index while
+    // the broken one survives. The migration filters on pg_table_is_visible; this is that case.
+    const before = await indexState();
+    try {
+      // Every statement a fixed literal — a schema name cannot be bound as a query parameter
+      // either, and the repo's rule is that no variable reaches a SQL string.
+      await pool.query('CREATE SCHEMA itest_081_shadow');
+      await pool.query('CREATE TABLE itest_081_shadow.audit_log (action TEXT)');
+      await pool.query("INSERT INTO itest_081_shadow.audit_log (action) VALUES ('dupe'), ('dupe')");
+      // Same failed-unique-build trick, on a table we own: leaves the shadow schema's
+      // idx_audit_action invalid. That schema is off the search path, so an unqualified
+      // `DROP INDEX idx_audit_action` can never resolve to it.
+      const failure = await pool
+        .query(
+          `CREATE UNIQUE INDEX CONCURRENTLY idx_audit_action
+             ON itest_081_shadow.audit_log (action)`,
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error as { code?: string },
+        );
+      expect(failure?.code).toBe('23505');
+
+      // Precondition: two indexes share the name — public's healthy and visible, the shadow's
+      // invalid and not.
+      const { rows } = await pool.query<{ nspname: string; indisvalid: boolean; visible: boolean }>(
+        `SELECT n.nspname, i.indisvalid, pg_catalog.pg_table_is_visible(c.oid) AS visible
+           FROM pg_class c
+           JOIN pg_index i ON i.indexrelid = c.oid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relname = 'idx_audit_action'
+          ORDER BY n.nspname`,
+      );
+      expect(rows).toEqual([
+        { nspname: 'itest_081_shadow', indisvalid: false, visible: false },
+        { nspname: 'public', indisvalid: true, visible: true },
+      ]);
+
+      const { steps } = await runUp();
+
+      // No DROP: the only invalid match is one this migration could not have addressed anyway.
+      expect(steps.filter((s) => /DROP INDEX/i.test(s))).toEqual([]);
+
+      const after = await indexState();
+      expect(after.get('idx_audit_action')?.oid).toBe(before.get('idx_audit_action')?.oid);
+      expect(after.get('idx_audit_action')?.valid).toBe(true);
+    } finally {
+      await pool.query('DROP SCHEMA IF EXISTS itest_081_shadow CASCADE');
     }
   }, 60_000);
 
