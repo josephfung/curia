@@ -17,6 +17,8 @@ channels:
     trust: high
     unknown_sender: allow
     threaded: false
+  # unknown_sender also governs Signal voice calls (#1626): ignore drops
+  # stranger texts AND unanswered incoming calls (same dispatcher gate).
   signal:
     trust: high
     unknown_sender: allow

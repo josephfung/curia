@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 import { loadAuthConfig } from './config-loader.js';
-import { isBlockedSender, unknownSenderPolicy } from './channel-sender-policy.js';
+import { isBlockedSender, isUnknownSenderIgnored, unknownSenderPolicy } from './channel-sender-policy.js';
 import type { ChannelPolicyConfig, InboundSenderContext, SenderContext } from './types.js';
 
 const CONFIG_DIR = path.resolve(import.meta.dirname, '../../config');
@@ -48,6 +48,40 @@ describe('unknownSenderPolicy', () => {
       { http: { trust: 'medium', unknownSender: 'ignore', threaded: false } },
       'voice',
     )).toBe('allow');
+  });
+});
+
+describe('isUnknownSenderIgnored', () => {
+  const ignore: Record<string, ChannelPolicyConfig> = {
+    signal: { trust: 'high', unknownSender: 'ignore', threaded: false },
+  };
+  const allow: Record<string, ChannelPolicyConfig> = {
+    signal: { trust: 'high', unknownSender: 'allow', threaded: false },
+  };
+  const unresolved: InboundSenderContext = {
+    resolved: false,
+    channel: 'signal',
+    senderId: '+15550001111',
+  };
+
+  it('ignores unresolved senders only when the channel policy is ignore', () => {
+    expect(isUnknownSenderIgnored(unresolved, ignore, 'signal')).toBe(true);
+    expect(isUnknownSenderIgnored(unresolved, allow, 'signal')).toBe(false);
+    expect(isUnknownSenderIgnored(unresolved, {}, 'signal')).toBe(false);
+  });
+
+  it('ignores resolved unknown-tier contacts under ignore (dispatcher parity)', () => {
+    expect(isUnknownSenderIgnored(resolvedSender('unknown'), ignore, 'signal')).toBe(true);
+    expect(isUnknownSenderIgnored(resolvedSender('unknown'), allow, 'signal')).toBe(false);
+    expect(isUnknownSenderIgnored(resolvedSender('trusted'), ignore, 'signal')).toBe(false);
+  });
+
+  it('does not ignore automated unknown-tier contacts (dispatcher automated bypass)', () => {
+    expect(isUnknownSenderIgnored(
+      { ...resolvedSender('unknown'), kind: 'automated' },
+      ignore,
+      'signal',
+    )).toBe(false);
   });
 });
 

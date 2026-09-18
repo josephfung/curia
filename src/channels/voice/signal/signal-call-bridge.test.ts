@@ -195,7 +195,7 @@ function setup(opts: SetupOptions = {}) {
     sessionStore: store,
     pulseServer: '/run/pulse/native',
     maxCallSeconds: opts.maxCallSeconds,
-    channelPolicies: opts.channelPolicies,
+    channelPolicies: opts.channelPolicies ?? {},
     createTransport,
   });
 
