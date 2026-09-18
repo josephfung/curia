@@ -6,8 +6,10 @@
 // channel-trust.yaml (currently `allow` — known contacts and unresolved
 // strangers are answered; a stranger is unknown-tier / liveTurn=false). Rejects
 // blocked contacts, uuid-only callers (no E.164), and — if the YAML is flipped
-// to `ignore` — unresolved numbers. Exactly one call is ever active at a time;
-// a second incoming call while one is active (or mid-accept) is rejected as busy.
+// to `ignore` — unresolved numbers and resolved `tier: 'unknown'` contacts
+// (except automated), matching the dispatcher gate. Exactly one call is ever
+// active at a time; a second incoming call while one is active (or mid-accept)
+// is rejected as busy.
 //
 // Two pieces of local state track this:
 //   - `pending`: callId -> resolved caller, from RINGING_INCOMING (accepted) to
@@ -67,8 +69,9 @@ export interface SignalCallBridgeConfig {
   voiceRuntime: VoiceRuntime;
   sessionStore: VoiceSessionStore;
   pulseServer: string;
-  /** Same channelPolicies map the dispatcher uses (`loadAuthConfig`). */
-  channelPolicies?: Record<string, ChannelPolicyConfig>;
+  /** Same channelPolicies map the dispatcher uses (`loadAuthConfig`). Required
+   *  so a forgotten construction site cannot silently default to allow. */
+  channelPolicies: Record<string, ChannelPolicyConfig>;
   /** Hard cap per call; default 600. */
   maxCallSeconds?: number;
   /** Injected for tests; defaults to (opts) => new SignalAudioTransport(opts). */
@@ -305,7 +308,7 @@ export class SignalCallBridge {
         result = await resolveSignalVoiceCaller({
           contactResolver: this.config.contactResolver,
           callerNumber: ev.number,
-          channelPolicies: this.config.channelPolicies ?? {},
+          channelPolicies: this.config.channelPolicies,
           logger: this.log,
         });
       } catch (err) {

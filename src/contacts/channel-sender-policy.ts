@@ -4,10 +4,11 @@
 // loadAuthConfig() → channelPolicies map. Keep the lookup here so voice cannot
 // grow an independent default (#1626).
 
-import type {
-  ChannelPolicyConfig,
-  InboundSenderContext,
-  UnknownSenderPolicy,
+import {
+  isAutomatedKind,
+  type ChannelPolicyConfig,
+  type InboundSenderContext,
+  type UnknownSenderPolicy,
 } from './types.js';
 
 /**
@@ -29,4 +30,23 @@ export function unknownSenderPolicy(
  */
 export function isBlockedSender(senderContext: InboundSenderContext): boolean {
   return senderContext.resolved && senderContext.tier === 'blocked';
+}
+
+/**
+ * True when this sender should be dropped under the channel's unknown_sender
+ * `ignore` policy — the same predicate the dispatcher uses:
+ * unresolved senders, and resolved `tier: 'unknown'` contacts that are not
+ * automated (automated's normal starting state is unknown).
+ *
+ * Returns false when the channel policy is `allow` (or the key is absent —
+ * dispatcher default). Blocked contacts are a separate always-deny gate.
+ */
+export function isUnknownSenderIgnored(
+  senderContext: InboundSenderContext,
+  channelPolicies: Record<string, ChannelPolicyConfig> | undefined,
+  channel: string,
+): boolean {
+  if (unknownSenderPolicy(channelPolicies, channel) !== 'ignore') return false;
+  if (!senderContext.resolved) return true;
+  return senderContext.tier === 'unknown' && !isAutomatedKind(senderContext.kind);
 }

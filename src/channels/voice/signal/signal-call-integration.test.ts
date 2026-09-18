@@ -265,6 +265,7 @@ describe('SignalCallBridge -> VoiceRuntime (end-to-end, #1672)', () => {
       voiceRuntime: runtime,
       sessionStore: store,
       pulseServer: '/run/pulse/native',
+      channelPolicies: {},
       createTransport: bridgeCreateTransport,
     });
 

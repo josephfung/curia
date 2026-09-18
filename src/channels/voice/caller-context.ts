@@ -9,7 +9,7 @@
 
 import type { ContactResolver } from '../../contacts/contact-resolver.js';
 import type { ContactService } from '../../contacts/contact-service.js';
-import { isBlockedSender, unknownSenderPolicy } from '../../contacts/channel-sender-policy.js';
+import { isBlockedSender, isUnknownSenderIgnored } from '../../contacts/channel-sender-policy.js';
 import type {
   ChannelPolicyConfig,
   ContactTier,
@@ -178,16 +178,11 @@ export async function resolveVoiceCallerFromToken(opts: {
   if (isBlockedSender(senderContext)) {
     return { ok: false, reason: 'blocked' };
   }
-  if (!senderContext.resolved) {
-    if (unknownSenderPolicy(opts.channelPolicies, 'voice') === 'ignore') {
-      return { ok: false, reason: 'unknown_sender' };
-    }
-    // 'allow' — admit with unknown-tier originator (not the YAML default for voice).
-    const senderId = opts.senderId ?? opts.callerToken;
-    return { ok: true, caller: toCallerContext(senderContext, 'voice', senderId) };
+  if (isUnknownSenderIgnored(senderContext, opts.channelPolicies, 'voice')) {
+    return { ok: false, reason: 'unknown_sender' };
   }
-
-  const senderId = opts.senderId ?? senderContext.contactId;
+  // Missing voice key → allow, matching dispatcher (not a voice-only fail-closed default).
+  const senderId = opts.senderId ?? (senderContext.resolved ? senderContext.contactId : opts.callerToken);
   return { ok: true, caller: toCallerContext(senderContext, 'voice', senderId) };
 }
 
@@ -204,10 +199,12 @@ export type ResolveSignalVoiceCallerResult =
  *
  * Unknown-caller admission follows `channels.signal.unknown_sender` in
  * channel-trust.yaml (currently `allow` — a stranger is answered, stamped
- * unknown-tier / liveTurn=false). A blocked-tier contact is always denied.
- * A null callerNumber (uuid-only, no stable identifier) is also rejected —
- * nothing to resolve or later create a contact from; the bridge logs the raw
- * uuid rather than admitting an untraceable caller.
+ * unknown-tier / liveTurn=false). The ignore gate matches the dispatcher:
+ * unresolved numbers *and* resolved `tier: 'unknown'` contacts (except
+ * automated) are rejected when the YAML is `ignore`. A blocked-tier contact
+ * is always denied. A null callerNumber (uuid-only, no stable identifier) is
+ * also rejected — nothing to resolve or later create a contact from; the
+ * bridge logs the raw uuid rather than admitting an untraceable caller.
  */
 export async function resolveSignalVoiceCaller(opts: {
   contactResolver: ContactResolver;
@@ -223,7 +220,7 @@ export async function resolveSignalVoiceCaller(opts: {
   if (isBlockedSender(senderContext)) {
     return { ok: false, reason: 'blocked' };
   }
-  if (!senderContext.resolved && unknownSenderPolicy(opts.channelPolicies, 'signal') === 'ignore') {
+  if (isUnknownSenderIgnored(senderContext, opts.channelPolicies, 'signal')) {
     return { ok: false, reason: 'unknown_sender' };
   }
   return { ok: true, caller: toCallerContext(senderContext, 'voice', opts.callerNumber) };
