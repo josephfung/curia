@@ -98,6 +98,33 @@ describeIf('migration 081: invalid-index recovery', () => {
     return new Map(rows.map((r) => [r.relname, { oid: r.oid, valid: r.indisvalid }]));
   }
 
+  /**
+   * Leave public.idx_audit_action INVALID, the way a killed concurrent build would: a
+   * CREATE INDEX CONCURRENTLY that fails during its table scan. Postgres leaves the index behind
+   * marked invalid, exactly as after a deadlock or a crashed deploy. Two audit rows sharing a
+   * sentinel `action` make a unique build over that predicate fail deterministically.
+   */
+  async function breakActionIndex(): Promise<void> {
+    await pool.query(
+      `INSERT INTO audit_log (event_type, source_layer, source_id, payload, action)
+       VALUES ('inbound.message', $1, 'itest', '{}', $2),
+              ('inbound.message', $1, 'itest', '{}', $2)`,
+      [SENTINEL_LAYER, SENTINEL_ACTION],
+    );
+    await pool.query('DROP INDEX CONCURRENTLY IF EXISTS idx_audit_action');
+    const failure = await pool
+      .query(
+        `CREATE UNIQUE INDEX CONCURRENTLY idx_audit_action
+           ON audit_log (action)
+           WHERE action = 'itest-081-invalid-index'`,
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error as { code?: string },
+      );
+    expect(failure?.code).toBe('23505'); // unique_violation — the build failed, as designed
+  }
+
   async function indexDefinition(name: string): Promise<string | undefined> {
     const { rows } = await pool.query<{ indexdef: string }>(
       `SELECT indexdef FROM pg_indexes WHERE tablename = 'audit_log' AND indexname = $1`,
@@ -163,28 +190,7 @@ describeIf('migration 081: invalid-index recovery', () => {
     const wanted = await indexDefinition('idx_audit_action');
     const before = await indexState();
 
-    // Manufacture a genuinely INVALID index under 081's name the way production would get one: a
-    // CREATE INDEX CONCURRENTLY that fails during its table scan. Postgres leaves the index behind
-    // marked invalid, exactly as after a deadlock or a killed deploy. Two audit rows sharing a
-    // sentinel `action` make a unique build over that predicate fail deterministically.
-    await pool.query(
-      `INSERT INTO audit_log (event_type, source_layer, source_id, payload, action)
-       VALUES ('inbound.message', $1, 'itest', '{}', $2),
-              ('inbound.message', $1, 'itest', '{}', $2)`,
-      [SENTINEL_LAYER, SENTINEL_ACTION],
-    );
-    await pool.query('DROP INDEX CONCURRENTLY IF EXISTS idx_audit_action');
-    const failure = await pool
-      .query(
-        `CREATE UNIQUE INDEX CONCURRENTLY idx_audit_action
-           ON audit_log (action)
-           WHERE action = 'itest-081-invalid-index'`,
-      )
-      .then(
-        () => undefined,
-        (error: unknown) => error as { code?: string },
-      );
-    expect(failure?.code).toBe('23505'); // unique_violation — the build failed, as designed
+    await breakActionIndex();
 
     // Precondition: the name is taken by an index the planner cannot use. Without the fix, 081's
     // IF NOT EXISTS stops here and the migration reports success.
@@ -266,6 +272,68 @@ describeIf('migration 081: invalid-index recovery', () => {
     } finally {
       await pool.query('DROP SCHEMA IF EXISTS itest_081_shadow CASCADE');
     }
+  }, 60_000);
+
+  it('ignores a visible invalid index sitting on a different audit_log than the CREATE targets', async () => {
+    // node-pg-migrate takes repeated --schema, so search_path can hold more than one schema. Then
+    // the visible `idx_audit_action` and the table an unqualified `ON audit_log` resolves to can
+    // live in DIFFERENT schemas — and the DROP/CREATE pair would remove a real index and rebuild
+    // it on the wrong table, leaving the original audit_log with no index at all. The migration
+    // pins the check with `i.indrelid = 'audit_log'::regclass`, which resolves the bare name
+    // exactly as the CREATE does. Visibility alone does not catch this: the invalid index IS
+    // visible here.
+    const originalPath = (
+      (await migrationDb.select('SHOW search_path')) as Array<{ search_path: string }>
+    )[0]!.search_path;
+    try {
+      await breakActionIndex();
+      await pool.query('CREATE SCHEMA itest_081_sp');
+      await pool.query('CREATE TABLE itest_081_sp.audit_log (action TEXT)');
+      // Ahead of public in the path and carrying no idx_audit_action of its own, so public's
+      // invalid index stays visible while a bare `audit_log` now resolves to the shadow table.
+      await migrationDb.query('SET search_path TO itest_081_sp, public');
+
+      // Precondition, read through the migration's own connection: the invalid index is visible
+      // (so the DROP would reach it) but its table is NOT the one the CREATE would build on.
+      const [precondition] = (await migrationDb.select(
+        `SELECT i.indisvalid,
+                pg_catalog.pg_table_is_visible(c.oid) AS visible,
+                i.indrelid = 'audit_log'::regclass AS on_create_target,
+                (SELECT n2.nspname FROM pg_class c2
+                   JOIN pg_namespace n2 ON n2.oid = c2.relnamespace
+                  WHERE c2.oid = 'audit_log'::regclass) AS create_target_schema
+           FROM pg_class c
+           JOIN pg_index i ON i.indexrelid = c.oid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relname = 'idx_audit_action' AND n.nspname = 'public'`,
+      )) as Array<{
+        indisvalid: boolean;
+        visible: boolean;
+        on_create_target: boolean;
+        create_target_schema: string;
+      }>;
+      expect(precondition).toEqual({
+        indisvalid: false,
+        visible: true,
+        on_create_target: false,
+        create_target_schema: 'itest_081_sp',
+      });
+
+      // Collected, never executed — the assertion is about which statements up() decides to emit,
+      // and running six CREATEs against the shadow table would prove nothing.
+      const pgm = new MigrationBuilder(migrationDb, undefined, false, silentLogger);
+      await up(pgm);
+      expect(pgm.getSqlSteps().filter((s) => /DROP INDEX/i.test(s))).toEqual([]);
+    } finally {
+      // Order matters: restore the path first so the repair below targets public, not the shadow.
+      await migrationDb.query(`SET search_path TO ${originalPath}`);
+      await pool.query('DROP SCHEMA IF EXISTS itest_081_sp CASCADE');
+      await pool.query('DROP INDEX CONCURRENTLY IF EXISTS idx_audit_action');
+      await runUp();
+    }
+
+    const after = await indexState();
+    expect(after.get('idx_audit_action')?.valid).toBe(true);
   }, 60_000);
 
   it('still drops all six, in reverse build order, on the way down', () => {
