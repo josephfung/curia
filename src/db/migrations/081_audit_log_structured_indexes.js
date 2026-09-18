@@ -14,6 +14,39 @@
  *
  * Safe against DBs that built these indexes under the original transactional
  * CREATE INDEX in 078/080 (`IF NOT EXISTS`).
+ *
+ * ---
+ *
+ * OPERATOR REPAIR (#1808) — read this if an audit_log index is already INVALID.
+ *
+ * `up()` below drops and rebuilds an index left INVALID by a failed concurrent
+ * build, but it only helps where it RUNS. Every deployment that has already
+ * applied 081 has its row in `pgmigrations`, so the runner will not execute this
+ * file again there — the guard protects fresh installs and any environment where
+ * 081 is retried after a failure, not a database already carrying the damage.
+ *
+ * To find the damage (read-only, safe on prod — widen past audit_log by dropping
+ * the `t.relname` clause):
+ *
+ *   SELECT n.nspname AS schema, t.relname AS table_name, c.relname AS index_name
+ *     FROM pg_class c
+ *     JOIN pg_index i ON i.indexrelid = c.oid
+ *     JOIN pg_class t ON t.oid = i.indrelid
+ *     JOIN pg_namespace n ON n.oid = c.relnamespace
+ *    WHERE t.relname = 'audit_log' AND NOT i.indisvalid;
+ *
+ * To repair each name it returns — one at a time, OUTSIDE a transaction, since
+ * neither statement can run inside one:
+ *
+ *   DROP INDEX CONCURRENTLY IF EXISTS <index_name>;
+ *   -- then re-issue that index's CREATE from INDEXES below, verbatim, e.g.
+ *   CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_action
+ *     ON audit_log (action) WHERE action IS NOT NULL;
+ *
+ * Re-run the detection query afterwards: the rebuilt index must come back
+ * `indisvalid = true`. If a repair is ever needed across the fleet rather than on
+ * one host, that belongs in a new migration with the next free prefix — not in
+ * an edit to this file, which those deployments will never re-run.
  */
 
 /**
@@ -99,6 +132,11 @@ export async function up(pgm) {
   // runs a single queued `pgm.sql()` step, so every check reads pre-migration state regardless
   // of how they are batched — and nothing this migration does can invalidate an index mid-run
   // (a failed CREATE aborts the migration outright).
+  //
+  // pg_table_is_visible pins the catalog read to the same index the unqualified DROP below will
+  // resolve to. Without it the read spans every schema, so an invalid index of the same name on
+  // an audit_log in a schema OFF the search path would make this drop and rebuild the healthy,
+  // visible one — while the invalid index it matched survives untouched.
   const invalid = await pgm.db.select(
     `SELECT c.relname
        FROM pg_class c
@@ -106,6 +144,7 @@ export async function up(pgm) {
        JOIN pg_class t ON t.oid = i.indrelid
       WHERE t.relname = 'audit_log'
         AND c.relname = ANY($1)
+        AND pg_catalog.pg_table_is_visible(c.oid)
         AND NOT i.indisvalid`,
     [INDEXES.map((index) => index.name)],
   );
