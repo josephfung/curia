@@ -31,6 +31,7 @@ interface FakeHandleRow {
   review_task_id: string | null;
   status: string;
   claimed_at: Date | null;
+  claim_token: string | null;
   resolution: string | null;
   late_response_event_id: string | null;
   wake_task_event_id: string | null;
@@ -56,6 +57,7 @@ function handleRow(overrides: Partial<FakeHandleRow> = {}): FakeHandleRow {
     review_task_id: null,
     status: 'pending',
     claimed_at: null,
+    claim_token: null,
     resolution: null,
     late_response_event_id: null,
     wake_task_event_id: null,
@@ -79,16 +81,16 @@ interface FakePoolOptions {
 interface FakePoolResult {
   pool: pg.Pool;
   claims: Array<{ id: string; resolution: string }>;
-  /** delegate_event_ids whose lease was closed out after the side effects landed. */
-  finalized: string[];
-  /** delegate_event_ids handed back for retry. */
-  released: string[];
+  /** Lease closures, with the token each presented. */
+  finalized: Array<{ id: string; token: unknown }>;
+  /** Leases handed back for retry, with the token each presented. */
+  released: Array<{ id: string; token: unknown }>;
 }
 
 function fakePool(opts: FakePoolOptions): FakePoolResult {
   const claims: Array<{ id: string; resolution: string }> = [];
-  const finalized: string[] = [];
-  const released: string[] = [];
+  const finalized: Array<{ id: string; token: unknown }> = [];
+  const released: Array<{ id: string; token: unknown }> = [];
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     if (sql.includes('FROM pending_delegations') && sql.includes("status = 'pending'")) {
       return { rows: opts.open };
@@ -105,16 +107,19 @@ function fakePool(opts: FakePoolOptions): FakePoolResult {
       if (opts.claimLoses?.has(id)) return { rows: [] };
       claims.push({ id, resolution });
       const row = opts.open.find((r) => r.delegate_event_id === id) ?? handleRow({ delegate_event_id: id });
-      return { rows: [{ ...row, status: 'claimed', claimed_at: new Date(), resolution }] };
+      // Every claim mints a fresh token — the fake mirrors gen_random_uuid().
+      return {
+        rows: [{ ...row, status: 'claimed', claimed_at: new Date(), claim_token: `token-${id}`, resolution }],
+      };
     }
     if (sql.includes('UPDATE pending_delegations') && sql.includes("SET status = 'resolved'")) {
       const id = params[0] as string;
-      finalized.push(id);
+      finalized.push({ id, token: params[1] });
       const row = opts.open.find((r) => r.delegate_event_id === id) ?? handleRow({ delegate_event_id: id });
       return { rows: [{ ...row, status: 'resolved', resolved_at: new Date() }] };
     }
     if (sql.includes('UPDATE pending_delegations') && sql.includes("SET status = 'pending'")) {
-      released.push(params[0] as string);
+      released.push({ id: params[0] as string, token: params[1] });
       return { rows: [] };
     }
     throw new Error(`unexpected query: ${sql.slice(0, 80)}`);
@@ -289,7 +294,8 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     // Claim → side effects → finalize, in that order. A handle marked resolved before its note
     // and audit event landed would record work that never happened.
     expect(claims).toHaveLength(1);
-    expect(finalized).toEqual(['delegate-evt-1']);
+    // Finalize presents the token this claim minted — proof of ownership, not just of a lease.
+    expect(finalized).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
   });
 
   it('hands the lease back instead of closing it when the review task cannot be annotated', async () => {
@@ -311,7 +317,7 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     // The principal never saw the result, so the handle must stay open for another attempt —
     // and nothing may claim the outcome was recorded.
     expect(claims).toHaveLength(1);
-    expect(released).toEqual(['delegate-evt-1']);
+    expect(released).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
     expect(finalized).toEqual([]);
     expect(resolved).toHaveLength(0);
     expect(result).toMatchObject({ recovered: 0, abandoned: 0, untouched: 1 });
@@ -340,7 +346,8 @@ describe('LateDelegationSweep.tick (#1799)', () => {
 
     expect(result.recovered).toBe(1);
     expect(claims).toEqual([{ id: 'delegate-evt-1', resolution: 'annotated_result' }]);
-    expect(finalized).toEqual(['delegate-evt-1']);
+    // The re-claim mints its OWN token, so the finalize cannot be mistaken for the dead actor's.
+    expect(finalized).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
   });
 
   it('reports an empty pass without touching anything', async () => {
