@@ -467,7 +467,7 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
       await pool.query(
         `UPDATE pending_delegations
             SET status = 'claimed', claimed_at = now() - interval '10 minutes',
-                resolution = 'annotated_result'
+                claim_token = gen_random_uuid(), resolution = 'annotated_result'
           WHERE delegate_event_id = $1`,
         [delegateEventId],
       );
@@ -504,7 +504,8 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
       const notesBefore = await noteCount(reviewTaskId);
       await pool.query(
         `UPDATE pending_delegations
-            SET status = 'claimed', claimed_at = now(), resolution = 'annotated_result'
+            SET status = 'claimed', claimed_at = now(),
+                claim_token = gen_random_uuid(), resolution = 'annotated_result'
           WHERE delegate_event_id = $1`,
         [delegateEventId],
       );
