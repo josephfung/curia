@@ -1,7 +1,7 @@
 // late-delegation-sweep.test.ts — branch selection and per-handle isolation (#1799).
 //
 // The DB-backed behaviour (real claim semantics, real task rows) is covered by
-// tests/integration/late-delegation-phase1.test.ts. This file drives the sweep's control flow
+// tests/integration/late-delegation.test.ts. This file drives the sweep's control flow
 // in-process: which branch a handle takes, that a claim lost to another path is not counted as
 // work done, and that one failing handle does not abort the pass.
 
@@ -10,7 +10,7 @@ import pino from 'pino';
 import type pg from 'pg';
 import { EventBus } from '../bus/bus.js';
 import type { TaskRepo } from '../db/task-repo.js';
-import type { DelegationLateResolvedEvent } from '../bus/events.js';
+import type { AgentTaskEvent, DelegationLateResolvedEvent } from '../bus/events.js';
 import { LateDelegationSweep } from './late-delegation-sweep.js';
 
 const logger = pino({ level: 'silent' });
@@ -85,12 +85,15 @@ interface FakePoolResult {
   finalized: Array<{ id: string; token: unknown }>;
   /** Leases handed back for retry, with the token each presented. */
   released: Array<{ id: string; token: unknown }>;
+  /** Wake ids written back onto handles, in order. */
+  wakeIdsRecorded: Array<{ id: string; wakeTaskEventId: string }>;
 }
 
 function fakePool(opts: FakePoolOptions): FakePoolResult {
   const claims: Array<{ id: string; resolution: string }> = [];
   const finalized: Array<{ id: string; token: unknown }> = [];
   const released: Array<{ id: string; token: unknown }> = [];
+  const wakeIdsRecorded: Array<{ id: string; wakeTaskEventId: string }> = [];
   const query = vi.fn(async (sql: string, params: unknown[] = []) => {
     if (sql.includes('FROM pending_delegations') && sql.includes("status = 'pending'")) {
       return { rows: opts.open };
@@ -122,9 +125,13 @@ function fakePool(opts: FakePoolOptions): FakePoolResult {
       released.push({ id: params[0] as string, token: params[1] });
       return { rows: [] };
     }
+    if (sql.includes('UPDATE pending_delegations') && sql.includes('SET wake_task_event_id')) {
+      wakeIdsRecorded.push({ id: params[0] as string, wakeTaskEventId: params[1] as string });
+      return { rows: [] };
+    }
     throw new Error(`unexpected query: ${sql.slice(0, 80)}`);
   });
-  return { pool: { query } as unknown as pg.Pool, claims, finalized, released };
+  return { pool: { query } as unknown as pg.Pool, claims, finalized, released, wakeIdsRecorded };
 }
 
 /** Duck-typed TaskRepo: no review task on these handles unless a test says otherwise. */
@@ -132,6 +139,16 @@ function fakeTaskRepo(): TaskRepo {
   return {
     getTask: vi.fn(async () => null),
     updateTask: vi.fn(async () => null),
+    completeTask: vi.fn(async () => null),
+  } as unknown as TaskRepo;
+}
+
+/** A repo with an open review task, so the deliver branch has something to close. */
+function openReviewTaskRepo(): TaskRepo {
+  return {
+    getTask: vi.fn(async () => ({ id: 'review-1', status: 'open' })),
+    updateTask: vi.fn(async () => null),
+    completeTask: vi.fn(async () => null),
   } as unknown as TaskRepo;
 }
 
@@ -140,6 +157,7 @@ function failingTaskRepo(): TaskRepo {
   return {
     getTask: vi.fn(async () => ({ id: 'review-1', status: 'open' })),
     updateTask: vi.fn(async () => { throw new Error('connection terminated'); }),
+    completeTask: vi.fn(async () => { throw new Error('connection terminated'); }),
   } as unknown as TaskRepo;
 }
 
@@ -163,6 +181,13 @@ function collectResolved(bus: EventBus): DelegationLateResolvedEvent[] {
   return events;
 }
 
+/** Wake tasks published back to originating agents. */
+function collectWakes(bus: EventBus): AgentTaskEvent[] {
+  const events: AgentTaskEvent[] = [];
+  bus.subscribe('agent.task', 'system', (event) => { events.push(event as AgentTaskEvent); });
+  return events;
+}
+
 const NOW = new Date('2026-09-14T12:30:00.000Z');
 
 describe('LateDelegationSweep.tick (#1799)', () => {
@@ -180,12 +205,31 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     const bus = new EventBus(logger);
     const resolved = collectResolved(bus);
 
+    const wakes = collectWakes(bus);
     const result = await makeSweep(pool, bus).tick(NOW);
 
     expect(result).toMatchObject({ examined: 1, recovered: 1, abandoned: 0, untouched: 0 });
-    expect(claims).toEqual([{ id: 'delegate-evt-1', resolution: 'annotated_result' }]);
+    expect(claims).toEqual([{ id: 'delegate-evt-1', resolution: 'delivered' }]);
+
+    // The originating agent is re-entered in its OWN conversation, carrying the result.
+    expect(wakes).toHaveLength(1);
+    const wake = wakes[0]!;
+    expect(wake.payload.agentId).toBe('coordinator');
+    expect(wake.payload.conversationId).toBe('scheduler:job-1:run-1');
+    expect(wake.payload.content).toContain('Travel detected: one trip.');
+    expect(wake.payload.content).toContain('Do NOT delegate this work again');
+    // The guard seed the runtime reads, so the woken turn cannot re-delegate the same work.
+    expect(wake.payload.metadata?.lateDelegation).toEqual({ agent: 'calendar', task: 'Detect travel' });
+    // Derived wake: the ladder may only downgrade standing. And liveTurn must not cross the
+    // async boundary (#1126).
+    expect(wake.payload.metadata?.wakeContext).toEqual({ derived: true });
+    expect(wake.payload.liveTurn).toBeUndefined();
+    // Audit chain: the wake points at the response that triggered it.
+    expect(wake.parentEventId).toBe('response-evt-1');
+
     expect(resolved).toHaveLength(1);
     expect(resolved[0]!.payload.lateResponseEventId).toBe('response-evt-1');
+    expect(resolved[0]!.payload.wakeTaskEventId).toBe(wake.id);
     expect(resolved[0]!.payload.reviewTaskOutcome).toBe('no_review_task');
   });
 
@@ -207,7 +251,7 @@ describe('LateDelegationSweep.tick (#1799)', () => {
 
     expect(result.recovered).toBe(1);
     expect(result.abandoned).toBe(0);
-    expect(claims[0]!.resolution).toBe('annotated_result');
+    expect(claims[0]!.resolution).toBe('delivered');
   });
 
   it('abandons an expired handle with no response', async () => {
@@ -291,15 +335,66 @@ describe('LateDelegationSweep.tick (#1799)', () => {
 
     await makeSweep(pool, bus).tick(NOW);
 
-    // Claim → side effects → finalize, in that order. A handle marked resolved before its note
-    // and audit event landed would record work that never happened.
+    // Claim → side effects → finalize, in that order. A handle marked resolved before its wake,
+    // note and audit event landed would record work that never happened.
     expect(claims).toHaveLength(1);
     // Finalize presents the token this claim minted — proof of ownership, not just of a lease.
     expect(finalized).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
   });
 
-  it('hands the lease back instead of closing it when the review task cannot be annotated', async () => {
+  it('hands the lease back when a recorded outcome cannot be written and nothing irreversible happened', async () => {
     const { pool, claims, finalized, released } = fakePool({
+      open: [handleRow({ review_task_id: 'review-1' })],
+      auditHits: {
+        'delegate-evt-1': {
+          // isError → a recorded outcome, so no wake goes out and a retry is free.
+          id: 'response-evt-1',
+          payload: { agentId: 'calendar', content: 'out of turns', isError: true, reason: 'maxTurns' },
+          timestamp: '2026-09-14T12:06:43.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+    const resolved = collectResolved(bus);
+    const wakes = collectWakes(bus);
+
+    const result = await makeSweep(pool, bus, failingTaskRepo()).tick(NOW);
+
+    expect(wakes).toHaveLength(0);
+    expect(claims).toHaveLength(1);
+    expect(released).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
+    expect(finalized).toEqual([]);
+    expect(resolved).toHaveLength(0);
+    expect(result).toMatchObject({ recovered: 0, abandoned: 0, untouched: 1 });
+  });
+
+  it('does NOT retry when the wake already went out but the review task write failed', async () => {
+    const { pool, finalized, released, wakeIdsRecorded } = fakePool({
+      open: [handleRow({ review_task_id: 'review-1' })],
+      auditHits: {
+        'delegate-evt-1': {
+          id: 'response-evt-1',
+          payload: { agentId: 'calendar', content: 'Travel detected: one trip.' },
+          timestamp: '2026-09-14T12:06:43.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+    const wakes = collectWakes(bus);
+
+    const result = await makeSweep(pool, bus, failingTaskRepo()).tick(NOW);
+
+    // The originator has been woken; retrying would re-enter it a second time over the same
+    // result. A review row missing its closing note is the lesser problem, so the handle closes.
+    expect(wakes).toHaveLength(1);
+    expect(wakeIdsRecorded).toEqual([{ id: 'delegate-evt-1', wakeTaskEventId: wakes[0]!.id }]);
+    expect(released).toEqual([]);
+    expect(finalized).toHaveLength(1);
+    expect(result.recovered).toBe(1);
+  });
+
+  it('closes the review task on delivery instead of leaving it open', async () => {
+    const { pool } = fakePool({
       open: [handleRow({ review_task_id: 'review-1' })],
       auditHits: {
         'delegate-evt-1': {
@@ -311,16 +406,46 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     });
     const bus = new EventBus(logger);
     const resolved = collectResolved(bus);
+    const taskRepo = openReviewTaskRepo();
 
-    const result = await makeSweep(pool, bus, failingTaskRepo()).tick(NOW);
+    await makeSweep(pool, bus, taskRepo).tick(NOW);
 
-    // The principal never saw the result, so the handle must stay open for another attempt —
-    // and nothing may claim the outcome was recorded.
-    expect(claims).toHaveLength(1);
-    expect(released).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
-    expect(finalized).toEqual([]);
-    expect(resolved).toHaveLength(0);
-    expect(result).toMatchObject({ recovered: 0, abandoned: 0, untouched: 1 });
+    // The row existed to ask "did it deliver?" — something finally checked, so it is finished.
+    expect(taskRepo.completeTask).toHaveBeenCalledTimes(1);
+    const [taskId, note] = (taskRepo.completeTask as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]!;
+    expect(taskId).toBe('review-1');
+    expect(String(note)).toContain('calendar delivered at');
+    expect(taskRepo.updateTask).not.toHaveBeenCalled();
+    expect(resolved[0]!.payload.reviewTaskOutcome).toBe('closed');
+  });
+
+  it('does not publish a second wake for a handle that already has one', async () => {
+    // A previous attempt woke the originator and died before finalizing. Re-waking would duplicate
+    // the follow-up work, so only the bookkeeping is finished.
+    const { pool, finalized } = fakePool({
+      open: [handleRow({
+        status: 'claimed',
+        claimed_at: new Date('2026-09-14T12:00:00.000Z'),
+        claim_token: 'stale-token',
+        resolution: 'delivered',
+        wake_task_event_id: 'wake-already-sent',
+      })],
+      auditHits: {
+        'delegate-evt-1': {
+          id: 'response-evt-1',
+          payload: { agentId: 'calendar', content: 'Travel detected: one trip.' },
+          timestamp: '2026-09-14T12:06:43.000Z',
+        },
+      },
+    });
+    const bus = new EventBus(logger);
+    const wakes = collectWakes(bus);
+
+    const result = await makeSweep(pool, bus).tick(NOW);
+
+    expect(wakes).toHaveLength(0);
+    expect(finalized).toHaveLength(1);
+    expect(result.recovered).toBe(1);
   });
 
   it('re-claims a handle whose lease was abandoned mid-flight', async () => {
@@ -330,7 +455,8 @@ describe('LateDelegationSweep.tick (#1799)', () => {
       open: [handleRow({
         status: 'claimed',
         claimed_at: new Date('2026-09-14T12:00:00.000Z'),
-        resolution: 'annotated_result',
+        claim_token: 'stale-token',
+        resolution: 'delivered',
       })],
       auditHits: {
         'delegate-evt-1': {
@@ -345,7 +471,7 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     const result = await makeSweep(pool, bus).tick(NOW);
 
     expect(result.recovered).toBe(1);
-    expect(claims).toEqual([{ id: 'delegate-evt-1', resolution: 'annotated_result' }]);
+    expect(claims).toEqual([{ id: 'delegate-evt-1', resolution: 'delivered' }]);
     // The re-claim mints its OWN token, so the finalize cannot be mistaken for the dead actor's.
     expect(finalized).toEqual([{ id: 'delegate-evt-1', token: 'token-delegate-evt-1' }]);
   });

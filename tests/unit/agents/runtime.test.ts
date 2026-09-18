@@ -4770,6 +4770,161 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).toMatch(/follow.?up|logged/i);
   });
 
+  it('blocks re-delegation of work a late-delivery wake already carries the result for (#1799)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const delegateCalls: Array<Record<string, unknown>> = [];
+    const taskCreateCount = { n: 0 };
+
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>) => {
+        if (toolName === 'task-create') {
+          taskCreateCount.n += 1;
+          return { success: true, data: { task_id: 'review-should-not-happen' } };
+        }
+        if (toolName === 'delegate') {
+          // The runtime's pre-invoke guard check should short-circuit before reaching here.
+          delegateCalls.push(input);
+          return { success: true, data: { response: 'fresh delegation result', agent: 'calendar' } };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let round = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        round += 1;
+        // Round 1: the woken model tries to re-delegate the very work it was handed.
+        if (round === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{
+              id: 'call-redelegate',
+              name: 'delegate',
+              input: { agent: 'calendar', task: 'Detect travel since Aug 17' },
+            }],
+            usage: { inputTokens: 40, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Created the trip tasks from the delivered result.',
+          usage: { inputTokens: 20, outputTokens: 10, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'scheduler:job-travel-1:run-5',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: '[Late specialist result — calendar, delivered 2026-09-14T12:06:43-04:00]\n\nTravel detected: YYZ→SFO Oct 2.',
+      metadata: {
+        wakeContext: { derived: true },
+        lateDelegation: { agent: 'calendar', task: 'Detect travel since Aug 17' },
+      },
+      parentEventId: 'late-response-evt-1',
+    }));
+
+    // The delegate skill is never invoked: the guard was seeded from the wake marker, so the
+    // pre-invoke check short-circuits with blocked:true.
+    expect(delegateCalls).toHaveLength(0);
+    // And a blocked call must NOT escalate — that path is what would create a second review task.
+    expect(taskCreateCount.n).toBe(0);
+    // The turn continues rather than stopping, so the follow-up work still gets done.
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]!.payload.content).toContain('Created the trip tasks');
+  });
+
+  it('ignores a malformed lateDelegation marker rather than trusting it (#1799)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    const delegateCalls: Array<Record<string, unknown>> = [];
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>) => {
+        if (toolName === 'delegate') {
+          delegateCalls.push(input);
+          return { success: true, data: { response: 'ok', agent: 'calendar' } };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let round = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        round += 1;
+        if (round === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'c1', name: 'delegate', input: { agent: 'calendar', task: 'Detect travel' } }],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'done',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-malformed-marker',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'something',
+      // agent present, task missing — a half-built marker must not silently block real work.
+      metadata: { lateDelegation: { agent: 'calendar' } },
+      parentEventId: 'inbound-malformed',
+    }));
+
+    expect(delegateCalls).toHaveLength(1);
+  });
+
   it('publishes delegation.timed_out with the origin routing and review task so a late response can be delivered (#1799)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);

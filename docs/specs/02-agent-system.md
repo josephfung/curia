@@ -14,6 +14,49 @@ All external communication flows through a single **Coordinator agent** — the 
 
 As of v0.35.0 the Coordinator prompt was re-derived around an explicit three-way routing decision — handle directly, borrow-then-answer (pull work from a specialist, then reply in its own voice), or transfer-ownership (hand the whole interaction to a specialist that owns its lifecycle). The keystone rule: a reply to anything the Coordinator sent on a specialist's behalf (a delegation-hinted outbound) is always transfer-ownership and is routed back to that specialist, never answered directly. Tool-specific mechanics were relocated out of the prompt into the relevant skill manifests (`config-store`, `email-send`/`email-reply`, `signal-send`, `decay-warnings-list`), and the vestigial executive-voice block was removed — CEO-voice drafting lives in the ceo-inbox specialist.
 
+### Late delegation delivery (#1799)
+
+A `delegate` wait that times out does not stop the specialist — by design (#1288): cancelling an
+in-flight run risks a half-completed side effect, so the run is left alone and the coordinator's
+turn ends. The specialist then finishes minutes later and publishes an `agent.response` whose
+originating turn no longer exists. Before v0.44 nothing consumed it, and the work was silently
+lost: the weekly travel sweep timed out four weeks running while the calendar agent delivered a
+full result each time, and no trip task was created for a month.
+
+The lifecycle now:
+
+1. On timeout, the runtime publishes `delegation.timed_out` carrying the delegate `agent.task`
+   event id — the value the specialist stamps as `parentEventId` on its eventual response — plus
+   the originating routing and the id of the CEO review task the escalation created.
+2. `LateDelegationSubscriber` (system layer) persists that as a row in `pending_delegations`.
+   `UNIQUE (delegate_event_id)` makes the handle idempotent, and `status` is a three-step lease
+   (`pending` → `claimed` + `claim_token` → `resolved`) so an actor that crashes mid-delivery
+   leaves recoverable work rather than a row claiming work that never happened.
+3. When the late response arrives, it is classified. A usable result re-enters the **originating
+   agent in its original conversation** with a brief carrying the specialist's output, and the
+   review task is closed. Every other outcome — the specialist ultimately failed, came back with a
+   question, paused, has no routable origin, or a human already closed the review — is recorded on
+   that review task and left open for the principal.
+4. `LateDelegationSweep` (default every 5 min) covers what an in-process subscriber cannot: a
+   response that landed while the process was down or before the handle was written (recovered from
+   `audit_log.parent_event_id`), an abandoned lease, and a handle whose specialist never delivered
+   (abandoned after `delegate.lateDelivery.ttlMinutes`).
+
+Two invariants govern the wake:
+
+- **Re-delegation is blocked structurally.** The wake carries `metadata.lateDelegation`, and the
+  runtime seeds `DelegationGuard` from it, so a model that tries to re-fetch a result it was just
+  handed is short-circuited rather than talked out of it (#1310's guard behaviour is preserved).
+- **The brief never restates the original delegated instruction.** #1064 is the precedent: a notify
+  `agent.task` that echoed the original intent made the coordinator re-execute it and send a
+  duplicate. The original brief is already in the conversation the wake re-enters.
+
+The wake restores the stored `originator` (so the follow-up steps still clear the autonomy gate),
+marks itself `derived` via `wakeContext` (so the standing ladder can only downgrade authority), and
+deliberately does not carry `liveTurn` — it crosses an async boundary (#1126).
+
+`delegate.lateDelivery.enabled: false` disables the whole mechanism.
+
 ### Coordinator Config
 
 ```yaml

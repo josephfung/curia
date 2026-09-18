@@ -1096,6 +1096,35 @@ export class AgentRuntime {
     // Delegation circuit-breaker state (#1171). Tracks identical delegate(agent, task)
     // calls within this turn so non-retryable specialist failures cannot be blind-retried.
     const delegationGuard = new DelegationGuard();
+
+    // Late-delivery re-entry (#1799): this turn was woken because a specialist that had timed
+    // out finally delivered, and its result is in the task content. Seed the guard so the work
+    // cannot be delegated a second time — structurally, not by asking the prompt nicely. The
+    // pre-invoke check then short-circuits any such call with blocked:true, which (because it
+    // sets delegateBlocked) also skips the escalation path, so no second review task is created.
+    const lateDelegation = taskEvent.payload.metadata?.lateDelegation;
+    if (
+      typeof lateDelegation === 'object' && lateDelegation !== null && !Array.isArray(lateDelegation)
+    ) {
+      const { agent: lateAgent, task: lateTask } = lateDelegation as Record<string, unknown>;
+      if (typeof lateAgent === 'string' && lateAgent !== '' && typeof lateTask === 'string' && lateTask !== '') {
+        delegationGuard.recordFailure(delegationKey(lateAgent, lateTask), {
+          agent: lateAgent,
+          reason: 'already_delivered',
+          retryable: false,
+          message: `'${lateAgent}' already completed this work — its result is included in your task. Do not delegate it again.`,
+        });
+        logger.info(
+          { agentId, conversationId, targetAgent: lateAgent },
+          'Seeded delegation guard from a late-delivery wake — re-delegation of this work is blocked',
+        );
+      } else {
+        logger.warn(
+          { agentId, conversationId },
+          'Late-delivery wake carried a malformed lateDelegation marker — re-delegation is NOT blocked',
+        );
+      }
+    }
     const turnDateResolveTracker = new TurnDateResolveTracker();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
 

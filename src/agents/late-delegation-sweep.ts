@@ -25,7 +25,12 @@ import {
   findLateResponseInAuditLog,
   listOpenPendingDelegations,
 } from '../db/queries/pending-delegations.js';
-import { CLAIM_LEASE_SECONDS, expireLateDelegation, handleLateResponse } from './late-delegation.js';
+import {
+  CLAIM_LEASE_SECONDS,
+  expireLateDelegation,
+  handleLateResponse,
+  type LateWakeRoutingRegistrar,
+} from './late-delegation.js';
 
 export interface LateDelegationSweepOptions {
   pool: Pool;
@@ -38,6 +43,10 @@ export interface LateDelegationSweepOptions {
   timezone?: string;
   /** Cap on handles examined per tick — open handles are few, this is a runaway guard. */
   maxPerTick?: number;
+  /** Registered agent names. An origin agent no longer on the roster is recorded, not woken. */
+  knownAgents?: Set<string>;
+  /** Seeds dispatcher routing so a woken agent's reply reaches the principal. */
+  registerRouting?: LateWakeRoutingRegistrar;
 }
 
 export interface LateDelegationSweepResult {
@@ -117,6 +126,8 @@ export class LateDelegationSweep {
             respondedAt: new Date(late.timestamp),
             maxResultChars: this.opts.maxResultChars,
             ...(this.opts.timezone !== undefined && { timezone: this.opts.timezone }),
+            ...(this.opts.knownAgents !== undefined && { knownAgents: this.opts.knownAgents }),
+            ...(this.opts.registerRouting !== undefined && { registerRouting: this.opts.registerRouting }),
           });
           if (outcome.resolved) {
             result.recovered += 1;

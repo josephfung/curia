@@ -2799,41 +2799,6 @@ async function main(): Promise<void> {
   });
   planFrontierSubscriber.start();
 
-  // Late delegation delivery (#1799): a delegate wait that times out abandons a specialist that
-  // keeps running. The subscriber opens a durable handle at timeout and matches the specialist's
-  // eventual agent.response back to it; the sweep covers what an in-process subscriber cannot —
-  // a response that landed while we were down (recovered from audit_log) and a handle whose
-  // specialist never delivered at all.
-  const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
-  let lateDelegationSweep: LateDelegationSweep | undefined;
-  if (lateDeliveryConfig.enabled) {
-    const lateDelegationSubscriber = new LateDelegationSubscriber({
-      pool,
-      bus,
-      logger,
-      taskRepo,
-      ttlMinutes: lateDeliveryConfig.ttlMinutes,
-      maxResultChars: lateDeliveryConfig.maxResultChars,
-      timezone: config.timezone,
-    });
-    lateDelegationSubscriber.start();
-
-    lateDelegationSweep = new LateDelegationSweep({
-      pool,
-      bus,
-      logger,
-      taskRepo,
-      intervalMinutes: lateDeliveryConfig.sweepIntervalMinutes,
-      ttlMinutes: lateDeliveryConfig.ttlMinutes,
-      maxResultChars: lateDeliveryConfig.maxResultChars,
-      timezone: config.timezone,
-    });
-    lateDelegationSweep.start();
-  } else {
-    logger.warn(
-      'delegate.lateDelivery.enabled is false — late specialist responses will be orphaned (#1799 disabled)',
-    );
-  }
 
   if (workingDocsRepo) {
     const deliverableKgPromotionSubscriber = new DeliverableKgPromotionSubscriber({
@@ -2969,6 +2934,60 @@ async function main(): Promise<void> {
     (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
   );
   secretCaptureResumeSubscriber.start();
+
+  // Late delegation delivery (#1799): a delegate wait that times out abandons a specialist that
+  // keeps running. The subscriber opens a durable handle at timeout, and when the specialist
+  // finally responds it re-enters the ORIGINATING agent in its original conversation with the
+  // result — so the follow-up steps that died with the timed-out turn actually run — then closes
+  // the escalation review task. The sweep covers what an in-process subscriber cannot: a response
+  // that landed while we were down (recovered from audit_log), an actor that died mid-delivery,
+  // and a handle whose specialist never delivered at all.
+  //
+  // Wired AFTER the dispatcher for the same reason as the secret-capture resume above: a woken
+  // agent's reply needs a routing entry seeded via registerExternalTaskRouting, or the dispatcher
+  // finds none for a task it never saw arrive and drops it.
+  const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
+  let lateDelegationSweep: LateDelegationSweep | undefined;
+  if (lateDeliveryConfig.enabled) {
+    // Every registered agent, not just the heartbeat-eligible ones: the question here is only
+    // whether a wake would reach a live subscriber.
+    const knownAgents = new Set(agentRegistry.list().map((a) => a.name));
+    const registerLateWakeRouting = (
+      taskEventId: string,
+      routing: Parameters<typeof dispatcher.registerExternalTaskRouting>[1],
+    ): void => dispatcher.registerExternalTaskRouting(taskEventId, routing);
+
+    const lateDelegationSubscriber = new LateDelegationSubscriber({
+      pool,
+      bus,
+      logger,
+      taskRepo,
+      ttlMinutes: lateDeliveryConfig.ttlMinutes,
+      maxResultChars: lateDeliveryConfig.maxResultChars,
+      timezone: config.timezone,
+      knownAgents,
+      registerRouting: registerLateWakeRouting,
+    });
+    lateDelegationSubscriber.start();
+
+    lateDelegationSweep = new LateDelegationSweep({
+      pool,
+      bus,
+      logger,
+      taskRepo,
+      intervalMinutes: lateDeliveryConfig.sweepIntervalMinutes,
+      ttlMinutes: lateDeliveryConfig.ttlMinutes,
+      maxResultChars: lateDeliveryConfig.maxResultChars,
+      timezone: config.timezone,
+      knownAgents,
+      registerRouting: registerLateWakeRouting,
+    });
+    lateDelegationSweep.start();
+  } else {
+    logger.warn(
+      'delegate.lateDelivery.enabled is false — late specialist responses will be orphaned (#1799 disabled)',
+    );
+  }
 
   // Conversation checkpoint processor — System Layer subscriber that runs background
   // memory skills (extract-relationships, etc.) at end of each conversation.

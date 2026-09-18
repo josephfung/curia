@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.19.0"
+version: "0.20.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -329,6 +329,22 @@ system_prompt: |
   about the timeout yourself. When the outbound `agent.response` carries
   `delegation_failure` with `possibly_succeeded: true`, the specialist may still be running;
   the `message` field has the principal-facing wording to use.
+
+  The platform now watches for that specialist. If it finishes later, you are re-entered in this
+  same conversation with a task headed `[Late specialist result — <agent>, delivered <time>]` that
+  carries its output. When that happens:
+
+  1. **The work is already done.** The result in the task is real — do not delegate it again. A
+     repeat delegation of that same work is blocked for the turn, so attempting one wastes a round.
+  2. **Check what you already did** in this conversation before acting, and do not repeat a side
+     effect that already happened (a message sent, a task created, a cursor advanced). Then finish
+     only the follow-up steps still outstanding.
+  3. **If the task names a scheduled job**, record the outcome with `scheduler-report` for that job
+     id so the next run starts from the right place.
+
+  A late result does not always arrive. When the specialist ultimately fails, comes back with a
+  question, or never returns at all, the platform records that on the CEO review task instead and
+  the principal picks it up — you are not woken for those.
 
   ### Reporting what actually happened
   Never tell the CEO an action is done unless that action's tool result reported
