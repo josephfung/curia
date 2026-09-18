@@ -16,6 +16,11 @@
 -- transient failure in between leaves an expired lease the sweep picks back up, whereas a
 -- straight flip to 'resolved' would have recorded the work as done and dropped it. Only one
 -- actor can hold a live lease, so recovery does not reintroduce concurrent duplicates.
+--
+-- claim_token is what makes the lease *ownable* rather than merely held. Every claim mints a
+-- fresh token, and finalize/release require it, so an actor that stalled past its lease cannot
+-- come back and close out — or hand back — work a later claimant now owns. Without it,
+-- `status = 'claimed'` is proof that someone holds the lease, not that the caller does.
 
 CREATE TABLE pending_delegations (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -42,6 +47,8 @@ CREATE TABLE pending_delegations (
                              CHECK (status IN ('pending', 'claimed', 'resolved')),
   -- When the current actor took its lease. NULL unless status is 'claimed'/'resolved'.
   claimed_at               TIMESTAMPTZ,
+  -- Minted fresh on every claim; finalize/release must present it to act on the handle.
+  claim_token              UUID,
   -- LateDelegationResolution (src/bus/events.ts); set when the lease is taken, because the
   -- classification is a pure function of the response and cannot change under a retry.
   resolution               TEXT,
@@ -55,9 +62,9 @@ CREATE TABLE pending_delegations (
   -- Each status carries exactly the fields it has earned: a pending handle claims nothing, a
   -- claimed one knows its verdict and holds a lease, a resolved one is finished.
   CONSTRAINT pending_delegations_resolution_shape CHECK (
-    (status = 'pending'  AND resolution IS NULL     AND claimed_at IS NULL     AND resolved_at IS NULL) OR
-    (status = 'claimed'  AND resolution IS NOT NULL AND claimed_at IS NOT NULL AND resolved_at IS NULL) OR
-    (status = 'resolved' AND resolution IS NOT NULL AND claimed_at IS NOT NULL AND resolved_at IS NOT NULL)
+    (status = 'pending'  AND resolution IS NULL     AND claimed_at IS NULL     AND claim_token IS NULL     AND resolved_at IS NULL) OR
+    (status = 'claimed'  AND resolution IS NOT NULL AND claimed_at IS NOT NULL AND claim_token IS NOT NULL AND resolved_at IS NULL) OR
+    (status = 'resolved' AND resolution IS NOT NULL AND claimed_at IS NOT NULL AND claim_token IS NOT NULL AND resolved_at IS NOT NULL)
   )
 );
 

@@ -23,8 +23,11 @@ import {
   type DelegationTimedOutEvent,
 } from '../../src/bus/events.js';
 import {
+  claimPendingDelegation,
+  finalizePendingDelegation,
   getPendingDelegationByDelegateEventId,
   recordPendingDelegation,
+  releasePendingDelegationClaim,
 } from '../../src/db/queries/pending-delegations.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 
@@ -513,6 +516,56 @@ describeIf('Late delegation phase 1 — correlation, review-task record, audit (
       expect(await noteCount(reviewTaskId)).toBe(notesBefore);
       const handle = await getPendingDelegationByDelegateEventId(pool, delegateEventId);
       expect(handle?.status).toBe('claimed');
+    });
+
+    it('refuses a stale holder finalizing or releasing a newer claimant\'s lease', async () => {
+      // Worker A claims, stalls past its lease, and worker B takes over. A must not be able to
+      // close out — or hand back — work B now owns: finalizing B's in-flight handle would mark
+      // unfinished work resolved and strand it, which is the loss the lease exists to prevent.
+      const delegateEventId = nextDelegateEventId();
+      await recordPendingDelegation(pool, {
+        delegateEventId,
+        delegateConversationId: 'delegate-conv-steal',
+        targetAgent: 'calendar',
+        delegateTask: 'Detect travel',
+        originAgentId: 'coordinator',
+        originConversationId: 'scheduler:steal-job:run-1',
+        originChannelId: 'scheduler',
+        originSenderId: 'scheduler',
+        expiresAt: new Date(Date.now() + 3_600_000),
+      });
+
+      const workerA = await claimPendingDelegation(pool, {
+        delegateEventId,
+        resolution: 'annotated_result',
+        leaseSeconds: 120,
+      });
+      expect(workerA?.claimToken).toBeTruthy();
+
+      // A stalls: backdate its lease so it is expired, then B steals it.
+      await pool.query(
+        `UPDATE pending_delegations SET claimed_at = now() - interval '10 minutes' WHERE delegate_event_id = $1`,
+        [delegateEventId],
+      );
+      const workerB = await claimPendingDelegation(pool, {
+        delegateEventId,
+        resolution: 'annotated_result',
+        leaseSeconds: 120,
+      });
+      expect(workerB?.claimToken).toBeTruthy();
+      expect(workerB!.claimToken).not.toBe(workerA!.claimToken);
+
+      // A wakes up and tries to finish. Both attempts must be no-ops.
+      expect(await finalizePendingDelegation(pool, delegateEventId, workerA!.claimToken!)).toBeNull();
+      await releasePendingDelegationClaim(pool, delegateEventId, workerA!.claimToken!);
+
+      const stillB = await getPendingDelegationByDelegateEventId(pool, delegateEventId);
+      expect(stillB?.status).toBe('claimed');
+      expect(stillB?.claimToken).toBe(workerB!.claimToken);
+
+      // B finishes normally with its own token.
+      const finalized = await finalizePendingDelegation(pool, delegateEventId, workerB!.claimToken!);
+      expect(finalized?.status).toBe('resolved');
     });
 
     it('leaves a young handle with no response alone', async () => {

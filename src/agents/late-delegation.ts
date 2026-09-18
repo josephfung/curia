@@ -427,7 +427,11 @@ export async function resolveLateDelegation(
   // writable in principle, so the note is still owed. Hand the lease back and let the sweep try
   // again rather than closing the handle over a result the principal never saw.
   if (reviewTaskOutcome === 'update_failed') {
-    await releasePendingDelegationClaim(pool, claimed.delegateEventId);
+    // Token-guarded: if this lease already expired and another actor took over, the release is a
+    // no-op rather than a yank of their in-flight work.
+    if (claimed.claimToken) {
+      await releasePendingDelegationClaim(pool, claimed.delegateEventId, claimed.claimToken);
+    }
     logger.warn(
       { delegateEventId: claimed.delegateEventId, reviewTaskId: claimed.reviewTaskId },
       'Late delegation: could not record the outcome on the review task — released for retry',
@@ -461,9 +465,12 @@ export async function resolveLateDelegation(
     );
   }
 
-  // Close the lease now that the side effects have landed. A lost race here (another actor stole
-  // an expired lease mid-flight) means that actor owns the outcome, so report not-resolved.
-  const finalized = await finalizePendingDelegation(pool, claimed.delegateEventId);
+  // Close the lease now that the side effects have landed, presenting the token this claim minted.
+  // A lost race here (we stalled past the lease and another actor took the handle) means that
+  // actor owns the outcome — finalizing anyway would mark THEIR unfinished work resolved.
+  const finalized = claimed.claimToken
+    ? await finalizePendingDelegation(pool, claimed.delegateEventId, claimed.claimToken)
+    : null;
   if (!finalized) {
     logger.warn(
       { delegateEventId: claimed.delegateEventId },

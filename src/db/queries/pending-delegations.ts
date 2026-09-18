@@ -9,7 +9,8 @@
 // Exactly-once rests on the conditional UPDATE, not on timing: subscriber and sweep can race
 // freely and only one of them gets the row back.
 //
-// The claim takes a LEASE ('claimed' + claimed_at) rather than marking the handle finished. The
+// The claim takes a LEASE ('claimed' + claimed_at + claim_token) rather than marking the handle
+// finished. The
 // side effects — annotating the review task, publishing the audit event — happen while the lease
 // is held, and finalizePendingDelegation closes it afterwards. A crash in between leaves an
 // expired lease that the sweep re-claims, so interrupted work is recoverable; marking the handle
@@ -36,6 +37,7 @@ interface DbPendingDelegationRow {
   review_task_id: string | null;
   status: string;
   claimed_at: Date | null;
+  claim_token: string | null;
   resolution: string | null;
   late_response_event_id: string | null;
   wake_task_event_id: string | null;
@@ -68,6 +70,8 @@ export interface PendingDelegationRow {
   status: 'pending' | 'claimed' | 'resolved';
   /** When the current actor took its lease; null while pending. */
   claimedAt: Date | null;
+  /** Proof of ownership for this lease — required to finalize or release it. */
+  claimToken: string | null;
   resolution: LateDelegationResolution | null;
   lateResponseEventId: string | null;
   wakeTaskEventId: string | null;
@@ -80,7 +84,7 @@ const COLUMNS = `
   id, delegate_event_id, delegate_conversation_id, target_agent, delegate_task,
   origin_agent_id, origin_conversation_id, origin_channel_id, origin_sender_id,
   origin_task_event_id, originator, scheduler_job_id, review_task_id,
-  status, claimed_at, resolution, late_response_event_id, wake_task_event_id,
+  status, claimed_at, claim_token, resolution, late_response_event_id, wake_task_event_id,
   created_at, expires_at, resolved_at
 `;
 
@@ -102,6 +106,7 @@ function mapRow(row: DbPendingDelegationRow): PendingDelegationRow {
     // The CHECK constraint on the column keeps this cast honest.
     status: row.status as 'pending' | 'claimed' | 'resolved',
     claimedAt: row.claimed_at,
+    claimToken: row.claim_token,
     resolution: row.resolution as LateDelegationResolution | null,
     lateResponseEventId: row.late_response_event_id,
     wakeTaskEventId: row.wake_task_event_id,
@@ -215,6 +220,7 @@ export async function claimPendingDelegation(
     `UPDATE pending_delegations
         SET status = 'claimed',
             claimed_at = now(),
+            claim_token = gen_random_uuid(),
             resolution = $2,
             late_response_event_id = COALESCE($3, late_response_event_id),
             wake_task_event_id = COALESCE($4, wake_task_event_id)
@@ -237,19 +243,25 @@ export async function claimPendingDelegation(
 }
 
 /**
- * Close out a claimed handle once its side effects have landed. Guarded on `status = 'claimed'`
- * so a lease that was stolen after expiry cannot be finalized by its previous holder.
+ * Close out a claimed handle once its side effects have landed. Returns null when the caller no
+ * longer owns the lease.
+ *
+ * The `claim_token` match is what makes that check meaningful. `status = 'claimed'` alone only
+ * proves SOMEONE holds a lease: an actor that stalled past its expiry, and whose handle was
+ * re-claimed by another, would otherwise mark the new claimant's in-flight work resolved and
+ * strand it half-done — reintroducing the loss the lease exists to prevent.
  */
 export async function finalizePendingDelegation(
   pool: Pool,
   delegateEventId: string,
+  claimToken: string,
 ): Promise<PendingDelegationRow | null> {
   const { rows } = await pool.query<DbPendingDelegationRow>(
     `UPDATE pending_delegations
         SET status = 'resolved', resolved_at = now()
-      WHERE delegate_event_id = $1 AND status = 'claimed'
+      WHERE delegate_event_id = $1 AND status = 'claimed' AND claim_token = $2
       RETURNING ${COLUMNS}`,
-    [delegateEventId],
+    [delegateEventId, claimToken],
   );
   const row = rows[0];
   return row ? mapRow(row) : null;
@@ -259,16 +271,20 @@ export async function finalizePendingDelegation(
  * Hand a claimed handle straight back for retry after a transient failure, instead of making the
  * next attempt wait out the whole lease. Clears the verdict too: the retry re-reads the review
  * task and re-classifies, which is what makes a human closing that task in the meantime win.
+ *
+ * Token-guarded for the same reason as finalize — a stale actor must not be able to yank a lease
+ * another claimant is actively working under, which would let two actors run side effects at once.
  */
 export async function releasePendingDelegationClaim(
   pool: Pool,
   delegateEventId: string,
+  claimToken: string,
 ): Promise<void> {
   await pool.query(
     `UPDATE pending_delegations
-        SET status = 'pending', claimed_at = NULL, resolution = NULL
-      WHERE delegate_event_id = $1 AND status = 'claimed'`,
-    [delegateEventId],
+        SET status = 'pending', claimed_at = NULL, claim_token = NULL, resolution = NULL
+      WHERE delegate_event_id = $1 AND status = 'claimed' AND claim_token = $2`,
+    [delegateEventId, claimToken],
   );
 }
 
