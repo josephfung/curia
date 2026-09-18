@@ -87,6 +87,27 @@ describe('ModelRouter', () => {
     };
     expect(() => new ModelRouter(config, registry, logger)).toThrow('not found in the model registry');
   });
+
+  // curia-deploy#226 repoints `standard` away from deepseek/deepseek-v4-pro.
+  // Each candidate has to construct cleanly and resolve to itself, or the
+  // deploy fails at boot rather than at call time (#1804).
+  it.each([
+    'deepseek/deepseek-v4.1-flash',
+    'deepseek/deepseek-v4-pro-0813',
+    'z-ai/glm-5.3-flash',
+    'qwen/qwen3.8-flash',
+  ])('accepts %s as the standard tier model', (model) => {
+    const config: ModelRoutingConfig = {
+      tiers: {
+        fast: { model: 'claude-haiku-4-5' },
+        standard: { model },
+        powerful: { model: 'claude-opus-4-6' },
+      },
+      default_tier: 'standard',
+    };
+    const router = new ModelRouter(config, registry, logger);
+    expect(router.resolve('standard').model).toBe(model);
+  });
 });
 
 describe('ModelRouter.getFallbackTier', () => {
