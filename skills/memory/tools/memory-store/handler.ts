@@ -13,6 +13,11 @@
 //   entity_not_found      — UUID entity no longer exists, or entity gone between resolution and write
 //   rate_limited          — write limit (50 per task) exceeded
 //   redirected_to_contact — attribute is canonical; write went to ContactService instead of KG
+//
+// When a canonical attribute cannot be redirected (lookup failed, no contact
+// record, or phone normalization failed) the KG write still proceeds, and the
+// success payload includes `canonical_redirect_skipped: true` plus a
+// `canonical_redirect_skip_reason` so the agent can tell the redirect was skipped.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { DECAY_CLASSES, SENSITIVITY_LEVELS, NODE_TYPES } from '../../../../src/memory/types.js';
@@ -28,6 +33,9 @@ const ENTITY_NODE_TYPES_SET: ReadonlySet<string> = new Set(ENTITY_NODE_TYPES);
 // UUID pattern — used to detect when the caller is passing a node ID directly.
 // Matches any UUID-shaped string (all versions/variants), not just v4.
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Why a canonical contact attribute landed in the KG instead of the contact record. */
+type CanonicalRedirectSkipReason = 'lookup_failed' | 'no_contact_record' | 'normalization_failed';
 
 export class MemoryStoreHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -214,6 +222,11 @@ export class MemoryStoreHandler implements ToolHandler {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
 
+    // Set when a canonical attribute falls through to the KG instead of the
+    // contact record. Distinguishes "no contact row" from "lookup threw" —
+    // both leave `contact` unset, but they are not the same outcome (#1772).
+    let canonicalRedirectSkipReason: CanonicalRedirectSkipReason | undefined;
+
     try {
       // --- Canonical contact attribute guard ---
       //
@@ -230,16 +243,28 @@ export class MemoryStoreHandler implements ToolHandler {
               { entityNodeId: entityNode.id, field, reason: patch.reason },
               'memory-store: canonical attribute normalization failed — falling back to KG write',
             );
+            canonicalRedirectSkipReason = 'normalization_failed';
           } else {
             // Look up the contact linked to this KG person node.
             // If the DB call fails, fall through to the normal KG write rather than
             // propagating — a transient DB error here shouldn't block the fact write.
+            // Track the throw separately from `contact === undefined`: a missing
+            // row is expected; a lookup failure is an infra error that used to
+            // look identical and silently diverge the two stores (#1772).
             let contact;
+            let lookupFailed = false;
             try {
               contact = await ctx.contactService.findContactByKgNodeId(entityNode.id);
             } catch (lookupErr) {
-              ctx.log.warn(
-                { entityNodeId: entityNode.id, field, err: lookupErr },
+              lookupFailed = true;
+              ctx.log.error(
+                {
+                  entityNodeId: entityNode.id,
+                  field,
+                  // errorName, not the raw Error: pino serializes err.message, which can
+                  // echo the caller-supplied entity name.
+                  errorName: lookupErr instanceof Error ? lookupErr.name : typeof lookupErr,
+                },
                 'memory-store: findContactByKgNodeId failed — falling back to KG write',
               );
             }
@@ -270,7 +295,7 @@ export class MemoryStoreHandler implements ToolHandler {
                 return { success: false, error: `Could not update contact field "${field}": ${msg}` };
               }
             }
-            // No contact record for this person node, or lookup failed — fall through.
+            canonicalRedirectSkipReason = lookupFailed ? 'lookup_failed' : 'no_contact_record';
           }
         }
       }
@@ -289,6 +314,16 @@ export class MemoryStoreHandler implements ToolHandler {
       );
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
+
+    // Spread onto every fact-storage success payload when a canonical write
+    // fell through to the KG. Dedicated field (not `reason`) so it coexists
+    // with conflict / auto_rejected / entity_not_found explanations.
+    const skippedRedirect = canonicalRedirectSkipReason === undefined
+      ? {}
+      : {
+          canonical_redirect_skipped: true as const,
+          canonical_redirect_skip_reason: canonicalRedirectSkipReason,
+        };
 
     try {
       // --- Fact storage ---
@@ -342,6 +377,7 @@ export class MemoryStoreHandler implements ToolHandler {
             action: result.action,
             node_id: result.nodeId,
             sensitivity: result.sensitivity,
+            ...skippedRedirect,
           },
         };
       }
@@ -358,6 +394,7 @@ export class MemoryStoreHandler implements ToolHandler {
             action: 'conflict',
             reason: result.conflict,
             existing_node_id: result.existingNodeId,
+            ...skippedRedirect,
           },
         };
       }
@@ -368,13 +405,13 @@ export class MemoryStoreHandler implements ToolHandler {
           ctx.log.warn({ entityNodeId: entityNode.id, field }, 'memory-store: entity node gone at write time — validator race');
           return {
             success: true,
-            data: { stored: false, action: 'entity_not_found', reason: result.reason },
+            data: { stored: false, action: 'entity_not_found', reason: result.reason, ...skippedRedirect },
           };
         case 'rate_limited':
           ctx.log.warn({ entityNodeId: entityNode.id, field, reason: result.reason }, 'memory-store: write rate limit reached');
           return {
             success: true,
-            data: { stored: false, action: 'rate_limited', reason: result.reason },
+            data: { stored: false, action: 'rate_limited', reason: result.reason, ...skippedRedirect },
           };
         case 'auto_rejected':
           // Auto-rejected: existing fact had higher confidence — write was dropped.
@@ -390,6 +427,7 @@ export class MemoryStoreHandler implements ToolHandler {
               action: 'auto_rejected',
               reason: result.conflict,
               existing_node_id: result.existingNodeId,
+              ...skippedRedirect,
             },
           };
         case 'auto_resolved':
