@@ -5,7 +5,7 @@
 // failures allow a bounded number of attempts before blocking.
 
 import type { AgentResponseFailureReason } from '../bus/events.js';
-import { decodeResumeToken } from './resume-token.js';
+import { decodeResumeToken, resumeTokenOriginalTaskForm } from './resume-token.js';
 import type { ExecutionLayer, InvokeOptions } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
 import type { Logger } from '../logger.js';
@@ -127,11 +127,48 @@ export function findAlreadyDeliveredKey(
   if (resumeToken === undefined || resumeToken === '') return undefined;
   // decodeResumeToken never throws — a malformed token yields null, and is handled later by the
   // handler's own validation. Here an undecodable token simply cannot prove anything.
-  const originalTask = decodeResumeToken(resumeToken)?.original_task;
-  if (typeof originalTask !== 'string' || originalTask === '') return undefined;
+  const payload = decodeResumeToken(resumeToken);
+  if (!payload) return undefined;
+
+  // A token minted for another specialist says nothing about THIS delegation. The handler rejects
+  // the mismatch with a specific error a few lines later; letting the token's task decide the guard
+  // key first would replace that error with a generic "blocked", which is both wrong and less
+  // actionable.
+  if (payload.agent !== agent) return undefined;
+
+  const originalTask = payload.original_task;
+  if (originalTask === '') return undefined;
 
   const originalKey = delegationKey(agent, originalTask);
   return guard.isAlreadyDelivered(originalKey) ? originalKey : undefined;
+}
+
+/**
+ * Record an already-delivered verdict under every key a later delegate call could present (#1799).
+ *
+ * Two keys, because `encodeResumeToken` truncates an original task over MAX_RESUME_TASK_LENGTH: a
+ * resume of a long brief carries the truncated form, whose key differs from the full brief's. The
+ * `delegate` input puts no ceiling on task length, so a brief long enough to be truncated is
+ * ordinary — and without this the block would silently not apply to it.
+ */
+export function seedAlreadyDelivered(
+  guard: DelegationGuard,
+  agent: string,
+  task: string,
+  message: string,
+): void {
+  const failure: DelegationFailureInfo = {
+    agent,
+    reason: ALREADY_DELIVERED_REASON,
+    retryable: false,
+    message,
+  };
+  guard.recordFailure(delegationKey(agent, task), failure);
+
+  const tokenForm = resumeTokenOriginalTaskForm(task);
+  if (tokenForm !== task) {
+    guard.recordFailure(delegationKey(agent, tokenForm), failure);
+  }
 }
 
 export interface DelegateFailureResult extends DelegationFailureInfo {

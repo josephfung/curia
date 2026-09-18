@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ALREADY_DELIVERED_REASON, DelegationGuard, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData } from './delegation-guard.js';
-import { encodeResumeToken } from './resume-token.js';
+import { ALREADY_DELIVERED_REASON, DelegationGuard, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, seedAlreadyDelivered } from './delegation-guard.js';
+import { encodeResumeToken, MAX_RESUME_TASK_LENGTH } from './resume-token.js';
 import pino from 'pino';
 
 describe('DelegationGuard', () => {
@@ -243,12 +243,14 @@ describe('findAlreadyDeliveredKey (#1799)', () => {
     expect(findAlreadyDeliveredKey(guard, 'calendar', DIRECTION, 'not-a-token')).toBeUndefined();
   });
 
-  it('ignores a token for a different agent', () => {
-    // The key includes the agent, so a token naming another specialist cannot match this call's
-    // delivered record.
+  it('ignores a token minted for a different agent', () => {
+    // calendar HAS a delivered record for this brief, and the token carries that same brief — but it
+    // was minted for research, so it is not valid for this call and must not decide the guard key.
+    // The handler rejects the mismatch with a specific error a few lines later; blocking here would
+    // replace that with a generic "blocked".
     const guard = guardWithDelivered(ORIGINAL);
     const token = encodeResumeToken({ agent: 'research', originalTask: ORIGINAL, context: 'so far' });
-    expect(findAlreadyDeliveredKey(guard, 'research', DIRECTION, token)).toBeUndefined();
+    expect(findAlreadyDeliveredKey(guard, 'calendar', DIRECTION, token)).toBeUndefined();
   });
 
   it('does not treat other failure reasons as delivered', () => {
@@ -261,5 +263,36 @@ describe('findAlreadyDeliveredKey (#1799)', () => {
     });
     const token = encodeResumeToken({ agent: 'calendar', originalTask: ORIGINAL, context: 'so far' });
     expect(findAlreadyDeliveredKey(guard, 'calendar', DIRECTION, token)).toBeUndefined();
+  });
+});
+
+describe('seedAlreadyDelivered — long briefs (#1799)', () => {
+  const LONG = `Detect travel since Aug 17. ${'x'.repeat(MAX_RESUME_TASK_LENGTH)}`;
+
+  it('blocks a resume of a brief long enough that the token truncates it', () => {
+    // `delegate` puts no ceiling on task length, and encodeResumeToken truncates past
+    // MAX_RESUME_TASK_LENGTH — so keying only on the full brief would leave every long delegation
+    // resumable, which is to say unguarded.
+    const guard = new DelegationGuard();
+    seedAlreadyDelivered(guard, 'calendar', LONG, 'already completed');
+
+    const token = encodeResumeToken({ agent: 'calendar', originalTask: LONG, context: 'so far' });
+    const hit = findAlreadyDeliveredKey(guard, 'calendar', 'Also include Boston', token);
+    expect(hit).toBeDefined();
+  });
+
+  it('still blocks a direct repeat of the full brief', () => {
+    const guard = new DelegationGuard();
+    seedAlreadyDelivered(guard, 'calendar', LONG, 'already completed');
+    expect(findAlreadyDeliveredKey(guard, 'calendar', LONG)).toBe(delegationKey('calendar', LONG));
+  });
+
+  it('records a single key for a brief within the token budget', () => {
+    const guard = new DelegationGuard();
+    const short = 'Detect travel since Aug 17';
+    seedAlreadyDelivered(guard, 'calendar', short, 'already completed');
+    expect(guard.isAlreadyDelivered(delegationKey('calendar', short))).toBe(true);
+    // No spurious second entry under a truncated form that cannot occur.
+    expect(guard.isAlreadyDelivered(delegationKey('calendar', `${short}…`))).toBe(false);
   });
 });

@@ -24,12 +24,24 @@ function truncateToMax(value: string, max: number): string {
   return value.length > max ? value.slice(0, max) + '…' : value;
 }
 
+/**
+ * The exact form `encodeResumeToken` will store for an original task.
+ *
+ * Exported because a caller that has to PREDICT a token's contents — the already-delivered guard
+ * key in #1799 — would otherwise re-implement this truncation and drift from it the moment either
+ * side changed. A brief over MAX_RESUME_TASK_LENGTH reaches the token truncated with an ellipsis,
+ * so a key built from the untruncated brief would never match the token's.
+ */
+export function resumeTokenOriginalTaskForm(originalTask: string): string {
+  return truncateToMax(originalTask, MAX_RESUME_TASK_LENGTH);
+}
+
 /** Build a base64 resume token, truncating over-budget fields with an ellipsis. */
 export function encodeResumeToken(args: { agent: string; originalTask: string; context: string }): string {
   const payload: ResumeTokenPayload = {
     v: RESUME_TOKEN_VERSION,
     agent: args.agent,
-    original_task: truncateToMax(args.originalTask, MAX_RESUME_TASK_LENGTH),
+    original_task: resumeTokenOriginalTaskForm(args.originalTask),
     context: truncateToMax(args.context, MAX_RESUME_CONTEXT_LENGTH),
   };
   return Buffer.from(JSON.stringify(payload)).toString('base64');

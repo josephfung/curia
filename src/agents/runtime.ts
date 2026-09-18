@@ -69,12 +69,12 @@ import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { encodeResumeToken } from './resume-token.js';
 import {
-  ALREADY_DELIVERED_REASON,
   DelegationGuard,
   delegationKey,
   escalateDelegationFailure,
   findAlreadyDeliveredKey,
   parseDelegateFailureData,
+  seedAlreadyDelivered,
   type DelegationFailureInfo,
 } from './delegation-guard.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
@@ -1110,12 +1110,14 @@ export class AgentRuntime {
     ) {
       const { agent: lateAgent, task: lateTask } = lateDelegation as Record<string, unknown>;
       if (typeof lateAgent === 'string' && lateAgent !== '' && typeof lateTask === 'string' && lateTask !== '') {
-        delegationGuard.recordFailure(delegationKey(lateAgent, lateTask), {
-          agent: lateAgent,
-          reason: ALREADY_DELIVERED_REASON,
-          retryable: false,
-          message: `'${lateAgent}' already completed this work — its result is included in your task. Do not delegate it again.`,
-        });
+        // Seeds every key a later call could present, including the truncated form a resume token
+        // would carry for a long brief.
+        seedAlreadyDelivered(
+          delegationGuard,
+          lateAgent,
+          lateTask,
+          `'${lateAgent}' already completed this work — its result is included in your task. Do not delegate it again.`,
+        );
         logger.info(
           { agentId, conversationId, targetAgent: lateAgent },
           'Seeded delegation guard from a late-delivery wake — re-delegation of this work is blocked',
