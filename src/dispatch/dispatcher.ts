@@ -9,6 +9,7 @@ import {
 } from '../contacts/authorization.js';
 import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, PrincipalEmailRef, TaskOriginator } from '../contacts/types.js';
 import { isAutomatedKind, resolvePrincipalEmail } from '../contacts/types.js';
+import { unknownSenderPolicy } from '../contacts/channel-sender-policy.js';
 import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
 import type { InboundScanner } from './inbound-scanner.js';
 import type { RateLimiter } from './rate-limiter.js';
@@ -551,8 +552,6 @@ export class Dispatcher {
             // (their normal starting state) — not when they've been explicitly blocked.
             if (senderContext.tier === 'blocked' ||
                 (senderContext.tier === 'unknown' && !isAutomatedKind(senderContext.kind))) {
-              const policy = this.channelPolicies?.[payload.channelId];
-
               if (senderContext.tier === 'blocked') {
                 this.logger.info(
                   { channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId },
@@ -578,7 +577,7 @@ export class Dispatcher {
                 return;
               }
 
-              if (policy?.unknownSender === 'ignore') {
+              if (unknownSenderPolicy(this.channelPolicies, payload.channelId) === 'ignore') {
                 this.logger.info(
                   { channel: payload.channelId, senderId: payload.senderId, contactId: senderContext.contactId },
                   'Rejected message from unknown-tier sender per ignore policy',
@@ -620,8 +619,10 @@ export class Dispatcher {
             weights: this.trustScorerWeights,
           });
 
-          const policy = this.channelPolicies?.[payload.channelId];
-          const routingDecision: UnknownSenderPolicy = policy?.unknownSender === 'ignore' ? 'ignore' : 'allow';
+          const routingDecision: UnknownSenderPolicy = unknownSenderPolicy(
+            this.channelPolicies,
+            payload.channelId,
+          );
 
           // Wrapped in its own try/catch so a publish failure cannot escape to the outer catch.
           try {
@@ -641,7 +642,7 @@ export class Dispatcher {
             return;
           }
 
-          if (policy?.unknownSender === 'ignore') {
+          if (routingDecision === 'ignore') {
             this.logger.info(
               { channel: payload.channelId, senderId: payload.senderId },
               'Rejected message from unknown sender per ignore policy',

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSilentLogger } from '../../../logger.js';
 import type { Logger } from '../../../logger.js';
 import type { ContactResolver } from '../../../contacts/contact-resolver.js';
-import type { InboundSenderContext, SenderContext } from '../../../contacts/types.js';
+import type { InboundSenderContext, SenderContext, ChannelPolicyConfig } from '../../../contacts/types.js';
 import type { BusEvent, Layer } from '../../../bus/events.js';
 import type { EventBus } from '../../../bus/bus.js';
 import type { SignalCallEvent } from '../../signal/call-types.js';
@@ -136,6 +136,7 @@ function stubLogger() {
 interface SetupOptions {
   resolveImpl?: (channel: string, senderId: string) => Promise<InboundSenderContext>;
   maxCallSeconds?: number;
+  channelPolicies?: Record<string, ChannelPolicyConfig>;
   /** Override sessionStore.create (e.g. reject, or hang forever). */
   createImpl?: (input: CreateVoiceSessionInput) => Promise<unknown>;
   /** Override voiceRuntime.startSession (e.g. hang forever to exercise the setup-window race). */
@@ -194,6 +195,7 @@ function setup(opts: SetupOptions = {}) {
     sessionStore: store,
     pulseServer: '/run/pulse/native',
     maxCallSeconds: opts.maxCallSeconds,
+    channelPolicies: opts.channelPolicies ?? {},
     createTransport,
   });
 
@@ -311,7 +313,7 @@ describe('SignalCallBridge', () => {
     expect(rpc.acceptCall).not.toHaveBeenCalled();
   });
 
-  it('admits an unknown caller with tier unknown and liveTurn false (answer-everyone)', async () => {
+  it('admits an unknown caller with tier unknown and liveTurn false (signal unknown_sender: allow)', async () => {
     const { bridge, rpc, startSession, create } = setup({
       resolveImpl: async () => unresolvedSenderContext(),
     });
@@ -329,6 +331,21 @@ describe('SignalCallBridge', () => {
     // Unknown caller's contactId is the E.164 number (not a UUID) — the
     // UUID-only principal_contact_id column must stay unset.
     expect(create.mock.calls[0]![0].principalContactId).toBeUndefined();
+  });
+
+  it('rejects an unknown caller when signal unknown_sender is ignore', async () => {
+    const { bridge, rpc } = setup({
+      resolveImpl: async () => unresolvedSenderContext(),
+      channelPolicies: {
+        signal: { trust: 'high', unknownSender: 'ignore', threaded: false },
+      },
+    });
+    bridge.start();
+    const callId = 12n;
+
+    rpc.emit('callEvent', ringingEvent(callId));
+    await vi.waitFor(() => expect(rpc.rejectCall).toHaveBeenCalledWith(callId));
+    expect(rpc.acceptCall).not.toHaveBeenCalled();
   });
 
   it('hangs up instead of starting a session when CONNECTED arrives without a pending accept', async () => {

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import pino from 'pino';
+import * as path from 'node:path';
 import type { ContactResolver } from '../../contacts/contact-resolver.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import { loadAuthConfig } from '../../contacts/config-loader.js';
 import type { ChannelPolicyConfig, SenderContext } from '../../contacts/types.js';
 import {
   buildPrincipalSenderContext,
@@ -12,6 +14,7 @@ import {
 } from './caller-context.js';
 
 const logger = pino({ level: 'silent' });
+const yamlPolicies = loadAuthConfig(path.resolve(import.meta.dirname, '../../../config')).channelPolicies;
 
 const PRINCIPAL_ID = '11111111-1111-1111-1111-111111111111';
 const PARTNER_ID = '22222222-2222-2222-2222-222222222222';
@@ -143,6 +146,7 @@ describe('resolveVoiceCallerFromToken', () => {
     const result = await resolveVoiceCallerFromToken({
       contactResolver,
       callerToken: '+15551234567',
+      channelPolicies: yamlPolicies,
     });
 
     expect(result.ok).toBe(true);
@@ -155,7 +159,26 @@ describe('resolveVoiceCallerFromToken', () => {
     expect(contactResolver.resolve).toHaveBeenCalledWith('voice', '+15551234567');
   });
 
-  it('fail-closes an unresolved token under voice unknown_sender: ignore', async () => {
+  it('fail-closes an unresolved token under the loaded voice unknown_sender: ignore', async () => {
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: false,
+        channel: 'voice',
+        senderId: 'unknown-token',
+      }),
+    } as unknown as ContactResolver;
+
+    expect(yamlPolicies.voice!.unknownSender).toBe('ignore');
+    const result = await resolveVoiceCallerFromToken({
+      contactResolver,
+      callerToken: 'unknown-token',
+      channelPolicies: yamlPolicies,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
+  });
+
+  it('admits an unresolved token when voice unknown_sender is overridden to allow', async () => {
     const contactResolver = {
       resolve: vi.fn().mockResolvedValue({
         resolved: false,
@@ -164,7 +187,8 @@ describe('resolveVoiceCallerFromToken', () => {
       }),
     } as unknown as ContactResolver;
     const channelPolicies: Record<string, ChannelPolicyConfig> = {
-      voice: { trust: 'high', unknownSender: 'ignore', threaded: false },
+      ...yamlPolicies,
+      voice: { ...yamlPolicies.voice!, unknownSender: 'allow' },
     };
 
     const result = await resolveVoiceCallerFromToken({
@@ -173,10 +197,14 @@ describe('resolveVoiceCallerFromToken', () => {
       channelPolicies,
     });
 
-    expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.caller.tier).toBe('unknown');
+      expect(result.caller.liveTurn).toBe(false);
+    }
   });
 
-  it('defaults to ignore (fail-closed) when no voice policy is configured', async () => {
+  it('admits an unresolved token when the voice policy key is missing (dispatcher default: allow)', async () => {
     const contactResolver = {
       resolve: vi.fn().mockResolvedValue({
         resolved: false,
@@ -188,9 +216,13 @@ describe('resolveVoiceCallerFromToken', () => {
     const result = await resolveVoiceCallerFromToken({
       contactResolver,
       callerToken: 'unknown-token',
+      channelPolicies: {},
     });
 
-    expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.caller.tier).toBe('unknown');
+    }
   });
 
   it('rejects a resolved but blocked-tier contact (mirrors dispatcher blocked-sender gate)', async () => {
@@ -215,6 +247,7 @@ describe('resolveVoiceCallerFromToken', () => {
     const result = await resolveVoiceCallerFromToken({
       contactResolver,
       callerToken: 'blocked-token',
+      channelPolicies: yamlPolicies,
     });
 
     expect(result).toEqual({ ok: false, reason: 'blocked' });
@@ -228,9 +261,28 @@ describe('resolveVoiceCallerFromToken', () => {
     await resolveVoiceCallerFromToken({
       contactResolver,
       callerToken: 'anything',
+      channelPolicies: yamlPolicies,
     });
 
     expect(contactResolver.resolve).toHaveBeenCalledWith('voice', 'anything');
+  });
+
+  it('rejects a resolved unknown-tier contact under YAML voice unknown_sender: ignore (dispatcher parity)', async () => {
+    const unknownTier: SenderContext = {
+      ...partnerSender(),
+      tier: 'unknown',
+    };
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue(unknownTier),
+    } as unknown as ContactResolver;
+
+    const result = await resolveVoiceCallerFromToken({
+      contactResolver,
+      callerToken: 'unknown-tier-token',
+      channelPolicies: yamlPolicies,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
   });
 });
 
@@ -243,6 +295,7 @@ describe('resolveSignalVoiceCaller (#1672)', () => {
     const result = await resolveSignalVoiceCaller({
       contactResolver,
       callerNumber: '+15196161377',
+      channelPolicies: yamlPolicies,
       logger,
     });
 
@@ -254,7 +307,7 @@ describe('resolveSignalVoiceCaller (#1672)', () => {
     expect(contactResolver.resolve).toHaveBeenCalledWith('signal', '+15196161377');
   });
 
-  it('admits an unresolved stranger as unknown tier without liveTurn (answer-everyone policy)', async () => {
+  it('admits an unresolved stranger as unknown tier without liveTurn (signal unknown_sender: allow)', async () => {
     const contactResolver = {
       resolve: vi.fn().mockResolvedValue({
         resolved: false,
@@ -263,9 +316,11 @@ describe('resolveSignalVoiceCaller (#1672)', () => {
       }),
     } as unknown as ContactResolver;
 
+    expect(yamlPolicies.signal!.unknownSender).toBe('allow');
     const result = await resolveSignalVoiceCaller({
       contactResolver,
       callerNumber: '+15550001111',
+      channelPolicies: yamlPolicies,
       logger,
     });
 
@@ -298,6 +353,7 @@ describe('resolveSignalVoiceCaller (#1672)', () => {
     const result = await resolveSignalVoiceCaller({
       contactResolver,
       callerNumber: '+15550001111',
+      channelPolicies: yamlPolicies,
       logger,
     });
 
@@ -316,10 +372,85 @@ describe('resolveSignalVoiceCaller (#1672)', () => {
     const result = await resolveSignalVoiceCaller({
       contactResolver,
       callerNumber: null,
+      channelPolicies: yamlPolicies,
       logger,
     });
 
     expect(result).toEqual({ ok: false, reason: 'no_identifier' });
     expect(contactResolver.resolve).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unresolved stranger when signal unknown_sender is overridden to ignore', async () => {
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue({
+        resolved: false,
+        channel: 'signal',
+        senderId: '+15550001111',
+      }),
+    } as unknown as ContactResolver;
+    const channelPolicies: Record<string, ChannelPolicyConfig> = {
+      ...yamlPolicies,
+      signal: { ...yamlPolicies.signal!, unknownSender: 'ignore' },
+    };
+
+    const result = await resolveSignalVoiceCaller({
+      contactResolver,
+      callerNumber: '+15550001111',
+      channelPolicies,
+      logger,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
+  });
+
+  it('rejects a resolved unknown-tier contact when signal unknown_sender is ignore (dispatcher parity)', async () => {
+    const unknownTier: SenderContext = {
+      ...partnerSender(),
+      tier: 'unknown',
+    };
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue(unknownTier),
+    } as unknown as ContactResolver;
+    const channelPolicies: Record<string, ChannelPolicyConfig> = {
+      ...yamlPolicies,
+      signal: { ...yamlPolicies.signal!, unknownSender: 'ignore' },
+    };
+
+    const result = await resolveSignalVoiceCaller({
+      contactResolver,
+      callerNumber: '+15550001111',
+      channelPolicies,
+      logger,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'unknown_sender' });
+  });
+
+  it('admits a resolved unknown-tier automated contact even when signal unknown_sender is ignore', async () => {
+    const automated: SenderContext = {
+      ...partnerSender(),
+      tier: 'unknown',
+      kind: 'automated',
+    };
+    const contactResolver = {
+      resolve: vi.fn().mockResolvedValue(automated),
+    } as unknown as ContactResolver;
+    const channelPolicies: Record<string, ChannelPolicyConfig> = {
+      ...yamlPolicies,
+      signal: { ...yamlPolicies.signal!, unknownSender: 'ignore' },
+    };
+
+    const result = await resolveSignalVoiceCaller({
+      contactResolver,
+      callerNumber: '+15550001111',
+      channelPolicies,
+      logger,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.caller.tier).toBe('unknown');
+      expect(result.caller.liveTurn).toBe(false);
+    }
   });
 });
