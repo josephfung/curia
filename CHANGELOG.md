@@ -33,6 +33,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`calendar-holds-sweep`** — rejects a non-UUID `contactId` instead of passing it to Postgres; skill v0.1.1. (#1800)
 - **Stale delegation reviews** — the CEO backlog row now says whether the specialist delivered, and closes when it did. (#1799)
 - **`audit_log.parent_event_id`** — indexed, so causal-chain reads stop scanning the whole table. (#1799)
+- **Interval config keys** — four timer intervals now rejected above Node's 24.9-day ceiling instead of overflowing. (#1807)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 
