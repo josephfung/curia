@@ -196,7 +196,7 @@ export type InboundSenderContext = SenderContext | UnknownSenderContext;
  * on every task — not just principal-originated ones. Survives task delegation
  * when the creating code copies originator from the parent task.
  *
- * See docs/wip/2026-05-10-principal-identity-design.md
+ * See docs/specs/09-contacts-and-identity.md § Principal Contact Resolution
  */
 export interface TaskOriginator {
   /** Contact ID of the person or agent that started this chain */
@@ -264,7 +264,8 @@ export const TRUST_RANK: Record<TrustLevel, number> = {
  * - 'trusted'   — CEO granted elevated trust (was: trust_level='high').
  * - 'principal' — the human CEO Curia serves (was: system_role='principal' / trust_level='ceo').
  *
- * Added in migration 055. See docs/wip/ for the contacts redesign design memo.
+ * Added in migration 055. See docs/specs/09-contacts-and-identity.md § Data Model → contacts
+ * for the authoritative tier table.
  */
 export type ContactTier = 'blocked' | 'unknown' | 'known' | 'trusted' | 'principal';
 

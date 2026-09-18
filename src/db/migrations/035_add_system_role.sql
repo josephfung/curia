@@ -2,7 +2,7 @@
 --
 -- Adds a system_role column to contacts to separate system designation
 -- ('principal', 'agent') from the free-text descriptive role field.
--- See design doc: docs/wip/2026-05-10-principal-identity-design.md
+-- See docs/specs/09-contacts-and-identity.md § Principal Contact Resolution
 
 -- Add column with check constraint
 ALTER TABLE contacts

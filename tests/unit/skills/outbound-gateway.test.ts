@@ -2701,7 +2701,9 @@ describe('isSystemNotification option on send()', () => {
 // ---------------------------------------------------------------------------
 // CEO recipient bypass on send() — agent-to-principal communication bypasses
 // the autonomy gate. All other safety checks (blocked-contact, content filter)
-// still run. See design: docs/wip/2026-05-05-ceo-gate-bypass-design.md
+// still run. See OutboundGateway.isPrincipalRecipient() for the carve-out, and
+// docs/adr/035-channel-owned-outbound-recipient-projection.md for how recipients
+// are projected per channel.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

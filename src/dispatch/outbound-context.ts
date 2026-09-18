@@ -5,7 +5,7 @@
 // injection; send skills use a ScopedOutboundContext (narrow: register + release
 // only) via the outboundContext capability.
 //
-// See docs/wip/2026-05-16-context-bridging-v2-design.md §2a.
+// See docs/adr/019-delegation-aware-outbound-context.md.
 
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';

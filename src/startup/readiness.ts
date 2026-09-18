@@ -4,7 +4,7 @@
 // runs all registered checks. If any fail, the system enters setup-required
 // mode and refuses to accept inbound messages.
 //
-// See docs/wip/2026-05-10-principal-identity-design.md
+// See docs/specs/09-contacts-and-identity.md § Principal Contact Resolution
 
 export interface ReadinessCheck {
   /** Short name for logging (e.g. 'principal-contact') */

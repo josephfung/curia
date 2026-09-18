@@ -5,7 +5,7 @@
 // against remaining budget — if it fits, include and deduct; if not,
 // drop it and move on. System prompt is always included.
 //
-// See: docs/wip/2026-05-12-context-budget-design.md
+// See: docs/specs/01-memory-system.md § Context Budget
 
 import type { Message } from './provider.js';
 import { estimateMessagesTokens } from './token-estimator.js';

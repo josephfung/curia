@@ -8,9 +8,8 @@ Status: Accepted
 Phase 2 (#1489, [ADR-031](031-tools-vs-skills-vocabulary.md)) introduced the skill
 (bundle) abstraction — `SKILL.md` + nested `tools/` — and shipped three exemplars
 (`calendar`, `tasks`, `documents`). The Phase 2 follow-up (#1494) bundles the remaining
-~98 flat tools into their natural clusters. Two of the design doc's §10 open questions
-([`docs/wip/2026-07-16-tools-skills-architecture-design.md`](../wip/2026-07-16-tools-skills-architecture-design.md))
-block that work and must be settled first.
+~98 flat tools into their natural clusters. Two open questions left over from that
+design block that work and must be settled first.
 
 1. **What does a pin reference?** Once tools live inside bundles, an agent that needs
    only *one* low-risk member of a bundle would be forced to pin the whole bundle —
@@ -18,11 +17,11 @@ block that work and must be settled first.
    `scheduler-report` is pinned by 7 agents while `scheduler-create` is pinned by 2; the
    custom `T2125-expense-tracker` agent pins `ceo-inbox-search` + `ceo-inbox-download-attachment`
    but none of the ceo-inbox drafting/archive tools. Forcing a bundle pin on these agents
-   violates the §8 invariant — *"an imported skill cannot expand the activating agent's
-   authority"* — generalized to any bundle.
+   violates the design's invariant — *"an imported skill cannot expand the activating
+   agent's authority"* — generalized to any bundle.
 
-2. **Does an MCP server present as a skill?** Design §3 frames an MCP server as a bundle
-   subtype and §4 says discovery *"spans tools and skills."* Whether a server projects a
+2. **Does an MCP server present as a skill?** The design framed an MCP server as a bundle
+   subtype, with discovery *"spanning tools and skills."* Whether a server projects a
    skill into `SkillRegistry` (unified discovery + single-name pin) or stays tools-only was
    left open. Today agents pin MCP tools individually — the coordinator names ~24
    `google-workspace` tools; the `T2125-expense-tracker` and `essay-editor` custom agents
