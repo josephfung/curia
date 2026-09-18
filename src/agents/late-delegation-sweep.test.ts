@@ -12,6 +12,7 @@ import { EventBus } from '../bus/bus.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { AgentTaskEvent, DelegationLateResolvedEvent } from '../bus/events.js';
 import { LateDelegationSweep } from './late-delegation-sweep.js';
+import { deterministicWakeEventId } from './late-delegation.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -189,6 +190,23 @@ function collectWakes(bus: EventBus): AgentTaskEvent[] {
   const events: AgentTaskEvent[] = [];
   bus.subscribe('agent.task', 'system', (event) => { events.push(event as AgentTaskEvent); });
   return events;
+}
+
+/**
+ * A bus whose write-ahead hook enforces event-id uniqueness, the way production's does: the audit
+ * logger inserts into `audit_log` (PK on id) BEFORE any subscriber is called, so a duplicate id
+ * rejects the publish and reaches no subscriber. The late-wake fence depends on exactly that, so a
+ * bus without it would let these tests pass while production behaved differently — or vice versa.
+ */
+function busWithAuditFence(seen: Set<string> = new Set()): EventBus {
+  return new EventBus(logger, async (event) => {
+    if (seen.has(event.id)) {
+      const err = new Error('duplicate key value violates unique constraint "audit_log_pkey"') as Error & { code?: string };
+      err.code = '23505';
+      throw err;
+    }
+    seen.add(event.id);
+  });
 }
 
 const NOW = new Date('2026-09-14T12:30:00.000Z');
@@ -422,16 +440,19 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     expect(resolved[0]!.payload.reviewTaskOutcome).toBe('closed');
   });
 
-  it('does not publish a second wake for a handle that already has one', async () => {
-    // A previous attempt woke the originator and died before finalizing. Re-waking would duplicate
-    // the follow-up work, so only the bookkeeping is finished.
+  it('delivers no second wake when an earlier attempt already published one', async () => {
+    // The dangerous case the derived id exists for: the first wake is still being processed (the
+    // woken turn runs inside publish(), which can outlive the 120s lease), so a sweep re-claims the
+    // row and tries again. Its attempt carries the SAME derived id, so the write-ahead audit insert
+    // rejects it and no subscriber — hence no second agent turn — ever sees it.
+    const alreadySent = deterministicWakeEventId('delegate-evt-1');
     const { pool, finalized } = fakePool({
       open: [handleRow({
         status: 'claimed',
         claimed_at: new Date('2026-09-14T12:00:00.000Z'),
         claim_token: 'stale-token',
         resolution: 'delivered',
-        wake_task_event_id: 'wake-already-sent',
+        wake_task_event_id: alreadySent,
       })],
       auditHits: {
         'delegate-evt-1': {
@@ -441,14 +462,44 @@ describe('LateDelegationSweep.tick (#1799)', () => {
         },
       },
     });
-    const bus = new EventBus(logger);
+    // Seed the fence with the id the first attempt used.
+    const bus = busWithAuditFence(new Set([alreadySent]));
     const wakes = collectWakes(bus);
 
     const result = await makeSweep(pool, bus).tick(NOW);
 
     expect(wakes).toHaveLength(0);
+    // And the handle still closes, so the row does not come back a third time.
     expect(finalized).toHaveLength(1);
     expect(result.recovered).toBe(1);
+  });
+
+  it('derives the wake id from the handle so two attempts cannot both deliver', async () => {
+    const seen = new Set<string>();
+    const auditHits = {
+      'delegate-evt-1': {
+        id: 'response-evt-1',
+        payload: { agentId: 'calendar', content: 'Travel detected: one trip.' },
+        timestamp: '2026-09-14T12:06:43.000Z',
+      },
+    };
+
+    // First pass delivers.
+    const first = fakePool({ open: [handleRow()], auditHits });
+    const bus = busWithAuditFence(seen);
+    const wakes = collectWakes(bus);
+    await makeSweep(first.pool, bus).tick(NOW);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]!.id).toBe(deterministicWakeEventId('delegate-evt-1'));
+
+    // A second actor sees the row still open (its lease expired mid-turn) and tries again on the
+    // same bus. Same id → fenced.
+    const second = fakePool({
+      open: [handleRow({ status: 'claimed', claimed_at: new Date('2026-09-14T12:00:00.000Z'), claim_token: 't', resolution: 'delivered' })],
+      auditHits,
+    });
+    await makeSweep(second.pool, bus).tick(NOW);
+    expect(wakes).toHaveLength(1);
   });
 
   it('re-claims a handle whose lease was abandoned mid-flight', async () => {
@@ -480,10 +531,9 @@ describe('LateDelegationSweep.tick (#1799)', () => {
   });
 
   it('closes the handle when the wake went out but recording its id failed', async () => {
-    // The dangerous shape: publish succeeds, the persist fails. Releasing the lease here would
-    // send the row back to pending with wake_task_event_id still NULL, and the duplicate guard
-    // reads that same column — so the sweep would wake the originating agent a SECOND time and
-    // the follow-up would run twice. The handle must close instead.
+    // Recording the id is a best-effort record, not the guarantee — the derived id is. A failed
+    // write must not release the lease (that would re-deliver) nor abort the pass (that would
+    // leave the row for another actor): the wake went out, so the handle closes.
     const { pool, finalized, released, wakeIdsRecorded } = fakePool({
       open: [handleRow()],
       auditHits: {

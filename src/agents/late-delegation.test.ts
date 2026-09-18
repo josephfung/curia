@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import {
   abandonedClassification,
   buildLateResultBrief,
+  deterministicWakeEventId,
   capResult,
   classifyLateResponse,
   computeLateDeliveryExpiry,
@@ -318,6 +319,25 @@ describe('renderDeliveredNote (#1799)', () => {
     expect(note).toContain('scheduler:cff7f3bb-job:run-1');
     // The row existed to ask "did it deliver?" — the closing note has to answer that.
     expect(note).toMatch(/closing this review/i);
+  });
+});
+
+describe('deterministicWakeEventId (#1799)', () => {
+  it('is stable for a given delegate event id', () => {
+    const a = deterministicWakeEventId('delegate-evt-1');
+    const b = deterministicWakeEventId('delegate-evt-1');
+    expect(a).toBe(b);
+  });
+
+  it('differs per delegation', () => {
+    expect(deterministicWakeEventId('delegate-evt-1'))
+      .not.toBe(deterministicWakeEventId('delegate-evt-2'));
+  });
+
+  it('is UUID-shaped, because audit_log.id is a uuid column', () => {
+    // A non-UUID id would be rejected by the very insert the duplicate fence relies on.
+    expect(deterministicWakeEventId('delegate-evt-1'))
+      .toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 });
 

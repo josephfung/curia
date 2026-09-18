@@ -73,6 +73,7 @@ import {
   DelegationGuard,
   delegationKey,
   escalateDelegationFailure,
+  findAlreadyDeliveredKey,
   parseDelegateFailureData,
   type DelegationFailureInfo,
 } from './delegation-guard.js';
@@ -1511,13 +1512,27 @@ export class AgentRuntime {
               // A resume continuation is normally exempt (#1171): it carries new CEO direction, so
               // it is not a repeat of the same request. `already_delivered` is the exception — that
               // work is finished, not paused, so resuming it would re-run the side effects the late
-              // delivery exists to avoid repeating (#1799).
-              const exemptByResumeToken = hasResumeToken && !delegationGuard.isAlreadyDelivered(dKey);
-              if (!exemptByResumeToken && !delegationGuard.canAttempt(dKey)) {
+              // delivery exists to avoid repeating (#1799). The delivered record may be keyed on the
+              // token's original_task rather than this call's task, which is why the key is resolved
+              // rather than assumed.
+              const deliveredKey = findAlreadyDeliveredKey(
+                delegationGuard,
+                delegateAgent,
+                delegateTask,
+                hasResumeToken ? (delegateInput['resume_token'] as string) : undefined,
+              );
+              const blockKey = deliveredKey
+                ?? (!hasResumeToken && !delegationGuard.canAttempt(dKey) ? dKey : undefined);
+              if (blockKey !== undefined) {
                 delegateBlocked = true;
-                const prior = delegationGuard.getFailure(dKey);
+                const prior = delegationGuard.getFailure(blockKey);
                 logger.warn(
-                  { agentId, targetAgent: delegateAgent, reason: prior?.reason },
+                  {
+                    agentId,
+                    targetAgent: delegateAgent,
+                    reason: prior?.reason,
+                    viaResumeToken: hasResumeToken,
+                  },
                   'Blocked identical re-delegation after specialist failure',
                 );
                 result = {
@@ -1530,7 +1545,7 @@ export class AgentRuntime {
                     retryable: false,
                     message: prior?.message
                       ?? `Re-delegation to '${delegateAgent}' is blocked for this task.`,
-                    escalated: delegationGuard.isEscalated(dKey),
+                    escalated: delegationGuard.isEscalated(blockKey),
                   },
                 };
               } else {
