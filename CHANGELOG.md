@@ -34,6 +34,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Stale delegation reviews** — the CEO backlog row now says whether the specialist delivered, and closes when it did. (#1799)
 - **`audit_log.parent_event_id`** — indexed, so causal-chain reads stop scanning the whole table. (#1799)
 - **Interval config keys** — four timer intervals now rejected above Node's 24.9-day ceiling instead of overflowing. (#1807)
+- **`audit_log` indexes** — a retried migration now rebuilds an index left invalid by a failed build. (#1808)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 
