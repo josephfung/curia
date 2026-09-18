@@ -17,6 +17,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Late specialist results** — a timed-out delegation now hands the specialist's late result back so follow-up work completes. (#1799)
 - **`delegation.timed_out` / `delegation.late_resolved` bus events (public API)** — audit trail for an abandoned delegation's fate. (#1799)
+- **Standard-tier model candidates** — four OpenRouter models registered so curia-deploy#226 can repoint the tier. (#1804)
+- **Cache-read pricing** — recorded for every OpenRouter model that publishes one, or the omission explained. (#1804)
 
 ### Changed
 
@@ -34,6 +36,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Stale delegation reviews** — the CEO backlog row now says whether the specialist delivered, and closes when it did. (#1799)
 - **`audit_log.parent_event_id`** — indexed, so causal-chain reads stop scanning the whole table. (#1799)
 - **Interval config keys** — four timer intervals now rejected above Node's 24.9-day ceiling instead of overflowing. (#1807)
+- **`deepseek/deepseek-v4-pro` pricing** — expired promotional rate corrected; cost estimates were understated ~3.7x. (#1804)
+- **Prefix-matched models** — exact keys now win, and a prefix hit warns instead of silently borrowing pricing. (#1804)
 - **`audit_log` indexes** — a retried migration now rebuilds an index left invalid by a failed build. (#1808)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
