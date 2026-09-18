@@ -69,12 +69,6 @@ Two principles shaped the resumable model:
   becomes a real child row (dispatchable, blockable, schedulable). A high-count homogeneous
   step is one leaf with a cursor. One progress notion, one resume loop.
 
-**Companion design docs** (the dated record of how this was designed and sequenced):
-[2026-06-01-tasks-and-backlog-design.md](../wip/2026-06-01-tasks-and-backlog-design.md),
-[2026-06-03-digest-backlog-sections-design.md](../wip/2026-06-03-digest-backlog-sections-design.md),
-[2026-06-04-meeting-debrief-tasks-migration-design.md](../wip/2026-06-04-meeting-debrief-tasks-migration-design.md),
-[2026-06-04-task-execution-heartbeat-design.md](../wip/2026-06-04-task-execution-heartbeat-design.md).
-
 **Companion spec & ADR:** [spec 20 — Agent Document Workspace (OKF)](20-agent-document-workspace.md),
 [ADR-024 — `plan` writes rows directly](../adr/024-plan-rows-direct.md). Resumable-execution
 tracking epic: #1150.

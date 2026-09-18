@@ -9,9 +9,7 @@ Curia’s extension atoms (`calendar-create-event`, etc.) have always been calle
 **skills**. Anthropic’s Agent Skills format uses **skill** for a *collection*
 (instructions + optional tools/scripts). Curia also already fakes a collection
 level three times (`enable_task_management`, MCP servers, and — without a rename —
-imported Claude skills). Design:
-[`docs/wip/2026-07-16-tools-skills-architecture-design.md`](../wip/2026-07-16-tools-skills-architecture-design.md);
-epic #1436; Phase 1 tracking #1485.
+imported Claude skills). Epic #1436; Phase 1 tracking #1485.
 
 Two questions must be settled before later phases:
 

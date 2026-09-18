@@ -258,7 +258,7 @@ Key constraints:
 
 See `src/autonomy/scoring-pass.ts`, `src/autonomy/action-log-repo.ts`, and ADR-018.
 
-The `autonomy_history` table from Phase 1 is the exact foundation Phase 3 writes to. Phase 3 gets its own design doc when the time comes. See `docs/wip/2026-04-03-autonomy-engine.md` for the detailed Phase 3 roadmap.
+The `autonomy_history` table from Phase 1 is the exact foundation Phase 3 writes to. Phase 3 gets its own design doc when the time comes.
 
 ### Shadow-draft competence (counterfactual input, ADR-029)
 

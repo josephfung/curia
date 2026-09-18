@@ -3,7 +3,8 @@
 Curia can load an **unmodified** [Anthropic Agent Skill](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) — a folder with `SKILL.md` plus optional `references/` / `assets/` — as a Curia skill bundle. No `tool.json`, no Curia-specific manifest, and no scripts executed (script sandbox is Phase 4).
 
 This is Phase 3 of the tools/skills rework (#1490). Design:
-[`docs/wip/2026-07-16-tools-skills-architecture-design.md`](../wip/2026-07-16-tools-skills-architecture-design.md).
+[ADR-031 — tools vs skills vocabulary](../adr/031-tools-vs-skills-vocabulary.md),
+[ADR-032 — polymorphic pins and MCP-as-skill](../adr/032-polymorphic-pins-and-mcp-as-skill.md).
 
 ## What you get
 
@@ -66,7 +67,7 @@ The skill still loads. Do not expect `scripts/*.py` (or similar) to run until th
 
 ## Trust model
 
-Anyone who can place files in the container and restart it already has full trust — the same bar as today's custom skills. There is no signing gate, no console upload UI, and no runtime self-install. See design §8.
+Anyone who can place files in the container and restart it already has full trust — the same bar as today's custom skills. There is no signing gate, no console upload UI, and no runtime self-install.
 
 ## Related
 

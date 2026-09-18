@@ -1,6 +1,7 @@
 // skill-activation.ts — Phase 3a (#1495) unified discovery + activation helpers.
 //
-// Design §6 (docs/wip/2026-07-16-tools-skills-architecture-design.md):
+// Activation tiers (docs/adr/031-tools-vs-skills-vocabulary.md,
+// docs/adr/032-polymorphic-pins-and-mcp-as-skill.md):
 //   Tier 0 — pinned (eager at bootstrap; unchanged)
 //   Tier 1 — task-active (durable progress.activeSkills; re-loaded on wake)
 //   Tier 2 — discovery (toolSearch kind:'skill' when allow_discovery)

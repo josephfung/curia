@@ -5,7 +5,8 @@
 // This helper takes only a display name and creates no channel identity. It exists so
 // the wizard's Step 1 "About you" can create the principal as a named entity before any
 // channel identity is bound. Channel identities (email, Signal) are added later via
-// per-channel verification flows — see docs/wip/2026-05-10-principal-identity-design.md.
+// per-channel verification flows — see docs/specs/09-contacts-and-identity.md
+// § Principal Contact Resolution.
 // Since #1049 this is the *only* principal-creation path (the env-var-driven CEO bootstrap
 // was removed); startup resolution is read-only via findContactBySystemRole('principal').
 //

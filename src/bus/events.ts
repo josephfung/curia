@@ -572,7 +572,7 @@ interface ModelFallbackEngagedPayload {
 // for each LLM call. Reports per-tier token estimates, budget utilization, and
 // which tiers were dropped. Co-located with llm.call events in audit_log for
 // correlating budget utilization with actual token usage.
-// Design: docs/wip/2026-05-12-context-budget-design.md
+// Design: docs/specs/01-memory-system.md § Context Budget
 interface ContextBudgetPayload {
   agentId: string;
   conversationId: string;

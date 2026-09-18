@@ -39,6 +39,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`deepseek/deepseek-v4-pro` pricing** — expired promotional rate corrected; cost estimates were understated ~3.7x. (#1804)
 - **Prefix-matched models** — exact keys now win, and a prefix hit warns instead of silently borrowing pricing. (#1804)
 - **`audit_log` indexes** — a retried migration now rebuilds an index left invalid by a failed build. (#1808)
+- **Dangling `docs/wip/` references** — 26 citations of pruned design docs repointed at their spec or ADR. (#1483)
+- **WIP reference guard** — a test now fails when a durable file cites a `docs/wip/` doc that does not exist. (#1483)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 

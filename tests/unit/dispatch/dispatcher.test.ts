@@ -1307,7 +1307,7 @@ describe('originator metadata stamping', () => {
   // The dispatcher stamps a TaskOriginator object on every agent.task event,
   // derived from the contact resolver result — not from channel-supplied metadata.
   // Legacy ceoInitiated: boolean has been replaced by originator.systemRole.
-  // See docs/wip/2026-05-10-principal-identity-design.md
+  // See docs/specs/09-contacts-and-identity.md § Principal Contact Resolution
 
   it('stamps originator with systemRole=principal on agent.task when sender has system_role=principal', async () => {
     const logger = createLogger('error');

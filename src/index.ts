@@ -1550,7 +1550,7 @@ async function main(): Promise<void> {
 
   // --- Startup readiness checks ---
   // All checks must pass before the system accepts inbound messages.
-  // See docs/wip/2026-05-10-principal-identity-design.md
+  // See docs/specs/09-contacts-and-identity.md § Principal Contact Resolution
   const readinessChecks = [
     {
       name: 'principal-contact',
@@ -2759,7 +2759,7 @@ async function main(): Promise<void> {
   }
   // Autonomous task execution: the deterministic hourly heartbeat that wakes idle/stale
   // tasks. Reads the tasks table, writes one-shot scheduled_jobs rows; the scheduler
-  // dispatches them. See docs/wip/2026-06-04-task-execution-heartbeat-design.md §3.
+  // dispatches them. See docs/specs/19-tasks-and-backlog.md §5 The BacklogHeartbeat.
   const tasksConfig = resolveTasksConfig(yamlConfig.tasks);
   const backlogHeartbeat = new BacklogHeartbeat({
     pool,

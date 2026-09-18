@@ -4,7 +4,7 @@
 // Centralizes all principal-related queries so authorization logic
 // lives in one place without over-abstracting into a service class.
 //
-// See docs/wip/2026-05-10-principal-identity-design.md
+// See docs/specs/09-contacts-and-identity.md § Principal Contact Resolution
 
 import type { ContactTier, SystemRole, TaskOriginator } from './types.js';
 

@@ -4,10 +4,6 @@
 
 > **TODO:** Keep this spec aligned with production behaviour as Stage 2 evolves
 > (tone/persona guardrails, operator override guidance, and caller-verification notes).
-> Detailed implementation notes are in `docs/wip/`:
-> - `docs/wip/2026-03-27-outbound-gateway-design.md`
-> - `docs/wip/2026-03-27-outbound-content-filter-design.md`
-> - `docs/wip/2026-03-28-caller-verification-design.md`
 
 ---
 

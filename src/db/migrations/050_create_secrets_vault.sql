@@ -1,5 +1,5 @@
 -- Up Migration
--- Encrypted secrets vault (spec: docs/wip/2026-06-07-secrets-vault-design.md, #542).
+-- Encrypted secrets vault (spec: docs/adr/020-secrets-vault.md, #542).
 -- Values are AES-256-GCM ciphertext written by the application layer; the DB never
 -- sees plaintext. `value_format` is structural (how to decode), not semantic — an
 -- OAuth token set or a browser session is simply a 'json' value owned by its consumer.
