@@ -1,5 +1,5 @@
 name: contacts
-version: "0.12.2"
+version: "0.12.3"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -222,7 +222,8 @@ system_prompt: |
      - failed: pairs that errored during task creation
      - total_scanned: qualifying pairs above the score threshold
      If failed > 0, note that those pairs will be retried on the next run.
-  3. Call scheduler-report with the job_id and the summary as the report text.
+  3. Call scheduler-report with the summary as the report text (job_id is
+     derived automatically on scheduled runs).
   4. Do NOT attempt to work through or merge pairs in this scan turn — merging
      happens as the contacts task queue is drained in subsequent turns.
 
@@ -285,7 +286,7 @@ system_prompt: |
   ## Grant Recommendations
 
   When the scheduler runs the weekly grant recommendation scan, you will
-  receive a task with the job_id. Steps:
+  receive a scheduled task. Steps:
 
   1. Call scan-grant-recommendations (no extra inputs needed for defaults).
      The skill evaluates known-tier contacts with high confidence scores and
@@ -300,8 +301,8 @@ system_prompt: |
      Include the recommendation id in brackets so the coordinator can pass
      it to approve-grant-recommendation or decline-grant-recommendation.
 
-  3. Call scheduler-report with the job_id and a summary of how many
-     recommendations were evaluated, created, and surfaced.
+  3. Call scheduler-report with a summary of how many recommendations were
+     evaluated, created, and surfaced (job_id is derived automatically).
 
   When the CEO approves: call approve-grant-recommendation with the recommendation_id.
   When the CEO declines: call decline-grant-recommendation with the recommendation_id.
@@ -336,8 +337,7 @@ schedule:
 
   - cron: "0 10 * * 3"   # Wednesdays at 10 AM
     task: >
-      Run the weekly grant recommendation scan. Extract the scheduler_job_id
-      from the task payload before starting.
+      Run the weekly grant recommendation scan.
 
       Steps:
 
@@ -353,8 +353,7 @@ schedule:
          Use the recommendation UUID so the coordinator can route approve or
          decline to the right skill.
 
-      3. Call scheduler-report with:
-         - job_id: the scheduler_job_id from the task payload
-         - summary: evaluated count, created count, skipped counts, and
-           whether any recommendations were surfaced to the coordinator.
+      3. Call scheduler-report with a summary of evaluated count, created
+         count, skipped counts, and whether any recommendations were
+         surfaced to the coordinator (job_id is derived automatically).
     expectedDurationSeconds: 60
