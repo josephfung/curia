@@ -181,20 +181,28 @@ Controls TTL (time-to-live) for outbound context entries — the records that le
 
 ```yaml
 contextBridge:
-  defaultExpiryHours: 6     # TTL for auto-registered entries (no explicit context_bridge param). Default: 6.
+  defaultExpiryHours: 6     # TTL for auto-registered entries on channels with no per-channel default. Default: 6.
   explicitExpiryHours: 24   # TTL for entries with explicit context_bridge delegation metadata. Default: 24.
+  channelDefaultExpiryHours: # Per-channel auto-registration TTL, keyed by channel id.
+    email: 72                # Built-in default for email. Default: {email: 72}.
 ```
 
-Every outbound message (Signal, email) automatically registers a context entry so that if the recipient replies, the coordinator knows what they're replying to. Entries registered without explicit `context_bridge` metadata get the shorter `defaultExpiryHours` TTL. Entries with delegation hints and expected-reply metadata get the longer `explicitExpiryHours` TTL.
+Every outbound message (Signal, email, Slack, SMS) automatically registers a context entry so that if the recipient replies, the coordinator knows what they're replying to. Entries registered without explicit `context_bridge` metadata get the auto-registration TTL. Entries with delegation hints and expected-reply metadata get the longer `explicitExpiryHours` TTL.
 
-When a caller passes `expires_in_hours` inside the `context_bridge` JSON param, it overrides `explicitExpiryHours` for that individual entry.
+**The auto-registration TTL is per channel**, because reply rhythms differ by channel. A channel listed in `channelDefaultExpiryHours` uses its own value; every other channel uses `defaultExpiryHours`. Email ships at 72h: its replies run on business days, so a 6h window expired before a correspondent who answered the next morning could land — their reply then arrived as an unrecognised cold inbound (#1816). Synchronous chat channels keep the 6h window.
+
+Note the asymmetry: raising `defaultExpiryHours` does **not** change a channel that has its own entry. To change email, set `channelDefaultExpiryHours.email`.
+
+An explicit `context_bridge` entry never expires sooner than a bare one on the same channel — `explicitExpiryHours` is raised to the channel default when that is longer. When a caller passes `expires_in_hours` inside the `context_bridge` JSON param, that wins outright for that individual entry, including when it is shorter than the channel default.
+
+The resolved TTL and the rule that produced it (`ttlSource`: `caller` or `channel-default`) are logged at `debug` on every registration.
 
 Expired entries are cleaned up automatically by the background scheduler. The coordinator can also release entries manually via the `context-bridge-release` skill.
 
 **Tuning guidance:**
-- Raise `defaultExpiryHours` if users commonly reply to proactive notifications after more than 6 hours.
-- Lower it if the `[ACTIVE OUTBOUND CONTEXT]` block is accumulating too many stale entries and causing noise.
-- `explicitExpiryHours` should be higher because explicit entries carry delegation metadata that's expensive to re-derive.
+- Add a channel to `channelDefaultExpiryHours` if its recipients commonly reply later than `defaultExpiryHours` allows.
+- Lower a value if the `[ACTIVE OUTBOUND CONTEXT]` block is accumulating too many stale entries and causing noise.
+- `explicitExpiryHours` should be higher than `defaultExpiryHours` because explicit entries carry delegation metadata that's expensive to re-derive.
 
 ---
 

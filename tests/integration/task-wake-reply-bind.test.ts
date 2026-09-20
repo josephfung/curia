@@ -97,6 +97,7 @@ describeIf('task-wake reply binding (#1299)', () => {
       clearBySubjects: (subjects: string[]) => outboundContext.clearBySubjects(subjects),
       defaultExpiryHours: outboundContext.defaultExpiryHours,
       explicitExpiryHours: outboundContext.explicitExpiryHours,
+      defaultExpiryHoursFor: (channelId: string) => outboundContext.defaultExpiryHoursFor(channelId),
     };
 
     await registerOutboundContext(scopedOutbound, undefined, {
@@ -227,6 +228,7 @@ describeIf('task-wake reply binding (#1299)', () => {
       clearBySubjects: (subjects: string[]) => outboundContext.clearBySubjects(subjects),
       defaultExpiryHours: outboundContext.defaultExpiryHours,
       explicitExpiryHours: outboundContext.explicitExpiryHours,
+      defaultExpiryHoursFor: (channelId: string) => outboundContext.defaultExpiryHoursFor(channelId),
     });
 
     await registerOutboundContext(makeScoped(convA), undefined, {

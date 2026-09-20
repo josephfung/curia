@@ -6,6 +6,10 @@ import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
 
+// Mirrors the real service's channel-aware defaults (#1816) so these tests
+// exercise the same resolution the dispatcher sees.
+const CHANNEL_TTL: Record<string, number> = { email: 72 };
+
 function makeCap(overrides?: Partial<OutboundContextCapability>): OutboundContextCapability {
   return {
     register: vi.fn().mockResolvedValue('entry-id'),
@@ -15,6 +19,7 @@ function makeCap(overrides?: Partial<OutboundContextCapability>): OutboundContex
     clearBySubjects: vi.fn().mockResolvedValue({ totalReleased: 0, perSubject: [], unmatched: [] }),
     defaultExpiryHours: 6,
     explicitExpiryHours: 24,
+    defaultExpiryHoursFor: (channelId: string) => CHANNEL_TTL[channelId] ?? 6,
     ...overrides,
   };
 }
@@ -115,6 +120,54 @@ describe('registerOutboundContext', () => {
       content: 'Hello world',
       expiresInHours: 6,
     });
+  });
+
+  // #1816 — the reported failure: an email auto-registered at 6h expired ~15h
+  // before the recipient answered the next business day.
+  it('auto-registers an email with the channel default TTL, not the flat default', async () => {
+    const cap = makeCap();
+    await registerOutboundContext(cap, undefined, { ...baseOpts, channelId: 'email' });
+
+    expect(cap.register).toHaveBeenCalledWith({
+      channelId: 'email',
+      agentId: 'test-agent',
+      content: 'Hello world',
+      expiresInHours: 72,
+    });
+  });
+
+  it('raises an explicit email bridge to the channel default when it names no expires_in_hours', async () => {
+    const cap = makeCap();
+    const bridge = JSON.stringify({ agent_id: 'coordinator', delegation_hint: 'contacts' });
+
+    await registerOutboundContext(cap, bridge, { ...baseOpts, channelId: 'email' });
+
+    // An annotated entry must never expire sooner than a bare one on the same channel.
+    expect(cap.register).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 72 }),
+    );
+  });
+
+  it('keeps the 24h explicit tier on synchronous channels', async () => {
+    const cap = makeCap();
+    const bridge = JSON.stringify({ agent_id: 'coordinator' });
+
+    await registerOutboundContext(cap, bridge, { ...baseOpts, channelId: 'signal' });
+
+    expect(cap.register).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 24 }),
+    );
+  });
+
+  it('lets a caller-specified expires_in_hours win even when shorter than the channel default', async () => {
+    const cap = makeCap();
+    const bridge = JSON.stringify({ agent_id: 'coordinator', expires_in_hours: 3 });
+
+    await registerOutboundContext(cap, bridge, { ...baseOpts, channelId: 'email' });
+
+    expect(cap.register).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 3 }),
+    );
   });
 
   it('falls back to auto-registration when context_bridge has missing agent_id', async () => {

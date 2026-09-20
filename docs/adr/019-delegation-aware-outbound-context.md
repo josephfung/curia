@@ -97,12 +97,22 @@ Three approaches were considered:
    metadata supplements the auto-registered fields; auto-registered entries
    carry only the agent ID and content preview.
 
-5. **Two-tier TTL.** Auto-registered entries expire in `defaultExpiryHours`
-   (6h default). Entries with explicit `context_bridge` metadata expire in
-   `explicitExpiryHours` (24h default). Caller-specified `expires_in_hours`
-   in the JSON overrides both. The meeting-debrief agent uses 48h via
-   `debrief.contextBridgeTtlHours`. Config keys live under `contextBridge.*`
-   in `config/default.yaml`.
+5. **Two-tier, channel-aware TTL.** Auto-registered entries expire after the
+   channel's default window — `channelDefaultExpiryHours[channelId]` (email:
+   72h) falling back to `defaultExpiryHours` (6h). Entries with explicit
+   `context_bridge` metadata expire in `explicitExpiryHours` (24h default),
+   raised to the channel default when that is longer. Caller-specified
+   `expires_in_hours` in the JSON overrides both, in either direction. The
+   meeting-debrief agent uses 48h via `debrief.contextBridgeTtlHours`. Config
+   keys live under `contextBridge.*` in `config/default.yaml`.
+
+   The per-channel tier was added in #1816: a flat 6h default was plausible for
+   a Signal ping to the principal but expired before any realistic email
+   correspondent could reply, so next-business-day answers arrived as
+   unrecognised cold inbounds. TTL is keyed on channel, not recipient — the
+   registration path has no recipient in scope (the table stores none), and the
+   channel is the better proxy anyway, since email is asynchronous for the
+   principal and third parties alike.
 
 6. **Periodic cleanup.** A scheduled job runs `cleanupExpired()` on a fixed
    cadence to delete released and expired rows. The dispatcher's read query

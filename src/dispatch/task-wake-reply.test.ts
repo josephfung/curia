@@ -87,6 +87,7 @@ describe('task-wake-reply', () => {
         clearBySubjects: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
+        defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       };
     });
 

@@ -21,6 +21,7 @@ function makeCtx(input: Record<string, unknown>, overrides: Partial<ToolContext>
       clearBySubjects: vi.fn(),
       defaultExpiryHours: 6,
       explicitExpiryHours: 24,
+      defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
     },
     ...overrides,
   } as unknown as ToolContext;
@@ -92,6 +93,7 @@ describe('ContextBridgeReleaseHandler', () => {
           clearBySubjects: vi.fn(),
           defaultExpiryHours: 6,
           explicitExpiryHours: 24,
+          defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
         },
       },
     );
@@ -120,6 +122,7 @@ describe('ContextBridgeReleaseHandler', () => {
           clearBySubjects: vi.fn(),
           defaultExpiryHours: 6,
           explicitExpiryHours: 24,
+          defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
         },
       },
     );
@@ -150,6 +153,7 @@ describe('ContextBridgeReleaseHandler', () => {
           clearBySubjects: vi.fn(),
           defaultExpiryHours: 6,
           explicitExpiryHours: 24,
+          defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
         },
       },
     );

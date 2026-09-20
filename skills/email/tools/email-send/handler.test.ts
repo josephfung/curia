@@ -196,6 +196,7 @@ describe('EmailSendHandler', () => {
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
+        defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       };
       (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
@@ -227,6 +228,7 @@ describe('EmailSendHandler', () => {
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
+        defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       };
       (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
@@ -237,7 +239,9 @@ describe('EmailSendHandler', () => {
         channelId: 'email',
         agentId: 'coordinator',
         content: 'Hi there',
-        expiresInHours: 6,
+        // Email's channel default, not the flat 6h that expired before
+        // next-business-day replies could land (#1816).
+        expiresInHours: 72,
       });
     });
 
@@ -257,6 +261,7 @@ describe('EmailSendHandler', () => {
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
+        defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       };
       (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 

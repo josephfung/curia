@@ -209,6 +209,7 @@ describe('SignalSendHandler', () => {
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
+        defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       };
       (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
@@ -239,6 +240,7 @@ describe('SignalSendHandler', () => {
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
+        defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       };
       (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
@@ -270,6 +272,7 @@ describe('SignalSendHandler', () => {
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
+        defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       };
 
       const result = await handler.execute(ctx);
@@ -295,6 +298,7 @@ describe('SignalSendHandler', () => {
         release: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
+        defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       };
       (ctx as unknown as Record<string, unknown>).agentId = 'coordinator';
 
