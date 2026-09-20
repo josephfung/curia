@@ -246,7 +246,7 @@ describe('Scheduler task-bound dispatch integration', () => {
     // Terminal completion, not a drift pause.
     expect(driftDetector.check).not.toHaveBeenCalled();
     expect(schedulerService.pauseJobForDrift).not.toHaveBeenCalled();
-    expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-task-wake-1', true, undefined, 'Debrief prompt sent.');
+    expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-task-wake-1', true, undefined, 'Debrief prompt sent.', undefined);
 
     // Exactly one outbound: the specialist fire. No drift-pause notify to the coordinator.
     expect(agentTaskEvents).toHaveLength(1);

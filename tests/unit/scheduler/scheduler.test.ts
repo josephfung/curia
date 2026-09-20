@@ -1357,7 +1357,7 @@ describe('Scheduler', () => {
         },
       });
 
-      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', false, 'budget blown', undefined);
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', false, 'budget blown', undefined, undefined);
     });
 
     it('does not double-complete when both agent.response(isError) and agent.error are published', async () => {
@@ -1406,6 +1406,7 @@ describe('Scheduler', () => {
         'job-1',
         false,
         'Tool loop exhausted without a text response',
+        undefined,
         undefined,
       );
       expect(pendingJobs(scheduler).size).toBe(0);
@@ -1513,7 +1514,7 @@ describe('Scheduler', () => {
           lastRunSummary: 'Found 5 articles on AI safety.',
         });
         expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'Here are the articles.');
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'Here are the articles.', undefined);
       });
     });
 
@@ -1601,7 +1602,7 @@ describe('Scheduler', () => {
       // the response handler doesn't return a promise so we must wait for microtasks.
       await vi.waitFor(() => {
         expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done', undefined);
       });
     });
 
@@ -1643,7 +1644,7 @@ describe('Scheduler', () => {
           lastRunSummary: 'Found 3 new articles this week.',
         });
         expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith(
-          'job-1', true, undefined, 'Found 3 new articles this week.',
+          'job-1', true, undefined, 'Found 3 new articles this week.', undefined,
         );
       });
     });
@@ -1718,7 +1719,7 @@ describe('Scheduler', () => {
       // the response handler doesn't return a promise so we must wait for microtasks.
       await vi.waitFor(() => {
         expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done', undefined);
       });
     });
 
@@ -1755,7 +1756,7 @@ describe('Scheduler', () => {
       // the response handler doesn't return a promise so we must wait for microtasks.
       await vi.waitFor(() => {
         expect(driftDetector.check).not.toHaveBeenCalled();
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done', undefined);
       });
     });
 
@@ -1802,6 +1803,7 @@ describe('Scheduler', () => {
           true,
           undefined,
           'Debrief prompt sent.',
+          undefined,
         );
       });
     });
@@ -1842,7 +1844,7 @@ describe('Scheduler', () => {
 
       await vi.waitFor(() => {
         // The job must still reach terminal completion — no swallowed TypeError in the guard.
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done', undefined);
       });
     });
 
@@ -1997,7 +1999,7 @@ describe('Scheduler', () => {
       });
 
       await vi.waitFor(() => {
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done', undefined);
       });
       expect(burstCounts(driftScheduler).has('job-1')).toBe(false);
     });
@@ -2035,7 +2037,7 @@ describe('Scheduler', () => {
       });
 
       await vi.waitFor(() => {
-        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done', undefined);
       });
       expect(burstCounts(driftScheduler).get('job-1')).toBe(1);
     });
