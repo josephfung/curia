@@ -128,10 +128,21 @@ export async function registerOutboundContext(
 
     if (bridge) {
       // Explicit registration — skill provided structured context_bridge metadata.
-      // TTL: a caller-specified expires_in_hours always wins (including when it
-      // is shorter). Otherwise take the larger of explicitExpiryHours and the
-      // channel's default window, so an annotated entry can never expire sooner
-      // than a bare one on the same channel (#1816).
+      //
+      // TTL, in order of authority:
+      //   1. The agent's own expires_in_hours wins outright, including when it
+      //      is shorter than the channel default — a deliberate short window is
+      //      a legitimate choice.
+      //   2. A system-injected task-wake TTL is a floor, not a ceiling: raise it
+      //      to the channel default if that is longer, so the binding cannot
+      //      expire before a bare entry on the same channel would.
+      //   3. Otherwise the explicit tier, likewise floored at the channel default.
+      //
+      // Both floors exist for the same reason: an entry carrying MORE context
+      // must never expire sooner than a bare one on the same channel (#1816).
+      // Only the task-wake branches above inject a TTL the agent did not ask
+      // for, so a bridge TTL that is present but not the agent's is theirs.
+      const systemInjectedTtl = !agentChoseTtl && bridge.expires_in_hours != null;
       await outboundContext.register({
         channelId,
         agentId: bridge.agent_id,
@@ -139,16 +150,12 @@ export async function registerOutboundContext(
         ...(bridge.expected_reply != null ? { expectedReply: bridge.expected_reply } : {}),
         ...(bridge.delegation_hint != null ? { delegationHint: bridge.delegation_hint } : {}),
         ...(bridge.metadata != null ? { metadata: bridge.metadata } : {}),
-        expiresInHours:
-          bridge.expires_in_hours ??
-          Math.max(outboundContext.explicitExpiryHours, channelDefaultHours),
-        // Only the task-wake branches above inject a TTL the agent did not ask
-        // for, so a bridge TTL that is present but not the agent's is theirs.
-        ttlSource: agentChoseTtl
-          ? 'agent'
-          : bridge.expires_in_hours != null
-            ? 'task-wake'
-            : 'explicit-tier',
+        expiresInHours: agentChoseTtl
+          ? bridge.expires_in_hours
+          : systemInjectedTtl
+            ? Math.max(bridge.expires_in_hours!, channelDefaultHours)
+            : Math.max(outboundContext.explicitExpiryHours, channelDefaultHours),
+        ttlSource: agentChoseTtl ? 'agent' : systemInjectedTtl ? 'task-wake' : 'explicit-tier',
       });
     } else {
       // Auto-registration — context_bridge was absent, null, or malformed.
