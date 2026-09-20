@@ -493,9 +493,10 @@ describe('Scheduler', () => {
 
     // #1829: last_run_summary was write-once because completeJobRun used
     // COALESCE(last_run_summary, autoSummary) against whatever the *previous* run left.
-    // Clearing both summary columns at claim makes COALESCE mean "this run's
+    // Clearing the summary at claim makes COALESCE mean "this run's
     // scheduler-report beats the auto-summary" — the intent of the original guard.
-    it('clears last_run_summary and last_run_context in the cron claim UPDATE (#1829)', async () => {
+    // last_run_context is NOT cleared — it carries continuity cursors across failed runs.
+    it('clears last_run_summary (but not last_run_context) in the cron claim UPDATE (#1829)', async () => {
       const row = fakeDbRow({
         last_run_summary: 'stale prior summary',
         last_run_context: { scanned: 3 },
@@ -509,10 +510,10 @@ describe('Scheduler', () => {
 
       const [claimSql] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(claimSql).toContain('last_run_summary = NULL');
-      expect(claimSql).toContain('last_run_context = NULL');
+      expect(claimSql).not.toContain('last_run_context');
     });
 
-    it('clears last_run_summary and last_run_context in the one-shot claim UPDATE (#1829)', async () => {
+    it('clears last_run_summary (but not last_run_context) in the one-shot claim UPDATE (#1829)', async () => {
       const row = fakeDbRow({
         cron_expr: null,
         run_at: new Date('2026-06-24T09:00:00.000Z').toISOString(),
@@ -527,7 +528,7 @@ describe('Scheduler', () => {
 
       const [claimSql] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(claimSql).toContain('last_run_summary = NULL');
-      expect(claimSql).toContain('last_run_context = NULL');
+      expect(claimSql).not.toContain('last_run_context');
       expect(claimSql).not.toContain('next_run_at');
     });
 
@@ -1561,6 +1562,87 @@ describe('Scheduler', () => {
       await vi.waitFor(() => {
         expect(driftSchedulerService.pauseJobForDrift).not.toHaveBeenCalled();
         expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+      });
+    });
+
+    // #1829: claim clears last_run_summary, so auto-summary-only agents would otherwise
+    // feed the drift detector a null "last run" section. Fall back to this run's autoSummary.
+    it('passes in-flight autoSummary to drift check when last_run_summary is null (#1829)', async () => {
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor: 'Research AI safety articles weekly.',
+        taskPayload: { skill: 'web-search', query: 'AI safety' },
+        lastRunSummary: null, // cleared at claim; no scheduler-report this run
+      });
+      driftDetector.check.mockResolvedValueOnce({ drifted: false, reason: 'Aligned.', confidence: 'high' });
+      driftDetector.shouldPause.mockReturnValueOnce(false);
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-auto-summary',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'Found 3 new articles this week.' },
+      });
+
+      await vi.waitFor(() => {
+        expect(driftDetector.check).toHaveBeenCalledWith({
+          intentAnchor: 'Research AI safety articles weekly.',
+          taskPayload: { skill: 'web-search', query: 'AI safety' },
+          lastRunSummary: 'Found 3 new articles this week.',
+        });
+        expect(driftSchedulerService.completeJobRun).toHaveBeenCalledWith(
+          'job-1', true, undefined, 'Found 3 new articles this week.',
+        );
+      });
+    });
+
+    it('prefers an explicit scheduler-report over autoSummary for the drift check (#1829)', async () => {
+      driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
+      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      await driftScheduler.pollDueJobs();
+      const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
+
+      driftSchedulerService.getJob.mockResolvedValueOnce({
+        id: 'job-1',
+        agentId: 'agent-1',
+        agentTaskId: 'task-99',
+        intentAnchor: 'Research AI safety articles weekly.',
+        taskPayload: { skill: 'web-search', query: 'AI safety' },
+        lastRunSummary: 'agent report: scanned 5', // written mid-run by scheduler-report
+      });
+      driftDetector.check.mockResolvedValueOnce({ drifted: false, reason: 'Aligned.', confidence: 'high' });
+      driftDetector.shouldPause.mockReturnValueOnce(false);
+      driftSchedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+
+      driftScheduler.start();
+      const responseHandler = driftBus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-drift-report-wins',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEvent.id,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'auto summary should lose' },
+      });
+
+      await vi.waitFor(() => {
+        expect(driftDetector.check).toHaveBeenCalledWith({
+          intentAnchor: 'Research AI safety articles weekly.',
+          taskPayload: { skill: 'web-search', query: 'AI safety' },
+          lastRunSummary: 'agent report: scanned 5',
+        });
       });
     });
 
