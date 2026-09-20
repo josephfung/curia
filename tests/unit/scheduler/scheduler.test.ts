@@ -491,6 +491,46 @@ describe('Scheduler', () => {
       expect(claimSql).toContain('next_run_at <= now()');
     });
 
+    // #1829: last_run_summary was write-once because completeJobRun used
+    // COALESCE(last_run_summary, autoSummary) against whatever the *previous* run left.
+    // Clearing both summary columns at claim makes COALESCE mean "this run's
+    // scheduler-report beats the auto-summary" — the intent of the original guard.
+    it('clears last_run_summary and last_run_context in the cron claim UPDATE (#1829)', async () => {
+      const row = fakeDbRow({
+        last_run_summary: 'stale prior summary',
+        last_run_context: { scanned: 3 },
+      });
+      schedulerService.nextRunFromCron.mockReturnValueOnce(new Date('2026-06-25T09:00:00.000Z'));
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [claimSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('last_run_summary = NULL');
+      expect(claimSql).toContain('last_run_context = NULL');
+    });
+
+    it('clears last_run_summary and last_run_context in the one-shot claim UPDATE (#1829)', async () => {
+      const row = fakeDbRow({
+        cron_expr: null,
+        run_at: new Date('2026-06-24T09:00:00.000Z').toISOString(),
+        last_run_summary: 'stale prior summary',
+        last_run_context: { scanned: 3 },
+      });
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [claimSql] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(claimSql).toContain('last_run_summary = NULL');
+      expect(claimSql).toContain('last_run_context = NULL');
+      expect(claimSql).not.toContain('next_run_at');
+    });
+
     it('does not include next_run_at in claim UPDATE for one-shot jobs', async () => {
       const row = fakeDbRow({ cron_expr: null, run_at: new Date('2026-06-24T09:00:00.000Z').toISOString() });
 
