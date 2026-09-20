@@ -22,6 +22,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`authorization.decision` payload (public API)** — Gate C outcomes include `recipientCount` when recipients resolved. (#1815)
 - **`delegate` input schema (public API)** — `timeout_ms` removed; the runtime is its only source. Skill v1.4.0. (#1797)
 - **`delegate` outputs (public API)** — timeouts now return the delegate event and conversation ids. Skill v1.5.0. (#1799)
 - **Published image** — now keeps `pnpm-retry`, so downstream images can retry their own network installs. (curia-deploy#220)
@@ -29,6 +30,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Gate C / `email-reply`** — known-tier replies to the sender now allow; reply-all still escalates. (#1815)
 - **`memory-store` outputs (public API)** — skipped canonical redirects now flag `canonical_redirect_skipped` with a reason. Skill v1.2.0. (#1772)
 - **`calendar-list-events`** — `maxResults` above 200 now pages instead of failing; errors name the cause. (#1798)
 - **Delegate wait windows** — the coordinator's invented `timeout_ms` no longer shortens them into false timeouts. (#1797)

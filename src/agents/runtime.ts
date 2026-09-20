@@ -1493,6 +1493,7 @@ export class AgentRuntime {
             liveTurn: taskEvent.payload.liveTurn,
             delegationGuard,
             turnDateResolveResults: turnDateResolveTracker.snapshot(),
+            senderId: taskEvent.payload.senderId,
           };
 
           const startTime = Date.now();

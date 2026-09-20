@@ -1,15 +1,26 @@
 // Email channel contribution: principal identity compare, outbound recipient
-// projection, and email-send Gate C carve-out.
+// projection, and email-send / email-reply Gate C carve-out.
 
 import type {
   PrincipalChannelRules,
   ProjectedRecipient,
+  SkillRecipientResolveDeps,
 } from '../../contacts/principal-channel-rules.js';
 import {
   hasPresentValue,
   splitCommaSeparatedAddresses,
 } from '../../contacts/principal-carveout-parse.js';
 import { isEmailSendRequest } from './outbound-request.js';
+import { deriveEmailReplyRecipientSet } from './reply-recipients.js';
+
+const EMAIL_REPLY_UNPARSED_RECIPIENT_KEYS = [
+  'to',
+  'bcc',
+  'recipients',
+  'recipient',
+  'group_id',
+  'groupId',
+] as const;
 
 /**
  * Parse email-send recipients from skill input. Returns null when the input contains
@@ -32,6 +43,52 @@ function parseEmailSendRecipients(input: Record<string, unknown>): string[] | nu
     emails.push(...splitCommaSeparatedAddresses(cc));
   }
   return emails;
+}
+
+/**
+ * Sync parser for email-reply. Recipients live on the original message, not in
+ * the skill input, so this always returns null. Unmodeled recipient-shaped keys
+ * also fail closed. Gate C must call `resolveEmailReplyRecipients`.
+ */
+function parseEmailReplyRecipients(input: Record<string, unknown>): string[] | null {
+  for (const key of EMAIL_REPLY_UNPARSED_RECIPIENT_KEYS) {
+    if (hasPresentValue(input[key])) return null;
+  }
+  return null;
+}
+
+/**
+ * Fetch the original message and derive To+CC the same way the email-reply
+ * handler will send. Returns null on missing id, gateway error, or unmodeled
+ * input (fail closed).
+ */
+export async function resolveEmailReplyRecipients(
+  input: Record<string, unknown>,
+  deps: SkillRecipientResolveDeps,
+): Promise<string[] | null> {
+  for (const key of EMAIL_REPLY_UNPARSED_RECIPIENT_KEYS) {
+    if (hasPresentValue(input[key])) return null;
+  }
+
+  const messageId = input['reply_to_message_id'];
+  if (typeof messageId !== 'string' || messageId.trim().length === 0) return null;
+  const ccInput = input['cc'];
+  if (ccInput !== undefined && typeof ccInput !== 'string') {
+    return null;
+  }
+  if (!deps.fetchMessage) return null;
+
+  const original = await deps.fetchMessage(messageId.trim());
+
+  const set = deriveEmailReplyRecipientSet({
+    originalFrom: original.from[0]?.email,
+    originalTo: original.to,
+    originalCc: original.cc,
+    ccInput,
+    selfEmail: deps.selfEmail,
+  });
+  if (!set) return null;
+  return [set.to, ...set.cc];
 }
 
 /**
@@ -62,4 +119,11 @@ export const emailPrincipalRules: PrincipalChannelRules = {
     skillName: 'email-send',
     parseRecipients: parseEmailSendRecipients,
   },
+  carveoutSkills: [
+    {
+      skillName: 'email-reply',
+      parseRecipients: parseEmailReplyRecipients,
+      resolveRecipients: resolveEmailReplyRecipients,
+    },
+  ],
 };

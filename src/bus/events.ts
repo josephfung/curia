@@ -761,6 +761,11 @@ interface AuthorizationDecisionPayload {
    * different task id than the coordinator routing entry).
    */
   conversationId?: string;
+  /**
+   * Count of resolved outbound recipients at Gate C decision time (#1815).
+   * Absent when recipients could not be resolved (fail-closed / no parser).
+   */
+  recipientCount?: number;
 }
 
 // AutonomySkillBlockedPayload — published by the execution layer when a skill

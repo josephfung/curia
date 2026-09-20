@@ -28,6 +28,10 @@ and fails closed when the skill/channel is absent or has no `carveoutSkill`.
 Omit `carveoutSkill` to keep the conservative default (identity matching for the
 outbound gateway, no Gate C carve-out until a send skill opts in). Slack opted in
 via `slack-send` (#1526); channels without a send skill still omit the field.
+A channel may opt in more than one skill via `carveoutSkills` (email opted in
+`email-reply` in #1815). Skills whose recipients are not literal inputs set
+`resolveRecipients` so Gate C can fetch them before deciding; a failed resolve
+fails closed (escalate, never allow).
 
 ## Consequences
 

@@ -1071,6 +1071,7 @@ describe('autonomy gates', () => {
       bus?: EventBus,
       escalationJudge?: EscalationJudge,
       principalIdentities: readonly ChannelIdentity[] = TEST_PRINCIPAL_IDENTITIES,
+      extras?: { outboundGateway?: OutboundGateway; selfEmail?: string },
     ) {
       const registry = new ToolRegistry();
       const layer = new ExecutionLayer(registry, logger, {
@@ -1078,6 +1079,8 @@ describe('autonomy gates', () => {
         bus,
         escalationJudge,
         principalIdentities,
+        outboundGateway: extras?.outboundGateway,
+        selfEmail: extras?.selfEmail,
       });
       return { registry, layer };
     }
@@ -1104,8 +1107,13 @@ describe('autonomy gates', () => {
       return { judge, classifyAction, isEnabled };
     }
 
-    function originatorMeta(tier: string, systemRole: string | null = null) {
+    function originatorMeta(
+      tier: string,
+      systemRole: string | null = null,
+      extra?: { senderId?: string },
+    ) {
       return {
+        ...(extra?.senderId ? { senderId: extra.senderId } : {}),
         taskMetadata: {
           originator: {
             contactId: 'contact-abc',
@@ -1116,6 +1124,25 @@ describe('autonomy gates', () => {
           },
         },
       };
+    }
+
+    function makeEmailGateway(message: {
+      from: Array<{ email: string }>;
+      to?: Array<{ email: string }>;
+      cc?: Array<{ email: string }>;
+      fail?: boolean;
+    }): OutboundGateway {
+      const getEmailMessage = message.fail
+        ? vi.fn().mockRejectedValue(new Error('nylas 404'))
+        : vi.fn().mockResolvedValue({
+            from: message.from,
+            to: message.to ?? [],
+            cc: message.cc ?? [],
+            subject: 'Test',
+            body: '',
+            date: 0,
+          });
+      return { getEmailMessage } as unknown as OutboundGateway;
     }
 
     // -- Deterministic fast path: outcome is tier-determined, judge is never consulted ----
@@ -1235,45 +1262,59 @@ describe('autonomy gates', () => {
     // A reply to the sender is allowed; a send to a third party must escalate. The manifest
     // can't tell them apart, so Gate C defers to the judge.
 
-    it('allows a known contact reply-to-sender when the judge clears it (not third-party-facing)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
-      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+    it('allows a known contact email-reply to the initiating sender without consulting the judge (#1815)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const gateway = makeEmailGateway({ from: [{ email: 'alice@example.com' }] });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
       const handler = makeHandler('ok');
       registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
 
-      const result = await layer.invoke('email-reply', { to: 'sender@example.com' }, undefined, originatorMeta('known'));
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Thanks', cc: '' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
 
       expect(result.success).toBe(true);
       expect(handler.execute).toHaveBeenCalledOnce();
-      expect(classifyAction).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
     });
 
-    it('blocks a known contact send to a third party when the judge escalates (the closed gap)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+    it('blocks a known contact send to a third party from structurally resolved recipients (#1815)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
 
-      const result = await layer.invoke('email-send', { to: 'stranger@example.com' }, undefined, originatorMeta('known'));
+      const result = await layer.invoke(
+        'email-send',
+        { to: 'stranger@example.com' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
 
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('known');
       }
       expect(handler.execute).not.toHaveBeenCalled();
-      expect(classifyAction).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
     });
 
     it('clamps a judge class-downgrade up to the manifest floor (third-party send still escalates)', async () => {
-      // Crafted/misclassified verdict: judge calls a medium email-send "read-only" (none) but
+      // Crafted/misclassified verdict: judge calls a medium skill "read-only" (none) but
       // flags it third-party-facing. Without the clamp, applyActionPolicy(known, none, …) would
       // allow. The manifest floor (reversible-external) must win → escalate.
+      // Use a non-carveout skill so recipients stay unresolved and the judge still runs.
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true, actionClass: 'none' });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
-      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+      registry.register(makeRiskyManifest('custom-notify', 'medium'), handler);
 
-      const result = await layer.invoke('email-send', { to: 'stranger@example.com' }, undefined, originatorMeta('known'));
+      const result = await layer.invoke('custom-notify', { to: 'stranger@example.com' }, undefined, originatorMeta('known'));
 
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
@@ -1285,9 +1326,9 @@ describe('autonomy gates', () => {
       const { judge } = makeEscalationJudge({ isThirdPartyFacing: false, actionClass: 'irreversible' });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
-      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+      registry.register(makeRiskyManifest('custom-notify', 'medium'), handler);
 
-      const result = await layer.invoke('email-send', { to: 'sender@example.com' }, undefined, originatorMeta('known'));
+      const result = await layer.invoke('custom-notify', { to: 'sender@example.com' }, undefined, originatorMeta('known'));
 
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
@@ -1302,7 +1343,7 @@ describe('autonomy gates', () => {
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
 
-      const result = await layer.invoke('email-send', { to: 'x@example.com' }, undefined, originatorMeta('known'));
+      const result = await layer.invoke('email-send', {}, undefined, originatorMeta('known'));
 
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
@@ -1704,6 +1745,179 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(true);
       expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    // -- email-reply recipient resolution (#1815): tier × reply-mode matrix ----
+
+    it('allows known-tier email-reply in reply-all when the thread has no extra participants', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const gateway = makeEmailGateway({
+        from: [{ email: 'alice@example.com' }],
+        to: [{ email: 'curia@example.com' }],
+        cc: [],
+      });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+        selfEmail: 'curia@example.com',
+      });
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Thanks' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('escalates known-tier email-reply reply-all when CC contains anyone else', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
+      const gateway = makeEmailGateway({
+        from: [{ email: 'alice@example.com' }],
+        to: [{ email: 'curia@example.com' }, { email: 'bob@example.com' }],
+        cc: [{ email: 'carol@example.com' }],
+      });
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const { registry, layer } = makeLayerWithScore100(mockBus, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+        selfEmail: 'curia@example.com',
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Looping everyone in' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            decision: 'escalate',
+            gate: 'gate_c',
+            action: 'email-reply',
+            recipientCount: 3,
+          }),
+        }),
+      );
+    });
+
+    it('allows known-tier email-reply with cc: "" (sender-only) even when the thread has others', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const gateway = makeEmailGateway({
+        from: [{ email: 'alice@example.com' }],
+        to: [{ email: 'curia@example.com' }, { email: 'bob@example.com' }],
+        cc: [{ email: 'carol@example.com' }],
+      });
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const { registry, layer } = makeLayerWithScore100(mockBus, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+        selfEmail: 'curia@example.com',
+      });
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Private reply', cc: '' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            decision: 'allow',
+            gate: 'gate_c',
+            action: 'email-reply',
+            recipientCount: 1,
+          }),
+        }),
+      );
+    });
+
+    it('escalates known-tier email-reply when recipient resolution fails', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
+      const gateway = makeEmailGateway({ from: [{ email: 'alice@example.com' }], fail: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'missing', body: 'Thanks' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('escalates unknown- and blocked-tier email-reply in every reply mode', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
+      const gateway = makeEmailGateway({ from: [{ email: 'alice@example.com' }] });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      for (const tier of ['unknown', 'blocked'] as const) {
+        for (const input of [
+          { reply_to_message_id: 'msg-1', body: 'Hi', cc: '' },
+          { reply_to_message_id: 'msg-1', body: 'Hi' },
+        ]) {
+          const result = await layer.invoke(
+            'email-reply',
+            input,
+            undefined,
+            originatorMeta(tier, null, { senderId: 'alice@example.com' }),
+          );
+          expect(result.success).toBe(false);
+        }
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('includes initiating sender and resolved recipients in the judge description', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('custom-notify', 'medium'), handler);
+
+      await layer.invoke(
+        'custom-notify',
+        { note: 'hello' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(classifyAction).toHaveBeenCalledOnce();
+      const description = classifyAction.mock.calls[0]![0] as { description: string };
+      expect(description.description).toContain('Initiating sender: alice@example.com');
+      expect(description.description).toContain('Resolved recipients: (not resolved)');
     });
   });
 });

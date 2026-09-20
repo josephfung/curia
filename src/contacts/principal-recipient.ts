@@ -11,7 +11,7 @@
 import type { ChannelIdentity } from './types.js';
 import {
   GATE_C_PRINCIPAL_CARVEOUT_SKILLS,
-  findCarveoutRulesBySkill,
+  findCarveoutSkill,
   findPrincipalChannelRules,
 } from './principal-channel-registry.js';
 
@@ -57,33 +57,61 @@ export function computePrincipalIsSoleRecipient(recipients: readonly TaggedRecip
 }
 
 /**
+ * After deduplicating by `identifiersEqual`, true only when every remaining
+ * recipient matches one of `initiatingIdentifiers`. Empty sets fail closed.
+ */
+export function isSolelyInitiatingSender(
+  recipients: readonly string[],
+  initiatingIdentifiers: readonly string[],
+  identifiersEqual: (a: string, b: string) => boolean,
+): boolean {
+  if (recipients.length === 0 || initiatingIdentifiers.length === 0) return false;
+
+  const unique: string[] = [];
+  for (const recipient of recipients) {
+    if (!unique.some((existing) => identifiersEqual(existing, recipient))) {
+      unique.push(recipient);
+    }
+  }
+  return unique.every((recipient) =>
+    initiatingIdentifiers.some((id) => identifiersEqual(recipient, id)),
+  );
+}
+
+/**
  * Resolve whether a skill invocation's recipient set is exclusively the principal,
  * using verified channel identities. Returns false when recipients cannot be
- * determined from the input (e.g. email-reply without explicit to/cc) or when the
+ * determined from the input (e.g. email-reply without a prior resolve) or when the
  * skill/input shape is not fully understood (fail closed).
  *
- * Fail-closed: only skills listed via `carveoutSkill` on a registered channel
- * contribution (see `GATE_C_PRINCIPAL_CARVEOUT_SKILLS`) can receive the carve-out.
+ * When `resolvedRecipients` is passed (including `null` for a failed resolve), that
+ * list is used instead of `parseRecipients`. `null` fails closed.
+ *
+ * Fail-closed: only skills listed via `carveoutSkill` / `carveoutSkills` on a
+ * registered channel contribution (see `GATE_C_PRINCIPAL_CARVEOUT_SKILLS`) can
+ * receive the carve-out.
  */
 export function resolvePrincipalIsSoleRecipientFromSkillInput(
   toolName: string,
   input: Record<string, unknown>,
   principalIdentities: readonly ChannelIdentity[],
+  resolvedRecipients?: readonly string[] | null,
 ): boolean {
   if (principalIdentities.length === 0) return false;
   // Explicit allowlist check keeps the fail-closed default auditable in one Set.
   if (!GATE_C_PRINCIPAL_CARVEOUT_SKILLS.has(toolName)) return false;
 
-  const rules = findCarveoutRulesBySkill(toolName);
-  const carveout = rules?.carveoutSkill;
-  if (!carveout) return false;
+  const found = findCarveoutSkill(toolName);
+  if (!found) return false;
 
-  const recipients = carveout.parseRecipients(input);
+  const recipients = resolvedRecipients !== undefined
+    ? resolvedRecipients
+    : found.carveout.parseRecipients(input);
   if (recipients === null) return false;
 
   const tagged = recipients.map((identifier) => ({
     identifier,
-    isPrincipal: isPrincipalIdentity(rules.channel, identifier, principalIdentities),
+    isPrincipal: isPrincipalIdentity(found.rules.channel, identifier, principalIdentities),
   }));
   return computePrincipalIsSoleRecipient(tagged);
 }
