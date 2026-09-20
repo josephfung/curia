@@ -191,10 +191,12 @@ Every outbound message (Signal, email, Slack, SMS) *attempts* to register a cont
 
 At the shipped defaults that makes the two tiers differ per channel, which matters when reading a `context_bridge` description:
 
-| Channel | Bare send | With `context_bridge` (no `expires_in_hours`) |
+| Channel | Bare send, or a malformed `context_bridge` | With a **valid** `context_bridge` (no `expires_in_hours`) |
 |---|---|---|
 | `email` | 72h | 72h (`max(24, 72)`) |
 | `signal`, `slack`, `sms` | 6h | 24h (`max(24, 6)`) |
+
+`parseContextBridge` drops malformed metadata (bad JSON, a missing or blank `agent_id`, a non-object payload) and returns `null`, so the send falls through to auto-registration — it logs a warning but does not fail the send. On the chat channels that silently costs ~18h of window, so the distinction is load-bearing wherever the tiers are quoted to an agent.
 
 A system-injected task-wake binding (168h) is floored the same way: if a channel's default is longer than 168h, the binding is raised to it, so the system's own binding cannot expire before a bare entry on that channel. An agent's explicit `expires_in_hours` is never floored — a deliberately short window is a legitimate choice.
 
