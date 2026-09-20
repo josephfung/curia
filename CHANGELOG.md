@@ -33,7 +33,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Gate C / `email-reply`** — known-tier replies to the sender now allow; reply-all still escalates. (#1815)
 - **Gate C** — known sender-only still consults the judge for class upgrades. (#1815)
+- **Gate C** — known sender-only allows without a judge when recipients are pinned. (#1815)
 - **Gate C** — initiating-sender match ignores unverified, defunct, and cross-channel identities. (#1815)
+- **`email-reply`** — Gate C and the handler share one message fetch per invoke. (#1815)
 - **`memory-store` outputs (public API)** — skipped canonical redirects now flag `canonical_redirect_skipped` with a reason. Skill v1.2.0. (#1772)
 - **`calendar-list-events`** — `maxResults` above 200 now pages instead of failing; errors name the cause. (#1798)
 - **Delegate wait windows** — the coordinator's invented `timeout_ms` no longer shortens them into false timeouts. (#1797)

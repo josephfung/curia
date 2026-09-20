@@ -1408,6 +1408,30 @@ describe('autonomy gates', () => {
       expect(classifyAction).not.toHaveBeenCalled();
     });
 
+    it('allows known sender-only email-reply when the judge is disabled and recipients are pinned', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({
+        isThirdPartyFacing: true,
+        enabled: false,
+      });
+      const gateway = makeEmailGateway({ from: [{ email: 'alice@example.com' }] });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Thanks', cc: '' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
     // -- Principal-only carve-out (#1301): heads-up to the CEO is not third-party-facing ----
 
     it('allows signal-send to the principal from a known contact without consulting the judge', async () => {
@@ -2105,6 +2129,36 @@ describe('autonomy gates', () => {
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('reuses the Gate C getEmailMessage fetch in the handler', async () => {
+      const { judge } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const gateway = makeEmailGateway({ from: [{ email: 'alice@example.com' }] });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
+      const handler: ToolHandler = {
+        execute: vi.fn(async (ctx): Promise<ToolResult> => {
+          await ctx.outboundGateway!.getEmailMessage('msg-1');
+          return { success: true, data: 'ok' };
+        }),
+      };
+      registry.register(
+        { ...makeRiskyManifest('email-reply', 'medium'), capabilities: ['outboundGateway'] },
+        handler,
+      );
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Thanks', cc: '' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      expect(gateway.getEmailMessage).toHaveBeenCalledOnce();
+      expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-1');
     });
 
     it('JSON-encodes initiating sender and recipients in the judge description', async () => {
