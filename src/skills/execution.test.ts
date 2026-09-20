@@ -1430,8 +1430,8 @@ describe('autonomy gates', () => {
       expect(classifyAction).toHaveBeenCalledOnce();
     });
 
-    it('rejects spoofed principal display name in to field (still escalates via judge)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+    it('rejects spoofed principal display name in to field (structurally escalates, #1815)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
@@ -1440,16 +1440,16 @@ describe('autonomy gates', () => {
         'email-send',
         { to: 'CEO', subject: 'x', body: 'y' },
         undefined,
-        originatorMeta('known'),
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
       );
 
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
-      expect(classifyAction).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
     });
 
-    it('escalates principal + non-principal mixed recipient set', async () => {
-      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+    it('escalates principal + non-principal mixed recipient set without the judge', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
@@ -1458,12 +1458,12 @@ describe('autonomy gates', () => {
         'email-send',
         { to: 'ceo@example.com', cc: 'other@example.com', subject: 'x', body: 'y' },
         undefined,
-        originatorMeta('known'),
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
       );
 
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
-      expect(classifyAction).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
     });
 
     it('still escalates irreversible actions to the principal only', async () => {
