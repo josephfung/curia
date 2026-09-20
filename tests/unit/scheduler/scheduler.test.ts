@@ -1530,6 +1530,48 @@ describe('Scheduler', () => {
       expect(burstCounts(scheduler).has('job-1')).toBe(false);
     });
 
+    it('completes on unpaired agent.response(isError) using content, and warns (#1830)', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
+      const taskEventId = taskEvent.id;
+
+      schedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+      scheduler.start();
+
+      const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      // No preceding agent.error — stash miss path.
+      await responseHandler({
+        id: 'resp-unpaired',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEventId,
+        timestamp: new Date(),
+        payload: {
+          agentId: 'agent-1',
+          conversationId: 'c1',
+          content: 'Generic failure fallback message',
+          isError: true,
+        },
+      });
+
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
+        'job-1',
+        false,
+        'Generic failure fallback message',
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        { parentEventId: taskEventId },
+        expect.stringContaining('no preceding agent.error'),
+      );
+    });
+
     it('ignores events not originating from the scheduler', async () => {
       scheduler.start();
 

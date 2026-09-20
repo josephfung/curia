@@ -197,6 +197,15 @@ Agents are not required to call `scheduler-report`. Stateless jobs (e.g. a daily
 
 `reportJobRun` replaces the column wholesale. `completeJobRun` then merges `failedSkills` (or clears it) after the agent finishes, so a mid-run report cannot permanently drop this run's tool-failure visibility. A future writer must preserve that two-step ownership.
 
+### Which bus event completes a job
+
+The scheduler completes a fired job from `agent.response`, not from `agent.error`:
+
+- **Success** — a non-error `agent.response` calls `completeJobRun(…, success=true)` (and may merge `failedSkills` from tools that failed mid-run without flipping health).
+- **Failure** — the runtime emits `agent.error` *then* `agent.response(isError)` with the same `parentEventId`. The scheduler stashes the structured message from `agent.error` and completes on the response (which also carries `failedSkills`). `agent.error` alone does **not** complete the job.
+
+That pairing is load-bearing: every runtime failure path must emit both events in that order. An unpaired `agent.error` leaves the row in `running` until the stuck-job watchdog times it out; an unpaired `agent.response(isError)` still completes, but `last_error` falls back to the response content (and the scheduler logs a warning).
+
 ---
 
 ## Task-Scope Fence for Scheduler-Originated Runs

@@ -469,6 +469,15 @@ export class Scheduler {
       if (responseEvent.payload.isError) {
         const stashed = this.pendingFailureMessages.get(parentEventId);
         this.pendingFailureMessages.delete(parentEventId);
+        if (stashed === undefined) {
+          // Invariant broken: every runtime failure path should have published
+          // agent.error first. Falling back to response content loses the
+          // structured cause (often the generic LLM_FAILURE_USER_MESSAGE).
+          this.logger.warn(
+            { parentEventId },
+            'scheduler: agent.response(isError) arrived with no preceding agent.error — last_error will use response content',
+          );
+        }
         const errorMessage =
           stashed
           ?? (responseEvent.payload.content.slice(0, 500) || 'Agent error');

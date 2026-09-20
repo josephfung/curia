@@ -2689,8 +2689,19 @@ export class AgentRuntime {
 
   /**
    * Best-effort paired error signal for fallback response paths.
-   * Scheduler completion on failures relies on agent.error, while agent.response(isError)
-   * provides user-facing context; publish errors first without blocking the response event.
+   *
+   * Scheduler job completion on failures is driven by `agent.response(isError)`,
+   * not by `agent.error` (#1830). The invariant this function helps uphold:
+   * every failure path must emit `agent.error` *then* `agent.response(isError)`
+   * with the same `parentEventId`. The scheduler stashes the structured error
+   * message from the first event and completes on the second (also carrying
+   * `failedSkills`). Emitting only `agent.error` leaves the job in `running`
+   * until the stuck-job watchdog reclaims it; emitting the response first
+   * (or without a preceding error) degrades `last_error` to the generic
+   * user-facing fallback text.
+   *
+   * Publish is best-effort / try-caught so a telemetry failure here cannot
+   * skip the paired response that actually completes the job.
    */
   private async publishAgentErrorForFallback(taskEvent: AgentTaskEvent, agentErr: AgentError): Promise<void> {
     const { logger, agentId } = this.config;
