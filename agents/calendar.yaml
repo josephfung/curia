@@ -1,5 +1,5 @@
 name: calendar
-version: "0.7.2"
+version: "0.7.3"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
@@ -541,6 +541,7 @@ schedule:
   - cron: "0 1 * * *"   # daily 01:00 local — expire stale tentative holds
     task: >
       Run the calendar holds expiry sweep. Call calendar-holds-sweep with
-      contactId set to ${principal_contact_id}. Report the scanned, expired,
-      failed, and calendarErrors counts; if either failure count is non-zero,
+      contactId set to ${principal_contact_id}. Call scheduler-report with a
+      summary of the scanned, expired, failed, and calendarErrors counts
+      (job_id is derived automatically); if either failure count is non-zero,
       call that out explicitly. Do not perform any other scheduling work on this wake.

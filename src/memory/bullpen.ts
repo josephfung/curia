@@ -113,7 +113,7 @@ class InMemoryBullpenBackend implements BullpenBackend {
 
   async postMessage(threadId: string, message: BullpenMessage, closeAfter = false): Promise<void> {
     const thread = this.threads.get(threadId);
-    if (!thread) throw new Error(`Thread ${threadId} not found`);
+    if (!thread) throw new Error(`No bullpen thread with ID ${threadId} exists`);
     thread.messageCount++;
     thread.lastMessageAt = message.createdAt;
     const msgs = this.messages.get(threadId) ?? [];
@@ -511,7 +511,10 @@ export class BullpenService {
     closeAfter = false,
   ): Promise<BullpenMessage> {
     const existing = await this.backend.getThread(threadId);
-    if (!existing) throw new Error(`Thread ${threadId} not found`);
+    // Agent-facing copy (incl. job-UUID → scheduler-report redirect) is owned by
+    // skills/bullpen/handler.ts via bullpenThreadNotFoundError. Keep this generic
+    // so non-handler callers never see the old "Thread X not found" implication (#1828).
+    if (!existing) throw new Error(`No bullpen thread with ID ${threadId} exists`);
     if (existing.thread.status === 'closed') {
       throw new Error(`Cannot post to closed thread ${threadId}`);
     }
@@ -535,7 +538,8 @@ export class BullpenService {
 
   async closeThread(threadId: string, requestingAgentId: string): Promise<void> {
     const existing = await this.backend.getThread(threadId);
-    if (!existing) throw new Error(`Thread ${threadId} not found`);
+    // See postMessage — agent-facing not-found wording is owned by the skill handler (#1828).
+    if (!existing) throw new Error(`No bullpen thread with ID ${threadId} exists`);
     if (requestingAgentId !== existing.thread.creatorAgentId && requestingAgentId !== 'coordinator') {
       throw new Error(
         `Agent '${requestingAgentId}' is not authorized to close thread ${threadId} — only the creator or coordinator may close threads`,

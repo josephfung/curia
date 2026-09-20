@@ -305,9 +305,10 @@ describe('LateDelegationSubscriber — agent.response matching (#1799)', () => {
     expect(wake.payload.agentId).toBe('coordinator');
     expect(wake.payload.conversationId).toBe('scheduler:job-7:run-2');
     expect(wake.payload.content).toContain('Travel detected: YYZ→SFO Oct 2.');
-    // The scheduled job is named so the woken turn can advance the cursor.
+    // Name the tool without embedding a bare job UUID (#1828).
     expect(wake.payload.content).toContain('scheduler-report');
-    expect(wake.payload.content).toContain('job-7');
+    expect(wake.payload.content).toContain('job_id is derived automatically');
+    expect(wake.payload.content).not.toContain('job-7');
     // Lineage restored, so the follow-up steps still clear the autonomy gate.
     expect((wake.payload.metadata?.originator as Record<string, unknown>)?.contactId).toBe('contact-ceo');
     expect(wake.payload.metadata?.wakeContext).toEqual({ derived: true });

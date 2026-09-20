@@ -292,10 +292,11 @@ describe('buildLateResultBrief (#1799)', () => {
     expect(brief).toMatch(/do not repeat a side effect/i);
   });
 
-  it('names the scheduled job when there is one, so the cursor can be advanced', () => {
+  it('names scheduler-report for a scheduled origin without embedding a bare job UUID (#1828)', () => {
     const brief = buildLateResultBrief({ ...base, schedulerJobId: 'cff7f3bb-job' });
     expect(brief).toContain('scheduler-report');
-    expect(brief).toContain('cff7f3bb-job');
+    expect(brief).toContain('job_id is derived automatically');
+    expect(brief).not.toContain('cff7f3bb-job');
   });
 
   it('omits the scheduler line for a non-scheduled origin', () => {

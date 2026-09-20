@@ -397,8 +397,9 @@ export interface LateResultBriefParams {
  * would add nothing except an instruction the model might act on twice.
  *
  * What it does carry: the result, the fact that the work is already done, and what remains.
- * `scheduler_job_id` is stated explicitly rather than left to history, because the context budget
- * can truncate the original prompt away and the cursor update depends on that id (#1799).
+ * When the origin was a scheduled run, name `scheduler-report` so the agent records the
+ * outcome — but do not embed a bare job UUID (attractive nuisance for bullpen thread_id;
+ * the skill derives job_id from the same conversationId this wake re-enters — #1828).
  */
 export function buildLateResultBrief(params: LateResultBriefParams): string {
   const { targetAgent, content, deliveredAtDisplay, maxResultChars, schedulerJobId } = params;
@@ -421,7 +422,7 @@ export function buildLateResultBrief(params: LateResultBriefParams): string {
   if (schedulerJobId) {
     lines.push(
       '',
-      `When you are done, record the outcome with scheduler-report for job ${schedulerJobId} so the next scheduled run starts from the right place.`,
+      'When you are done, record the outcome with scheduler-report (job_id is derived automatically) so the next scheduled run starts from the right place.',
     );
   }
 

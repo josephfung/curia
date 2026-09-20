@@ -443,7 +443,7 @@ describe('BullpenHandler', () => {
       );
     });
 
-    it('reply: unrelated missing thread_id under a scheduler conversation stays generic', async () => {
+    it('reply: unrelated missing UUID under a scheduler conversation gets a soft scheduler-report hint', async () => {
       const ctx = makeCtx(
         {
           action: 'reply',
@@ -454,9 +454,20 @@ describe('BullpenHandler', () => {
       );
       const result = await handler.execute(ctx);
       expect(result.success).toBe(false);
-      expect((result as { success: false; error: string }).error).toBe(
-        'No bullpen thread with ID 00000000-0000-4000-8000-000000000099 exists',
+      const error = (result as { success: false; error: string }).error;
+      expect(error).toContain('No bullpen thread with ID 00000000-0000-4000-8000-000000000099 exists');
+      expect(error).toContain('scheduler-report');
+      expect(error).not.toContain('is your scheduled-job ID');
+    });
+
+    it('close: remaps service not-found through the job-UUID helper without a pre-check', async () => {
+      const ctx = makeCtx(
+        { action: 'close', thread_id: JOB_ID },
+        { conversationId: RUN_CONV },
       );
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect((result as { success: false; error: string }).error).toContain('scheduled-job ID');
     });
   });
 });
