@@ -224,6 +224,7 @@ describe('SignalSendHandler', () => {
         delegationHint: 'Delegate to meeting-debrief',
         metadata: { meeting: 'sync' },
         expiresInHours: 48,
+        ttlSource: 'agent',
       });
     });
 
@@ -252,6 +253,7 @@ describe('SignalSendHandler', () => {
         agentId: 'coordinator',
         content: 'Hello',
         expiresInHours: 6,
+        ttlSource: 'channel-default',
       });
     });
 

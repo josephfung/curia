@@ -69,7 +69,25 @@ export interface OutboundContextEntry {
   /** Hours until automatic expiry. Default: the channel's default TTL (see
    *  CHANNEL_DEFAULT_EXPIRY_HOURS / defaultExpiryHoursFor). */
   expiresInHours?: number;
+  /**
+   * Which rule chose `expiresInHours`, for the registration log (#1816).
+   *
+   * Callers that resolve the TTL themselves must say so: the service cannot
+   * tell an agent's deliberate window from one it supplied a line earlier, and
+   * a guess here sends the next debugger looking at the wrong layer. Omitted
+   * only by callers that let the service resolve the default.
+   */
+  ttlSource?: TtlSource;
 }
+
+/**
+ * Provenance of a registered entry's TTL, ordered from most to least
+ * deliberate. `agent` means a skill passed `expires_in_hours`; `task-wake` is
+ * the system's 168h reply binding; `explicit-tier` is `explicitExpiryHours`
+ * (or the channel default, whichever is longer); `channel-default` is bare
+ * auto-registration.
+ */
+export type TtlSource = 'agent' | 'task-wake' | 'explicit-tier' | 'channel-default';
 
 /** A row from the outbound_context table, with snake_case → camelCase mapping. */
 export interface OutboundContextRow {
@@ -194,6 +212,20 @@ export class OutboundContextService {
       ...CHANNEL_DEFAULT_EXPIRY_HOURS,
       ...(config?.channelDefaultExpiryHours ?? {}),
     };
+
+    // info, not debug: prod runs at LOG_LEVEL=info, so a debug line would never
+    // fire and the resolved policy would stay invisible in the one place it
+    // matters — #1816 was diagnosed by reading a row by hand. One line per boot
+    // (not per send) keeps that cheap, and it is also how a typo'd channel key
+    // surfaces: an inert `emial: 96` shows up here next to a still-72 `email`.
+    this.logger.info(
+      {
+        defaultExpiryHours: this._defaultExpiryHours,
+        explicitExpiryHours: this._explicitExpiryHours,
+        channelDefaults: this._channelDefaultExpiryHours,
+      },
+      'Outbound context TTL policy resolved',
+    );
   }
 
   get defaultExpiryHours(): number {
@@ -222,8 +254,11 @@ export class OutboundContextService {
     const preview = truncatePreview(entry.content);
     // Resolved here as well as at the call site so that any caller which omits
     // expiresInHours still gets the channel-aware window rather than a flat 6h.
-    const ttlSource = entry.expiresInHours != null ? 'caller' : 'channel-default';
+    // Trust the caller's own account of which rule chose the window; only fall
+    // back to deriving it for callers that let the service resolve the default.
     const expiresInHours = entry.expiresInHours ?? this.defaultExpiryHoursFor(entry.channelId);
+    const ttlSource: TtlSource =
+      entry.ttlSource ?? (entry.expiresInHours != null ? 'agent' : 'channel-default');
     const expiresAt = new Date(Date.now() + expiresInHours * 3_600_000);
 
     const result = await this.pool.query<{ id: string }>(

@@ -154,10 +154,27 @@ Three approaches were considered:
   the query fast even with high write throughput, but the table requires
   periodic cleanup — handled by the scheduled `cleanupExpired()` job.
 - Unconditional registration means every outbound message writes a row,
-  including one-shot sends that will never receive a reply. The 6-hour TTL
-  on auto-registered entries plus cleanup keeps storage bounded, but the
+  including one-shot sends that will never receive a reply. The per-channel
+  TTL on auto-registered entries plus cleanup keeps storage bounded, but the
   write amplification is real. Accepted because the alternative
   (conditional registration) is exactly what caused #609.
+- **The per-channel TTL is bounded by the injection cap, not just by time.**
+  `getActive(limit = 10)` surfaces only the ten most recent active entries,
+  ordered `created_at DESC` and unfiltered by channel, and correlation is
+  entirely LLM-driven off that block. Holding email entries alive for 72h
+  instead of 6h grows the active population without widening the window that
+  shows it, so a three-day-old email whose reply finally lands can now be alive
+  in the table yet sit outside the newest ten — arriving as an unrecognised
+  cold inbound, the #1816 symptom at a different threshold. Ten outbounds over
+  three days is an ordinary week for this workload. Scoping that query is
+  tracked separately as #1817; until it lands, the longer TTL delivers its
+  benefit only up to the cap.
+- An unrecognised channel id in `contextBridge.channelDefaultExpiryHours` is
+  accepted and silently inert — registration uses pseudo-channel ids
+  (`internal`, `scheduler`, `bullpen`) that are not in the channel catalog, so
+  rejecting unknown keys would break legitimate tuning. The startup
+  `Outbound context TTL policy resolved` line prints the merged map so a typo
+  is visible next to the value it failed to override.
 - Metadata is JSONB capped at 16 KB. Oversize metadata is dropped at
   serialization time (text fields like `expected_reply` and `delegation_hint`
   are truncated to 500 chars with a marker). This protects against runaway

@@ -210,6 +210,7 @@ describe('EmailSendHandler', () => {
         expectedReply: 'Proposal feedback',
         delegationHint: 'Delegate to meeting-debrief',
         expiresInHours: 72,
+        ttlSource: 'agent',
       });
     });
 
@@ -242,6 +243,7 @@ describe('EmailSendHandler', () => {
         // Email's channel default, not the flat 6h that expired before
         // next-business-day replies could land (#1816).
         expiresInHours: 72,
+        ttlSource: 'channel-default',
       });
     });
 
