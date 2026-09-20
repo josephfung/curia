@@ -763,7 +763,9 @@ interface AuthorizationDecisionPayload {
   conversationId?: string;
   /**
    * Count of resolved outbound recipients at Gate C decision time (#1815).
-   * Absent when recipients could not be resolved (fail-closed / no parser).
+   * Absent when recipients could not be resolved (fail-closed / no parser),
+   * and when Gate C skipped resolution because the third-party axis cannot
+   * change the decision (e.g. trusted / unknown / blocked).
    */
   recipientCount?: number;
 }

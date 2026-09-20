@@ -37,6 +37,37 @@ import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { OutboundGateway } from './outbound-gateway.js';
+
+/**
+ * Per-invoke wrapper so Gate C and the handler share one `getEmailMessage`
+ * snapshot. Closes the TOCTOU window between the set Gate C judged and the
+ * set the handler sends, and avoids a second Nylas round trip (#1815).
+ */
+function withCachedGetEmailMessage(
+  gateway: OutboundGateway,
+  cache: Map<string, ReturnType<OutboundGateway['getEmailMessage']>>,
+): OutboundGateway {
+  const getEmailMessage: OutboundGateway['getEmailMessage'] = (messageId, accountId) => {
+    const key = `${accountId ?? ''}\0${messageId}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const pending = accountId === undefined
+      ? gateway.getEmailMessage(messageId)
+      : gateway.getEmailMessage(messageId, accountId);
+    cache.set(key, pending);
+    return pending;
+  };
+  return new Proxy(gateway, {
+    get(target, prop, receiver) {
+      if (prop === 'getEmailMessage') return getEmailMessage;
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value === 'function') {
+        return (value as (...args: never[]) => unknown).bind(target);
+      }
+      return value;
+    },
+  });
+}
 import type { SchedulerService } from '../scheduler/scheduler-service.js';
 import type { EntityMemory, CreateEntityOptions, StoreFactResult } from '../memory/entity-memory.js';
 import type { SensitivityClassifier } from '../memory/sensitivity.js';
@@ -619,6 +650,7 @@ export class ExecutionLayer {
     toolName: string,
     input: Record<string, unknown>,
     skillLogger: Logger,
+    fetchMessage?: (messageId: string) => ReturnType<OutboundGateway['getEmailMessage']>,
   ): Promise<{ recipients: string[] | null; resolutionFailed: boolean }> {
     const found = findCarveoutSkill(toolName);
     if (!found) return { recipients: null, resolutionFailed: false };
@@ -626,9 +658,9 @@ export class ExecutionLayer {
     if (found.carveout.resolveRecipients) {
       try {
         const recipients = await found.carveout.resolveRecipients(input, {
-          fetchMessage: this.outboundGateway
+          fetchMessage: fetchMessage ?? (this.outboundGateway
             ? (messageId) => this.outboundGateway!.getEmailMessage(messageId)
-            : undefined,
+            : undefined),
           selfEmails: this.selfEmails,
         });
         if (recipients === null) return { recipients: null, resolutionFailed: true };
@@ -716,8 +748,10 @@ export class ExecutionLayer {
    * emailing a third party must escalate — the static manifest cannot distinguish the two.
    * Defer to the EscalationJudge, which inspects the actual action. The judge is fail-closed
    * internally (LLM error/timeout/malformed verdict → escalate). When no judge is wired or it
-   * is disabled, we fail closed here as well — an ambiguous consequential action is never
-   * silently allowed.
+   * is disabled, an *ambiguous* consequential action (third-party axis not pinned) still
+   * fails closed. A structural pin is trusted without a judge: there is no class-upgrade
+   * mechanism when the judge is off, and failing closed would re-escalate every known
+   * sender-only reply (#1815).
    */
   private async resolveTierGateDecision(
     initiatingTier: ContactTier,
@@ -766,7 +800,7 @@ export class ExecutionLayer {
         structuralIsThirdPartyFacing,
         isPrincipalSoleRecipient,
       );
-      if (decisionWithClass === decisionIfIrreversible || !this.escalationJudge?.isEnabled()) {
+      if (decisionWithClass === decisionIfIrreversible) {
         skillLogger.info(
           {
             toolName,
@@ -777,6 +811,25 @@ export class ExecutionLayer {
             decision: decisionWithClass,
           },
           'autonomy gate: Gate C used structurally resolved recipients for the third-party-facing determination (#1815)',
+        );
+        return decisionWithClass;
+      }
+      // Structural pin is stronger evidence than the judge's third-party guess.
+      // With the judge off there is no class-upgrade path anywhere, so trusting
+      // the pin (including allow for known + sender-only) is the #1815 outcome.
+      // Failing closed here would re-escalate every known sender-only reply
+      // whenever the judge is unwired or kill-switched.
+      if (!this.escalationJudge?.isEnabled()) {
+        skillLogger.info(
+          {
+            toolName,
+            initiatingTier,
+            actionClass,
+            isPrincipalSoleRecipient,
+            isThirdPartyFacing: structuralIsThirdPartyFacing,
+            decision: decisionWithClass,
+          },
+          'autonomy gate: Gate C trusted structurally resolved recipients with no escalation judge (#1815)',
         );
         return decisionWithClass;
       }
@@ -831,7 +884,8 @@ export class ExecutionLayer {
       return decision;
     }
 
-    // No judge available — fail closed rather than guess permissively.
+    // No judge available and the third-party axis was not pinned structurally —
+    // fail closed rather than guess permissively.
     skillLogger.warn(
       { toolName, initiatingTier, actionClass },
       'autonomy gate: Gate C decision is third-party-sensitive but no escalation judge is configured — failing closed (escalate)',
@@ -903,6 +957,22 @@ export class ExecutionLayer {
     // Declare skillLogger here (before the normalization loop) so it is in scope
     // for both the normalization error path and the rest of the method.
     const skillLogger = this.logger.child({ skill: toolName });
+
+    // Per-invoke cache: Gate C's getEmailMessage and the handler's share one
+    // snapshot so an allowed email-reply is not fetched twice / raced (#1815).
+    // The wrapper is created lazily on first Gate C fetch so other skills keep
+    // the original gateway object identity.
+    const emailMessageCache = new Map<string, ReturnType<OutboundGateway['getEmailMessage']>>();
+    let outboundGatewayForCtx = this.outboundGateway;
+    const sourceOutboundGateway = this.outboundGateway;
+    const fetchMessageForGateC = sourceOutboundGateway
+      ? (messageId: string) => {
+          if (outboundGatewayForCtx === sourceOutboundGateway) {
+            outboundGatewayForCtx = withCachedGetEmailMessage(sourceOutboundGateway, emailMessageCache);
+          }
+          return outboundGatewayForCtx!.getEmailMessage(messageId);
+        }
+      : undefined;
 
     // Normalize timestamp inputs to UTC Z-suffix before invoking the handler.
     // The LLM often emits offset-less ISO strings (e.g. "2026-04-06T08:00:00")
@@ -1197,7 +1267,9 @@ export class ExecutionLayer {
             let initiatingIdentifiers: string[] = [];
             if (decisionIfReplyToSender !== decisionIfThirdParty) {
               if (foundCarveout?.carveout.resolveRecipients) {
-                const resolved = await this.resolveGateCRecipients(toolName, input, skillLogger);
+                const resolved = await this.resolveGateCRecipients(
+                  toolName, input, skillLogger, fetchMessageForGateC,
+                );
                 recipients = resolved.recipients;
                 resolutionFailed = resolved.resolutionFailed;
                 isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
@@ -1544,7 +1616,7 @@ export class ExecutionLayer {
     const capabilityServices: Record<string, unknown> = {
       bus: this.bus,
       agentRegistry: this.agentRegistry,
-      outboundGateway: this.outboundGateway,
+      outboundGateway: outboundGatewayForCtx,
       schedulerService: this.schedulerService,
       entityMemory: this.entityMemory,
       nylasCalendarClient: this.nylasCalendarClient,
