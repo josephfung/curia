@@ -112,16 +112,18 @@ interface AgentResponsePayload {
   /** Whether retrying the same delegation may succeed. Mirrors AgentError.retryable. */
   retryable?: boolean;
   // Names of skills invoked during the task (in call order, may contain duplicates).
-  // Populated by the agent runtime's tool-use loop; absent on error-path responses
-  // where the runtime bailed before completing the loop.
+  // Populated by the agent runtime's tool-use loop. Present on end-of-loop responses
+  // (including `isError: true` fallbacks); absent on early-bail `sendErrorResponse`
+  // paths where the runtime never entered / finished the loop.
   skillsCalled?: string[];
   /**
    * Skills that returned `{ success: false }` during the tool-use loop.
    * Populated alongside `skillsCalled` so the scheduler can persist visibility
    * into `last_run_context` without flipping job health (#1830). Absent when
-   * no tool failed, and absent on error-path responses (same rule as
-   * `skillsCalled`). Capped to distinct skill names (first failure wins);
-   * further failures are counted in `failedSkillsOmitted`.
+   * no tool failed. Same presence rule as `skillsCalled`: set on end-of-loop
+   * responses (including `isError: true`), absent on early-bail error responses.
+   * Capped to distinct skill names (first failure wins); further failures are
+   * counted in `failedSkillsOmitted`.
    */
   failedSkills?: Array<{ name: string; error: string }>;
   /** Count of tool failures not represented in `failedSkills` (cap overflow / duplicates). */

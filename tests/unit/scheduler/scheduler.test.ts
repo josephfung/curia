@@ -1363,7 +1363,7 @@ describe('Scheduler', () => {
       expect(autoSummary).toBe('x'.repeat(500));
     });
 
-    it('completes a job run on agent.error', async () => {
+    it('completes a failed run from agent.response(isError), using the stashed agent.error message', async () => {
       // Set up: fire a job
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
@@ -1378,8 +1378,10 @@ describe('Scheduler', () => {
 
       scheduler.start();
 
-      // The error handler is the second subscriber
+      const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
       const errorHandler = bus.subscribe.mock.calls[1]?.[2] as (event: unknown) => Promise<void>;
+
+      // Production order: agent.error first (stash), then agent.response(isError) completes.
       await errorHandler({
         id: 'err-1',
         type: 'agent.error',
@@ -1396,11 +1398,28 @@ describe('Scheduler', () => {
           context: {},
         },
       });
+      expect(schedulerService.completeJobRun).not.toHaveBeenCalled();
 
-      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', false, 'budget blown', undefined, undefined, undefined);
+      await responseHandler({
+        id: 'resp-err-1',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEventId,
+        timestamp: new Date(),
+        payload: {
+          agentId: 'agent-1',
+          conversationId: 'c1',
+          content: 'fallback',
+          isError: true,
+        },
+      });
+
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
+        'job-1', false, 'budget blown', undefined, undefined, undefined,
+      );
     });
 
-    it('does not double-complete when both agent.response(isError) and agent.error are published', async () => {
+    it('persists failedSkills on a failed run from agent.response(isError) (#1830)', async () => {
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
       pool.query.mockResolvedValueOnce({ rows: [] });
@@ -1415,15 +1434,64 @@ describe('Scheduler', () => {
       const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
       const errorHandler = bus.subscribe.mock.calls[1]?.[2] as (event: unknown) => Promise<void>;
 
-      // Runtime failure paths intentionally emit both events; scheduler must complete once.
+      const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+      await errorHandler({
+        id: 'err-fs',
+        type: 'agent.error',
+        sourceLayer: 'agent',
+        parentEventId: taskEventId,
+        timestamp: new Date(),
+        payload: {
+          agentId: 'agent-1',
+          conversationId: 'c1',
+          errorType: 'BUDGET_EXCEEDED',
+          source: 'runtime',
+          message: 'Task exceeded consecutive error budget',
+          retryable: false,
+          context: {},
+        },
+      });
       await responseHandler({
-        id: 'resp-err-1',
+        id: 'resp-fs',
         type: 'agent.response',
         sourceLayer: 'agent',
         parentEventId: taskEventId,
         timestamp: new Date(),
-        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'fallback', isError: true },
+        payload: {
+          agentId: 'agent-1',
+          conversationId: 'c1',
+          content: 'fallback',
+          isError: true,
+          failedSkills,
+        },
       });
+
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
+        'job-1',
+        false,
+        'Task exceeded consecutive error budget',
+        undefined,
+        failedSkills,
+        undefined,
+      );
+    });
+
+    it('does not double-complete when both agent.error and agent.response(isError) are published', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
+      const taskEventId = taskEvent.id;
+
+      schedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+      scheduler.start();
+
+      const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      const errorHandler = bus.subscribe.mock.calls[1]?.[2] as (event: unknown) => Promise<void>;
+
+      // Production order: error then response. Completes once on the response.
       await errorHandler({
         id: 'err-2',
         type: 'agent.error',
@@ -1439,6 +1507,14 @@ describe('Scheduler', () => {
           retryable: false,
           context: {},
         },
+      });
+      await responseHandler({
+        id: 'resp-err-1',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEventId,
+        timestamp: new Date(),
+        payload: { agentId: 'agent-1', conversationId: 'c1', content: 'fallback', isError: true },
       });
 
       expect(schedulerService.completeJobRun).toHaveBeenCalledTimes(1);

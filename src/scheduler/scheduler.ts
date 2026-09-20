@@ -419,6 +419,11 @@ export class Scheduler {
   // agent.response / agent.error events to the originating scheduled job.
   private pendingJobs = new Map<string, string>();
 
+  // agent.error arrives before agent.response(isError) on failure paths. Stash the
+  // structured error message here so the response subscriber can complete the job
+  // with both the real message and failedSkills (#1830 follow-on).
+  private pendingFailureMessages = new Map<string, string>();
+
   // Tracks burst counts per job for checkEveryNBursts support.
   // In-memory only — resets on process restart (a missed check is not a security failure).
   private burstCounts = new Map<string, number>();
@@ -447,43 +452,65 @@ export class Scheduler {
    * Sets up bus subscribers for completion tracking, then starts the polling interval.
    */
   start(): void {
-    // Subscribe to agent.response on system layer to track successful completions.
-    // Error responses (isError: true) are skipped here — the agent.error subscriber
-    // below handles failures. This avoids a double handleCompletion call on the same
-    // parentEventId (the runtime emits both agent.error and agent.response on failure).
+    // Subscribe to agent.response on system layer to track completions.
+    // Both success and isError responses complete the job here. Failure paths emit
+    // agent.error first (stashed below) then agent.response(isError) with failedSkills;
+    // completing on the response means a run that dies mid-tooling still records what
+    // failed (#1830 follow-on). agent.error alone does not complete — every runtime
+    // failure path also emits a response.
     this.bus.subscribe('agent.response', 'system', (event) => {
       const responseEvent = event as AgentResponseEvent;
-      if (responseEvent.payload.isError) return;
-      if (responseEvent.parentEventId) {
-        // Pass the agent's final text as a fallback summary (truncated to 500 chars).
-        // completeJobRun() writes it via COALESCE — agent-provided scheduler-report wins.
-        const autoSummary = responseEvent.payload.content.slice(0, 500) || undefined;
-        const failedSkills = responseEvent.payload.failedSkills;
-        const failedSkillsOmitted = responseEvent.payload.failedSkillsOmitted;
+      if (!responseEvent.parentEventId) return;
+
+      const parentEventId = responseEvent.parentEventId;
+      const failedSkills = responseEvent.payload.failedSkills;
+      const failedSkillsOmitted = responseEvent.payload.failedSkillsOmitted;
+
+      if (responseEvent.payload.isError) {
+        const stashed = this.pendingFailureMessages.get(parentEventId);
+        this.pendingFailureMessages.delete(parentEventId);
+        const errorMessage =
+          stashed
+          ?? (responseEvent.payload.content.slice(0, 500) || 'Agent error');
         this.handleCompletion(
-          responseEvent.parentEventId,
-          true,
+          parentEventId,
+          false,
+          errorMessage,
           undefined,
-          autoSummary,
           failedSkills,
           failedSkillsOmitted,
         ).catch((err) => {
-          this.logger.error({ err, parentEventId: responseEvent.parentEventId }, 'Unhandled error in handleCompletion (success path)');
+          this.logger.error({ err, parentEventId }, 'Unhandled error in handleCompletion (error-response path)');
         });
+        return;
       }
+
+      this.pendingFailureMessages.delete(parentEventId);
+      // Pass the agent's final text as a fallback summary (truncated to 500 chars).
+      // completeJobRun() writes it via COALESCE — agent-provided scheduler-report wins.
+      const autoSummary = responseEvent.payload.content.slice(0, 500) || undefined;
+      this.handleCompletion(
+        parentEventId,
+        true,
+        undefined,
+        autoSummary,
+        failedSkills,
+        failedSkillsOmitted,
+      ).catch((err) => {
+        this.logger.error({ err, parentEventId }, 'Unhandled error in handleCompletion (success path)');
+      });
     });
 
-    // Subscribe to agent.error on system layer to track failures.
+    // agent.error: stash the structured message for the paired agent.response(isError).
+    // Do not complete here — completing early would clear pendingJobs before the response
+    // arrives with failedSkills, leaving a failed run with no tool-failure visibility.
     this.bus.subscribe('agent.error', 'system', (event) => {
       const errorEvent = event as AgentErrorEvent;
-      if (errorEvent.parentEventId) {
-        this.handleCompletion(
+      if (errorEvent.parentEventId && this.pendingJobs.has(errorEvent.parentEventId)) {
+        this.pendingFailureMessages.set(
           errorEvent.parentEventId,
-          false,
           errorEvent.payload.message,
-        ).catch((err) => {
-          this.logger.error({ err, parentEventId: errorEvent.parentEventId }, 'Unhandled error in handleCompletion (failure path)');
-        });
+        );
       }
     });
 
@@ -638,6 +665,7 @@ export class Scheduler {
           for (const [eventId, pendingJobId] of this.pendingJobs) {
             if (pendingJobId === job.id) {
               this.pendingJobs.delete(eventId);
+              this.pendingFailureMessages.delete(eventId);
               break;
             }
           }
@@ -950,6 +978,7 @@ export class Scheduler {
 
     // Clean up the tracking map.
     this.pendingJobs.delete(parentEventId);
+    this.pendingFailureMessages.delete(parentEventId);
 
     try {
       // Run the drift check on the success path for persistent tasks only.
@@ -1290,6 +1319,7 @@ export class Scheduler {
           for (const [eventId, pendingJobId] of this.pendingJobs) {
             if (pendingJobId === row.id) {
               this.pendingJobs.delete(eventId);
+              this.pendingFailureMessages.delete(eventId);
               this.burstCounts.delete(row.id);
               this.logger.debug({ jobId: row.id, eventId }, 'Removed stale pendingJobs entry for recovered job');
               break; // At most one entry per job

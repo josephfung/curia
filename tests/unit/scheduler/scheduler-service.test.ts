@@ -725,7 +725,7 @@ describe('SchedulerService', () => {
       expect(sql).not.toContain('|| $');
     });
 
-    it('clears failedSkills on the failure path so a failed run does not inherit prior tool failures (#1830)', async () => {
+    it('clears failedSkills on the failure path when none were reported (#1830)', async () => {
       const jobId = 'job-fail-clear-skills';
       pool.query.mockResolvedValueOnce({
         rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
@@ -739,6 +739,25 @@ describe('SchedulerService', () => {
       expect(sql).toContain("last_run_outcome = $5");
       expect(sql).toContain("jsonb_typeof(last_run_context) = 'object'");
       expect(sql).toContain("last_run_context - 'failedSkills' - 'failedSkillsOmitted'");
+      expect(sql).not.toContain('|| $6');
+    });
+
+    it('merges failedSkills on the failure path when the isError response carried them (#1830)', async () => {
+      const jobId = 'job-fail-merge-skills';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+      const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+      await svc.completeJobRun(jobId, false, 'budget blown', undefined, failedSkills);
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('|| $6::jsonb');
+      expect(params).toContain(JSON.stringify({ failedSkills }));
+      expect(params).toContain('failed');
     });
 
     it('uses COALESCE for last_run_summary so agent-provided summary wins (one-shot)', async () => {
