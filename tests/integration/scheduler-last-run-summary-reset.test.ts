@@ -14,6 +14,7 @@ import { EventBus } from '../../src/bus/bus.js';
 import { Scheduler } from '../../src/scheduler/scheduler.js';
 import { SchedulerService, type JobRow } from '../../src/scheduler/scheduler-service.js';
 import { deriveJobObjective } from '../../src/scheduler/job-notification-context.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -22,24 +23,31 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 const AGENT_ID = 'last-run-summary-reset-test-agent';
 const logger = pino({ level: 'silent' });
 
-async function cleanup(pool: pg.Pool): Promise<void> {
-  await pool.query(`DELETE FROM scheduled_jobs WHERE agent_id = $1`, [AGENT_ID]);
-}
-
 describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
   let pool: pg.Pool;
   let bus: EventBus;
   let schedulerService: SchedulerService;
   let scheduler: Scheduler;
+  // Set true only after requireCuriaTestDatabase confirms we're on curia_test. vitest still
+  // fires beforeEach/afterAll after a FAILED beforeAll, so without this flag a guard abort
+  // against a mispointed DATABASE_URL would still run the teardown DELETEs.
+  let onTestDb = false;
+
+  async function cleanup(): Promise<void> {
+    if (!onTestDb) return;
+    await pool.query(`DELETE FROM scheduled_jobs WHERE agent_id = $1`, [AGENT_ID]);
+  }
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
+    onTestDb = true;
     bus = new EventBus(logger as never);
     schedulerService = new SchedulerService(pool, bus, logger as never, 'UTC');
     scheduler = new Scheduler({ pool, bus, logger: logger as never, schedulerService });
   });
-  afterAll(async () => { await cleanup(pool); await pool.end(); });
-  beforeEach(async () => { await cleanup(pool); });
+  afterAll(async () => { await cleanup(); await pool?.end(); });
+  beforeEach(async () => { await cleanup(); });
 
   async function insertDueCronJob(summary: string | null, context: Record<string, unknown> | null = null): Promise<string> {
     const pastDue = new Date(Date.now() - 60_000).toISOString();
