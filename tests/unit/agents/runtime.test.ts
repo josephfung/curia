@@ -1694,6 +1694,151 @@ describe('AgentRuntime tool-use loop', () => {
     expect(responses[0]!.payload.failedSkills).toBeUndefined();
   });
 
+  it('redacts credential shapes from failedSkills error text (#1830)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-1', name: 'web-fetch', input: {} }],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Could not fetch.',
+          usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const leakedKey = 'sk-ant-api03-abcdefghijk1234567890';
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({
+        success: false,
+        error: `Upstream rejected Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature and key ${leakedKey}`,
+      }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{
+        name: 'web-fetch',
+        description: 'Fetch',
+        input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+      }],
+      errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-redact-failed',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Fetch',
+      parentEventId: 'parent-redact-failed',
+    }));
+
+    expect(responses).toHaveLength(1);
+    const errText = responses[0]!.payload.failedSkills![0]!.error;
+    expect(errText).not.toContain(leakedKey);
+    expect(errText).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
+    expect(errText).toContain('[REDACTED]');
+  });
+
+  it('forwards failedSkills on LLM failure exit after a tool failure (#1830)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-1', name: 'web-fetch', input: {} }],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'error' as const,
+          error: {
+            type: 'AUTH_FAILURE' as const,
+            source: 'mock',
+            message: 'API key rejected',
+            retryable: false,
+            context: {},
+            timestamp: new Date(),
+          },
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: false, error: 'connection refused' }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{
+        name: 'web-fetch',
+        description: 'Fetch',
+        input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+      }],
+      errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-llm-fail-skills',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Fetch',
+      parentEventId: 'parent-llm-fail-skills',
+    }));
+
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.payload.isError).toBe(true);
+    expect(responses[0]!.payload.failedSkills).toEqual([
+      { name: 'web-fetch', error: 'connection refused' },
+    ]);
+  });
+
   it('synthesizes caller from originator when senderContext is absent (delegated task path)', async () => {
     // Regression test for #710: when the delegate skill creates a specialist task it omits
     // senderContext. The runtime must fall back to taskMetadata.originator so ctx.caller

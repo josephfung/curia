@@ -679,8 +679,12 @@ export class AgentRuntime {
     };
     // Keep the ref in sync so paused-path publish sees the live omitted count.
     const recordFailedSkill = (name: string, error: string): void => {
-      // Sanitise like drift verdict.reason — error bodies are third-party free text.
-      const sanitized = error.replace(/[\r\n]+/g, ' ').trim().slice(0, 500);
+      // Redact credential shapes first (shared secret patterns), then flatten
+      // newlines and cap length for last_run_context / diagnostics (#1830).
+      const sanitized = sanitizeOutput(error)
+        .replace(/[\r\n]+/g, ' ')
+        .trim()
+        .slice(0, 500);
       const already = failedSkills.some((f) => f.name === name);
       if (!already && failedSkills.length < MAX_DISTINCT_FAILED_SKILLS) {
         failedSkills.push({ name, error: sanitized });
@@ -1964,7 +1968,7 @@ export class AgentRuntime {
           timestamp: new Date(),
         };
         await this.publishAgentError(streamErr, taskEvent);
-        await this.sendErrorResponse(taskEvent, streamErr);
+        await this.sendErrorResponse(taskEvent, streamErr, budgetHandoff);
         return;
       } else {
         // empty_stream / aborted — sensible fallback error response
@@ -2409,7 +2413,7 @@ export class AgentRuntime {
             logger.error({ err: telemetryErr, agentId }, 'Failed to publish llm.error for fallback exception');
           }
           await this.publishAgentError(thrownErr, taskEvent);
-          await this.sendErrorResponse(taskEvent, thrownErr);
+          await this.sendErrorResponse(taskEvent, thrownErr, budgetHandoff);
           return null;
         }
         const fallbackLatencyMs = Date.now() - fallbackStartMs;
@@ -2435,7 +2439,7 @@ export class AgentRuntime {
         );
         await publishLlmErrorEvent(fallbackResponse, this.config.fallbackModel, this.config.fallbackProvider.id);
         await this.publishAgentError(fallbackErr, taskEvent);
-        await this.sendErrorResponse(taskEvent, fallbackErr);
+        await this.sendErrorResponse(taskEvent, fallbackErr, budgetHandoff);
         return null;
       }
 
@@ -2450,7 +2454,7 @@ export class AgentRuntime {
       }
       logger.error({ agentId, errorType: agentErr.type, source: agentErr.source }, 'Non-retryable LLM error');
       await this.publishAgentError(agentErr, taskEvent);
-      await this.sendErrorResponse(taskEvent, agentErr);
+      await this.sendErrorResponse(taskEvent, agentErr, budgetHandoff);
       return null;
     }
 
@@ -2495,7 +2499,7 @@ export class AgentRuntime {
       if (!latestErr.retryable) {
         logger.error({ agentId, errorType: latestErr.type }, 'Retry returned non-retryable error');
         await this.publishAgentError(latestErr, taskEvent);
-        await this.sendErrorResponse(taskEvent, latestErr);
+        await this.sendErrorResponse(taskEvent, latestErr, budgetHandoff);
         return null;
       }
 
@@ -2508,7 +2512,7 @@ export class AgentRuntime {
     // All retries exhausted — publish the most recent error
     logger.error({ agentId, retries: RETRY_BACKOFF_MS.length }, 'All LLM retries exhausted');
     await this.publishAgentError(latestErr, taskEvent);
-    await this.sendErrorResponse(taskEvent, latestErr);
+    await this.sendErrorResponse(taskEvent, latestErr, budgetHandoff);
     return null;
   }
 
