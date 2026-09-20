@@ -1,9 +1,11 @@
-// scheduler-last-run-summary-reset.test.ts — claim clears last_run_summary/context so
+// scheduler-last-run-summary-reset.test.ts — claim clears last_run_summary so
 // completeJobRun's COALESCE reflects *this* run, not a stale prior write (#1829).
+// last_run_context is deliberately left alone so continuity cursors survive a
+// crash/timeout before the next scheduler-report.
 //
 // Against real Postgres: a SQL-substring unit assertion cannot prove the end-to-end
-// writer interaction (claim NULL → optional reportJobRun → completeJobRun COALESCE /
-// recoverStuckJob leave-alone).
+// writer interaction (claim NULL summary → optional reportJobRun → completeJobRun
+// COALESCE / recoverStuckJob leave-alone).
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
@@ -77,23 +79,23 @@ describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
     (scheduler as unknown as { fireJob(j: JobRow): Promise<void> }).fireJob(job);
 
   it('replaces a prior summary with the new auto-summary when scheduler-report is not called', async () => {
-    const jobId = await insertDueCronJob('Calendar holds sweep completed: 0 scanned…', { scanned: 0 });
+    const jobId = await insertDueCronJob('Calendar holds sweep completed: 0 scanned…', { offset: 500 });
     const pastDue = new Date(Date.now() - 60_000).toISOString();
 
     await fireJob(jobRowFor(jobId, pastDue));
 
-    // Mid-run: claim cleared both columns; deriveJobObjective falls back to task_payload.
+    // Mid-run: summary cleared; context survives so a crash before report keeps the cursor.
     const mid = await schedulerService.getJob(jobId);
     expect(mid!.status).toBe('running');
     expect(mid!.lastRunSummary).toBeNull();
-    expect(mid!.lastRunContext).toBeNull();
+    expect(mid!.lastRunContext).toEqual({ offset: 500 });
     expect(deriveJobObjective(mid!)).toBe('sweep calendar holds');
 
     await schedulerService.completeJobRun(jobId, true, undefined, 'auto: 2 scanned, 1 expired');
 
     const after = await schedulerService.getJob(jobId);
     expect(after!.lastRunSummary).toBe('auto: 2 scanned, 1 expired');
-    expect(after!.lastRunContext).toBeNull();
+    expect(after!.lastRunContext).toEqual({ offset: 500 });
     expect(after!.status).toBe('pending');
   });
 
@@ -110,21 +112,36 @@ describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
     expect(after!.lastRunContext).toEqual({ scanned: 5, expired: 2 });
   });
 
-  it('leaves last_run_summary NULL after a timeout recovery (no stale success text)', async () => {
-    const jobId = await insertDueCronJob('looked successful last time', { ok: true });
+  it('preserves last_run_context when scheduler-report omits context', async () => {
+    const jobId = await insertDueCronJob('prior', { offset: 500 });
+    const pastDue = new Date(Date.now() - 60_000).toISOString();
+
+    await fireJob(jobRowFor(jobId, pastDue));
+    // Summary-only report — must not wipe the continuity cursor.
+    await schedulerService.reportJobRun(jobId, 'swept another batch');
+    await schedulerService.completeJobRun(jobId, true, undefined, 'auto: should not win');
+
+    const after = await schedulerService.getJob(jobId);
+    expect(after!.lastRunSummary).toBe('swept another batch');
+    expect(after!.lastRunContext).toEqual({ offset: 500 });
+  });
+
+  it('leaves last_run_summary NULL after a timeout but keeps last_run_context', async () => {
+    const jobId = await insertDueCronJob('looked successful last time', { offset: 500 });
     const pastDue = new Date(Date.now() - 60_000).toISOString();
 
     await fireJob(jobRowFor(jobId, pastDue));
 
     const mid = await schedulerService.getJob(jobId);
     expect(mid!.lastRunSummary).toBeNull();
+    expect(mid!.lastRunContext).toEqual({ offset: 500 });
 
     const recovered = await schedulerService.recoverStuckJob(jobId, 900);
     expect(recovered.noOp).toBe(false);
 
     const after = await schedulerService.getJob(jobId);
     expect(after!.lastRunSummary).toBeNull();
-    expect(after!.lastRunContext).toBeNull();
+    expect(after!.lastRunContext).toEqual({ offset: 500 });
     expect(after!.lastError).toMatch(/timed out/i);
     expect(after!.lastRunOutcome).toBe('timed_out');
   });

@@ -700,18 +700,17 @@ export class Scheduler {
       // next_run_at to the future, so any stale concurrent claim matches 0 rows and skips.
       // (#1124 advanced next_run_at but only shielded the NEXT poll's SELECT, not a
       // concurrent poll already holding the row.)
-      // Clear last_run_summary/context at claim so completeJobRun's COALESCE means
-      // "explicit scheduler-report during *this* run beats the auto-summary" — not
-      // "whatever the previous run left behind" (#1829). Prior-run injection below
-      // still uses the in-memory JobRow from the poll SELECT, so the agent sees the
-      // previous run's text; only the DB column is reset for this run's writers.
+      // Clear last_run_summary at claim so completeJobRun's COALESCE prefers an
+      // explicit scheduler-report from *this* run over a stale prior summary (#1829).
+      // last_run_context is intentionally left alone — it carries continuity state
+      // (e.g. sweep cursors) that must survive a crash/timeout before the next report.
+      // Prior-run injection below still uses the in-memory JobRow from the poll SELECT.
       claimResult = await this.pool.query(
         `UPDATE scheduled_jobs
             SET status = $1,
                 run_started_at = now(),
                 next_run_at = $3,
-                last_run_summary = NULL,
-                last_run_context = NULL
+                last_run_summary = NULL
           WHERE id = $2
             AND status IN ('pending', 'failed')
             AND cron_expr = $4
@@ -724,8 +723,7 @@ export class Scheduler {
         `UPDATE scheduled_jobs
             SET status = $1,
                 run_started_at = now(),
-                last_run_summary = NULL,
-                last_run_context = NULL
+                last_run_summary = NULL
           WHERE id = $2
             AND status IN ('pending', 'failed')`,
         ['running', job.id],
@@ -937,10 +935,15 @@ export class Scheduler {
           const shouldCheck = burstCount % this.driftDetector.checkEveryNBursts === 0;
 
           if (shouldCheck) {
+            // Prefer an explicit mid-run scheduler-report; otherwise use this run's
+            // auto-summary. The DB column is cleared at claim (#1829), so reading it
+            // alone would always drop the detector's "last run" section for agents
+            // that rely on the auto-summary path.
+            const driftSummary = job.lastRunSummary ?? autoSummary ?? null;
             const verdict = await this.driftDetector.check({
               intentAnchor: job.intentAnchor,
               taskPayload: job.taskPayload,
-              lastRunSummary: job.lastRunSummary ?? null,
+              lastRunSummary: driftSummary,
             });
 
             if (verdict !== null) {
@@ -963,7 +966,7 @@ export class Scheduler {
                     agentTaskId: job.agentTaskId,
                     intentAnchor: job.intentAnchor,
                     taskPayload: job.taskPayload,
-                    lastRunSummary: job.lastRunSummary ?? null,
+                    lastRunSummary: driftSummary,
                     verdict,
                     parentEventId,
                   });

@@ -107,7 +107,7 @@ interface DbJobRow {
   expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
   last_run_outcome: 'completed' | 'failed' | 'timed_out' | null;
   last_run_summary: string | null;   // cleared at claim; set by scheduler-report or completeJobRun auto-summary
-  last_run_context: Record<string, unknown> | null; // cleared at claim; set only by scheduler-report
+  last_run_context: Record<string, unknown> | null; // survives claim; set/updated only by scheduler-report
   originator: Record<string, unknown> | null; // JSONB — cast to TaskOriginator when mapping
 }
 
@@ -969,7 +969,9 @@ export class SchedulerService {
    *
    * On success, `last_run_summary = COALESCE(last_run_summary, autoSummary)` so an
    * explicit mid-run `scheduler-report` wins. Claim clears the column first (#1829), so
-   * the COALESCE only sees this run's report — never a stale prior-run summary.
+   * a completed prior run's summary no longer blocks the auto path. (A late report from
+   * an abandoned earlier run can still land while the next run is `running` —
+   * `reportJobRun` is not claim-stamp fenced; that race is separate from #1829.)
    */
   async completeJobRun(
     jobId: string,

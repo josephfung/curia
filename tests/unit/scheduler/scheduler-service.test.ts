@@ -770,6 +770,7 @@ describe('SchedulerService', () => {
       expect(lastError).toBeTruthy();
       // #1829: claim already NULLed last_run_summary; recovery must not restore a stale
       // success summary — leaving the column alone keeps the mid-run NULL honest.
+      // last_run_context is also untouched (continuity cursors survive timeouts).
       expect(updateSql).not.toContain('last_run_summary');
       expect(updateSql).not.toContain('last_run_context');
     });
