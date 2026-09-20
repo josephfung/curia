@@ -320,3 +320,60 @@ describe('registerOutboundContext against the real OutboundContextService', () =
     );
   });
 });
+
+// A system-injected TTL is a floor, not a ceiling. Task-wake binds at 168h,
+// which beats email's 72h default — but an operator who raises a channel past
+// 168h would otherwise have the system's own binding expire before a bare
+// entry on that channel, losing task correlation in the gap.
+describe('system-injected task-wake TTL vs a longer channel default', () => {
+  function capWithEmailTtl(hours: number): OutboundContextCapability {
+    return makeCap({
+      defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? hours : 6),
+    });
+  }
+
+  it('raises a task-wake binding to the channel default when the channel is longer', async () => {
+    const cap = capWithEmailTtl(240);
+    await registerOutboundContext(cap, undefined, {
+      ...baseOpts,
+      channelId: 'email',
+      boundTask: { taskId: 'f9e9a0d9-0000-4000-8000-000000000001' },
+    });
+
+    expect(cap.register).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 240, ttlSource: 'task-wake' }),
+    );
+  });
+
+  it('leaves the task-wake binding at 168h when the channel default is shorter', async () => {
+    const cap = capWithEmailTtl(72);
+    await registerOutboundContext(cap, undefined, {
+      ...baseOpts,
+      channelId: 'email',
+      boundTask: { taskId: 'f9e9a0d9-0000-4000-8000-000000000001' },
+    });
+
+    expect(cap.register).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 168, ttlSource: 'task-wake' }),
+    );
+  });
+
+  it('still lets an agent choose a window shorter than the channel default on a bound task', async () => {
+    const cap = capWithEmailTtl(240);
+    await registerOutboundContext(
+      cap,
+      JSON.stringify({ agent_id: 'coordinator', expires_in_hours: 4 }),
+      {
+        ...baseOpts,
+        channelId: 'email',
+        boundTask: { taskId: 'f9e9a0d9-0000-4000-8000-000000000001' },
+      },
+    );
+
+    // The agent's deliberate 4h is authoritative — floors apply to windows the
+    // system picked, never to one an agent asked for.
+    expect(cap.register).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 4, ttlSource: 'agent' }),
+    );
+  });
+});

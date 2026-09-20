@@ -1180,7 +1180,20 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   }
 
   // Validate contextBridge if present
-  if (config.contextBridge != null && typeof config.contextBridge === 'object') {
+  if (config.contextBridge !== undefined) {
+    // Validate the root before reading fields. `typeof [] === 'object'` and a
+    // scalar root skips an `=== 'object'` guard entirely, so `contextBridge: []`
+    // and `contextBridge: 5` both used to boot clean and silently fall back to
+    // defaults — a TTL nobody set, which is the failure mode #1816 is about.
+    if (
+      config.contextBridge === null ||
+      typeof config.contextBridge !== 'object' ||
+      Array.isArray(config.contextBridge)
+    ) {
+      throw new Error(
+        `contextBridge must be a YAML mapping, got: ${Array.isArray(config.contextBridge) ? 'list' : typeof config.contextBridge}`,
+      );
+    }
     const { defaultExpiryHours, explicitExpiryHours, channelDefaultExpiryHours } = config.contextBridge;
     if (defaultExpiryHours !== undefined && (!Number.isInteger(defaultExpiryHours) || defaultExpiryHours < 1)) {
       throw new Error(`contextBridge.defaultExpiryHours must be a positive integer, got: ${defaultExpiryHours}`);

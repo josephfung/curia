@@ -99,6 +99,25 @@ contextBridge:
     );
   });
 
+  // The root itself, not just its fields: `typeof [] === 'object'` and a scalar
+  // root skips an `=== 'object'` guard, so these used to boot clean on defaults.
+  it.each([
+    ['a list', 'contextBridge: []', 'list'],
+    ['a number', 'contextBridge: 5', 'number'],
+    ['a string', 'contextBridge: "nope"', 'string'],
+    ['null', 'contextBridge:', 'object'],
+  ])('rejects a %s where a contextBridge mapping is expected', (_label, yaml, shown) => {
+    writeLocalYaml(yaml + '\n');
+    expect(() => loadYamlConfig(tempDir)).toThrow(
+      new RegExp(`contextBridge must be a YAML mapping, got: ${shown}`),
+    );
+  });
+
+  it('still accepts an omitted contextBridge', () => {
+    writeLocalYaml('debrief:\n  channel: signal\n');
+    expect(loadYamlConfig(tempDir).contextBridge).toBeUndefined();
+  });
+
   it('still rejects a negative defaultExpiryHours', () => {
     writeLocalYaml(`
 contextBridge:
