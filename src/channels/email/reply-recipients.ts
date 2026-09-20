@@ -26,7 +26,8 @@ export function deriveEmailReplyRecipientSet(opts: {
   originalTo?: readonly EmailAddressParticipant[] | null;
   originalCc?: readonly EmailAddressParticipant[] | null;
   ccInput: unknown;
-  selfEmail?: string;
+  /** Owned mailbox addresses to exclude from reply-all CC (all accounts, not just primary). */
+  selfEmails?: readonly string[];
 }): EmailReplyRecipientSet | null {
   const originalFrom = opts.originalFrom?.trim();
   if (!originalFrom) return null;
@@ -43,8 +44,8 @@ export function deriveEmailReplyRecipientSet(opts: {
     // and Curia's own address (must never CC itself).
     const excluded = new Set<string>();
     excluded.add(originalFrom.toLowerCase());
-    if (opts.selfEmail && opts.selfEmail.trim().length > 0) {
-      excluded.add(opts.selfEmail.trim().toLowerCase());
+    for (const addr of opts.selfEmails ?? []) {
+      if (addr.trim().length > 0) excluded.add(addr.trim().toLowerCase());
     }
 
     const candidates = [

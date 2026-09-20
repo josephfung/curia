@@ -85,7 +85,7 @@ export async function resolveEmailReplyRecipients(
     originalTo: original.to,
     originalCc: original.cc,
     ccInput,
-    selfEmail: deps.selfEmail,
+    selfEmails: deps.selfEmails,
   });
   if (!set) return null;
   return [set.to, ...set.cc];

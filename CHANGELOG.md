@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`delegation.timed_out` / `delegation.late_resolved` bus events (public API)** — audit trail for an abandoned delegation's fate. (#1799)
 - **Standard-tier model candidates** — four OpenRouter models registered so curia-deploy#226 can repoint the tier. (#1804)
 - **Cache-read pricing** — recorded for every OpenRouter model that publishes one, or the omission explained. (#1804)
+- **`ToolContext` (public API)** — `selfEmails` lists every owned mailbox for reply-all exclusion. (#1815)
 
 ### Changed
 
@@ -31,6 +32,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Gate C / `email-reply`** — known-tier replies to the sender now allow; reply-all still escalates. (#1815)
+- **Gate C** — known sender-only still consults the judge for class upgrades. (#1815)
+- **Gate C** — initiating-sender match ignores unverified, defunct, and cross-channel identities. (#1815)
 - **`memory-store` outputs (public API)** — skipped canonical redirects now flag `canonical_redirect_skipped` with a reason. Skill v1.2.0. (#1772)
 - **`calendar-list-events`** — `maxResults` above 200 now pages instead of failing; errors name the cause. (#1798)
 - **Delegate wait windows** — the coordinator's invented `timeout_ms` no longer shortens them into false timeouts. (#1797)

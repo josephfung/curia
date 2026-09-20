@@ -30,7 +30,8 @@ export interface SkillRecipientMessage {
 /** Runtime deps for `CarveoutSkillSpec.resolveRecipients`. */
 export interface SkillRecipientResolveDeps {
   fetchMessage?: (messageId: string) => Promise<SkillRecipientMessage>;
-  selfEmail?: string;
+  /** Every owned mailbox — excluded from email-reply reply-all CC. */
+  selfEmails?: readonly string[];
 }
 
 /**

@@ -12,7 +12,7 @@ function makeCtx(
     send: (...args: unknown[]) => unknown;
   }>,
   taskMetadata?: Record<string, unknown>,
-  opts?: { selfEmail?: string },
+  opts?: { selfEmail?: string; selfEmails?: readonly string[] },
 ): ToolContext {
   return {
     toolName: 'email-reply',
@@ -23,6 +23,7 @@ function makeCtx(
     outboundGateway: gateway as never,
     taskMetadata,
     ...(opts?.selfEmail ? { selfEmail: opts.selfEmail } : {}),
+    ...(opts?.selfEmails ? { selfEmails: opts.selfEmails } : {}),
   } as ToolContext;
 }
 
@@ -174,6 +175,35 @@ describe('EmailReplyHandler — CC modes', () => {
     expect(gateway.send).toHaveBeenCalledWith(
       expect.objectContaining({
         cc: ['bob@example.com', 'carol@example.com'],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('cc absent — excludes every owned mailbox from reply-all CC', async () => {
+    const gateway = {
+      getEmailMessage: vi.fn().mockResolvedValue({
+        from: [{ email: 'sender@example.com' }],
+        to: [{ email: 'ops@example.com' }, { email: 'bob@example.com' }],
+        cc: [{ email: 'curia@example.com' }],
+        subject: 'Group thread',
+      }),
+      send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-cc-ops' }),
+    };
+
+    const result = await handler.execute(
+      makeCtx(
+        { reply_to_message_id: 'msg-group', body: 'Sounds good' },
+        gateway,
+        {},
+        { selfEmails: ['curia@example.com', 'ops@example.com'] },
+      ),
+    );
+
+    expect(result.success).toBe(true);
+    expect(gateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cc: ['bob@example.com'],
       }),
       expect.anything(),
     );
