@@ -1294,7 +1294,7 @@ export class AgentRuntime {
                   'Discarding pending clarification due to error budget exhaustion — specialist question will not reach the CEO',
                 );
               }
-              await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors');
+              await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors', budgetHandoff);
               earlyExitHandled = true;
               return 'stop';
             }
@@ -2470,7 +2470,7 @@ export class AgentRuntime {
 
       // Check budget before waiting — if already exceeded, no point retrying
       if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
-        await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors');
+        await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors', budgetHandoff);
         return null;
       }
 
@@ -2592,7 +2592,9 @@ export class AgentRuntime {
       timestamp: new Date(),
     };
     await this.publishAgentError(agentErr, taskEvent);
-    await this.sendErrorResponse(taskEvent, agentErr);
+    // Forward handoff so failedSkills from this run reach agent.response(isError)
+    // and the scheduler can persist them (#1830 / maxConsecutiveErrors path).
+    await this.sendErrorResponse(taskEvent, agentErr, handoff);
   }
 
   /**
@@ -2720,11 +2722,29 @@ export class AgentRuntime {
    * Send a user-facing error response so the user isn't left waiting.
    * When agentErr is provided, structured failure fields are copied onto the
    * agent.response so delegation consumers can report the real cause (#1170).
+   * When handoff carries failedSkills, those are published too so the scheduler
+   * can merge them into last_run_context on isError completion (#1830).
    */
-  private async sendErrorResponse(taskEvent: AgentTaskEvent, agentErr?: AgentError): Promise<void> {
+  private async sendErrorResponse(
+    taskEvent: AgentTaskEvent,
+    agentErr?: AgentError,
+    handoff?: {
+      failedSkills: Array<{ name: string; error: string }>;
+      failedSkillsOmittedRef: { count: number };
+    },
+  ): Promise<void> {
     const { agentId, bus } = this.config;
     const { conversationId } = taskEvent.payload;
     const structuredFailure = agentErr ? mapAgentErrorToResponseFields(agentErr) : undefined;
+    const failedSkillsFields =
+      handoff && handoff.failedSkills.length > 0
+        ? {
+            failedSkills: [...handoff.failedSkills],
+            ...(handoff.failedSkillsOmittedRef.count > 0 && {
+              failedSkillsOmitted: handoff.failedSkillsOmittedRef.count,
+            }),
+          }
+        : {};
     const responseEvent = createAgentResponse({
       agentId,
       conversationId,
@@ -2733,6 +2753,7 @@ export class AgentRuntime {
       // a failure from a real specialist result and surface it as { success: false }.
       isError: true,
       ...structuredFailure,
+      ...failedSkillsFields,
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);
