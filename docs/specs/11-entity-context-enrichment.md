@@ -476,7 +476,7 @@ A partial index `(expires_at, created_at DESC) WHERE released = false` covers th
 
 Owns all CRUD against `outbound_context`. Two surfaces:
 
-1. **Full service** — held by the dispatcher and other system-layer code. Methods include `register()`, `getActive({ conversationId?, limit? })`, `release(id, conversationId?)`, `cleanupExpired()`, and `formatInjectionBlock(entries, originalContent)`.
+1. **Full service** — held by the dispatcher and other system-layer code. Methods include `register()`, `getActive(limit)`, `release(id, conversationId?)`, `cleanupExpired()`, and `formatInjectionBlock(entries, originalContent)`.
 
 2. **`ScopedOutboundContext`** — a per-conversation wrapper exposed to skills via the `outboundContext` capability. Pre-binds `conversationId` so skills don't need to know it. Exposes only `register` and `release`, plus `defaultExpiryHours` / `explicitExpiryHours` / `defaultExpiryHoursFor(channelId)` for skills that want to be explicit.
 
@@ -521,9 +521,9 @@ Agent-specific overrides (e.g. `debrief.contextBridgeTtlHours = 48`) are passed 
 
 On every inbound message, the dispatcher:
 
-1. Queries `OutboundContextService.getActive({ conversationId })` for non-released, non-expired entries scoped to the current conversation, plus any cross-conversation entries carrying `metadata.bind_reply === true` (task-wake bindings that span channels — #1817).
+1. Queries `OutboundContextService.getActive()` for the newest non-released, non-expired entries system-wide (conversation-agnostic — proactive sends register under bullpen/scheduler/peer ids that differ from the reply conversation; see ADR-019 / #1817).
 2. If any exist, calls `formatInjectionBlock(entries, originalContent)` to prepend an `[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]` block to the content the coordinator sees.
-3. Each block labels the row UUID as `outbound_context_entry_id` (for `context-bridge-release` only — not a Nylas/email message id), plus channel, originating agent, age, expiry-relative time, content preview, and any explicit hint fields.
+3. Each block keeps the key name `entry_id` (for `context-bridge-release`) but labels it as an outbound_context UUID — not a Nylas/email message id — plus channel, originating agent, age, expiry-relative time, content preview, and any explicit hint fields.
 
 The coordinator reads this block, decides whether the inbound is a continuation of an outbound thread, and (if so) delegates to the originating agent — or invokes `context-bridge-release` if the LLM concludes the thread is done.
 

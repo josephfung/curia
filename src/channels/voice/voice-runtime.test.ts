@@ -915,7 +915,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
    */
   function fakeOutboundContext(opts: {
     entries?: OutboundContextRow[];
-    getActive?: (options?: { conversationId?: string; limit?: number }) => Promise<OutboundContextRow[]>;
+    getActive?: () => Promise<OutboundContextRow[]>;
   }): OutboundContextService {
     const entries = opts.entries ?? [];
     const real = new OutboundContextService(
@@ -946,7 +946,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
       audience: { liveTurn: true },
     });
     expect(prompt).toContain('[ACTIVE OUTBOUND CONTEXT');
-    expect(prompt).toContain('outbound_context_entry_id (for context-bridge-release only — NOT a Nylas/email message id): entry-signal-alert');
+    expect(prompt).toContain('entry_id (for context-bridge-release only — NOT a Nylas/email message id): entry-signal-alert');
     expect(prompt).toContain('via signal');
     expect(prompt).toContain('Google security alert: new sign-in on your account.');
     expect(prompt.indexOf('[ACTIVE OUTBOUND CONTEXT'))
@@ -1013,7 +1013,7 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     const system = llm.seenMessages[0]![0]!;
     const systemText = typeof system.content === 'string' ? system.content : '';
     expect(systemText).toContain('[ACTIVE OUTBOUND CONTEXT');
-    expect(systemText).toContain('outbound_context_entry_id (for context-bridge-release only — NOT a Nylas/email message id): entry-signal-alert');
+    expect(systemText).toContain('entry_id (for context-bridge-release only — NOT a Nylas/email message id): entry-signal-alert');
     expect(systemText).toContain('via signal');
     expect(systemText).toContain('Google security alert: new sign-in on your account.');
     // Utterance stays a separate user message — not wrapped into the system block.

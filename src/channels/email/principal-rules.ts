@@ -12,6 +12,18 @@ import {
 } from '../../contacts/principal-carveout-parse.js';
 import { isEmailSendRequest } from './outbound-request.js';
 import { deriveEmailReplyRecipientSet } from './reply-recipients.js';
+import {
+  looksLikeOutboundContextEntryId,
+  replyToMessageIdLooksLikeEntryIdError,
+} from './nylas-message-id.js';
+
+/** Thrown when reply_to_message_id is an outbound_context entry UUID (#1817). */
+export class ReplyToMessageIdShapeError extends Error {
+  constructor(message = replyToMessageIdLooksLikeEntryIdError()) {
+    super(message);
+    this.name = 'ReplyToMessageIdShapeError';
+  }
+}
 
 const EMAIL_REPLY_UNPARSED_RECIPIENT_KEYS = [
   'to',
@@ -72,6 +84,12 @@ export async function resolveEmailReplyRecipients(
 
   const messageId = input['reply_to_message_id'];
   if (typeof messageId !== 'string' || messageId.trim().length === 0) return null;
+  // Reject before any Nylas fetch (#1817): an outbound_context entry_id UUID is
+  // not a message id. Throw so Gate C can surface the actionable error instead
+  // of a generic escalate-after-404.
+  if (looksLikeOutboundContextEntryId(messageId)) {
+    throw new ReplyToMessageIdShapeError();
+  }
   const ccInput = input['cc'];
   if (ccInput !== undefined && typeof ccInput !== 'string') {
     return null;

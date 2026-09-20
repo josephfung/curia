@@ -158,18 +158,20 @@ Three approaches were considered:
   TTL on auto-registered entries plus cleanup keeps storage bounded, but the
   write amplification is real. Accepted because the alternative
   (conditional registration) is exactly what caused #609.
-- **The per-channel TTL is bounded by the injection cap, not just by time.**
-  `getActive({ conversationId, limit })` (#1817) surfaces at most the ten most
-  recent active entries for the current conversation, plus cross-conversation
-  entries carrying `metadata.bind_reply === true` (task-wake bindings that
-  legitimately span channels). Unrelated conversations no longer bleed into the
-  prompt. Correlation remains LLM-driven off that block. Holding email entries
-  alive for 72h instead of 6h still grows the active population within a busy
-  conversation, so a three-day-old email whose reply finally lands can still sit
-  outside the newest ten for that thread — arriving as an unrecognised cold
-  inbound, the #1816 symptom at a different threshold. Ten outbounds on one
-  conversation over three days is less common than ten across the whole system,
-  so scoping materially widens the useful window of the longer TTL.
+- **The injection window is a global newest-N, not a conversation scope.**
+  `getActive(limit = 10)` surfaces the ten most recent active entries system-wide
+  (`ORDER BY created_at DESC`), and correlation is LLM-driven off that block.
+  Conversation scoping was considered for #1817 and rejected: proactive sends
+  register under the *invoking* conversation (bullpen thread id, scheduler run
+  id), while replies arrive on a different conversation (`signal:<sender>`,
+  `email:<threadId>`, `voice:<sessionId>`). Scoping to the inbound conversation
+  would hide the bridge's primary correlation cases. Holding email entries alive
+  for 72h instead of 6h still grows the active population without widening the
+  window that shows it, so a three-day-old email whose reply finally lands can
+  sit outside the newest ten — arriving as an unrecognised cold inbound, the
+  #1816 symptom at a different threshold. Ten outbounds over three days is an
+  ordinary week for this workload. The #1817 fix for the UUID/`entry_id`
+  confusion is labelling + pre-fetch shape validation, not conversation scope.
 - An unrecognised channel id in `contextBridge.channelDefaultExpiryHours` is
   accepted and silently inert — registration uses pseudo-channel ids
   (`internal`, `scheduler`, `bullpen`) that are not in the channel catalog, so

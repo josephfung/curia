@@ -79,7 +79,7 @@ describeIf('clearBySubjects across the injection window (#975)', () => {
     // rows in a shared DB (they only push it further out). If clearBySubjects naively
     // released only what getActive surfaced, that out-of-window Sean row would survive
     // and fail the post-clear DB check below — which is the #975 regression this guards.
-    const visibleIds = new Set((await service.getActive({ limit: 10 })).map((e) => e.id));
+    const visibleIds = new Set((await service.getActive(10)).map((e) => e.id));
     const seanActive = await pool.query<{ id: string }>(
       `SELECT id FROM outbound_context
         WHERE conversation_id = $1 AND released = false

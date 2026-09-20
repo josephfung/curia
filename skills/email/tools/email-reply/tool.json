@@ -5,7 +5,7 @@
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
-    "reply_to_message_id": "string (Nylas message ID from the inbound email preamble / Message ID field — NOT an outbound_context entry_id UUID from [ACTIVE OUTBOUND CONTEXT])",
+    "reply_to_message_id": "string (Nylas message ID from the inbound email preamble / Message ID field — NOT an entry_id UUID from [ACTIVE OUTBOUND CONTEXT])",
     "body": "string",
     "cc": "string? (comma-separated — omit for reply-all default, empty string to reply to sender only)",
     "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string, node_id?: string}. file_url must be a file:// URL from email-download-attachment or similar. When the attachment contains KG-sourced data, set node_id to the kg_nodes UUID so export gates can resolve sensitivity. Max 10 attachments, 20 MB total.)",

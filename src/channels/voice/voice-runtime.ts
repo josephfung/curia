@@ -224,10 +224,10 @@ export const VOICE_DELEGATION_GUIDANCE =
  * with date-resolve, #1595), the voice async off-ramp (#1614), and a fresh
  * date/time block. They deliberately do NOT get the coordinator's full YAML
  * system prompt or KG/sender enrichment (latency + text-channel content that
- * makes no sense spoken). Active outbound-context entries for this voice
- * conversation (plus bind_reply cross-channel task-wake bindings) are included
- * for principal (liveTurn) callers only (#1594 / #1598 / #1817). See ADR-037
- * Consequences and ADR-038.
+ * makes no sense spoken). Active outbound-context entries are included for
+ * principal (liveTurn) callers only (#1594 / #1598) so voice can acknowledge
+ * recent proactive sends on other channels without leaking them to a
+ * non-principal audience. See ADR-037 Consequences and ADR-038.
  */
 export function buildVoiceSystemPrompt(parts: {
   /** Compiled office identity/persona block; omitted when null/empty. */
@@ -1017,21 +1017,20 @@ export class VoiceRuntime {
       }
     }
 
-    // Same getActive({ conversationId }) + formatInjectionBlock() path the
-    // dispatcher uses for text channels (#1594 / #1817). Scoped to this voice
-    // session plus bind_reply cross-channel task-wake bindings. Empty result →
-    // null → prompt unchanged. Failure and deadline expiry are best-effort:
-    // log and continue without the bridge (parity with dispatcher failure mode
-    // + loadTurnHistory latency contract).
+    // Same getActive() + formatInjectionBlock() path the dispatcher uses for
+    // text channels (#1594). Global (not voice-session-scoped): voice mint
+    // conversationId = voice:${sessionId} per call, and proactive sends were
+    // registered under signal:/email:/scheduler:/bullpen ids (#1817). Empty
+    // result → null → prompt unchanged. Failure and deadline expiry are
+    // best-effort: log and continue without the bridge (parity with dispatcher
+    // failure mode + loadTurnHistory latency contract).
     //
     // Gate on liveTurn (#1598): "messages you've sent" is principal-audience
     // content — never inject it for a non-principal voice caller.
     let outboundContextBlock: string | null = null;
     if (this.config.outboundContextService && session.caller.liveTurn) {
       const timeoutMs = this.config.historyReadTimeoutMs ?? DEFAULT_HISTORY_READ_TIMEOUT_MS;
-      const read = this.config.outboundContextService.getActive({
-        conversationId: session.conversationId,
-      });
+      const read = this.config.outboundContextService.getActive();
       // A read that loses the deadline race settles later with no awaiter —
       // absorb its eventual rejection so it cannot become an unhandled rejection.
       read.catch(err => {
