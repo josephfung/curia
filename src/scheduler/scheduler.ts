@@ -432,7 +432,14 @@ export class Scheduler {
         // Pass the agent's final text as a fallback summary (truncated to 500 chars).
         // completeJobRun() writes it via COALESCE — agent-provided scheduler-report wins.
         const autoSummary = responseEvent.payload.content.slice(0, 500) || undefined;
-        this.handleCompletion(responseEvent.parentEventId, true, undefined, autoSummary).catch((err) => {
+        const failedSkills = responseEvent.payload.failedSkills;
+        this.handleCompletion(
+          responseEvent.parentEventId,
+          true,
+          undefined,
+          autoSummary,
+          failedSkills,
+        ).catch((err) => {
           this.logger.error({ err, parentEventId: responseEvent.parentEventId }, 'Unhandled error in handleCompletion (success path)');
         });
       }
@@ -904,6 +911,7 @@ export class Scheduler {
     success: boolean,
     error?: string,
     autoSummary?: string,
+    failedSkills?: Array<{ name: string; error: string }>,
   ): Promise<void> {
     const jobId = this.pendingJobs.get(parentEventId);
     if (!jobId) {
@@ -1037,7 +1045,13 @@ export class Scheduler {
         }
       }
 
-      const result = await this.schedulerService.completeJobRun(jobId, success, error, autoSummary);
+      const result = await this.schedulerService.completeJobRun(
+        jobId,
+        success,
+        error,
+        autoSummary,
+        failedSkills,
+      );
 
       if (result.suspended) {
         // Fetch the job to get the agentId and consecutiveFailures for the event.

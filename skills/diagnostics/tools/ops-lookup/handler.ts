@@ -122,6 +122,7 @@ export class OpsLookupHandler implements ToolHandler {
           status: j.status,
           last_run_outcome: j.lastRunOutcome,
           last_run_summary: redactText(j.lastRunSummary),
+          last_run_context: summarizePayload(j.lastRunContext),
           last_error: redactText(j.lastError),
           consecutive_failures: j.consecutiveFailures,
           created_by: j.createdBy,

@@ -1488,6 +1488,134 @@ describe('AgentRuntime tool-use loop', () => {
     expect(responseContent).toContain('Call count: 2');
   });
 
+  it('reports exactly one failedSkills entry when one of two tool calls fails (#1830)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [
+              { id: 'call-ok', name: 'calendar-list-events', input: {} },
+              { id: 'call-fail', name: 'bullpen.post', input: { thread_id: 'missing' } },
+            ],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Sweep done; bullpen report failed.',
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockImplementation(async (name: string) => {
+        if (name === 'bullpen.post') {
+          return { success: false, error: 'Thread not found' };
+        }
+        return { success: true, data: { events: [] } };
+      }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'calendar',
+      systemPrompt: 'You are the calendar specialist.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [
+        {
+          name: 'calendar-list-events',
+          description: 'List events',
+          input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+        },
+        {
+          name: 'bullpen.post',
+          description: 'Post to bullpen',
+          input_schema: { type: 'object' as const, properties: { thread_id: { type: 'string' } }, required: ['thread_id'] },
+        },
+      ],
+      errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
+    });
+    agent.register();
+
+    const task = createAgentTask({
+      agentId: 'calendar',
+      conversationId: 'conv-failed-skills',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Run the daily holds sweep',
+      parentEventId: 'parent-failed-skills',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(responses).toHaveLength(1);
+    const payload = responses[0]!.payload;
+    expect(payload.isError).toBeUndefined();
+    expect(payload.skillsCalled).toEqual(['calendar-list-events', 'bullpen.post']);
+    expect(payload.failedSkills).toEqual([{ name: 'bullpen.post', error: 'Thread not found' }]);
+  });
+
+  it('omits failedSkills when every tool call succeeds (#1830)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const provider = createToolUseProvider('web-fetch', { url: 'https://example.com' });
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'ok' }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [{
+        name: 'web-fetch',
+        description: 'Fetch',
+        input_schema: { type: 'object' as const, properties: { url: { type: 'string' } }, required: ['url'] },
+      }],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-no-failed',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Fetch',
+      parentEventId: 'parent-no-failed',
+    }));
+
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.payload.skillsCalled).toEqual(['web-fetch']);
+    expect(responses[0]!.payload.failedSkills).toBeUndefined();
+  });
+
   it('synthesizes caller from originator when senderContext is absent (delegated task path)', async () => {
     // Regression test for #710: when the delegate skill creates a specialist task it omits
     // senderContext. The runtime must fall back to taskMetadata.originator so ctx.caller

@@ -686,6 +686,43 @@ describe('SchedulerService', () => {
       expect(params).toContain('failed');
     });
 
+    it('merges failedSkills into last_run_context without flipping health (#1830)', async () => {
+      const jobId = 'job-failed-skills';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+      const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+      const result = await svc.completeJobRun(jobId, true, undefined, 'sweep done', failedSkills);
+
+      expect(result).toEqual({ suspended: false });
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      const params: unknown[] = updateCall[1];
+      expect(sql).toContain('last_run_outcome = $4');
+      expect(params).toContain('completed');
+      expect(sql).toContain('consecutive_failures = 0');
+      expect(sql).toContain('last_error = NULL');
+      expect(sql).toContain("COALESCE(last_run_context, '{}'::jsonb)");
+      expect(params).toContain(JSON.stringify({ failedSkills }));
+    });
+
+    it('clears stale failedSkills key when this run had no tool failures (#1830)', async () => {
+      const jobId = 'job-clear-failed-skills';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: null, status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+      await svc.completeJobRun(jobId, true, undefined, 'all good');
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      expect(sql).toContain("last_run_context - 'failedSkills'");
+      expect(sql).not.toContain("COALESCE(last_run_context");
+    });
+
     it('uses COALESCE for last_run_summary so agent-provided summary wins (one-shot)', async () => {
       const jobId = 'job-coalesce';
       pool.query.mockResolvedValueOnce({
@@ -701,8 +738,9 @@ describe('SchedulerService', () => {
       // Must use COALESCE so an agent-provided scheduler-report call wins
       expect(sql).toContain('COALESCE(last_run_summary,');
       expect(params).toContain('auto summary');
-      // Must NOT touch last_run_context — that column is only written by scheduler-report
-      expect(sql).not.toContain('last_run_context');
+      // No failedSkills → clear the key only; do not merge a payload (#1830)
+      expect(sql).toContain("last_run_context - 'failedSkills'");
+      expect(sql).not.toContain("COALESCE(last_run_context");
     });
 
     it('uses COALESCE for last_run_summary so agent-provided summary wins (recurring)', async () => {

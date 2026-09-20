@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`agent.response` payload (public API)** — optional `failedSkills` lists tool failures for scheduler visibility. (#1830)
 - **`authorization.decision` payload (public API)** — Gate C outcomes include `recipientCount` when recipients resolved. (#1815)
 - **`delegate` input schema (public API)** — `timeout_ms` removed; the runtime is its only source. Skill v1.4.0. (#1797)
 - **`delegate` outputs (public API)** — timeouts now return the delegate event and conversation ids. Skill v1.5.0. (#1799)
@@ -32,6 +33,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scheduler** — tool failures on a completed run now land in `last_run_context` without flipping health. (#1830)
 - **Scheduler** — recurring jobs refresh `last_run_summary` each run instead of keeping the first write. (#1829)
 - **Gate C / `email-reply`** — known-tier replies to the sender now allow; reply-all still escalates. (#1815)
 - **Gate C** — known sender-only still consults the judge for class upgrades. (#1815)
