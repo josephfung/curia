@@ -401,7 +401,7 @@ describe('documented TTL tiers per channel', () => {
     ['signal', 6, 24],
     ['slack', 6, 24],
     ['sms', 6, 24],
-  ])('%s: bare send = %ih, with context_bridge = %ih', async (channelId, bare, withBridge) => {
+  ])('%s: bare send = %ih, with a valid context_bridge = %ih', async (channelId, bare, withBridge) => {
     const bareCap = capFor(channelId);
     await registerOutboundContext(bareCap, undefined, { ...baseOpts, channelId });
     expect(registeredTtl(bareCap)).toBe(bare);
@@ -412,5 +412,27 @@ describe('documented TTL tiers per channel', () => {
       channelId,
     });
     expect(registeredTtl(bridgeCap)).toBe(withBridge);
+  });
+
+  // The 24h tier is earned by a *valid* bridge, not by passing the parameter.
+  // parseContextBridge drops malformed metadata and returns null, so the send
+  // falls through to auto-registration — silently costing ~18h on chat channels.
+  // The manifests and docs quote these tiers, so pin the malformed case too.
+  it.each([
+    ['malformed JSON', 'not json {{{'],
+    ['valid JSON, missing agent_id', JSON.stringify({ expected_reply: 'x' })],
+    ['valid JSON, blank agent_id', JSON.stringify({ agent_id: '   ' })],
+    ['a JSON array', JSON.stringify([{ agent_id: 'coordinator' }])],
+    ['an empty string', ''],
+  ])('signal: %s falls back to the 6h bare-send tier, not 24h', async (_label, raw) => {
+    const cap = capFor('signal');
+    await registerOutboundContext(cap, raw, { ...baseOpts, channelId: 'signal' });
+    expect(registeredTtl(cap)).toBe(6);
+  });
+
+  it('email is unaffected by malformed metadata — both tiers resolve to 72h', async () => {
+    const cap = capFor('email');
+    await registerOutboundContext(cap, 'not json {{{', { ...baseOpts, channelId: 'email' });
+    expect(registeredTtl(cap)).toBe(72);
   });
 });

@@ -236,11 +236,14 @@ system_prompt: |
 
   Unless you set `expires_in_hours`, the window is about 3 days on email (the
   same with or without `context_bridge`), and on Signal, SMS, and Slack about 6
-  hours for a bare send or about 24 hours when you passed `context_bridge` — so
-  on those channels the hint buys a longer window as well as faster routing. A
-  valid `expires_in_hours` replaces that default outright, in either direction:
-  a smaller number gives you a shorter window, not a longer one. (A deployment
-  may configure different defaults.)
+  hours for a bare send or about 24 hours when you passed a **valid**
+  `context_bridge` — so on those channels a good hint buys a longer window as
+  well as faster routing. Malformed `context_bridge` metadata is dropped
+  silently and falls back to the bare-send window, so a typo in that JSON costs
+  you the longer window without telling you: get the shape right. A valid
+  `expires_in_hours` replaces that default outright, in either direction: a
+  smaller number gives you a shorter window, not a longer one. (A deployment may
+  configure different defaults.)
 
   Set `expires_in_hours` whenever you expect the reply to land outside the
   default window: a message someone will answer after a holiday or a long trip,
