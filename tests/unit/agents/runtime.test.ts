@@ -2613,7 +2613,10 @@ describe('AgentRuntime error budget', () => {
     bus.subscribe('agent.error', 'system', (event) => {
       agentErrors.push(event as AgentErrorEvent);
     });
-    bus.subscribe('agent.response', 'dispatch', () => {});
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
 
     const agent = new AgentRuntime({
       agentId: 'coordinator',
@@ -2649,6 +2652,16 @@ describe('AgentRuntime error budget', () => {
     expect(agentErrors).toHaveLength(1);
     expect(agentErrors[0]?.payload.errorType).toBe('BUDGET_EXCEEDED');
     expect(agentErrors[0]?.payload.message).toContain('consecutive error');
+
+    // Error response must carry failedSkills so the scheduler can persist them
+    // on isError completion (#1830 / CodeRabbit outside-diff finding).
+    // Two web-fetch failures → one distinct entry + omitted count for the duplicate.
+    expect(responses).toHaveLength(1);
+    expect(responses[0]!.payload.isError).toBe(true);
+    expect(responses[0]!.payload.failedSkills).toEqual([
+      { name: 'web-fetch', error: 'connection refused' },
+    ]);
+    expect(responses[0]!.payload.failedSkillsOmitted).toBe(1);
   });
 
   it('resets consecutiveErrors on successful skill invocation', async () => {
