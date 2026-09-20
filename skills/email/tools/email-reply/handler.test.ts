@@ -45,6 +45,22 @@ describe('EmailReplyHandler', () => {
     if (!result.success) expect(result.error).toMatch(/reply_to_message_id/);
   });
 
+  it('rejects an outbound_context entry_id UUID before calling the gateway (#1817)', async () => {
+    const ctx = makeCtx({
+      reply_to_message_id: 'f97d6a62-0ec4-4751-96c3-2538eb364f06',
+      body: 'Thanks!',
+    });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/outbound_context entry_id/);
+      expect(result.error).toMatch(/Nylas message ID/);
+      expect(result.error).toMatch(/context-bridge-release/);
+    }
+    expect(ctx.outboundGateway!.getEmailMessage).not.toHaveBeenCalled();
+    expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+  });
+
   it('returns error when body is missing', async () => {
     const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1' });
     const result = await handler.execute(ctx);

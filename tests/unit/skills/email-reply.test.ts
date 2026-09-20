@@ -47,6 +47,26 @@ describe('EmailReplyHandler', () => {
     if (!result.success) expect(result.error).toContain('reply_to_message_id');
   });
 
+  it('rejects an outbound_context entry_id UUID before calling the gateway (#1817)', async () => {
+    const gateway = { getEmailMessage: vi.fn(), send: vi.fn() };
+    const result = await handler.execute(
+      makeCtx(
+        {
+          reply_to_message_id: 'f97d6a62-0ec4-4751-96c3-2538eb364f06',
+          body: 'Hello',
+        },
+        gateway,
+      ),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('outbound_context entry_id');
+      expect(result.error).toContain('Nylas message ID');
+    }
+    expect(gateway.getEmailMessage).not.toHaveBeenCalled();
+    expect(gateway.send).not.toHaveBeenCalled();
+  });
+
   it('returns failure when body is missing', async () => {
     const gateway = { getEmailMessage: vi.fn(), send: vi.fn() };
     const result = await handler.execute(
