@@ -20,7 +20,8 @@
 import type { ToolResult, ToolContext, CallerContext, AgentPersona, ToolDefinition, ToolManifest } from './types.js';
 import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
-import { resolvePrincipalIsSoleRecipientFromSkillInput } from '../contacts/principal-recipient.js';
+import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
+import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
@@ -115,6 +116,11 @@ export interface InvokeOptions {
   delegationGuard?: import('../agents/delegation-guard.js').DelegationGuard;
   /** date-resolve outputs from earlier in this agent turn (#1612). Forwarded to delegate. */
   turnDateResolveResults?: readonly import('../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];
+  /**
+   * Inbound channel sender identifier from agent.task.payload.senderId (#1815).
+   * Gate C uses it to compare resolved recipients against the initiating sender.
+   */
+  senderId?: string;
 }
 
 /** Cap on the input rendering passed to the escalation judge — keeps full email bodies and
@@ -128,14 +134,20 @@ const JUDGE_INPUT_DESCRIPTION_MAX_LENGTH = 1000;
  * The judge's action classifier expects a short description (e.g. "send an email to X") and
  * decides isThirdPartyFacing from the target it sees. We surface the skill's purpose plus a
  * length-capped rendering of its inputs — the recipient/target fields (e.g. `to`) are what
- * let the judge distinguish a reply-to-sender from a message to a third party. The judge
- * JSON-encodes and treats this as opaque data, so embedded content cannot alter the verdict.
- * A vague or truncated description fails safe: the judge leans toward escalate.
+ * let the judge distinguish a reply-to-sender from a message to a third party. The initiating
+ * sender identifier and resolved recipient set are included as separate clauses so they survive
+ * input truncation (#1815). The judge JSON-encodes and treats this as opaque data, so embedded
+ * content cannot alter the verdict. A vague or truncated description fails safe: the judge leans
+ * toward escalate.
  */
 function buildActionDescription(
   toolName: string,
   manifest: ToolManifest,
   input: Record<string, unknown>,
+  extras?: {
+    initiatingSender?: string;
+    resolvedRecipients?: readonly string[] | null;
+  },
 ): string {
   let inputJson: string;
   try {
@@ -147,7 +159,25 @@ function buildActionDescription(
   if (inputJson.length > JUDGE_INPUT_DESCRIPTION_MAX_LENGTH) {
     inputJson = inputJson.slice(0, JUDGE_INPUT_DESCRIPTION_MAX_LENGTH) + '…(truncated)';
   }
-  return `Skill "${toolName}" (${manifest.description}). Invocation input: ${inputJson}`;
+  const senderLabel = extras?.initiatingSender && extras.initiatingSender.length > 0
+    ? extras.initiatingSender
+    : '(unknown)';
+  let recipientsLabel: string;
+  if (extras?.resolvedRecipients === undefined) {
+    recipientsLabel = '(not resolved)';
+  } else if (extras.resolvedRecipients === null) {
+    recipientsLabel = '(unresolved)';
+  } else if (extras.resolvedRecipients.length === 0) {
+    recipientsLabel = '(none)';
+  } else {
+    recipientsLabel = extras.resolvedRecipients.join(', ');
+  }
+  return (
+    `Skill "${toolName}" (${manifest.description}). ` +
+    `Initiating sender: ${senderLabel}. ` +
+    `Resolved recipients: ${recipientsLabel}. ` +
+    `Invocation input: ${inputJson}`
+  );
 }
 
 export class ExecutionLayer {
@@ -471,6 +501,7 @@ export class ExecutionLayer {
     tier: ContactTier | 'unresolved',
     options: InvokeOptions | undefined,
     skillLogger: Logger,
+    recipientCount?: number,
   ): Promise<ToolResult | null> {
     if (!this.bus) return null;
 
@@ -510,6 +541,7 @@ export class ExecutionLayer {
         conversationId: options?.conversationId,
         parentEventId: options?.taskEventId ?? options?.parentEventId,
         sourceLayer: 'execution',
+        ...(recipientCount !== undefined ? { recipientCount } : {}),
       }));
       return null;
     } catch (err) {
@@ -578,6 +610,89 @@ export class ExecutionLayer {
   }
 
   /**
+   * Resolve outbound recipients for Gate C (#1815). Prefers an async
+   * `resolveRecipients` hook (email-reply); otherwise uses the sync parser.
+   * `resolutionFailed` is true only when an async resolver ran and returned null
+   * or threw — the gate must escalate rather than allow.
+   */
+  private async resolveGateCRecipients(
+    toolName: string,
+    input: Record<string, unknown>,
+    skillLogger: Logger,
+  ): Promise<{ recipients: string[] | null; resolutionFailed: boolean }> {
+    const found = findCarveoutSkill(toolName);
+    if (!found) return { recipients: null, resolutionFailed: false };
+
+    if (found.carveout.resolveRecipients) {
+      try {
+        const recipients = await found.carveout.resolveRecipients(input, {
+          fetchMessage: this.outboundGateway
+            ? (messageId) => this.outboundGateway!.getEmailMessage(messageId)
+            : undefined,
+          selfEmail: this.selfEmail,
+        });
+        if (recipients === null) return { recipients: null, resolutionFailed: true };
+        return { recipients, resolutionFailed: false };
+      } catch (err) {
+        skillLogger.warn(
+          { err, toolName },
+          'autonomy gate: Gate C recipient resolution failed — failing closed (#1815)',
+        );
+        return { recipients: null, resolutionFailed: true };
+      }
+    }
+
+    return { recipients: found.carveout.parseRecipients(input), resolutionFailed: false };
+  }
+
+  /**
+   * Collect initiating-sender identifiers: inbound senderId, originator.contactId,
+   * and the originator's stored channel identities when contactService is wired.
+   */
+  private async collectInitiatingSenderIdentifiers(
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): Promise<string[]> {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    const add = (value: string | undefined | null): void => {
+      if (!value || value.length === 0) return;
+      const key = value.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      ids.push(value);
+    };
+
+    add(options?.senderId);
+
+    const rawOriginator: unknown = options?.taskMetadata?.['originator'];
+    let contactId: string | undefined;
+    if (rawOriginator !== null && typeof rawOriginator === 'object') {
+      const originator = rawOriginator as unknown as { contactId?: unknown };
+      if (typeof originator.contactId === 'string') {
+        contactId = originator.contactId;
+        add(originator.contactId);
+      }
+    }
+
+    if (this.contactService && contactId) {
+      try {
+        const identities = await this.contactService.getIdentitiesForContact(contactId);
+        for (const identity of identities) {
+          add(identity.channelIdentifier);
+        }
+      } catch (err) {
+        skillLogger.warn(
+          { err, contactId },
+          'autonomy gate: Gate C failed to load originator identities — continuing with senderId only',
+        );
+      }
+    }
+
+    return ids;
+  }
+
+  /**
    * Resolve the Gate C decision for a consequential action initiated by a non-principal contact.
    *
    * Fast path (no LLM): when applyActionPolicy returns the SAME decision regardless of whether
@@ -603,6 +718,11 @@ export class ExecutionLayer {
     options: InvokeOptions | undefined,
     skillLogger: Logger,
     isPrincipalSoleRecipient: boolean,
+    structuralIsThirdPartyFacing: boolean | undefined,
+    judgeDescriptionExtras?: {
+      initiatingSender?: string;
+      resolvedRecipients?: readonly string[] | null;
+    },
   ): Promise<EscalationDecision> {
     const decisionIfReplyToSender = applyActionPolicy(initiatingTier, actionClass, false, isPrincipalSoleRecipient);
     const decisionIfThirdParty = applyActionPolicy(initiatingTier, actionClass, true, isPrincipalSoleRecipient);
@@ -618,6 +738,30 @@ export class ExecutionLayer {
       return decisionIfReplyToSender;
     }
 
+    // Structural determination (#1815): when recipients resolved against the
+    // initiating sender, skip the judge — the production email-reply bug was
+    // the judge guessing without that information.
+    if (structuralIsThirdPartyFacing !== undefined) {
+      const decision = applyActionPolicy(
+        initiatingTier,
+        actionClass,
+        structuralIsThirdPartyFacing,
+        isPrincipalSoleRecipient,
+      );
+      skillLogger.info(
+        {
+          toolName,
+          initiatingTier,
+          actionClass,
+          isPrincipalSoleRecipient,
+          isThirdPartyFacing: structuralIsThirdPartyFacing,
+          decision,
+        },
+        'autonomy gate: Gate C used structurally resolved recipients for the third-party-facing determination (#1815)',
+      );
+      return decision;
+    }
+
     // Ambiguous: the outcome depends on who the action actually targets. Ask the judge —
     // but only to resolve the third-party-facing axis. We recompute the policy ourselves
     // against the manifest's consequence class so a misclassification (or crafted input)
@@ -627,7 +771,7 @@ export class ExecutionLayer {
     // (isThirdPartyFacing === undefined) → fail closed.
     if (this.escalationJudge?.isEnabled()) {
       const verdict = await this.escalationJudge.classifyAction({
-        description: buildActionDescription(toolName, manifest, input),
+        description: buildActionDescription(toolName, manifest, input, judgeDescriptionExtras),
         initiatingTier,
         conversationId: options?.conversationId ?? 'system',
       });
@@ -1004,14 +1148,47 @@ export class ExecutionLayer {
               };
             }
             const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
+            const { recipients, resolutionFailed } = await this.resolveGateCRecipients(
+              toolName, input, skillLogger,
+            );
             const isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
               toolName,
               input,
               this.principalIdentities,
+              resolutionFailed ? null : recipients,
             );
+            const initiatingIdentifiers = await this.collectInitiatingSenderIdentifiers(
+              options, skillLogger,
+            );
+            const foundCarveout = findCarveoutSkill(toolName);
+            let structuralIsThirdPartyFacing: boolean | undefined;
+            if (resolutionFailed) {
+              // Resolver ran and failed — never allow (#1815).
+              structuralIsThirdPartyFacing = true;
+            } else if (
+              recipients !== null &&
+              initiatingIdentifiers.length > 0 &&
+              foundCarveout
+            ) {
+              structuralIsThirdPartyFacing = !isSolelyInitiatingSender(
+                recipients,
+                initiatingIdentifiers,
+                foundCarveout.rules.identifiersEqual.bind(foundCarveout.rules),
+              );
+            }
+            const recipientCount = recipients === null ? undefined : recipients.length;
             const tierDecision = await this.resolveTierGateDecision(
               initiatingTier, actionClass, toolName, manifest, input, options, skillLogger,
               isPrincipalSoleRecipient,
+              structuralIsThirdPartyFacing,
+              {
+                initiatingSender: initiatingIdentifiers.join(', ') || undefined,
+                resolvedRecipients: resolutionFailed
+                  ? null
+                  : foundCarveout
+                    ? recipients
+                    : undefined,
+              },
             );
             if (tierDecision === 'escalate') {
               skillLogger.info(
@@ -1019,7 +1196,7 @@ export class ExecutionLayer {
                 'autonomy gate: skill blocked — initiating contact tier below required minimum (Gate C)',
               );
               const auditFail = await this.publishGateCDecision(
-                'escalate', toolName, initiatingTier, options, skillLogger,
+                'escalate', toolName, initiatingTier, options, skillLogger, recipientCount,
               );
               if (auditFail) return auditFail;
               const gateCError = await this.buildTierGateError(
@@ -1031,7 +1208,7 @@ export class ExecutionLayer {
               };
             }
             const allowAuditFail = await this.publishGateCDecision(
-              'allow', toolName, initiatingTier, options, skillLogger,
+              'allow', toolName, initiatingTier, options, skillLogger, recipientCount,
             );
             if (allowAuditFail) return allowAuditFail;
           } else if (

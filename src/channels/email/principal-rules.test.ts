@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { emailPrincipalRules } from './principal-rules.js';
+import { describe, it, expect, vi } from 'vitest';
+import { emailPrincipalRules, resolveEmailReplyRecipients } from './principal-rules.js';
 import type { EmailSendRequest } from './outbound-request.js';
 
 describe('emailPrincipalRules.extractRecipients', () => {
@@ -51,5 +51,67 @@ describe('emailPrincipalRules.extractRecipients', () => {
       body: 'hi',
       cc: ['ok@example.com', 123],
     })).toBeNull();
+  });
+});
+
+describe('resolveEmailReplyRecipients', () => {
+  const thread = {
+    from: [{ email: 'alice@example.com' }],
+    to: [{ email: 'curia@example.com' }, { email: 'bob@example.com' }],
+    cc: [{ email: 'carol@example.com' }],
+  };
+
+  it('reply-all derives To plus remaining participants', async () => {
+    const fetchMessage = vi.fn().mockResolvedValue(thread);
+    await expect(resolveEmailReplyRecipients(
+      { reply_to_message_id: 'msg-1', body: 'hi' },
+      { fetchMessage, selfEmail: 'curia@example.com' },
+    )).resolves.toEqual([
+      'alice@example.com',
+      'bob@example.com',
+      'carol@example.com',
+    ]);
+    expect(fetchMessage).toHaveBeenCalledWith('msg-1');
+  });
+
+  it('sender-only (cc === "") returns just the original from', async () => {
+    const fetchMessage = vi.fn().mockResolvedValue(thread);
+    await expect(resolveEmailReplyRecipients(
+      { reply_to_message_id: 'msg-1', body: 'hi', cc: '' },
+      { fetchMessage, selfEmail: 'curia@example.com' },
+    )).resolves.toEqual(['alice@example.com']);
+  });
+
+  it('fails closed when reply_to_message_id is missing', async () => {
+    const fetchMessage = vi.fn();
+    await expect(resolveEmailReplyRecipients(
+      { body: 'hi' },
+      { fetchMessage },
+    )).resolves.toBeNull();
+    expect(fetchMessage).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when fetchMessage throws', async () => {
+    const fetchMessage = vi.fn().mockRejectedValue(new Error('nylas 404'));
+    await expect(resolveEmailReplyRecipients(
+      { reply_to_message_id: 'missing', body: 'hi' },
+      { fetchMessage },
+    )).rejects.toThrow(/nylas 404/);
+  });
+
+  it('fails closed when unmodeled to is present', async () => {
+    const fetchMessage = vi.fn();
+    await expect(resolveEmailReplyRecipients(
+      { reply_to_message_id: 'msg-1', body: 'hi', to: 'other@example.com' },
+      { fetchMessage },
+    )).resolves.toBeNull();
+    expect(fetchMessage).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when fetchMessage is not provided', async () => {
+    await expect(resolveEmailReplyRecipients(
+      { reply_to_message_id: 'msg-1', body: 'hi' },
+      {},
+    )).resolves.toBeNull();
   });
 });

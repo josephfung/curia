@@ -195,7 +195,7 @@ export const myChannelPrincipalRules: PrincipalChannelRules = {
 Two fail-closed rules to internalize:
 
 - **Group / conversation ids are never principal-eligible.** In `extractRecipients`, mark a shared conversation id (a Slack `C…`/`D…`, a Signal group id) with `principalEligible: false`. Only a per-human identifier (a Slack `U…`, a phone number, an email address) may be principal-eligible. Getting this wrong could let a group thread be treated as a private principal channel.
-- **Omit `carveoutSkill` unless a send skill needs the Gate C principal-only carve-out.** Absent ⇒ the channel still gets identity matching for the outbound gateway, but fails closed for Gate C. When you do add `carveoutSkill`, its `parseRecipients` must fully model the skill's recipient-shaped input and return `null` on any unmodeled key.
+- **Omit `carveoutSkill` unless a send skill needs the Gate C principal-only carve-out.** Absent ⇒ the channel still gets identity matching for the outbound gateway, but fails closed for Gate C. When you do add `carveoutSkill`, its `parseRecipients` must fully model the skill's recipient-shaped input and return `null` on any unmodeled key. A second skill on the same channel (e.g. `email-reply`) goes in `carveoutSkills`. If recipients are not literal inputs, set `resolveRecipients` so Gate C can fetch them before deciding; return `null` (or throw) on failure so the gate escalates.
 
 The registry asserts channel ids and carve-out skill names are unique at load (`assertPrincipalChannelRegistryUnique`) — a duplicate is a hard startup failure, not a silent shadow. Reviewers audit the entire Gate C opt-in surface by reading this one file; that is the point of centralizing it. See `docs/adr/034-channel-contributed-principal-carveout-registry.md` and `docs/adr/035-channel-owned-outbound-recipient-projection.md`.
 
@@ -271,7 +271,7 @@ Integration tests should run through a real bus instance so events flow the full
 - [ ] Senders auto-create via `ensureChannelContact` (best-effort, non-fatal); `<channel>_participant` added to `IdentitySource` (+ `AUTO_VERIFIED_SOURCES` only if the id is a strong identity signal)
 - [ ] Outbound routes through `OutboundGateway` (not a direct platform call), filtered by `channelId`
 - [ ] `outbound-request.ts` variant + type guard; re-exported into the `OutboundSendRequest` union; client added to `OutboundGatewayConfig`; `dispatch<Channel>()` + `send()` branch added
-- [ ] `principal-rules.ts` contributes `identifiersEqual` + `extractRecipients` (group/conversation ids `principalEligible: false`); appended to `principal-channel-registry.ts`; `carveoutSkill` omitted unless a send skill needs Gate C
+- [ ] `principal-rules.ts` contributes `identifiersEqual` + `extractRecipients` (group/conversation ids `principalEligible: false`); appended to `principal-channel-registry.ts`; `carveoutSkill` omitted unless a send skill needs Gate C (`carveoutSkills` + `resolveRecipients` when recipients are not literal inputs)
 - [ ] `channels.<name>` block in `config/channel-trust.yaml` (`trust`, `unknown_sender`, `threaded`); channel-specific settings in `config/default.yaml`
 - [ ] Bootstrap wiring in `src/index.ts` (client + adapter, gated on `channelShouldStart`, adapter constructed after the gateway)
 - [ ] If the channel is something a new user would set up, a matching entry exists in `skills/setup/tools/setup-status/catalog.yaml` with a `docs_url`, and a setup guide exists in the `curia-docs` repo

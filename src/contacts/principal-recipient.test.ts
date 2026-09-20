@@ -4,6 +4,7 @@ import {
   isPrincipalIdentity,
   computePrincipalIsSoleRecipient,
   resolvePrincipalIsSoleRecipientFromSkillInput,
+  isSolelyInitiatingSender,
   GATE_C_PRINCIPAL_CARVEOUT_SKILLS,
 } from './principal-recipient.js';
 import {
@@ -38,8 +39,9 @@ const PRINCIPAL_IDENTITIES = [
 
 describe('principal-recipient', () => {
   describe('GATE_C_PRINCIPAL_CARVEOUT_SKILLS', () => {
-    it('opts in email-send, signal-send, sms-send, and slack-send', () => {
+    it('opts in email-send, email-reply, signal-send, sms-send, and slack-send', () => {
       expect([...GATE_C_PRINCIPAL_CARVEOUT_SKILLS].sort()).toEqual([
+        'email-reply',
         'email-send',
         'signal-send',
         'slack-send',
@@ -74,6 +76,19 @@ describe('principal-recipient', () => {
       expect(() =>
         assertPrincipalChannelRegistryUnique([...PRINCIPAL_CHANNEL_RULES, dupSkill]),
       ).toThrow(/duplicate carveout skill 'email-send'/);
+
+      const dupViaArray: PrincipalChannelRules = {
+        channel: 'other-array',
+        identifiersEqual: (a, b) => a === b,
+        extractRecipients: () => null,
+        carveoutSkills: [{
+          skillName: 'email-reply',
+          parseRecipients: () => [],
+        }],
+      };
+      expect(() =>
+        assertPrincipalChannelRegistryUnique([...PRINCIPAL_CHANNEL_RULES, dupViaArray]),
+      ).toThrow(/duplicate carveout skill 'email-reply'/);
     });
   });
 
@@ -257,6 +272,74 @@ describe('principal-recipient', () => {
         { recipient: 'U_CEO', message: 'hi' },
         PRINCIPAL_IDENTITIES,
       )).toBe(true);
+    });
+
+    it('fails closed for email-reply without pre-resolved recipients', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'hi' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
+    it('detects email-reply to the principal when recipients were pre-resolved', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'hi' },
+        PRINCIPAL_IDENTITIES,
+        ['ceo@example.com'],
+      )).toBe(true);
+    });
+
+    it('rejects email-reply mixed recipient set even when pre-resolved', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'hi' },
+        PRINCIPAL_IDENTITIES,
+        ['ceo@example.com', 'other@example.com'],
+      )).toBe(false);
+    });
+
+    it('fails closed for email-reply when resolution returned null', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'hi' },
+        PRINCIPAL_IDENTITIES,
+        null,
+      )).toBe(false);
+    });
+  });
+
+  describe('isSolelyInitiatingSender', () => {
+    const emailEqual = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+    it('is true when every recipient matches the initiating sender', () => {
+      expect(isSolelyInitiatingSender(
+        ['alice@example.com'],
+        ['alice@example.com'],
+        emailEqual,
+      )).toBe(true);
+    });
+
+    it('folds email case and dedupes', () => {
+      expect(isSolelyInitiatingSender(
+        ['Alice@example.com', 'alice@example.com'],
+        ['alice@example.com'],
+        emailEqual,
+      )).toBe(true);
+    });
+
+    it('is false when any recipient is not the initiating sender', () => {
+      expect(isSolelyInitiatingSender(
+        ['alice@example.com', 'bob@example.com'],
+        ['alice@example.com'],
+        emailEqual,
+      )).toBe(false);
+    });
+
+    it('fails closed on empty recipient or initiator sets', () => {
+      expect(isSolelyInitiatingSender([], ['alice@example.com'], emailEqual)).toBe(false);
+      expect(isSolelyInitiatingSender(['alice@example.com'], [], emailEqual)).toBe(false);
     });
   });
 });
