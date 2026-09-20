@@ -34,7 +34,10 @@ export const ROUTING_DECISION_GUARDRAIL = [
   '`delegation` / `delegation_hint` is **always** transfer-ownership: delegate to',
   'that specialist with the sender\'s full message and the `entry_id`. Do not',
   'answer, research, or acknowledge the substance yourself first — even for a',
-  'trivial "yes" / "no" / "sounds good". On a live voice call, you may say a brief',
+  'trivial "yes" / "no" / "sounds good". The `entry_id` is for',
+  '`context-bridge-release` only — never pass it as `email-reply`\'s',
+  '`reply_to_message_id` (that needs a Nylas Message ID from the inbound email).',
+  'On a live voice call, you may say a brief',
   'routing acknowledgment ("on it") after delegating; never give the substantive',
   'answer that the owning specialist should deliver.',
 ].join('\n');

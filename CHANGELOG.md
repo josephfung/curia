@@ -41,7 +41,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Agent runtime** — `maxConsecutiveErrors` budget exits now forward `failedSkills` on the error response. (#1830)
 - **Agent runtime** — LLM failure exits and credential redaction now cover `failedSkills` persistence. (#1830)
 - **Scheduler** — recurring jobs refresh `last_run_summary` each run instead of keeping the first write. (#1829)
-- **`[ACTIVE OUTBOUND CONTEXT]`** — labels entry UUIDs so they cannot be mistaken for Nylas IDs. (#1817)
+- **`[ACTIVE OUTBOUND CONTEXT]`** — labels `entry_id` so it cannot be mistaken for a Nylas ID. (#1817)
 - **`email-reply` / Gate C** — reject UUID-shaped `reply_to_message_id` before any Nylas fetch. (#1817)
 - **Gate C / `email-reply`** — known-tier replies to the sender now allow; reply-all still escalates. (#1815)
 - **Gate C** — known sender-only still consults the judge for class upgrades. (#1815)

@@ -290,36 +290,16 @@ export class OutboundContextService {
   }
 
   /**
-   * Query active (non-released, non-expired) entries.
+   * Query active (non-released, non-expired) entries, newest first.
    *
-   * When `conversationId` is set, returns that conversation's entries plus any
-   * cross-conversation entries carrying `metadata.bind_reply === true` (task-wake
-   * bindings that legitimately span channels — see #1817). Unrelated conversations'
-   * ordinary entries are excluded so they cannot bleed into the coordinator prompt.
-   *
-   * When `conversationId` is omitted, returns the global active set — reserved for
-   * operator/test inspection. The dispatcher and voice always pass a conversation id.
-   * `clearBySubjects()` remains intentionally conversation-agnostic.
+   * Intentionally conversation-agnostic: proactive sends register under the
+   * *invoking* conversation (bullpen thread id, scheduler run id, Signal peer),
+   * while the reply often arrives on a different conversation id. Conversation
+   * scoping therefore hides the bridge's primary correlation cases (#1817
+   * review). Relevance filtering stays with the LLM over this bounded window.
+   * `clearBySubjects()` is also conversation-agnostic for the same reason.
    */
-  async getActive(options: { conversationId?: string; limit?: number } = {}): Promise<OutboundContextRow[]> {
-    const limit = options.limit ?? 10;
-    const conversationId = options.conversationId;
-
-    if (conversationId !== undefined) {
-      const result = await this.pool.query(
-        `SELECT * FROM outbound_context
-         WHERE released = false AND expires_at > now()
-           AND (
-             conversation_id = $1
-             OR metadata @> '{"bind_reply": true}'::jsonb
-           )
-         ORDER BY created_at DESC
-         LIMIT $2`,
-        [conversationId, limit],
-      );
-      return result.rows.map(mapRow);
-    }
-
+  async getActive(limit = 10): Promise<OutboundContextRow[]> {
     const result = await this.pool.query(
       `SELECT * FROM outbound_context
        WHERE released = false AND expires_at > now()
@@ -443,10 +423,9 @@ export class OutboundContextService {
     const blocks = entries.map((e) => {
       const lines: string[] = [
         '---',
-        // Label makes the id space unambiguous: this UUID is for
-        // context-bridge-release only — never for email-reply's reply_to_message_id
-        // (that needs a Nylas Message ID from the inbound email preamble). See #1817.
-        `outbound_context_entry_id (for context-bridge-release only — NOT a Nylas/email message id): ${e.id}`,
+        // Keep the key name `entry_id` (agents and context-bridge-release still
+        // look for it) but make the id space unambiguous in the label (#1817).
+        `entry_id (for context-bridge-release only — NOT a Nylas/email message id): ${e.id}`,
         `[sent ${timeAgo(e.createdAt)} via ${e.channelId}, on behalf of ${e.agentId}, expires in ${timeUntil(e.expiresAt)}]`,
         `preview: "${e.contentPreview.replace(/\n/g, ' ')}"`,
       ];
@@ -459,7 +438,7 @@ export class OutboundContextService {
 
     return [
       '[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]',
-      'IDs below are outbound_context UUIDs for context-bridge-release only. Do not pass them as email-reply reply_to_message_id — that field needs a Nylas Message ID from the inbound email (e.g. the OWNER CC / Message ID preamble).',
+      'Each entry_id below is an outbound_context UUID for context-bridge-release only. Do not pass it as email-reply reply_to_message_id — that field needs a Nylas Message ID from the inbound email (e.g. the OWNER CC / Message ID preamble).',
       ...blocks,
       '',
       originalContent,

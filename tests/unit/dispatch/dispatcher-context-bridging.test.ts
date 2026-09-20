@@ -47,7 +47,7 @@ describe('OutboundContextService integration (read path)', () => {
 
     expect(result).not.toBeNull();
     expect(result).toContain('[ACTIVE OUTBOUND CONTEXT');
-    expect(result).toContain('outbound_context_entry_id (for context-bridge-release only — NOT a Nylas/email message id): entry-1');
+    expect(result).toContain('entry_id (for context-bridge-release only — NOT a Nylas/email message id): entry-1');
     expect(result).toContain('on behalf of meeting-debrief');
     expect(result).toContain('Hello from CEO');
   });
@@ -67,14 +67,4 @@ describe('OutboundContextService integration (read path)', () => {
     expect(sql).toContain('expires_at > now()');
   });
 
-  it('getActive with conversationId scopes SQL to that conversation plus bind_reply (#1817)', async () => {
-    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({ rows: [] });
-
-    await service.getActive({ conversationId: 'email:thread-a' });
-
-    const sql = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(sql).toContain('conversation_id = $1');
-    expect(sql).toContain(`metadata @> '{"bind_reply": true}'::jsonb`);
-    expect((pool.query as ReturnType<typeof vi.fn>).mock.calls[0][1]).toEqual(['email:thread-a', 10]);
-  });
 });

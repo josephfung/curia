@@ -91,6 +91,15 @@ describe('resolveEmailReplyRecipients', () => {
     expect(fetchMessage).not.toHaveBeenCalled();
   });
 
+  it('rejects an outbound_context entry_id UUID before fetchMessage (#1817)', async () => {
+    const fetchMessage = vi.fn();
+    await expect(resolveEmailReplyRecipients(
+      { reply_to_message_id: 'f97d6a62-0ec4-4751-96c3-2538eb364f06', body: 'hi' },
+      { fetchMessage },
+    )).rejects.toThrow(/outbound_context entry_id/);
+    expect(fetchMessage).not.toHaveBeenCalled();
+  });
+
   it('propagates fetchMessage errors to the caller (Gate C converts them to escalate)', async () => {
     const fetchMessage = vi.fn().mockRejectedValue(new Error('nylas 404'));
     await expect(resolveEmailReplyRecipients(

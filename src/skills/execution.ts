@@ -22,6 +22,7 @@ import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
 import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
+import { ReplyToMessageIdShapeError } from '../channels/email/principal-rules.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
@@ -645,13 +646,16 @@ export class ExecutionLayer {
    * `resolveRecipients` hook (email-reply); otherwise uses the sync parser.
    * `resolutionFailed` is true only when an async resolver ran and returned null
    * or threw — the gate must escalate rather than allow.
+   * `inputError` is set when the resolver rejects malformed input before any
+   * gateway call (e.g. UUID-shaped reply_to_message_id — #1817); callers should
+   * return that error to the agent instead of a generic Gate C escalate.
    */
   private async resolveGateCRecipients(
     toolName: string,
     input: Record<string, unknown>,
     skillLogger: Logger,
     fetchMessage?: (messageId: string) => ReturnType<OutboundGateway['getEmailMessage']>,
-  ): Promise<{ recipients: string[] | null; resolutionFailed: boolean }> {
+  ): Promise<{ recipients: string[] | null; resolutionFailed: boolean; inputError?: string }> {
     const found = findCarveoutSkill(toolName);
     if (!found) return { recipients: null, resolutionFailed: false };
 
@@ -666,6 +670,9 @@ export class ExecutionLayer {
         if (recipients === null) return { recipients: null, resolutionFailed: true };
         return { recipients, resolutionFailed: false };
       } catch (err) {
+        if (err instanceof ReplyToMessageIdShapeError) {
+          return { recipients: null, resolutionFailed: true, inputError: err.message };
+        }
         skillLogger.warn(
           { err, toolName },
           'autonomy gate: Gate C recipient resolution failed — failing closed (#1815)',
@@ -1270,6 +1277,16 @@ export class ExecutionLayer {
                 const resolved = await this.resolveGateCRecipients(
                   toolName, input, skillLogger, fetchMessageForGateC,
                 );
+                if (resolved.inputError) {
+                  skillLogger.info(
+                    { toolName },
+                    'autonomy gate: email-reply reply_to_message_id failed shape check before Nylas fetch (#1817)',
+                  );
+                  return {
+                    success: false,
+                    error: this.wrapSkillError(resolved.inputError),
+                  };
+                }
                 recipients = resolved.recipients;
                 resolutionFailed = resolved.resolutionFailed;
                 isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
