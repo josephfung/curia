@@ -253,6 +253,8 @@ export interface ToolContext {
   timezone?: string;
   /** Curia's own email address — used by email skills to filter self from CC lists. */
   selfEmail?: string;
+  /** Every owned mailbox — used by email-reply to exclude Curia from reply-all CC. */
+  selfEmails?: readonly string[];
   /** Action log repo — available to skills declaring 'actionLogRepo' in capabilities.
    *  Provides read/write access to the autonomy_action_log table for approval lifecycle
    *  management. Used by approve-action, deny-action, dismiss-action, list-pending-actions. */

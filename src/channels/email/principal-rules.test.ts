@@ -65,7 +65,7 @@ describe('resolveEmailReplyRecipients', () => {
     const fetchMessage = vi.fn().mockResolvedValue(thread);
     await expect(resolveEmailReplyRecipients(
       { reply_to_message_id: 'msg-1', body: 'hi' },
-      { fetchMessage, selfEmail: 'curia@example.com' },
+      { fetchMessage, selfEmails: ['curia@example.com'] },
     )).resolves.toEqual([
       'alice@example.com',
       'bob@example.com',
@@ -78,7 +78,7 @@ describe('resolveEmailReplyRecipients', () => {
     const fetchMessage = vi.fn().mockResolvedValue(thread);
     await expect(resolveEmailReplyRecipients(
       { reply_to_message_id: 'msg-1', body: 'hi', cc: '' },
-      { fetchMessage, selfEmail: 'curia@example.com' },
+      { fetchMessage, selfEmails: ['curia@example.com'] },
     )).resolves.toEqual(['alice@example.com']);
   });
 
@@ -113,5 +113,17 @@ describe('resolveEmailReplyRecipients', () => {
       { reply_to_message_id: 'msg-1', body: 'hi' },
       {},
     )).resolves.toBeNull();
+  });
+
+  it('reply-all excludes every owned mailbox', async () => {
+    const fetchMessage = vi.fn().mockResolvedValue({
+      from: [{ email: 'alice@example.com' }],
+      to: [{ email: 'ops@example.com' }, { email: 'bob@example.com' }],
+      cc: [{ email: 'curia@example.com' }],
+    });
+    await expect(resolveEmailReplyRecipients(
+      { reply_to_message_id: 'msg-1', body: 'hi' },
+      { fetchMessage, selfEmails: ['curia@example.com', 'ops@example.com'] },
+    )).resolves.toEqual(['alice@example.com', 'bob@example.com']);
   });
 });

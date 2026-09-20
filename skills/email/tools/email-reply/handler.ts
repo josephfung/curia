@@ -7,7 +7,7 @@
 //
 // CC behaviour (three modes):
 //   - cc absent (undefined): reply-all — auto-populate from original.to[] + original.cc[],
-//     excluding the primary To recipient and ctx.selfEmail (Curia's own address).
+//     excluding the primary To recipient and every owned mailbox (ctx.selfEmails).
 //   - cc === "": reply to sender only — no CC recipients.
 //   - cc is a non-empty string: parse comma-separated addresses explicitly.
 //
@@ -80,7 +80,10 @@ export class EmailReplyHandler implements ToolHandler {
       const baseSubject = original.subject.replace(/^Re:\s*/i, '');
       const replySubject = `Re: ${baseSubject}`;
 
-      if (ccInput === undefined && !ctx.selfEmail) {
+      const ownedMailboxes = (ctx.selfEmails && ctx.selfEmails.length > 0)
+        ? ctx.selfEmails
+        : (ctx.selfEmail ? [ctx.selfEmail] : []);
+      if (ccInput === undefined && ownedMailboxes.length === 0) {
         ctx.log.warn({ replyToMessageId }, 'email-reply: selfEmail not configured — Curia may CC itself in reply-all');
       }
 
@@ -89,7 +92,7 @@ export class EmailReplyHandler implements ToolHandler {
         originalTo: original.to,
         originalCc: original.cc,
         ccInput,
-        selfEmail: ctx.selfEmail,
+        selfEmails: ownedMailboxes,
       });
       if (!recipientSet) {
         return {

@@ -6,7 +6,7 @@ describe('deriveEmailReplyRecipientSet', () => {
     originalFrom: 'alice@example.com',
     originalTo: [{ email: 'curia@example.com' }, { email: 'bob@example.com' }],
     originalCc: [{ email: 'carol@example.com' }],
-    selfEmail: 'curia@example.com',
+    selfEmails: ['curia@example.com'],
   };
 
   it('returns null when originalFrom is missing', () => {
@@ -63,6 +63,19 @@ describe('deriveEmailReplyRecipientSet', () => {
     })).toEqual({
       to: 'alice@example.com',
       cc: ['Bob@example.com', 'carol@example.com'],
+    });
+  });
+
+  it('reply-all excludes every owned mailbox, not just the primary', () => {
+    expect(deriveEmailReplyRecipientSet({
+      originalFrom: 'alice@example.com',
+      originalTo: [{ email: 'ops@example.com' }, { email: 'bob@example.com' }],
+      originalCc: [{ email: 'curia@example.com' }],
+      ccInput: undefined,
+      selfEmails: ['curia@example.com', 'ops@example.com'],
+    })).toEqual({
+      to: 'alice@example.com',
+      cc: ['bob@example.com'],
     });
   });
 });
