@@ -91,7 +91,7 @@ describe('resolveEmailReplyRecipients', () => {
     expect(fetchMessage).not.toHaveBeenCalled();
   });
 
-  it('fails closed when fetchMessage throws', async () => {
+  it('propagates fetchMessage errors to the caller (Gate C converts them to escalate)', async () => {
     const fetchMessage = vi.fn().mockRejectedValue(new Error('nylas 404'));
     await expect(resolveEmailReplyRecipients(
       { reply_to_message_id: 'missing', body: 'hi' },
