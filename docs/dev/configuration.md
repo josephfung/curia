@@ -187,7 +187,14 @@ contextBridge:
     email: 72                # Built-in default for email. Default: {email: 72}.
 ```
 
-Every outbound message (Signal, email, Slack, SMS) registers a context entry so that if the recipient replies, the coordinator knows what they're replying to. Registration is **best-effort**: it happens after delivery, and a failure is logged and swallowed rather than failing a send that already went out — so an entry can be missing entirely, not just expired. Entries registered without explicit `context_bridge` metadata get the auto-registration TTL. Entries with delegation hints and expected-reply metadata get the longer `explicitExpiryHours` TTL, floored at the channel default.
+Every outbound message (Signal, email, Slack, SMS) *attempts* to register a context entry so that if the recipient replies, the coordinator knows what they're replying to. Registration is **best-effort**: it happens after delivery, and a failure is logged and swallowed rather than failing a send that already went out — so an entry can be missing entirely, not just expired. Entries registered without explicit `context_bridge` metadata get the auto-registration TTL. Entries with delegation hints and expected-reply metadata get the longer `explicitExpiryHours` TTL, floored at the channel default.
+
+At the shipped defaults that makes the two tiers differ per channel, which matters when reading a `context_bridge` description:
+
+| Channel | Bare send | With `context_bridge` (no `expires_in_hours`) |
+|---|---|---|
+| `email` | 72h | 72h (`max(24, 72)`) |
+| `signal`, `slack`, `sms` | 6h | 24h (`max(24, 6)`) |
 
 A system-injected task-wake binding (168h) is floored the same way: if a channel's default is longer than 168h, the binding is raised to it, so the system's own binding cannot expire before a bare entry on that channel. An agent's explicit `expires_in_hours` is never floored — a deliberately short window is a legitimate choice.
 

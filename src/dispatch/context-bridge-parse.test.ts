@@ -377,3 +377,40 @@ describe('system-injected task-wake TTL vs a longer channel default', () => {
     );
   });
 });
+
+// The numbers the manifests and docs quote to the agent, pinned against the
+// code that produces them. These drifted once: the chat manifests advertised
+// "about 6 hours" inside the description of the context_bridge parameter, but
+// passing that parameter yields max(explicitExpiryHours=24, channelDefault=6)
+// = 24h. Email hid the bug because both tiers resolve to 72.
+describe('documented TTL tiers per channel', () => {
+  const CHANNEL_DEFAULTS: Record<string, number> = { email: 72, signal: 6, slack: 6, sms: 6 };
+
+  function capFor(channelId: string): OutboundContextCapability {
+    return makeCap({ defaultExpiryHoursFor: () => CHANNEL_DEFAULTS[channelId]! });
+  }
+
+  function registeredTtl(cap: OutboundContextCapability): number {
+    const call = (cap.register as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { expiresInHours: number };
+    return call.expiresInHours;
+  }
+
+  it.each([
+    // channel, bare send, with a valid bridge carrying no expires_in_hours
+    ['email', 72, 72],
+    ['signal', 6, 24],
+    ['slack', 6, 24],
+    ['sms', 6, 24],
+  ])('%s: bare send = %ih, with context_bridge = %ih', async (channelId, bare, withBridge) => {
+    const bareCap = capFor(channelId);
+    await registerOutboundContext(bareCap, undefined, { ...baseOpts, channelId });
+    expect(registeredTtl(bareCap)).toBe(bare);
+
+    const bridgeCap = capFor(channelId);
+    await registerOutboundContext(bridgeCap, JSON.stringify({ agent_id: 'coordinator' }), {
+      ...baseOpts,
+      channelId,
+    });
+    expect(registeredTtl(bridgeCap)).toBe(withBridge);
+  });
+});
