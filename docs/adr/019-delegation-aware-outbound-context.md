@@ -159,16 +159,17 @@ Three approaches were considered:
   write amplification is real. Accepted because the alternative
   (conditional registration) is exactly what caused #609.
 - **The per-channel TTL is bounded by the injection cap, not just by time.**
-  `getActive(limit = 10)` surfaces only the ten most recent active entries,
-  ordered `created_at DESC` and unfiltered by channel, and correlation is
-  entirely LLM-driven off that block. Holding email entries alive for 72h
-  instead of 6h grows the active population without widening the window that
-  shows it, so a three-day-old email whose reply finally lands can now be alive
-  in the table yet sit outside the newest ten — arriving as an unrecognised
-  cold inbound, the #1816 symptom at a different threshold. Ten outbounds over
-  three days is an ordinary week for this workload. Scoping that query is
-  tracked separately as #1817; until it lands, the longer TTL delivers its
-  benefit only up to the cap.
+  `getActive({ conversationId, limit })` (#1817) surfaces at most the ten most
+  recent active entries for the current conversation, plus cross-conversation
+  entries carrying `metadata.bind_reply === true` (task-wake bindings that
+  legitimately span channels). Unrelated conversations no longer bleed into the
+  prompt. Correlation remains LLM-driven off that block. Holding email entries
+  alive for 72h instead of 6h still grows the active population within a busy
+  conversation, so a three-day-old email whose reply finally lands can still sit
+  outside the newest ten for that thread — arriving as an unrecognised cold
+  inbound, the #1816 symptom at a different threshold. Ten outbounds on one
+  conversation over three days is less common than ten across the whole system,
+  so scoping materially widens the useful window of the longer TTL.
 - An unrecognised channel id in `contextBridge.channelDefaultExpiryHours` is
   accepted and silently inert — registration uses pseudo-channel ids
   (`internal`, `scheduler`, `bullpen`) that are not in the channel catalog, so

@@ -125,11 +125,14 @@ describe('OutboundContextService', () => {
       const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[0]).toContain('released = false');
       expect(call[0]).toContain('expires_at > now()');
+      // Unscoped path — no conversation predicate.
+      expect(call[0]).not.toContain('conversation_id = $1');
+      expect(call[0]).not.toContain('bind_reply');
     });
 
     it('respects the limit parameter', async () => {
       (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [] });
-      await service.getActive(5);
+      await service.getActive({ limit: 5 });
       const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[1][0]).toBe(5);
     });
@@ -139,6 +142,26 @@ describe('OutboundContextService', () => {
       await service.getActive();
       const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(call[1][0]).toBe(10);
+    });
+
+    it('scopes to conversationId and includes bind_reply cross-conversation entries (#1817)', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [] });
+      await service.getActive({ conversationId: 'email:thread-a', limit: 7 });
+
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const sql = call[0] as string;
+      expect(sql).toContain('conversation_id = $1');
+      expect(sql).toContain(`metadata @> '{"bind_reply": true}'::jsonb`);
+      expect(sql).toContain('released = false');
+      expect(sql).toContain('expires_at > now()');
+      expect(call[1]).toEqual(['email:thread-a', 7]);
+    });
+
+    it('defaults scoped limit to 10 when conversationId is set without limit', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [] });
+      await service.getActive({ conversationId: 'signal:ceo' });
+      const call = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(call[1]).toEqual(['signal:ceo', 10]);
     });
   });
 
@@ -255,7 +278,8 @@ describe('OutboundContextService', () => {
 
       expect(result).not.toBeNull();
       expect(result).toContain('[ACTIVE OUTBOUND CONTEXT');
-      expect(result).toContain('entry_id: abc-123');
+      expect(result).toContain('outbound_context_entry_id (for context-bridge-release only — NOT a Nylas/email message id): abc-123');
+      expect(result).toContain('Do not pass them as email-reply reply_to_message_id');
       expect(result).toContain('via signal');
       expect(result).toContain('on behalf of meeting-debrief');
       expect(result).toContain('preview: "Any takeaways from the meeting?"');

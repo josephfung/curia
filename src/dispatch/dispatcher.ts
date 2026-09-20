@@ -755,15 +755,16 @@ export class Dispatcher {
       }
     }
 
-    // Context bridging v2: inject active outbound context entries.
-    // Unlike v1 (which only applied to non-threaded channels), v2 injects for all
-    // inbound messages — the LLM judges relevance across channels.
+    // Context bridging v2: inject active outbound context entries scoped to
+    // this conversation (+ bind_reply cross-channel task-wake bindings — #1817).
     // Placed AFTER the injection scanner so the preamble (system-generated content)
     // wraps the already-sanitized user content and is not itself scanned or overwritten.
     // Best-effort: failure is logged but does not block message routing.
     if (this._outboundContextService) {
       try {
-        const activeEntries = await this._outboundContextService.getActive();
+        const activeEntries = await this._outboundContextService.getActive({
+          conversationId: payload.conversationId,
+        });
         const preamble = this._outboundContextService.formatInjectionBlock(activeEntries, taskContent);
         if (preamble !== null) {
           taskContent = preamble;

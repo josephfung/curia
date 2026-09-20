@@ -413,7 +413,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
     const activeOutboundContextBlock = [
       "[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]",
       '---',
-      'entry_id: test-bridge-entry-001',
+      'outbound_context_entry_id (for context-bridge-release only — NOT a Nylas/email message id): test-bridge-entry-001',
       '[sent 3 minutes ago via signal, on behalf of coordinator, expires in 23h]',
       'preview: "Working on your acquisition research. One question: which angle matters most..."',
       "expected reply: CEO's direction on the research question",
