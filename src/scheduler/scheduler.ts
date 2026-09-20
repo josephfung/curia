@@ -700,9 +700,18 @@ export class Scheduler {
       // next_run_at to the future, so any stale concurrent claim matches 0 rows and skips.
       // (#1124 advanced next_run_at but only shielded the NEXT poll's SELECT, not a
       // concurrent poll already holding the row.)
+      // Clear last_run_summary/context at claim so completeJobRun's COALESCE means
+      // "explicit scheduler-report during *this* run beats the auto-summary" — not
+      // "whatever the previous run left behind" (#1829). Prior-run injection below
+      // still uses the in-memory JobRow from the poll SELECT, so the agent sees the
+      // previous run's text; only the DB column is reset for this run's writers.
       claimResult = await this.pool.query(
         `UPDATE scheduled_jobs
-            SET status = $1, run_started_at = now(), next_run_at = $3
+            SET status = $1,
+                run_started_at = now(),
+                next_run_at = $3,
+                last_run_summary = NULL,
+                last_run_context = NULL
           WHERE id = $2
             AND status IN ('pending', 'failed')
             AND cron_expr = $4
@@ -712,7 +721,13 @@ export class Scheduler {
       );
     } else {
       claimResult = await this.pool.query(
-        `UPDATE scheduled_jobs SET status = $1, run_started_at = now() WHERE id = $2 AND status IN ('pending', 'failed')`,
+        `UPDATE scheduled_jobs
+            SET status = $1,
+                run_started_at = now(),
+                last_run_summary = NULL,
+                last_run_context = NULL
+          WHERE id = $2
+            AND status IN ('pending', 'failed')`,
         ['running', job.id],
       );
     }

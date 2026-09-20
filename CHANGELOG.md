@@ -32,6 +32,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scheduler** — recurring jobs refresh `last_run_summary` each run instead of keeping the first write. (#1829)
 - **Gate C / `email-reply`** — known-tier replies to the sender now allow; reply-all still escalates. (#1815)
 - **Gate C** — known sender-only still consults the judge for class upgrades. (#1815)
 - **Gate C** — known sender-only allows without a judge when recipients are pinned. (#1815)
