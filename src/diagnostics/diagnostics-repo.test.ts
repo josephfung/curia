@@ -39,17 +39,38 @@ describe('DiagnosticsRepo', () => {
         id: 'job-1', agent_id: 'coordinator', source_agent_id: null, task_id: 'task-b4j3',
         cron_expr: '0 8 * * *', run_at: null, next_run_at: '2026-07-07T08:00:00.000Z',
         last_run_at: null, run_started_at: null, status: 'pending', last_run_outcome: null,
-        last_run_summary: null, last_error: null, consecutive_failures: 0, created_by: 'system',
+        last_run_summary: null, last_run_context: null, last_error: null, consecutive_failures: 0, created_by: 'system',
         created_at: '2026-07-07T07:00:00.000Z', task_payload: { kind: 'wake' },
       },
     ]);
 
     const jobs = await repo.getScheduledJobs({ taskId: 'task-b4j3' });
     expect(calls[0]!.text).toContain('FROM scheduled_jobs');
+    expect(calls[0]!.text).toContain('last_run_context');
     expect(calls[0]!.text).toContain('task_id = $1');
     expect(calls[0]!.params).toContain('task-b4j3');
-    expect(jobs[0]).toMatchObject({ id: 'job-1', taskId: 'task-b4j3', status: 'pending' });
+    expect(jobs[0]).toMatchObject({ id: 'job-1', taskId: 'task-b4j3', status: 'pending', lastRunContext: null });
     expect(jobs[0]!.nextRunAt).toBeInstanceOf(Date);
+  });
+
+  it('maps last_run_context.failedSkills for diagnostics (#1830)', async () => {
+    const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+    const { repo } = repoWithRows([
+      {
+        id: 'job-d3f8', agent_id: 'calendar', source_agent_id: null, task_id: null,
+        cron_expr: '0 6 * * *', run_at: null, next_run_at: '2026-09-20T06:00:00.000Z',
+        last_run_at: '2026-09-19T06:00:00.000Z', run_started_at: null, status: 'pending',
+        last_run_outcome: 'completed', last_run_summary: 'sweep ok',
+        last_run_context: { failedSkills, cursor: '2026-09-19' },
+        last_error: null, consecutive_failures: 0, created_by: 'system',
+        created_at: '2026-08-01T00:00:00.000Z', task_payload: { skill: 'holds-sweep' },
+      },
+    ]);
+
+    const jobs = await repo.getScheduledJobs({ id: 'job-d3f8' });
+    expect(jobs[0]!.lastRunOutcome).toBe('completed');
+    expect(jobs[0]!.consecutiveFailures).toBe(0);
+    expect(jobs[0]!.lastRunContext).toEqual({ failedSkills, cursor: '2026-09-19' });
   });
 
   it('getOutboundContext returns released/expired rows too (no active-only filter) and surfaces `expired`', async () => {

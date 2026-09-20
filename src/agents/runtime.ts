@@ -661,10 +661,14 @@ export class AgentRuntime {
     // Accumulate skill names across all tool-use turns so we can report them
     // on the agent.response event for audit and monitoring.
     const skillsCalled: string[] = [];
+    // Skills that returned success:false — surfaced to the scheduler as
+    // last_run_context.failedSkills without flipping job health (#1830).
+    const failedSkills: Array<{ name: string; error: string }> = [];
     // Threaded into every maxTurns budget check (tool loop, recovery, chatWithRetry).
     const budgetHandoff = {
       conversationId,
       skillsCalled,
+      failedSkills,
       boundTaskCtx,
       memory,
       sliceCostTracker: resumableActive ? sliceCostTracker : undefined,
@@ -1292,6 +1296,7 @@ export class AgentRuntime {
                 conversationId,
                 content: clarificationContent,
                 skillsCalled,
+                ...(failedSkills.length > 0 && { failedSkills: [...failedSkills] }),
                 parentEventId: taskEvent.id,
               });
               await bus.publish('agent', clarificationResponse);
@@ -1338,6 +1343,7 @@ export class AgentRuntime {
                 conversationId,
                 content: escalationContent,
                 skillsCalled,
+                ...(failedSkills.length > 0 && { failedSkills: [...failedSkills] }),
                 parentEventId: taskEvent.id,
               });
               await bus.publish('agent', escalationResponse);
@@ -1837,6 +1843,11 @@ export class AgentRuntime {
           // burn the consecutive error budget — temporary infra must not abort the task.
           // Auth-class skill failures (#1561) preserve AUTH_FAILURE so the LLM sees
           // the reconnect action rather than a generic SKILL_ERROR.
+          // Record for scheduler visibility (#1830) — truncated to match autoSummary.
+          failedSkills.push({
+            name: toolCall.name,
+            error: result.error.slice(0, 500),
+          });
           const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
           const isAuthFailure = result.errorType === 'AUTH_FAILURE';
           if (isDbFailure) {
@@ -2079,6 +2090,7 @@ export class AgentRuntime {
       ...(isResponseError && { isError: true }),
       ...(prepared.suppressDelivery && { suppressDelivery: true }),
       skillsCalled,
+      ...(failedSkills.length > 0 && { failedSkills: [...failedSkills] }),
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);
@@ -2197,6 +2209,7 @@ export class AgentRuntime {
     budgetHandoff?: {
       conversationId: string;
       skillsCalled: string[];
+      failedSkills: Array<{ name: string; error: string }>;
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
       sliceCostTracker?: { usd: number };
@@ -2484,6 +2497,7 @@ export class AgentRuntime {
     handoff?: {
       conversationId: string;
       skillsCalled: string[];
+      failedSkills: Array<{ name: string; error: string }>;
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
       sliceCostTracker?: { usd: number };
@@ -2508,6 +2522,7 @@ export class AgentRuntime {
     handoff?: {
       conversationId: string;
       skillsCalled: string[];
+      failedSkills: Array<{ name: string; error: string }>;
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
       sliceCostTracker?: { usd: number };
@@ -2524,6 +2539,7 @@ export class AgentRuntime {
           checkpoint,
           handoff.conversationId,
           handoff.skillsCalled,
+          handoff.failedSkills,
           handoff.memory,
           budget,
           reason,
@@ -2561,6 +2577,7 @@ export class AgentRuntime {
     checkpoint: ResumableProgressBlock,
     conversationId: string,
     skillsCalled: string[],
+    failedSkills: Array<{ name: string; error: string }>,
     memory: WorkingMemory | undefined,
     budget: ErrorBudget,
     reason: 'maxTurns',
@@ -2587,6 +2604,7 @@ export class AgentRuntime {
       conversationId,
       content,
       skillsCalled,
+      ...(failedSkills.length > 0 && { failedSkills: [...failedSkills] }),
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);

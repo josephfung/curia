@@ -1251,7 +1251,47 @@ describe('Scheduler', () => {
         payload: { agentId: 'agent-1', conversationId: 'c1', content: 'done' },
       });
 
-      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done');
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith('job-1', true, undefined, 'done', undefined);
+    });
+
+    it('threads failedSkills from agent.response into completeJobRun (#1830)', async () => {
+      const row = fakeDbRow();
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
+      const taskEventId = taskEvent.id;
+
+      schedulerService.completeJobRun.mockResolvedValueOnce({ suspended: false });
+      scheduler.start();
+
+      const failedSkills = [
+        { name: 'bullpen.post', error: 'Thread not found' },
+      ];
+      const responseHandler = bus.subscribe.mock.calls[0]?.[2] as (event: unknown) => Promise<void>;
+      await responseHandler({
+        id: 'resp-failed-skills',
+        type: 'agent.response',
+        sourceLayer: 'agent',
+        parentEventId: taskEventId,
+        timestamp: new Date(),
+        payload: {
+          agentId: 'agent-1',
+          conversationId: 'c1',
+          content: 'Sweep finished; one report call failed.',
+          failedSkills,
+        },
+      });
+
+      expect(schedulerService.completeJobRun).toHaveBeenCalledWith(
+        'job-1',
+        true,
+        undefined,
+        'Sweep finished; one report call failed.',
+        failedSkills,
+      );
     });
 
     it('passes auto-summary truncated to 500 chars on agent.response', async () => {

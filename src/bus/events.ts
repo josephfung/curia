@@ -116,6 +116,14 @@ interface AgentResponsePayload {
   // where the runtime bailed before completing the loop.
   skillsCalled?: string[];
   /**
+   * Skills that returned `{ success: false }` during the tool-use loop.
+   * Populated alongside `skillsCalled` so the scheduler can persist visibility
+   * into `last_run_context` without flipping job health (#1830). Absent when
+   * no tool failed, and absent on error-path responses (same rule as
+   * `skillsCalled`).
+   */
+  failedSkills?: Array<{ name: string; error: string }>;
+  /**
    * Set by the agent runtime when it detects a no-reply sentinel (or a near-miss)
    * in the model output. Dispatch honours this the same way it honours the
    * in-band `NO_REPLY` token. Other `agent.response` subscribers (scheduler,

@@ -21,7 +21,7 @@ function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   } as ToolContext;
 }
 
-function job(id: string, nextRunIso: string): ScheduledJobRow {
+function job(id: string, nextRunIso: string, extras?: Partial<ScheduledJobRow>): ScheduledJobRow {
   return {
     id,
     agentId: 'coordinator',
@@ -35,11 +35,13 @@ function job(id: string, nextRunIso: string): ScheduledJobRow {
     status: 'pending',
     lastRunOutcome: null,
     lastRunSummary: null,
+    lastRunContext: null,
     lastError: null,
     consecutiveFailures: 0,
     createdBy: 'system',
     createdAt: new Date('2026-07-07T07:00:00.000Z'),
     taskPayload: {},
+    ...extras,
   };
 }
 
@@ -76,6 +78,32 @@ describe('OpsLookupHandler', () => {
     expect(data.available).toBe(true);
     expect(data.rows.map((r) => r.id)).toEqual(['job-a', 'job-b']);
     expect(data.rows[0]!.next_run_at).toBe(data.rows[1]!.next_run_at); // same fire time
+  });
+
+  it('surfaces last_run_context.failedSkills for a healthy job (#1830)', async () => {
+    const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+    const getScheduledJobs = vi.fn().mockResolvedValue([
+      job('job-d3f8', '2026-09-20T06:00:00.000Z', {
+        agentId: 'calendar',
+        status: 'pending',
+        lastRunOutcome: 'completed',
+        lastRunSummary: 'sweep ok',
+        lastRunContext: { failedSkills, cursor: '2026-09-19' },
+        consecutiveFailures: 0,
+        lastError: null,
+      }),
+    ]);
+    const repo = { getScheduledJobs } as unknown as DiagnosticsRepo;
+    const result = await new OpsLookupHandler().execute(makeCtx({
+      diagnosticsRepo: repo,
+      input: { source: 'scheduled_jobs', id: 'job-d3f8' },
+    }));
+
+    expect(result.success).toBe(true);
+    const row = (result as { success: true; data: { rows: Array<Record<string, unknown>> } }).data.rows[0]!;
+    expect(row.last_run_outcome).toBe('completed');
+    expect(row.consecutive_failures).toBe(0);
+    expect(row.last_run_context).toEqual({ failedSkills, cursor: '2026-09-19' });
   });
 
   it('reports available:false when a source returns nothing for the scope', async () => {

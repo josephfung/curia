@@ -51,6 +51,8 @@ export interface ScheduledJobRow {
   status: string;
   lastRunOutcome: string | null;
   lastRunSummary: string | null;
+  /** Opaque agent context; may include `failedSkills` from the last completed run (#1830). */
+  lastRunContext: Record<string, unknown> | null;
   lastError: string | null;
   consecutiveFailures: number;
   createdBy: string;
@@ -200,7 +202,8 @@ export class DiagnosticsRepo {
     const result = await this.readOnlyQuery(
       `SELECT id, agent_id, source_agent_id, task_id, cron_expr, run_at, next_run_at,
               last_run_at, run_started_at, status, last_run_outcome, last_run_summary,
-              last_error, consecutive_failures, created_by, created_at, task_payload
+              last_run_context, last_error, consecutive_failures, created_by, created_at,
+              task_payload
        FROM scheduled_jobs
        ${where}
        ORDER BY created_at ASC
@@ -221,6 +224,7 @@ export class DiagnosticsRepo {
       status: r.status as string,
       lastRunOutcome: (r.last_run_outcome as string | null) ?? null,
       lastRunSummary: (r.last_run_summary as string | null) ?? null,
+      lastRunContext: r.last_run_context == null ? null : asRecord(r.last_run_context),
       lastError: (r.last_error as string | null) ?? null,
       consecutiveFailures: Number(r.consecutive_failures ?? 0),
       createdBy: r.created_by as string,

@@ -107,7 +107,7 @@ interface DbJobRow {
   expected_duration_seconds: number | null; // per-job timeout hint; NULL → system default (600s)
   last_run_outcome: 'completed' | 'failed' | 'timed_out' | null;
   last_run_summary: string | null;   // cleared at claim; set by scheduler-report or completeJobRun auto-summary
-  last_run_context: Record<string, unknown> | null; // survives claim; set/updated only by scheduler-report
+  last_run_context: Record<string, unknown> | null; // survives claim; scheduler-report + completeJobRun failedSkills (#1830)
   originator: Record<string, unknown> | null; // JSONB — cast to TaskOriginator when mapping
 }
 
@@ -972,12 +972,17 @@ export class SchedulerService {
    * a completed prior run's summary no longer blocks the auto path. (A late report from
    * an abandoned earlier run can still land while the next run is `running` —
    * `reportJobRun` is not claim-stamp fenced; that race is separate from #1829.)
+   *
+   * On success, `failedSkills` from the agent response is merged into `last_run_context`
+   * (or the key is removed when absent) so tool failures are visible without flipping
+   * job health (#1830). Continuity keys written by scheduler-report are preserved.
    */
   async completeJobRun(
     jobId: string,
     success: boolean,
     error?: string,
     autoSummary?: string,
+    failedSkills?: Array<{ name: string; error: string }>,
   ): Promise<{ suspended: boolean }> {
     // Fetch the current job state to decide how to handle the completion.
     // Include timezone so nextRunFromCron() uses the per-job zone, not the system default.
@@ -994,6 +999,19 @@ export class SchedulerService {
     }
 
     if (success) {
+      // Merge or clear failedSkills in last_run_context without clobbering agent continuity
+      // state. Right-hand jsonb || wins on key conflict, so a prior run's failedSkills is
+      // replaced; ` - 'failedSkills'` drops the key when this run had no tool failures.
+      const hasFailedSkills = failedSkills !== undefined && failedSkills.length > 0;
+      const failedSkillsJson = hasFailedSkills ? JSON.stringify({ failedSkills }) : undefined;
+      const contextSetClause = (paramIndex: number): string =>
+        hasFailedSkills
+          ? `, last_run_context = COALESCE(last_run_context, '{}'::jsonb) || $${paramIndex}::jsonb`
+          : `, last_run_context = CASE
+               WHEN last_run_context IS NULL THEN NULL
+               ELSE last_run_context - 'failedSkills'
+             END`;
+
       if (job.cron_expr) {
         // Recurring job: advance to next run using the per-job timezone, reset failure counter.
         // Fence the completion on the job NOT being in an operator-intervention state:
@@ -1012,9 +1030,12 @@ export class SchedulerService {
                  status = $2,
                  last_run_outcome = $4,
                  last_run_summary = COALESCE(last_run_summary, $5)
+                 ${contextSetClause(6)}
            WHERE id = $3 AND status NOT IN ('paused', 'cancelled')
         `;
-        const res = await this.pool.query(updateSql, [nextRunAt, 'pending', jobId, 'completed', autoSummary ?? null]);
+        const params: unknown[] = [nextRunAt, 'pending', jobId, 'completed', autoSummary ?? null];
+        if (failedSkillsJson !== undefined) params.push(failedSkillsJson);
+        const res = await this.pool.query(updateSql, params);
         if (res.rowCount === 0) return this.skippedCompletion(jobId);
       } else {
         // One-shot job: mark as completed (same pause/cancel fence).
@@ -1027,9 +1048,12 @@ export class SchedulerService {
                  run_started_at = NULL,
                  last_run_outcome = $3,
                  last_run_summary = COALESCE(last_run_summary, $4)
+                 ${contextSetClause(5)}
            WHERE id = $2 AND status NOT IN ('paused', 'cancelled')
         `;
-        const res = await this.pool.query(updateSql, ['completed', jobId, 'completed', autoSummary ?? null]);
+        const params: unknown[] = ['completed', jobId, 'completed', autoSummary ?? null];
+        if (failedSkillsJson !== undefined) params.push(failedSkillsJson);
+        const res = await this.pool.query(updateSql, params);
         if (res.rowCount === 0) return this.skippedCompletion(jobId);
       }
 
