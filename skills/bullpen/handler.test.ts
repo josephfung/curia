@@ -411,4 +411,52 @@ describe('BullpenHandler', () => {
     await new Promise((r) => setImmediate(r));
     expect(failingPublish).toHaveBeenCalledOnce();
   });
+
+  describe('thread not-found errors (#1828)', () => {
+    const JOB_ID = 'd3f8bfa9-1761-4f01-a66e-a3d4c28834b0';
+    const RUN_CONV = `scheduler:${JOB_ID}:run-xyz`;
+
+    it.each(['reply', 'get_thread', 'close'] as const)(
+      '%s: names scheduler-report when thread_id is the caller job UUID',
+      async (action) => {
+        const input: Record<string, unknown> = { action, thread_id: JOB_ID };
+        if (action === 'reply') input.content = 'status update';
+        const ctx = makeCtx(input, { conversationId: RUN_CONV });
+        const result = await handler.execute(ctx);
+        expect(result.success).toBe(false);
+        const error = (result as { success: false; error: string }).error;
+        expect(error).toContain('scheduled-job ID');
+        expect(error).toContain('scheduler-report');
+        expect(error).not.toMatch(/not found/i);
+      },
+    );
+
+    it('get_thread: generic miss no longer implies the thread previously existed', async () => {
+      const ctx = makeCtx({
+        action: 'get_thread',
+        thread_id: '00000000-0000-4000-8000-000000000099',
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect((result as { success: false; error: string }).error).toBe(
+        'No bullpen thread with ID 00000000-0000-4000-8000-000000000099 exists',
+      );
+    });
+
+    it('reply: unrelated missing thread_id under a scheduler conversation stays generic', async () => {
+      const ctx = makeCtx(
+        {
+          action: 'reply',
+          thread_id: '00000000-0000-4000-8000-000000000099',
+          content: 'hello',
+        },
+        { conversationId: RUN_CONV },
+      );
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect((result as { success: false; error: string }).error).toBe(
+        'No bullpen thread with ID 00000000-0000-4000-8000-000000000099 exists',
+      );
+    });
+  });
 });

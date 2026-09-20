@@ -14,6 +14,27 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { createAgentDiscuss } from '../../src/bus/events.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
+import { parseSchedulerRunJobId } from '../../src/scheduler/conversation-id.js';
+
+/**
+ * Error when a thread_id fails to resolve. If the id matches this run's scheduled
+ * job UUID, name the mistake and point at scheduler-report (#1828). Otherwise use
+ * wording that does not imply the thread once existed.
+ */
+export function bullpenThreadNotFoundError(
+  threadId: string,
+  conversationId: string | undefined,
+): string {
+  const jobId = parseSchedulerRunJobId(conversationId);
+  if (jobId && threadId === jobId) {
+    return (
+      `${threadId} is your scheduled-job ID, not a bullpen thread ID. ` +
+      'Scheduled runs have no thread. To record this run\'s outcome call scheduler-report; ' +
+      "to start a discussion call bullpen with action:'post'."
+    );
+  }
+  return `No bullpen thread with ID ${threadId} exists`;
+}
 
 export class BullpenHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -137,7 +158,12 @@ export class BullpenHandler implements ToolHandler {
           // constrain mentions to actual thread members. postMessage validates the thread too,
           // but we need participants here for mention filtering.
           const existing = await ctx.bullpenService.getThread(threadId);
-          if (!existing) return { success: false, error: `Thread ${threadId} not found` };
+          if (!existing) {
+            return {
+              success: false,
+              error: bullpenThreadNotFoundError(threadId, ctx.conversationId),
+            };
+          }
 
           const rawMentioned = input['mentioned_agent_ids'];
           // Trim/filter mentions, then constrain to actual thread participants to prevent out-of-thread fan-out.
@@ -204,7 +230,10 @@ export class BullpenHandler implements ToolHandler {
 
           const result = await ctx.bullpenService.getThread(threadId);
           if (!result) {
-            return { success: false, error: `Thread ${threadId} not found` };
+            return {
+              success: false,
+              error: bullpenThreadNotFoundError(threadId, ctx.conversationId),
+            };
           }
 
           // Return the BullpenThread under 'thread' and messages array separately.
@@ -217,6 +246,16 @@ export class BullpenHandler implements ToolHandler {
 
           if (typeof threadId !== 'string' || !threadId) {
             return { success: false, error: "Missing required field: 'thread_id'" };
+          }
+
+          // Pre-check so a job-UUID-as-thread_id mistake gets the actionable error
+          // rather than the generic service throw (#1828).
+          const existingForClose = await ctx.bullpenService.getThread(threadId);
+          if (!existingForClose) {
+            return {
+              success: false,
+              error: bullpenThreadNotFoundError(threadId, ctx.conversationId),
+            };
           }
 
           // closeThread throws if the requesting agent is not the creator or coordinator

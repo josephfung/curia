@@ -291,7 +291,7 @@ Four skills available to agents:
 - **`scheduler-create`** — create a cron or one-shot job, optionally with a linked persistent task (`intent_anchor`)
 - **`scheduler-list`** — list jobs with optional status/agent_id filters
 - **`scheduler-cancel`** — cancel a job by ID
-- **`scheduler-report`** — write prior-run context at the end of a run. Input: `{ job_id, summary, context? }`. Action risk: `none`. The scheduler writes `last_run_outcome` itself; this skill writes `last_run_summary` and `last_run_context`. After the agent finishes, `completeJobRun` may merge `failedSkills` into the same column (#1830).
+- **`scheduler-report`** — write prior-run context at the end of a run. Input: `{ summary, context?, job_id? }`. On a scheduled run, `job_id` is optional and derived from `conversationId` (`scheduler:<uuid>:<runId>`); an explicit `job_id` that disagrees with the run is rejected. Outside a scheduled run (e.g. late-delegation wake), pass `job_id` explicitly. Action risk: `none`. The scheduler writes `last_run_outcome` itself; this skill writes `last_run_summary` and `last_run_context`. After the agent finishes, `completeJobRun` may merge `failedSkills` into the same column (#1830). Do not inject a bare job UUID into the agent prompt — that was an attractive nuisance for bullpen `thread_id` (#1828).
 
 ---
 

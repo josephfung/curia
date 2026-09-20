@@ -713,11 +713,12 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
     expect(systemMsg?.content).toContain('The task description is the ONLY work you may do this run.');
     expect(systemMsg?.content).toContain('Outbound-context entries are informational');
-    // job_id UUID extracted from conversationId "scheduler:<uuid>:<run-id>"
-    expect(systemMsg?.content).toContain('Job ID (pass to scheduler-report): 123e4567-e89b-12d3-a456-426614174000');
+    // Bare job UUID must NOT appear — agents mistook it for a bullpen thread_id (#1828).
+    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
+    expect(systemMsg?.content).not.toContain('123e4567-e89b-12d3-a456-426614174000');
   });
 
-  it('omits Job ID line when conversationId does not match scheduler format', async () => {
+  it('still appends scheduler fence when conversationId does not match scheduler format', async () => {
     const provider = createMockProvider('Done.');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -731,7 +732,7 @@ describe('AgentRuntime', () => {
 
     const task = createAgentTask({
       agentId: 'coordinator',
-      // Scheduler-prefixed but non-UUID middle segment — exercises the UUID regex rejection path
+      // Scheduler-prefixed but non-UUID middle segment
       conversationId: 'scheduler:not-a-uuid:run-001',
       channelId: 'scheduler',
       senderId: 'scheduler',
@@ -744,14 +745,12 @@ describe('AgentRuntime', () => {
     const systemMsg = chatCall.messages.find(m => m.role === 'system');
     // Fence block still appended — agent still gets its scope restriction
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
-    // But no Job ID line since "not-a-uuid" fails the UUID regex
-    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report):');
+    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
   });
 
-  it('omits Job ID line for 2-part scheduler notification IDs (scheduler:<jobId>)', async () => {
+  it('appends scheduler fence for 2-part scheduler notification IDs without a Job ID line', async () => {
     // The scheduler emits coordinator notification tasks (drift, suspension) with
-    // conversationId: "scheduler:<jobId>" — 2 parts, no run-id. These must NOT get a
-    // Job ID line; they are not runnable scheduled tasks.
+    // conversationId: "scheduler:<jobId>" — 2 parts, no run-id.
     const provider = createMockProvider('Done.');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -777,8 +776,7 @@ describe('AgentRuntime', () => {
     const systemMsg = chatCall.messages.find(m => m.role === 'system');
     // Fence block still appended
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
-    // No Job ID — 2-part notification IDs must be rejected
-    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report):');
+    expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
   });
 
   it('does not append scheduler fence when channelId is not scheduler', async () => {

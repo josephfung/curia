@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`scheduler-report` input (public API)** — `job_id` optional on scheduled runs; derived from conversation. (#1828)
 - **`agent.response` payload (public API)** — optional `failedSkills` / `failedSkillsOmitted` for scheduler visibility. (#1830)
 - **`authorization.decision` payload (public API)** — Gate C outcomes include `recipientCount` when recipients resolved. (#1815)
 - **`delegate` input schema (public API)** — `timeout_ms` removed; the runtime is its only source. Skill v1.4.0. (#1797)
@@ -33,6 +34,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`scheduler-report`** — derives `job_id` from the run conversation so agents stop mistaking it for a bullpen thread. (#1828)
+- **`bullpen`** — job-UUID-as-thread_id errors now point at `scheduler-report` instead of "not found". (#1828)
 - **Scheduler** — tool failures on a completed run now land in `last_run_context` without flipping health. (#1830)
 - **Agent runtime** — `maxConsecutiveErrors` budget exits now forward `failedSkills` on the error response. (#1830)
 - **Agent runtime** — LLM failure exits and credential redaction now cover `failedSkills` persistence. (#1830)
