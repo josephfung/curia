@@ -190,10 +190,12 @@ bound on what the column holds.
 | Field | Written by | When |
 |---|---|---|
 | `last_run_outcome` | Scheduler | On `completeJobRun()` success/failure; stuck-job recovery writes `timed_out` |
-| `last_run_summary` | Agent (via `scheduler-report` skill) | At the end of a successful run |
-| `last_run_context` | Agent (via `scheduler-report` skill) | At the end of a successful run |
+| `last_run_summary` | Agent (via `scheduler-report` skill), or scheduler auto-summary | Mid-run via `scheduler-report`; otherwise `completeJobRun` COALESCE on success (claim clears first) |
+| `last_run_context` | Agent (via `scheduler-report`) **and** scheduler (`completeJobRun`) | Agent writes opaque continuity state; scheduler merges/clears `failedSkills` / `failedSkillsOmitted` on every completion (#1830) |
 
-Agents are not required to call `scheduler-report`. Stateless jobs (e.g. a daily email that simply reads the calendar and sends) can skip it — `last_run_context` stays `NULL` and the next run starts with only the outcome/summary from the scheduler.
+Agents are not required to call `scheduler-report`. Stateless jobs (e.g. a daily email that simply reads the calendar and sends) can skip it — without a report, continuity state stays unset, but `completeJobRun` may still write a `failedSkills` key when tools failed during the run. `failedSkills` is diagnostics-only: `buildPriorRunBlock` strips it before injecting context into the next run's prompt.
+
+`reportJobRun` replaces the column wholesale. `completeJobRun` then merges `failedSkills` (or clears it) after the agent finishes, so a mid-run report cannot permanently drop this run's tool-failure visibility. A future writer must preserve that two-step ownership.
 
 ---
 
@@ -280,7 +282,7 @@ Four skills available to agents:
 - **`scheduler-create`** — create a cron or one-shot job, optionally with a linked persistent task (`intent_anchor`)
 - **`scheduler-list`** — list jobs with optional status/agent_id filters
 - **`scheduler-cancel`** — cancel a job by ID
-- **`scheduler-report`** — write prior-run context at the end of a run. Input: `{ job_id, summary, context? }`. Action risk: `none`. The scheduler writes `last_run_outcome` itself; this skill writes `last_run_summary` and `last_run_context`.
+- **`scheduler-report`** — write prior-run context at the end of a run. Input: `{ job_id, summary, context? }`. Action risk: `none`. The scheduler writes `last_run_outcome` itself; this skill writes `last_run_summary` and `last_run_context`. After the agent finishes, `completeJobRun` may merge `failedSkills` into the same column (#1830).
 
 ---
 

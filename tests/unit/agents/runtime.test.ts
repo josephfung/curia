@@ -1570,6 +1570,84 @@ describe('AgentRuntime tool-use loop', () => {
     expect(payload.isError).toBeUndefined();
     expect(payload.skillsCalled).toEqual(['calendar-list-events', 'bullpen.post']);
     expect(payload.failedSkills).toEqual([{ name: 'bullpen.post', error: 'Thread not found' }]);
+    expect(payload.failedSkillsOmitted).toBeUndefined();
+  });
+
+  it('caps failedSkills to distinct names and counts overflow (#1830)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          // 12 failures of unique skills + one repeat of the first → 10 kept, 3 omitted
+          const toolCalls = Array.from({ length: 12 }, (_, i) => ({
+            id: `call-${i}`,
+            name: `skill-${i}`,
+            input: {},
+          }));
+          toolCalls.push({ id: 'call-repeat', name: 'skill-0', input: {} });
+          return {
+            type: 'tool_use' as const,
+            toolCalls,
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Recovered after tool storm.',
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockResolvedValue({ success: false, error: 'boom\nline2' }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+
+    const skillToolDefs = Array.from({ length: 12 }, (_, i) => ({
+      name: `skill-${i}`,
+      description: `Skill ${i}`,
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    }));
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs,
+      errorBudget: { maxTurns: 50, maxConsecutiveErrors: 100 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-cap-failed',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Do many things',
+      parentEventId: 'parent-cap-failed',
+    }));
+
+    expect(responses).toHaveLength(1);
+    const payload = responses[0]!.payload;
+    expect(payload.failedSkills).toHaveLength(10);
+    expect(payload.failedSkills![0]!.error).toBe('boom line2'); // newlines sanitised
+    expect(payload.failedSkillsOmitted).toBe(3); // skill-10, skill-11, and skill-0 repeat
   });
 
   it('omits failedSkills when every tool call succeeds (#1830)', async () => {

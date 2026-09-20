@@ -663,16 +663,42 @@ export class AgentRuntime {
     const skillsCalled: string[] = [];
     // Skills that returned success:false — surfaced to the scheduler as
     // last_run_context.failedSkills without flipping job health (#1830).
+    // Cap to distinct skill names so a flailing DB/API loop cannot bloat the
+    // column (and previously the next-run prompt) with hundreds of repeats.
+    const MAX_DISTINCT_FAILED_SKILLS = 10;
     const failedSkills: Array<{ name: string; error: string }> = [];
-    // Threaded into every maxTurns budget check (tool loop, recovery, chatWithRetry).
+    let failedSkillsOmitted = 0;
     const budgetHandoff = {
       conversationId,
       skillsCalled,
       failedSkills,
+      failedSkillsOmittedRef: { count: 0 as number },
       boundTaskCtx,
       memory,
       sliceCostTracker: resumableActive ? sliceCostTracker : undefined,
     };
+    // Keep the ref in sync so paused-path publish sees the live omitted count.
+    const recordFailedSkill = (name: string, error: string): void => {
+      // Sanitise like drift verdict.reason — error bodies are third-party free text.
+      const sanitized = error.replace(/[\r\n]+/g, ' ').trim().slice(0, 500);
+      const already = failedSkills.some((f) => f.name === name);
+      if (!already && failedSkills.length < MAX_DISTINCT_FAILED_SKILLS) {
+        failedSkills.push({ name, error: sanitized });
+      } else {
+        failedSkillsOmitted++;
+        budgetHandoff.failedSkillsOmittedRef.count = failedSkillsOmitted;
+      }
+    };
+    const failedSkillsPayload = (): {
+      failedSkills?: Array<{ name: string; error: string }>;
+      failedSkillsOmitted?: number;
+    } =>
+      failedSkills.length === 0
+        ? {}
+        : {
+            failedSkills: [...failedSkills],
+            ...(failedSkillsOmitted > 0 && { failedSkillsOmitted }),
+          };
 
     // Append intent anchor — present only for persistent scheduler tasks that have a
     // linked agent_task record. Injected near the end so it sits close to the conversation
@@ -1296,7 +1322,7 @@ export class AgentRuntime {
                 conversationId,
                 content: clarificationContent,
                 skillsCalled,
-                ...(failedSkills.length > 0 && { failedSkills: [...failedSkills] }),
+                ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });
               await bus.publish('agent', clarificationResponse);
@@ -1343,7 +1369,7 @@ export class AgentRuntime {
                 conversationId,
                 content: escalationContent,
                 skillsCalled,
-                ...(failedSkills.length > 0 && { failedSkills: [...failedSkills] }),
+                ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });
               await bus.publish('agent', escalationResponse);
@@ -1843,11 +1869,9 @@ export class AgentRuntime {
           // burn the consecutive error budget — temporary infra must not abort the task.
           // Auth-class skill failures (#1561) preserve AUTH_FAILURE so the LLM sees
           // the reconnect action rather than a generic SKILL_ERROR.
-          // Record for scheduler visibility (#1830) — truncated to match autoSummary.
-          failedSkills.push({
-            name: toolCall.name,
-            error: result.error.slice(0, 500),
-          });
+          // Record for scheduler visibility (#1830) — distinct-skill cap + sanitised
+          // error text (third-party bodies must not land unsanitised in last_run_context).
+          recordFailedSkill(toolCall.name, result.error);
           const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
           const isAuthFailure = result.errorType === 'AUTH_FAILURE';
           if (isDbFailure) {
@@ -2090,7 +2114,7 @@ export class AgentRuntime {
       ...(isResponseError && { isError: true }),
       ...(prepared.suppressDelivery && { suppressDelivery: true }),
       skillsCalled,
-      ...(failedSkills.length > 0 && { failedSkills: [...failedSkills] }),
+      ...failedSkillsPayload(),
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);
@@ -2210,6 +2234,7 @@ export class AgentRuntime {
       conversationId: string;
       skillsCalled: string[];
       failedSkills: Array<{ name: string; error: string }>;
+      failedSkillsOmittedRef: { count: number };
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
       sliceCostTracker?: { usd: number };
@@ -2498,6 +2523,7 @@ export class AgentRuntime {
       conversationId: string;
       skillsCalled: string[];
       failedSkills: Array<{ name: string; error: string }>;
+      failedSkillsOmittedRef: { count: number };
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
       sliceCostTracker?: { usd: number };
@@ -2523,6 +2549,7 @@ export class AgentRuntime {
       conversationId: string;
       skillsCalled: string[];
       failedSkills: Array<{ name: string; error: string }>;
+      failedSkillsOmittedRef: { count: number };
       boundTaskCtx: BoundTaskContext | null;
       memory?: WorkingMemory;
       sliceCostTracker?: { usd: number };
@@ -2540,6 +2567,7 @@ export class AgentRuntime {
           handoff.conversationId,
           handoff.skillsCalled,
           handoff.failedSkills,
+          handoff.failedSkillsOmittedRef.count,
           handoff.memory,
           budget,
           reason,
@@ -2578,6 +2606,7 @@ export class AgentRuntime {
     conversationId: string,
     skillsCalled: string[],
     failedSkills: Array<{ name: string; error: string }>,
+    failedSkillsOmitted: number,
     memory: WorkingMemory | undefined,
     budget: ErrorBudget,
     reason: 'maxTurns',
@@ -2604,7 +2633,10 @@ export class AgentRuntime {
       conversationId,
       content,
       skillsCalled,
-      ...(failedSkills.length > 0 && { failedSkills: [...failedSkills] }),
+      ...(failedSkills.length > 0 && {
+        failedSkills: [...failedSkills],
+        ...(failedSkillsOmitted > 0 && { failedSkillsOmitted }),
+      }),
       parentEventId: taskEvent.id,
     });
     await bus.publish('agent', responseEvent);

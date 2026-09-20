@@ -235,11 +235,31 @@ function truncateContext(
 }
 
 /**
+ * Strip scheduler-owned diagnostics keys from last_run_context before injecting
+ * it into the next run's prompt (#1830). `failedSkills` is operator visibility —
+ * feeding it back would make the model re-litigate yesterday's tool errors
+ * (and could smuggle unsanitised third-party error text into the prompt).
+ * Continuity keys written by scheduler-report are preserved.
+ */
+function contextForPriorRunPrompt(context: unknown): unknown {
+  if (typeof context !== 'object' || context === null || Array.isArray(context)) {
+    return context;
+  }
+  const {
+    failedSkills: _failedSkills,
+    failedSkillsOmitted: _failedSkillsOmitted,
+    ...rest
+  } = context as Record<string, unknown>;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
+/**
  * Build a structured text block summarising the previous run's outcome.
  * Injected into the agent.task content so the agent can avoid repeating work
  * or adjust its approach based on what happened last time.
  *
  * Both prior-run fields are size-capped — see MAX_PRIOR_SUMMARY_CHARS / MAX_PRIOR_CONTEXT_CHARS.
+ * `failedSkills` / `failedSkillsOmitted` are stripped before injection (#1830).
  *
  * Returns an empty string when there is no prior-run data (first run ever).
  */
@@ -264,8 +284,16 @@ function buildPriorRunBlock(job: JobRow, truncations: TruncationRecord[] = []): 
   // `!= null`, not truthiness: last_run_context is JSONB and accepts 0, false and "".
   // The row loader preserves those (`?? null` only collapses null/undefined), so a
   // truthiness check here would silently drop continuity state that was really written.
-  if (job.lastRunContext != null) {
-    parts.push(`Agent context: ${truncateContext(job.lastRunContext, MAX_PRIOR_CONTEXT_CHARS, truncations)}`);
+  // Strip failedSkills* first — diagnostics-only, not prompt input (#1830 review).
+  const priorContext = contextForPriorRunPrompt(job.lastRunContext);
+  if (priorContext != null) {
+    parts.push(
+      `Agent context: ${truncateContext(
+        priorContext as Record<string, unknown>,
+        MAX_PRIOR_CONTEXT_CHARS,
+        truncations,
+      )}`,
+    );
   }
 
   return parts.join('\n');
@@ -433,12 +461,14 @@ export class Scheduler {
         // completeJobRun() writes it via COALESCE — agent-provided scheduler-report wins.
         const autoSummary = responseEvent.payload.content.slice(0, 500) || undefined;
         const failedSkills = responseEvent.payload.failedSkills;
+        const failedSkillsOmitted = responseEvent.payload.failedSkillsOmitted;
         this.handleCompletion(
           responseEvent.parentEventId,
           true,
           undefined,
           autoSummary,
           failedSkills,
+          failedSkillsOmitted,
         ).catch((err) => {
           this.logger.error({ err, parentEventId: responseEvent.parentEventId }, 'Unhandled error in handleCompletion (success path)');
         });
@@ -912,6 +942,7 @@ export class Scheduler {
     error?: string,
     autoSummary?: string,
     failedSkills?: Array<{ name: string; error: string }>,
+    failedSkillsOmitted?: number,
   ): Promise<void> {
     const jobId = this.pendingJobs.get(parentEventId);
     if (!jobId) {
@@ -1051,6 +1082,7 @@ export class Scheduler {
         error,
         autoSummary,
         failedSkills,
+        failedSkillsOmitted,
       );
 
       if (result.suspended) {

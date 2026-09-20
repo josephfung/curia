@@ -120,9 +120,12 @@ interface AgentResponsePayload {
    * Populated alongside `skillsCalled` so the scheduler can persist visibility
    * into `last_run_context` without flipping job health (#1830). Absent when
    * no tool failed, and absent on error-path responses (same rule as
-   * `skillsCalled`).
+   * `skillsCalled`). Capped to distinct skill names (first failure wins);
+   * further failures are counted in `failedSkillsOmitted`.
    */
   failedSkills?: Array<{ name: string; error: string }>;
+  /** Count of tool failures not represented in `failedSkills` (cap overflow / duplicates). */
+  failedSkillsOmitted?: number;
   /**
    * Set by the agent runtime when it detects a no-reply sentinel (or a near-miss)
    * in the model output. Dispatch honours this the same way it honours the

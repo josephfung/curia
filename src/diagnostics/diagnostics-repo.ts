@@ -51,8 +51,9 @@ export interface ScheduledJobRow {
   status: string;
   lastRunOutcome: string | null;
   lastRunSummary: string | null;
-  /** Opaque agent context; may include `failedSkills` from the last completed run (#1830). */
-  lastRunContext: Record<string, unknown> | null;
+  /** Opaque agent context; may include `failedSkills` from the last completed run (#1830).
+   *  JSONB can be a non-object (array/scalar) at runtime — pass through faithfully. */
+  lastRunContext: unknown;
   lastError: string | null;
   consecutiveFailures: number;
   createdBy: string;
@@ -224,7 +225,7 @@ export class DiagnosticsRepo {
       status: r.status as string,
       lastRunOutcome: (r.last_run_outcome as string | null) ?? null,
       lastRunSummary: (r.last_run_summary as string | null) ?? null,
-      lastRunContext: r.last_run_context == null ? null : asRecord(r.last_run_context),
+      lastRunContext: r.last_run_context ?? null,
       lastError: (r.last_error as string | null) ?? null,
       consecutiveFailures: Number(r.consecutive_failures ?? 0),
       createdBy: r.created_by as string,

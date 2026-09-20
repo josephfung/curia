@@ -704,7 +704,8 @@ describe('SchedulerService', () => {
       expect(params).toContain('completed');
       expect(sql).toContain('consecutive_failures = 0');
       expect(sql).toContain('last_error = NULL');
-      expect(sql).toContain("COALESCE(last_run_context, '{}'::jsonb)");
+      expect(sql).toContain("jsonb_typeof(last_run_context) = 'object'");
+      expect(sql).toContain("(last_run_context - 'failedSkills' - 'failedSkillsOmitted')");
       expect(params).toContain(JSON.stringify({ failedSkills }));
     });
 
@@ -719,8 +720,25 @@ describe('SchedulerService', () => {
 
       const updateCall = pool.query.mock.calls[1];
       const sql: string = updateCall[0];
-      expect(sql).toContain("last_run_context - 'failedSkills'");
-      expect(sql).not.toContain("COALESCE(last_run_context");
+      expect(sql).toContain("jsonb_typeof(last_run_context) = 'object'");
+      expect(sql).toContain("last_run_context - 'failedSkills' - 'failedSkillsOmitted'");
+      expect(sql).not.toContain('|| $');
+    });
+
+    it('clears failedSkills on the failure path so a failed run does not inherit prior tool failures (#1830)', async () => {
+      const jobId = 'job-fail-clear-skills';
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+      await svc.completeJobRun(jobId, false, 'budget blown');
+
+      const updateCall = pool.query.mock.calls[1];
+      const sql: string = updateCall[0];
+      expect(sql).toContain("last_run_outcome = $5");
+      expect(sql).toContain("jsonb_typeof(last_run_context) = 'object'");
+      expect(sql).toContain("last_run_context - 'failedSkills' - 'failedSkillsOmitted'");
     });
 
     it('uses COALESCE for last_run_summary so agent-provided summary wins (one-shot)', async () => {
@@ -738,9 +756,9 @@ describe('SchedulerService', () => {
       // Must use COALESCE so an agent-provided scheduler-report call wins
       expect(sql).toContain('COALESCE(last_run_summary,');
       expect(params).toContain('auto summary');
-      // No failedSkills → clear the key only; do not merge a payload (#1830)
-      expect(sql).toContain("last_run_context - 'failedSkills'");
-      expect(sql).not.toContain("COALESCE(last_run_context");
+      // No failedSkills → clear the keys only; do not merge a payload (#1830)
+      expect(sql).toContain("last_run_context - 'failedSkills' - 'failedSkillsOmitted'");
+      expect(sql).toContain("jsonb_typeof(last_run_context) = 'object'");
     });
 
     it('uses COALESCE for last_run_summary so agent-provided summary wins (recurring)', async () => {
