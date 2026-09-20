@@ -23,7 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **`agent.response` payload (public API)** — optional `failedSkills` lists tool failures for scheduler visibility. (#1830)
+- **`agent.response` payload (public API)** — optional `failedSkills` / `failedSkillsOmitted` for scheduler visibility. (#1830)
 - **`authorization.decision` payload (public API)** — Gate C outcomes include `recipientCount` when recipients resolved. (#1815)
 - **`delegate` input schema (public API)** — `timeout_ms` removed; the runtime is its only source. Skill v1.4.0. (#1797)
 - **`delegate` outputs (public API)** — timeouts now return the delegate event and conversation ids. Skill v1.5.0. (#1799)

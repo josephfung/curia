@@ -73,6 +73,23 @@ describe('DiagnosticsRepo', () => {
     expect(jobs[0]!.lastRunContext).toEqual({ failedSkills, cursor: '2026-09-19' });
   });
 
+  it('passes non-object last_run_context through faithfully (#1830)', async () => {
+    const { repo } = repoWithRows([
+      {
+        id: 'job-scalar', agent_id: 'calendar', source_agent_id: null, task_id: null,
+        cron_expr: null, run_at: null, next_run_at: null,
+        last_run_at: null, run_started_at: null, status: 'pending',
+        last_run_outcome: 'completed', last_run_summary: null,
+        last_run_context: ['batch-1', 'batch-2'],
+        last_error: null, consecutive_failures: 0, created_by: 'system',
+        created_at: '2026-08-01T00:00:00.000Z', task_payload: {},
+      },
+    ]);
+
+    const jobs = await repo.getScheduledJobs({ id: 'job-scalar' });
+    expect(jobs[0]!.lastRunContext).toEqual(['batch-1', 'batch-2']);
+  });
+
   it('getOutboundContext returns released/expired rows too (no active-only filter) and surfaces `expired`', async () => {
     const { repo, calls } = repoWithRows([
       {

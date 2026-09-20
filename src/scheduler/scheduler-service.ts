@@ -976,6 +976,12 @@ export class SchedulerService {
    * On success, `failedSkills` from the agent response is merged into `last_run_context`
    * (or the key is removed when absent) so tool failures are visible without flipping
    * job health (#1830). Continuity keys written by scheduler-report are preserved.
+   * On failure the same keys are cleared so a failed run does not inherit the previous
+   * run's tool-failure attribution.
+   *
+   * `jsonb_typeof` guards both branches: `scheduler-report` can store a scalar/array
+   * (manifest input is not type-checked at invoke), and `||` / `-` on a non-object
+   * would throw and leave the job stuck in `running`.
    */
   async completeJobRun(
     jobId: string,
@@ -983,6 +989,7 @@ export class SchedulerService {
     error?: string,
     autoSummary?: string,
     failedSkills?: Array<{ name: string; error: string }>,
+    failedSkillsOmitted?: number,
   ): Promise<{ suspended: boolean }> {
     // Fetch the current job state to decide how to handle the completion.
     // Include timezone so nextRunFromCron() uses the per-job zone, not the system default.
@@ -1000,16 +1007,28 @@ export class SchedulerService {
 
     if (success) {
       // Merge or clear failedSkills in last_run_context without clobbering agent continuity
-      // state. Right-hand jsonb || wins on key conflict, so a prior run's failedSkills is
-      // replaced; ` - 'failedSkills'` drops the key when this run had no tool failures.
+      // state. Strip both keys before merge so a prior omitted-count cannot linger when the
+      // new run has none. Non-object JSONB falls through without throwing (#1830 review).
       const hasFailedSkills = failedSkills !== undefined && failedSkills.length > 0;
-      const failedSkillsJson = hasFailedSkills ? JSON.stringify({ failedSkills }) : undefined;
+      const failedSkillsJson = hasFailedSkills
+        ? JSON.stringify({
+            failedSkills,
+            ...(failedSkillsOmitted !== undefined && failedSkillsOmitted > 0
+              ? { failedSkillsOmitted }
+              : {}),
+          })
+        : undefined;
       const contextSetClause = (paramIndex: number): string =>
         hasFailedSkills
-          ? `, last_run_context = COALESCE(last_run_context, '{}'::jsonb) || $${paramIndex}::jsonb`
+          ? `, last_run_context = CASE
+               WHEN jsonb_typeof(last_run_context) = 'object'
+                 THEN (last_run_context - 'failedSkills' - 'failedSkillsOmitted') || $${paramIndex}::jsonb
+               ELSE $${paramIndex}::jsonb
+             END`
           : `, last_run_context = CASE
-               WHEN last_run_context IS NULL THEN NULL
-               ELSE last_run_context - 'failedSkills'
+               WHEN jsonb_typeof(last_run_context) = 'object'
+                 THEN last_run_context - 'failedSkills' - 'failedSkillsOmitted'
+               ELSE last_run_context
              END`;
 
       if (job.cron_expr) {
@@ -1062,6 +1081,8 @@ export class SchedulerService {
     }
 
     // Failure path: increment consecutive_failures and possibly auto-suspend.
+    // Also clear failedSkills* so a failed run does not inherit the previous run's
+    // tool-failure attribution in diagnostics / prior-run display (#1830 review).
     const newFailures = job.consecutive_failures + 1;
     const shouldSuspend = newFailures >= SUSPEND_THRESHOLD;
     const newStatus = shouldSuspend ? 'suspended' : 'failed';
@@ -1073,7 +1094,12 @@ export class SchedulerService {
              last_error = $2,
              run_started_at = NULL,
              status = $3,
-             last_run_outcome = $5
+             last_run_outcome = $5,
+             last_run_context = CASE
+               WHEN jsonb_typeof(last_run_context) = 'object'
+                 THEN last_run_context - 'failedSkills' - 'failedSkillsOmitted'
+               ELSE last_run_context
+             END
        WHERE id = $4 AND status NOT IN ('paused', 'cancelled')
     `;
     const res = await this.pool.query(updateSql, [newFailures, error ?? null, newStatus, jobId, 'failed']);
