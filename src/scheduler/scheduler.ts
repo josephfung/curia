@@ -245,11 +245,9 @@ function contextForPriorRunPrompt(context: unknown): unknown {
   if (typeof context !== 'object' || context === null || Array.isArray(context)) {
     return context;
   }
-  const {
-    failedSkills: _failedSkills,
-    failedSkillsOmitted: _failedSkillsOmitted,
-    ...rest
-  } = context as Record<string, unknown>;
+  const rest: Record<string, unknown> = { ...(context as Record<string, unknown>) };
+  delete rest['failedSkills'];
+  delete rest['failedSkillsOmitted'];
   return Object.keys(rest).length > 0 ? rest : null;
 }
 
