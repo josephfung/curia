@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`scheduler-report` input (public API)** — `job_id` optional on scheduled runs; derived from conversation. (#1828)
+- **Scheduler fire path** — no longer injects a bare `scheduler_job_id` into model-visible task content. (#1828)
 - **`agent.response` payload (public API)** — optional `failedSkills` / `failedSkillsOmitted` for scheduler visibility. (#1830)
 - **`authorization.decision` payload (public API)** — Gate C outcomes include `recipientCount` when recipients resolved. (#1815)
 - **`delegate` input schema (public API)** — `timeout_ms` removed; the runtime is its only source. Skill v1.4.0. (#1797)

@@ -2,31 +2,43 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { parseSchedulerRunJobId } from '../../../../src/scheduler/conversation-id.js';
 
+export type ResolveSchedulerReportJobIdResult =
+  | { ok: true; jobId: string; ignoredProvidedJobId?: string }
+  | { ok: false; error: string };
+
 /**
  * Resolve which job to report against. Prefer deriving from the run conversation
- * id so agents need not pass a bare UUID (attractive nuisance — #1828). An explicit
- * job_id is still accepted for non-scheduler contexts (e.g. late-delegation wake),
- * but must agree with the run context when both are present.
+ * id so agents need not pass a bare UUID (attractive nuisance — #1828).
+ *
+ * When a derived id is present it is authoritative: a disagreeing explicit
+ * `job_id` is ignored (with a warning at the call site) rather than hard-failing
+ * the report — a hallucinated/stale UUID must not cost the run its summary.
+ * Outside a scheduler conversation an explicit `job_id` is still required.
  */
 export function resolveSchedulerReportJobId(
-  inputJobId: string | undefined,
+  inputJobId: unknown,
   conversationId: string | undefined,
-): { ok: true; jobId: string } | { ok: false; error: string } {
+): ResolveSchedulerReportJobIdResult {
   const derived = parseSchedulerRunJobId(conversationId);
-  const provided =
-    typeof inputJobId === 'string' && inputJobId.trim().length > 0 ? inputJobId.trim() : undefined;
 
-  if (provided && derived && provided !== derived) {
+  if (inputJobId !== undefined && inputJobId !== null && typeof inputJobId !== 'string') {
     return {
       ok: false,
-      error:
-        `job_id ${provided} does not match this run's job ${derived}; ` +
-        "refusing to write another job's summary",
+      error: `job_id must be a string (got ${typeof inputJobId})`,
     };
   }
 
-  const jobId = derived ?? provided;
-  if (!jobId) {
+  const provided =
+    typeof inputJobId === 'string' && inputJobId.trim().length > 0 ? inputJobId.trim() : undefined;
+
+  if (derived) {
+    if (provided && provided !== derived) {
+      return { ok: true, jobId: derived, ignoredProvidedJobId: provided };
+    }
+    return { ok: true, jobId: derived };
+  }
+
+  if (!provided) {
     return {
       ok: false,
       error:
@@ -34,7 +46,7 @@ export function resolveSchedulerReportJobId(
         '(or pass job_id explicitly outside one)',
     };
   }
-  return { ok: true, jobId };
+  return { ok: true, jobId: provided };
 }
 
 export class SchedulerReportHandler implements ToolHandler {
@@ -47,7 +59,7 @@ export class SchedulerReportHandler implements ToolHandler {
     }
 
     const { job_id, summary, context } = ctx.input as {
-      job_id?: string;
+      job_id?: unknown;
       summary?: string;
       context?: Record<string, unknown>;
     };
@@ -56,12 +68,15 @@ export class SchedulerReportHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: summary (string)' };
     }
 
-    const resolved = resolveSchedulerReportJobId(
-      typeof job_id === 'string' ? job_id : undefined,
-      ctx.conversationId,
-    );
+    const resolved = resolveSchedulerReportJobId(job_id, ctx.conversationId);
     if (!resolved.ok) {
       return { success: false, error: resolved.error };
+    }
+    if (resolved.ignoredProvidedJobId) {
+      ctx.log.warn(
+        { provided: resolved.ignoredProvidedJobId, derived: resolved.jobId },
+        'scheduler-report: ignoring job_id that does not match this run; writing to derived job',
+      );
     }
 
     try {

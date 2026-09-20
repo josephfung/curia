@@ -820,23 +820,21 @@ export class Scheduler {
       return;
     }
 
-    // Build the agent.task content. The scheduler_job_id is always injected so
-    // agents can call scheduler-report to persist their cursor/context for the
-    // next run. For task-bound jobs, include task_id, title, and progress as
-    // well. For non-task-bound jobs the payload fields are spread at the top level.
+    // Build the agent.task content. Do NOT inject a bare job UUID here — agents
+    // mistook `scheduler_job_id` for a bullpen thread_id (#1828). scheduler-report
+    // derives job_id from conversationId (`scheduler:<uuid>:<runId>`) server-side.
+    // For task-bound jobs, include task_id, title, and progress. For non-task-bound
+    // jobs the payload fields are spread at the top level.
     let content: string;
     if (job.agentTaskId) {
       content = JSON.stringify({
-        scheduler_job_id: job.id,
         task_id: job.agentTaskId,
         ...(job.taskTitle !== null && { title: job.taskTitle }),
         progress: job.progress ?? {},
         task_payload: job.taskPayload,
       });
     } else {
-      // scheduler_job_id is placed last so it always wins if taskPayload coincidentally
-      // contains the same key (e.g. a manually-crafted job row).
-      content = JSON.stringify({ ...job.taskPayload, scheduler_job_id: job.id });
+      content = JSON.stringify({ ...job.taskPayload });
     }
 
     // Resolve runtime placeholders before the payload is ever visible to a model. Runs on

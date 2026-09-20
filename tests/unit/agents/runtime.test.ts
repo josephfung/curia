@@ -713,6 +713,9 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
     expect(systemMsg?.content).toContain('The task description is the ONLY work you may do this run.');
     expect(systemMsg?.content).toContain('Outbound-context entries are informational');
+    // Positive success-path cue — without this, bare "report" in a task drifts to bullpen (#1828).
+    expect(systemMsg?.content).toContain('Record the outcome of this run by calling `scheduler-report`');
+    expect(systemMsg?.content).toContain('do not use `bullpen` to report');
     // Bare job UUID must NOT appear — agents mistook it for a bullpen thread_id (#1828).
     expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
     expect(systemMsg?.content).not.toContain('123e4567-e89b-12d3-a456-426614174000');

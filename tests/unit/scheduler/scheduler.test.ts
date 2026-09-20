@@ -1101,6 +1101,8 @@ describe('Scheduler', () => {
       expect(content.task_payload).toEqual({ type: 'task-wake' });
       // intent_anchor stays in the event payload, not content
       expect(content.intent_anchor).toBeUndefined();
+      // Bare job UUID must not appear in model-visible task content (#1828)
+      expect(content.scheduler_job_id).toBeUndefined();
     });
 
     it('omits title from content bundle when task_title is null', async () => {
@@ -1138,6 +1140,7 @@ describe('Scheduler', () => {
       // Non-task-bound: raw payload, no task_id
       expect(content.task_id).toBeUndefined();
       expect(content.skill).toBe('morning-brief');
+      expect(content.scheduler_job_id).toBeUndefined();
     });
   });
 

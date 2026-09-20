@@ -37,14 +37,19 @@ describe('resolveSchedulerReportJobId (#1828)', () => {
     expect(resolved).toEqual({ ok: true, jobId: JOB_A });
   });
 
-  it('rejects an explicit job_id that disagrees with the run context', () => {
+  it('prefers the derived job_id when an explicit job_id disagrees', () => {
     const resolved = resolveSchedulerReportJobId(JOB_B, RUN_CONV);
+    expect(resolved).toEqual({
+      ok: true,
+      jobId: JOB_A,
+      ignoredProvidedJobId: JOB_B,
+    });
+  });
+
+  it('rejects a non-string job_id with a distinct error', () => {
+    const resolved = resolveSchedulerReportJobId(123, 'delegate-sub-run-xyz');
     expect(resolved.ok).toBe(false);
-    if (!resolved.ok) {
-      expect(resolved.error).toContain(JOB_B);
-      expect(resolved.error).toContain(JOB_A);
-      expect(resolved.error).toMatch(/does not match/i);
-    }
+    if (!resolved.ok) expect(resolved.error).toMatch(/must be a string/);
   });
 
   it('falls back to an explicit job_id outside a scheduler conversation', () => {
@@ -85,35 +90,35 @@ describe('SchedulerReportHandler', () => {
     );
   });
 
-  it('rejects a mismatched job_id and writes nothing (#1828)', async () => {
+  it('writes to the derived job when an explicit job_id disagrees (#1828)', async () => {
+    const warn = vi.fn();
     const schedulerService = { reportJobRun: vi.fn().mockResolvedValue(undefined) };
     const result = await handler.execute(makeCtx(
-      { job_id: JOB_B, summary: 'should not write' },
+      { job_id: JOB_B, summary: 'should still write' },
       {
         schedulerService: schedulerService as never,
         conversationId: RUN_CONV,
-      },
-    ));
-    expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/does not match/);
-    expect(schedulerService.reportJobRun).not.toHaveBeenCalled();
-  });
-
-  it('accepts an explicit job_id outside a scheduler conversation (#1828)', async () => {
-    const schedulerService = { reportJobRun: vi.fn().mockResolvedValue(undefined) };
-    const result = await handler.execute(makeCtx(
-      { job_id: JOB_A, summary: 'late wake report' },
-      {
-        schedulerService: schedulerService as never,
-        conversationId: 'delegate-wake-abc',
+        log: { ...logger, warn } as never,
       },
     ));
     expect(result.success).toBe(true);
     expect(schedulerService.reportJobRun).toHaveBeenCalledWith(
       JOB_A,
-      'late wake report',
+      'should still write',
       undefined,
     );
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it('returns a distinct error when job_id is present but not a string', async () => {
+    const schedulerService = { reportJobRun: vi.fn() };
+    const result = await handler.execute(makeCtx(
+      { job_id: 123, summary: 'done' },
+      { schedulerService: schedulerService as never },
+    ));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/must be a string/);
+    expect(schedulerService.reportJobRun).not.toHaveBeenCalled();
   });
 
   it('returns failure when job_id cannot be derived or supplied', async () => {

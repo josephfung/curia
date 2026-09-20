@@ -264,7 +264,8 @@ describeIf('Late delegation — delivery, records, audit (#1799)', () => {
     expect(wake.payload.conversationId).toBe('scheduler:cff7f3bb-job:run-1');
     expect(wake.payload.content).toContain('Travel detected: YYZ→SFO Oct 2–5');
     expect(wake.payload.content).toContain('scheduler-report');
-    expect(wake.payload.content).toContain('cff7f3bb-job');
+    expect(wake.payload.content).toContain('job_id is derived automatically');
+    expect(wake.payload.content).not.toContain('cff7f3bb-job');
     expect(wake.payload.metadata?.lateDelegation)
       .toEqual({ agent: 'calendar', task: 'Detect travel since Aug 17' });
     expect((wake.payload.metadata?.originator as Record<string, unknown>)?.contactId).toBe('contact-ceo');
