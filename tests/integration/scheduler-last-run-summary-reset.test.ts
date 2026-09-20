@@ -44,8 +44,8 @@ describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
     const insert = await pool.query(
       `INSERT INTO scheduled_jobs
          (agent_id, source_agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone,
-          last_run_summary, last_run_context, intent_anchor)
-       VALUES ($1, $1, $2, $3, 'pending', $4, 'system', 'UTC', $5, $6, $7)
+          last_run_summary, last_run_context)
+       VALUES ($1, $1, $2, $3, 'pending', $4, 'system', 'UTC', $5, $6)
        RETURNING id`,
       [
         AGENT_ID,
@@ -54,7 +54,6 @@ describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
         pastDue,
         summary,
         context === null ? null : JSON.stringify(context),
-        'Keep calendar holds current',
       ],
     );
     return insert.rows[0]!.id as string;
@@ -66,7 +65,7 @@ describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
       taskPayload: { task: 'sweep calendar holds' }, status: 'pending',
       lastRunAt: null, nextRunAt, lastError: null, consecutiveFailures: 0,
       createdBy: 'system', createdAt: new Date().toISOString(), timezone: 'UTC',
-      agentTaskId: null, intentAnchor: 'Keep calendar holds current', progress: null,
+      agentTaskId: null, intentAnchor: null, progress: null,
       taskErrorBudget: null, taskTags: null, taskTitle: null,
       runStartedAt: null, expectedDurationSeconds: null, lastRunOutcome: null,
       lastRunSummary: 'stale from prior run — should not survive claim', lastRunContext: { scanned: 99 },
@@ -83,12 +82,12 @@ describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
 
     await fireJob(jobRowFor(jobId, pastDue));
 
-    // Mid-run: claim cleared both columns; deriveJobObjective falls back to intent_anchor.
+    // Mid-run: claim cleared both columns; deriveJobObjective falls back to task_payload.
     const mid = await schedulerService.getJob(jobId);
     expect(mid!.status).toBe('running');
     expect(mid!.lastRunSummary).toBeNull();
     expect(mid!.lastRunContext).toBeNull();
-    expect(deriveJobObjective(mid!)).toBe('Keep calendar holds current');
+    expect(deriveJobObjective(mid!)).toBe('sweep calendar holds');
 
     await schedulerService.completeJobRun(jobId, true, undefined, 'auto: 2 scanned, 1 expired');
 
