@@ -175,11 +175,18 @@ health:
 # Context bridge TTL configuration.
 # Controls how long outbound context entries remain active before automatic expiry.
 # Auto-registered entries (when the caller doesn't pass explicit context_bridge metadata)
-# use defaultExpiryHours. Entries with explicit delegation hints use explicitExpiryHours.
+# use the channel's entry in channelDefaultExpiryHours, falling back to defaultExpiryHours.
+# Entries with explicit delegation hints use explicitExpiryHours, raised to the channel
+# default when that is longer.
 # A caller-specified expires_in_hours in the context_bridge JSON always overrides these.
 contextBridge:
-  defaultExpiryHours: 6      # auto-registered entries (proactive sends without metadata)
+  defaultExpiryHours: 6      # channels with no entry below (chat-paced: reply within hours)
   explicitExpiryHours: 24    # entries with explicit context_bridge JSON
+  # Per-channel auto-registration windows. Email is measured in business days, not
+  # hours: a late-afternoon send is routinely answered the next morning, and a
+  # Friday ask on Monday — a 6h window expired before either could land (#1816).
+  channelDefaultExpiryHours:
+    email: 72
 
 # Meeting debrief agent configuration (spec §17-meeting-debrief.md).
 # Controls the proactive debrief prompt sent after external meetings end.

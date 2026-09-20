@@ -59,6 +59,7 @@ describe('outbound.delivered emission (#729)', () => {
     const outboundContextService = {
       defaultExpiryHours: 6,
       explicitExpiryHours: 24,
+      defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
       register: vi.fn().mockResolvedValue('ctx-entry-int-1'),
       release: vi.fn().mockResolvedValue(undefined),
     } as unknown as OutboundContextService;

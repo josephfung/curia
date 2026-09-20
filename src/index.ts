@@ -1871,6 +1871,7 @@ async function main(): Promise<void> {
     ? new OutboundContextService(pool, logger, {
         defaultExpiryHours: yamlConfig.contextBridge?.defaultExpiryHours,
         explicitExpiryHours: yamlConfig.contextBridge?.explicitExpiryHours,
+        channelDefaultExpiryHours: yamlConfig.contextBridge?.channelDefaultExpiryHours,
       })
     : undefined;
 

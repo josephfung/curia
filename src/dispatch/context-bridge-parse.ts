@@ -75,9 +75,10 @@ export function parseContextBridge(raw: unknown, log: Logger): ContextBridgeInpu
  *
  * - If `outboundContext` is undefined → no-op (graceful when capability unavailable)
  * - If `contextBridgeRaw` parses successfully → registers with explicit metadata;
- *   TTL = bridge.expires_in_hours ?? outboundContext.explicitExpiryHours
+ *   TTL = bridge.expires_in_hours, else the larger of explicitExpiryHours and
+ *   the channel's default window
  * - If absent/null/malformed → registers minimal entry (agentId + channelId + content);
- *   TTL = outboundContext.defaultExpiryHours
+ *   TTL = the channel's default window (defaultExpiryHoursFor)
  * - Never throws — logs warnings on failure
  */
 export async function registerOutboundContext(
@@ -119,10 +120,14 @@ export async function registerOutboundContext(
       };
     }
 
+    const channelDefaultHours = outboundContext.defaultExpiryHoursFor(channelId);
+
     if (bridge) {
       // Explicit registration — skill provided structured context_bridge metadata.
-      // TTL: use the caller-specified expires_in_hours, falling back to the
-      // capability's explicitExpiryHours (longer TTL for well-structured entries).
+      // TTL: a caller-specified expires_in_hours always wins (including when it
+      // is shorter). Otherwise take the larger of explicitExpiryHours and the
+      // channel's default window, so an annotated entry can never expire sooner
+      // than a bare one on the same channel (#1816).
       await outboundContext.register({
         channelId,
         agentId: bridge.agent_id,
@@ -130,16 +135,19 @@ export async function registerOutboundContext(
         ...(bridge.expected_reply != null ? { expectedReply: bridge.expected_reply } : {}),
         ...(bridge.delegation_hint != null ? { delegationHint: bridge.delegation_hint } : {}),
         ...(bridge.metadata != null ? { metadata: bridge.metadata } : {}),
-        expiresInHours: bridge.expires_in_hours ?? outboundContext.explicitExpiryHours,
+        expiresInHours:
+          bridge.expires_in_hours ??
+          Math.max(outboundContext.explicitExpiryHours, channelDefaultHours),
       });
     } else {
       // Auto-registration — context_bridge was absent, null, or malformed.
       // Register a minimal entry so inbound replies can still be correlated.
+      // TTL follows the channel's reply rhythm, not a flat 6h (#1816).
       await outboundContext.register({
         channelId,
         agentId,
         content,
-        expiresInHours: outboundContext.defaultExpiryHours,
+        expiresInHours: channelDefaultHours,
       });
     }
   } catch (err) {

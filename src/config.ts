@@ -582,10 +582,19 @@ export interface YamlConfig {
   };
 
   contextBridge?: {
-    /** TTL in hours for auto-registered entries (no explicit context_bridge param). Default: 6. */
+    /**
+     * TTL in hours for auto-registered entries on channels with no
+     * `channelDefaultExpiryHours` entry. Default: 6.
+     */
     defaultExpiryHours?: number;
     /** TTL in hours for entries with explicit context_bridge metadata. Default: 24. */
     explicitExpiryHours?: number;
+    /**
+     * Per-channel auto-registration TTL in hours, keyed by channel id. Overrides
+     * the built-in per-channel defaults (email: 72). Channels named neither here
+     * nor in the built-ins use `defaultExpiryHours`.
+     */
+    channelDefaultExpiryHours?: Record<string, number>;
   };
 
   /** Meeting debrief agent configuration (spec §17-meeting-debrief.md). */
@@ -1172,12 +1181,28 @@ export function loadYamlConfig(configDir: string): YamlConfig {
 
   // Validate contextBridge if present
   if (config.contextBridge != null && typeof config.contextBridge === 'object') {
-    const { defaultExpiryHours, explicitExpiryHours } = config.contextBridge;
+    const { defaultExpiryHours, explicitExpiryHours, channelDefaultExpiryHours } = config.contextBridge;
     if (defaultExpiryHours !== undefined && (!Number.isInteger(defaultExpiryHours) || defaultExpiryHours < 1)) {
       throw new Error(`contextBridge.defaultExpiryHours must be a positive integer, got: ${defaultExpiryHours}`);
     }
     if (explicitExpiryHours !== undefined && (!Number.isInteger(explicitExpiryHours) || explicitExpiryHours < 1)) {
       throw new Error(`contextBridge.explicitExpiryHours must be a positive integer, got: ${explicitExpiryHours}`);
+    }
+    if (channelDefaultExpiryHours !== undefined) {
+      if (
+        typeof channelDefaultExpiryHours !== 'object' ||
+        channelDefaultExpiryHours === null ||
+        Array.isArray(channelDefaultExpiryHours)
+      ) {
+        throw new Error('contextBridge.channelDefaultExpiryHours must be a YAML mapping of channel id to hours');
+      }
+      for (const [channelId, hours] of Object.entries(channelDefaultExpiryHours)) {
+        if (!Number.isInteger(hours) || hours < 1) {
+          throw new Error(
+            `contextBridge.channelDefaultExpiryHours.${channelId} must be a positive integer, got: ${hours}`,
+          );
+        }
+      }
     }
   }
 

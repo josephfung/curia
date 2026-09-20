@@ -315,6 +315,135 @@ describe('OutboundContextService TTL config', () => {
   });
 });
 
+// Channel-aware TTL defaults (#1816). Email replies arrive on business-day
+// rhythms, so a flat 6h window expired before any realistic correspondent
+// could answer. Synchronous chat channels keep the short window.
+describe('OutboundContextService channel-aware TTL defaults', () => {
+  it('defaults email to 72 hours so a next-business-day reply still lands in context', () => {
+    const service = new OutboundContextService(makePool(), logger);
+    expect(service.defaultExpiryHoursFor('email')).toBe(72);
+  });
+
+  it('keeps synchronous channels on the short default — no blanket widening', () => {
+    const service = new OutboundContextService(makePool(), logger);
+    expect(service.defaultExpiryHoursFor('signal')).toBe(6);
+    expect(service.defaultExpiryHoursFor('slack')).toBe(6);
+    expect(service.defaultExpiryHoursFor('sms')).toBe(6);
+  });
+
+  it('falls back to defaultExpiryHours for channels with no built-in entry', () => {
+    const service = new OutboundContextService(makePool(), logger, { defaultExpiryHours: 9 });
+    expect(service.defaultExpiryHoursFor('voice')).toBe(9);
+    // Raising the global default must not drag email down to it.
+    expect(service.defaultExpiryHoursFor('email')).toBe(72);
+  });
+
+  it('lets YAML override any channel default', () => {
+    const service = new OutboundContextService(makePool(), logger, {
+      channelDefaultExpiryHours: { email: 96, signal: 12 },
+    });
+    expect(service.defaultExpiryHoursFor('email')).toBe(96);
+    expect(service.defaultExpiryHoursFor('signal')).toBe(12);
+    // Channels absent from the override keep their resolved value.
+    expect(service.defaultExpiryHoursFor('slack')).toBe(6);
+  });
+
+  it('registers an email with the 72h channel default when the entry omits expiresInHours', async () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger);
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 'e1' }] });
+
+    await service.register({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      agentId: 'coordinator',
+      content: 'Could you complete the registration form?',
+    });
+
+    const expiresAt = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]![1][7] as Date;
+    expect(Math.abs(expiresAt.getTime() - (Date.now() + 72 * 3_600_000))).toBeLessThan(5000);
+  });
+
+  it('registers a signal message with the 6h channel default when the entry omits expiresInHours', async () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger);
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 's1' }] });
+
+    await service.register({
+      conversationId: 'conv-1',
+      channelId: 'signal',
+      agentId: 'coordinator',
+      content: 'Heads up — the 3pm moved.',
+    });
+
+    const expiresAt = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]![1][7] as Date;
+    expect(Math.abs(expiresAt.getTime() - (Date.now() + 6 * 3_600_000))).toBeLessThan(5000);
+  });
+
+  it('honours an explicit expiresInHours over the channel default', async () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger);
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 'e2' }] });
+
+    await service.register({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      agentId: 'coordinator',
+      content: 'Quick one.',
+      expiresInHours: 2,
+    });
+
+    const expiresAt = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]![1][7] as Date;
+    expect(Math.abs(expiresAt.getTime() - (Date.now() + 2 * 3_600_000))).toBeLessThan(5000);
+  });
+
+  it('logs the resolved TTL and its source at registration', async () => {
+    const pool = makePool();
+    const spyLogger = { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const service = new OutboundContextService(
+      pool,
+      spyLogger as unknown as typeof logger,
+    );
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 'e3' }] });
+
+    await service.register({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      agentId: 'coordinator',
+      content: 'Please confirm.',
+    });
+
+    expect(spyLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: 'email',
+        expiresInHours: 72,
+        ttlSource: 'channel-default',
+      }),
+      'Outbound context entry registered',
+    );
+  });
+
+  it('records ttlSource as caller when expiresInHours is supplied', async () => {
+    const pool = makePool();
+    const spyLogger = { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const service = new OutboundContextService(pool, spyLogger as unknown as typeof logger);
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 'e4' }] });
+
+    await service.register({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      agentId: 'coordinator',
+      content: 'Please confirm.',
+      expiresInHours: 168,
+    });
+
+    expect(spyLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 168, ttlSource: 'caller' }),
+      'Outbound context entry registered',
+    );
+  });
+});
+
 describe('ScopedOutboundContext TTL delegation', () => {
   it('exposes defaultExpiryHours from the underlying service', () => {
     const pool = makePool();
@@ -328,6 +457,16 @@ describe('ScopedOutboundContext TTL delegation', () => {
     const service = new OutboundContextService(pool, logger, { explicitExpiryHours: 36 });
     const scoped = new ScopedOutboundContext(service, 'conv-1');
     expect(scoped.explicitExpiryHours).toBe(36);
+  });
+
+  it('delegates defaultExpiryHoursFor to the underlying service', () => {
+    const pool = makePool();
+    const service = new OutboundContextService(pool, logger, {
+      channelDefaultExpiryHours: { email: 84 },
+    });
+    const scoped = new ScopedOutboundContext(service, 'conv-1');
+    expect(scoped.defaultExpiryHoursFor('email')).toBe(84);
+    expect(scoped.defaultExpiryHoursFor('signal')).toBe(6);
   });
 });
 

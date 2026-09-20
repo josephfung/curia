@@ -378,7 +378,11 @@
       "additionalProperties": false,
       "properties": {
         "defaultExpiryHours": { "type": "integer", "minimum": 1 },
-        "explicitExpiryHours": { "type": "integer", "minimum": 1 }
+        "explicitExpiryHours": { "type": "integer", "minimum": 1 },
+        "channelDefaultExpiryHours": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 1 }
+        }
       }
     },
     "debrief": {

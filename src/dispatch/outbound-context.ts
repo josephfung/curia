@@ -21,12 +21,37 @@ const MAX_FIELD_LENGTH = 500;
 
 // ── Config ───────────────────────────────────────────────────────────────
 
+/**
+ * Built-in per-channel TTL defaults, keyed by channel id (#1816).
+ *
+ * A channel absent from this map falls through to `defaultExpiryHours`, so the
+ * flat short window stays the rule and a longer window is the documented
+ * exception. Only asynchronous channels belong here.
+ *
+ * Email earns 72h because its reply rhythm is business days, not hours: a
+ * message sent late afternoon is routinely answered the next morning (~15h
+ * later, well past the old 6h window), and a Friday-afternoon ask is answered
+ * on Monday. 72h covers both without keeping entries alive for a full week.
+ */
+export const CHANNEL_DEFAULT_EXPIRY_HOURS: Readonly<Record<string, number>> = Object.freeze({
+  email: 72,
+});
+
 /** Optional configuration for OutboundContextService TTL defaults. */
 export interface OutboundContextConfig {
-  /** Hours until auto-registered entries expire. Default: 6. */
+  /**
+   * Hours until auto-registered entries expire on channels with no per-channel
+   * default. Default: 6.
+   */
   defaultExpiryHours?: number;
   /** Hours until entries with explicit context_bridge metadata expire. Default: 24. */
   explicitExpiryHours?: number;
+  /**
+   * Per-channel TTL overrides, keyed by channel id. Merged over
+   * CHANNEL_DEFAULT_EXPIRY_HOURS, so naming a channel here replaces its
+   * built-in value and naming a new one adds it.
+   */
+  channelDefaultExpiryHours?: Record<string, number>;
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -41,7 +66,8 @@ export interface OutboundContextEntry {
   expectedReply?: string;
   delegationHint?: string;
   metadata?: Record<string, unknown>;
-  /** Hours until automatic expiry. Default: service's defaultExpiryHours (6). */
+  /** Hours until automatic expiry. Default: the channel's default TTL (see
+   *  CHANNEL_DEFAULT_EXPIRY_HOURS / defaultExpiryHoursFor). */
   expiresInHours?: number;
 }
 
@@ -74,6 +100,9 @@ export interface SubjectClearResult {
 export interface OutboundContextCapability {
   readonly defaultExpiryHours: number;
   readonly explicitExpiryHours: number;
+  /** Auto-registration TTL for a given channel — the per-channel default, or
+   *  `defaultExpiryHours` for channels with no entry (#1816). */
+  defaultExpiryHoursFor(channelId: string): number;
   register(entry: Omit<OutboundContextEntry, 'conversationId'>): Promise<string>;
   release(entryId: string): Promise<void>;
   /** Release by entry id only — conversation-agnostic (task-wake bindings span channels). */
@@ -151,6 +180,7 @@ function mapRow(row: Record<string, unknown>): OutboundContextRow {
 export class OutboundContextService {
   private readonly _defaultExpiryHours: number;
   private readonly _explicitExpiryHours: number;
+  private readonly _channelDefaultExpiryHours: Readonly<Record<string, number>>;
 
   constructor(
     private pool: DbPool,
@@ -159,6 +189,11 @@ export class OutboundContextService {
   ) {
     this._defaultExpiryHours = config?.defaultExpiryHours ?? 6;
     this._explicitExpiryHours = config?.explicitExpiryHours ?? 24;
+    // YAML overrides win per channel; unnamed channels keep their built-in value.
+    this._channelDefaultExpiryHours = {
+      ...CHANNEL_DEFAULT_EXPIRY_HOURS,
+      ...(config?.channelDefaultExpiryHours ?? {}),
+    };
   }
 
   get defaultExpiryHours(): number {
@@ -169,12 +204,27 @@ export class OutboundContextService {
     return this._explicitExpiryHours;
   }
 
+  /**
+   * Resolve the auto-registration TTL for a channel (#1816).
+   *
+   * Channels with a per-channel default (built-in or YAML) use it; everything
+   * else falls through to `defaultExpiryHours`. Note the asymmetry: raising
+   * `defaultExpiryHours` does NOT lower a channel that has its own entry —
+   * the per-channel value is a deliberate statement about that channel's reply
+   * rhythm, not a ceiling on the global knob.
+   */
+  defaultExpiryHoursFor(channelId: string): number {
+    return this._channelDefaultExpiryHours[channelId] ?? this._defaultExpiryHours;
+  }
+
   /** Write a new outbound context entry. Returns the generated UUID. */
   async register(entry: OutboundContextEntry): Promise<string> {
     const preview = truncatePreview(entry.content);
-    const expiresAt = new Date(
-      Date.now() + (entry.expiresInHours ?? this._defaultExpiryHours) * 3_600_000,
-    );
+    // Resolved here as well as at the call site so that any caller which omits
+    // expiresInHours still gets the channel-aware window rather than a flat 6h.
+    const ttlSource = entry.expiresInHours != null ? 'caller' : 'channel-default';
+    const expiresInHours = entry.expiresInHours ?? this.defaultExpiryHoursFor(entry.channelId);
+    const expiresAt = new Date(Date.now() + expiresInHours * 3_600_000);
 
     const result = await this.pool.query<{ id: string }>(
       `INSERT INTO outbound_context
@@ -195,7 +245,12 @@ export class OutboundContextService {
     );
 
     const id = result.rows[0]!.id;
-    this.logger.debug({ id, channelId: entry.channelId, agentId: entry.agentId }, 'Outbound context entry registered');
+    // Log the resolved window and where it came from — a silently-short TTL was
+    // invisible in prod until someone read the row by hand (#1816).
+    this.logger.debug(
+      { id, channelId: entry.channelId, agentId: entry.agentId, expiresInHours, ttlSource },
+      'Outbound context entry registered',
+    );
     return id;
   }
 
@@ -387,6 +442,10 @@ export class ScopedOutboundContext implements OutboundContextCapability {
 
   get explicitExpiryHours(): number {
     return this.service.explicitExpiryHours;
+  }
+
+  defaultExpiryHoursFor(channelId: string): number {
+    return this.service.defaultExpiryHoursFor(channelId);
   }
 
   async register(entry: Omit<OutboundContextEntry, 'conversationId'>): Promise<string> {

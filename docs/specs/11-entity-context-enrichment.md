@@ -478,7 +478,7 @@ Owns all CRUD against `outbound_context`. Two surfaces:
 
 1. **Full service** — held by the dispatcher and other system-layer code. Methods include `register()`, `getActive(limit)`, `release(id, conversationId?)`, `cleanupExpired()`, and `formatInjectionBlock(entries, originalContent)`.
 
-2. **`ScopedOutboundContext`** — a per-conversation wrapper exposed to skills via the `outboundContext` capability. Pre-binds `conversationId` so skills don't need to know it. Exposes only `register` and `release`, plus `defaultExpiryHours` / `explicitExpiryHours` for skills that want to be explicit.
+2. **`ScopedOutboundContext`** — a per-conversation wrapper exposed to skills via the `outboundContext` capability. Pre-binds `conversationId` so skills don't need to know it. Exposes only `register` and `release`, plus `defaultExpiryHours` / `explicitExpiryHours` / `defaultExpiryHoursFor(channelId)` for skills that want to be explicit.
 
 ### The `outboundContext` Skill Capability
 
@@ -497,9 +497,9 @@ A shared helper module `src/dispatch/context-bridge-parse.ts` (not a skill — i
 
 All send-skill handlers register an outbound context entry on success — **regardless of whether the caller passed an explicit `context_bridge` input**. This fixes the v1 bug (#609) where proactive outbounds frequently shipped without a memo and the reply arrived as a context-less inbound.
 
-- **Auto-registered entries** carry the agent ID and content preview only. They expire in `defaultExpiryHours` (6h default).
-- **Explicit entries** (caller passed `context_bridge` JSON) carry the full hint set and expire in `explicitExpiryHours` (24h default).
-- A caller-specified `expires_in_hours` in the JSON always overrides the defaults.
+- **Auto-registered entries** carry the agent ID and content preview only. They expire after the **channel's** default window — 72h on email, 6h on synchronous chat channels.
+- **Explicit entries** (caller passed `context_bridge` JSON) carry the full hint set and expire in `explicitExpiryHours` (24h default), raised to the channel default when that is longer so an annotated entry never outlives less than a bare one.
+- A caller-specified `expires_in_hours` in the JSON always overrides the defaults, in either direction.
 
 ### TTL Configuration
 
@@ -507,9 +507,13 @@ Defaults live under `contextBridge.*` in `config/default.yaml`:
 
 ```yaml
 contextBridge:
-  defaultExpiryHours: 6      # auto-registered entries (proactive sends without metadata)
+  defaultExpiryHours: 6      # channels with no per-channel entry below
   explicitExpiryHours: 24    # entries with explicit context_bridge JSON
+  channelDefaultExpiryHours: # per-channel auto-registration windows
+    email: 72
 ```
+
+The auto-registration TTL is channel-aware because reply rhythms are (#1816): email correspondence runs on business days, so a flat 6h window expired roughly 15 hours before a recipient who answered the next morning, and their reply arrived as an unrecognised cold inbound. Channels absent from `channelDefaultExpiryHours` fall through to `defaultExpiryHours`; raising that global value does not pull a per-channel value down to it. The resolved TTL and its source are logged at registration.
 
 Agent-specific overrides (e.g. `debrief.contextBridgeTtlHours = 48`) are passed via the explicit `context_bridge.expires_in_hours` field by the calling agent.
 
