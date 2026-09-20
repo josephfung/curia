@@ -15,7 +15,8 @@ export const TASK_WAKE_BIND_REPLY_KEY = 'bind_reply';
 /** Metadata field: originating task UUID for task-wake reply binding. */
 export const TASK_WAKE_TASK_ID_KEY = 'task_id';
 
-/** TTL for task-wake reply bindings — longer than the 6h auto-registration default. */
+/** TTL for task-wake reply bindings — longer than any channel's auto-registration
+ *  default, because the CEO answers a task-wake question on their own schedule. */
 export const TASK_WAKE_REPLY_TTL_HOURS = 168;
 
 export function isTaskWakeReplyBinding(

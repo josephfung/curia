@@ -423,11 +423,35 @@ describe('OutboundContextService channel-aware TTL defaults', () => {
     );
   });
 
-  it('records ttlSource as caller when expiresInHours is supplied', async () => {
+  it('trusts the caller-declared ttlSource over deriving one', async () => {
     const pool = makePool();
     const spyLogger = { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() };
     const service = new OutboundContextService(pool, spyLogger as unknown as typeof logger);
     (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 'e4' }] });
+
+    // The production caller resolves the channel default itself and passes it,
+    // so deriving 'agent' from "expiresInHours is set" would credit the agent
+    // for a window the system chose.
+    await service.register({
+      conversationId: 'conv-1',
+      channelId: 'email',
+      agentId: 'coordinator',
+      content: 'Please confirm.',
+      expiresInHours: 72,
+      ttlSource: 'channel-default',
+    });
+
+    expect(spyLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 72, ttlSource: 'channel-default' }),
+      'Outbound context entry registered',
+    );
+  });
+
+  it('derives ttlSource as agent when a TTL is supplied with no declared source', async () => {
+    const pool = makePool();
+    const spyLogger = { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const service = new OutboundContextService(pool, spyLogger as unknown as typeof logger);
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rows: [{ id: 'e5' }] });
 
     await service.register({
       conversationId: 'conv-1',
@@ -438,8 +462,26 @@ describe('OutboundContextService channel-aware TTL defaults', () => {
     });
 
     expect(spyLogger.debug).toHaveBeenCalledWith(
-      expect.objectContaining({ expiresInHours: 168, ttlSource: 'caller' }),
+      expect.objectContaining({ expiresInHours: 168, ttlSource: 'agent' }),
       'Outbound context entry registered',
+    );
+  });
+
+  it('logs the resolved TTL policy once at construction, at info', () => {
+    const spyLogger = { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+    new OutboundContextService(makePool(), spyLogger as unknown as typeof logger, {
+      channelDefaultExpiryHours: { emial: 96 },
+    });
+
+    expect(spyLogger.info).toHaveBeenCalledWith(
+      {
+        defaultExpiryHours: 6,
+        explicitExpiryHours: 24,
+        // The typo'd key sits next to the still-72 real one — which is how an
+        // operator finds out their override did nothing.
+        channelDefaults: { email: 72, emial: 96 },
+      },
+      'Outbound context TTL policy resolved',
     );
   });
 });

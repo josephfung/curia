@@ -99,6 +99,10 @@ export async function registerOutboundContext(
 
   try {
     let bridge = parseContextBridge(contextBridgeRaw, log);
+    // Captured before the task-wake branches below can inject a TTL of their
+    // own — afterwards there is no way to tell an agent's chosen window from
+    // one the system supplied, and the log would credit the agent for both.
+    const agentChoseTtl = bridge?.expires_in_hours != null;
 
     if (!bridge && boundTask) {
       // Task-wake send without explicit context_bridge — attach durable task binding.
@@ -138,6 +142,13 @@ export async function registerOutboundContext(
         expiresInHours:
           bridge.expires_in_hours ??
           Math.max(outboundContext.explicitExpiryHours, channelDefaultHours),
+        // Only the task-wake branches above inject a TTL the agent did not ask
+        // for, so a bridge TTL that is present but not the agent's is theirs.
+        ttlSource: agentChoseTtl
+          ? 'agent'
+          : bridge.expires_in_hours != null
+            ? 'task-wake'
+            : 'explicit-tier',
       });
     } else {
       // Auto-registration — context_bridge was absent, null, or malformed.
@@ -148,9 +159,18 @@ export async function registerOutboundContext(
         agentId,
         content,
         expiresInHours: channelDefaultHours,
+        ttlSource: 'channel-default',
       });
     }
   } catch (err) {
-    log.warn({ err, channelId }, 'Failed to register outbound context — send succeeded');
+    // Swallowed by design: the message already went out, so failing the skill
+    // would report a failure for a send that shipped. But the consequence is
+    // not degraded service — it is a guaranteed future cold inbound, so name
+    // it, and carry enough identity to tell which message will come back
+    // unrecognised (#1816).
+    log.warn(
+      { err, channelId, agentId, hadBridge: contextBridgeRaw != null },
+      'Failed to register outbound context — send succeeded, but any reply will arrive with no record of this message',
+    );
   }
 }

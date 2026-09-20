@@ -1,7 +1,9 @@
 // src/dispatch/context-bridge-parse.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import { registerOutboundContext } from './context-bridge-parse.js';
+import { OutboundContextService, ScopedOutboundContext } from './outbound-context.js';
 import type { OutboundContextCapability } from './outbound-context.js';
+import type { DbPool } from '../db/connection.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -47,6 +49,7 @@ describe('registerOutboundContext', () => {
       agentId: 'test-agent',
       content: 'Hello world',
       expiresInHours: 6,
+      ttlSource: 'channel-default',
     });
   });
 
@@ -67,6 +70,7 @@ describe('registerOutboundContext', () => {
           task_id: 'f9e9a0d9-0000-4000-8000-000000000001',
         },
         expiresInHours: 168,
+        ttlSource: 'task-wake',
       }),
     );
   });
@@ -91,6 +95,7 @@ describe('registerOutboundContext', () => {
       delegationHint: 'Delegate to meeting-debrief',
       metadata: { topic: 'standup' },
       expiresInHours: 24,
+      ttlSource: 'explicit-tier',
     });
   });
 
@@ -119,6 +124,7 @@ describe('registerOutboundContext', () => {
       agentId: 'test-agent',
       content: 'Hello world',
       expiresInHours: 6,
+      ttlSource: 'channel-default',
     });
   });
 
@@ -133,6 +139,7 @@ describe('registerOutboundContext', () => {
       agentId: 'test-agent',
       content: 'Hello world',
       expiresInHours: 72,
+      ttlSource: 'channel-default',
     });
   });
 
@@ -185,6 +192,7 @@ describe('registerOutboundContext', () => {
       agentId: 'test-agent',
       content: 'Hello world',
       expiresInHours: 6,
+      ttlSource: 'channel-default',
     });
   });
 
@@ -205,6 +213,7 @@ describe('registerOutboundContext', () => {
       content: 'Hello world',
       delegationHint: 'delegate to sales', // valid field kept
       expiresInHours: 24, // explicit path TTL
+      ttlSource: 'explicit-tier',
     });
   });
 
@@ -215,5 +224,99 @@ describe('registerOutboundContext', () => {
 
     // Should not throw
     await expect(registerOutboundContext(cap, undefined, baseOpts)).resolves.toBeUndefined();
+  });
+});
+
+// The stubs above mirror the real service by hand, which is exactly how the two
+// resolution sites drifted once already: every production registration logged
+// ttlSource 'caller' because registerOutboundContext always passes an explicit
+// expiresInHours, while a stub-free unit test asserted the branch production
+// could never reach. These tests drive the real service so that cannot recur.
+describe('registerOutboundContext against the real OutboundContextService', () => {
+  function makeService(spyLogger: { debug: ReturnType<typeof vi.fn> } & object) {
+    const pool = {
+      query: vi.fn().mockResolvedValue({ rows: [{ id: 'row-id' }] }),
+    } as unknown as DbPool;
+    const service = new OutboundContextService(pool, spyLogger as unknown as typeof logger);
+    return { pool, scoped: new ScopedOutboundContext(service, 'conv-1') };
+  }
+
+  function makeSpyLogger() {
+    return { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() };
+  }
+
+  it('records a bare email send as channel-default, not as an agent choice', async () => {
+    const spyLogger = makeSpyLogger();
+    const { pool, scoped } = makeService(spyLogger);
+
+    await registerOutboundContext(scoped, undefined, { ...baseOpts, channelId: 'email' });
+
+    expect(spyLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: 'email', expiresInHours: 72, ttlSource: 'channel-default' }),
+      'Outbound context entry registered',
+    );
+    // And the window actually written to the row matches what was logged.
+    const expiresAt = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]![1][7] as Date;
+    expect(Math.abs(expiresAt.getTime() - (Date.now() + 72 * 3_600_000))).toBeLessThan(5000);
+  });
+
+  it('records a bare signal send as channel-default at the short window', async () => {
+    const spyLogger = makeSpyLogger();
+    const { scoped } = makeService(spyLogger);
+
+    await registerOutboundContext(scoped, undefined, { ...baseOpts, channelId: 'signal' });
+
+    expect(spyLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: 'signal', expiresInHours: 6, ttlSource: 'channel-default' }),
+      'Outbound context entry registered',
+    );
+  });
+
+  it('records an agent-chosen window as agent', async () => {
+    const spyLogger = makeSpyLogger();
+    const { scoped } = makeService(spyLogger);
+
+    await registerOutboundContext(
+      scoped,
+      JSON.stringify({ agent_id: 'coordinator', expires_in_hours: 240 }),
+      { ...baseOpts, channelId: 'email' },
+    );
+
+    expect(spyLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 240, ttlSource: 'agent' }),
+      'Outbound context entry registered',
+    );
+  });
+
+  it('records an annotated entry with no chosen window as explicit-tier', async () => {
+    const spyLogger = makeSpyLogger();
+    const { scoped } = makeService(spyLogger);
+
+    await registerOutboundContext(
+      scoped,
+      JSON.stringify({ agent_id: 'coordinator', delegation_hint: 'contacts' }),
+      { ...baseOpts, channelId: 'email' },
+    );
+
+    expect(spyLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 72, ttlSource: 'explicit-tier' }),
+      'Outbound context entry registered',
+    );
+  });
+
+  it('records a system-injected task-wake binding as task-wake, not as agent', async () => {
+    const spyLogger = makeSpyLogger();
+    const { scoped } = makeService(spyLogger);
+
+    await registerOutboundContext(scoped, undefined, {
+      ...baseOpts,
+      channelId: 'signal',
+      boundTask: { taskId: 'f9e9a0d9-0000-4000-8000-000000000001' },
+    });
+
+    expect(spyLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresInHours: 168, ttlSource: 'task-wake' }),
+      'Outbound context entry registered',
+    );
   });
 });

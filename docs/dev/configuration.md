@@ -195,7 +195,9 @@ Note the asymmetry: raising `defaultExpiryHours` does **not** change a channel t
 
 An explicit `context_bridge` entry never expires sooner than a bare one on the same channel — `explicitExpiryHours` is raised to the channel default when that is longer. When a caller passes `expires_in_hours` inside the `context_bridge` JSON param, that wins outright for that individual entry, including when it is shorter than the channel default.
 
-The resolved TTL and the rule that produced it (`ttlSource`: `caller` or `channel-default`) are logged at `debug` on every registration.
+**Observability.** The resolved policy — `defaultExpiryHours`, `explicitExpiryHours`, and the merged per-channel map — is logged once at startup at `info` (`Outbound context TTL policy resolved`). That line is the one to check when an override appears to have had no effect: a mistyped channel id is accepted as written, so an inert `emial: 96` shows up in the map next to a still-72 `email`.
+
+Per-registration, the resolved window and the rule that chose it are logged at `debug` (`ttlSource`: `agent`, `task-wake`, `explicit-tier`, or `channel-default`). Prod runs at `LOG_LEVEL=info`, so **these per-send lines do not appear by default** — raise the level to see them.
 
 Expired entries are cleaned up automatically by the background scheduler. The coordinator can also release entries manually via the `context-bridge-release` skill.
 

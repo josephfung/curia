@@ -241,6 +241,7 @@ describe('EmailReplyHandler', () => {
         content: 'Thanks for the update — any next steps?',
         expectedReply: 'Next steps or action items',
         expiresInHours: 24,
+        ttlSource: 'agent',
       });
     });
 
@@ -280,6 +281,7 @@ describe('EmailReplyHandler', () => {
         // Email's channel default, not the flat 6h that expired before
         // next-business-day replies could land (#1816).
         expiresInHours: 72,
+        ttlSource: 'channel-default',
       });
     });
 
