@@ -1,7 +1,7 @@
 {
   "name": "calendar-update-event",
   "description": "Modify an existing calendar event. Partial updates: send only the fields that change (title, start, end, description, location, attendees, conferencing). attendees replaces the entire guest list with email and optional name — not a per-person patch, and this Nylas tool cannot set RSVP status (use calendar-respond-to-invite for the principal's own RSVP). Whether existing RSVPs are preserved on a guest-list replace is unverified; re-read the event after changing attendees. Guest-list and time changes send invitation emails by default. Set notifyAttendees=false to suppress those emails on Google; Microsoft and iCloud always notify.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "sensitivity": "normal",
   "action_risk": "high",
   "inputs": {
@@ -25,5 +25,8 @@
   "timeout": 30000,
   "capabilities": [
     "nylasCalendarClient"
+  ],
+  "allowed_callers": [
+    "calendar"
   ]
 }

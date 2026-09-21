@@ -1,7 +1,5 @@
 // Structural contract: coordinator routes principal calendar to @calendar (#1853).
-// Asserted at the tool-selection / config layer — no LLM. Verifies routing text,
-// pinned_skills stay free of principal calendar tools, and google-workspace MCP
-// calendar tools cannot land in the coordinator's resolved toolset.
+// Asserted at the tool-selection / config layer — no LLM.
 
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -13,7 +11,6 @@ import { ToolRegistry } from '../../../src/skills/registry.js';
 import { resolvePinnedSkills } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
 import {
-  filterHeldBackMcpTools,
   GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK,
   registerMcpProjectedSkills,
 } from '../../../src/skills/mcp-loader.js';
@@ -44,23 +41,42 @@ function loadCoordinator() {
   return loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
 }
 
+function extractHandleDirectlySection(prompt: string): string {
+  const start = prompt.indexOf('1. **Handle directly**');
+  const end = prompt.indexOf('2. **Borrow-then-answer**');
+  if (start === -1) throw new Error('Handle directly section not found');
+  if (end === -1 || end <= start) {
+    throw new Error('Borrow-then-answer delimiter not found after Handle directly');
+  }
+  return prompt.slice(start, end);
+}
+
+function extractCeoCalendarSection(prompt: string): string {
+  const start = prompt.indexOf('### CEO calendar requests (borrow-then-answer)');
+  const end = prompt.indexOf('### Delegation acknowledgment on synchronous channels');
+  if (start === -1) throw new Error('CEO calendar requests section not found');
+  if (end === -1 || end <= start) {
+    throw new Error('Delegation acknowledgment delimiter not found after CEO calendar section');
+  }
+  return prompt.slice(start, end);
+}
+
 describe('coordinator principal-calendar routing (#1853)', () => {
   it('has an explicit CEO calendar → @calendar borrow-then-answer rule', () => {
-    const prompt = loadCoordinator().system_prompt;
-    expect(prompt).toContain('### CEO calendar requests (borrow-then-answer)');
-    expect(prompt).toMatch(/delegated to `@calendar`/);
-    expect(prompt).toMatch(/never\s+read or mutate the CEO's calendar myself/i);
+    const section = extractCeoCalendarSection(loadCoordinator().system_prompt);
+    expect(section).toMatch(/delegated to `@calendar`/);
+    expect(section).toMatch(/never\s+read or mutate the CEO's calendar myself/i);
+    expect(section).toMatch(/never present the brief/i);
+    expect(section).toMatch(/could not be read/i);
+    expect(section).toMatch(/do not search\s+tool-registry/i);
   });
 
-  it('narrows handle-directly so calendar means Curia only, not the CEO', () => {
-    const prompt = loadCoordinator().system_prompt;
-    const handleDirectly = prompt.slice(
-      prompt.indexOf('1. **Handle directly**'),
-      prompt.indexOf('2. **Borrow-then-answer**'),
-    );
-    expect(handleDirectly).toMatch(/never the CEO's/i);
+  it('drops calendar from handle-directly (no Curia calendar path)', () => {
+    const handleDirectly = extractHandleDirectlySection(loadCoordinator().system_prompt);
+    expect(handleDirectly).toMatch(/Calendar is never handle-directly/i);
     expect(handleDirectly).toMatch(/@calendar/);
     expect(handleDirectly).not.toMatch(/my own email\/calendar\/workspace/);
+    expect(handleDirectly).not.toMatch(/Curia's identity only/);
   });
 
   it('does not pin principal-scoped calendar tools or the calendar bundle', () => {
@@ -69,12 +85,16 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     expect(pins).not.toContain('calendar');
     expect(pins).not.toContain('calendar-list-events');
     expect(pins).not.toContain('calendar-check-conflicts');
-    expect(pins).not.toContain('get_events');
-    expect(pins).not.toContain('list_calendars');
-    expect(pins).not.toContain('query_freebusy');
+    for (const heldBack of GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK) {
+      expect(pins).not.toContain(heldBack);
+    }
   });
 
-  it('resolved toolset excludes google-workspace calendar tools (tool-selection layer)', () => {
+  it('projected google-workspace membership leaves no unresolved calendar pins', () => {
+    // Simulates post-holdback projection: ToolRegistry has Drive tools but not the
+    // held-back calendar names. If projection still listed held-back members,
+    // resolvePinnedSkills would record member_tools_missing and
+    // reportScheduledPinGaps would error-log every coordinator boot.
     const config = loadCoordinator();
     const tools = new ToolRegistry();
     const skills = new SkillRegistry();
@@ -135,26 +155,15 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       'list-user-secrets',
       'create_doc',
       'search_drive_files',
-      // Held-back tools: present in ToolRegistry only if registration skipped filtering —
-      // we deliberately do NOT register them here, matching production after #1853.
-      ...GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK,
     ]) {
       needed.add(extra);
     }
     for (const name of needed) {
-      if (
-        (GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK as readonly string[]).includes(name)
-      ) {
-        continue; // not registered — same as MCP holdback
-      }
       if (!tools.get(name)) tools.register(toolManifest(name), noopHandler);
     }
 
-    const liveMembership = filterHeldBackMcpTools('google-workspace', [
-      'create_doc',
-      'search_drive_files',
-      ...GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK,
-    ]);
+    // Pass the RAW advertised set (including held-back names). registerMcpProjectedSkills
+    // must filter them — that is what this assertion guards.
     const logger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -162,23 +171,24 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       error: vi.fn(),
     } as unknown as Logger;
     registerMcpProjectedSkills(
-      new Map([['google-workspace', liveMembership]]),
+      new Map([
+        [
+          'google-workspace',
+          ['create_doc', 'search_drive_files', ...GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK],
+        ],
+      ]),
       skills,
       logger,
     );
     registerSyntheticSingletonSkills(tools, skills);
 
-    const resolved = resolvePinnedSkills(
-      config.pinned_skills ?? [],
-      skills,
-      tools,
-    ).toolNames;
-
+    const resolution = resolvePinnedSkills(config.pinned_skills ?? [], skills, tools);
+    expect(resolution.unresolvedPins).toEqual([]);
     for (const heldBack of GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK) {
-      expect(resolved).not.toContain(heldBack);
+      expect(resolution.toolNames).not.toContain(heldBack);
     }
-    expect(resolved).not.toContain('calendar-list-events');
-    expect(resolved).toContain('delegate');
-    expect(resolved).toContain('create_doc');
+    expect(resolution.toolNames).not.toContain('calendar-list-events');
+    expect(resolution.toolNames).toContain('delegate');
+    expect(resolution.toolNames).toContain('create_doc');
   });
 });

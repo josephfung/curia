@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Calendar tools (public API)** — `allowed_callers` now exclude the coordinator so discovery cannot re-open a direct path. (#1853)
 - **Coordinator outbound guidance** — absent block means withheld on non-principal turns, not empty. (#1848)
 - **`delegate` outputs (public API)** — `resolvedContactIds` keeps contact IDs after output sanitization. Skill v1.6.0. (#1818)
 - **Identity gate** — `filter.identityGate` selects enforce, shadow, or off. (#1818)
@@ -37,6 +38,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`contextBridge` config** — new `channelDefaultExpiryHours` map sets the auto-registration TTL per channel. (#1816)
 - **`email-reply` / `email-send` inputs (public API)** — optional `account` selects the mailbox; send only when threading. (#1832)
 - **Coordinator** — CC replies pass the preamble Account into `email-reply`. (#1832)
+
+### Removed
+
+- **Google Workspace calendar tools** — held back from MCP registration; principal calendar belongs to `@calendar`. (#1853)
 
 ### Fixed
 
