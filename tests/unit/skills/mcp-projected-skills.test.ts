@@ -57,30 +57,38 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
     expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
   });
 
-  it('skips projection when a skill name is already taken', () => {
+  it('strips held-back google-workspace calendar tools from projected membership (#1853)', () => {
     const skills = new SkillRegistry();
-    skills.register(
-      {
-        name: 'google-workspace',
-        description: 'native collision',
-        tools: [],
-        instructions: '',
-      },
-      '/tmp/gw',
-    );
-    const warn = vi.fn();
+    const tools = new ToolRegistry();
+    tools.register(toolManifest('create_doc'), noopHandler);
+    tools.register(toolManifest('search_drive_files'), noopHandler);
+    // Held-back tools are NOT registered — matching loadMcpServers skip path.
+
     const logger = {
       info: vi.fn(),
-      warn,
+      warn: vi.fn(),
       debug: vi.fn(),
       error: vi.fn(),
     } as unknown as import('../../../src/logger.js').Logger;
-    const added = registerMcpProjectedSkills(
-      new Map([['google-workspace', ['create_doc']]]),
-      skills,
-      logger,
-    );
-    expect(added).toBe(0);
-    expect(warn).toHaveBeenCalled();
+    const projected = new Map<string, string[]>([
+      [
+        'google-workspace',
+        [
+          'create_doc',
+          'get_events',
+          'list_calendars',
+          'query_freebusy',
+          'search_drive_files',
+        ],
+      ],
+    ]);
+    registerMcpProjectedSkills(projected, skills, logger);
+
+    const gw = skills.get('google-workspace');
+    expect(gw?.manifest.tools).toEqual(['create_doc', 'search_drive_files']);
+
+    const r = resolvePinnedSkills(['google-workspace'], skills, tools);
+    expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
+    expect(r.toolNames).not.toContain('get_events');
   });
 });
