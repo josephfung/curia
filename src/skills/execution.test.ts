@@ -2329,6 +2329,72 @@ describe('autonomy gates', () => {
       expect(getEmailMessage).toHaveBeenCalledWith('msg-1', 'typo');
     });
 
+    it('returns a misspelled account when Gate C would skip recipient resolution (#1832)', async () => {
+      // Unknown tier → both axes escalate, so the shortcut skips resolveGateCRecipients.
+      // The account check must still return UnknownEmailAccountError and must not fetch.
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const getEmailMessage = vi.fn();
+      const requireKnownEmailAccount = vi.fn((accountId: string) => {
+        throw new UnknownEmailAccountError(accountId, ['curia']);
+      });
+      const gateway = { getEmailMessage, requireKnownEmailAccount } as unknown as OutboundGateway;
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const { registry, layer } = makeLayerWithScore100(mockBus, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Thanks', cc: '', account: '  typo  ' },
+        undefined,
+        originatorMeta('unknown', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/unknown account 'typo'/);
+        expect(result.error).toMatch(/curia/);
+        expect(result.error).not.toMatch(/without approval/);
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+      expect(getEmailMessage).not.toHaveBeenCalled();
+      expect(requireKnownEmailAccount).toHaveBeenCalledOnce();
+      expect(requireKnownEmailAccount).toHaveBeenCalledWith('typo');
+      expect(mockBus.publish).not.toHaveBeenCalled();
+    });
+
+    it('still escalates an unknown-tier reply when the named account exists (#1832)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const getEmailMessage = vi.fn();
+      const requireKnownEmailAccount = vi.fn();
+      const gateway = { getEmailMessage, requireKnownEmailAccount } as unknown as OutboundGateway;
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Thanks', cc: '', account: 'personal' },
+        undefined,
+        originatorMeta('unknown', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/without approval/);
+        expect(result.error).not.toMatch(/unknown account/);
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+      expect(getEmailMessage).not.toHaveBeenCalled();
+      expect(requireKnownEmailAccount).toHaveBeenCalledWith('personal');
+    });
+
     it('resolves reply-all recipients from the named account, not the primary (#1832)', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const getEmailMessage = vi.fn(async (_messageId: string, accountId?: string) => {

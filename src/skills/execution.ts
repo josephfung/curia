@@ -22,6 +22,7 @@ import { normalizeTimestamp } from '../time/timestamp.js';
 import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExternalOriginatorMissingTier } from '../contacts/principal.js';
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
 import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
+import { emailAccountIdFromInput } from '../channels/email/account-id.js';
 import { ReplyToMessageIdShapeError } from '../channels/email/principal-rules.js';
 import {
   looksLikeOutboundContextEntryId,
@@ -1315,6 +1316,34 @@ export class ExecutionLayer {
             const decisionIfThirdParty = applyActionPolicy(
               initiatingTier, actionClass, true, isPrincipalSoleRecipient,
             );
+
+            // Both axes already agree, so resolveGateCRecipients is skipped below
+            // and a misspelled mailbox would become a generic escalation (#1832).
+            // Validate the name against the client map — no message fetch.
+            if (
+              decisionIfReplyToSender === decisionIfThirdParty
+              && toolName === 'email-reply'
+              && this.outboundGateway
+            ) {
+              const accountId = emailAccountIdFromInput(input);
+              if (accountId) {
+                try {
+                  this.outboundGateway.requireKnownEmailAccount(accountId);
+                } catch (err) {
+                  if (err instanceof UnknownEmailAccountError) {
+                    skillLogger.info(
+                      { toolName },
+                      'autonomy gate: email-reply account is not a configured mailbox (#1832)',
+                    );
+                    return {
+                      success: false,
+                      error: this.wrapSkillError(err.message),
+                    };
+                  }
+                  throw err;
+                }
+              }
+            }
 
             let structuralIsThirdPartyFacing: boolean | undefined;
             let initiatingIdentifiers: string[] = [];
