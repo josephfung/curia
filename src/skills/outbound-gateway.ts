@@ -1759,6 +1759,22 @@ export class OutboundGateway {
   }
 
   /**
+   * Reject a mailbox name that is not configured, without fetching a message.
+   *
+   * Gate C skips recipient resolution when both policy axes already escalate
+   * (unknown/blocked tier). A misspelled `account` must still surface as
+   * `UnknownEmailAccountError` instead of a generic approval (#1832).
+   * No clients configured is a different failure (`getEmailMessage` throws
+   * "no nylasClient is configured") and is left to that path.
+   */
+  requireKnownEmailAccount(accountId: string): void {
+    if (this.nylasClients.size === 0) return;
+    if (!this.nylasClients.has(accountId)) {
+      throw new UnknownEmailAccountError(accountId, this.listAccountIds());
+    }
+  }
+
+  /**
    * Fetch a single email message by its Nylas message ID.
    * Read-only — no security filtering applied.
    *

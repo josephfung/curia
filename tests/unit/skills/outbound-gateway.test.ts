@@ -1036,6 +1036,24 @@ describe('OutboundGateway.createEmailDraft', () => {
     expect(result.blockedReason).toContain('curia');
   });
 
+  it('requireKnownEmailAccount names a missing mailbox without fetching (#1832)', () => {
+    const getMessage = vi.fn();
+    const { gateway } = makeGateway({
+      nylasClients: new Map([['curia', { getMessage } as unknown as NylasClient]]),
+    });
+
+    expect(() => gateway.requireKnownEmailAccount('typo')).toThrow(/unknown account 'typo'/);
+    expect(() => gateway.requireKnownEmailAccount('typo')).toThrow(/curia/);
+    expect(() => gateway.requireKnownEmailAccount('curia')).not.toThrow();
+    expect(getMessage).not.toHaveBeenCalled();
+  });
+
+  it('requireKnownEmailAccount does nothing when no clients are configured (#1832)', () => {
+    const { gateway } = makeGateway({ nylasClients: new Map() });
+
+    expect(() => gateway.requireKnownEmailAccount('typo')).not.toThrow();
+  });
+
   it('names an unknown account from getEmailMessage (#1832)', async () => {
     const { gateway } = makeGateway({
       nylasClients: new Map([['curia', { getMessage: vi.fn() } as unknown as NylasClient]]),
