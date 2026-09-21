@@ -103,8 +103,8 @@ importers:
         specifier: ^1.13.12
         version: 1.13.12
       livekit-server-sdk:
-        specifier: ^2.18.0
-        version: 2.18.0
+        specifier: ^2.19.0
+        version: 2.19.0
       luxon:
         specifier: ^3.7.2
         version: 3.7.2
@@ -1541,11 +1541,11 @@ packages:
   '@livekit/mutex@1.1.1':
     resolution: {integrity: sha512-EsshAucklmpuUAfkABPxJNhzj9v2sG7JuzFDL4ML1oJQSV14sqrpTYnsaOudMAw9yOaW53NU3QQTlUQoRs4czw==}
 
-  '@livekit/protocol@1.48.0':
-    resolution: {integrity: sha512-fYHYgltH6YavAsokl3qsHLkBdQeKCl4UORVTub5crS3t8JtKFZ0uinHDFQ+XXdNKS6Ub9gcOjV+UHcDiqnWXoQ==}
-
   '@livekit/protocol@1.50.4':
     resolution: {integrity: sha512-L1uggNQAqyY21smQY8AllyOYbcv9Me9TaxwuLytL1R8ck9nbYPmQLNwEDi3pOFGAMa5F8I2nUi2Jc59W5awxlA==}
+
+  '@livekit/protocol@1.51.0':
+    resolution: {integrity: sha512-kEDEDaFvIcp5VlYBromdSKMJMEJKfPvXPfEaJPdEz1Qgo84gZAoLF2g58CcMlVYGsjrwE5XYgQxRS5B7KuEj3w==}
 
   '@livekit/rtc-ffi-bindings-darwin-arm64@0.12.73':
     resolution: {integrity: sha512-gIGftVyO1Jl266AZPRzoL6dxck969dmIiaut3+D1aCZRkDb/gLz98BEGRfOSU3X0LS4QBkmiaYWsjN9ot/zmwg==}
@@ -4511,9 +4511,9 @@ packages:
     peerDependencies:
       '@types/dom-mediacapture-record': ^1
 
-  livekit-server-sdk@2.18.0:
-    resolution: {integrity: sha512-iUGmkbyi0g4DHKQ0Z4VSVs/V+ddp3T75ccQIe6LX94AYlqgyh+SVSM1lQMjFQuI3Qh6Z9v06T4xxV+vWmp7VeQ==}
-    engines: {node: '>=18'}
+  livekit-server-sdk@2.19.0:
+    resolution: {integrity: sha512-9q+MuVS2qky5+Xaf7/XalMu90EcGX2wkKBy80ANlJH8WCulQpfNMU8ILIMq913X59kH6itNyxP4fr16616KG3A==}
+    engines: {node: '>=19'}
 
   load-esm@1.0.3:
     resolution: {integrity: sha512-v5xlu8eHD1+6r8EHTg6hfmO97LN8ugKtiXcy5e6oN72iD2r6u0RPfLl6fxM+7Wnh2ZRq15o0russMst44WauPA==}
@@ -7720,11 +7720,11 @@ snapshots:
 
   '@livekit/mutex@1.1.1': {}
 
-  '@livekit/protocol@1.48.0':
+  '@livekit/protocol@1.50.4':
     dependencies:
       '@bufbuild/protobuf': 1.10.1
 
-  '@livekit/protocol@1.50.4':
+  '@livekit/protocol@1.51.0':
     dependencies:
       '@bufbuild/protobuf': 1.10.1
 
@@ -10790,10 +10790,10 @@ snapshots:
       typed-emitter: 2.1.0
       webrtc-adapter: 9.0.6
 
-  livekit-server-sdk@2.18.0:
+  livekit-server-sdk@2.19.0:
     dependencies:
       '@bufbuild/protobuf': 1.10.1
-      '@livekit/protocol': 1.48.0
+      '@livekit/protocol': 1.51.0
       jose: 5.10.0
 
   load-esm@1.0.3:
