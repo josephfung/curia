@@ -36,7 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`scheduler-report`** — derives `job_id` from the run conversation so agents stop mistaking it for a bullpen thread. (#1828)
-- **`bullpen`** — job-UUID-as-thread_id errors now point at `scheduler-report` instead of "not found". (#1828)
+- **`bullpen`** — job-UUID-as-thread_id redirects to `scheduler-report` and logs a greppable warn. (#1828)
 - **Scheduler** — tool failures on a completed run now land in `last_run_context` without flipping health. (#1830)
 - **Agent runtime** — `maxConsecutiveErrors` budget exits now forward `failedSkills` on the error response. (#1830)
 - **Agent runtime** — LLM failure exits and credential redaction now cover `failedSkills` persistence. (#1830)
