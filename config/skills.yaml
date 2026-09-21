@@ -49,6 +49,10 @@ servers:
   # create_sheet (new tab) and append_table_rows are both in the complete tier —
   # they were not promoted to extended in workspace-mcp's tool_tiers.yaml.
   #
+  # Calendar tools from this server (get_events, list_calendars, query_freebusy)
+  # are held back at MCP load (#1853) — they authenticate as Curia's identity and
+  # must not shadow the principal-bound Nylas `calendar` skill. Revisit with #1330.
+  #
   # Secrets are declared in the `secrets:` block and resolved from the encrypted
   # vault at spawn time. The `secrets:` list defines which credentials are required,
   # and how they are injected into the process:

@@ -173,6 +173,9 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(config.pinned_skills).not.toContain('create_doc');
     expect(config.pinned_skills).toContain('contact-update');
     expect(config.pinned_skills).not.toContain('contact-lookup');
+    // #1853: principal calendar stays on @calendar — never widen coordinator pins
+    expect(config.pinned_skills).not.toContain('calendar');
+    expect(config.pinned_skills).not.toContain('calendar-list-events');
   });
 
   // #1502: the KG relationship tools moved from the contacts bundle to the memory

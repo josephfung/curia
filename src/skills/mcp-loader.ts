@@ -27,6 +27,34 @@ import type {
   SkillsConfig,
 } from './mcp-config-types.js';
 
+/**
+ * google-workspace MCP calendar tools held back from registration / projection (#1853).
+ *
+ * They authenticate as Curia's Google service identity, not the principal's Nylas
+ * grant. Leaving them on an agent's toolbelt shadows `@calendar` and causes silent
+ * empty-day briefs. Re-enable only when #1330 (Curia managing its own calendar) lands
+ * and the tools are renamed/scoped so they cannot be mistaken for principal calendar.
+ */
+export const GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK = [
+  'get_events',
+  'list_calendars',
+  'query_freebusy',
+] as const;
+
+const HELD_BACK_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['google-workspace', new Set(GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK)],
+]);
+
+/** True when an MCP tool must not be registered or projected for this server (#1853). */
+export function isMcpToolHeldBack(serverName: string, toolName: string): boolean {
+  return HELD_BACK_BY_SERVER.get(serverName)?.has(toolName) === true;
+}
+
+/** Drop held-back tools from a live MCP membership list (defense in depth for projection). */
+export function filterHeldBackMcpTools(serverName: string, tools: readonly string[]): string[] {
+  return tools.filter((t) => !isMcpToolHeldBack(serverName, t));
+}
+
 /** Result of loading MCP servers: live sessions + tools registered per server. */
 export type McpServerLoadStatus =
   | { status: 'ok'; toolCount: number }
@@ -627,6 +655,14 @@ export async function loadMcpServers(
     let registered = 0;
     const registeredNames: string[] = [];
     for (const tool of tools) {
+      if (isMcpToolHeldBack(serverEntry.name, tool.name)) {
+        logger.info(
+          { server: serverEntry.name, tool: tool.name },
+          'MCP tool held back from registration — principal calendar belongs to @calendar (#1853)',
+        );
+        continue;
+      }
+
       // Build a minimal ToolManifest from the tool's metadata.
       // inputs is left empty ({}) because toToolDefinitions() uses mcpInputSchema
       // instead of the shorthand inputs notation for MCP-sourced tools.
@@ -739,18 +775,19 @@ export function registerMcpProjectedSkills(
       );
       continue;
     }
+    const membership = filterHeldBackMcpTools(serverName, tools);
     skillRegistry.register(
       {
         name: serverName,
-        description: `MCP server '${serverName}' — ${tools.length} tool${tools.length === 1 ? '' : 's'} projected as a skill (ADR-032)`,
+        description: `MCP server '${serverName}' — ${membership.length} tool${membership.length === 1 ? '' : 's'} projected as a skill (ADR-032)`,
         version: '1.0.0',
-        tools: [...tools],
+        tools: membership,
         instructions: '',
       },
       '', // no on-disk SKILL.md — membership is live from tools/list
     );
     logger.info(
-      { skill: serverName, tools, kind: 'mcp' },
+      { skill: serverName, tools: membership, kind: 'mcp' },
       'MCP server projected as skill',
     );
     added++;

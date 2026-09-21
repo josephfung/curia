@@ -13,6 +13,9 @@ import {
   resolveFixedInputFromVault,
   resolveSecretsBlock,
   loadSkillsConfig,
+  filterHeldBackMcpTools,
+  isMcpToolHeldBack,
+  GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK,
 } from './mcp-loader.js';
 import type { McpSecretDeclaration } from './mcp-config-types.js';
 import * as fs from 'node:fs';
@@ -394,5 +397,31 @@ describe('resolveSecretsBlock', () => {
       if (prior === undefined) delete process.env['SHOULD_NOT_READ'];
       else process.env['SHOULD_NOT_READ'] = prior;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// google-workspace calendar holdback (#1853)
+// ---------------------------------------------------------------------------
+
+describe('MCP calendar tool holdback (#1853)', () => {
+  it('holds back get_events / list_calendars / query_freebusy on google-workspace only', () => {
+    for (const tool of GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK) {
+      expect(isMcpToolHeldBack('google-workspace', tool)).toBe(true);
+      expect(isMcpToolHeldBack('other-server', tool)).toBe(false);
+    }
+    expect(isMcpToolHeldBack('google-workspace', 'create_doc')).toBe(false);
+  });
+
+  it('filterHeldBackMcpTools strips calendar tools from projected membership', () => {
+    expect(
+      filterHeldBackMcpTools('google-workspace', [
+        'create_doc',
+        'get_events',
+        'list_calendars',
+        'query_freebusy',
+        'search_drive_files',
+      ]),
+    ).toEqual(['create_doc', 'search_drive_files']);
   });
 });

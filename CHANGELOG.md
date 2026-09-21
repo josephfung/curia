@@ -40,6 +40,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Coordinator morning brief** — routes CEO calendar reads to `@calendar` instead of Curia's empty Google calendar. (#1853)
 - **`[ACTIVE OUTBOUND CONTEXT]`** — dispatcher injects only on principal `liveTurn`, matching voice. (#1848)
 - **Scheduled maintenance prompts** — `calendar`, `coordinator`, and `meeting-debrief` name `scheduler-report` and forbid bullpen. (#1831)
 - **Resolved entities** — identities from a turn stay available later, refreshed from the contact record. (#1818)
