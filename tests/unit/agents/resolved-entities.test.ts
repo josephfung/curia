@@ -164,6 +164,14 @@ describe('describeUnresolvedIdentity', () => {
     expect(describeUnresolvedIdentity('José Müller would like to attend.', ['José Müller'])).toBeNull();
   });
 
+  it('treats an honorific as a person cue even though it overlaps the name', () => {
+    const uncovered = describeUnresolvedIdentity('Please add Mr Marcus Webb to the list.', []);
+    expect(uncovered).toContain('Marcus Webb');
+    expect(describeUnresolvedIdentity('Please add Mr Marcus Webb to the list.', ['Marcus Webb'])).toBeNull();
+    expect(describeUnresolvedIdentity('Dr Priya Raman will be joining us.', [])).toContain('Priya Raman');
+    expect(describeUnresolvedIdentity('Mrs Webb confirmed.', ['Webb'])).toBeNull();
+  });
+
   it('does not treat a capitalized cue header as an unresolved person', () => {
     const covered = ['Joseph Fung', 'Xiaopu Chen'];
     expect(describeUnresolvedIdentity('Attendees:\n- Joseph Fung\n- Xiaopu Chen', covered)).toBeNull();
