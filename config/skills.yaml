@@ -44,14 +44,18 @@
 
 servers:
   # Community Google Workspace MCP server (taylorwilsdon/google_workspace_mcp).
-  # Covers Drive, Sheets, Docs, Gmail, Calendar, and more via OAuth 2.0 as Curia's
-  # Gmail user. The "complete" tier is required for load-bearing Sheets tools:
+  # Covers Drive, Sheets, Docs, Gmail, and more via OAuth 2.0 as Curia's Gmail
+  # user. The "complete" tier is required for load-bearing Sheets tools:
   # create_sheet (new tab) and append_table_rows are both in the complete tier —
   # they were not promoted to extended in workspace-mcp's tool_tiers.yaml.
   #
-  # Calendar tools from this server (get_events, list_calendars, query_freebusy)
-  # are held back at MCP load (#1853) — they authenticate as Curia's identity and
-  # must not shadow the principal-bound Nylas `calendar` skill. Revisit with #1330.
+  # Calendar is intentionally omitted from `--tools` (#1853): those tools
+  # authenticate as Curia's Google identity and must not shadow the principal-bound
+  # Nylas `calendar` skill. Omitting the service also keeps Calendar out of the
+  # OAuth scope set. In-process backstop (never registered in ToolRegistry, so no
+  # agent can call them regardless of pins): GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK
+  # in src/skills/mcp-loader.ts — keep that list in sync if upstream adds tools.
+  # Revisit with #1330.
   #
   # Secrets are declared in the `secrets:` block and resolved from the encrypted
   # vault at spawn time. The `secrets:` list defines which credentials are required,
@@ -75,6 +79,19 @@ servers:
       - workspace-mcp
       - --tool-tier
       - complete
+      # All upstream services except calendar (#1853 / #1330).
+      - --tools
+      - gmail
+      - drive
+      - docs
+      - sheets
+      - chat
+      - forms
+      - slides
+      - tasks
+      - contacts
+      - search
+      - appscript
     secrets:
       - key: google_oauth_client_id
         label: "Google OAuth client ID"

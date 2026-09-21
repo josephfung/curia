@@ -13,8 +13,10 @@ uses [`taylorwilsdon/google_workspace_mcp`](https://github.com/taylorwilsdon/goo
 as a local stdio subprocess — the MCP loader spawns it via `uvx workspace-mcp` and
 communicates over stdin/stdout.
 
-This gives Curia full access to Drive, Sheets, Docs, Gmail, Calendar, and more using
-OAuth 2.0 as Curia's own Gmail user.
+This gives Curia full access to Drive, Sheets, Docs, Gmail, and more using
+OAuth 2.0 as Curia's own Gmail user. Principal calendar access is **not** via
+this MCP server — it goes through the Nylas-backed `calendar` skill (#1853).
+`config/skills.yaml` omits the `calendar` service from `--tools` for that reason.
 
 ### One-time setup
 
@@ -27,14 +29,18 @@ OAuth 2.0 as Curia's own Gmail user.
    - Google Sheets API
    - Google Docs API
    - Gmail API
-   - Google Calendar API
+
+   Do **not** enable Google Calendar API for Curia's Workspace OAuth client.
+   Principal calendar traffic uses Nylas; Workspace Calendar tools are withheld
+   (#1853). Enabling Calendar here only widens Curia's grant without a caller.
 
 #### Step 2 — OAuth consent screen
 
 1. Go to APIs & Services → OAuth consent screen.
 2. Choose **External** (works with any Gmail account, including Curia's).
 3. Fill in the app name and contact email.
-4. Add scopes: Drive, Sheets, Docs, Gmail, Calendar.
+4. Add scopes: Drive, Sheets, Docs, Gmail.
+   Omit Calendar — see Step 1 / #1853.
 5. Under **Test users**, add Curia's Gmail address.
 
 > The app can stay in "Testing" mode. If you want non-expiring tokens without having
@@ -94,7 +100,8 @@ callback), opens your browser once per service, and waits for you to complete th
 
 Log in as **Curia's Gmail account** each time.
 
-After all five services are authenticated, tokens are saved to:
+After all services in the auth script are authenticated (Drive, Sheets, Docs,
+Gmail — not Calendar; #1853), tokens are saved to:
 ```text
 ~/.google_workspace_mcp/credentials/<curia-gmail>.json
 ```
@@ -143,7 +150,8 @@ repeat Step 5 to re-authenticate and copy fresh tokens to the VPS.
    A non-zero `registered` count means the server connected and tools are available.
 
 2. **Tool discovery**: ask Curia: *"What Google Workspace tools do you have available?"*
-   It should list Drive, Sheets, Docs, Gmail, and Calendar tools.
+   It should list Drive, Sheets, Docs, and Gmail tools — **not** Calendar
+   (`get_events` / `manage_event` / etc. are withheld; #1853).
 
 3. **End-to-end read**: share a test Google Sheet with Curia's Gmail, then ask:
    *"Read the test sheet and summarize what's in it."*
@@ -214,7 +222,8 @@ volumes:
 
 ## Future: Google-hosted Workspace MCP server
 
-Google announced a hosted Workspace MCP server (Drive, Docs, Sheets, Calendar, Gmail)
+Google announced a hosted Workspace MCP server (Drive, Docs, Sheets, Gmail;
+Calendar historically included upstream but Curia omits it — #1853)
 in late 2025. Track availability at:
 
 > https://docs.cloud.google.com/mcp/supported-products

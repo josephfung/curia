@@ -1,7 +1,7 @@
 {
   "name": "calendar-delete-event",
   "description": "Delete a calendar event. By default, attendees receive cancellation emails. Set notifyAttendees to false to suppress cancellation notifications.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "high",
   "inputs": {
@@ -17,5 +17,8 @@
   "timeout": 15000,
   "capabilities": [
     "nylasCalendarClient"
+  ],
+  "allowed_callers": [
+    "calendar"
   ]
 }

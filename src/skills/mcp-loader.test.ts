@@ -405,7 +405,18 @@ describe('resolveSecretsBlock', () => {
 // ---------------------------------------------------------------------------
 
 describe('MCP calendar tool holdback (#1853)', () => {
-  it('holds back get_events / list_calendars / query_freebusy on google-workspace only', () => {
+  it('holds back the full upstream calendar module on google-workspace only', () => {
+    expect([...GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK].sort()).toEqual(
+      [
+        'create_calendar',
+        'get_events',
+        'list_calendars',
+        'manage_event',
+        'manage_focus_time',
+        'manage_out_of_office',
+        'query_freebusy',
+      ].sort(),
+    );
     for (const tool of GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK) {
       expect(isMcpToolHeldBack('google-workspace', tool)).toBe(true);
       expect(isMcpToolHeldBack('other-server', tool)).toBe(false);
@@ -419,7 +430,11 @@ describe('MCP calendar tool holdback (#1853)', () => {
         'create_doc',
         'get_events',
         'list_calendars',
+        'manage_event',
+        'create_calendar',
         'query_freebusy',
+        'manage_out_of_office',
+        'manage_focus_time',
         'search_drive_files',
       ]),
     ).toEqual(['create_doc', 'search_drive_files']);

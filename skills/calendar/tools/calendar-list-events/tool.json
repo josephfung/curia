@@ -1,7 +1,7 @@
 {
   "name": "calendar-list-events",
   "description": "Fetch events within a date range. Pass contactId to look up all calendars registered to that contact (in scheduled runs, use the principal's contact ID as given in your system prompt). Pass calendarId only when targeting a specific calendar by Nylas ID. Supports filtering by text query (title/description) and attendee email.",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -22,5 +22,10 @@
   "timeout": 30000,
   "capabilities": [
     "nylasCalendarClient"
+  ],
+  "allowed_callers": [
+    "calendar",
+    "meeting-debrief",
+    "contacts"
   ]
 }

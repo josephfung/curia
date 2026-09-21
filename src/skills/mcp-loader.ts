@@ -30,20 +30,40 @@ import type {
 /**
  * google-workspace MCP calendar tools held back from registration / projection (#1853).
  *
- * They authenticate as Curia's Google service identity, not the principal's Nylas
- * grant. Leaving them on an agent's toolbelt shadows `@calendar` and causes silent
- * empty-day briefs. Re-enable only when #1330 (Curia managing its own calendar) lands
- * and the tools are renamed/scoped so they cannot be mistaken for principal calendar.
+ * Full upstream calendar module (`core/tool_tiers.yaml`): list_calendars, get_events,
+ * manage_event (core); create_calendar, query_freebusy, manage_out_of_office,
+ * manage_focus_time (extended). They authenticate as Curia's Google service identity,
+ * not the principal's Nylas grant. Leaving them on an agent's toolbelt shadows
+ * `@calendar` (empty reads and wrong-identity writes).
+ *
+ * Primary gate: `config/skills.yaml` omits `calendar` from `--tools` so the module
+ * never loads (and Calendar OAuth scope is not requested). This list is the
+ * in-process backstop if a calendar tool still appears (tier bump, misconfig, or
+ * upstream rename). Re-enable only when #1330 lands and tools are renamed/scoped.
+ *
+ * Keep in sync with the comment block on the google-workspace entry in
+ * `config/skills.yaml`.
  */
 export const GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK = [
-  'get_events',
   'list_calendars',
+  'get_events',
+  'manage_event',
+  'create_calendar',
   'query_freebusy',
+  'manage_out_of_office',
+  'manage_focus_time',
 ] as const;
 
 const HELD_BACK_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['google-workspace', new Set(GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK)],
 ]);
+
+/**
+ * Heuristic for calendar-shaped google-workspace tool names not yet on the denylist.
+ * Underscore-segment match avoids false positives like substrings inside other words.
+ */
+const GOOGLE_WORKSPACE_CALENDARISH_TOOL =
+  /(^|_)(events?|calendars?|freebusy|out_of_office|focus_time)($|_)/;
 
 /** True when an MCP tool must not be registered or projected for this server (#1853). */
 export function isMcpToolHeldBack(serverName: string, toolName: string): boolean {
@@ -53,6 +73,22 @@ export function isMcpToolHeldBack(serverName: string, toolName: string): boolean
 /** Drop held-back tools from a live MCP membership list (defense in depth for projection). */
 export function filterHeldBackMcpTools(serverName: string, tools: readonly string[]): string[] {
   return tools.filter((t) => !isMcpToolHeldBack(serverName, t));
+}
+
+/**
+ * Warn when google-workspace advertises a calendar-looking tool that is not on the
+ * holdback list — silent denylist drift when upstream adds an eighth calendar tool.
+ */
+export function warnIfUnexpectedGoogleWorkspaceCalendarTool(
+  toolName: string,
+  logger: Logger,
+): void {
+  if (isMcpToolHeldBack('google-workspace', toolName)) return;
+  if (!GOOGLE_WORKSPACE_CALENDARISH_TOOL.test(toolName)) return;
+  logger.warn(
+    { server: 'google-workspace', tool: toolName },
+    'google-workspace advertised a calendar-shaped tool not on the #1853 holdback list — add it to GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK (and omit calendar from --tools in config/skills.yaml)',
+  );
 }
 
 /** Result of loading MCP servers: live sessions + tools registered per server. */
@@ -655,10 +691,13 @@ export async function loadMcpServers(
     let registered = 0;
     const registeredNames: string[] = [];
     for (const tool of tools) {
+      if (serverEntry.name === 'google-workspace') {
+        warnIfUnexpectedGoogleWorkspaceCalendarTool(tool.name, logger);
+      }
       if (isMcpToolHeldBack(serverEntry.name, tool.name)) {
         logger.info(
           { server: serverEntry.name, tool: tool.name },
-          'MCP tool held back from registration — principal calendar belongs to @calendar (#1853)',
+          'MCP tool held back from registration — never enters ToolRegistry; principal calendar belongs to @calendar (#1853)',
         );
         continue;
       }

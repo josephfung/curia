@@ -306,6 +306,71 @@ servers:
     expect(registry.get('tool-t')!.manifest.timeout).toBe(30000);
   });
 
+  it('skips google-workspace calendar tools at registration (#1853)', async () => {
+    const calendarTools = [
+      'list_calendars',
+      'get_events',
+      'manage_event',
+      'create_calendar',
+      'query_freebusy',
+      'manage_out_of_office',
+      'manage_focus_time',
+    ];
+    const gwSession = makeMockSession([
+      { name: 'create_doc', inputSchema: { type: 'object', properties: {}, required: [] } },
+      ...calendarTools.map((name) => ({
+        name,
+        inputSchema: { type: 'object', properties: {}, required: [] },
+      })),
+      { name: 'search_drive_files', inputSchema: { type: 'object', properties: {}, required: [] } },
+    ]);
+    gwSession.serverId = 'google-workspace';
+    mockConnectStdio.mockResolvedValueOnce(gwSession);
+
+    const dir = writeSkillsYaml(`
+servers:
+  - name: google-workspace
+    transport: stdio
+    command: uvx
+    args: ["workspace-mcp"]
+    action_risk: low
+`);
+    const registry = new ToolRegistry();
+    const { projectedTools } = await loadMcpServers(dir, registry, logger, secrets);
+
+    expect(registry.get('create_doc')).toBeDefined();
+    expect(registry.get('search_drive_files')).toBeDefined();
+    for (const name of calendarTools) {
+      expect(registry.get(name)).toBeUndefined();
+    }
+    expect(projectedTools.get('google-workspace')).toEqual([
+      'create_doc',
+      'search_drive_files',
+    ]);
+  });
+
+  it('still registers same-named tools on a non-google-workspace server (#1853)', async () => {
+    const otherSession = makeMockSession([
+      { name: 'get_events', inputSchema: { type: 'object', properties: {}, required: [] } },
+      { name: 'manage_event', inputSchema: { type: 'object', properties: {}, required: [] } },
+    ]);
+    otherSession.serverId = 'other-calendar-mcp';
+    mockConnectStdio.mockResolvedValueOnce(otherSession);
+
+    const dir = writeSkillsYaml(`
+servers:
+  - name: other-calendar-mcp
+    transport: stdio
+    command: npx
+    action_risk: low
+`);
+    const registry = new ToolRegistry();
+    await loadMcpServers(dir, registry, logger, secrets);
+
+    expect(registry.get('get_events')).toBeDefined();
+    expect(registry.get('manage_event')).toBeDefined();
+  });
+
   it('uses connectSse for sse transport', async () => {
     const session = makeMockSession([
       { name: 'github_search', inputSchema: { type: 'object', properties: {}, required: [] } },

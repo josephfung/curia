@@ -1,7 +1,7 @@
 {
   "name": "calendar-create-event",
   "description": "Create a new calendar event with title, time, and optional description/location/conferencing. attendees is a guest list of { email, name? } — this Nylas tool cannot set RSVP status. Attendees receive invitation emails automatically.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "sensitivity": "normal",
   "action_risk": "high",
   "inputs": {
@@ -22,5 +22,9 @@
   "timeout": 30000,
   "capabilities": [
     "nylasCalendarClient"
+  ],
+  "allowed_callers": [
+    "calendar",
+    "meeting-debrief"
   ]
 }

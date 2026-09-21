@@ -57,6 +57,33 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
     expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
   });
 
+  it('skips projection when a skill name is already taken', () => {
+    const skills = new SkillRegistry();
+    skills.register(
+      {
+        name: 'google-workspace',
+        description: 'native collision',
+        tools: [],
+        instructions: '',
+      },
+      '/tmp/gw',
+    );
+    const warn = vi.fn();
+    const logger = {
+      info: vi.fn(),
+      warn,
+      debug: vi.fn(),
+      error: vi.fn(),
+    } as unknown as import('../../../src/logger.js').Logger;
+    const added = registerMcpProjectedSkills(
+      new Map([['google-workspace', ['create_doc']]]),
+      skills,
+      logger,
+    );
+    expect(added).toBe(0);
+    expect(warn).toHaveBeenCalled();
+  });
+
   it('strips held-back google-workspace calendar tools from projected membership (#1853)', () => {
     const skills = new SkillRegistry();
     const tools = new ToolRegistry();
@@ -77,7 +104,11 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
           'create_doc',
           'get_events',
           'list_calendars',
+          'manage_event',
+          'create_calendar',
           'query_freebusy',
+          'manage_out_of_office',
+          'manage_focus_time',
           'search_drive_files',
         ],
       ],
@@ -90,5 +121,6 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
     const r = resolvePinnedSkills(['google-workspace'], skills, tools);
     expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
     expect(r.toolNames).not.toContain('get_events');
+    expect(r.toolNames).not.toContain('manage_event');
   });
 });

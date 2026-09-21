@@ -1,7 +1,7 @@
 {
   "name": "calendar-create-hold",
   "description": "Place a tentative HOLD (TBC) on a calendar slot while an offer is outstanding, so the same time is not re-offered to another contact. The hold is a busy/tentative Nylas event with no attendees (no invitations sent), tagged with curia-hold metadata including optional subject/domain/thread context for later invite matching; it auto-releases when a real event books over it and expires via the holds sweep. Honours the calendar_holds toggle (default on) -- returns held:false when disabled. Returns a timezone-labelled display string for the slot.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
@@ -27,5 +27,8 @@
   "capabilities": [
     "nylasCalendarClient",
     "entityMemory"
+  ],
+  "allowed_callers": [
+    "calendar"
   ]
 }
