@@ -29,7 +29,13 @@ export interface SkillRecipientMessage {
 
 /** Runtime deps for `CarveoutSkillSpec.resolveRecipients`. */
 export interface SkillRecipientResolveDeps {
-  fetchMessage?: (messageId: string) => Promise<SkillRecipientMessage>;
+  /**
+   * Fetch the original message. `accountId` is the mailbox from
+   * `emailAccountIdFromInput` — forward it unchanged so Gate C and the
+   * handler share one `getEmailMessage` snapshot (#1832). Omit it for the
+   * primary account.
+   */
+  fetchMessage?: (messageId: string, accountId?: string) => Promise<SkillRecipientMessage>;
   /** Every owned mailbox — excluded from email-reply reply-all CC. */
   selfEmails?: readonly string[];
 }

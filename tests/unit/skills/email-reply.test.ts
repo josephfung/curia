@@ -229,6 +229,41 @@ describe('EmailReplyHandler — CC modes', () => {
     );
   });
 
+  it('reads a secondary mailbox and derives reply-all CC from that thread (#1832)', async () => {
+    const gateway = {
+      getEmailMessage: vi.fn().mockResolvedValue({
+        from: [{ email: 'sender@example.com' }],
+        to: [{ email: 'ops@example.com' }, { email: 'bob@example.com' }],
+        cc: [{ email: 'curia@example.com' }, { email: 'carol@example.com' }],
+        subject: 'Personal thread',
+      }),
+      send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-sec' }),
+    };
+
+    const result = await handler.execute(
+      makeCtx(
+        { reply_to_message_id: 'msg-sec', body: 'Thanks all', account: 'personal' },
+        gateway,
+        {},
+        { selfEmails: ['curia@example.com', 'ops@example.com'] },
+      ),
+    );
+
+    expect(result.success).toBe(true);
+    expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-sec', 'personal');
+    expect(gateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'personal',
+        to: 'sender@example.com',
+        cc: ['bob@example.com', 'carol@example.com'],
+      }),
+      expect.anything(),
+    );
+    if (result.success) {
+      expect((result.data as { cc: string }).cc).toBe('bob@example.com, carol@example.com');
+    }
+  });
+
   it('cc === "" — reply to sender only, no CC', async () => {
     const gateway = {
       getEmailMessage: vi.fn().mockResolvedValue({

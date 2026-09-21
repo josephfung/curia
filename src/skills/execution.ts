@@ -44,9 +44,28 @@ import type { ContactService } from '../contacts/contact-service.js';
 import type { OutboundGateway } from './outbound-gateway.js';
 
 /**
+ * Call `getEmailMessage` without a trailing `undefined` accountId.
+ * The cache key treats omitted and undefined as the primary mailbox; keeping
+ * the underlying call one-arg for that case preserves that identity (#1832).
+ */
+function getEmailMessageForAccount(
+  gateway: OutboundGateway,
+  messageId: string,
+  accountId?: string,
+): ReturnType<OutboundGateway['getEmailMessage']> {
+  return accountId === undefined
+    ? gateway.getEmailMessage(messageId)
+    : gateway.getEmailMessage(messageId, accountId);
+}
+
+/**
  * Per-invoke wrapper so Gate C and the handler share one `getEmailMessage`
  * snapshot. Closes the TOCTOU window between the set Gate C judged and the
  * set the handler sends, and avoids a second Nylas round trip (#1815).
+ *
+ * The cache key is `${accountId ?? ''}\0${messageId}`. Both callers must pass
+ * the account from `emailAccountIdFromInput` — a handler that starts passing
+ * an account Gate C omits misses this cache and reopens the window (#1832).
  */
 function withCachedGetEmailMessage(
   gateway: OutboundGateway,
@@ -56,9 +75,7 @@ function withCachedGetEmailMessage(
     const key = `${accountId ?? ''}\0${messageId}`;
     const cached = cache.get(key);
     if (cached) return cached;
-    const pending = accountId === undefined
-      ? gateway.getEmailMessage(messageId)
-      : gateway.getEmailMessage(messageId, accountId);
+    const pending = getEmailMessageForAccount(gateway, messageId, accountId);
     cache.set(key, pending);
     return pending;
   };
@@ -658,7 +675,10 @@ export class ExecutionLayer {
     toolName: string,
     input: Record<string, unknown>,
     skillLogger: Logger,
-    fetchMessage?: (messageId: string) => ReturnType<OutboundGateway['getEmailMessage']>,
+    fetchMessage?: (
+      messageId: string,
+      accountId?: string,
+    ) => ReturnType<OutboundGateway['getEmailMessage']>,
   ): Promise<{ recipients: string[] | null; resolutionFailed: boolean; inputError?: string }> {
     const found = findCarveoutSkill(toolName);
     if (!found) return { recipients: null, resolutionFailed: false };
@@ -667,7 +687,11 @@ export class ExecutionLayer {
       try {
         const recipients = await found.carveout.resolveRecipients(input, {
           fetchMessage: fetchMessage ?? (this.outboundGateway
-            ? (messageId) => this.outboundGateway!.getEmailMessage(messageId)
+            ? (messageId, accountId) => getEmailMessageForAccount(
+                this.outboundGateway!,
+                messageId,
+                accountId,
+              )
             : undefined),
           selfEmails: this.selfEmails,
         });
@@ -977,11 +1001,14 @@ export class ExecutionLayer {
     let outboundGatewayForCtx = this.outboundGateway;
     const sourceOutboundGateway = this.outboundGateway;
     const fetchMessageForGateC = sourceOutboundGateway
-      ? (messageId: string) => {
+      ? (messageId: string, accountId?: string) => {
           if (outboundGatewayForCtx === sourceOutboundGateway) {
             outboundGatewayForCtx = withCachedGetEmailMessage(sourceOutboundGateway, emailMessageCache);
           }
-          return outboundGatewayForCtx!.getEmailMessage(messageId);
+          // Forward accountId into the cached wrapper. The resolver and the
+          // handler both take it from emailAccountIdFromInput, so this key
+          // matches the handler's later getEmailMessage (#1832).
+          return getEmailMessageForAccount(outboundGatewayForCtx!, messageId, accountId);
         }
       : undefined;
 

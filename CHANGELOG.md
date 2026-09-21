@@ -33,6 +33,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Published image** — now keeps `pnpm-retry`, so downstream images can retry their own network installs. (curia-deploy#220)
 - **Voice caller policy** — unknown-sender now follows `channel-trust.yaml`; blocked stays always-deny. (#1626)
 - **`contextBridge` config** — new `channelDefaultExpiryHours` map sets the auto-registration TTL per channel. (#1816)
+- **`email-reply` / `email-send` inputs (public API)** — optional `account` selects the mailbox. (#1832)
+- **Coordinator** — CC replies pass the preamble Account into `email-reply`. (#1832)
 
 ### Fixed
 
@@ -51,6 +53,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Gate C** — known sender-only allows without a judge when recipients are pinned. (#1815)
 - **Gate C** — initiating-sender match ignores unverified, defunct, and cross-channel identities. (#1815)
 - **`email-reply`** — Gate C and the handler share one message fetch per invoke. (#1815)
+- **`email-reply`** — secondary-mailbox replies read that account, and Gate C reuses the fetch. (#1832)
 - **Outbound email tracking** — entries now last 72h per channel, so next-business-day replies still arrive in context. (#1816)
 - **Coordinator outbound guidance** — states the real tracking window and when to pass `expires_in_hours`. (#1816)
 - **`memory-store` outputs (public API)** — skipped canonical redirects now flag `canonical_redirect_skipped` with a reason. Skill v1.2.0. (#1772)
