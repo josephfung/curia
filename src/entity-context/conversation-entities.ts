@@ -141,6 +141,8 @@ class MemoryEntityStore implements EntityStore {
       existing.unshift(id);
     }
     this.order.set(key, existing);
+    // Newest first, matching Postgres `array_position(...) DESC` (last id in
+    // this call is the newest). formatResolvedEntitiesBlock drops the tail.
     return hydrate(existing.filter(id => contactIds.includes(id)), this.source);
   }
 
@@ -199,7 +201,8 @@ class PostgresEntityStore implements EntityStore {
       `SELECT c.id, c.display_name, c.preferred_name, c.role, c.organization,
               c.primary_email, c.primary_phone
        FROM contacts c
-       WHERE c.id = ANY($1::uuid[])`,
+       WHERE c.id = ANY($1::uuid[])
+       ORDER BY array_position($1::uuid[], c.id) DESC`,
       [contactIds],
     );
     if (result.rows.length < contactIds.length) {

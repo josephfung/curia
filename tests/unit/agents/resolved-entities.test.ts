@@ -128,4 +128,54 @@ describe('describeUnresolvedIdentity', () => {
     expect(emailLocalNameTokens('dani@wrcf.ca')).toEqual(['dani']);
     expect(emailLocalNameTokens('no-reply@wrcf.ca')).toEqual([]);
   });
+
+  it('does not join a name across a newline or block a title-case subject', () => {
+    const coveredPeople = ['Dani', 'Xiaopu Chen', 'Joseph Fung'];
+    expect(describeUnresolvedIdentity(
+      'Hi Dani,\n\nXiaopu Chen will attend.\n\nJoseph Fung\nCurious Minds Inc.',
+      coveredPeople,
+    )).toBeNull();
+    expect(describeUnresolvedIdentity(
+      'Hi Dani,\n\nXiaopu Chen\nDani will attend.\n\nJoseph Fung\nCurious Minds Inc.',
+      coveredPeople,
+    )).toBeNull();
+    expect(describeUnresolvedIdentity(
+      'Quarterly Planning Session\nI have shared the deck on Google Drive.',
+      [],
+    )).toBeNull();
+    expect(describeUnresolvedIdentity({
+      subject: 'Quarterly Planning Session',
+      body: 'I have shared the deck on Google Drive.',
+    }, [])).toBeNull();
+    expect(describeUnresolvedIdentity({
+      subject: 'Xiaopu (last name to be confirmed)',
+      body: 'See you there.',
+    }, [])).toContain('unconfirmed');
+  });
+
+  it('treats an uncovered CJK or accented name as unresolved, and the full name as covered', () => {
+    const cjk = describeUnresolvedIdentity('李伟 would like to attend.', []);
+    expect(cjk).toContain('李伟');
+    expect(describeUnresolvedIdentity('李伟 would like to attend.', ['李伟'])).toBeNull();
+
+    const accented = describeUnresolvedIdentity('José Müller would like to attend.', []);
+    expect(accented).toContain('José Müller');
+    expect(accented).not.toContain('"Jos"');
+    expect(describeUnresolvedIdentity('José Müller would like to attend.', ['José Müller'])).toBeNull();
+  });
+
+  it('flags a two-letter name when a person cue is nearby', () => {
+    expect(describeUnresolvedIdentity('Al Li would like to attend.', [])).toContain('Al Li');
+    expect(describeUnresolvedIdentity('Al Li would like to attend.', ['Al Li'])).toBeNull();
+  });
+
+  it('slices attribute text before escaping so an ampersand is not cut mid-entity', () => {
+    const displayName = `${'A'.repeat(119)}&more`;
+    const block = formatResolvedEntitiesBlock([
+      card({ contactId: XIAOPU, displayName }),
+    ]);
+    expect(block).toContain(`${'A'.repeat(119)}&amp;`);
+    expect(block).not.toContain('&more');
+    expect(block).not.toMatch(/&(?!amp;|quot;|lt;|gt;)/);
+  });
 });

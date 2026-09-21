@@ -22,7 +22,22 @@ const BLOCK_RE = /<resolved_entities\b[^>]*>([\s\S]*?)<\/resolved_entities>/gi;
 const CONTACT_RE = /<contact\b([^>]*?)\/?>/gi;
 const ATTR_RE = /([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 
-const NAME_RE = /\b[A-Z][a-z]+(?:['’-][A-Za-z]+)?(?:\s+[A-Z][a-z]+(?:['’-][A-Za-z]+)?){0,2}\b/g;
+// Horizontal whitespace only. `\s` would glue "Xiaopu Chen\nWill" into one
+// mention, and a covered person plus the next line's name would then look
+// unresolved. `\b` is ASCII-only, so boundaries are Unicode-aware lookarounds.
+const LATIN_WORD = String.raw`\p{Lu}[\p{Ll}\p{M}]*(?:['’-][\p{Lu}\p{Ll}\p{M}]+)?`;
+const NAME_RE = new RegExp(
+  String.raw`(?<![\p{L}\p{N}_])${LATIN_WORD}(?:[ \t]+${LATIN_WORD}){0,2}(?![\p{L}\p{N}_])`,
+  'gu',
+);
+/** Han (and other) names have no case and no ASCII word boundary. */
+const CJK_NAME_RE = /(?<![\p{L}\p{N}])\p{Lo}{2,4}(?![\p{L}\p{N}])/gu;
+
+/**
+ * A capitalized span is a person only when one of these sits nearby. Bare
+ * Title Case ("Quarterly Planning Session", "Google Drive", "Zoom") is not.
+ */
+const PERSON_CUE_RE = /(?<![\p{L}\p{N}])(?:invit(?:e|es|ed|ing)|register(?:s|ed|ing)?|guests?|attendees?|attend(?:s|ed|ing)?|rsvp|behalf|named|called)(?![\p{L}\p{N}])|(?:^|[ \t])(?:Mr|Mrs|Ms|Dr|Prof)\.?(?=[ \t]|$)/iu;
 
 /**
  * Explicit "we do not actually know who this is" hedges. Sending one of these
@@ -40,6 +55,10 @@ const STOPWORDS = new Set([
   'there', 'here', 'yes', 'okay', 'subject', 'from', 'cc', 'bcc', 're', 'fwd',
   'mr', 'mrs', 'ms', 'dr', 'prof', 'gala', 'conference', 'summit', 'forum', 'webinar',
   'workshop', 'registration', 'rsvp', 'morning', 'afternoon', 'evening',
+  // "Will attend" / "would like" are not people. Without these, the cue
+  // "attend" flags the sentence opener.
+  'will', 'would', 'like', 'wants', 'want',
+  'he', 'she', 'we', 'they', 'him', 'her', 'his', 'our', 'who', 'you', 'your', 'it', 'its',
 ]);
 
 /**
@@ -154,8 +173,11 @@ export function collectResolvedContactIds(value: unknown): string[] {
 
 /**
  * Render the re-injected block from current contact rows.
- * Returns null when there is nothing to say. Drops the oldest cards first
- * when the character cap would be exceeded.
+ * Returns null when there is nothing to say.
+ *
+ * `cards` must be newest-first — `ConversationEntityState.load` and `record`
+ * both return that order. When the character cap is exceeded the tail
+ * (oldest) is dropped. This function does not reorder.
  */
 export function formatResolvedEntitiesBlock(
   cards: readonly ResolvedEntityCard[],
@@ -180,10 +202,26 @@ export function formatResolvedEntitiesBlock(
   return assemble(header, lines);
 }
 
-/** Why an external send must not go out, or null when every named person is resolved. */
-export function describeUnresolvedIdentity(text: string, coveredNames: readonly string[]): string | null {
-  const hedges = HEDGE_RE.test(text);
-  const uncovered = uncoveredMentions(text, coveredNames);
+export interface IdentityScan {
+  /** Message body. Person-shaped mentions are taken from here only. */
+  body: string;
+  /**
+   * Email subject. Scanned for unconfirmed-name hedges, not for capitalized
+   * words — a Title Case subject must not block a clean body.
+   */
+  subject?: string;
+}
+
+/** Why an external send must not go out, or null when nothing person-shaped is unresolved. */
+export function describeUnresolvedIdentity(
+  text: string | IdentityScan,
+  coveredNames: readonly string[],
+): string | null {
+  const body = typeof text === 'string' ? text : text.body;
+  const subject = typeof text === 'string' ? '' : (text.subject ?? '');
+  const hedgeText = subject === '' ? body : `${subject}\n${body}`;
+  const hedges = HEDGE_RE.test(hedgeText);
+  const uncovered = uncoveredMentions(body, coveredNames);
   if (!hedges && uncovered.length === 0) return null;
 
   const parts: string[] = [];
@@ -192,8 +230,8 @@ export function describeUnresolvedIdentity(text: string, coveredNames: readonly 
     const verb = uncovered.length === 1 ? 'is' : 'are';
     parts.push(
       `${listed} ${verb} not resolved to a contact ID in this turn. ` +
-      'If this is a person, delegate to the contacts specialist before sending. ' +
-      'If it is not a person, rephrase without the capitalized name.',
+      'Resolve them with the contacts specialist only if they are a person. ' +
+      'If the word is a product, place, or title, rephrase the sentence.',
     );
   }
   if (hedges) {
@@ -232,10 +270,12 @@ function uncoveredMentions(text: string, coveredNames: readonly string[]): strin
     .replace(/https?:\/\/\S+/gi, ' ');
   const found: string[] = [];
   const seen = new Set<string>();
-  NAME_RE.lastIndex = 0;
-  for (const match of stripped.matchAll(NAME_RE)) {
-    const raw = match[0];
-    const index = match.index ?? 0;
+  for (const match of collectNameSpans(stripped)) {
+    const raw = match.raw;
+    const index = match.index;
+    // A name span counts only with a nearby person cue. Title Case on its
+    // own ("Google Drive", a subject line) is not a person.
+    if (!hasPersonCue(stripped, index, raw.length)) continue;
     // Drop greeting words glued to a name ("Hello Dani" → "Dani") so the
     // coverage check sees the person, not the salutation.
     const tokens = trimStopwords(nameTokens(raw));
@@ -259,6 +299,32 @@ function uncoveredMentions(text: string, coveredNames: readonly string[]): strin
   return found;
 }
 
+function collectNameSpans(text: string): Array<{ raw: string; index: number }> {
+  const spans: Array<{ raw: string; index: number }> = [];
+  NAME_RE.lastIndex = 0;
+  for (const match of text.matchAll(NAME_RE)) {
+    spans.push({ raw: match[0], index: match.index ?? 0 });
+  }
+  CJK_NAME_RE.lastIndex = 0;
+  for (const match of text.matchAll(CJK_NAME_RE)) {
+    spans.push({ raw: match[0], index: match.index ?? 0 });
+  }
+  return spans;
+}
+
+/** Cue window stays inside the paragraph so a signature is not tainted by "attend" above it. */
+function hasPersonCue(text: string, index: number, length: number): boolean {
+  let start = Math.max(0, index - 60);
+  let end = Math.min(text.length, index + length + 60);
+  const before = text.slice(start, index);
+  const blankBefore = before.lastIndexOf('\n\n');
+  if (blankBefore >= 0) start += blankBefore + 2;
+  const after = text.slice(index + length, end);
+  const blankAfter = /\n[ \t]*\n/.exec(after);
+  if (blankAfter && blankAfter.index >= 0) end = index + length + blankAfter.index;
+  return PERSON_CUE_RE.test(text.slice(start, end));
+}
+
 function isSentenceInitial(text: string, index: number): boolean {
   let i = index - 1;
   while (i >= 0 && (text[i] === ' ' || text[i] === '\t')) i--;
@@ -276,10 +342,14 @@ function isCovered(mention: string[], sets: string[][]): boolean {
 }
 
 function nameTokens(name: string): string[] {
-  return name
-    .toLowerCase()
-    .split(/[^a-z]+/)
-    .filter(token => token.length >= 3);
+  const tokens: string[] = [];
+  for (const match of name.matchAll(/\p{L}[\p{L}\p{M}]*/gu)) {
+    const token = match[0].toLowerCase();
+    // Two letters so "Al Li" and "李伟" count. One letter ("A") does not.
+    if ([...token].length < 2) continue;
+    tokens.push(token);
+  }
+  return tokens;
 }
 
 function trimStopwords(tokens: string[]): string[] {
@@ -312,13 +382,15 @@ function formatContactLine(card: ResolvedEntityCard): string {
 }
 
 function escapeAttr(value: string): string {
+  // Slice the raw text first. Escaping and then slicing can cut an entity
+  // in half (`&amp;` → `&amp`).
   return value
+    .slice(0, 120)
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/[\r\n]+/g, ' ')
-    .slice(0, 120);
+    .replace(/[\r\n]+/g, ' ');
 }
 
 function attrs(raw: string): Record<string, string> {
