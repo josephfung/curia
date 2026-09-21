@@ -62,10 +62,10 @@ Three approaches were considered:
    A single `outbound_context` table records every outbound message Curia sends:
    conversation, channel, originating agent, content preview, expected-reply
    hint, delegation hint, structured metadata, TTL. The dispatcher injects
-   active entries into the coordinator's prompt on every inbound. Skills get
-   a narrow `outboundContext` capability (register + release, pre-scoped to
-   the current conversation) so any skill — not just send skills — can claim
-   a reply thread.
+   active entries into the coordinator's prompt on every **principal** inbound
+   (`liveTurn: true` — #1848 / #1598). Skills get a narrow `outboundContext`
+   capability (register + release, pre-scoped to the current conversation) so
+   any skill — not just send skills — can claim a reply thread.
 
 ## Decision
 
@@ -158,7 +158,7 @@ Three approaches were considered:
   TTL on auto-registered entries plus cleanup keeps storage bounded, but the
   write amplification is real. Accepted because the alternative
   (conditional registration) is exactly what caused #609.
-- **The injection window is a global newest-N, not a conversation scope.**
+- **The injection window is a global newest-N, not a conversation scope — but only on principal turns.**
   `getActive(limit = 10)` surfaces the ten most recent active entries system-wide
   (`ORDER BY created_at DESC`), and correlation is LLM-driven off that block.
   Conversation scoping was considered for #1817 and rejected: proactive sends
@@ -172,6 +172,17 @@ Three approaches were considered:
   #1816 symptom at a different threshold. Ten outbounds over three days is an
   ordinary week for this workload. The #1817 fix for the UUID/`entry_id`
   confusion is labelling + pre-fetch shape validation, not conversation scope.
+  Separately, #1848 gates injection on `liveTurn` (principal inbound only) on
+  both the dispatcher and the voice path (#1598): the block is principal-audience
+  content and must not appear on third-party or unknown sender turns (including
+  `http`, whose caller-supplied `sender_id` never resolves as principal).
+  **Cost of the gate (accepted until Fix B):** for any entry whose reply comes
+  from a third party, the coordinator never sees the entry, so `delegation_hint`
+  cannot route the reply, `context-bridge-release` / ceo-inbox self-sweep cannot
+  fire for it, and the row clears only via TTL + `cleanupExpired()`. Principal-
+  facing flows (research-analyst clarification, meeting-debrief, ceo-inbox 🚨,
+  task-wake bindings) are unaffected. Recipient-identity correlation (who the
+  outbound was sent *to*) remains open as Fix B of #1848.
 - An unrecognised channel id in `contextBridge.channelDefaultExpiryHours` is
   accepted and silently inert — registration uses pseudo-channel ids
   (`internal`, `scheduler`, `bullpen`) that are not in the channel catalog, so

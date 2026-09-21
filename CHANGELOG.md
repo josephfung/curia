@@ -23,6 +23,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Coordinator outbound guidance** — absent block means withheld on non-principal turns, not empty. (#1848)
 - **`scheduler-report` input (public API)** — `job_id` optional on scheduled runs; derived from conversation. (#1828)
 - **Scheduler fire path** — no longer injects a bare `scheduler_job_id` into model-visible task content. (#1828)
 - **`agent.response` payload (public API)** — optional `failedSkills` / `failedSkillsOmitted` for scheduler visibility. (#1830)
@@ -35,6 +36,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`[ACTIVE OUTBOUND CONTEXT]`** — dispatcher injects only on principal `liveTurn`, matching voice. (#1848)
 - **Scheduled maintenance prompts** — `calendar`, `coordinator`, and `meeting-debrief` name `scheduler-report` and forbid bullpen. (#1831)
 - **`scheduler-report`** — derives `job_id` from the run conversation so agents stop mistaking it for a bullpen thread. (#1828)
 - **`bullpen`** — job-UUID-as-thread_id redirects to `scheduler-report` and logs a greppable warn. (#1828)

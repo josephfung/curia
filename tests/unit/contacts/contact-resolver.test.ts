@@ -23,18 +23,34 @@ describe('ContactResolver', () => {
     resolver = new ContactResolver(contactService, entityMemory, undefined, createLogger('error'));
   });
 
+  it.each(['cli', 'smoke-test', 'web'])('resolves %s as the principal (systemRole)', async (channel) => {
+    // liveTurn reads originator.systemRole === 'principal' (#1848) — displayName/role
+    // alone are not enough; a null systemRole would kill outbound-context injection
+    // on the CEO's console even if role stayed 'ceo'.
+    const result = await resolver.resolve(channel, 'any-id');
+    expect(result.resolved).toBe(true);
+    if (result.resolved) {
+      expect(result.systemRole).toBe('principal');
+      expect(result.tier).toBe('principal');
+    }
+  });
+
   it('resolves CLI channel as primary user (CEO)', async () => {
     const result = await resolver.resolve('cli', 'any-id');
     expect(result.resolved).toBe(true);
     if (result.resolved) {
       expect(result.displayName).toBe('CEO');
       expect(result.role).toBe('ceo');
+      expect(result.systemRole).toBe('principal');
     }
   });
 
   it('resolves smoke-test channel as primary user', async () => {
     const result = await resolver.resolve('smoke-test', 'any-id');
     expect(result.resolved).toBe(true);
+    if (result.resolved) {
+      expect(result.systemRole).toBe('principal');
+    }
   });
 
   it('resolves known verified sender with contact details', async () => {
