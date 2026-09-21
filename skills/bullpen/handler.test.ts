@@ -416,23 +416,38 @@ describe('BullpenHandler', () => {
     const JOB_ID = 'd3f8bfa9-1761-4f01-a66e-a3d4c28834b0';
     const RUN_CONV = `scheduler:${JOB_ID}:run-xyz`;
 
+    function makeCtxWithWarn(
+      input: Record<string, unknown>,
+      overrides?: Partial<ToolContext>,
+    ): { ctx: ToolContext; warn: ReturnType<typeof vi.fn> } {
+      const warn = vi.fn();
+      const baseLog = createLogger('error');
+      const ctx = makeCtx(input, {
+        ...overrides,
+        log: { ...baseLog, warn, error: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
+      });
+      return { ctx, warn };
+    }
+
     it.each(['reply', 'get_thread', 'close'] as const)(
       '%s: names scheduler-report when thread_id is the caller job UUID',
       async (action) => {
         const input: Record<string, unknown> = { action, thread_id: JOB_ID };
         if (action === 'reply') input.content = 'status update';
-        const ctx = makeCtx(input, { conversationId: RUN_CONV });
+        const { ctx, warn } = makeCtxWithWarn(input, { conversationId: RUN_CONV });
         const result = await handler.execute(ctx);
         expect(result.success).toBe(false);
         const error = (result as { success: false; error: string }).error;
         expect(error).toContain('scheduled-job ID');
         expect(error).toContain('scheduler-report');
         expect(error).not.toMatch(/not found/i);
+        expect(warn).toHaveBeenCalledOnce();
+        expect(warn.mock.calls[0]![1]).toMatch(/scheduled-job UUID as thread_id/);
       },
     );
 
     it('get_thread: generic miss no longer implies the thread previously existed', async () => {
-      const ctx = makeCtx({
+      const { ctx, warn } = makeCtxWithWarn({
         action: 'get_thread',
         thread_id: '00000000-0000-4000-8000-000000000099',
       });
@@ -441,10 +456,11 @@ describe('BullpenHandler', () => {
       expect((result as { success: false; error: string }).error).toBe(
         'No bullpen thread with ID 00000000-0000-4000-8000-000000000099 exists',
       );
+      expect(warn).not.toHaveBeenCalled();
     });
 
     it('reply: unrelated missing UUID under a scheduler conversation gets a soft scheduler-report hint', async () => {
-      const ctx = makeCtx(
+      const { ctx, warn } = makeCtxWithWarn(
         {
           action: 'reply',
           thread_id: '00000000-0000-4000-8000-000000000099',
@@ -458,16 +474,19 @@ describe('BullpenHandler', () => {
       expect(error).toContain('No bullpen thread with ID 00000000-0000-4000-8000-000000000099 exists');
       expect(error).toContain('scheduler-report');
       expect(error).not.toContain('is your scheduled-job ID');
+      // Soft hint is not the exact-match recurrence signal — no warn.
+      expect(warn).not.toHaveBeenCalled();
     });
 
     it('close: remaps service not-found through the job-UUID helper without a pre-check', async () => {
-      const ctx = makeCtx(
+      const { ctx, warn } = makeCtxWithWarn(
         { action: 'close', thread_id: JOB_ID },
         { conversationId: RUN_CONV },
       );
       const result = await handler.execute(ctx);
       expect(result.success).toBe(false);
       expect((result as { success: false; error: string }).error).toContain('scheduled-job ID');
+      expect(warn).toHaveBeenCalledOnce();
     });
   });
 });

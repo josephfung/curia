@@ -21,7 +21,7 @@ const UUID_SHAPE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
- * Error when a thread_id fails to resolve (#1828).
+ * Classify a missing-thread miss for agent-facing copy (#1828).
  *
  * Exact match against this run's job UUID gets a precise redirect. We only assert
  * "this IS your job id" on that match — a previous run's job id, a task id, or a
@@ -30,40 +30,79 @@ const UUID_SHAPE =
  * softer scheduler-report hint so near-miss hallucinations still get redirected.
  * Generic wording otherwise does not imply the thread once existed.
  *
+ * `jobIdAsThreadId` lets call sites emit a greppable warn so recurrence is
+ * measurable without logging ordinary thread misses at error.
+ *
  * Agent-facing copy lives here (and the catch remapper below). BullpenService
  * throws the same generic "No bullpen thread…" string for non-handler callers;
  * do not reintroduce `Thread X not found` on new paths.
  */
+export function classifyBullpenThreadMiss(
+  threadId: string,
+  conversationId: string | undefined,
+): { error: string; jobIdAsThreadId: boolean } {
+  const jobId = parseSchedulerRunJobId(conversationId);
+  if (jobId && threadId === jobId) {
+    return {
+      jobIdAsThreadId: true,
+      error:
+        `${threadId} is your scheduled-job ID, not a bullpen thread ID. ` +
+        'Scheduled runs have no thread. To record this run\'s outcome call scheduler-report; ' +
+        "to start a discussion call bullpen with action:'post'.",
+    };
+  }
+  const generic = `No bullpen thread with ID ${threadId} exists`;
+  if (jobId && UUID_SHAPE.test(threadId)) {
+    return {
+      jobIdAsThreadId: false,
+      error:
+        `${generic}. ` +
+        'If you meant to record this scheduled run\'s outcome, call scheduler-report ' +
+        "(job_id is derived automatically); do not use bullpen to report.",
+    };
+  }
+  return { jobIdAsThreadId: false, error: generic };
+}
+
+/** Convenience wrapper — prefer classifyBullpenThreadMiss when the caller needs the flag. */
 export function bullpenThreadNotFoundError(
   threadId: string,
   conversationId: string | undefined,
 ): string {
-  const jobId = parseSchedulerRunJobId(conversationId);
-  if (jobId && threadId === jobId) {
-    return (
-      `${threadId} is your scheduled-job ID, not a bullpen thread ID. ` +
-      'Scheduled runs have no thread. To record this run\'s outcome call scheduler-report; ' +
-      "to start a discussion call bullpen with action:'post'."
-    );
-  }
-  const generic = `No bullpen thread with ID ${threadId} exists`;
-  if (jobId && UUID_SHAPE.test(threadId)) {
-    return (
-      `${generic}. ` +
-      'If you meant to record this scheduled run\'s outcome, call scheduler-report ' +
-      "(job_id is derived automatically); do not use bullpen to report."
-    );
-  }
-  return generic;
+  return classifyBullpenThreadMiss(threadId, conversationId).error;
 }
 
-/** True when a service-layer miss should be remapped through bullpenThreadNotFoundError. */
+/** True when a service-layer miss should be remapped through classifyBullpenThreadMiss. */
 function isBullpenThreadNotFoundMessage(message: string, threadId: string): boolean {
   return (
     message === `Thread ${threadId} not found` ||
     message === `No bullpen thread with ID ${threadId} exists` ||
     message.startsWith(`No bullpen thread with ID ${threadId} exists.`)
   );
+}
+
+/**
+ * Build the agent-facing miss result and warn when the model passed its own
+ * job UUID as thread_id — the recurrence signal for #1828.
+ */
+function threadMissResult(
+  ctx: ToolContext,
+  threadId: string,
+  action: unknown,
+): ToolResult {
+  const miss = classifyBullpenThreadMiss(threadId, ctx.conversationId);
+  if (miss.jobIdAsThreadId) {
+    ctx.log.warn(
+      {
+        agentId: ctx.agentId,
+        threadId,
+        conversationId: ctx.conversationId,
+        action,
+      },
+      'bullpen: agent passed its scheduled-job UUID as thread_id — redirected to scheduler-report',
+    );
+  }
+  return { success: false, error: miss.error };
 }
 
 export class BullpenHandler implements ToolHandler {
@@ -189,10 +228,7 @@ export class BullpenHandler implements ToolHandler {
           // but we need participants here for mention filtering.
           const existing = await ctx.bullpenService.getThread(threadId);
           if (!existing) {
-            return {
-              success: false,
-              error: bullpenThreadNotFoundError(threadId, ctx.conversationId),
-            };
+            return threadMissResult(ctx, threadId, action);
           }
 
           const rawMentioned = input['mentioned_agent_ids'];
@@ -260,10 +296,7 @@ export class BullpenHandler implements ToolHandler {
 
           const result = await ctx.bullpenService.getThread(threadId);
           if (!result) {
-            return {
-              success: false,
-              error: bullpenThreadNotFoundError(threadId, ctx.conversationId),
-            };
+            return threadMissResult(ctx, threadId, action);
           }
 
           // Return the BullpenThread under 'thread' and messages array separately.
@@ -280,8 +313,8 @@ export class BullpenHandler implements ToolHandler {
 
           // closeThread throws if missing or if the requesting agent is not the
           // creator/coordinator. Missing threads are remapped in the outer catch
-          // via bullpenThreadNotFoundError — avoids a double getThread round-trip
-          // that a pre-check would add (#1828 review).
+          // via threadMissResult — avoids a double getThread round-trip that a
+          // pre-check would add (#1828 review).
           await ctx.bullpenService.closeThread(threadId, ctx.agentId);
           return { success: true, data: { thread_id: threadId, status: 'closed' } };
         }
@@ -296,10 +329,7 @@ export class BullpenHandler implements ToolHandler {
       const message = err instanceof Error ? err.message : String(err);
       const threadId = input['thread_id'];
       if (typeof threadId === 'string' && isBullpenThreadNotFoundMessage(message, threadId)) {
-        return {
-          success: false,
-          error: bullpenThreadNotFoundError(threadId, ctx.conversationId),
-        };
+        return threadMissResult(ctx, threadId, action);
       }
       ctx.log.error({ err, action, agentId: ctx.agentId }, 'Bullpen skill error');
       return { success: false, error: message };
