@@ -749,6 +749,8 @@ describe('AgentRuntime', () => {
     // Fence block still appended — agent still gets its scope restriction
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
     expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
+    // Non-derivable conversationId: do not require scheduler-report (#1828 CodeRabbit)
+    expect(systemMsg?.content).not.toContain('Record the outcome of this run by calling `scheduler-report`');
   });
 
   it('appends scheduler fence for 2-part scheduler notification IDs without a Job ID line', async () => {
@@ -780,6 +782,8 @@ describe('AgentRuntime', () => {
     // Fence block still appended
     expect(systemMsg?.content).toContain('## Scheduled Task — Scope Restriction');
     expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
+    // Notification IDs cannot derive job_id — no scheduler-report requirement (#1828 CodeRabbit)
+    expect(systemMsg?.content).not.toContain('Record the outcome of this run by calling `scheduler-report`');
   });
 
   it('does not append scheduler fence when channelId is not scheduler', async () => {
