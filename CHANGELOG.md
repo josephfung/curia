@@ -45,6 +45,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Email skill manifests** — `account` provenance names the console Email accounts path. (#1856)
 - **Coordinator morning brief** — routes CEO calendar reads to `@calendar` instead of Curia's empty Google calendar. (#1853)
 - **Nylas `normalizeEvent`** — warns on missing `calendarId` or timing; list paths aggregate. (#105, #107)
 - **`[ACTIVE OUTBOUND CONTEXT]`** — dispatcher injects only on principal `liveTurn`, matching voice. (#1848)

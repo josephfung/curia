@@ -105,3 +105,32 @@ describe('tool manifests are free of runtime template placeholders', () => {
     ).toHaveLength(0);
   });
 });
+
+// channel_accounts.email was retired in #1101 (email_accounts table + console UI).
+// Naming the old YAML path in a tool.json points the model at a surface that no longer
+// exists — agents then tell users to edit local.yaml. Point at the console path instead:
+// "as configured under Settings → Channels → Email → Email accounts" (#1856).
+describe('tool manifests do not mention the retired channel_accounts path', () => {
+  it('no tool.json string contains channel_accounts', () => {
+    const violations: string[] = [];
+
+    for (const manifestPath of collectManifestPaths()) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+      const relative = path.relative(SKILLS_DIR, manifestPath);
+
+      for (const { field, text } of stringFields(manifest)) {
+        if (text.includes('channel_accounts')) {
+          violations.push(`${relative} → ${field}`);
+        }
+      }
+    }
+
+    expect(
+      violations,
+      `\nRetired channel_accounts path found in tool manifests:\n` +
+        violations.map(v => `  - ${v}`).join('\n') +
+        `\n\nchannel_accounts.email was retired in #1101. Name the console path instead:\n` +
+        `"as configured under Settings → Channels → Email → Email accounts" (#1856).\n`,
+    ).toHaveLength(0);
+  });
+});
