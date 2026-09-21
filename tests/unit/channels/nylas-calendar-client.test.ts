@@ -13,8 +13,15 @@ import pino from 'pino';
 
 import { NylasCalendarClient } from '../../../src/channels/calendar/nylas-calendar-client.js';
 import type { NylasCalendarLike } from '../../../src/channels/calendar/nylas-calendar-client.js';
+import type { Logger } from '../../../src/logger.js';
 
 const logger = pino({ level: 'silent' });
+
+function makeMockLogger() {
+  const warn = vi.fn();
+  const log = { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  return { logger: { ...log, child: () => log } as unknown as Logger, warn };
+}
 
 function makeMockSdk(): NylasCalendarLike {
   return {
@@ -178,6 +185,172 @@ describe('NylasCalendarClient', () => {
         startDate: '2026-04-10',
         endDate: '2026-04-10',
       });
+    });
+
+    it('maps Time-type when.time to startTime (#107)', async () => {
+      (sdk.events.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{
+          id: 'evt-time',
+          title: 'Reminder',
+          calendarId: 'cal-1',
+          status: 'confirmed',
+          busy: false,
+          when: {
+            time: 1744027500,
+            object: 'time',
+          },
+        }],
+      });
+
+      const events = await client.listEvents('cal-1', '2026-04-07T00:00:00Z', '2026-04-08T00:00:00Z');
+
+      expect(events[0]).toMatchObject({
+        startTime: 1744027500,
+        endTime: null,
+        startDate: null,
+        endDate: null,
+      });
+    });
+
+    it('prefers when.startTime over when.time when both are present', async () => {
+      (sdk.events.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{
+          id: 'evt-both',
+          title: 'Both fields',
+          calendarId: 'cal-1',
+          status: 'confirmed',
+          busy: true,
+          when: {
+            startTime: 1744027500,
+            endTime: 1744029300,
+            time: 9999999999,
+            object: 'timespan',
+          },
+        }],
+      });
+
+      const events = await client.listEvents('cal-1', '2026-04-07T00:00:00Z', '2026-04-08T00:00:00Z');
+
+      expect(events[0]?.startTime).toBe(1744027500);
+    });
+
+    it('does not warn on a well-formed timespan event', async () => {
+      const { logger: mockLog, warn } = makeMockLogger();
+      client = NylasCalendarClient.createWithSdk(sdk, 'grant-123', mockLog);
+      (sdk.events.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [{
+          id: 'evt-ok',
+          title: 'Normal',
+          calendarId: 'cal-1',
+          status: 'confirmed',
+          busy: true,
+          when: { startTime: 1744027500, endTime: 1744029300, object: 'timespan' },
+        }],
+      });
+
+      await client.listEvents('cal-1', '2026-04-07T00:00:00Z', '2026-04-08T00:00:00Z');
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('aggregates missing calendarId warns once per listEvents call (#105)', async () => {
+      const { logger: mockLog, warn } = makeMockLogger();
+      client = NylasCalendarClient.createWithSdk(sdk, 'grant-123', mockLog);
+      (sdk.events.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [
+          {
+            id: 'evt-no-cal-1',
+            title: 'Orphan 1',
+            status: 'confirmed',
+            busy: true,
+            when: { startTime: 1744027500, endTime: 1744029300, object: 'timespan' },
+          },
+          {
+            id: 'evt-no-cal-2',
+            title: 'Orphan 2',
+            status: 'confirmed',
+            busy: true,
+            when: { startTime: 1744027600, endTime: 1744029400, object: 'timespan' },
+          },
+        ],
+      });
+
+      const events = await client.listEvents('cal-1', '2026-04-07T00:00:00Z', '2026-04-08T00:00:00Z');
+
+      expect(events.map((e) => e.calendarId)).toEqual(['', '']);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        {
+          calendarId: 'cal-1',
+          count: 2,
+          total: 2,
+          sampleEventIds: ['evt-no-cal-1', 'evt-no-cal-2'],
+        },
+        'normalizeEvent: calendarId missing from Nylas events — possible SDK casing mismatch',
+      );
+    });
+
+    it('aggregates unrecognized when-shape warns once per listEvents call (#107)', async () => {
+      const { logger: mockLog, warn } = makeMockLogger();
+      client = NylasCalendarClient.createWithSdk(sdk, 'grant-123', mockLog);
+      const weirdWhen = { object: 'mystery', timezone: 'UTC' };
+      (sdk.events.list as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: [
+          {
+            id: 'evt-weird',
+            title: 'Unknown shape',
+            calendarId: 'cal-1',
+            status: 'confirmed',
+            busy: true,
+            when: weirdWhen,
+          },
+          {
+            id: 'evt-absent-when',
+            title: 'No when at all',
+            calendarId: 'cal-1',
+            status: 'confirmed',
+            busy: true,
+          },
+        ],
+      });
+
+      const events = await client.listEvents('cal-1', '2026-04-07T00:00:00Z', '2026-04-08T00:00:00Z');
+
+      expect(events).toHaveLength(2);
+      expect(events.every((e) => e.startTime === null && e.startDate === null)).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        {
+          calendarId: 'cal-1',
+          count: 2,
+          total: 2,
+          sampleEventIds: ['evt-weird', 'evt-absent-when'],
+          sampleWhen: [weirdWhen, null],
+        },
+        'normalizeEvent: unrecognized when shape — all timing fields are null',
+      );
+    });
+
+    it('warns per-event on getEvent when calendarId is missing', async () => {
+      const { logger: mockLog, warn } = makeMockLogger();
+      client = NylasCalendarClient.createWithSdk(sdk, 'grant-123', mockLog);
+      (sdk.events.find as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: {
+          id: 'evt-single',
+          title: 'Orphan',
+          status: 'confirmed',
+          busy: true,
+          when: { startTime: 1744027500, endTime: 1744029300, object: 'timespan' },
+        },
+      });
+
+      const event = await client.getEvent('cal-1', 'evt-single');
+
+      expect(event.calendarId).toBe('');
+      expect(warn).toHaveBeenCalledWith(
+        { eventId: 'evt-single' },
+        'normalizeEvent: calendarId missing from Nylas event — possible SDK casing mismatch',
+      );
     });
 
     // Nylas v3 returns HTTP 400 "limit must be lower than or equal to 200" for a
