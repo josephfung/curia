@@ -1,11 +1,11 @@
 {
   "name": "email-list",
   "description": "List recent emails from any configured email account. Returns message summaries (ID, sender, subject, snippet, date). Use email-get to fetch the full body of a specific message.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
-    "account": "string? (named account to read from, as configured in channel_accounts.email. Defaults to the primary account.)",
+    "account": "string? (named account to read from, as configured under Settings → Channels → Email → Email accounts. Defaults to the primary account.)",
     "folder": "string? (folder to filter by, e.g. 'INBOX', 'SENT', 'DRAFTS'. Defaults to all folders.)",
     "unread_only": "boolean? (when true, only return unread messages)",
     "from": "string? (filter to messages from this email address)",
