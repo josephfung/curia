@@ -37,7 +37,13 @@ const CJK_NAME_RE = /(?<![\p{L}\p{N}])\p{Lo}{2,4}(?![\p{L}\p{N}])/gu;
  * A capitalized span is a person only when one of these sits nearby. Bare
  * Title Case ("Quarterly Planning Session", "Google Drive", "Zoom") is not.
  */
-const PERSON_CUE_RE = /(?<![\p{L}\p{N}])(?:invit(?:e|es|ed|ing)|register(?:s|ed|ing)?|guests?|attendees?|attend(?:s|ed|ing)?|rsvp|behalf|named|called)(?![\p{L}\p{N}])|(?:^|[ \t])(?:Mr|Mrs|Ms|Dr|Prof)\.?(?=[ \t]|$)/iu;
+const PERSON_CUE_RE = /(?<![\p{L}\p{N}])(?:invit(?:e|es|ed|ing)|register(?:s|ed|ing)?|guests?|attendees?|attend(?:s|ed|ing)?|rsvp|behalf|named|called)(?![\p{L}\p{N}])/iu;
+
+/**
+ * A marker on the name, not context beside it. `Mr Marcus Webb` is one span,
+ * so this cue overlaps the mention and the overlap rule must not reject it.
+ */
+const HONORIFIC_RE = /(?:^|[ \t])(?:Mr|Mrs|Ms|Dr|Prof)\.?(?=[ \t]|$)/iu;
 
 /**
  * Explicit "we do not actually know who this is" hedges. Sending one of these
@@ -318,7 +324,8 @@ function collectNameSpans(text: string): Array<{ raw: string; index: number }> {
  * Cue window stays inside the paragraph so a signature is not tainted by
  * "attend" above it. A cue that overlaps the mention itself does not count:
  * "Attendees:" matches both the name pattern and the cue list, and must not
- * vouch for itself.
+ * vouch for itself. An honorific is the exception: it is a marker on the
+ * name, so it is tested against the mention and may overlap it.
  */
 function hasPersonCue(text: string, index: number, length: number): boolean {
   let start = Math.max(0, index - 60);
@@ -338,7 +345,8 @@ function hasPersonCue(text: string, index: number, length: number): boolean {
     const cueEnd = cueStart + match[0].length;
     if (cueEnd <= mentionStart || cueStart >= mentionEnd) return true;
   }
-  return false;
+  const mentionText = windowText.slice(mentionStart, mentionEnd);
+  return new RegExp(HONORIFIC_RE.source, 'iu').test(mentionText);
 }
 
 function isSentenceInitial(text: string, index: number): boolean {
