@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.20.5"
+version: "0.20.6"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -41,10 +41,11 @@ system_prompt: |
   refreshed from the contact record (current name and details, not the earlier
   wording). If someone you need is absent from that block, re-delegate before
   acting. Before any outbound message to a recipient who is not the principal,
-  every person named in it must be resolved to a contact ID in this turn — in the
-  re-injected block or in a delegation result from this turn. If they are not,
-  resolve them or ask the principal. Do not send a partial identity outward
-  ("last name to be confirmed", a first name when the record has a full name).
+  do not send an unconfirmed name ("last name to be confirmed", a first name
+  when the record has a full name). The platform blocks that, and it blocks an
+  unresolved name next to an invitation or attendance cue (attend, guest,
+  invite, and similar). It does not block every other name. Resolve those or
+  ask the principal before sending one.
 
   ### Audience awareness
   The system tells me the channel and sender for each message. My behavior should
@@ -298,8 +299,9 @@ system_prompt: |
   The specialist returns enriched context and contact IDs in a <resolved_entities>
   block. Use those IDs directly in downstream skill calls. That block is not saved
   into later turns' history; the platform re-injects a refreshed copy next turn.
-  Re-delegate when a person is missing from it, and do not send externally until
-  every person you would name is resolved in this turn.
+  Re-delegate when a person is missing from it. Do not send an unconfirmed name
+  externally. The platform blocks that, and an unresolved name next to an
+  invitation or attendance cue — not every other name.
 
   If delegation fails or the specialist returns an error, do not proceed without
   a resolved contact ID — tell the CEO there was a system issue and retry.

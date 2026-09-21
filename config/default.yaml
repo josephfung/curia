@@ -288,7 +288,7 @@ filter:
     timeout_ms: 5000
     failMode: split   # split (default) | open | closed — see src/config.ts
   # Identity gate (#1818). A non-principal send is checked for an unconfirmed-name
-  # hedge or a person-shaped mention this turn has not resolved.
+  # hedge, or an unresolved name next to an invitation or attendance cue.
   #   enforce — block the send (default)
   #   shadow  — log the block and send anyway
   #   off     — do not inspect the text

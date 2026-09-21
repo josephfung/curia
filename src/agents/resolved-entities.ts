@@ -187,7 +187,9 @@ export function formatResolvedEntitiesBlock(
   const header =
     '[Resolved entities — refreshed this turn from the contact record, not from an earlier message. ' +
     'A <resolved_entities> block is not kept in conversation history. Use these IDs directly. ' +
-    'Before sending to anyone but the principal, every person you name must appear here or be resolved by a delegation this turn.]';
+    'Before sending to anyone but the principal, do not send an unconfirmed name. ' +
+    'The platform blocks that, and an unresolved name next to an invitation or attendance cue. ' +
+    'Other names are not blocked automatically.]';
 
   const lines: string[] = [];
   for (const card of cards) {
@@ -312,7 +314,12 @@ function collectNameSpans(text: string): Array<{ raw: string; index: number }> {
   return spans;
 }
 
-/** Cue window stays inside the paragraph so a signature is not tainted by "attend" above it. */
+/**
+ * Cue window stays inside the paragraph so a signature is not tainted by
+ * "attend" above it. A cue that overlaps the mention itself does not count:
+ * "Attendees:" matches both the name pattern and the cue list, and must not
+ * vouch for itself.
+ */
 function hasPersonCue(text: string, index: number, length: number): boolean {
   let start = Math.max(0, index - 60);
   let end = Math.min(text.length, index + length + 60);
@@ -322,7 +329,16 @@ function hasPersonCue(text: string, index: number, length: number): boolean {
   const after = text.slice(index + length, end);
   const blankAfter = /\n[ \t]*\n/.exec(after);
   if (blankAfter && blankAfter.index >= 0) end = index + length + blankAfter.index;
-  return PERSON_CUE_RE.test(text.slice(start, end));
+  const windowText = text.slice(start, end);
+  const mentionStart = index - start;
+  const mentionEnd = mentionStart + length;
+  const cues = new RegExp(PERSON_CUE_RE.source, 'giu');
+  for (const match of windowText.matchAll(cues)) {
+    const cueStart = match.index ?? 0;
+    const cueEnd = cueStart + match[0].length;
+    if (cueEnd <= mentionStart || cueStart >= mentionEnd) return true;
+  }
+  return false;
 }
 
 function isSentenceInitial(text: string, index: number): boolean {
