@@ -40,7 +40,7 @@ vi.mock('../../../src/skills/mcp-client.js', () => ({
 }));
 
 // Import the loader AFTER setting up mocks.
-const { loadMcpServers, buildMcpToolHandler } = await import('../../../src/skills/mcp-loader.js');
+const { loadMcpServers, buildMcpToolHandler, loadSkillsConfig } = await import('../../../src/skills/mcp-loader.js');
 type BuildHandlerParams = Parameters<typeof buildMcpToolHandler>[0];
 
 // ---------------------------------------------------------------------------
@@ -649,5 +649,19 @@ describe('buildMcpToolHandler — request cancellation (#1666)', () => {
     // Guard: the raw message must not appear anywhere in the logged metadata.
     const [logMeta] = warn.mock.calls[0]!;
     expect(JSON.stringify(logMeta)).not.toContain('boom');
+  });
+});
+
+describe('google-workspace --tools primary gate (#1853)', () => {
+  it('omits calendar from the committed config/skills.yaml allowlist', () => {
+    const configDir = path.resolve(import.meta.dirname, '../../../config');
+    const gw = loadSkillsConfig(configDir).servers?.find((s) => s.name === 'google-workspace');
+    expect(gw).toBeDefined();
+    expect(gw!.transport).toBe('stdio');
+    if (gw!.transport !== 'stdio') throw new Error('expected stdio');
+    expect(gw!.args).toContain('--tools');
+    expect(gw!.args).not.toContain('calendar');
+    // Sanity: the allowlist still loads the services Curia actually uses.
+    expect(gw!.args).toEqual(expect.arrayContaining(['gmail', 'drive', 'docs', 'sheets']));
   });
 });
