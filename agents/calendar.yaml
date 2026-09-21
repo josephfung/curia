@@ -1,5 +1,5 @@
 name: calendar
-version: "0.7.4"
+version: "0.8.0"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
@@ -549,4 +549,4 @@ schedule:
       non-zero, say so in the summary line. This is a silent maintenance run:
       do NOT post to the bullpen, do NOT message the CEO, and do NOT perform
       any other scheduling work on this wake.
-    expectedDurationSeconds: 60
+    expectedDurationSeconds: 120
