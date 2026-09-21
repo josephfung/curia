@@ -25,6 +25,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Coordinator outbound guidance** — absent block means withheld on non-principal turns, not empty. (#1848)
 - **`delegate` outputs (public API)** — `resolvedContactIds` keeps contact IDs after output sanitization. Skill v1.6.0. (#1818)
+- **Identity gate** — `filter.identityGate` selects enforce, shadow, or off. (#1818)
 - **`scheduler-report` input (public API)** — `job_id` optional on scheduled runs; derived from conversation. (#1828)
 - **Scheduler fire path** — no longer injects a bare `scheduler_job_id` into model-visible task content. (#1828)
 - **`agent.response` payload (public API)** — optional `failedSkills` / `failedSkillsOmitted` for scheduler visibility. (#1830)
@@ -42,7 +43,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`[ACTIVE OUTBOUND CONTEXT]`** — dispatcher injects only on principal `liveTurn`, matching voice. (#1848)
 - **Scheduled maintenance prompts** — `calendar`, `coordinator`, and `meeting-debrief` name `scheduler-report` and forbid bullpen. (#1831)
 - **Resolved entities** — identities from a turn stay available later, refreshed from the contact record. (#1818)
-- **Outbound identity gate** — external sends naming an unresolved person are blocked until resolved. (#1818)
+- **Outbound identity gate** — external sends with an unresolved person-shaped mention are blocked until resolved. (#1818)
 - **`scheduler-report`** — derives `job_id` from the run conversation so agents stop mistaking it for a bullpen thread. (#1828)
 - **`bullpen`** — job-UUID-as-thread_id redirects to `scheduler-report` and logs a greppable warn. (#1828)
 - **Scheduler** — tool failures on a completed run now land in `last_run_context` without flipping health. (#1830)

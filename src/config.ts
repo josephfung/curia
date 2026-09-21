@@ -90,6 +90,22 @@ export interface Config {
   voiceModel?: string;
 }
 
+/** Kill switch for the outbound identity gate (#1818). */
+export type IdentityGateMode = 'off' | 'shadow' | 'enforce';
+
+/**
+ * `enforce` blocks a non-principal send that has an unconfirmed-name hedge or
+ * an unresolved person-shaped mention. `shadow` logs that block and sends.
+ * `off` does not inspect the text. Default `enforce`.
+ */
+export function resolveIdentityGateMode(filter: YamlConfig['filter']): IdentityGateMode {
+  const mode = filter?.identityGate ?? 'enforce';
+  if (mode !== 'off' && mode !== 'shadow' && mode !== 'enforce') {
+    throw new Error(`filter.identityGate must be "off", "shadow", or "enforce", got: ${String(mode)}`);
+  }
+  return mode;
+}
+
 /** Per-resumable-task aggregate ceilings — progress-based circuit breaker (#1176). */
 export interface ResumableCeilingsConfig {
   /** Consecutive paused slices with no forward progress before fail/escalate (K). */
@@ -470,6 +486,13 @@ export interface YamlConfig {
        */
       failMode?: 'split' | 'open' | 'closed';
     };
+    /**
+     * Identity gate for non-principal sends (#1818). Default: 'enforce'.
+     *   'enforce' — block an unconfirmed-name hedge or unresolved person-shaped mention
+     *   'shadow'  — log the block and send
+     *   'off'     — do not inspect the text
+     */
+    identityGate?: IdentityGateMode;
   };
   /** Bulk export gates for attachments and MCP record exports (#201). */
   exportControls?: {
@@ -891,6 +914,8 @@ export function loadYamlConfig(configDir: string): YamlConfig {
   if (maxLength !== undefined && (!Number.isInteger(maxLength) || maxLength <= 0)) {
     throw new Error(`skillOutput.maxLength must be a positive integer, got: ${maxLength}`);
   }
+
+  resolveIdentityGateMode(config.filter);
 
   // Validate the browser block. config/local.yaml is deep-merged above but not
   // schema-validated, so a bad override (e.g. sweepIntervalMs: 0 or -1) would otherwise

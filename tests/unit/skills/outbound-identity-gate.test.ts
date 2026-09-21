@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { OutboundGateway } from '../../../src/skills/outbound-gateway.js';
-import { createLogger } from '../../../src/logger.js';
 import type { NylasClient } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import { ConversationEntityState } from '../../../src/entity-context/conversation-entities.js';
 import type { ResolvedEntityCard } from '../../../src/agents/resolved-entities.js';
+import type { IdentityGateMode } from '../../../src/config.js';
+import type { Logger } from '../../../src/logger.js';
 
 const XIAOPU = '11111111-1111-4111-8111-111111111111';
 const TASK = 'task-turn-3';
@@ -23,13 +24,16 @@ function card(): ResolvedEntityCard {
   };
 }
 
-function gateway(entities: ConversationEntityState) {
+function gateway(
+  entities: ConversationEntityState,
+  options?: { identityGate?: IdentityGateMode; contactService?: ContactService },
+) {
   const nylasClient = {
     sendMessage: vi.fn().mockResolvedValue({ id: 'msg-123' }),
   } as unknown as NylasClient;
-  const contactService = {
+  const contactService = options?.contactService ?? ({
     resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
-  } as unknown as ContactService;
+  } as unknown as ContactService);
   const contentFilter = {
     check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
   } as unknown as OutboundContentFilter;
@@ -37,6 +41,16 @@ function gateway(entities: ConversationEntityState) {
     publish: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn(),
   } as unknown as EventBus;
+  const warn = vi.fn();
+  const logger = {
+    child() { return this; },
+    warn,
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    fatal: vi.fn(),
+    trace: vi.fn(),
+  } as unknown as Logger;
   const gw = new OutboundGateway({
     nylasClients: new Map([['curia', nylasClient]]),
     contactService,
@@ -56,9 +70,10 @@ function gateway(entities: ConversationEntityState) {
       updatedAt: new Date(),
     }],
     conversationEntities: entities,
-    logger: createLogger('error'),
+    identityGate: options?.identityGate,
+    logger,
   });
-  return { gw, nylasClient, bus };
+  return { gw, nylasClient, bus, warn };
 }
 
 describe('outbound identity gate (#1818)', () => {
@@ -111,5 +126,85 @@ describe('outbound identity gate (#1818)', () => {
 
     expect(result.success).toBe(true);
     expect(nylasClient.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('reports a blocked recipient instead of an unresolved identity', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue({
+        tier: 'blocked',
+        contactId: 'blocked-1',
+        displayName: 'Dani',
+      }),
+    } as unknown as ContactService;
+    const { gw, nylasClient } = gateway(entities, { contactService });
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'Registration',
+      body: 'He and Xiaopu (last name to be confirmed) would like to attend.',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    expect(result.success).toBe(false);
+    expect(result.blockedReason).toBe('Recipient is blocked');
+    expect(nylasClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not block a title-case subject on a clean body', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const { gw, nylasClient } = gateway(entities);
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'Quarterly Planning Session',
+      body: 'I have shared the deck on Google Drive.',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    expect(result.success).toBe(true);
+    expect(nylasClient.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('logs and sends when the gate is in shadow mode', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const { gw, nylasClient, warn } = gateway(entities, { identityGate: 'shadow' });
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'Registration',
+      body: 'He and Xiaopu (last name to be confirmed) would like to attend.',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    expect(result.success).toBe(true);
+    expect(nylasClient.sendMessage).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ identityGate: 'shadow' }),
+      expect.stringContaining('would have blocked'),
+    );
+  });
+
+  it('does not inspect the body when the gate is off', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    const { gw, nylasClient, warn } = gateway(entities, { identityGate: 'off' });
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'dani@wrcf.ca',
+      subject: 'Registration',
+      body: 'He and Xiaopu (last name to be confirmed) would like to attend.',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    expect(result.success).toBe(true);
+    expect(nylasClient.sendMessage).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('unresolved identity'),
+    );
   });
 });

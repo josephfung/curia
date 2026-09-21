@@ -152,7 +152,7 @@ Each LLM call has a context budget (model's max tokens minus a reserve for the r
 
 If the total exceeds the budget, items are trimmed from the bottom of the priority list. Within each tier, older/less-relevant items are dropped first.
 
-Contacts resolved during a conversation are not part of working-memory history (tool results are not persisted). Their contact IDs are stored on the conversation and re-read from the contact row at the start of each later turn. That block is its own context-budget tier, `resolved_entities`, capped in size and charged before history so a long transcript cannot crowd the identities out. An outbound message to someone other than the principal is blocked when it names a person who is not in that turn's resolved set.
+Contacts resolved during a conversation are not part of working-memory history (tool results are not persisted). Their contact IDs are stored on the conversation and re-read from the contact row at the start of each later turn. That block is its own context-budget tier, `resolved_entities`, capped in size and charged before history so a long transcript cannot crowd the identities out. An outbound message to someone other than the principal is blocked when it carries an unconfirmed-name hedge or a person-shaped mention that is not in that turn's resolved set. `filter.identityGate` selects `enforce` (default), `shadow` (log only), or `off`.
 
 ### Context Summarization
 When conversation history in working memory exceeds a configurable threshold (default: 20 turns), older turns are summarized into a condensed narrative and the originals are archived (still in Postgres, just not loaded into context). The summary preserves: key decisions made, entities discussed, and any commitments or action items.

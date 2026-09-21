@@ -20,7 +20,7 @@
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveIdentityGateMode } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
@@ -1696,8 +1696,10 @@ async function main(): Promise<void> {
   const exportControlService = new ExportControlService(pool, exportControlsConfig, logger);
 
   // Contact IDs resolved in a conversation, re-read from the contact row on
-  // each later turn (#1818). Shared by every agent and the outbound gateway
-  // so a send in the same turn sees identities that turn just resolved.
+  // each later turn (#1818). The coordinator records and re-injects them.
+  // The gateway reads the same store so a send in that turn sees identities
+  // the turn just resolved. Specialists are not wired: they run in a fresh
+  // delegate conversation, and begin() would arm the gate with an empty set.
   const principalNames = [principalContact?.displayName, principalContact?.preferredName]
     .filter((name): name is string => typeof name === 'string' && name.trim() !== '');
   const conversationEntities = ConversationEntityState.createWithPostgres(pool, logger, principalNames);
@@ -1729,6 +1731,7 @@ async function main(): Promise<void> {
       // to bypass the autonomy gate for agent-to-principal communications.
       principalIdentities,
       conversationEntities,
+      identityGate: resolveIdentityGateMode(yamlConfig.filter),
       logger,
       autonomyService,
       piiRedactor,
@@ -2643,8 +2646,10 @@ async function main(): Promise<void> {
       } : undefined,
       bullpenService,
       bullpenWindowMinutes: 60,
-      // Re-inject contacts resolved earlier in this conversation (#1818).
-      conversationEntities,
+      // Coordinator only (#1818). A specialist's delegate conversation has no
+      // stored identities, and begin() on an empty set would fail closed on
+      // any person-shaped send from that specialist.
+      conversationEntities: agentConfig.role === 'coordinator' ? conversationEntities : undefined,
       documentWorkspaceEnabled: pinResolution.documentWorkspaceEnabled,
       workingDocsRepo,
       // taskRepo serves both task-wake scheduler refresh (tasks/heartbeat) and
