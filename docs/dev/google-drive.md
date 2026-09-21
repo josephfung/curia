@@ -43,6 +43,13 @@ this MCP server — it goes through the Nylas-backed `calendar` skill (#1853).
    Omit Calendar — see Step 1 / #1853.
 5. Under **Test users**, add Curia's Gmail address.
 
+> **Existing deployments:** narrowing `--tools` does not revoke anything already
+> granted. Existing tokens keep working (upstream scope checks are
+> superset-based), but Curia's Calendar scope stays live until you revoke the
+> grant at [myaccount.google.com](https://myaccount.google.com/permissions) and
+> re-run Step 5. Do this at the next convenient window; nothing breaks if you
+> don't — there is simply no caller for that scope after #1853.
+
 > The app can stay in "Testing" mode. If you want non-expiring tokens without having
 > to re-add test users, publish the app (Publish App button). Publishing does not make
 > the app publicly listed — it just removes the 7-day test-token expiry.
