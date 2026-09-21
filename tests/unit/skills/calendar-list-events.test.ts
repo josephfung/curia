@@ -484,4 +484,35 @@ describe('CalendarListEventsHandler', () => {
       expect(data.count).toBe(2);
     }
   });
+
+  it('fails closed when principal-scoped explicit calendarId belongs to another contact (#1854)', async () => {
+    const { makeSystemOriginator } = await import('../../../src/contacts/principal.js');
+    const principalId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const listEvents = vi.fn().mockResolvedValue([]);
+    const contactService = {
+      findContactBySystemRole: vi.fn().mockResolvedValue({ id: principalId }),
+      resolveCalendar: vi.fn().mockResolvedValue({
+        contactId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        label: 'Curia',
+        isPrimary: true,
+        readOnly: false,
+      }),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-curia', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        nylasCalendarClient: { listEvents } as never,
+        contactService: contactService as never,
+        taskMetadata: { originator: makeSystemOriginator() },
+      },
+    ));
+
+    expect(listEvents).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorType).toBe('IDENTITY_MISMATCH');
+      expect(result.error).toContain('calendar_identity_mismatch');
+    }
+  });
 });

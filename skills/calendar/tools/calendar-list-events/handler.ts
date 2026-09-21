@@ -16,6 +16,7 @@ import type { NylasCalendarEvent } from '../../../../src/channels/calendar/nylas
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/contacts/principal.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
+import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shared/calendar-identity-guard.js';
 
 export class CalendarListEventsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -49,6 +50,9 @@ export class CalendarListEventsHandler implements ToolHandler {
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
       if (calendarId && typeof calendarId === 'string') {
+        // Principal-scoped task + calendar registered to a non-principal contact → fail closed (#1854).
+        const identityGuard = await guardNylasExplicitCalendarIdentity({ calendarId, ctx });
+        if (identityGuard) return identityGuard;
         calendarIds = [calendarId];
       } else if (contactId && typeof contactId === 'string') {
         // Explicit contactId provided — used by scheduled agents that don't have a

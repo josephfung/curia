@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Calendar identity guard** — principal-scoped wrong-identity reads fail closed as `IDENTITY_MISMATCH`, not empty success. (#1854)
+- **`ErrorType` / `tool.result` (public API)** — `IDENTITY_MISMATCH`; failure payloads may carry `errorType`. (#1854)
 - **Late specialist results** — a timed-out delegation now hands the specialist's late result back so follow-up work completes. (#1799)
 - **`delegation.timed_out` / `delegation.late_resolved` bus events (public API)** — audit trail for an abandoned delegation's fate. (#1799)
 - **Standard-tier model candidates** — four OpenRouter models registered so curia-deploy#226 can repoint the tier. (#1804)

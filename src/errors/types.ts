@@ -13,6 +13,7 @@ export type ErrorType =
   | 'DATABASE_UNAVAILABLE'   // Postgres / pool unreachable — retryable, tracked separately (#1381)
   | 'SKILL_ERROR'            // skill returned { success: false }
   | 'BUDGET_EXCEEDED'        // turn or error budget exhausted
+  | 'IDENTITY_MISMATCH'      // calendar (or similar) resolved to the wrong subject — fail closed, never retry (#1854)
   | 'UNKNOWN';               // fallback — something unexpected
 
 export interface AgentError {
@@ -38,7 +39,7 @@ export interface ErrorBudget {
 }
 
 // Retryable is deterministic from ErrorType — no per-instance overrides.
-// AUTH_FAILURE and BUDGET_EXCEEDED are never retryable.
+// AUTH_FAILURE, BUDGET_EXCEEDED, and IDENTITY_MISMATCH are never retryable.
 // RATE_LIMIT, TIMEOUT, PROVIDER_ERROR, and DATABASE_UNAVAILABLE are retryable
 // (transient failures).
 const RETRYABLE_TYPES: ReadonlySet<ErrorType> = new Set([

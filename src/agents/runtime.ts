@@ -686,6 +686,13 @@ export class AgentRuntime {
     const MAX_DISTINCT_FAILED_SKILLS = 10;
     const failedSkills: Array<{ name: string; error: string }> = [];
     let failedSkillsOmitted = 0;
+    /**
+     * Calendar (or similar) identity mismatch (#1854). Soft skill failure alone
+     * leaves last_run_outcome=completed (#1830); this hard-fails the task after
+     * the tool round so the principal never gets a silent "clear day" and the
+     * scheduled job is not marked completed.
+     */
+    let pendingIdentityMismatch: AgentError | null = null;
     const budgetHandoff = {
       conversationId,
       skillsCalled,
@@ -1330,6 +1337,15 @@ export class AgentRuntime {
             return 'continue';
           },
           afterTools: async () => {
+            // Identity mismatch is a hard fail (#1854): do not let the model
+            // continue and invent a "clear day" from a wrong-identity empty read.
+            if (pendingIdentityMismatch) {
+              await this.publishAgentError(pendingIdentityMismatch, taskEvent);
+              await this.sendErrorResponse(taskEvent, pendingIdentityMismatch, budgetHandoff);
+              earlyExitHandled = true;
+              return 'stop';
+            }
+
             if (budget.consecutiveErrors >= budget.maxConsecutiveErrors) {
               if (pendingClarification) {
                 logger.warn(
@@ -1935,6 +1951,7 @@ export class AgentRuntime {
           recordFailedSkill(toolCall.name, result.error);
           const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
           const isAuthFailure = result.errorType === 'AUTH_FAILURE';
+          const isIdentityMismatch = result.errorType === 'IDENTITY_MISMATCH';
           if (isDbFailure) {
             budget.dbFailures++;
           } else {
@@ -1958,7 +1975,19 @@ export class AgentRuntime {
                   context: { toolName: toolCall.name },
                   timestamp: new Date(),
                 }
+            : isIdentityMismatch
+              ? {
+                  type: 'IDENTITY_MISMATCH' as const,
+                  source: `skill:${toolCall.name}`,
+                  message: result.error,
+                  retryable: false,
+                  context: { toolName: toolCall.name },
+                  timestamp: new Date(),
+                }
             : classifySkillError(toolCall.name, result.error);
+          if (isIdentityMismatch) {
+            pendingIdentityMismatch = agentErr;
+          }
           const formattedError = formatTaskError(
             toolCall.name,
             agentErr.type,
@@ -2879,7 +2908,7 @@ function mapAgentErrorToResponseFields(agentErr: AgentError): {
   if (agentErr.type === 'DATABASE_UNAVAILABLE') {
     return { errorType: agentErr.type, reason: 'api_error', retryable: agentErr.retryable };
   }
-  if (agentErr.type === 'AUTH_FAILURE' || agentErr.type === 'VALIDATION_ERROR') {
+  if (agentErr.type === 'AUTH_FAILURE' || agentErr.type === 'VALIDATION_ERROR' || agentErr.type === 'IDENTITY_MISMATCH') {
     return { errorType: agentErr.type, reason: 'blocked', retryable: agentErr.retryable };
   }
   return { errorType: agentErr.type, reason: 'api_error', retryable: agentErr.retryable };
