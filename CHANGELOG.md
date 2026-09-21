@@ -35,6 +35,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scheduled maintenance prompts** — `calendar`, `coordinator`, and `meeting-debrief` name `scheduler-report` and forbid bullpen. (#1831)
 - **`scheduler-report`** — derives `job_id` from the run conversation so agents stop mistaking it for a bullpen thread. (#1828)
 - **`bullpen`** — job-UUID-as-thread_id redirects to `scheduler-report` and logs a greppable warn. (#1828)
 - **Scheduler** — tool failures on a completed run now land in `last_run_context` without flipping health. (#1830)

@@ -143,9 +143,11 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(tools).toEqual(
       expect.arrayContaining(['task-create', 'task-list', 'task-update', 'task-complete']),
     );
+    expect(tools).toContain('scheduler-report');
     expect(tools).not.toContain('plan');
     expect(tools).not.toContain('checkpoint');
-    expect(tools).not.toContain('scheduler-report');
+    expect(tools).not.toContain('scheduler-list');
+    expect(tools).not.toContain('scheduler-create');
   });
 
   it('contacts does not gain entity-context via the contacts bundle', () => {
