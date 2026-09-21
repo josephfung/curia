@@ -108,6 +108,8 @@ interface NylasRawEvent {
     // Timespan — regular timed events
     startTime?: number;
     endTime?: number;
+    // Time — single point-in-time events (Nylas `when.object === 'time'`)
+    time?: number;
     // Date — single all-day events
     date?: string;
     // Datespan — multi-day all-day events
@@ -351,7 +353,43 @@ export class NylasCalendarClient {
       } while (raw.length < wanted && pageToken);
 
       // The last page can overshoot if Nylas returns more than we asked for.
-      return raw.slice(0, wanted).map((evt) => this.normalizeEvent(evt));
+      // Suppress per-event warns here — a systemic SDK regression would otherwise
+      // emit up to LIST_EVENTS_MAX_TOTAL identical lines. Aggregate once below.
+      const slice = raw.slice(0, wanted);
+      const normalized = slice.map((evt) => this.normalizeEvent(evt, { warn: false }));
+
+      const orphans = normalized.filter((e) => !e.calendarId);
+      if (orphans.length > 0) {
+        this.log.warn(
+          {
+            calendarId,
+            count: orphans.length,
+            total: normalized.length,
+            sampleEventIds: orphans.slice(0, 5).map((e) => e.id),
+          },
+          'normalizeEvent: calendarId missing from Nylas events — possible SDK casing mismatch',
+        );
+      }
+
+      const timingGaps = slice
+        .map((evt, i) => ({ evt, event: normalized[i]! }))
+        .filter(({ event }) => event.startTime === null && event.startDate === null);
+      if (timingGaps.length > 0) {
+        this.log.warn(
+          {
+            calendarId,
+            count: timingGaps.length,
+            total: normalized.length,
+            sampleEventIds: timingGaps.slice(0, 5).map(({ evt }) => evt.id),
+            // A handful of samples is enough to recognize an unmodelled shape
+            // without dumping up to 1000 nested `when` objects into the log.
+            sampleWhen: timingGaps.slice(0, 3).map(({ evt }) => evt.when ?? null),
+          },
+          'normalizeEvent: unrecognized when shape — all timing fields are null',
+        );
+      }
+
+      return normalized;
     } catch (err) {
       this.log.error({ err, calendarId }, 'Nylas listEvents failed');
       throw err;
@@ -622,17 +660,48 @@ export class NylasCalendarClient {
     };
   }
 
-  private normalizeEvent(evt: NylasRawEvent): NylasCalendarEvent {
+  private normalizeEvent(
+    evt: NylasRawEvent,
+    opts?: { warn?: boolean },
+  ): NylasCalendarEvent {
+    // Time-type events expose a single `time` field; treat it as startTime.
+    // Deliberate asymmetry: endTime stays null. Overlap helpers in holds.ts
+    // require both bounds, so Time events never conflict / are treated as stale
+    // by isHoldStale — fine today because Curia creates holds as timespans.
+    const startTime = evt.when?.startTime ?? evt.when?.time ?? null;
+    const endTime = evt.when?.endTime ?? null;
+    // For single all-day events (Date type), expose the date as both startDate and endDate
+    const startDate = evt.when?.startDate ?? evt.when?.date ?? null;
+    const endDate = evt.when?.endDate ?? evt.when?.date ?? null;
+
+    // Default warn=true for single-event paths (get/create/update). listEvents
+    // opts out and aggregates — see call site — to avoid log floods.
+    if (opts?.warn !== false) {
+      // Absent `when` is as anomalous as an unrecognized shape (Nylas requires it).
+      if (startTime === null && startDate === null) {
+        this.log.warn(
+          { eventId: evt.id, when: evt.when ?? null },
+          'normalizeEvent: unrecognized when shape — all timing fields are null',
+        );
+      }
+
+      if (!evt.calendarId) {
+        this.log.warn(
+          { eventId: evt.id },
+          'normalizeEvent: calendarId missing from Nylas event — possible SDK casing mismatch',
+        );
+      }
+    }
+
     return {
       id: evt.id,
       title: evt.title ?? '',
       description: evt.description ?? '',
       location: evt.location ?? '',
-      startTime: evt.when?.startTime ?? null,
-      endTime: evt.when?.endTime ?? null,
-      // For single all-day events (Date type), expose the date as both startDate and endDate
-      startDate: evt.when?.startDate ?? evt.when?.date ?? null,
-      endDate: evt.when?.endDate ?? evt.when?.date ?? null,
+      startTime,
+      endTime,
+      startDate,
+      endDate,
       participants: (evt.participants ?? []).map((p) => ({
         email: p.email,
         name: p.name ?? '',
