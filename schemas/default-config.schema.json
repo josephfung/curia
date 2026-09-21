@@ -217,7 +217,8 @@
             "timeout_ms": { "type": "integer", "minimum": 250 },
             "failMode": { "type": "string", "enum": ["split", "open", "closed"] }
           }
-        }
+        },
+        "identityGate": { "type": "string", "enum": ["off", "shadow", "enforce"] }
       }
     },
     "escalation": {
