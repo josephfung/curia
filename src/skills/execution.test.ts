@@ -1864,6 +1864,40 @@ describe('autonomy gates', () => {
       expect(classifyAction).not.toHaveBeenCalled();
     });
 
+    it('rejects UUID-shaped reply_to_message_id even when Gate C would skip recipient resolution (#1817)', async () => {
+      // Unknown tier → both reply-to-sender and third-party axes escalate, so the
+      // decisionIfReplyToSender !== decisionIfThirdParty shortcut skips
+      // resolveGateCRecipients. The shape check must still fire before that.
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const gateway = makeEmailGateway({ from: [{ email: 'alice@example.com' }] });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+        selfEmail: 'curia@example.com',
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        {
+          reply_to_message_id: 'f97d6a62-0ec4-4751-96c3-2538eb364f06',
+          body: 'Thanks',
+          cc: '',
+        },
+        undefined,
+        originatorMeta('unknown', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/outbound_context entry_id/);
+        expect(result.error).not.toMatch(/unknown/);
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(gateway.getEmailMessage).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
     it('escalates known-tier email-reply reply-all when CC contains anyone else', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const gateway = makeEmailGateway({

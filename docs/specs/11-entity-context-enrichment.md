@@ -459,7 +459,7 @@ A single table records every outbound message Curia sends, with enough metadata 
 | Column | Type | Purpose |
 |---|---|---|
 | `id` | `UUID` | Primary key |
-| `conversation_id` | `TEXT` | Conversation the outbound belongs to (scopes the read query) |
+| `conversation_id` | `TEXT` | Conversation associated with the outbound registration; it does not scope the dispatcher read query |
 | `channel_id` | `TEXT` | Channel the message was sent on (`email`, `signal`, future) |
 | `agent_id` | `TEXT` | Originating agent (`coordinator`, `research-analyst`, `meeting-debrief`, ...) |
 | `content_preview` | `TEXT` | Truncated message body (≤ 300 chars) for the LLM to recognize the thread |

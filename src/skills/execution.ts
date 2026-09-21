@@ -23,6 +23,10 @@ import { isPrincipalOriginated, isLivePrincipalTurn, getInitiatingTier, isExtern
 import { resolvePrincipalIsSoleRecipientFromSkillInput, isSolelyInitiatingSender } from '../contacts/principal-recipient.js';
 import { findCarveoutSkill } from '../contacts/principal-channel-registry.js';
 import { ReplyToMessageIdShapeError } from '../channels/email/principal-rules.js';
+import {
+  looksLikeOutboundContextEntryId,
+  replyToMessageIdLooksLikeEntryIdError,
+} from '../channels/email/nylas-message-id.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
@@ -1250,6 +1254,23 @@ export class ExecutionLayer {
             }
             const actionClass = mapActionRiskToConsequenceClass(manifest.action_risk);
             const foundCarveout = findCarveoutSkill(toolName);
+            // Shape-check email-reply before the Gate C policy shortcut (#1817 /
+            // CodeRabbit). When both policy axes escalate (e.g. unknown tier),
+            // resolveGateCRecipients is skipped and the agent would only see a
+            // generic escalate error. This check is sync and never fetches.
+            if (toolName === 'email-reply') {
+              const replyTo = input['reply_to_message_id'];
+              if (typeof replyTo === 'string' && looksLikeOutboundContextEntryId(replyTo)) {
+                skillLogger.info(
+                  { toolName },
+                  'autonomy gate: email-reply reply_to_message_id failed shape check before Gate C shortcut (#1817)',
+                );
+                return {
+                  success: false,
+                  error: this.wrapSkillError(replyToMessageIdLooksLikeEntryIdError()),
+                };
+              }
+            }
             // Cheap sync parse only. Async resolveRecipients (Nylas) waits until the
             // third-party axis actually matters — blocked/unknown never pay that round trip.
             let recipients: string[] | null = null;
