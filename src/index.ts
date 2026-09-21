@@ -115,6 +115,7 @@ import { SuspensionNotifier } from './scheduler/suspension-notifier.js';
 import { RecoveryNotifier } from './scheduler/recovery-notifier.js';
 import type { DriftConfig } from './scheduler/drift-detector.js';
 import { EntityContextAssembler } from './entity-context/assembler.js';
+import { ConversationEntityState } from './entity-context/conversation-entities.js';
 import { bootstrapAgentIdentity } from './entity-context/bootstrap.js';
 import { repairPrincipalMetadata } from './contacts/ceo-bootstrap.js';
 import { AutonomyService } from './autonomy/autonomy-service.js';
@@ -1694,6 +1695,13 @@ async function main(): Promise<void> {
   const exportControlsConfig = resolveExportControls(yamlConfig);
   const exportControlService = new ExportControlService(pool, exportControlsConfig, logger);
 
+  // Contact IDs resolved in a conversation, re-read from the contact row on
+  // each later turn (#1818). Shared by every agent and the outbound gateway
+  // so a send in the same turn sees identities that turn just resolved.
+  const principalNames = [principalContact?.displayName, principalContact?.preferredName]
+    .filter((name): name is string => typeof name === 'string' && name.trim() !== '');
+  const conversationEntities = ConversationEntityState.createWithPostgres(pool, logger, principalNames);
+
   if (hasAnyOutboundClient && outboundFilter && !setupRequiredAtBoot) {
     const outboundQueue = new OutboundQueueRepo(pool);
     // Channels that implement Channel.supportsOutboundQueue register readiness
@@ -1720,6 +1728,7 @@ async function main(): Promise<void> {
       // principalIdentities loaded from the DB at startup — used by isPrincipalRecipient()
       // to bypass the autonomy gate for agent-to-principal communications.
       principalIdentities,
+      conversationEntities,
       logger,
       autonomyService,
       piiRedactor,
@@ -2634,6 +2643,8 @@ async function main(): Promise<void> {
       } : undefined,
       bullpenService,
       bullpenWindowMinutes: 60,
+      // Re-inject contacts resolved earlier in this conversation (#1818).
+      conversationEntities,
       documentWorkspaceEnabled: pinResolution.documentWorkspaceEnabled,
       workingDocsRepo,
       // taskRepo serves both task-wake scheduler refresh (tasks/heartbeat) and

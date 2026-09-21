@@ -21,6 +21,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
+import { parseResolvedContactIds } from '../../src/agents/resolved-entities.js';
 import { createAgentTask, type AgentResponseEvent, type AgentResponseFailureReason } from '../../src/bus/events.js';
 // Resume-token format lives in ONE place (#995): decode + version via the shared helper, so a
 // future format change can't silently desync this handler from runtime.ts and the resume subscriber.
@@ -537,11 +538,16 @@ export class DelegateHandler implements ToolHandler {
         }
       }
 
+      // Pull contact IDs out before the execution layer strips the
+      // <resolved_entities> tags. The structured field survives sanitization;
+      // the markup in `response` does not (#1818).
+      const resolvedContactIds = parseResolvedContactIds(response);
       return {
         success: true,
         data: {
           response,
           agent,
+          ...(resolvedContactIds.length > 0 ? { resolvedContactIds } : {}),
         },
       };
     } catch (err) {

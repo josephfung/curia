@@ -70,6 +70,8 @@ import {
 } from '../security/export-controls.js';
 import { OutboundQueueFullError, type OutboundQueueRepo } from './outbound-queue-repo.js';
 import type { ExportItem } from '../security/export-controls.js';
+import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
+import { describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
 
 // ---------------------------------------------------------------------------
 // Public types — request variants owned by channel packages; re-exported here
@@ -199,6 +201,14 @@ export interface OutboundGatewayConfig {
    * When empty (no principal contact exists), the principal bypass does not fire.
    */
   principalIdentities?: ChannelIdentity[];
+
+  /**
+   * Conversation-scoped resolved contacts (#1818). When set, a send to a
+   * non-principal recipient is blocked if the body names a person who is not
+   * resolved to a contact ID in the current turn. Absent in tests and in
+   * boots that have no database — the gate is skipped.
+   */
+  conversationEntities?: ConversationEntityState;
 
   logger: Logger;
 
@@ -372,6 +382,7 @@ export class OutboundGateway {
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
   private readonly principalIdentities: ChannelIdentity[];
+  private readonly conversationEntities?: ConversationEntityState;
   private readonly log: Logger;
   private readonly autonomyService?: AutonomyService;
   private readonly piiRedactor?: PiiRedactor;
@@ -395,6 +406,7 @@ export class OutboundGateway {
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
     this.principalIdentities = config.principalIdentities ?? [];
+    this.conversationEntities = config.conversationEntities;
     this.log = config.logger.child({ component: 'outbound-gateway' });
     this.autonomyService = config.autonomyService;
     this.piiRedactor = config.piiRedactor;
@@ -781,6 +793,45 @@ export class OutboundGateway {
         // recipient problem, discouraging retry loops).
         return { success: false, blockedReason: 'Recipient is a no-reply/automated address; message not deliverable' };
       }
+    }
+
+    // ------------------------------------------------------------------
+    // Step 0.6: Unresolved-identity gate (#1818)
+    // ------------------------------------------------------------------
+    // A name that was resolved on an earlier turn is not in working memory.
+    // The runtime re-injects those contact IDs for this task; if the message
+    // names someone who is not in that set, block and tell the agent to
+    // resolve them. Principal recipients, human-approved sends, and system
+    // notifications are exempt — the failure mode is an external party
+    // receiving a partial identity.
+    const identityReason = await this.unresolvedIdentityReason(request, options);
+    if (identityReason) {
+      this.log.warn(
+        { channel: request.channel, recipientId: redactId(recipientId) },
+        'outbound-gateway: send blocked — unresolved identity',
+      );
+      const blockId = `block_${randomUUID()}`;
+      try {
+        await this.bus.publish('dispatch', createOutboundBlocked({
+          blockId,
+          conversationId: options?.conversationId ?? '',
+          channelId: request.channel,
+          content: scrubPii(messageBody),
+          recipientId,
+          reason: 'unresolved_identity',
+          findings: [{
+            rule: 'unresolved-identity',
+            detail: 'Outbound message names a person who is not resolved to a contact ID in this turn',
+          }],
+          parentEventId: options?.parentEventId ?? '',
+        }));
+      } catch (publishErr) {
+        this.log.warn(
+          { publishErr, blockId },
+          'outbound-gateway: failed to publish outbound.blocked event for unresolved identity — message is still blocked',
+        );
+      }
+      return { success: false, blockedReason: identityReason, blockedRules: ['unresolved-identity'] };
     }
 
     // ------------------------------------------------------------------
@@ -1532,6 +1583,68 @@ export class OutboundGateway {
   }
 
   /**
+   * Block an external send that names a person this turn has not resolved
+   * (#1818). Returns the agent-facing reason, or null when the send may proceed.
+   * Skipped when the turn was not tracked (no conversation-entity service, or
+   * a send that did not come from an agent task).
+   */
+  private async unresolvedIdentityReason(
+    request: OutboundSendRequest,
+    options?: {
+      humanApproved?: boolean;
+      isSystemNotification?: boolean;
+      taskEventId?: string;
+    },
+  ): Promise<string | null> {
+    const state = this.conversationEntities;
+    if (!state) return null;
+    if (options?.humanApproved || options?.isSystemNotification) return null;
+    if (this.isPrincipalRecipient(request)) return null;
+    const taskEventId = options?.taskEventId;
+    if (!taskEventId || !state.turnIdentities.has(taskEventId)) return null;
+
+    const covered: string[] = [...state.principalNames];
+    for (const card of state.turnIdentities.get(taskEventId)) {
+      covered.push(card.displayName);
+      if (card.preferredName) covered.push(card.preferredName);
+    }
+
+    const principalId = this.principalIdentities[0]?.contactId;
+    if (principalId && 'getContact' in this.contactService) {
+      try {
+        const principal = await this.contactService.getContact(principalId);
+        if (principal) {
+          covered.push(principal.displayName);
+          if (principal.preferredName) covered.push(principal.preferredName);
+        }
+      } catch (err) {
+        this.log.warn(
+          { err },
+          'outbound-gateway: principal name lookup failed — identity gate using startup names only',
+        );
+      }
+    }
+
+    try {
+      for (const recipient of this.projectRecipients(request)) {
+        covered.push(...emailLocalNameTokens(recipient.identifier));
+        const contact = await this.contactService.resolveByChannelIdentity(request.channel, recipient.identifier);
+        if (contact?.displayName) covered.push(contact.displayName);
+      }
+    } catch (err) {
+      this.log.warn(
+        { err, channel: request.channel },
+        'outbound-gateway: recipient name lookup failed — identity gate continuing without recipient names',
+      );
+    }
+
+    const text = request.channel === 'email'
+      ? `${request.subject ?? ''}\n${request.body}`
+      : request.message;
+    return describeUnresolvedIdentity(text, covered);
+  }
+
+  /**
    * Channel-parameterized principal identity check. Must pass the channel that
    * owns the identifier (email matcher must NOT be used for Signal/Slack).
    */
@@ -1949,6 +2062,44 @@ export class OutboundGateway {
     }
 
     const { recipientEmail, body } = draftMeta;
+
+    // Same unresolved-identity rule as send() (#1818). A draft that leaves
+    // the mailbox is an external message; approving it (humanApproved) skips
+    // the gate, matching the direct-send path.
+    const identityReason = await this.unresolvedIdentityReason({
+      channel: 'email',
+      to: recipientEmail,
+      subject: draftMeta.subject,
+      body,
+    }, options);
+    if (identityReason) {
+      this.log.warn(
+        { draftId, recipientId: redactId(recipientEmail) },
+        'outbound-gateway: draft send blocked — unresolved identity',
+      );
+      const blockId = `block_${randomUUID()}`;
+      try {
+        await this.bus.publish('dispatch', createOutboundBlocked({
+          blockId,
+          conversationId: options?.conversationId ?? '',
+          channelId: 'email',
+          content: scrubPii(body),
+          recipientId: recipientEmail,
+          reason: 'unresolved_identity',
+          findings: [{
+            rule: 'unresolved-identity',
+            detail: 'Outbound message names a person who is not resolved to a contact ID in this turn',
+          }],
+          parentEventId: options?.parentEventId ?? '',
+        }));
+      } catch (publishErr) {
+        this.log.warn(
+          { publishErr, blockId, draftId },
+          'outbound-gateway: failed to publish outbound.blocked event for unresolved identity — draft send is still blocked',
+        );
+      }
+      return { success: false, blockedReason: identityReason, blockedRules: ['unresolved-identity'] };
+    }
 
     // ------------------------------------------------------------------
     // Step 1: Blocked-contact check
