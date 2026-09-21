@@ -82,11 +82,11 @@ importers:
         specifier: ^5.10.1
         version: 5.10.1
       cytoscape:
-        specifier: ^3.34.2
-        version: 3.34.2
+        specifier: ^3.34.3
+        version: 3.34.3
       cytoscape-fcose:
         specifier: ^2.2.0
-        version: 2.2.0(cytoscape@3.34.2)
+        version: 2.2.0(cytoscape@3.34.3)
       fastify:
         specifier: ^5.12.4
         version: 5.12.4
@@ -3243,8 +3243,8 @@ packages:
     peerDependencies:
       cytoscape: ^3.2.0
 
-  cytoscape@3.34.2:
-    resolution: {integrity: sha512-Cm2jaj1X/PBNlzV9yH8zcfGOxO7U+CJ/+mxSBVPSchLaugdp4jtlGx5qaHtPRZ6tgiZ5P+o1XoRfJA+ba6KM3g==}
+  cytoscape@3.34.3:
+    resolution: {integrity: sha512-yfYGhRcGAntq6YBD583j4n0Eg3jIxvWmZtz/5uz9UYkeIStSlMxuUja+ec5j3iBD8nv1rwaOAYMW09tBdkSeaQ==}
     engines: {node: '>=0.10'}
 
   data-uri-to-buffer@4.0.1:
@@ -9366,12 +9366,12 @@ snapshots:
 
   csv-stringify@6.8.3: {}
 
-  cytoscape-fcose@2.2.0(cytoscape@3.34.2):
+  cytoscape-fcose@2.2.0(cytoscape@3.34.3):
     dependencies:
       cose-base: 2.2.0
-      cytoscape: 3.34.2
+      cytoscape: 3.34.3
 
-  cytoscape@3.34.2: {}
+  cytoscape@3.34.3: {}
 
   data-uri-to-buffer@4.0.1: {}
 
