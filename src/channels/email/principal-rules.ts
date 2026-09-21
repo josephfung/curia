@@ -11,6 +11,7 @@ import {
   splitCommaSeparatedAddresses,
 } from '../../contacts/principal-carveout-parse.js';
 import { isEmailSendRequest } from './outbound-request.js';
+import { emailAccountIdFromInput } from './account-id.js';
 import { deriveEmailReplyRecipientSet } from './reply-recipients.js';
 import {
   looksLikeOutboundContextEntryId,
@@ -96,7 +97,13 @@ export async function resolveEmailReplyRecipients(
   }
   if (!deps.fetchMessage) return null;
 
-  const original = await deps.fetchMessage(messageId.trim());
+  // Same account the email-reply handler will pass to getEmailMessage.
+  // Passing a different id (or omitting one the handler sends) splits the
+  // per-invoke fetch cache (#1832).
+  const accountId = emailAccountIdFromInput(input);
+  const original = accountId === undefined
+    ? await deps.fetchMessage(messageId.trim())
+    : await deps.fetchMessage(messageId.trim(), accountId);
 
   const set = deriveEmailReplyRecipientSet({
     originalFrom: original.from[0]?.email,

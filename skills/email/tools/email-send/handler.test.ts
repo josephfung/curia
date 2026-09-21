@@ -92,6 +92,37 @@ describe('EmailSendHandler', () => {
     );
   });
 
+  it('reads the quoted original and sends from the named account (#1832)', async () => {
+    const ctx = makeCtx({
+      to: 'alice@example.com',
+      subject: 'Re: Hello',
+      body: 'Hi there',
+      reply_to_message_id: 'msg-sec',
+      account: 'personal',
+    });
+    const getEmailMessage = vi.fn().mockResolvedValue({
+      from: [{ email: 'alice@example.com' }],
+      to: [],
+      cc: [],
+      subject: 'Hello',
+      body: '<p>Original</p>',
+      date: 1700000000,
+    });
+    (ctx.outboundGateway as unknown as { getEmailMessage: ReturnType<typeof vi.fn> }).getEmailMessage = getEmailMessage;
+    (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true, messageId: 'msg-123',
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(getEmailMessage).toHaveBeenCalledWith('msg-sec', 'personal');
+    expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 'personal', replyToMessageId: 'msg-sec' }),
+      expect.anything(),
+    );
+  });
+
   it('returns error when gateway blocks the send', async () => {
     const ctx = makeCtx({ to: 'alice@example.com', subject: 'Hello', body: 'Body' });
     (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
