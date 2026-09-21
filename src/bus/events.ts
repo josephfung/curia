@@ -337,7 +337,17 @@ interface ToolResultPayload {
   agentId: string;
   conversationId: string;
   toolName: string;
-  result: { success: true; data: unknown } | { success: false; error: string };
+  /**
+   * Skill/tool outcome. Failure may carry `errorType` (e.g. IDENTITY_MISMATCH #1854)
+   * so audit_log can query structured classifications without parsing prose in `error`.
+   */
+  result:
+    | { success: true; data: unknown }
+    | {
+        success: false;
+        error: string;
+        errorType?: ErrorType;
+      };
   durationMs: number;
 }
 

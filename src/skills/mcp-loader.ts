@@ -26,44 +26,26 @@ import type {
   McpStdioServerEntry,
   SkillsConfig,
 } from './mcp-config-types.js';
+import {
+  GOOGLE_WORKSPACE_CALENDAR_TOOLS,
+  GOOGLE_WORKSPACE_CALENDARISH_TOOL,
+  guardMcpCalendarIdentity,
+} from './_shared/calendar-identity-guard.js';
 
 /**
  * google-workspace MCP calendar tools held back from registration / projection (#1853).
  *
- * Full upstream calendar module (`core/tool_tiers.yaml`): list_calendars, get_events,
- * manage_event (core); create_calendar, query_freebusy, manage_out_of_office,
- * manage_focus_time (extended). They authenticate as Curia's Google service identity,
- * not the principal's Nylas grant. Leaving them on an agent's toolbelt shadows
- * `@calendar` (empty reads and wrong-identity writes).
- *
- * Primary gate: `config/skills.yaml` omits `calendar` from `--tools` so the module
- * never loads (and Calendar OAuth scope is not requested). This list is the
- * in-process backstop if a calendar tool still appears (tier bump, misconfig, or
- * upstream rename). Re-enable only when #1330 lands and tools are renamed/scoped.
- *
- * Keep in sync with the comment block on the google-workspace entry in
- * `config/skills.yaml`.
+ * Re-exports the shared list from calendar-identity-guard (#1854). Primary gate:
+ * `config/skills.yaml` omits `calendar` from `--tools`. This list is the in-process
+ * backstop if a calendar tool still appears. Re-enable only when #1330 lands and
+ * tools are renamed/scoped — the identity guard still fail-closes principal-scoped
+ * reads even after re-registration.
  */
-export const GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK = [
-  'list_calendars',
-  'get_events',
-  'manage_event',
-  'create_calendar',
-  'query_freebusy',
-  'manage_out_of_office',
-  'manage_focus_time',
-] as const;
+export const GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK = GOOGLE_WORKSPACE_CALENDAR_TOOLS;
 
 const HELD_BACK_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['google-workspace', new Set(GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK)],
 ]);
-
-/**
- * Heuristic for calendar-shaped google-workspace tool names not yet on the denylist.
- * Underscore-segment match avoids false positives like substrings inside other words.
- */
-const GOOGLE_WORKSPACE_CALENDARISH_TOOL =
-  /(^|_)(events?|calendars?|freebusy|out_of_office|focus_time)($|_)/;
 
 /** True when an MCP tool must not be registered or projected for this server (#1853). */
 export function isMcpToolHeldBack(serverName: string, toolName: string): boolean {
@@ -87,7 +69,7 @@ export function warnIfUnexpectedGoogleWorkspaceCalendarTool(
   if (!GOOGLE_WORKSPACE_CALENDARISH_TOOL.test(toolName)) return;
   logger.warn(
     { server: 'google-workspace', tool: toolName },
-    'google-workspace advertised a calendar-shaped tool not on the #1853 holdback list — add it to GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK (and omit calendar from --tools in config/skills.yaml)',
+    'google-workspace advertised a calendar-shaped tool not on the #1853 holdback list — add it to GOOGLE_WORKSPACE_CALENDAR_TOOLS (calendar-identity-guard) and omit calendar from --tools in config/skills.yaml',
   );
 }
 
@@ -386,6 +368,18 @@ export function buildMcpToolHandler(params: {
   const { session, toolName, resolvedFixedInputs, timeoutMs, logger } = params;
   return {
     async execute(ctx: ToolContext): Promise<ToolResult> {
+      // Principal-scoped calendar reads via google-workspace always resolve to
+      // Curia's identity — fail closed before the MCP call (#1854). Held-back
+      // tools never reach here in normal boots (#1853); this is the backstop
+      // for re-registration (#1330) or holdback bypass.
+      const identityGuard = guardMcpCalendarIdentity({
+        serverId: session.serverId,
+        toolName,
+        ctx,
+        resolvedOwnerEmail: resolvedFixedInputs.user_google_email,
+      });
+      if (identityGuard) return identityGuard;
+
       // Abort the MCP request if it outlives the execution-layer timeout (#1666).
       const controller = new AbortController();
       const abortTimer = setTimeout(() => controller.abort(), timeoutMs);

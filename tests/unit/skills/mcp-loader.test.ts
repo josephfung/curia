@@ -665,3 +665,71 @@ describe('google-workspace --tools primary gate (#1853)', () => {
     expect(gw!.args).toEqual(expect.arrayContaining(['gmail', 'drive', 'docs', 'sheets']));
   });
 });
+
+describe('buildMcpToolHandler — calendar identity guard (#1854)', () => {
+  it('rejects principal-scoped get_events before calling MCP (no success+empty)', async () => {
+    const { makeSystemOriginator } = await import('../../../src/contacts/principal.js');
+    const callTool = vi.fn().mockResolvedValue({
+      content: [{
+        type: 'text',
+        text: "No events found in calendar 'primary' for nathancuria1@gmail.com for the specified time range.",
+      }],
+    });
+    const handler = buildMcpToolHandler({
+      session: { serverId: 'google-workspace', client: { callTool } } as unknown as BuildHandlerParams['session'],
+      toolName: 'get_events',
+      resolvedFixedInputs: { user_google_email: 'nathancuria1@gmail.com' },
+      timeoutMs: 30_000,
+      logger,
+    });
+
+    const result = await handler.execute({
+      toolName: 'get_events',
+      toolVersion: '1.0.0',
+      input: { calendar_id: 'primary' },
+      secret: () => '',
+      log: logger,
+      taskMetadata: { originator: makeSystemOriginator() },
+    } as unknown as import('../../../src/skills/types.js').ToolContext);
+
+    expect(callTool).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorType).toBe('IDENTITY_MISMATCH');
+      expect(result.error).toContain('calendar_identity_mismatch');
+    }
+  });
+
+  it('still calls MCP for agent-originated get_events (#1330 coexistence)', async () => {
+    const callTool = vi.fn().mockResolvedValue({
+      content: [{ type: 'text', text: 'two events' }],
+    });
+    const handler = buildMcpToolHandler({
+      session: { serverId: 'google-workspace', client: { callTool } } as unknown as BuildHandlerParams['session'],
+      toolName: 'get_events',
+      resolvedFixedInputs: { user_google_email: 'nathancuria1@gmail.com' },
+      timeoutMs: 30_000,
+      logger,
+    });
+
+    const result = await handler.execute({
+      toolName: 'get_events',
+      toolVersion: '1.0.0',
+      input: { calendar_id: 'primary' },
+      secret: () => '',
+      log: logger,
+      taskMetadata: {
+        originator: {
+          contactId: 'agent',
+          systemRole: 'agent',
+          channel: 'internal',
+          initiatedAt: new Date().toISOString(),
+          tier: null,
+        },
+      },
+    } as unknown as import('../../../src/skills/types.js').ToolContext);
+
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(result).toEqual({ success: true, data: 'two events' });
+  });
+});
