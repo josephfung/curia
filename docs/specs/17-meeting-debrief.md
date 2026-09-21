@@ -159,6 +159,8 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 1. CEO responds on Signal (or any channel)
 2. Dispatcher routes to coordinator (always — no routing bypass)
 3. Coordinator sees `[ACTIVE OUTBOUND CONTEXT]` block injected by dispatcher
+   (principal inbound only — `#1848`; the debrief prompt is CEO-facing, so this
+   step depends on that audience)
 4. Coordinator judges relevance — if reply relates to an active entry, delegates to the hinted specialist via the existing `delegate` skill
 5. Specialist processes and returns result; coordinator relays in its own voice
 
@@ -168,7 +170,7 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 - **Created** atomically with the outbound send (via `context_bridge` param on send skills)
 - **Expires** after configurable TTL (default 48 hours)
 - **Released** explicitly by the coordinator (via `context-bridge-release` skill) when conversation completes
-- **Read** by the dispatcher on every inbound — all active entries injected into coordinator's task
+- **Read** by the dispatcher on every **principal** inbound (`liveTurn`) — active entries injected into the coordinator's task
 
 **Security properties preserved:**
 - Coordinator sees and approves all outbound before it's sent

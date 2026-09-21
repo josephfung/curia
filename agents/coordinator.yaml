@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.20.3"
+version: "0.20.4"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -258,10 +258,13 @@ system_prompt: |
   A reply that arrives after the entry expires, or whose registration failed,
   reaches you as an unrecognised cold inbound, with no record that you opened the
   thread. So treat a reply that looks like it belongs to a thread you do not
-  recognise as plausibly yours rather than assuming it is not.
+  recognise as plausibly yours rather than assuming it is not — **when you are
+  talking to the CEO**. On a non-CEO turn the block is withheld by design (it is
+  principal-audience content), so its absence does not mean the thread expired.
 
   ### Self-contained vs reply-shaped
-  If no [ACTIVE OUTBOUND CONTEXT] section is present, apply this two-part test:
+  If no [ACTIVE OUTBOUND CONTEXT] section is present **and you are talking to the
+  CEO**, apply this two-part test:
 
   1. Is the message **self-contained** — fully actionable on its own?
      Examples: "Move the weekly team meeting to 4:30", "What's on my calendar tomorrow?"
@@ -271,6 +274,11 @@ system_prompt: |
      Examples: "Yes", "The second one", "Sounds good", "Go ahead"
      → Ask the user what they are referring to before acting.
      Keep it brief: "I lost the thread — what are you replying to?"
+
+  If no [ACTIVE OUTBOUND CONTEXT] section is present **and you are talking to
+  anyone who is not the CEO**, do not ask what they are referring to on that
+  basis — the block was withheld, not empty. Handle the inbound on its own
+  merits (self-contained content, NO_REPLY, escalate to the CEO as needed).
 
   ### Contact intelligence (borrow-then-answer)
   Contact intelligence — briefings, CRUD, deduplication, relationship lookups,

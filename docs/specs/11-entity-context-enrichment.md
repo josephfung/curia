@@ -519,11 +519,13 @@ Agent-specific overrides (e.g. `debrief.contextBridgeTtlHours = 48`) are passed 
 
 ### Dispatcher Injection
 
-On every inbound message, the dispatcher:
+On every **principal** inbound (`liveTurn: true`), the dispatcher:
 
 1. Queries `OutboundContextService.getActive()` for the newest non-released, non-expired entries system-wide (conversation-agnostic — proactive sends register under bullpen/scheduler/peer ids that differ from the reply conversation; see ADR-019 / #1817).
 2. If any exist, calls `formatInjectionBlock(entries, originalContent)` to prepend an `[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]` block to the content the coordinator sees.
 3. Each block keeps the key name `entry_id` (for `context-bridge-release`) but labels it as an outbound_context UUID — not a Nylas/email message id — plus channel, originating agent, age, expiry-relative time, content preview, and any explicit hint fields.
+
+Non-principal text inbounds (resolved third parties, unresolved/`tier: unknown` senders) skip the query entirely — the block is principal-audience content (#1848), matching the voice path's `liveTurn` gate (#1598). `stampOriginator()` runs once per inbound and supplies that signal.
 
 The coordinator reads this block, decides whether the inbound is a continuation of an outbound thread, and (if so) delegates to the originating agent — or invokes `context-bridge-release` if the LLM concludes the thread is done.
 
