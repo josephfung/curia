@@ -6,7 +6,7 @@
   "action_risk": "medium",
   "inputs": {
     "reply_to_message_id": "string (Nylas message ID from the inbound email preamble / Message ID field — NOT an entry_id UUID from [ACTIVE OUTBOUND CONTEXT])",
-    "account": "string? (named account that owns the thread, as configured in channel_accounts.email — the Account line in an [OWNER CC] preamble. The original message is read from this mailbox and the reply is sent from it. Defaults to the primary account.)",
+    "account": "string? (named account that owns the thread, as configured under Settings → Channels → Email → Email accounts — the Account line in an [OWNER CC] preamble. The original message is read from this mailbox and the reply is sent from it. Defaults to the primary account.)",
     "body": "string",
     "cc": "string? (comma-separated — omit for reply-all default, empty string to reply to sender only)",
     "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string, node_id?: string}. file_url must be a file:// URL from email-download-attachment or similar. When the attachment contains KG-sourced data, set node_id to the kg_nodes UUID so export gates can resolve sensitivity. Max 10 attachments, 20 MB total.)",

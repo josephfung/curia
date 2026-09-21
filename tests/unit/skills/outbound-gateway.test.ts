@@ -1036,6 +1036,21 @@ describe('OutboundGateway.createEmailDraft', () => {
     expect(result.blockedReason).toContain('curia');
   });
 
+  it('names an unknown account from getEmailMessage (#1832)', async () => {
+    const { gateway } = makeGateway({
+      nylasClients: new Map([['curia', { getMessage: vi.fn() } as unknown as NylasClient]]),
+    });
+
+    await expect(gateway.getEmailMessage('msg-1', 'typo')).rejects.toThrow(/unknown account 'typo'/);
+    await expect(gateway.getEmailMessage('msg-1', 'typo')).rejects.toThrow(/curia/);
+  });
+
+  it('keeps the unconfigured error when getEmailMessage has no clients', async () => {
+    const { gateway } = makeGateway({ nylasClients: new Map() });
+
+    await expect(gateway.getEmailMessage('msg-1')).rejects.toThrow(/no nylasClient is configured/);
+  });
+
   it('returns generic error when no email clients are configured at all', async () => {
     const requestWithoutAccount = { ...draftRequest, accountId: undefined };
     const { gateway } = makeGateway({

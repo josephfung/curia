@@ -33,7 +33,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Published image** — now keeps `pnpm-retry`, so downstream images can retry their own network installs. (curia-deploy#220)
 - **Voice caller policy** — unknown-sender now follows `channel-trust.yaml`; blocked stays always-deny. (#1626)
 - **`contextBridge` config** — new `channelDefaultExpiryHours` map sets the auto-registration TTL per channel. (#1816)
-- **`email-reply` / `email-send` inputs (public API)** — optional `account` selects the mailbox. (#1832)
+- **`email-reply` / `email-send` inputs (public API)** — optional `account` selects the mailbox; send only when threading. (#1832)
 - **Coordinator** — CC replies pass the preamble Account into `email-reply`. (#1832)
 
 ### Fixed

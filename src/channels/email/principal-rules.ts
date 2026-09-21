@@ -11,7 +11,7 @@ import {
   splitCommaSeparatedAddresses,
 } from '../../contacts/principal-carveout-parse.js';
 import { isEmailSendRequest } from './outbound-request.js';
-import { emailAccountIdFromInput } from './account-id.js';
+import { emailAccountIdFromInput, replyToMessageIdFromInput } from './account-id.js';
 import { deriveEmailReplyRecipientSet } from './reply-recipients.js';
 import {
   looksLikeOutboundContextEntryId,
@@ -83,8 +83,10 @@ export async function resolveEmailReplyRecipients(
     if (hasPresentValue(input[key])) return null;
   }
 
-  const messageId = input['reply_to_message_id'];
-  if (typeof messageId !== 'string' || messageId.trim().length === 0) return null;
+  // Same normalizers the email-reply handler uses. Trimming on only one
+  // side splits the per-invoke fetch cache (#1832).
+  const messageId = replyToMessageIdFromInput(input);
+  if (!messageId) return null;
   // Reject before any Nylas fetch (#1817): an outbound_context entry_id UUID is
   // not a message id. Throw so Gate C can surface the actionable error instead
   // of a generic escalate-after-404.
@@ -97,13 +99,8 @@ export async function resolveEmailReplyRecipients(
   }
   if (!deps.fetchMessage) return null;
 
-  // Same account the email-reply handler will pass to getEmailMessage.
-  // Passing a different id (or omitting one the handler sends) splits the
-  // per-invoke fetch cache (#1832).
   const accountId = emailAccountIdFromInput(input);
-  const original = accountId === undefined
-    ? await deps.fetchMessage(messageId.trim())
-    : await deps.fetchMessage(messageId.trim(), accountId);
+  const original = await deps.fetchMessage(messageId, accountId);
 
   const set = deriveEmailReplyRecipientSet({
     originalFrom: original.from[0]?.email,
