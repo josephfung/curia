@@ -164,6 +164,23 @@ describe('describeUnresolvedIdentity', () => {
     expect(describeUnresolvedIdentity('José Müller would like to attend.', ['José Müller'])).toBeNull();
   });
 
+  it('does not treat a capitalized cue header as an unresolved person', () => {
+    const covered = ['Joseph Fung', 'Xiaopu Chen'];
+    expect(describeUnresolvedIdentity('Attendees:\n- Joseph Fung\n- Xiaopu Chen', covered)).toBeNull();
+    expect(describeUnresolvedIdentity('Guests:\n- Joseph Fung\n- Xiaopu Chen', covered)).toBeNull();
+    expect(describeUnresolvedIdentity('Invited:\n- Joseph Fung', ['Joseph Fung'])).toBeNull();
+    expect(describeUnresolvedIdentity('Attendees:\n- Marcus Webb', covered)).toContain('Marcus Webb');
+  });
+
+  it('does not block an unresolved name that has no invitation or attendance cue', () => {
+    // Deliberate. The gate is hedges plus a nearby cue, not every proper name.
+    const covered = ['Joseph Fung', 'Dani Smith', 'Xiaopu Chen'];
+    expect(describeUnresolvedIdentity(
+      'I am connecting you with Marcus Webb about the contract.',
+      covered,
+    )).toBeNull();
+  });
+
   it('flags a two-letter name when a person cue is nearby', () => {
     expect(describeUnresolvedIdentity('Al Li would like to attend.', [])).toContain('Al Li');
     expect(describeUnresolvedIdentity('Al Li would like to attend.', ['Al Li'])).toBeNull();

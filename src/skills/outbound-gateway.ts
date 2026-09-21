@@ -206,8 +206,8 @@ export interface OutboundGatewayConfig {
   /**
    * Conversation-scoped resolved contacts (#1818). When set, a send to a
    * non-principal recipient is blocked if the body has an unconfirmed-name
-   * hedge or a person-shaped mention that is not resolved to a contact ID
-   * in the current turn. Absent in tests and in boots that have no
+   * hedge, or an unresolved name next to an invitation or attendance cue.
+   * Other names are not blocked. Absent in tests and in boots that have no
    * database — the gate is skipped.
    */
   conversationEntities?: ConversationEntityState;

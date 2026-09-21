@@ -95,7 +95,7 @@ export type IdentityGateMode = 'off' | 'shadow' | 'enforce';
 
 /**
  * `enforce` blocks a non-principal send that has an unconfirmed-name hedge or
- * an unresolved person-shaped mention. `shadow` logs that block and sends.
+ * an unresolved name next to an invitation or attendance cue. `shadow` logs that block and sends.
  * `off` does not inspect the text. Default `enforce`.
  */
 export function resolveIdentityGateMode(filter: YamlConfig['filter']): IdentityGateMode {
@@ -488,7 +488,7 @@ export interface YamlConfig {
     };
     /**
      * Identity gate for non-principal sends (#1818). Default: 'enforce'.
-     *   'enforce' — block an unconfirmed-name hedge or unresolved person-shaped mention
+     *   'enforce' — block an unconfirmed-name hedge or a name beside an attendance cue
      *   'shadow'  — log the block and send
      *   'off'     — do not inspect the text
      */

@@ -43,7 +43,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`[ACTIVE OUTBOUND CONTEXT]`** — dispatcher injects only on principal `liveTurn`, matching voice. (#1848)
 - **Scheduled maintenance prompts** — `calendar`, `coordinator`, and `meeting-debrief` name `scheduler-report` and forbid bullpen. (#1831)
 - **Resolved entities** — identities from a turn stay available later, refreshed from the contact record. (#1818)
-- **Outbound identity gate** — external sends with an unresolved person-shaped mention are blocked until resolved. (#1818)
+- **Outbound identity gate** — blocks an unconfirmed-name hedge or a name beside an attendance cue. (#1818)
 - **`scheduler-report`** — derives `job_id` from the run conversation so agents stop mistaking it for a bullpen thread. (#1828)
 - **`bullpen`** — job-UUID-as-thread_id redirects to `scheduler-report` and logs a greppable warn. (#1828)
 - **Scheduler** — tool failures on a completed run now land in `last_run_context` without flipping health. (#1830)
