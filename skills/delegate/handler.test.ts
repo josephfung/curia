@@ -10,7 +10,7 @@ import { encodeResumeToken } from '../../src/agents/resume-token.js';
 
 /** Fake bus that, when an agent.task is published, immediately delivers a successful
  *  agent.response parented to it so DelegateHandler's await resolves. */
-function makeBus() {
+function makeBus(responseContent = 'done') {
   const published: BusEvent[] = [];
   const responseHandlers: Array<(e: BusEvent) => unknown> = [];
   const bus = {
@@ -24,7 +24,7 @@ function makeBus() {
         const resp = createAgentResponse({
           agentId: task.payload.agentId,
           conversationId: task.payload.conversationId,
-          content: 'done',
+          content: responseContent,
           skillsCalled: [],
           parentEventId: task.id,
         });
@@ -306,5 +306,21 @@ describe('DelegateHandler resume_token decode', () => {
     const task = published.find(e => e.type === 'agent.task');
     expect(task).toBeDefined();
     expect((task as AgentTaskEvent).payload.content).toContain('orig task');
+  });
+});
+
+describe('DelegateHandler resolved entities (#1818)', () => {
+  it('returns contact IDs parsed from the specialist <resolved_entities> block', async () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const { bus } = makeBus(
+      `Xiaopu Fung is on file.\n<resolved_entities><contact name="Xiaopu Fung" id="${id}" role="Spouse"/></resolved_entities>`,
+    );
+    const result = await new DelegateHandler().execute(makeCtx(bus));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({
+      agent: 'research-analyst',
+      resolvedContactIds: [id],
+    });
   });
 });

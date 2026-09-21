@@ -89,6 +89,14 @@ import {
   formatWorkspaceManifestBlock,
   resolveWorkspaceDirectoryPrefix,
 } from './document-workspace.js';
+import {
+  collectResolvedContactIds,
+  formatResolvedEntitiesBlock,
+  MAX_RESOLVED_ENTITIES,
+  RESOLVED_ENTITIES_TIER,
+  type ResolvedEntityCard,
+} from './resolved-entities.js';
+import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
 
 export interface AgentConfig {
   agentId: string;
@@ -203,6 +211,12 @@ export interface AgentConfig {
   workingDocsRepo?: WorkingDocsRepo;
   /** Task repo — used to resolve project-root workspace prefixes on resume (#1210). */
   taskRepo?: TaskRepo;
+  /**
+   * Conversation-scoped contact IDs (#1818). When set, identities resolved by
+   * a delegation are remembered and re-injected next turn from the current
+   * contact row — working memory does not keep tool results.
+   */
+  conversationEntities?: ConversationEntityState;
 }
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
@@ -316,6 +330,9 @@ export class AgentRuntime {
           );
         }
       }
+      // Drop the per-turn identity set once the task is over. The durable
+      // contact IDs stay in conversation_resolved_entities (#1818).
+      this.config.conversationEntities?.turnIdentities.end(taskEvent.id);
     }
   }
 
@@ -1007,6 +1024,36 @@ export class AgentRuntime {
     );
     ctxBudget.allocate('bullpen', bullpenMsg ? [bullpenMsg] : []);
 
+    // Re-inject contacts resolved earlier in this conversation (#1818).
+    // The block is rendered from the current contact row, then charged to its
+    // own budget tier. History is allocated after this so a long transcript
+    // cannot push the identities out.
+    const conversationEntities = this.config.conversationEntities;
+    if (conversationEntities) {
+      conversationEntities.turnIdentities.begin(taskEvent.id);
+      let resolvedCards: ResolvedEntityCard[] = [];
+      try {
+        resolvedCards = await conversationEntities.loadCurrent(conversationId, agentId, MAX_RESOLVED_ENTITIES);
+        conversationEntities.turnIdentities.replace(taskEvent.id, resolvedCards);
+      } catch (err) {
+        logger.error(
+          { err, agentId, conversationId },
+          'Failed to load resolved entities — this turn has no re-injected identities',
+        );
+      }
+      const resolvedBlock = formatResolvedEntitiesBlock(resolvedCards);
+      if (resolvedBlock && ctxBudget.allocate(RESOLVED_ENTITIES_TIER, [{ role: 'system', content: resolvedBlock }])) {
+        messages.push({ role: 'system', content: resolvedBlock });
+      } else if (!resolvedBlock) {
+        ctxBudget.allocate(RESOLVED_ENTITIES_TIER, []);
+      } else {
+        logger.warn(
+          { agentId, conversationId, contacts: resolvedCards.length },
+          'Resolved-entity block dropped by context budget — outbound sends must re-resolve before naming anyone',
+        );
+      }
+    }
+
     // Load conversation history LAST — it has partial inclusion (truncation)
     // so it takes whatever budget remains after higher-priority tiers are secured.
     const rawHistory = memory
@@ -1611,6 +1658,24 @@ export class AgentRuntime {
           if (result.success) {
             // Success: reset consecutive error counter
             budget.consecutiveErrors = 0;
+
+            // Persist contact IDs from a delegation (or any tool result that
+            // still carries <resolved_entities>) so the next turn can refresh
+            // them. The in-turn registry is updated before the model can send.
+            if (this.config.conversationEntities) {
+              const resolvedIds = collectResolvedContactIds(result.data);
+              if (resolvedIds.length > 0) {
+                try {
+                  const fresh = await this.config.conversationEntities.record(conversationId, agentId, resolvedIds);
+                  this.config.conversationEntities.turnIdentities.merge(taskEvent.id, fresh);
+                } catch (err) {
+                  logger.error(
+                    { err, agentId, conversationId, contactCount: resolvedIds.length },
+                    'Failed to persist resolved entities — later turns will not see these contact IDs',
+                  );
+                }
+              }
+            }
 
             // When a tool result is (partly) re-emitted into the turn by the runtime
             // — e.g. skill-activate, whose instructions/reference bodies are spliced
