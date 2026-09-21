@@ -49,7 +49,7 @@ describe('EmailSendHandler — reply quote', () => {
     ));
 
     expect(result.success).toBe(true);
-    expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-orig');
+    expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-orig', undefined);
 
     const sendArg = gateway.send.mock.calls[0]![0] as { body: string; htmlQuote?: string; replyToMessageId?: string };
     // Reply body stays as markdown; gateway converts it to HTML

@@ -664,7 +664,12 @@ export class ExecutionLayer {
       messageId: string,
       accountId?: string,
     ) => ReturnType<OutboundGateway['getEmailMessage']>,
-  ): Promise<{ recipients: string[] | null; resolutionFailed: boolean; inputError?: string }> {
+  ): Promise<{
+    recipients: string[] | null;
+    resolutionFailed: boolean;
+    inputError?: string;
+    inputErrorKind?: 'message-id-shape' | 'unknown-account';
+  }> {
     const found = findCarveoutSkill(toolName);
     if (!found) return { recipients: null, resolutionFailed: false };
 
@@ -679,8 +684,21 @@ export class ExecutionLayer {
         if (recipients === null) return { recipients: null, resolutionFailed: true };
         return { recipients, resolutionFailed: false };
       } catch (err) {
-        if (err instanceof ReplyToMessageIdShapeError || err instanceof UnknownEmailAccountError) {
-          return { recipients: null, resolutionFailed: true, inputError: err.message };
+        if (err instanceof ReplyToMessageIdShapeError) {
+          return {
+            recipients: null,
+            resolutionFailed: true,
+            inputError: err.message,
+            inputErrorKind: 'message-id-shape',
+          };
+        }
+        if (err instanceof UnknownEmailAccountError) {
+          return {
+            recipients: null,
+            resolutionFailed: true,
+            inputError: err.message,
+            inputErrorKind: 'unknown-account',
+          };
         }
         skillLogger.warn(
           { err, toolName },
@@ -1308,7 +1326,7 @@ export class ExecutionLayer {
                 if (resolved.inputError) {
                   skillLogger.info(
                     { toolName },
-                    resolved.inputError.startsWith('unknown account ')
+                    resolved.inputErrorKind === 'unknown-account'
                       ? 'autonomy gate: email-reply account is not a configured mailbox (#1832)'
                       : 'autonomy gate: email-reply reply_to_message_id failed shape check before Nylas fetch (#1817)',
                   );
