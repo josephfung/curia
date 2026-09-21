@@ -512,7 +512,7 @@ export class BullpenService {
   ): Promise<BullpenMessage> {
     const existing = await this.backend.getThread(threadId);
     // Agent-facing copy (incl. job-UUID → scheduler-report redirect) is owned by
-    // skills/bullpen/handler.ts via bullpenThreadNotFoundError. Keep this generic
+    // skills/bullpen/handler.ts via classifyBullpenThreadMiss. Keep this generic
     // so non-handler callers never see the old "Thread X not found" implication (#1828).
     if (!existing) throw new Error(`No bullpen thread with ID ${threadId} exists`);
     if (existing.thread.status === 'closed') {

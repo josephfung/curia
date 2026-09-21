@@ -64,14 +64,6 @@ export function classifyBullpenThreadMiss(
   return { jobIdAsThreadId: false, error: generic };
 }
 
-/** Convenience wrapper — prefer classifyBullpenThreadMiss when the caller needs the flag. */
-export function bullpenThreadNotFoundError(
-  threadId: string,
-  conversationId: string | undefined,
-): string {
-  return classifyBullpenThreadMiss(threadId, conversationId).error;
-}
-
 /** True when a service-layer miss should be remapped through classifyBullpenThreadMiss. */
 function isBullpenThreadNotFoundMessage(message: string, threadId: string): boolean {
   return (
