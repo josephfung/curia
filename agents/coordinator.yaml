@@ -787,5 +787,11 @@ error_budget:
   max_cost_usd: 1.00
 schedule:
   - cron: "0 * * * *"
-    task: "Run the approval expiry sweep — find and expire any pending approval requests that have passed their expiry time."
+    task: >
+      Run the approval expiry sweep. Call approval-expiry-sweep exactly once.
+      Then call scheduler-report exactly once, with a one-line summary and
+      context set to the expired and notified counts. This is a silent
+      maintenance run: do NOT post to the bullpen, and do NOT send any
+      additional CEO messages beyond what approval-expiry-sweep itself emits.
+      Do not perform any other work on this wake.
     expectedDurationSeconds: 360

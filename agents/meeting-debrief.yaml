@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.2.2"
+version: "0.2.3"
 role: specialist
 description: >
   Proactively debriefs the CEO after external meetings. Three times a day it
@@ -31,6 +31,8 @@ pinned_skills:
   - date-resolve
   - config-store
   - context-bridge-clear
+  # Narrow pin for scheduled detection-run reporting (ADR-032 / #1831)
+  - scheduler-report
 
 allow_discovery: false
 
@@ -44,7 +46,10 @@ schedule:
       Run the meeting debrief detection & scheduling pipeline. Scan the CEO's
       calendar for the rest of today's meetings, judge which warrant a debrief,
       and schedule a per-meeting debrief task (with a meeting-end wake-up) for
-      each one. Do not prompt the CEO during this run.
+      each one. Then call scheduler-report exactly once, with a one-line summary
+      and context set to the scanned, scheduled, and skipped counts. This is a
+      silent maintenance run: do NOT post to the bullpen, do NOT prompt or
+      message the CEO, and do NOT run the debrief lifecycle on this wake.
     expectedDurationSeconds: 120
 
 system_prompt: |
@@ -200,7 +205,9 @@ system_prompt: |
 
   - **NO** → set `seen:<eventId>` only (config-store `"store"`). Create no task — a not-worthy meeting must never appear in the backlog.
 
-  Then exit.
+  Then call `scheduler-report` exactly once with a one-line summary and context
+  set to the scanned, scheduled, and skipped counts, and exit. Do not post to
+  the bullpen or prompt the CEO on this wake.
 
   ---
 
