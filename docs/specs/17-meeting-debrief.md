@@ -170,7 +170,7 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 - **Created** atomically with the outbound send (via `context_bridge` param on send skills)
 - **Expires** after configurable TTL (default 48 hours)
 - **Released** explicitly by the coordinator (via `context-bridge-release` skill) when conversation completes
-- **Read** by the dispatcher on every **principal** inbound (`liveTurn`) — active entries injected into the coordinator's task
+- **Read** by the dispatcher on every **dispatcher-routed principal** inbound (`liveTurn`) — active entries injected into the coordinator's task (voice uses `VoiceRuntime`'s parallel path)
 
 **Security properties preserved:**
 - Coordinator sees and approves all outbound before it's sent

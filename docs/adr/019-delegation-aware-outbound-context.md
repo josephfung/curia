@@ -62,10 +62,13 @@ Three approaches were considered:
    A single `outbound_context` table records every outbound message Curia sends:
    conversation, channel, originating agent, content preview, expected-reply
    hint, delegation hint, structured metadata, TTL. The dispatcher injects
-   active entries into the coordinator's prompt on every **principal** inbound
-   (`liveTurn: true` — #1848 / #1598). Skills get a narrow `outboundContext`
-   capability (register + release, pre-scoped to the current conversation) so
-   any skill — not just send skills — can claim a reply thread.
+   active entries into the coordinator's prompt on every **dispatcher-routed
+   principal** inbound (`liveTurn: true` — #1848 / #1598). Voice inbounds
+   never reach this path (`channelId === 'voice'` returns early); `VoiceRuntime`
+   applies the same `liveTurn` gate on its own injection path. Skills get a
+   narrow `outboundContext` capability (register + release, pre-scoped to the
+   current conversation) so any skill — not just send skills — can claim a
+   reply thread.
 
 ## Decision
 
