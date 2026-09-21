@@ -1,6 +1,6 @@
 {
   "name": "email-send",
-  "description": "Send a new email. Provide comma-separated recipient email addresses, subject, and body. Emails are sent from the agent's configured email address. Pass account to send from a named mailbox; when reply_to_message_id is set, the quoted original is read from that same mailbox.",
+  "description": "Send a new email. Provide comma-separated recipient email addresses, subject, and body. Emails are sent from the agent's configured email address. Pass account only together with reply_to_message_id, to read and send a threaded reply from that mailbox. A new email always goes from the primary account.",
   "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "medium",
@@ -9,7 +9,7 @@
     "cc": "string?",
     "subject": "string",
     "body": "string",
-    "account": "string? (named account to send from, as configured in channel_accounts.email. When reply_to_message_id is set, the original message is also read from this account. Defaults to the primary account.)",
+    "account": "string? (named account to thread a reply from, as configured under Settings → Channels → Email → Email accounts. Only valid together with reply_to_message_id — the quoted original is read from this account and the reply is sent from it. Omit it, and do not pass it on a new email, to use the primary account.)",
     "reply_to_message_id": "string? (Nylas message ID — when set, the original message is quoted below the reply and the send is threaded)",
     "attachments": "object[]? (file attachments — array of {file_url: string, filename: string, content_type: string, node_id?: string}. file_url must be a file:// URL from email-download-attachment or similar. When the attachment contains KG-sourced data, set node_id to the kg_nodes UUID so export gates can resolve sensitivity. Max 10 attachments, 20 MB total.)",
     "export_items": "object[]? (parallel to attachments — array of {node_id: string, label: string} tagging each attachment's KG source for bulk-export gates. Required when sending confidential+ attachments; one entry per attachment in the same order.)",

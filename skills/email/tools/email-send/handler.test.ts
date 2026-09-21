@@ -123,6 +123,21 @@ describe('EmailSendHandler', () => {
     );
   });
 
+  it('rejects account on a new email that is not a threaded reply (#1832)', async () => {
+    const ctx = makeCtx({
+      to: 'alice@example.com',
+      subject: 'Hello',
+      body: 'Hi there',
+      account: 'ceo',
+    });
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/reply_to_message_id/);
+    expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+  });
+
   it('returns error when gateway blocks the send', async () => {
     const ctx = makeCtx({ to: 'alice@example.com', subject: 'Hello', body: 'Body' });
     (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({

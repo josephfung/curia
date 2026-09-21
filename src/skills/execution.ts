@@ -41,22 +41,7 @@ import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { ContactService } from '../contacts/contact-service.js';
-import type { OutboundGateway } from './outbound-gateway.js';
-
-/**
- * Call `getEmailMessage` without a trailing `undefined` accountId.
- * The cache key treats omitted and undefined as the primary mailbox; keeping
- * the underlying call one-arg for that case preserves that identity (#1832).
- */
-function getEmailMessageForAccount(
-  gateway: OutboundGateway,
-  messageId: string,
-  accountId?: string,
-): ReturnType<OutboundGateway['getEmailMessage']> {
-  return accountId === undefined
-    ? gateway.getEmailMessage(messageId)
-    : gateway.getEmailMessage(messageId, accountId);
-}
+import { UnknownEmailAccountError, type OutboundGateway } from './outbound-gateway.js';
 
 /**
  * Per-invoke wrapper so Gate C and the handler share one `getEmailMessage`
@@ -64,8 +49,8 @@ function getEmailMessageForAccount(
  * set the handler sends, and avoids a second Nylas round trip (#1815).
  *
  * The cache key is `${accountId ?? ''}\0${messageId}`. Both callers must pass
- * the account from `emailAccountIdFromInput` — a handler that starts passing
- * an account Gate C omits misses this cache and reopens the window (#1832).
+ * the account from `emailAccountIdFromInput` and the id from
+ * `replyToMessageIdFromInput` — a second parser misses this cache (#1832).
  */
 function withCachedGetEmailMessage(
   gateway: OutboundGateway,
@@ -75,7 +60,7 @@ function withCachedGetEmailMessage(
     const key = `${accountId ?? ''}\0${messageId}`;
     const cached = cache.get(key);
     if (cached) return cached;
-    const pending = getEmailMessageForAccount(gateway, messageId, accountId);
+    const pending = gateway.getEmailMessage(messageId, accountId);
     cache.set(key, pending);
     return pending;
   };
@@ -687,18 +672,14 @@ export class ExecutionLayer {
       try {
         const recipients = await found.carveout.resolveRecipients(input, {
           fetchMessage: fetchMessage ?? (this.outboundGateway
-            ? (messageId, accountId) => getEmailMessageForAccount(
-                this.outboundGateway!,
-                messageId,
-                accountId,
-              )
+            ? (messageId, accountId) => this.outboundGateway!.getEmailMessage(messageId, accountId)
             : undefined),
           selfEmails: this.selfEmails,
         });
         if (recipients === null) return { recipients: null, resolutionFailed: true };
         return { recipients, resolutionFailed: false };
       } catch (err) {
-        if (err instanceof ReplyToMessageIdShapeError) {
+        if (err instanceof ReplyToMessageIdShapeError || err instanceof UnknownEmailAccountError) {
           return { recipients: null, resolutionFailed: true, inputError: err.message };
         }
         skillLogger.warn(
@@ -1005,10 +986,9 @@ export class ExecutionLayer {
           if (outboundGatewayForCtx === sourceOutboundGateway) {
             outboundGatewayForCtx = withCachedGetEmailMessage(sourceOutboundGateway, emailMessageCache);
           }
-          // Forward accountId into the cached wrapper. The resolver and the
-          // handler both take it from emailAccountIdFromInput, so this key
-          // matches the handler's later getEmailMessage (#1832).
-          return getEmailMessageForAccount(outboundGatewayForCtx!, messageId, accountId);
+          // Forward the resolver's accountId into the cached wrapper. The
+          // handler passes the same id from emailAccountIdFromInput (#1832).
+          return outboundGatewayForCtx!.getEmailMessage(messageId, accountId);
         }
       : undefined;
 
@@ -1328,7 +1308,9 @@ export class ExecutionLayer {
                 if (resolved.inputError) {
                   skillLogger.info(
                     { toolName },
-                    'autonomy gate: email-reply reply_to_message_id failed shape check before Nylas fetch (#1817)',
+                    resolved.inputError.startsWith('unknown account ')
+                      ? 'autonomy gate: email-reply account is not a configured mailbox (#1832)'
+                      : 'autonomy gate: email-reply reply_to_message_id failed shape check before Nylas fetch (#1817)',
                   );
                   return {
                     success: false,

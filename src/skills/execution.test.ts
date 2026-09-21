@@ -24,7 +24,8 @@ import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import { SensitivityClassifier } from '../memory/sensitivity.js';
-import { emailAccountIdFromInput } from '../channels/email/account-id.js';
+import { emailAccountIdFromInput, replyToMessageIdFromInput } from '../channels/email/account-id.js';
+import { UnknownEmailAccountError } from './outbound-gateway.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -2224,7 +2225,7 @@ describe('autonomy gates', () => {
       expect(result.success).toBe(true);
       expect(handler.execute).toHaveBeenCalledOnce();
       expect(gateway.getEmailMessage).toHaveBeenCalledOnce();
-      expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-1');
+      expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-1', undefined);
     });
 
     it('reuses the Gate C fetch when email-reply names an account (#1832)', async () => {
@@ -2239,14 +2240,11 @@ describe('autonomy gates', () => {
       });
       const handler: ToolHandler = {
         execute: vi.fn(async (ctx): Promise<ToolResult> => {
-          // Same parser the email-reply handler uses, so this cannot pass a
-          // different account than Gate C resolved from the input (#1832).
+          // Same normalizers the email-reply handler uses, so neither half of
+          // the cache key can diverge from Gate C (#1832).
+          const messageId = replyToMessageIdFromInput(ctx.input);
           const accountId = emailAccountIdFromInput(ctx.input);
-          if (accountId === undefined) {
-            await ctx.outboundGateway!.getEmailMessage('msg-1');
-          } else {
-            await ctx.outboundGateway!.getEmailMessage('msg-1', accountId);
-          }
+          await ctx.outboundGateway!.getEmailMessage(messageId!, accountId);
           return { success: true, data: 'ok' };
         }),
       };
@@ -2266,6 +2264,69 @@ describe('autonomy gates', () => {
       expect(handler.execute).toHaveBeenCalledOnce();
       expect(gateway.getEmailMessage).toHaveBeenCalledOnce();
       expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-1', 'personal');
+    });
+
+    it('reuses the Gate C fetch when reply_to_message_id is padded (#1832)', async () => {
+      const { judge } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const gateway = makeEmailGateway({
+        from: [{ email: 'alice@example.com' }],
+        to: [{ email: 'bob@example.com' }],
+        cc: [],
+      });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
+      const handler: ToolHandler = {
+        execute: vi.fn(async (ctx): Promise<ToolResult> => {
+          const messageId = replyToMessageIdFromInput(ctx.input);
+          const accountId = emailAccountIdFromInput(ctx.input);
+          await ctx.outboundGateway!.getEmailMessage(messageId!, accountId);
+          return { success: true, data: 'ok' };
+        }),
+      };
+      registry.register(
+        { ...makeRiskyManifest('email-reply', 'medium'), capabilities: ['outboundGateway'] },
+        handler,
+      );
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: '  msg-1  ', body: 'Thanks', cc: '', account: 'personal' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(gateway.getEmailMessage).toHaveBeenCalledOnce();
+      expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-1', 'personal');
+    });
+
+    it('returns an unknown account to the agent instead of escalating (#1832)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const getEmailMessage = vi.fn().mockRejectedValue(new UnknownEmailAccountError('typo', ['curia']));
+      const gateway = { getEmailMessage } as unknown as OutboundGateway;
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: 'msg-1', body: 'Thanks', cc: '', account: 'typo' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/unknown account 'typo'/);
+        expect(result.error).toMatch(/curia/);
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+      expect(getEmailMessage).toHaveBeenCalledOnce();
+      expect(getEmailMessage).toHaveBeenCalledWith('msg-1', 'typo');
     });
 
     it('resolves reply-all recipients from the named account, not the primary (#1832)', async () => {

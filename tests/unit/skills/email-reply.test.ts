@@ -264,6 +264,29 @@ describe('EmailReplyHandler — CC modes', () => {
     }
   });
 
+  it('trims a padded reply_to_message_id before the fetch (#1832)', async () => {
+    const gateway = {
+      getEmailMessage: vi.fn().mockResolvedValue({
+        from: [{ email: 'sender@example.com' }],
+        to: [],
+        cc: [],
+        subject: 'Padded',
+      }),
+      send: vi.fn().mockResolvedValue({ success: true, messageId: 'sent-pad' }),
+    };
+
+    const result = await handler.execute(
+      makeCtx(
+        { reply_to_message_id: '  msg-sec  ', body: 'Thanks', cc: '', account: ' personal ' },
+        gateway,
+      ),
+    );
+
+    expect(result.success).toBe(true);
+    expect(gateway.getEmailMessage).toHaveBeenCalledOnce();
+    expect(gateway.getEmailMessage).toHaveBeenCalledWith('msg-sec', 'personal');
+  });
+
   it('cc === "" — reply to sender only, no CC', async () => {
     const gateway = {
       getEmailMessage: vi.fn().mockResolvedValue({

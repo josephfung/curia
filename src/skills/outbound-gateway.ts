@@ -338,6 +338,20 @@ export function hasTransientErrorSignal(err: unknown): boolean {
   return typeof e.code === 'string' && TRANSIENT_ERROR_CODES.has(e.code);
 }
 
+/**
+ * A named mailbox is not in the configured Nylas client map.
+ * Gate C returns this message to the agent instead of escalating (#1832).
+ */
+export class UnknownEmailAccountError extends Error {
+  readonly accountId: string;
+
+  constructor(accountId: string, available: readonly string[]) {
+    super(`unknown account '${accountId}'; available: [${available.join(', ')}]`);
+    this.name = 'UnknownEmailAccountError';
+    this.accountId = accountId;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // OutboundGateway
 // ---------------------------------------------------------------------------
@@ -1754,6 +1768,9 @@ export class OutboundGateway {
   async getEmailMessage(messageId: string, accountId?: string): Promise<NylasMessage> {
     const client = this.getNylasClient(accountId);
     if (!client) {
+      if (accountId && this.nylasClients.size > 0) {
+        throw new UnknownEmailAccountError(accountId, this.listAccountIds());
+      }
       throw new Error('outbound-gateway: getEmailMessage called but no nylasClient is configured');
     }
     return client.getMessage(messageId);
@@ -2432,7 +2449,11 @@ export class OutboundGateway {
   private async dispatchEmail(request: EmailSendRequest): Promise<OutboundSendResult> {
     const nylasClient = this.getNylasClient(request.accountId);
     if (!nylasClient) {
-      return { success: false, blockedReason: 'Email client not configured' };
+      const available = [...this.nylasClients.keys()];
+      const reason = request.accountId
+        ? `unknown account '${request.accountId}'; available: [${available.join(', ')}]`
+        : 'Email client not configured';
+      return { success: false, blockedReason: reason };
     }
 
     // markdownToHtml is a pure function (no I/O, no realistic throw path).

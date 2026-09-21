@@ -71,7 +71,17 @@ describe('resolveEmailReplyRecipients', () => {
       'bob@example.com',
       'carol@example.com',
     ]);
-    expect(fetchMessage).toHaveBeenCalledWith('msg-1');
+    expect(fetchMessage).toHaveBeenCalledWith('msg-1', undefined);
+  });
+
+  it('trims reply_to_message_id before fetch so the cache key matches the handler (#1832)', async () => {
+    const fetchMessage = vi.fn().mockResolvedValue(thread);
+    await resolveEmailReplyRecipients(
+      { reply_to_message_id: '  msg-1  ', body: 'hi', account: 'personal' },
+      { fetchMessage, selfEmails: ['curia@example.com'] },
+    );
+    expect(fetchMessage).toHaveBeenCalledOnce();
+    expect(fetchMessage).toHaveBeenCalledWith('msg-1', 'personal');
   });
 
   it('forwards a named account to fetchMessage (#1832)', async () => {
@@ -87,13 +97,13 @@ describe('resolveEmailReplyRecipients', () => {
     expect(fetchMessage).toHaveBeenCalledWith('msg-1', 'personal');
   });
 
-  it('omits accountId when account is blank so the primary mailbox is used', async () => {
+  it('treats a blank account as the primary mailbox', async () => {
     const fetchMessage = vi.fn().mockResolvedValue(thread);
     await resolveEmailReplyRecipients(
       { reply_to_message_id: 'msg-1', body: 'hi', account: '   ' },
       { fetchMessage },
     );
-    expect(fetchMessage).toHaveBeenCalledWith('msg-1');
+    expect(fetchMessage).toHaveBeenCalledWith('msg-1', undefined);
   });
 
   it('sender-only (cc === "") returns just the original from', async () => {
