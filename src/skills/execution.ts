@@ -2172,8 +2172,15 @@ export class ExecutionLayer {
       // Handler returned { success: false, error } directly (did not throw).
       // Sanitize and wrap the error message — handler errors can contain
       // user-supplied values or external content that poses injection risk.
+      // Preserve handler-set errorType (#1381 / #1854): stripping it here made
+      // IDENTITY_MISMATCH (and AUTH_FAILURE from calendar-list-events) invisible
+      // to the runtime, so hard-fail / structured audit never fired.
       if (!result.success && result.error) {
-        return { success: false, error: this.wrapSkillError(result.error) };
+        return {
+          success: false,
+          error: this.wrapSkillError(result.error),
+          ...(result.errorType !== undefined && { errorType: result.errorType }),
+        };
       }
 
       return result;

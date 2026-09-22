@@ -152,13 +152,14 @@ describe('guardMcpCalendarIdentity', () => {
 
 describe('guardNylasExplicitCalendarIdentity', () => {
   const principalId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-  const otherId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  const agentId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+  const sarahId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 
-  it('fails when an explicit calendarId is registered to a non-principal contact', async () => {
+  it('fails when an explicit calendarId is registered to the agent contact', async () => {
     const contactService = {
       findContactBySystemRole: vi.fn().mockResolvedValue({ id: principalId }),
       resolveCalendar: vi.fn().mockResolvedValue({
-        contactId: otherId,
+        contactId: agentId,
         label: 'Agent calendar',
         isPrimary: true,
         readOnly: false,
@@ -170,6 +171,7 @@ describe('guardNylasExplicitCalendarIdentity', () => {
       ctx: makeCtx({
         originator: makeSystemOriginator(),
         contactService: contactService as never,
+        agentContactId: agentId,
       }),
     });
 
@@ -179,10 +181,11 @@ describe('guardNylasExplicitCalendarIdentity', () => {
       expect(result!.errorType).toBe('IDENTITY_MISMATCH');
       expect(result!.error).toContain('cal-agent');
       expect(result!.error).toContain(principalId);
+      expect(result!.error).toContain('agent');
     }
   });
 
-  it('allows principal-owned, org-wide, and unregistered calendars', async () => {
+  it('allows principal-owned, third-party, org-wide, and unregistered calendars', async () => {
     const contactService = {
       findContactBySystemRole: vi.fn().mockResolvedValue({ id: principalId }),
       resolveCalendar: vi
@@ -190,6 +193,12 @@ describe('guardNylasExplicitCalendarIdentity', () => {
         .mockResolvedValueOnce({
           contactId: principalId,
           label: 'Work',
+          isPrimary: true,
+          readOnly: false,
+        })
+        .mockResolvedValueOnce({
+          contactId: sarahId,
+          label: "Sarah's calendar",
           isPrimary: true,
           readOnly: false,
         })
@@ -202,16 +211,67 @@ describe('guardNylasExplicitCalendarIdentity', () => {
         .mockResolvedValueOnce(null),
     };
 
-    for (const calendarId of ['cal-principal', 'cal-holidays', 'cal-unregistered']) {
+    for (const calendarId of ['cal-principal', 'cal-sarah', 'cal-holidays', 'cal-unregistered']) {
       const result = await guardNylasExplicitCalendarIdentity({
         calendarId,
         ctx: makeCtx({
           originator: makeSystemOriginator(),
           contactService: contactService as never,
+          agentContactId: agentId,
         }),
       });
       expect(result).toBeNull();
     }
+  });
+
+  it('warns and fails open when contactService is missing', async () => {
+    const warn = vi.fn();
+    const result = await guardNylasExplicitCalendarIdentity({
+      calendarId: 'cal-1',
+      ctx: makeCtx({
+        originator: makeSystemOriginator(),
+        log: { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      }),
+    });
+    expect(result).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ code: CALENDAR_IDENTITY_MISMATCH_CODE }),
+      expect.stringContaining('contactService'),
+    );
+  });
+});
+
+describe('identityMismatchFromToolResult', () => {
+  it('detects direct IDENTITY_MISMATCH failures', async () => {
+    const { identityMismatchFromToolResult } = await import(
+      '../../../src/skills/_shared/calendar-identity-guard.js'
+    );
+    const err = identityMismatchFromToolResult('get_events', {
+      success: false,
+      errorType: 'IDENTITY_MISMATCH',
+      error: 'mismatch',
+    });
+    expect(err?.type).toBe('IDENTITY_MISMATCH');
+    expect(err?.source).toBe('skill:get_events');
+  });
+
+  it('detects delegate soft-failures carrying IDENTITY_MISMATCH', async () => {
+    const { identityMismatchFromToolResult } = await import(
+      '../../../src/skills/_shared/calendar-identity-guard.js'
+    );
+    const err = identityMismatchFromToolResult('delegate', {
+      success: true,
+      data: {
+        agent: 'calendar',
+        failed: true,
+        errorType: 'IDENTITY_MISMATCH',
+        message: 'specialist blocked',
+      },
+    });
+    expect(err?.type).toBe('IDENTITY_MISMATCH');
+    expect(err?.context).toEqual(
+      expect.objectContaining({ via: 'delegate', specialistAgent: 'calendar' }),
+    );
   });
 });
 

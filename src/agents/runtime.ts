@@ -23,6 +23,7 @@ import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
+import { identityMismatchFromToolResult } from '../skills/_shared/calendar-identity-guard.js';
 // Value import (not type-only) — we call AutonomyService.formatPromptBlock() as a static method.
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
@@ -1675,6 +1676,15 @@ export class AgentRuntime {
             // Success: reset consecutive error counter
             budget.consecutiveErrors = 0;
 
+            // Delegate soft-failures (`success: true, data.failed`) still carry
+            // IDENTITY_MISMATCH from @calendar — hard-fail the coordinating turn
+            // so the scheduled morning-brief job is not marked completed (#1854).
+            const delegateMismatch = identityMismatchFromToolResult(toolCall.name, result);
+            if (delegateMismatch) {
+              pendingIdentityMismatch = delegateMismatch;
+              recordFailedSkill(toolCall.name, delegateMismatch.message);
+            }
+
             // Persist contact IDs from a delegation (or any tool result that
             // still carries <resolved_entities>) so the next turn can refresh
             // them. The in-turn registry is updated before the model can send.
@@ -1951,7 +1961,7 @@ export class AgentRuntime {
           recordFailedSkill(toolCall.name, result.error);
           const isDbFailure = result.errorType === 'DATABASE_UNAVAILABLE';
           const isAuthFailure = result.errorType === 'AUTH_FAILURE';
-          const isIdentityMismatch = result.errorType === 'IDENTITY_MISMATCH';
+          const mismatchFromFailure = identityMismatchFromToolResult(toolCall.name, result);
           if (isDbFailure) {
             budget.dbFailures++;
           } else {
@@ -1975,18 +1985,10 @@ export class AgentRuntime {
                   context: { toolName: toolCall.name },
                   timestamp: new Date(),
                 }
-            : isIdentityMismatch
-              ? {
-                  type: 'IDENTITY_MISMATCH' as const,
-                  source: `skill:${toolCall.name}`,
-                  message: result.error,
-                  retryable: false,
-                  context: { toolName: toolCall.name },
-                  timestamp: new Date(),
-                }
-            : classifySkillError(toolCall.name, result.error);
-          if (isIdentityMismatch) {
-            pendingIdentityMismatch = agentErr;
+            : mismatchFromFailure
+              ?? classifySkillError(toolCall.name, result.error);
+          if (mismatchFromFailure) {
+            pendingIdentityMismatch = mismatchFromFailure;
           }
           const formattedError = formatTaskError(
             toolCall.name,
