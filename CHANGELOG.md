@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ExecutionLayer.invoke`** — preserves handler-set `errorType` (unblocks `AUTH_FAILURE` / `IDENTITY_MISMATCH`). (#1854)
 - **Calendar tools (public API)** — `allowed_callers` now exclude the coordinator so discovery cannot re-open a direct path. (#1853)
 - **Coordinator outbound guidance** — absent block means withheld on non-principal turns, not empty. (#1848)
+- **`delegate` outputs (public API)** — `declined` marks a specialist refusal as distinct from an answer. Skill v1.7.0. (#1871)
 - **`delegate` outputs (public API)** — `resolvedContactIds` keeps contact IDs after output sanitization. Skill v1.6.0. (#1818)
 - **Identity gate** — `filter.identityGate` selects enforce, shadow, or off. (#1818)
 - **`scheduler-report` input (public API)** — `job_id` optional on scheduled runs; derived from conversation. (#1828)
@@ -48,6 +49,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Delegated specialists** — harness-set requester identity replaces the low-trust unknown-sender block. (#1871)
+- **Calendar RSVP policy** — unknown-sender decline applies only to formal invite responses. (#1871)
+- **Specialist decline** — structured marker stops reworded re-delegation on the first refusal. (#1871)
+- **`parseExecutionPausedPayload`** — plain-prose replies no longer log a warn with a stack. (#1871)
 - **Agent runtime** — skip remaining batch tool calls once `IDENTITY_MISMATCH` is pending. (#1854)
 - **`docker-publish`** — retries transient registry failures and caches layers per image. (#1864)
 - **Email skill manifests** — `account` provenance names the console Email accounts path. (#1856)

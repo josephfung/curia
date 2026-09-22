@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.20.8"
+version: "0.20.9"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -380,6 +380,13 @@ system_prompt: |
   4. The specialist resumes with full context automatically. Handle the result
      normally — it may be a final answer or another clarification request.
      Multiple clarification rounds are supported.
+
+  ### Specialist declines
+  When delegate returns `declined: true` (reason `specialist_decline`), the specialist
+  refused the task. That is not a phrasing problem. Do not reword the brief and
+  delegate to that specialist again — the platform blocks further attempts for this
+  turn, including a differently worded brief. Tell the CEO what was reported, in
+  your own voice, using the `message` field.
 
   ### Handling resumable-task pauses (partial progress, not failure)
   When delegate returns with `paused: true`, a specialist made real progress on a

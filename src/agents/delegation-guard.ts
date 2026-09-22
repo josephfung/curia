@@ -40,6 +40,8 @@ export interface DelegationFailureInfo {
   delegateConversationId?: string;
   /** Timeout only (#1799): the delegate wait that elapsed, in ms. */
   waitTimeoutMs?: number;
+  /** Set when the specialist refused via the structured decline marker (#1871). */
+  declined?: boolean;
 }
 
 interface DelegationEntry {
@@ -52,16 +54,41 @@ export function delegationKey(agent: string, task: string): string {
   return `${agent}\0${task.trim()}`;
 }
 
+/** Agent name encoded by delegationKey, or '' when the key is not in that shape. */
+export function agentFromDelegationKey(key: string): string {
+  const idx = key.indexOf('\0');
+  return idx === -1 ? '' : key.slice(0, idx);
+}
+
 export class DelegationGuard {
   private readonly entries = new Map<string, DelegationEntry>();
+  /** Agent-scoped refusals (#1871). A reworded brief is a different key, so an
+   *  identical-task block would not stop the retry loop a prose refusal caused. */
+  private readonly agentDeclines = new Map<string, DelegationFailureInfo>();
 
   /** Whether another identical delegation may be invoked. */
   canAttempt(key: string): boolean {
+    const agent = agentFromDelegationKey(key);
+    if (agent !== '' && this.agentDeclines.has(agent)) return false;
     const entry = this.entries.get(key);
     if (!entry) return true;
     if (!entry.lastFailure) return true;
     if (entry.lastFailure.retryable === false) return false;
     return entry.attempts < MAX_RETRYABLE_IDENTICAL_DELEGATIONS;
+  }
+
+  /**
+   * Record a structured specialist refusal. Further delegate calls to this agent
+   * are blocked for the rest of the turn, including when the brief is reworded.
+   */
+  recordSpecialistDecline(agent: string, failure: DelegationFailureInfo): void {
+    if (agent === '') return;
+    this.agentDeclines.set(agent, failure);
+  }
+
+  /** The structured refusal recorded for this agent, if the turn already saw one. */
+  getAgentDecline(agent: string): DelegationFailureInfo | undefined {
+    return this.agentDeclines.get(agent);
   }
 
   /** Record an in-flight delegate invocation (before the specialist runs). */
@@ -222,6 +249,7 @@ export function parseDelegateFailureData(data: unknown, logger?: Logger): Delega
       && Number.isFinite(record['wait_timeout_ms'])
       && record['wait_timeout_ms'] > 0
       && { waitTimeoutMs: record['wait_timeout_ms'] }),
+    ...(record['declined'] === true && { declined: true }),
   };
 }
 

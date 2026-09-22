@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   buildCheckpointBudgetNudgeMessage,
   buildExecutionPausedResponse,
@@ -322,6 +322,25 @@ describe('parseExecutionPausedPayload negative paths (#1174)', () => {
     ['missing last_slice_units', JSON.stringify({ ...basePayload, last_slice_units: undefined })],
   ])('returns null for %s — treated as non-paused', (_label, content) => {
     expect(parseExecutionPausedPayload(content)).toBeNull();
+  });
+
+  it('does not warn-with-stack for a plain-prose specialist reply (#1871)', () => {
+    const warn = vi.fn();
+    const logger = { warn } as unknown as import('../logger.js').Logger;
+    expect(parseExecutionPausedPayload(
+      'Today: 9:00 standup at the office. Three events, no conflicts.',
+      logger,
+    )).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+    expect(parseExecutionPausedPayload('   not json either', logger)).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('still warns when a brace-prefixed body is not the paused protocol', () => {
+    const warn = vi.fn();
+    const logger = { warn } as unknown as import('../logger.js').Logger;
+    expect(parseExecutionPausedPayload('{not valid json', logger)).toBeNull();
+    expect(warn).toHaveBeenCalledOnce();
   });
 
   it('accepts a valid payload without task_id (optional field)', () => {

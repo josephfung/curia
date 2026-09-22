@@ -2613,6 +2613,8 @@ async function main(): Promise<void> {
       // prepended to the system prompt (immediately after the identity block) on every task.
       // Specialists do not receive this — they operate in a trust-elevated context (tasks
       // arrive from the coordinator after the security layer has already evaluated the sender).
+      // The runtime states that contract on delegated tasks (#1871). Withholding this
+      // block is not itself the signal.
       securityContextBlock: agentConfig.role === 'coordinator' ? securityContextBlock : undefined,
       // Curia's own contact details — injected per-task so agents know which accounts to
       // use when MCP tools ask for an email address or phone number. Injected into ALL
