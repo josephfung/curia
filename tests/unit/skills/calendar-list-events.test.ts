@@ -485,14 +485,15 @@ describe('CalendarListEventsHandler', () => {
     }
   });
 
-  it('fails closed when principal-scoped explicit calendarId belongs to another contact (#1854)', async () => {
+  it('fails closed when principal-scoped explicit calendarId belongs to the agent (#1854)', async () => {
     const { makeSystemOriginator } = await import('../../../src/contacts/principal.js');
     const principalId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const agentContactId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
     const listEvents = vi.fn().mockResolvedValue([]);
     const contactService = {
       findContactBySystemRole: vi.fn().mockResolvedValue({ id: principalId }),
       resolveCalendar: vi.fn().mockResolvedValue({
-        contactId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        contactId: agentContactId,
         label: 'Curia',
         isPrimary: true,
         readOnly: false,
@@ -504,6 +505,7 @@ describe('CalendarListEventsHandler', () => {
       {
         nylasCalendarClient: { listEvents } as never,
         contactService: contactService as never,
+        agentContactId,
         taskMetadata: { originator: makeSystemOriginator() },
       },
     ));
@@ -514,5 +516,35 @@ describe('CalendarListEventsHandler', () => {
       expect(result.errorType).toBe('IDENTITY_MISMATCH');
       expect(result.error).toContain('calendar_identity_mismatch');
     }
+  });
+
+  it('allows principal-scoped reads of a third-party registered calendarId (#1854)', async () => {
+    const { makeSystemOriginator } = await import('../../../src/contacts/principal.js');
+    const principalId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const sarahId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const agentContactId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+    const listEvents = vi.fn().mockResolvedValue(mockEvents);
+    const contactService = {
+      findContactBySystemRole: vi.fn().mockResolvedValue({ id: principalId }),
+      resolveCalendar: vi.fn().mockResolvedValue({
+        contactId: sarahId,
+        label: "Sarah's calendar",
+        isPrimary: true,
+        readOnly: false,
+      }),
+    };
+
+    const result = await handler.execute(makeCtx(
+      { calendarId: 'cal-sarah', timeMin: '2026-04-01T00:00:00Z', timeMax: '2026-04-02T00:00:00Z' },
+      {
+        nylasCalendarClient: { listEvents } as never,
+        contactService: contactService as never,
+        agentContactId,
+        taskMetadata: { originator: makeSystemOriginator() },
+      },
+    ));
+
+    expect(listEvents).toHaveBeenCalledOnce();
+    expect(result.success).toBe(true);
   });
 });

@@ -425,6 +425,42 @@ describe('ExecutionLayer', () => {
       }
     });
 
+    it('preserves handler-set errorType through invoke (#1854)', async () => {
+      const handler: ToolHandler = {
+        execute: async () => ({
+          success: false,
+          error: 'IDENTITY_MISMATCH (calendar_identity_mismatch) — wrong identity',
+          errorType: 'IDENTITY_MISMATCH',
+        }),
+      };
+      registry.register(makeManifest(), handler);
+
+      const result = await execution.invoke('test-skill', {});
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorType).toBe('IDENTITY_MISMATCH');
+        expect(result.error).toContain('<skill_error>');
+        expect(result.error).toContain('calendar_identity_mismatch');
+      }
+    });
+
+    it('preserves AUTH_FAILURE errorType from handler (#1561 / #1854)', async () => {
+      const handler: ToolHandler = {
+        execute: async () => ({
+          success: false,
+          error: 'Calendar authorization failed',
+          errorType: 'AUTH_FAILURE',
+        }),
+      };
+      registry.register(makeManifest(), handler);
+
+      const result = await execution.invoke('test-skill', {});
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errorType).toBe('AUTH_FAILURE');
+      }
+    });
+
     it('strips injection vectors from handler-returned error before wrapping', async () => {
       const handler: ToolHandler = {
         // Malicious content in the returned error string (e.g., from an external API response)
