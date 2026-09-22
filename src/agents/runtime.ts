@@ -1458,11 +1458,17 @@ export class AgentRuntime {
           // splices (skill-activate) are visible to the next openStream snapshot.
           const transcript = ctx?.messages ?? messages;
 
-          // When escalation is pending mid-batch, skip remaining tools (matches
-          // the former `break` after pendingDelegationEscalation is set).
+          // When escalation or identity mismatch is pending mid-batch, skip
+          // remaining tools (matches the former `break` after those flags are set).
           if (pendingDelegationEscalation) {
             return {
               content: 'Skipped — delegation failure escalation pending for this turn.',
+              is_error: true,
+            };
+          }
+          if (pendingIdentityMismatch) {
+            return {
+              content: 'Skipped — identity mismatch pending for this turn.',
               is_error: true,
             };
           }

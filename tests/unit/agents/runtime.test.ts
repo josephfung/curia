@@ -1780,6 +1780,98 @@ describe('AgentRuntime tool-use loop', () => {
     ]);
   });
 
+  it('skips remaining tool calls in a batch after IDENTITY_MISMATCH (#1854)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [
+              { id: 'call-1', name: 'get_events', input: { calendar_id: 'primary' } },
+              { id: 'call-2', name: 'email-send', input: { to: 'ceo@example.com' } },
+            ],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Should not run.',
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockImplementation(async (name: string) => {
+        if (name === 'get_events') {
+          return {
+            success: false,
+            error: 'IDENTITY_MISMATCH (calendar_identity_mismatch) — wrong identity',
+            errorType: 'IDENTITY_MISMATCH',
+          };
+        }
+        return { success: true, data: { sent: true } };
+      }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    const errors: AgentErrorEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+    bus.subscribe('agent.error', 'dispatch', (event) => {
+      errors.push(event as AgentErrorEvent);
+    });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [
+        {
+          name: 'get_events',
+          description: 'MCP calendar',
+          input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+        },
+        {
+          name: 'email-send',
+          description: 'Send email',
+          input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+        },
+      ],
+      errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-identity-batch-skip',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'Morning brief',
+      parentEventId: 'parent-identity-batch-skip',
+    }));
+
+    expect(mockExecution.invoke).toHaveBeenCalledTimes(1);
+    expect(mockExecution.invoke.mock.calls[0]![0]).toBe('get_events');
+    expect(chatCallCount).toBe(1);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.payload.errorType).toBe('IDENTITY_MISMATCH');
+    expect(responses[0]!.payload.isError).toBe(true);
+  });
+
   it('hard-fails the coordinating turn when delegate soft-fails with IDENTITY_MISMATCH (#1854)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
