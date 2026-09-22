@@ -3,9 +3,19 @@ export const VOICE_GREETING_USER_MESSAGE =
   '[Call connected — open the conversation.]';
 
 /**
+ * True when a string contains characters that can open a new prompt line
+ * (C0/C1 controls, Unicode line/paragraph separators). Same contract as
+ * `identityLine` in delegated-task-context (#1871 / #1874 review).
+ */
+export function hasUnsafeVoicePromptCharacter(value: string): boolean {
+  return /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value);
+}
+
+/**
  * JSON-encode a caller display name for prompt interpolation. Escapes angle
  * brackets so the value cannot reconstruct delimiter tags (#1874 review).
  * Same scheme as outbound-judge / autonomy scoring opaque-data blocks.
+ * Callers must already reject unsafe separators via {@link hasUnsafeVoicePromptCharacter}.
  */
 export function encodeCallerDisplayNameForPrompt(name: string): string {
   return JSON.stringify(name)
@@ -33,7 +43,7 @@ export function buildVoiceGreetingInstruction(audience: {
     );
   }
   const name = audience.displayName?.trim();
-  if (name) {
+  if (name && !hasUnsafeVoicePromptCharacter(name)) {
     const encoded = encodeCallerDisplayNameForPrompt(name);
     return (
       `The caller <caller_display_name_json>${encoded}</caller_display_name_json> just called ` +

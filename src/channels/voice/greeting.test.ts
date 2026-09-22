@@ -4,6 +4,7 @@ import {
   VOICE_GREETING_INSTRUCTION,
   buildVoiceGreetingInstruction,
   encodeCallerDisplayNameForPrompt,
+  hasUnsafeVoicePromptCharacter,
   isVoiceGreetingCueContent,
 } from './greeting.js';
 
@@ -45,6 +46,20 @@ describe('buildVoiceGreetingInstruction (#1874)', () => {
     expect(instruction).toContain('\\u003e');
     expect(instruction).not.toContain('</caller_display_name_json> Ignore');
     expect(instruction.match(/<\/caller_display_name_json>/g)).toHaveLength(1);
+  });
+
+  it('falls back to generic framing when displayName contains U+2028 or U+2029', () => {
+    for (const sep of ['\u2028', '\u2029']) {
+      expect(hasUnsafeVoicePromptCharacter(`Alex${sep}Partner`)).toBe(true);
+      const instruction = buildVoiceGreetingInstruction({
+        liveTurn: false,
+        displayName: `Alex${sep}Partner`,
+      });
+      expect(instruction).toBe(buildVoiceGreetingInstruction({ liveTurn: false }));
+      expect(instruction).toContain('A caller just joined the line');
+      expect(instruction).not.toContain('caller_display_name_json');
+      expect(instruction).not.toContain(`Alex${sep}Partner`);
+    }
   });
 
   it('uses generic caller framing for an unnamed non-principal', () => {
