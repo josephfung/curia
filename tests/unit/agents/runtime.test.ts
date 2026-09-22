@@ -1809,18 +1809,17 @@ describe('AgentRuntime tool-use loop', () => {
       }),
     };
 
-    const mockExecution = {
-      invoke: vi.fn().mockImplementation(async (name: string) => {
-        if (name === 'get_events') {
-          return {
-            success: false,
-            error: 'IDENTITY_MISMATCH (calendar_identity_mismatch) — wrong identity',
-            errorType: 'IDENTITY_MISMATCH',
-          };
-        }
-        return { success: true, data: { sent: true } };
-      }),
-    } as unknown as ExecutionLayer;
+    const invokeMock = vi.fn().mockImplementation(async (name: string) => {
+      if (name === 'get_events') {
+        return {
+          success: false,
+          error: 'IDENTITY_MISMATCH (calendar_identity_mismatch) — wrong identity',
+          errorType: 'IDENTITY_MISMATCH',
+        };
+      }
+      return { success: true, data: { sent: true } };
+    });
+    const mockExecution = { invoke: invokeMock } as unknown as ExecutionLayer;
 
     const responses: AgentResponseEvent[] = [];
     const errors: AgentErrorEvent[] = [];
@@ -1864,8 +1863,8 @@ describe('AgentRuntime tool-use loop', () => {
       parentEventId: 'parent-identity-batch-skip',
     }));
 
-    expect(mockExecution.invoke).toHaveBeenCalledTimes(1);
-    expect(mockExecution.invoke.mock.calls[0]![0]).toBe('get_events');
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls[0]![0]).toBe('get_events');
     expect(chatCallCount).toBe(1);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.payload.errorType).toBe('IDENTITY_MISMATCH');
