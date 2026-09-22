@@ -97,8 +97,11 @@ const RETIRED_SURFACES = ['channel_accounts', 'CEO_PRIMARY_EMAIL'] as const;
 describe('tool manifest walk covers both layouts', () => {
   it('finds manifests to scan in both layouts', () => {
     // Guards the guards: a broken walk returning [] would make every scan below vacuous.
+    // Both layout branches must be present — nested alone can satisfy length + tools/, so
+    // also require at least one flat path (no /tools/ segment).
     expect(MANIFESTS.length).toBeGreaterThan(50);
     expect(MANIFESTS.some(m => m.relative.includes(`${path.sep}tools${path.sep}`))).toBe(true);
+    expect(MANIFESTS.some(m => !m.relative.includes(`${path.sep}tools${path.sep}`))).toBe(true);
   });
 });
 
