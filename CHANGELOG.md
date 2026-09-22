@@ -49,6 +49,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Voice greeting** — non-principal callers no longer get principal framing on the opening turn. (#1874)
 - **Delegated specialists** — harness-set requester identity replaces the low-trust unknown-sender block. (#1871)
 - **Voice off-ramp** — internal coordinator tasks get requester identity without specialist framing. (#1871)
 - **Calendar RSVP policy** — unknown-sender decline applies only to formal invite responses. (#1871)

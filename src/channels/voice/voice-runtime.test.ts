@@ -1611,6 +1611,37 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     expect(user).toEqual({ role: 'user', content: VOICE_GREETING_USER_MESSAGE });
   });
 
+  it('greeting for a non-principal caller has no principal framing (#1874)', async () => {
+    const llm = new FakeStreamProvider([
+      replyScript('Hi Alex — what can I help with?'),
+    ]);
+    const { runtime } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(3, 1),
+      timezone: 'America/Toronto',
+    });
+
+    await runtime.startSession({
+      sessionId: 'g-nonprincipal',
+      conversationId: 'voice:g-nonprincipal',
+      roomName: 'voice-g-nonprincipal',
+      agentToken: 'tok',
+      caller: partnerCaller(),
+      openingGreeting: true,
+    });
+    await runtime.awaitIdle('g-nonprincipal');
+
+    expect(llm.seenMessages).toHaveLength(1);
+    const system = llm.seenMessages[0]![0]!;
+    expect(system.role).toBe('system');
+    const content = typeof system.content === 'string' ? system.content : '';
+    expect(content).toContain('Alex Partner just called and joined the line');
+    expect(content).toContain('They are not the principal');
+    expect(content).not.toContain('The principal just called');
+    expect(content).not.toContain('You are speaking to the principal');
+    expect(content).not.toContain(VOICE_GREETING_INSTRUCTION);
+  });
+
   it('includes outbound-context in the greeting system prompt when active', async () => {
     const llm = new FakeStreamProvider([
       replyScript('Hey — is this about that Google alert?'),
