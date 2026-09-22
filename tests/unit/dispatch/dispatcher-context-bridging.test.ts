@@ -14,7 +14,7 @@ import { createInboundMessage, type AgentTaskEvent } from '../../../src/bus/even
 import type { ContactResolver } from '../../../src/contacts/contact-resolver.js';
 import type { ContactTier } from '../../../src/contacts/types.js';
 import { createLogger } from '../../../src/logger.js';
-import * as stampOriginatorMod from '../../../src/dispatch/stamp-originator.js';
+import * as stampOriginatorMod from '../../../src/contacts/stamp-originator.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
