@@ -53,6 +53,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Voice off-ramp** — internal coordinator tasks get requester identity without specialist framing. (#1871)
 - **Calendar RSVP policy** — unknown-sender decline applies only to formal invite responses. (#1871)
 - **Specialist decline** — structured marker stops reworded re-delegation on the first refusal. (#1871)
+- **Specialist decline** — a quoted marker counts only when it ends the reply. (#1871)
+- **Requester identity** — Unicode line separators in originator fields cannot open a new prompt line. (#1871)
 - **`parseExecutionPausedPayload`** — plain-prose replies no longer log a warn with a stack. (#1871)
 - **Agent runtime** — skip remaining batch tool calls once `IDENTITY_MISMATCH` is pending. (#1854)
 - **`docker-publish`** — retries transient registry failures and caches layers per image. (#1864)

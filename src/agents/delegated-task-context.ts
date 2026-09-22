@@ -81,9 +81,15 @@ export function isDelegatedSpecialistTask(
   return typeof origin === 'object' && origin !== null && !Array.isArray(origin);
 }
 
-/** One prompt line. Newlines in an originator field must not open a new instruction. */
+/**
+ * One prompt line. Control characters and Unicode line/paragraph separators
+ * (U+2028, U+2029) must not open a new instruction. CR/LF alone is not enough:
+ * JavaScript multiline anchors also treat those separators as line breaks.
+ */
 function identityLine(label: string, value: string, maxLength: number): string {
-  const cleaned = sanitizeOutput(value, { maxLength }).replace(/[\r\n]+/g, ' ').trim();
+  const cleaned = sanitizeOutput(value, { maxLength })
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ')
+    .trim();
   return `${label}: ${cleaned}`;
 }
 

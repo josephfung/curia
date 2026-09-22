@@ -12,7 +12,11 @@ export const SPECIALIST_DECLINE_REASON = 'specialist_decline';
 export const SPECIALIST_DECLINE_MARKER_EXAMPLE =
   '<specialist_decline reason="short_reason">why the task cannot be done</specialist_decline>';
 
-const MARKER_RE = /<specialist_decline\b([^>]*)>([\s\S]*?)<\/specialist_decline>/i;
+// The prompt tells the specialist to end the reply with the marker. A marker
+// quoted earlier, with more answer after it, is not a refusal — otherwise a
+// normal answer that mentions the format returns declined and the guard halts
+// that specialist for the turn.
+const MARKER_RE = /<specialist_decline\b([^>]*)>([\s\S]*?)<\/specialist_decline>\s*$/i;
 
 export interface SpecialistDeclineMarker {
   /** Model-supplied reason attribute, or the stable reason when the attribute is absent. */
@@ -23,8 +27,9 @@ export interface SpecialistDeclineMarker {
 /**
  * Parse a specialist refusal marker out of a response body.
  *
- * Returns null for ordinary prose, for an empty body, and for a verbatim echo of
- * the harness example (a copied template is not a refusal).
+ * Returns null for ordinary prose, for an empty body, for a verbatim echo of
+ * the harness example (a copied template is not a refusal), and when the marker
+ * is not the end of the reply.
  */
 export function parseSpecialistDeclineMarker(content: string): SpecialistDeclineMarker | null {
   const match = MARKER_RE.exec(content);
