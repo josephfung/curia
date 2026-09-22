@@ -86,7 +86,10 @@ TRANSIENT_PATTERNS=(
   'http2: server sent GOAWAY'
   'unexpected EOF'
   ': EOF'
-  'E: Failed to fetch'
+  # Not "E: Failed to fetch". apt prints that for a permanent HTTP 404 as well
+  # as a dropped mirror, and a 404 would otherwise burn the whole retry budget.
+  # A mirror drop still matches a transport signature (Connection timed out,
+  # Could not resolve host, connection reset, ...).
   'Could not resolve host'
   'Connection timed out'
   'network is unreachable'

@@ -163,8 +163,10 @@ chmod +x "$d/cmd"
 BUILDX_RETRY_DELAY=0 BUILDX_RETRY_ATTEMPTS=3 "$WRAPPER" "$d/cmd" >/dev/null 2>&1
 check_eq "permanent 401 is not retried" "1" "$(cat "$d/count")"
 
-# 7. Rate limit and an apt mirror drop are the other two transients the step
-#    retry is supposed to cover. Each must take a second attempt.
+# 7. Rate limit and an apt mirror timeout are the other two transients the step
+#    retry is supposed to cover. Each must take a second attempt. The apt line
+#    still starts with "E: Failed to fetch" — that prefix is NOT the signature
+#    (a 404 uses it too). "Connection timed out" is.
 for label_pat in \
   "toomanyrequests: You have reached your pull rate limit" \
   "E: Failed to fetch http://deb.debian.org/debian/pool/main/ Connection timed out"
@@ -183,6 +185,21 @@ STUB
   check_eq "retries: $label_pat" "0" "$?"
   check_eq "  ...on a second attempt" "2" "$(cat "$d/count")"
 done
+
+# 7b. An apt 404 uses the same "E: Failed to fetch" prefix and must not retry.
+d="$tmpdir/t7b"; mkdir -p "$d"
+cat > "$d/cmd" <<'STUB'
+#!/usr/bin/env bash
+count_file="$(dirname "$0")/count"
+n=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$count_file"
+echo 'E: Failed to fetch http://deb.debian.org/debian/pool/main/foo.deb  404  Not Found [IP: 151.101.1.132 80]' >&2
+exit 100
+STUB
+chmod +x "$d/cmd"
+BUILDX_RETRY_DELAY=0 BUILDX_RETRY_ATTEMPTS=3 "$WRAPPER" "$d/cmd" >/dev/null 2>&1
+check_eq "apt HTTP 404 fails on the first attempt" "100" "$?"
+check_eq "  ...and is not retried" "1" "$(cat "$d/count")"
 
 # 8. Arguments stay separate words, including ones with spaces.
 d="$tmpdir/t8"; mkdir -p "$d"
