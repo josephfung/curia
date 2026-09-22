@@ -44,7 +44,8 @@ that decision. Calendar RSVP policy applies only to a formal-invite CONSULT
 REQUEST. A day brief has no invite sender.
 
 A specialist that cannot do the task ends its reply with
-`<specialist_decline>`. `delegate` returns `declined: true` rather than prose,
+`<specialist_decline>`. A marker quoted earlier in the answer is not a refusal.
+`delegate` returns `declined: true` rather than prose,
 and `DelegationGuard` blocks further attempts to that specialist for the turn
 even when the coordinator rewords the brief.
 
