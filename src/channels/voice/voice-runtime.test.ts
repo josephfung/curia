@@ -1635,7 +1635,8 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     const system = llm.seenMessages[0]![0]!;
     expect(system.role).toBe('system');
     const content = typeof system.content === 'string' ? system.content : '';
-    expect(content).toContain('Alex Partner just called and joined the line');
+    expect(content).toContain('<caller_display_name_json>');
+    expect(content).toContain(JSON.stringify('Alex Partner'));
     expect(content).toContain('They are not the principal');
     expect(content).not.toContain('The principal just called');
     expect(content).not.toContain('You are speaking to the principal');
