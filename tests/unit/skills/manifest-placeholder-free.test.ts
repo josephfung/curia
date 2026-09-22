@@ -162,7 +162,7 @@ describe('tool manifests do not mention retired email config surfaces', () => {
 // point at the same console path the #1856 manifests already use.
 const EMAIL_ACCOUNT_PROVENANCE =
   'as configured under Settings → Channels → Email → Email accounts';
-const EXAMPLE_MAILBOX = /e\.g\.\s*'[^']+'|'curia'|'joseph'/;
+const EXAMPLE_MAILBOX = /e\.g\.\s*'[^']+'|\b(?:curia|joseph)\b/i;
 
 describe('email account inputs cite console provenance', () => {
   it('every email tool account input names the console path and no example mailbox', () => {
