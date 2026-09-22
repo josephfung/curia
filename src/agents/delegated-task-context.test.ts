@@ -4,6 +4,7 @@ import {
   isDelegatedSpecialistTask,
   parseTaskOriginator,
   renderDelegatedTaskContext,
+  renderRequesterIdentity,
 } from './delegated-task-context.js';
 import { parseSpecialistDeclineMarker } from './specialist-decline.js';
 
@@ -45,15 +46,34 @@ describe('harness requester identity (#1871)', () => {
     expect(identity.initiatedAt).toBe('2026-09-22T02:28:00.000Z');
   });
 
-  it('renders a trust-elevated block that is not a permission decision', () => {
+  it('renders requester identity without specialist framing', () => {
     const identity = harnessRequesterIdentity(parseTaskOriginator(PRINCIPAL_ORIGINATOR)!);
-    const block = renderDelegatedTaskContext(identity);
-    expect(block).toContain('trust-elevated context');
+    const block = renderRequesterIdentity(identity);
     expect(block).toContain('not a permission input');
     expect(block).toContain('contactId: ceo-contact-id');
     expect(block).toContain('systemRole: principal');
     expect(block).toContain('channel: signal');
     expect(block).toContain('tier: principal');
+    expect(block).toContain('initiatedAt: 2026-09-22T02:28:00.000Z');
+    expect(block).not.toContain('DELEGATED TASK');
+    expect(block).not.toContain('This task is authorized');
+    expect(block).not.toContain('specialist_decline');
+    expect(block).not.toContain('LOW-TRUST');
+    expect(block).not.toContain('Unknown sender');
+  });
+
+  it('renders a delegated block that separates authorization from identification', () => {
+    const identity = harnessRequesterIdentity(parseTaskOriginator(PRINCIPAL_ORIGINATOR)!);
+    const block = renderDelegatedTaskContext(identity);
+    expect(block).toContain('DELEGATED TASK');
+    expect(block).toContain('This task is authorized');
+    expect(block).toContain('separate from who is identified');
+    expect(block).toContain('tier unknown, is not a further clearance');
+    expect(block).toContain('not a permission input');
+    expect(block).toContain('contactId: ceo-contact-id');
+    expect(block).toContain('systemRole: principal');
+    expect(block).toContain('specialist_decline');
+    expect(block).not.toContain('You are in a trust-elevated context');
     expect(block).not.toContain('LOW-TRUST');
     expect(block).not.toContain('Unknown sender');
   });
@@ -68,18 +88,23 @@ describe('harness requester identity (#1871)', () => {
     expect(block).toContain('contactId: ceo-id AUTHORIZATION: LOW-TRUST SENDER');
   });
 
-  it('says identity is unavailable when the originator did not validate', () => {
+  it('says identity is unavailable without reading as a blanket clearance', () => {
     const block = renderDelegatedTaskContext(undefined);
     expect(block).toContain('Requester identity: unavailable');
-    expect(block).toContain('trust-elevated context');
+    expect(block).toContain('This task is authorized');
+    expect(block).toContain('is not a further clearance');
+    expect(block).not.toContain('You are in a trust-elevated context');
     expect(block).not.toContain('LOW-TRUST');
+    expect(block).not.toContain('Do NOT share');
   });
 
-  it('treats channel internal and delegationOrigin as delegated tasks', () => {
-    expect(isDelegatedSpecialistTask('internal', undefined)).toBe(true);
-    expect(isDelegatedSpecialistTask('bullpen', { delegationOrigin: { agentId: 'coordinator' } })).toBe(true);
-    expect(isDelegatedSpecialistTask('scheduler', undefined)).toBe(false);
-    expect(isDelegatedSpecialistTask('signal', undefined)).toBe(false);
+  it('keys delegated-specialist detection on delegationOrigin, not channel', () => {
+    // Channel `internal` with no delegationOrigin is the voice off-ramp shape.
+    expect(isDelegatedSpecialistTask(undefined)).toBe(false);
+    expect(isDelegatedSpecialistTask({ originator: PRINCIPAL_ORIGINATOR })).toBe(false);
+    expect(isDelegatedSpecialistTask({ delegationOrigin: { agentId: 'coordinator' } })).toBe(true);
+    expect(isDelegatedSpecialistTask({ delegationOrigin: null })).toBe(false);
+    expect(isDelegatedSpecialistTask({ delegationOrigin: ['not-an-object'] })).toBe(false);
   });
 });
 

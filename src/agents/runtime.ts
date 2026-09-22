@@ -84,6 +84,7 @@ import {
   isDelegatedSpecialistTask,
   parseTaskOriginator,
   renderDelegatedTaskContext,
+  renderRequesterIdentity,
 } from './delegated-task-context.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
@@ -821,10 +822,9 @@ export class AgentRuntime {
     // metadata is Record<string, unknown>; a malformed originator must not become
     // audit fields or prompt identity (#1871, #710).
     const originator = parseTaskOriginator(taskEvent.payload.metadata?.originator);
-    const delegatedTask = isDelegatedSpecialistTask(
-      taskEvent.payload.channelId,
-      taskEvent.payload.metadata,
-    );
+    // delegationOrigin, not channel `internal`. Voice off-ramp publishes a
+    // coordinator task on that channel with an originator and no delegationOrigin.
+    const delegatedTask = isDelegatedSpecialistTask(taskEvent.payload.metadata);
 
     const senderCtx = taskEvent.payload.senderContext;
     if (senderCtx?.resolved) {
@@ -942,16 +942,19 @@ export class AgentRuntime {
       //
       // For (b): system tasks are trusted by construction — do not inject LOW-TRUST
       // constraints, as that would block the model from taking actions on scheduled jobs.
-      // For a delegated specialist: state the trust-elevated contract (#1871). Channel
-      // `internal` is not an unresolved external sender.
+      // For a delegated specialist (delegationOrigin): state authorization and identity (#1871).
+      // For any other internal-channel task that carries a validated originator
+      // (voice off-ramp): identity only. Do not tell the coordinator authorization
+      // was settled, and do not hand it the decline marker.
+      // Channel `internal` with neither signal still fail-closes to LOW-TRUST.
       // For (a): inject LOW-TRUST behavioral constraints so the coordinator acts safely.
       const SYSTEM_CHANNEL_IDS = new Set(['scheduler', 'bullpen']);
+      const identity = originator ? harnessRequesterIdentity(originator) : undefined;
       if (delegatedTask) {
-        // Trust-elevated contract (#1871). Channel `internal` used to fall through
-        // to the unresolved-sender LOW-TRUST block, which tells the specialist not
-        // to share the principal's availability. Authorization was already decided
-        // upstream; the identity below is context for the work, not a permission input.
-        const identity = originator ? harnessRequesterIdentity(originator) : undefined;
+        // Channel `internal` used to fall through to the unresolved-sender LOW-TRUST
+        // block, which tells the specialist not to share the principal's availability.
+        // Authorization was already decided upstream. Identity is separate: missing
+        // or tier unknown is not a further clearance.
         const delegatedBlock = renderDelegatedTaskContext(identity);
         if (ctxBudget.allocate('sender_context', [{ role: 'system', content: delegatedBlock }])) {
           messages.splice(1, 0, { role: 'system', content: delegatedBlock });
@@ -960,6 +963,17 @@ export class AgentRuntime {
           logger.error(
             { agentId, conversationId, blockLength: delegatedBlock.length },
             'Delegated-task requester block dropped by context budget — specialist proceeding without harness-set requester identity',
+          );
+        }
+      } else if (taskEvent.payload.channelId === 'internal' && identity) {
+        const identityBlock = renderRequesterIdentity(identity);
+        if (ctxBudget.allocate('sender_context', [{ role: 'system', content: identityBlock }])) {
+          messages.splice(1, 0, { role: 'system', content: identityBlock });
+          bullpenInsertAt = 2;
+        } else {
+          logger.error(
+            { agentId, conversationId, blockLength: identityBlock.length },
+            'Requester-identity block dropped by context budget — internal task proceeding without harness-set requester identity',
           );
         }
       } else if (SYSTEM_CHANNEL_IDS.has(taskEvent.payload.channelId)) {

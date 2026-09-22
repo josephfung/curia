@@ -1,11 +1,17 @@
-// delegated-task-context.ts — trust-elevated contract for a delegated specialist (#1871).
+// delegated-task-context.ts — requester identity and delegated-specialist contract (#1871).
 //
-// Authorization is decided upstream, before delegate publishes the specialist task.
+// Authorization is decided upstream, before delegate publishes a specialist task.
 // Withholding the coordinator's security block is not that contract: a cautious model
 // reads the absence (or the unresolved-sender LOW-TRUST block on channel `internal`)
-// as an unknown sender and refuses principal-originated work. This module renders the
-// contract from the validated originator. The identity is context for the work, not
-// a permission input.
+// as an unknown sender and refuses principal-originated work.
+//
+// Two blocks, because channel `internal` is not only `delegate`:
+// - Requester identity is harness-set context for any internal-channel task that
+//   carries a validated originator, including a coordinator task (voice off-ramp).
+//   It says who asked. It does not say the task was authorized.
+// - The delegated-specialist addendum (trust boundary, decline marker) is only
+//   for a task that carries `delegationOrigin`. The coordinator adjudicates
+//   senders and must not be told authorization was settled upstream.
 
 import type { ContactTier, SystemRole, TaskOriginator } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
@@ -15,7 +21,7 @@ const SYSTEM_ROLES = new Set<SystemRole>(['principal', 'agent', 'system']);
 const TIERS = new Set<ContactTier>(['blocked', 'unknown', 'known', 'trusted', 'principal']);
 
 /**
- * Requester identity the harness shows a delegated specialist.
+ * Requester identity the harness shows on an internal-channel task.
  * Projected from a validated TaskOriginator — never from the raw metadata bag.
  */
 export interface HarnessRequesterIdentity {
@@ -63,14 +69,14 @@ export function harnessRequesterIdentity(originator: TaskOriginator): HarnessReq
 }
 
 /**
- * A task the delegate skill published. `channelId: internal` is that path today;
- * `delegationOrigin` is the structural marker the handler also sets (#995).
+ * A task the delegate skill published. `delegationOrigin` is the structural
+ * marker only that handler sets (#995). Channel `internal` is not sufficient:
+ * the voice off-ramp publishes a coordinator task on that channel with an
+ * originator and no delegationOrigin.
  */
 export function isDelegatedSpecialistTask(
-  channelId: string,
   metadata: Record<string, unknown> | undefined,
 ): boolean {
-  if (channelId === 'internal') return true;
   const origin = metadata?.['delegationOrigin'];
   return typeof origin === 'object' && origin !== null && !Array.isArray(origin);
 }
@@ -81,33 +87,49 @@ function identityLine(label: string, value: string, maxLength: number): string {
   return `${label}: ${cleaned}`;
 }
 
-/** System message that replaces the unresolved-sender vacuum on a delegated task. */
+/**
+ * Who asked, on which channel. Shared by delegated specialists and by other
+ * internal-channel tasks that carry a validated originator (voice off-ramp).
+ * Does not state that authorization was settled, and does not include the
+ * decline marker — the coordinator still adjudicates senders.
+ */
+export function renderRequesterIdentity(identity: HarnessRequesterIdentity): string {
+  const lines = [
+    'Requester identity',
+    'Harness-set context for the work. It is not a permission input.',
+    identityLine('contactId', identity.contactId, 200),
+    `systemRole: ${identity.systemRole ?? 'none'}`,
+    identityLine('channel', identity.channel, 64),
+  ];
+  if (identity.tier !== undefined) {
+    lines.push(`tier: ${identity.tier ?? 'none'}`);
+  }
+  if (identity.initiatedAt) {
+    lines.push(identityLine('initiatedAt', identity.initiatedAt, 64));
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Specialist addendum. Authorized (the task may run) is not identified (who
+ * asked). A missing identity or tier unknown is not a further clearance, and
+ * it is not a reason to treat the task as an unresolved external sender.
+ */
+const AUTHORIZED_NOT_IDENTIFIED =
+  'This task is authorized. That decision was made upstream and is separate from who is identified below. A missing identity, or tier unknown, is not a further clearance.';
+
+/** System message for a task that carries delegationOrigin. */
 export function renderDelegatedTaskContext(identity: HarnessRequesterIdentity | undefined): string {
   const lines = [
     'DELEGATED TASK',
-    'Authorization for this task was decided upstream. You are in a trust-elevated context.',
-    'Requester identity is harness-set context for the work. It is not a permission input.',
+    AUTHORIZED_NOT_IDENTIFIED,
     '',
-  ];
-  if (!identity) {
-    lines.push('Requester identity: unavailable');
-  } else {
-    lines.push(identityLine('contactId', identity.contactId, 200));
-    lines.push(`systemRole: ${identity.systemRole ?? 'none'}`);
-    lines.push(identityLine('channel', identity.channel, 64));
-    if (identity.tier !== undefined) {
-      lines.push(`tier: ${identity.tier ?? 'none'}`);
-    }
-    if (identity.initiatedAt) {
-      lines.push(identityLine('initiatedAt', identity.initiatedAt, 64));
-    }
-  }
-  lines.push(
+    identity ? renderRequesterIdentity(identity) : 'Requester identity: unavailable',
     '',
     'To refuse this task, end your reply with exactly:',
     SPECIALIST_DECLINE_MARKER_EXAMPLE,
     'Emit that marker only when refusing the task. Do not echo it in a normal answer.',
     'An RSVP response of decline is a normal answer, not this marker.',
-  );
+  ];
   return lines.join('\n');
 }
