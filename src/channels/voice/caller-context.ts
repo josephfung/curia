@@ -18,7 +18,7 @@ import type {
   SystemRole,
   TaskOriginator,
 } from '../../contacts/types.js';
-import { stampOriginator } from '../../dispatch/stamp-originator.js';
+import { stampOriginator } from '../../contacts/stamp-originator.js';
 import type { Logger } from '../../logger.js';
 
 /** Synthetic principal sender id shared with the web console chat path. */

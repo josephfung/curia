@@ -1,11 +1,13 @@
-// stamp-originator.ts — shared originator / liveTurn derivation for inbound work.
+// src/contacts/stamp-originator.ts — shared originator / liveTurn derivation for inbound work.
 //
 // The dispatcher and the voice session-create path both need the same security-critical
 // mapping from a resolved (or unresolved) sender context to TaskOriginator + the
 // live-principal-turn signal. Keeping that derivation in one pure helper means the
-// elevated skill gate has a single source of truth (#1598 / #1126).
+// elevated skill gate has a single source of truth (#1598 / #1126). Lives next to
+// isLivePrincipalTurn (principal.ts) — both are contacts-domain predicates over
+// SenderContext / TaskOriginator (#1628).
 
-import type { InboundSenderContext, TaskOriginator } from '../contacts/types.js';
+import type { InboundSenderContext, TaskOriginator } from './types.js';
 
 export interface StampOriginatorInput {
   /** Resolved/unresolved sender context from ContactResolver (or a console-built equivalent). */

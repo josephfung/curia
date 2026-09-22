@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { InboundSenderContext, SenderContext } from '../contacts/types.js';
+import type { InboundSenderContext, SenderContext } from './types.js';
 import { stampOriginator } from './stamp-originator.js';
 
 const FIXED_AT = '2026-07-29T12:00:00.000Z';
