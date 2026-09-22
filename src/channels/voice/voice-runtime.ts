@@ -41,7 +41,7 @@ import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
 import type { VoiceCallerContext } from './caller-context.js';
 import {
-  VOICE_GREETING_INSTRUCTION,
+  buildVoiceGreetingInstruction,
   VOICE_GREETING_USER_MESSAGE,
 } from './greeting.js';
 import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from '../../speech/index.js';
@@ -50,6 +50,7 @@ import type { VoiceSessionRecord, VoiceSessionStore } from './session-store.js';
 import { VoiceTurnError, VoiceTurnRunner } from './turn-runner.js';
 
 export {
+  buildVoiceGreetingInstruction,
   VOICE_GREETING_INSTRUCTION,
   VOICE_GREETING_USER_MESSAGE,
   isVoiceGreetingCueContent,
@@ -879,7 +880,13 @@ export class VoiceRuntime {
       // already in the system prompt when present.
       withTools: false,
       assembleMessages: ({ systemPrompt, priorHistory }) => [
-        { role: 'system', content: `${systemPrompt}\n\n${VOICE_GREETING_INSTRUCTION}` },
+        {
+          role: 'system',
+          content: `${systemPrompt}\n\n${buildVoiceGreetingInstruction({
+            liveTurn: session.caller.liveTurn,
+            displayName: session.caller.displayName,
+          })}`,
+        },
         ...priorHistory,
         { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
       ],
