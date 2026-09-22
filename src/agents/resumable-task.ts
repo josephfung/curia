@@ -325,6 +325,9 @@ export function buildExecutionPausedResponse(options: {
 
 /** Parse a paused protocol payload from agent.response content. */
 export function parseExecutionPausedPayload(content: string, logger?: Logger): ExecutionPausedPayload | null {
+  // Plain prose is the healthy specialist path. JSON.parse throws on it, and the
+  // catch used to log a warn-with-stack for every such reply (#1871).
+  if (!content.trimStart().startsWith('{')) return null;
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
     if (parsed['_curia_protocol'] !== EXECUTION_PAUSED_PROTOCOL) return null;

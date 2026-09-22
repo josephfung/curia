@@ -17,7 +17,7 @@ import { historyForLlm, LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } fro
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
-import type { ChannelIdentity, TaskOriginator } from '../contacts/types.js';
+import type { ChannelIdentity } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
@@ -79,6 +79,13 @@ import {
   seedAlreadyDelivered,
   type DelegationFailureInfo,
 } from './delegation-guard.js';
+import {
+  harnessRequesterIdentity,
+  isDelegatedSpecialistTask,
+  parseTaskOriginator,
+  renderDelegatedTaskContext,
+} from './delegated-task-context.js';
+import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import type { TaskRepo } from '../db/task-repo.js';
@@ -810,6 +817,15 @@ export class AgentRuntime {
     // Inject resolved sender context as a system message so the coordinator
     // knows who it's talking to. Inserted after the system prompt but before
     // history, so it's visible but doesn't pollute working memory.
+    // Validated once and reused for the delegated-task prompt and ctx.caller.
+    // metadata is Record<string, unknown>; a malformed originator must not become
+    // audit fields or prompt identity (#1871, #710).
+    const originator = parseTaskOriginator(taskEvent.payload.metadata?.originator);
+    const delegatedTask = isDelegatedSpecialistTask(
+      taskEvent.payload.channelId,
+      taskEvent.payload.metadata,
+    );
+
     const senderCtx = taskEvent.payload.senderContext;
     if (senderCtx?.resolved) {
       // Sanitize sender fields before prompt inclusion — these originate from
@@ -926,9 +942,27 @@ export class AgentRuntime {
       //
       // For (b): system tasks are trusted by construction — do not inject LOW-TRUST
       // constraints, as that would block the model from taking actions on scheduled jobs.
+      // For a delegated specialist: state the trust-elevated contract (#1871). Channel
+      // `internal` is not an unresolved external sender.
       // For (a): inject LOW-TRUST behavioral constraints so the coordinator acts safely.
       const SYSTEM_CHANNEL_IDS = new Set(['scheduler', 'bullpen']);
-      if (SYSTEM_CHANNEL_IDS.has(taskEvent.payload.channelId)) {
+      if (delegatedTask) {
+        // Trust-elevated contract (#1871). Channel `internal` used to fall through
+        // to the unresolved-sender LOW-TRUST block, which tells the specialist not
+        // to share the principal's availability. Authorization was already decided
+        // upstream; the identity below is context for the work, not a permission input.
+        const identity = originator ? harnessRequesterIdentity(originator) : undefined;
+        const delegatedBlock = renderDelegatedTaskContext(identity);
+        if (ctxBudget.allocate('sender_context', [{ role: 'system', content: delegatedBlock }])) {
+          messages.splice(1, 0, { role: 'system', content: delegatedBlock });
+          bullpenInsertAt = 2;
+        } else {
+          logger.error(
+            { agentId, conversationId, blockLength: delegatedBlock.length },
+            'Delegated-task requester block dropped by context budget — specialist proceeding without harness-set requester identity',
+          );
+        }
+      } else if (SYSTEM_CHANNEL_IDS.has(taskEvent.payload.channelId)) {
         // Nothing to inject — the model operates on its system prompt without sender context.
         logger.debug({ agentId, conversationId, channelId: taskEvent.payload.channelId },
           'System-channel task — no sender context; skipping LOW-TRUST injection');
@@ -1150,14 +1184,7 @@ export class AgentRuntime {
     // Truly unknown senders (no senderContext AND no originator) remain undefined, which
     // triggers the execution layer's fail-closed gate on elevated skills.
     const callerSenderCtx = taskEvent.payload.senderContext;
-    const rawOriginator = taskEvent.payload.metadata?.originator;
-    // Validate the originator shape before using it — metadata is Record<string, unknown>
-    // so a malformed originator must not silently produce wrong audit fields downstream.
-    const originator: TaskOriginator | undefined =
-      typeof (rawOriginator as Record<string, unknown> | undefined)?.contactId === 'string' &&
-      typeof (rawOriginator as Record<string, unknown> | undefined)?.channel === 'string'
-        ? rawOriginator as unknown as TaskOriginator
-        : undefined;
+    // originator was validated above, before the prompt was built (#1871).
     let caller: CallerContext | undefined;
     if (callerSenderCtx && callerSenderCtx.resolved) {
       caller = { contactId: callerSenderCtx.contactId, role: callerSenderCtx.role, channel: taskEvent.payload.channelId };
@@ -1410,6 +1437,11 @@ export class AgentRuntime {
                 if (esc.possiblySucceeded) parts.push('The request may still be completing in the background.');
               } else if (esc.reason === 'blocked') {
                 parts.push(`The ${agentLabel} was blocked and couldn't complete the task.`);
+              } else if (esc.reason === SPECIALIST_DECLINE_REASON || esc.declined === true) {
+                const detail = sanitizeOutput(esc.message).trim().slice(0, 500);
+                parts.push(detail.length > 0
+                  ? `The ${agentLabel} declined the task. ${detail}`
+                  : `The ${agentLabel} declined the task.`);
               } else {
                 logger.info(
                   { agentId, conversationId, targetAgent: esc.agent, reason: esc.reason },
@@ -1622,19 +1654,29 @@ export class AgentRuntime {
                 delegateTask,
                 hasResumeToken ? (delegateInput['resume_token'] as string) : undefined,
               );
+              // A structured decline blocks this specialist for the rest of the turn,
+              // including a reworded brief and a resume_token (#1871). Identical-task
+              // exhaustion stays resume-exempt: a continuation carries new direction.
+              const agentDecline = delegationGuard.getAgentDecline(delegateAgent);
               const blockKey = deliveredKey
+                ?? (agentDecline ? dKey : undefined)
                 ?? (!hasResumeToken && !delegationGuard.canAttempt(dKey) ? dKey : undefined);
               if (blockKey !== undefined) {
                 delegateBlocked = true;
-                const prior = delegationGuard.getFailure(blockKey);
+                const prior = (deliveredKey ? delegationGuard.getFailure(deliveredKey) : undefined)
+                  ?? agentDecline
+                  ?? delegationGuard.getFailure(blockKey);
                 logger.warn(
                   {
                     agentId,
                     targetAgent: delegateAgent,
                     reason: prior?.reason,
                     viaResumeToken: hasResumeToken,
+                    structuredDecline: agentDecline !== undefined,
                   },
-                  'Blocked identical re-delegation after specialist failure',
+                  agentDecline
+                    ? 'Blocked re-delegation after a structured specialist decline'
+                    : 'Blocked identical re-delegation after specialist failure',
                 );
                 result = {
                   success: true,
@@ -1647,6 +1689,7 @@ export class AgentRuntime {
                     message: prior?.message
                       ?? `Re-delegation to '${delegateAgent}' is blocked for this task.`,
                     escalated: delegationGuard.isEscalated(blockKey),
+                    ...(prior?.declined === true && { declined: true }),
                   },
                 };
               } else {
@@ -1870,6 +1913,12 @@ export class AgentRuntime {
                   const delegateInput = skillInput as Record<string, unknown>;
                   const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
                   const dKey = delegationKey(delegateFailure.agent, delegateTask);
+                  if (
+                    delegateFailure.declined === true
+                    || delegateFailure.reason === SPECIALIST_DECLINE_REASON
+                  ) {
+                    delegationGuard.recordSpecialistDecline(delegateFailure.agent, delegateFailure);
+                  }
                   delegationGuard.recordFailure(dKey, delegateFailure);
                   if (delegationGuard.shouldEscalate(dKey)) {
                     const escalation = await escalateDelegationFailure(

@@ -395,6 +395,77 @@ describe('DelegateHandler', () => {
     }
   });
 
+  it('returns a structured decline instead of prose when the specialist refuses (#1871)', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'calendar') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'calendar',
+          conversationId: event.payload.conversationId,
+          content: 'The sender is unrecognized.\n<specialist_decline reason="unknown_sender">No contact record for this requester.</specialist_decline>',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Brief the CEO calendar with titles, times, and locations.' },
+      { bus, agentRegistry },
+    ));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as {
+        declined?: boolean;
+        failed?: boolean;
+        reason?: string;
+        retryable?: boolean;
+        message?: string;
+        response?: string;
+      };
+      expect(data.declined).toBe(true);
+      expect(data.failed).toBe(true);
+      expect(data.reason).toBe('specialist_decline');
+      expect(data.retryable).toBe(false);
+      expect(data.message).toBe('No contact record for this requester.');
+      expect(data.response).toBeUndefined();
+    }
+  });
+
+  it('returns a day-brief answer as a normal response, not a decline (#1871)', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+    const bus = new EventBus(logger);
+
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'calendar') {
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'calendar',
+          conversationId: event.payload.conversationId,
+          content: 'Today: 9:00 standup at the office. No conflicts.',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'List the CEO calendar events with titles and locations.' },
+      { bus, agentRegistry },
+    ));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const data = result.data as { declined?: boolean; response?: string };
+      expect(data.declined).toBeUndefined();
+      expect(data.response).toContain('9:00 standup');
+    }
+  });
+
   it('returns structured failure when specialist responds with isError and structured reason (#1170)', async () => {
     const agentRegistry = new AgentRegistry();
     agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });

@@ -34,6 +34,10 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
+import {
+  parseSpecialistDeclineMarker,
+  SPECIALIST_DECLINE_REASON,
+} from '../../src/agents/specialist-decline.js';
 
 // Default wait for the specialist to respond — appropriate for interactive tasks.
 // Used only when neither config.delegate.defaultTimeoutMs nor a runtime-resolved
@@ -536,6 +540,28 @@ export class DelegateHandler implements ToolHandler {
             'Unexpected error parsing specialist response for clarification protocol — treating as normal text response',
           );
         }
+      }
+
+      // Prose replies are not JSON. A structured decline is an XML marker in that
+      // prose (#1871) — distinguishable from a successful answer so the coordinator
+      // does not reword the brief and retry.
+      const decline = parseSpecialistDeclineMarker(response);
+      if (decline) {
+        ctx.log.info(
+          { targetAgent: agent, declineReason: decline.reason },
+          'Specialist declined the delegated task',
+        );
+        return {
+          success: true,
+          data: {
+            agent,
+            declined: true,
+            failed: true,
+            reason: SPECIALIST_DECLINE_REASON,
+            retryable: false,
+            message: decline.message,
+          },
+        };
       }
 
       // Pull contact IDs out before the execution layer strips the

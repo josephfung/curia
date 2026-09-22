@@ -14,6 +14,25 @@ All external communication flows through a single **Coordinator agent** — the 
 
 As of v0.35.0 the Coordinator prompt was re-derived around an explicit three-way routing decision — handle directly, borrow-then-answer (pull work from a specialist, then reply in its own voice), or transfer-ownership (hand the whole interaction to a specialist that owns its lifecycle). The keystone rule: a reply to anything the Coordinator sent on a specialist's behalf (a delegation-hinted outbound) is always transfer-ownership and is routed back to that specialist, never answered directly. Tool-specific mechanics were relocated out of the prompt into the relevant skill manifests (`config-store`, `email-send`/`email-reply`, `signal-send`, `decay-warnings-list`), and the vestigial executive-voice block was removed — CEO-voice drafting lives in the ceo-inbox specialist.
 
+### Delegated specialist context (#1871)
+
+A delegated specialist does not re-decide whether the requester may ask. The
+dispatcher and the coordinator already did that. `delegate` publishes the
+specialist task on channel `internal` with the validated `metadata.originator`
+and no `senderContext`. The runtime renders a harness-set requester identity
+from that originator and states that the task is trust-elevated. The identity
+is context for the work (who asked, on which channel). It is not a permission
+input.
+
+Sender judgment that remains in a specialist prompt is task quality scoped to
+that decision. Calendar RSVP policy applies only to a formal-invite CONSULT
+REQUEST. A day brief has no invite sender.
+
+A specialist that cannot do the task ends its reply with
+`<specialist_decline>`. `delegate` returns `declined: true` rather than prose,
+and `DelegationGuard` blocks further attempts to that specialist for the turn
+even when the coordinator rewords the brief.
+
 ### Late delegation delivery (#1799)
 
 A `delegate` wait that times out does not stop the specialist — by design (#1288): cancelling an

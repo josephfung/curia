@@ -109,6 +109,44 @@ describe('calendar consult prompt — proposed-time conflict checks', () => {
   });
 });
 
+describe('calendar prompt — sender gating is RSVP-scoped (#1871)', () => {
+  it('answers a day brief without an invite-sender decline rule', () => {
+    const prompt = loadCalendarPrompt();
+    const readsStart = prompt.indexOf('## Reads and briefs');
+    const schedulingStart = prompt.indexOf('## Scheduling Intelligence');
+    expect(readsStart).toBeGreaterThan(-1);
+    expect(schedulingStart).toBeGreaterThan(readsStart);
+    const reads = prompt.slice(readsStart, schedulingStart);
+    expect(reads).toContain('day brief');
+    expect(reads).toContain('is not an RSVP');
+    expect(reads).not.toContain('Decline the invite when its sender is unknown');
+  });
+
+  it('keeps the unknown-sender decline inside formal invite RSVP policy', () => {
+    const prompt = loadCalendarPrompt();
+    const rsvpStart = prompt.indexOf('RSVP policy:');
+    const rsvpEnd = prompt.indexOf('## Unregistered Calendar Handling');
+    expect(rsvpStart).toBeGreaterThan(-1);
+    expect(rsvpEnd).toBeGreaterThan(rsvpStart);
+    const rsvp = prompt.slice(rsvpStart, rsvpEnd);
+    expect(rsvp).toContain('Formal invite responses only');
+    expect(rsvp).toContain('A missing consult block is not an unknown sender');
+    expect(rsvp).toContain('Decline the invite when its sender is unknown');
+    expect(rsvp).toContain('sales/solicitation-like');
+    expect(rsvp).toContain('no prior correspondence or business');
+    // The unbound rule is what a day-brief delegation generalized (#1871).
+    expect(prompt).not.toContain('Decline when the sender is unknown');
+  });
+
+  it('binds consult sender fields to the invite, not the task requester', () => {
+    const prompt = loadCalendarPrompt();
+    const consult = extractCalendarConsultSection(prompt);
+    expect(consult).toContain('They describe the invite sender, not whoever');
+    expect(consult).toContain('Absent fields are missing consult data, not an');
+    expect(consult).toContain('unknown requester');
+  });
+});
+
 describe('calendar consult prompt — formal invite RSVP behavior', () => {
   it('uses standard model tier for RSVP judgment', async () => {
     const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
@@ -129,7 +167,7 @@ describe('calendar consult prompt — formal invite RSVP behavior', () => {
   it('allows context-aware RSVP attempts and reserves recommendations for ambiguity', () => {
     const prompt = loadCalendarPrompt();
     const consultSection = extractCalendarConsultSection(prompt);
-    const decidePos = posIn(consultSection, 'Decide the RSVP response from all available context');
+    const decidePos = posIn(consultSection, 'Decide the RSVP for this invite only');
     const rsvpPos = posIn(consultSection, 'calendar-respond-to-invite');
     const ambiguousPos = posIn(consultSection, 'If the correct RSVP is genuinely ambiguous');
 
@@ -256,9 +294,9 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
   it('bumps calendar agent version for scheduling-rules capability', async () => {
     const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
     // Exact-version tripwire: bump this alongside `agents/calendar.yaml`'s version on any
-    // meaningful prompt/capability change. 0.8.0 = pins scheduler-report for holds-sweep
-    // reporting + schedule negative list (#1831).
-    expect(config.version).toBe('0.8.0');
+    // meaningful prompt/capability change. 0.8.1 = RSVP sender-gating scoped to formal
+    // invite consults so a day brief is not declined as an unknown sender (#1871).
+    expect(config.version).toBe('0.8.1');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {

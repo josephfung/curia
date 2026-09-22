@@ -82,6 +82,23 @@ describe('DelegationGuard', () => {
     expect(guard.canAttempt(otherKey)).toBe(true);
   });
 
+  it('blocks a reworded brief after one structured decline (#1871)', () => {
+    const guard = new DelegationGuard();
+    const original = delegationKey('calendar', 'Brief me on the CEO calendar for today');
+    const reworded = delegationKey('calendar', 'List today\'s events with titles, times, and locations');
+    guard.recordSpecialistDecline('calendar', {
+      agent: 'calendar',
+      reason: 'specialist_decline',
+      retryable: false,
+      declined: true,
+      message: 'Unrecognized sender; refusing the day brief.',
+    });
+    expect(guard.canAttempt(original)).toBe(false);
+    expect(guard.canAttempt(reworded)).toBe(false);
+    expect(guard.getAgentDecline('calendar')?.declined).toBe(true);
+    expect(guard.canAttempt(delegationKey('research-analyst', 'Look this up'))).toBe(true);
+  });
+
   it('does not block successful repeat delegations before any failure is recorded', () => {
     const guard = new DelegationGuard();
     for (let i = 0; i < MAX_RETRYABLE_IDENTICAL_DELEGATIONS + 1; i++) {
