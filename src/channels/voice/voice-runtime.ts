@@ -42,6 +42,7 @@ import type { AudioTransport } from './audio-transport.js';
 import type { VoiceCallerContext } from './caller-context.js';
 import {
   buildVoiceGreetingInstruction,
+  hasUnsafeVoicePromptCharacter,
   VOICE_GREETING_USER_MESSAGE,
 } from './greeting.js';
 import type { SpeechToTextProvider, SttSession, SttTranscriptEvent, TextToSpeechProvider } from '../../speech/index.js';
@@ -51,6 +52,7 @@ import { VoiceTurnError, VoiceTurnRunner } from './turn-runner.js';
 
 export {
   buildVoiceGreetingInstruction,
+  hasUnsafeVoicePromptCharacter,
   VOICE_GREETING_INSTRUCTION,
   VOICE_GREETING_USER_MESSAGE,
   isVoiceGreetingCueContent,
@@ -151,7 +153,7 @@ export function buildVoiceAudienceLine(audience: {
     return 'You are speaking to the principal in a live voice call.';
   }
   const name = audience.displayName?.trim();
-  if (name) {
+  if (name && !hasUnsafeVoicePromptCharacter(name)) {
     return (
       `You are speaking to ${name} in a live voice call. They are not the principal — ` +
       'do not treat them as having principal authority.'

@@ -15,6 +15,7 @@ import { WorkingMemory } from '../../memory/working-memory.js';
 import {
   VoiceRuntime,
   buildVoiceSystemPrompt,
+  buildVoiceAudienceLine,
   VOICE_SYSTEM_ADDENDUM,
   VOICE_SPOKEN_STYLE_ADDENDUM,
   VOICE_TOOL_RESULT_POLICY,
@@ -980,6 +981,18 @@ describe('VoiceRuntime outbound-context bridge (#1594)', () => {
     expect(prompt).toContain('They are not the principal');
     expect(prompt).not.toContain('You are speaking to the principal');
     expect(prompt).toContain(VOICE_SPOKEN_STYLE_ADDENDUM);
+  });
+
+  it('buildVoiceAudienceLine omits displayName with U+2028/U+2029 (#1874)', () => {
+    for (const sep of ['\u2028', '\u2029']) {
+      const line = buildVoiceAudienceLine({
+        liveTurn: false,
+        displayName: `Alex${sep}Partner`,
+      });
+      expect(line).toBe(buildVoiceAudienceLine({ liveTurn: false }));
+      expect(line).toContain('a non-principal caller');
+      expect(line).not.toContain(`Alex${sep}Partner`);
+    }
   });
 
   it('buildVoiceSystemPrompt keeps the principal audience line for liveTurn callers', () => {
