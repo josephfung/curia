@@ -18,11 +18,26 @@ As of v0.35.0 the Coordinator prompt was re-derived around an explicit three-way
 
 A delegated specialist does not re-decide whether the requester may ask. The
 dispatcher and the coordinator already did that. `delegate` publishes the
-specialist task on channel `internal` with the validated `metadata.originator`
-and no `senderContext`. The runtime renders a harness-set requester identity
-from that originator and states that the task is trust-elevated. The identity
-is context for the work (who asked, on which channel). It is not a permission
-input.
+specialist task with `metadata.delegationOrigin`, the validated
+`metadata.originator`, and no `senderContext`. The runtime renders two
+different blocks:
+
+- **Requester identity** — who asked, on which channel, with what system role
+  and tier. Any internal-channel task that carries a validated originator gets
+  this, including a coordinator task such as the voice off-ramp (channel
+  `internal`, originator, no `delegationOrigin`). The identity is context for
+  the work. It is not a permission input, and this block does not say
+  authorization was settled.
+- **Delegated-specialist addendum** — only when `delegationOrigin` is set.
+  States that the task is authorized, and that authorization is not
+  identification: a missing identity or tier `unknown` is not a further
+  clearance. Includes the `<specialist_decline>` instructions. The coordinator
+  does not receive this addendum; it still adjudicates senders.
+
+Detection keys off `delegationOrigin`, not `channelId`. A new internal-channel
+caller does not inherit specialist framing. Channel `internal` with neither a
+validated originator nor `delegationOrigin` still receives the unresolved-sender
+low-trust block.
 
 Sender judgment that remains in a specialist prompt is task quality scoped to
 that decision. Calendar RSVP policy applies only to a formal-invite CONSULT

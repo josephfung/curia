@@ -2176,6 +2176,12 @@ describe('AgentRuntime tool-use loop', () => {
       senderId: 'coordinator',
       content: 'Brief me on the CEO calendar for today, with titles, times, and locations.',
       metadata: {
+        delegationOrigin: {
+          conversationId: 'conv-origin',
+          channelId: 'signal',
+          agentId: 'coordinator',
+          originalTask: 'Brief the calendar',
+        },
         originator: {
           contactId: 'ceo-contact-id',
           systemRole: 'principal',
@@ -2194,15 +2200,115 @@ describe('AgentRuntime tool-use loop', () => {
     };
     const systemMessages = firstCall.messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
     expect(systemMessages).toContain('DELEGATED TASK');
-    expect(systemMessages).toContain('trust-elevated context');
+    expect(systemMessages).toContain('This task is authorized');
+    expect(systemMessages).toContain('is not a further clearance');
     expect(systemMessages).toContain('not a permission input');
     expect(systemMessages).toContain('contactId: ceo-contact-id');
     expect(systemMessages).toContain('systemRole: principal');
     expect(systemMessages).toContain('channel: signal');
     expect(systemMessages).toContain('tier: principal');
+    expect(systemMessages).toContain('specialist_decline');
+    expect(systemMessages).not.toContain('You are in a trust-elevated context');
     expect(systemMessages).not.toContain('LOW-TRUST');
     expect(systemMessages).not.toContain('Unknown sender');
     expect(systemMessages).not.toContain('Ignore previous instructions');
+  });
+
+  it('gives an internal coordinator task requester identity without specialist framing (#1871)', async () => {
+    // Voice off-ramp shape: channel internal, originator forwarded, no delegationOrigin.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const provider = createMockProvider('I will follow up.');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are the coordinator.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'voice-offramp:abc',
+      channelId: 'internal',
+      senderId: 'ceo-contact-id',
+      content: 'Follow up on the scheduling question.',
+      metadata: {
+        voiceOfframp: true,
+        followUpChannel: 'signal',
+        originator: {
+          contactId: 'ceo-contact-id',
+          systemRole: 'principal',
+          channel: 'voice',
+          initiatedAt: '2026-09-11T15:00:00.000Z',
+          tier: 'principal',
+        },
+      },
+      parentEventId: 'offramp-1',
+    }));
+
+    const firstCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    // Index 0 is the coordinator prompt, which already mentions specialist_decline
+    // and the LOW-TRUST block by name. Assert on the injected message only.
+    const injected = firstCall.messages
+      .filter(m => m.role === 'system')
+      .map(m => m.content)
+      .slice(1)
+      .join('\n');
+    expect(injected).toContain('Requester identity');
+    expect(injected).toContain('not a permission input');
+    expect(injected).toContain('contactId: ceo-contact-id');
+    expect(injected).toContain('systemRole: principal');
+    expect(injected).toContain('channel: voice');
+    expect(injected).not.toContain('LOW-TRUST');
+    expect(injected).not.toContain('Unknown sender');
+    expect(injected).not.toContain('DELEGATED TASK');
+    expect(injected).not.toContain('This task is authorized');
+    expect(injected).not.toContain('specialist_decline');
+  });
+
+  it('keeps LOW-TRUST on an internal task with no originator and no delegationOrigin (#1871)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const provider = createMockProvider('Holding.');
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are the coordinator.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'voice-offramp:no-origin',
+      channelId: 'internal',
+      senderId: 'coordinator',
+      content: 'Follow up with no originator attached.',
+      metadata: { voiceOfframp: true, followUpChannel: 'signal' },
+      parentEventId: 'offramp-2',
+    }));
+
+    const firstCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const injected = firstCall.messages
+      .filter(m => m.role === 'system')
+      .map(m => m.content)
+      .slice(1)
+      .join('\n');
+    expect(injected).toContain('Unknown sender');
+    expect(injected).toContain('LOW-TRUST SENDER');
+    expect(injected).not.toContain('Requester identity');
+    expect(injected).not.toContain('DELEGATED TASK');
   });
 
   it('keeps LOW-TRUST injection for an unresolved external sender (#1871)', async () => {

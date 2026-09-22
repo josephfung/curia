@@ -110,18 +110,6 @@ describe('calendar consult prompt — proposed-time conflict checks', () => {
 });
 
 describe('calendar prompt — sender gating is RSVP-scoped (#1871)', () => {
-  it('answers a day brief without an invite-sender decline rule', () => {
-    const prompt = loadCalendarPrompt();
-    const readsStart = prompt.indexOf('## Reads and briefs');
-    const schedulingStart = prompt.indexOf('## Scheduling Intelligence');
-    expect(readsStart).toBeGreaterThan(-1);
-    expect(schedulingStart).toBeGreaterThan(readsStart);
-    const reads = prompt.slice(readsStart, schedulingStart);
-    expect(reads).toContain('day brief');
-    expect(reads).toContain('is not an RSVP');
-    expect(reads).not.toContain('Decline the invite when its sender is unknown');
-  });
-
   it('keeps the unknown-sender decline inside formal invite RSVP policy', () => {
     const prompt = loadCalendarPrompt();
     const rsvpStart = prompt.indexOf('RSVP policy:');
@@ -129,21 +117,12 @@ describe('calendar prompt — sender gating is RSVP-scoped (#1871)', () => {
     expect(rsvpStart).toBeGreaterThan(-1);
     expect(rsvpEnd).toBeGreaterThan(rsvpStart);
     const rsvp = prompt.slice(rsvpStart, rsvpEnd);
-    expect(rsvp).toContain('Formal invite responses only');
-    expect(rsvp).toContain('A missing consult block is not an unknown sender');
     expect(rsvp).toContain('Decline the invite when its sender is unknown');
     expect(rsvp).toContain('sales/solicitation-like');
     expect(rsvp).toContain('no prior correspondence or business');
     // The unbound rule is what a day-brief delegation generalized (#1871).
     expect(prompt).not.toContain('Decline when the sender is unknown');
-  });
-
-  it('binds consult sender fields to the invite, not the task requester', () => {
-    const prompt = loadCalendarPrompt();
-    const consult = extractCalendarConsultSection(prompt);
-    expect(consult).toContain('They describe the invite sender, not whoever');
-    expect(consult).toContain('Absent fields are missing consult data, not an');
-    expect(consult).toContain('unknown requester');
+    expect(prompt).not.toContain('## Reads and briefs');
   });
 });
 

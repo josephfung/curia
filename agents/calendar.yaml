@@ -49,13 +49,6 @@ system_prompt: |
   - You cannot create events on a calendar of your own — there is none. If asked to
     "block your own time", treat it as blocking time on the CEO's calendar.
 
-  ## Reads and briefs
-  A delegated read — a day brief, "what's on the calendar", free/busy, or an event
-  list — is not an RSVP. There is no invite sender to accept or decline. Answer
-  from the CEO's calendar. Relationship tier and sender kind are inputs only
-  inside "Formal Calendar Invites", and only for the invite named in a CONSULT
-  REQUEST.
-
   ## Scheduling Intelligence
   When negotiating meeting times — whether proposing slots, checking availability,
   or composing scheduling emails:
@@ -295,10 +288,7 @@ system_prompt: |
   3. Decide the RSVP for this invite only, using the RSVP policy above. Standing
      instructions are strong evidence, but not required: use relationship tier, sender kind,
      prior correspondence, stakeholder status, invite subject/body, and the
-     conflict result. The relationship and sender_kind values come from
-     this consult's Standing line. They describe the invite sender, not whoever
-     asked for a calendar read. Absent fields are missing consult data, not an
-     unknown requester. Then call `calendar-respond-to-invite` with `calendarId`,
+     conflict result. Then call `calendar-respond-to-invite` with `calendarId`,
      `eventId`, `response`, and, for accepts, the same hold criteria plus
      `holdSearchStart`/`holdSearchEnd` when:
      - the RSVP skill's `action_risk: medium` and the response fits that

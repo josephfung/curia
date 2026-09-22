@@ -50,6 +50,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Delegated specialists** — harness-set requester identity replaces the low-trust unknown-sender block. (#1871)
+- **Voice off-ramp** — internal coordinator tasks get requester identity without specialist framing. (#1871)
 - **Calendar RSVP policy** — unknown-sender decline applies only to formal invite responses. (#1871)
 - **Specialist decline** — structured marker stops reworded re-delegation on the first refusal. (#1871)
 - **`parseExecutionPausedPayload`** — plain-prose replies no longer log a warn with a stack. (#1871)
