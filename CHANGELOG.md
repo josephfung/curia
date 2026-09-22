@@ -49,6 +49,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Agent runtime** — skip remaining batch tool calls once `IDENTITY_MISMATCH` is pending. (#1854)
+- **`docker-publish`** — retries transient registry failures and caches layers per image. (#1864)
 - **Email skill manifests** — `account` provenance names the console Email accounts path. (#1856)
 - **Five email skill manifests** — `account` inputs cite the console Email accounts path. (#1867)
 - **Coordinator morning brief** — routes CEO calendar reads to `@calendar` instead of Curia's empty Google calendar. (#1853)

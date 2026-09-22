@@ -223,11 +223,18 @@ jobs:
     # that could otherwise grind for hours against the 6h default before failing. A normal
     # build is ~10min (see the concurrency note above), so this is generous headroom while
     # still failing in a bounded time instead of burning a runner all afternoon.
+    #
+    # #1864 adds a third layer, around the whole build, capped at 3 attempts and only
+    # when the log matches a registry/network signature. An outdated lockfile fails the
+    # first attempt and does not multiply. Three full uncached builds still fit under
+    # this wall; the incident itself (SBOM scanner resolve) dies in seconds. The GHA
+    # layer cache makes a late push-reset reuse layers from the previous good publish.
     timeout-minutes: 60
     permissions:
       contents: read    # actions/checkout
       packages: write   # push + sign images in GHCR
       id-token: write   # keyless cosign via GitHub OIDC
+      actions: write    # GHA layer cache (type=gha) written by the build step
     strategy:
       fail-fast: false
       matrix:
@@ -352,19 +359,27 @@ jobs:
           IMAGE: ${{ matrix.image }}
         run: echo "::notice::No tags apply to ${IMAGE} on this trigger; skipping its build and push."
 
+      # `docker/build-push-action` cannot be retried selectively: a `uses:` step
+      # does not expose its log, and retrying every failure would rebuild an
+      # outdated lockfile until `timeout-minutes` (#1864). publish-image.sh runs
+      # the same build (SBOM attestation, provenance mode=max, multi-arch push)
+      # through buildx-retry.sh, which retries only a registry/network signature,
+      # and writes `digest` for the cosign step below.
+      #
+      # Tag, label, and dockerfile values cross this boundary through the
+      # environment, not through the shell text — same rule as `resolve` above.
       - name: Build and push
         id: build
         if: steps.meta.outputs.tags != ''
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: mode=max
-          sbom: true
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          LABELS: ${{ steps.meta.outputs.labels }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          # Separate scopes: the two images share a branch and would otherwise
+          # overwrite each other's layer cache.
+          CACHE_SCOPE: ${{ matrix.name }}
+          BUILDER_ID: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        run: bash docker/publish-image.sh
 
       - name: Install cosign
         if: steps.meta.outputs.tags != ''
@@ -450,10 +465,10 @@ jobs:
               '- signing runs *after* the push, so a cosign failure means the image was',
               '  actually published and is current — only its signature is missing.',
               '',
-              '_Possible causes, not a diagnosis:_ a transient registry or Debian-mirror drop is',
-              'the known flake (#1699) and a re-run clears it. But if the logs show every retry',
-              'failing the same way, it is not transient — read the underlying error (an outdated',
-              'lockfile is the usual culprit) instead of re-running.',
+              '_Possible causes, not a diagnosis:_ the build already retried known transient',
+              'registry and network failures (#1864), including the Docker Hub SBOM-scanner pull.',
+              'A red run means that budget was spent, or the failure was not that class — an',
+              'outdated lockfile fails on the first attempt. Read the log before re-running.',
             ].join('\n');
 
             // Reuse one open issue rather than filing a new one per failure — a flaky
