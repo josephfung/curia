@@ -156,3 +156,57 @@ describe('tool manifests do not mention retired email config surfaces', () => {
     ).toHaveLength(0);
   });
 });
+
+// Example mailbox names in an `account` description invite the model to guess a
+// mailbox that may not exist (#1867). Every email tool that takes `account` must
+// point at the same console path the #1856 manifests already use.
+const EMAIL_ACCOUNT_PROVENANCE =
+  'as configured under Settings → Channels → Email → Email accounts';
+const EXAMPLE_MAILBOX = /e\.g\.\s*'[^']+'|'curia'|'joseph'/;
+
+describe('email account inputs cite console provenance', () => {
+  it('every email tool account input names the console path and no example mailbox', () => {
+    const withAccount = MANIFESTS.filter(m => {
+      if (!m.relative.startsWith(`email${path.sep}tools${path.sep}`)) return false;
+      if (typeof m.manifest !== 'object' || m.manifest === null) return false;
+      const inputs = (m.manifest as { inputs?: unknown }).inputs;
+      if (typeof inputs !== 'object' || inputs === null) return false;
+      return typeof (inputs as { account?: unknown }).account === 'string';
+    });
+
+    // All twelve email tools that take `account`. A new one must cite the same path.
+    expect(withAccount.map(m => m.relative).sort()).toEqual([
+      'email/tools/email-archive/tool.json',
+      'email/tools/email-create-folder/tool.json',
+      'email/tools/email-download-attachment/tool.json',
+      'email/tools/email-draft-save/tool.json',
+      'email/tools/email-get/tool.json',
+      'email/tools/email-label/tool.json',
+      'email/tools/email-list-folders/tool.json',
+      'email/tools/email-list/tool.json',
+      'email/tools/email-mark-read/tool.json',
+      'email/tools/email-reply/tool.json',
+      'email/tools/email-send/tool.json',
+      'email/tools/send-draft/tool.json',
+    ]);
+
+    const violations: string[] = [];
+    for (const { relative, manifest } of withAccount) {
+      const inputs = (manifest as { inputs: { account: string } }).inputs;
+      const account = inputs.account;
+      if (!account.includes(EMAIL_ACCOUNT_PROVENANCE)) {
+        violations.push(`${relative} → inputs.account: missing console provenance`);
+      }
+      if (EXAMPLE_MAILBOX.test(account)) {
+        violations.push(`${relative} → inputs.account: hardcoded example mailbox`);
+      }
+    }
+
+    expect(
+      violations,
+      `\nEmail account inputs must cite console provenance and name no example mailbox:\n` +
+        violations.map(v => `  - ${v}`).join('\n') +
+        `\n\nUse "${EMAIL_ACCOUNT_PROVENANCE}" (#1867).\n`,
+    ).toHaveLength(0);
+  });
+});
