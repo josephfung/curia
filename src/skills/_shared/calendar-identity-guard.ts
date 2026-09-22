@@ -153,7 +153,18 @@ export function guardMcpCalendarIdentity(params: {
     return null;
   }
 
-  if (!isPrincipalScopedCalendarTask(ctx.taskMetadata)) return null;
+  // Metadata present but no originator lineage — same silent fail-open as absent
+  // metadata; warn so a future threading bug cannot quiet the guard again.
+  if (!isPrincipalScopedCalendarTask(ctx.taskMetadata)) {
+    const originator = (ctx.taskMetadata as { originator?: unknown }).originator;
+    if (originator == null) {
+      ctx.log.warn(
+        { tool: toolName, server: serverId, code: CALENDAR_IDENTITY_MISMATCH_CODE },
+        'google-workspace calendar tool invoked with taskMetadata but no originator — identity guard cannot assert subject (#1854)',
+      );
+    }
+    return null;
+  }
 
   const requestedCalendarId = extractRequestedCalendarId(ctx.input);
   const resolvedIdentity =
