@@ -18,12 +18,10 @@ import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../s
 import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
-// Reject malformed ids at the API boundary with a 400 — Postgres UUID columns
-// throw a cast error on bad input, which would otherwise surface as a 500.
-// This used to be a local regex that had drifted stricter than every other copy
-// (RFC v1-v5 only), which would have 400'd a legitimate v7 or nil id for no
-// reason anyone could see. See src/util/uuid.ts for why loose is the right
-// choice here: the check guards the SQL cast, not RFC conformance (#1879).
+// These routes used a local regex that had drifted stricter than every other copy
+// (RFC v1-v5 only), which would have 400'd a legitimate v7 or nil id for no reason
+// anyone could see. They now share the codebase matcher — see src/util/uuid.ts for
+// why shape-only is the right check here (#1879).
 import { isUuid } from '../../../util/uuid.js';
 import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 
