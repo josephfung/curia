@@ -93,9 +93,11 @@ describe('resolveConsoleVoiceCaller', () => {
     const caller = await resolveConsoleVoiceCaller({ contactService, logger: warnLogger });
     expect(caller.liveTurn).toBe(true);
     expect(caller.contactId).toBe(PRINCIPAL_ID);
-    expect(caller.senderContext.resolved && caller.senderContext.kind).toBe('principal');
+    expect(caller.senderContext.resolved).toBe(true);
+    if (!caller.senderContext.resolved) return;
+    expect(caller.senderContext.kind).toBe('principal');
     expect(warnSpy).toHaveBeenCalledWith(
-      { contactId: PRINCIPAL_ID, kind: 'person' },
+      { source: 'voice-console', contactId: PRINCIPAL_ID, kind: 'person' },
       'principal contact has kind != "principal" — migration-055 backfill may have missed this row',
     );
   });

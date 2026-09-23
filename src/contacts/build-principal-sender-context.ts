@@ -26,14 +26,18 @@ export interface PrincipalSenderInput {
 /**
  * Build a SenderContext for the principal contact (or the synthetic CLI/web fallback).
  *
- * Forces `tier` / `kind` to `'principal'` unconditionally — a stale stored kind is
- * observable via the warning, never surfaced to callers. `systemRole` is taken from
- * the row (ContactResolver semantics); the synthetic fallback always stamps
- * `systemRole: 'principal'`.
+ * Forces `systemRole` / `tier` / `kind` to `'principal'` unconditionally — a stale
+ * stored value is observable via the warning (tagged with `source` so operators can
+ * tell which caller hit it), never surfaced to callers. The synthetic fallback always
+ * stamps the same three axes.
+ *
+ * @param source — short caller tag (e.g. `'contact-resolver'`, `'voice-console'`)
+ *   included in warning structured fields for operator triage.
  */
 export function buildPrincipalSenderContext(
   principal: PrincipalSenderInput | null,
   logger: Logger,
+  source: string,
 ): SenderContext {
   if (principal) {
     // Warn if migration-055 backfill missed this principal row — kind should
@@ -42,8 +46,17 @@ export function buildPrincipalSenderContext(
     // not NULL). Making it unconditional here is both authoritative and observable.
     if (principal.kind !== 'principal') {
       logger.warn(
-        { contactId: principal.id, kind: principal.kind },
+        { source, contactId: principal.id, kind: principal.kind },
         'principal contact has kind != "principal" — migration-055 backfill may have missed this row',
+      );
+    }
+    // Same treatment for systemRole: a "principal" context whose systemRole is null
+    // would disagree with itself (liveTurn reads systemRole; tier/kind read as
+    // privileged elsewhere). Force + warn, matching kind (#1627).
+    if (principal.systemRole !== 'principal') {
+      logger.warn(
+        { source, contactId: principal.id, systemRole: principal.systemRole },
+        'principal contact has systemRole != "principal"',
       );
     }
     return {
@@ -51,7 +64,7 @@ export function buildPrincipalSenderContext(
       contactId: principal.id,
       displayName: principal.displayName,
       role: principal.role,
-      systemRole: principal.systemRole,
+      systemRole: 'principal',
       verified: true,
       kgNodeId: principal.kgNodeId,
       knowledgeSummary: '',

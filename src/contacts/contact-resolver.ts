@@ -46,7 +46,7 @@ export class ContactResolver {
       try {
         const principal = await this.contactService.findContactBySystemRole('principal');
         if (principal) {
-          return buildPrincipalSenderContext(principal, this.logger);
+          return buildPrincipalSenderContext(principal, this.logger, 'contact-resolver');
         }
         // DB call succeeded but no principal contact row exists yet (fresh install before seeding).
         // Skills that need a real UUID will return empty results — best we can do.
@@ -69,7 +69,7 @@ export class ContactResolver {
         // The CLI continuing to work in degraded mode is acceptable; operators still need to know.
         this.logger.error({ err }, 'contact-resolver: DB error looking up principal contact — falling back to synthetic ID');
       }
-      return buildPrincipalSenderContext(null, this.logger);
+      return buildPrincipalSenderContext(null, this.logger, 'contact-resolver');
     }
 
     const resolved = await this.contactService.resolveByChannelIdentity(channel, senderId);

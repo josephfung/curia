@@ -149,7 +149,7 @@ describe('ContactResolver', () => {
     expect(result.kind).toBe('principal');
     expect(result.contactId).toBe(PRINCIPAL_ID);
     expect(warnSpy).toHaveBeenCalledWith(
-      { contactId: PRINCIPAL_ID, kind: 'person' },
+      { source: 'contact-resolver', contactId: PRINCIPAL_ID, kind: 'person' },
       'principal contact has kind != "principal" — migration-055 backfill may have missed this row',
     );
   });

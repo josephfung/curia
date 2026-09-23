@@ -4,9 +4,10 @@ import { buildPrincipalSenderContext } from './build-principal-sender-context.js
 import { createSilentLogger } from '../logger.js';
 
 const PRINCIPAL_ID = '11111111-1111-1111-1111-111111111111';
+const SOURCE = 'test';
 
 describe('buildPrincipalSenderContext', () => {
-  it('builds from a real principal contact and forces tier/kind to principal', () => {
+  it('builds from a real principal contact and forces systemRole/tier/kind to principal', () => {
     const logger = createSilentLogger();
     const warnSpy = vi.spyOn(logger, 'warn');
 
@@ -20,6 +21,7 @@ describe('buildPrincipalSenderContext', () => {
         kind: 'principal',
       },
       logger,
+      SOURCE,
     );
 
     expect(ctx).toEqual({
@@ -39,10 +41,10 @@ describe('buildPrincipalSenderContext', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('preserves systemRole from the row rather than silently forcing it', () => {
-    // ContactResolver semantics: systemRole is taken from the stored row.
-    // findContactBySystemRole('principal') always returns systemRole='principal',
-    // so a null here is only reachable via a manually constructed input.
+  it('forces systemRole to principal and warns when the row is stale', () => {
+    const logger = createSilentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+
     const ctx = buildPrincipalSenderContext(
       {
         id: PRINCIPAL_ID,
@@ -52,11 +54,17 @@ describe('buildPrincipalSenderContext', () => {
         kgNodeId: null,
         kind: 'principal',
       },
-      createSilentLogger(),
+      logger,
+      SOURCE,
     );
-    expect(ctx.systemRole).toBeNull();
+
+    expect(ctx.systemRole).toBe('principal');
     expect(ctx.tier).toBe('principal');
     expect(ctx.kind).toBe('principal');
+    expect(warnSpy).toHaveBeenCalledWith(
+      { source: SOURCE, contactId: PRINCIPAL_ID, systemRole: null },
+      'principal contact has systemRole != "principal"',
+    );
   });
 
   it('warns when stored kind is not principal (migration-055) but still forces kind', () => {
@@ -73,18 +81,19 @@ describe('buildPrincipalSenderContext', () => {
         kind: 'person',
       },
       logger,
+      SOURCE,
     );
 
     expect(ctx.kind).toBe('principal');
     expect(ctx.tier).toBe('principal');
     expect(warnSpy).toHaveBeenCalledWith(
-      { contactId: PRINCIPAL_ID, kind: 'person' },
+      { source: SOURCE, contactId: PRINCIPAL_ID, kind: 'person' },
       'principal contact has kind != "principal" — migration-055 backfill may have missed this row',
     );
   });
 
   it('falls back to the synthetic primary-user principal when no row exists', () => {
-    const ctx = buildPrincipalSenderContext(null, createSilentLogger());
+    const ctx = buildPrincipalSenderContext(null, createSilentLogger(), SOURCE);
     expect(ctx).toEqual({
       resolved: true,
       contactId: 'primary-user',
