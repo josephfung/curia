@@ -21,6 +21,8 @@ Short-lived context for active agent conversations. Stored in the `working_memor
 - `created_at` TIMESTAMPTZ
 - `expires_at` TIMESTAMPTZ
 - `archived` BOOLEAN — excludes summarized turns from active context loading (migration 018)
+- `sender_contact_id` UUID NULL — contact who authored a `user` turn (migration 090). Assistant and system turns leave it null. Deleting the contact sets it null.
+- `channel_id` TEXT NULL — inbound channel, used to label cross-conversation recall (migration 090)
 
 ---
 
@@ -153,6 +155,8 @@ Each LLM call has a context budget (model's max tokens minus a reserve for the r
 If the total exceeds the budget, items are trimmed from the bottom of the priority list. Within each tier, older/less-relevant items are dropped first.
 
 Contacts resolved during a conversation are not part of working-memory history (tool results are not persisted). Their contact IDs are stored on the conversation and re-read from the contact row at the start of each later turn. That block is its own context-budget tier, `resolved_entities`, capped in size and charged before history so a long transcript cannot crowd the identities out. An outbound message to someone other than the principal is blocked when it carries an unconfirmed-name hedge, or an unresolved name next to an invitation or attendance cue. Other names are not blocked. `filter.identityGate` selects `enforce` (default), `shadow` (log only), or `off`.
+
+Recent activity with the current contact from *other* conversations is a separate tier, `contact_recent_history`. The read lives in working memory and is keyed by `sender_contact_id`, so a new email thread or a voice call can see what that person said earlier the same day. It is charged only after `resolved_entities` and the active transcript, and dropped when it does not fit. User turns are limited to that contact. Assistant and summary turns are included only from conversations where that contact is the sole attributed sender, so a group or a CC'd thread cannot leak another participant's words. Voice runs the same read inside its history deadline and, on timeout, continues with the live transcript only.
 
 ### Context Summarization
 When conversation history in working memory exceeds a configurable threshold (default: 20 turns), older turns are summarized into a condensed narrative and the originals are archived (still in Postgres, just not loaded into context). The summary preserves: key decisions made, entities discussed, and any commitments or action items.

@@ -12,6 +12,7 @@ import {
   LLM_FAILURE_USER_MESSAGE,
 } from '../../memory/llm-failure-turn.js';
 import { WorkingMemory } from '../../memory/working-memory.js';
+import { CONTACT_RECENT_HISTORY_HEADER } from '../../memory/contact-recent-history.js';
 import {
   VoiceRuntime,
   buildVoiceSystemPrompt,
@@ -1778,10 +1779,14 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     expect(addTurn).toHaveBeenNthCalledWith(1, 'voice:g4', 'coordinator', {
       role: 'user',
       content: VOICE_GREETING_USER_MESSAGE,
+    }, {
+      channelId: 'voice',
     });
     expect(addTurn).toHaveBeenNthCalledWith(2, 'voice:g4', 'coordinator', {
       role: 'assistant',
       content: 'Hey boss.',
+    }, {
+      channelId: 'voice',
     });
   });
 
@@ -1926,5 +1931,140 @@ describe('transport override (#1672)', () => {
 
     expect(runtime.activeSessionCount).toBe(0);
     expect(provided.disconnectCount).toBe(1);
+  });
+});
+
+describe('VoiceRuntime contact recent history (#1599)', () => {
+  const reply = (text: string): LLMStreamEvent[] => [
+    { type: 'text_delta', text: `${text} ` },
+    { type: 'message_end', content: text, usage, provenance },
+  ];
+
+  const textContents = (msgs: Message[]): string[] =>
+    msgs.map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)));
+
+  const BOB = '33333333-3333-3333-3333-333333333333';
+
+  it('lets a voice turn reference the caller Signal thread from earlier today', async () => {
+    const caller = principalCaller();
+    const wm = WorkingMemory.createInMemory();
+    await wm.addTurn('signal:+15551212', 'coordinator', { role: 'user', content: 'the board deck is due Friday' }, {
+      senderContactId: caller.contactId,
+      channelId: 'signal',
+    });
+    await wm.addTurn('signal:+15551212', 'coordinator', { role: 'assistant', content: 'I will remind you Thursday.' }, {
+      channelId: 'signal',
+    });
+    await wm.addTurn('email:bob', 'coordinator', { role: 'user', content: 'bob private plan' }, {
+      senderContactId: BOB,
+      channelId: 'email',
+    });
+
+    const llm = new FakeStreamProvider([reply('Friday it is.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: wm,
+      timezone: 'America/Toronto',
+    });
+    await runtime.startSession({
+      sessionId: 'recall1',
+      conversationId: 'voice:recall1',
+      roomName: 'voice-recall1',
+      agentToken: 'tok',
+      caller,
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'what did I tell you earlier', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('recall1');
+
+    const messages = llm.seenMessages[0]!;
+    const contents = textContents(messages);
+    const block = contents.find(c => c.includes(CONTACT_RECENT_HISTORY_HEADER));
+    expect(block).toBeDefined();
+    expect(block).toContain('the board deck is due Friday');
+    expect(block).toContain('I will remind you Thursday.');
+    expect(block).not.toContain('bob private plan');
+    expect(messages[messages.length - 1]).toEqual({ role: 'user', content: 'what did I tell you earlier' });
+  });
+
+  it('does not surface another participant in a shared conversation to a non-principal caller', async () => {
+    const caller = partnerCaller();
+    const wm = WorkingMemory.createInMemory();
+    await wm.addTurn('signal:group=g1', 'coordinator', { role: 'user', content: 'alice asked about the venue' }, {
+      senderContactId: caller.contactId,
+      channelId: 'signal',
+    });
+    await wm.addTurn('signal:group=g1', 'coordinator', { role: 'user', content: 'bob shared the door code' }, {
+      senderContactId: BOB,
+      channelId: 'signal',
+    });
+    await wm.addTurn('signal:group=g1', 'coordinator', { role: 'assistant', content: 'noted both the venue and the code' }, {
+      channelId: 'signal',
+    });
+
+    const llm = new FakeStreamProvider([reply('The venue.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: wm,
+      timezone: 'America/Toronto',
+    });
+    await runtime.startSession({
+      sessionId: 'recall2',
+      conversationId: 'voice:recall2',
+      roomName: 'voice-recall2',
+      agentToken: 'tok',
+      caller,
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'what did we say', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('recall2');
+
+    const contents = textContents(llm.seenMessages[0]!);
+    const block = contents.find(c => c.includes(CONTACT_RECENT_HISTORY_HEADER));
+    expect(block).toContain('alice asked about the venue');
+    expect(contents.join('\n')).not.toContain('bob shared the door code');
+    expect(contents.join('\n')).not.toContain('noted both the venue and the code');
+  });
+
+  it('keeps the live transcript when the contact recall read misses the deadline', async () => {
+    const stalled = {
+      addTurn: vi.fn(async () => {}),
+      getHistory: vi.fn(async () => [
+        { role: 'user', content: 'earlier on this call' },
+        { role: 'assistant', content: 'I heard you' },
+      ]),
+      getContactRecentHistory: vi.fn(() => new Promise(() => {})),
+      purgeExpired: vi.fn(async () => 0),
+    } as unknown as WorkingMemory;
+
+    const llm = new FakeStreamProvider([reply('Still here.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: stalled,
+      historyReadTimeoutMs: 40,
+      timezone: 'America/Toronto',
+    });
+    await runtime.startSession({
+      sessionId: 'recall3',
+      conversationId: 'voice:recall3',
+      roomName: 'voice-recall3',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'are you there', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('recall3');
+
+    const contents = textContents(llm.seenMessages[0]!);
+    expect(contents).toContain('earlier on this call');
+    expect(contents).toContain('I heard you');
+    expect(contents.join('\n')).not.toContain(CONTACT_RECENT_HISTORY_HEADER);
+    expect(llm.seenMessages[0]![llm.seenMessages[0]!.length - 1]).toEqual({
+      role: 'user',
+      content: 'are you there',
+    });
   });
 });
