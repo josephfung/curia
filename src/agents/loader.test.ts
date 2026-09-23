@@ -36,4 +36,11 @@ describe('discoverAgentManifests', () => {
     expect(found[0]!.config).toBeNull();
     expect(found[0]!.error).toMatch(/Invalid agent name/);
   });
+
+  it('captures a non-object YAML document without throwing TypeError (#1882)', () => {
+    fs.writeFileSync(path.join(dir, 'scalar.yaml'), '42\n');
+    const found = discoverAgentManifests(dir);
+    expect(found[0]!.config).toBeNull();
+    expect(found[0]!.error).toMatch(/Invalid agent name/);
+  });
 });
