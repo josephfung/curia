@@ -2,39 +2,20 @@ import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { DocPlaceHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
-import type { WorkingDocsRepo, WorkingDocRow } from '../../../../src/db/working-docs-repo.js';
+import type { WorkingDocsRepo } from '../../../../src/db/working-docs-repo.js';
 
 const silentLog = pino({ level: 'silent' });
-
-function makeDoc(path: string, overrides: Partial<WorkingDocRow> = {}): WorkingDocRow {
-  return {
-    id: 'doc-1',
-    path,
-    type: 'note',
-    frontmatter: { title: 'T' },
-    body: '',
-    version: 1,
-    sectionVersions: {},
-    byteSize: 0,
-    taskId: null,
-    conversationId: null,
-    agentId: null,
-    createdAt: '2026-06-28T10:00:00.000Z',
-    updatedAt: '2026-06-28T10:00:00.000Z',
-    archivedAt: null,
-    ...overrides,
-  };
-}
 
 describe('DocPlaceHandler', () => {
   it('recommends add_to_folder when a matching project exists', async () => {
     const repo = {
-      listByPrefix: vi.fn(async (prefix: string) => {
-        if (prefix === '/projects/') {
-          return [makeDoc('/projects/social-media/queue.md')];
-        }
-        return [makeDoc('/projects/social-media/queue.md')];
-      }),
+      listProjectDirectorySummaries: vi.fn(async () => [{
+        slug: 'social-media',
+        directoryPrefix: '/projects/social-media/',
+        documentCount: 1,
+        samplePaths: ['/projects/social-media/queue.md'],
+        sampleTitles: ['Queue'],
+      }]),
     } as unknown as WorkingDocsRepo;
 
     const ctx = {
@@ -54,7 +35,7 @@ describe('DocPlaceHandler', () => {
 
   it('recommends create_folder for net-new work', async () => {
     const repo = {
-      listByPrefix: vi.fn(async () => []),
+      listProjectDirectorySummaries: vi.fn(async () => []),
     } as unknown as WorkingDocsRepo;
 
     const ctx = {

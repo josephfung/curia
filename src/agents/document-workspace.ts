@@ -170,6 +170,8 @@ export function resolveWorkspacePrefixFromTaskContent(content: string): string |
 
 export interface ResolveWorkspaceDirectoryOptions {
   resolveRootTaskId?: (taskId: string) => Promise<string | null>;
+  /** Pre-resolved project root — skips a second parent walk when the caller already has it. */
+  rootTaskId?: string;
   /** Live documents owned by the root task (`task_id = root`). */
   listLiveByTaskId?: (rootTaskId: string) => Promise<WorkingDocRow[]>;
   /** Live documents under a path prefix (used for legacy UUID folders). */
@@ -205,8 +207,8 @@ export async function resolveWorkspaceDirectoryPrefix(
     : null;
   if (!taskId) return null;
 
-  let rootTaskId = taskId;
-  if (options.resolveRootTaskId) {
+  let rootTaskId = options.rootTaskId ?? taskId;
+  if (!options.rootTaskId && options.resolveRootTaskId) {
     const root = await options.resolveRootTaskId(taskId);
     if (root) rootTaskId = root;
   }

@@ -77,9 +77,10 @@ export function isWellFormedProjectSlug(segment: string): boolean {
   return WELL_FORMED_SLUG_RE.test(segment);
 }
 
-/** 8-char hex short id from a task UUID (dashes stripped). */
+/** 8-char hex short id from a task UUID (dashes stripped, taken from the end for uniqueness). */
 export function collisionShortId(rootTaskId: string): string {
-  return rootTaskId.replace(/-/g, '').slice(0, 8).toLowerCase();
+  const hex = rootTaskId.replace(/-/g, '').toLowerCase();
+  return hex.slice(-8) || hex.slice(0, 8);
 }
 
 /**
@@ -108,28 +109,9 @@ export function normalizeProposedSlug(raw: string): string | null {
 /**
  * Allocate a unique project slug. If `proposed` is free, return it; otherwise
  * `${proposed}-${shortId}`, then `${proposed}-${shortId}-2`, … — never a UUID folder.
+ * Single implementation for sync and async occupancy checks (#1819 review).
  */
-export function allocateUniqueProjectSlug(
-  proposed: string,
-  rootTaskId: string,
-  prefixOccupied: (slug: string) => boolean,
-): string {
-  const base = normalizeProposedSlug(proposed) ?? suggestProjectSlug(proposed);
-  if (!prefixOccupied(base)) return base;
-
-  const short = collisionShortId(rootTaskId) || 'task';
-  const withShort = `${base}-${short}`.slice(0, MAX_PROJECT_SLUG_LENGTH).replace(/-$/g, '');
-  if (!prefixOccupied(withShort)) return withShort;
-
-  for (let n = 2; n < 1000; n++) {
-    const candidate = `${withShort}-${n}`.slice(0, MAX_PROJECT_SLUG_LENGTH).replace(/-$/g, '');
-    if (isWellFormedProjectSlug(candidate) && !prefixOccupied(candidate)) return candidate;
-  }
-  // Extremely pathological — still avoid UUID folders.
-  return `${withShort}-x`.slice(0, MAX_PROJECT_SLUG_LENGTH);
-}
-
-export async function allocateUniqueProjectSlugAsync(
+export async function allocateUniqueProjectSlug(
   proposed: string,
   rootTaskId: string,
   prefixOccupied: (slug: string) => boolean | Promise<boolean>,
@@ -145,6 +127,7 @@ export async function allocateUniqueProjectSlugAsync(
     const candidate = `${withShort}-${n}`.slice(0, MAX_PROJECT_SLUG_LENGTH).replace(/-$/g, '');
     if (isWellFormedProjectSlug(candidate) && !(await prefixOccupied(candidate))) return candidate;
   }
+  // Extremely pathological — still avoid UUID folders.
   return `${withShort}-x`.slice(0, MAX_PROJECT_SLUG_LENGTH);
 }
 
@@ -160,23 +143,41 @@ export function projectSlugFromPath(path: string): string | null {
   return match?.[1] ?? null;
 }
 
+export interface ValidateProjectsWritePathOptions {
+  /** When the UUID segment equals the bound root task id, allow (legacy home). */
+  boundRootTaskId?: string;
+  /** True when `/projects/<uuid>/` already has live documents. */
+  legacyFolderOccupied?: boolean;
+}
+
 /**
- * Validate a create path under /projects/: legacy UUID dirs allowed; new dirs
- * must use a well-formed slug. Returns an error message or null when ok.
+ * Validate a create path under /projects/: new dirs must use a well-formed slug.
+ * UUID segments are allowed only for an existing legacy folder or the bound root id
+ * (#1819 review) — not for inventing a brand-new UUID folder.
  */
-export function validateProjectsWritePath(path: string): string | null {
+export function validateProjectsWritePath(
+  path: string,
+  options?: ValidateProjectsWritePathOptions,
+): string | null {
   const normalized = normalizeDocPath(path);
   const match = /^\/projects\/([^/]+)\/(.+)$/.exec(normalized);
   if (!match) {
     if (normalized === '/projects' || normalized === '/projects/') {
       return 'Write under /projects/<slug>/… — not the /projects/ root';
     }
-    // Non-/projects paths (e.g. /scratch/…) are not governed here.
     if (!normalized.startsWith('/projects/')) return null;
     return 'Project documents must live at /projects/<slug>/<leaf> (not directly under /projects/)';
   }
   const segment = match[1]!;
-  if (isLegacyUuidProjectDir(segment)) return null;
+  if (isLegacyUuidProjectDir(segment)) {
+    const isBoundRoot = options?.boundRootTaskId != null
+      && segment.toLowerCase() === options.boundRootTaskId.toLowerCase();
+    if (isBoundRoot || options?.legacyFolderOccupied === true) return null;
+    return (
+      `Cannot create a new project folder named after a task UUID ('${segment}'). ` +
+      'Use a kebab-case slug via doc-place, or write into an existing legacy UUID folder.'
+    );
+  }
   if (isWellFormedProjectSlug(segment)) return null;
   return (
     `Invalid project folder '${segment}' — use a kebab-case slug (e.g. social-media), ` +
@@ -232,14 +233,33 @@ function normalizeLeaf(leaf?: string): string {
   return trimmed.includes('.') ? trimmed : `${trimmed}.md`;
 }
 
+function slugWords(slug: string): string[] {
+  return slug.split('-').filter(Boolean);
+}
+
+/** True when every word of the shorter slug appears as a whole word in the longer. */
+export function softSlugWordMatch(a: string, b: string): boolean {
+  const wa = slugWords(a);
+  const wb = slugWords(b);
+  if (wa.length === 0 || wb.length === 0) return false;
+  const [shorter, longer] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+  // Single-token soft matches are too aggressive (`ai`⊂`email-campaign`, `project`⊂`my-project-notes`).
+  if (shorter.length < 2) return false;
+  const longerSet = new Set(longer);
+  return shorter.every(w => longerSet.has(w));
+}
+
+type CatalogMatchKind = 'exact' | 'soft';
+
 function findCatalogMatch(
   catalog: ProjectDirectorySummary[],
   slug: string,
-): ProjectDirectorySummary | undefined {
+): { entry: ProjectDirectorySummary; kind: CatalogMatchKind } | undefined {
   const exact = catalog.find(c => c.slug === slug);
-  if (exact) return exact;
-  // Soft match: catalog slug equals or contains the suggestion (or vice versa).
-  return catalog.find(c => c.slug.includes(slug) || slug.includes(c.slug));
+  if (exact) return { entry: exact, kind: 'exact' };
+  const soft = catalog.find(c => softSlugWordMatch(c.slug, slug));
+  if (soft) return { entry: soft, kind: 'soft' };
+  return undefined;
 }
 
 function pickExtendPath(
@@ -275,7 +295,9 @@ function pickExtendPath(
  * Mechanical placement recommendation — prefer extend → add_to_folder → create_folder.
  * Does not call an LLM; agents may override after reading the structured result.
  */
-export function recommendPlacement(input: RecommendPlacementInput): PlacementRecommendation {
+export async function recommendPlacement(
+  input: RecommendPlacementInput,
+): Promise<PlacementRecommendation> {
   const leafWasDefault = !input.leaf || !input.leaf.trim();
   const leaf = normalizeLeaf(input.leaf);
   const shortId = input.rootTaskId ? collisionShortId(input.rootTaskId) : undefined;
@@ -288,9 +310,11 @@ export function recommendPlacement(input: RecommendPlacementInput): PlacementRec
   const occupied = (slug: string) => input.catalog.some(c => c.slug === slug);
 
   if (input.preferNewFolder) {
-    const allocatedSlug = input.rootTaskId
-      ? allocateUniqueProjectSlug(suggested, input.rootTaskId, occupied)
-      : (occupied(suggested) ? `${suggested}-new` : suggested);
+    const allocatedSlug = await allocateUniqueProjectSlug(
+      suggested,
+      input.rootTaskId ?? 'new',
+      occupied,
+    );
     const directoryPrefix = projectDirectoryPrefix(allocatedSlug);
     return {
       action: 'create_folder',
@@ -308,31 +332,36 @@ export function recommendPlacement(input: RecommendPlacementInput): PlacementRec
 
   const match = findCatalogMatch(input.catalog, suggested);
   if (match) {
-    const extendPath = pickExtendPath(
-      match.directoryPrefix,
-      leaf,
-      input.documentsInFolder,
-      leafWasDefault,
-    );
-    if (extendPath) {
-      return {
-        action: 'extend',
-        slug: match.slug,
-        directoryPrefix: match.directoryPrefix,
-        path: extendPath,
-        reason: `Existing document ${extendPath} matches this work — prefer append or section-edit.`,
-        collisionShortId: shortId,
-        alternatives: input.catalog.filter(c => c.slug !== match.slug).slice(0, 5),
-      };
+    // Soft (word) matches never auto-extend — only exact folder hits may (#1819 review).
+    if (match.kind === 'exact') {
+      const extendPath = pickExtendPath(
+        match.entry.directoryPrefix,
+        leaf,
+        input.documentsInFolder,
+        leafWasDefault,
+      );
+      if (extendPath) {
+        return {
+          action: 'extend',
+          slug: match.entry.slug,
+          directoryPrefix: match.entry.directoryPrefix,
+          path: extendPath,
+          reason: `Existing document ${extendPath} matches this work — prefer append or section-edit.`,
+          collisionShortId: shortId,
+          alternatives: input.catalog.filter(c => c.slug !== match.entry.slug).slice(0, 5),
+        };
+      }
     }
     return {
       action: 'add_to_folder',
-      slug: match.slug,
-      directoryPrefix: match.directoryPrefix,
-      path: `${match.directoryPrefix}${leaf}`,
-      reason: `Existing folder ${match.directoryPrefix} matches — add a new document there rather than creating a sibling folder.`,
+      slug: match.entry.slug,
+      directoryPrefix: match.entry.directoryPrefix,
+      path: `${match.entry.directoryPrefix}${leaf}`,
+      reason: match.kind === 'soft'
+        ? `Folder ${match.entry.directoryPrefix} soft-matches the suggested slug — add there rather than extending blindly.`
+        : `Existing folder ${match.entry.directoryPrefix} matches — add a new document there rather than creating a sibling folder.`,
       collisionShortId: shortId,
-      alternatives: input.catalog.filter(c => c.slug !== match.slug).slice(0, 5),
+      alternatives: input.catalog.filter(c => c.slug !== match.entry.slug).slice(0, 5),
     };
   }
 

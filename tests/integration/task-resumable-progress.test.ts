@@ -270,7 +270,7 @@ describeIf('TaskRepo resumable progress (#1172, #1210)', () => {
     expect(isDocumentPointer(pointer)).toBe(true);
     if (!isDocumentPointer(pointer)) return;
     const expectedPrefix = projectDirectoryPrefix(suggestProjectSlug(parent.title));
-    expect(pointer.path).toBe(accumulatorDocPath(expectedPrefix));
+    expect(pointer.path).toBe(accumulatorDocPath(expectedPrefix, parent.id));
 
     const doc = await workingDocs.read(pointer.path);
     expect(doc?.body).toContain('"did:plc:000000"');

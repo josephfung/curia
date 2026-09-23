@@ -8,6 +8,7 @@ import {
   projectDirectoryPrefix,
   recommendPlacement,
   resolveOwnedWorkspacePrefix,
+  softSlugWordMatch,
   suggestProjectSlug,
   validateProjectsWritePath,
 } from '../../../src/agents/document-placement.js';
@@ -42,31 +43,50 @@ describe('suggestProjectSlug / validation', () => {
     expect(isWellFormedProjectSlug('3467d2d0-1695-4d90-9789-3319ba5a2c65')).toBe(false);
   });
 
-  it('validates /projects write paths', () => {
+  it('validates /projects write paths — UUID only when legacy or bound root', () => {
     expect(validateProjectsWritePath('/projects/social-media/brief.md')).toBeNull();
-    expect(validateProjectsWritePath('/projects/3467d2d0-1695-4d90-9789-3319ba5a2c65/brief.md')).toBeNull();
-    expect(validateProjectsWritePath('/projects/Not Valid/brief.md')).toMatch(/kebab-case/i);
     expect(validateProjectsWritePath('/scratch/c/note.md')).toBeNull();
+    expect(validateProjectsWritePath('/projects/Not Valid/brief.md')).toMatch(/kebab-case/i);
+
+    const uuid = '3467d2d0-1695-4d90-9789-3319ba5a2c65';
+    expect(validateProjectsWritePath(`/projects/${uuid}/brief.md`)).toMatch(/Cannot create/);
+    expect(validateProjectsWritePath(`/projects/${uuid}/brief.md`, {
+      legacyFolderOccupied: true,
+    })).toBeNull();
+    expect(validateProjectsWritePath(`/projects/${uuid}/brief.md`, {
+      boundRootTaskId: uuid,
+    })).toBeNull();
+  });
+});
+
+describe('softSlugWordMatch', () => {
+  it('matches on whole hyphenated words, not characters', () => {
+    expect(softSlugWordMatch('social-media', 'social-media-queue')).toBe(true);
+    expect(softSlugWordMatch('ai', 'email-campaign')).toBe(false);
+    expect(softSlugWordMatch('q3', 'q3-board-deck')).toBe(false);
+    expect(softSlugWordMatch('plan', 'planning-offsite')).toBe(false);
+    expect(softSlugWordMatch('project', 'my-project-notes')).toBe(false);
+    expect(softSlugWordMatch('board-deck', 'q3-board-deck')).toBe(true);
   });
 });
 
 describe('allocateUniqueProjectSlug', () => {
   const root = '00000000-0000-4000-8000-00000000abcd';
 
-  it('returns the proposed slug when free', () => {
-    expect(allocateUniqueProjectSlug('social-media', root, () => false)).toBe('social-media');
+  it('returns the proposed slug when free', async () => {
+    expect(await allocateUniqueProjectSlug('social-media', root, () => false)).toBe('social-media');
   });
 
-  it('appends a short task id when occupied', () => {
+  it('appends a short task id when occupied', async () => {
     const short = collisionShortId(root);
-    expect(allocateUniqueProjectSlug('social-media', root, (s) => s === 'social-media'))
+    expect(await allocateUniqueProjectSlug('social-media', root, (s) => s === 'social-media'))
       .toBe(`social-media-${short}`);
   });
 
-  it('increments when the short-id form is also taken', () => {
+  it('increments when the short-id form is also taken', async () => {
     const short = collisionShortId(root);
     const occupied = new Set([`social-media`, `social-media-${short}`]);
-    expect(allocateUniqueProjectSlug('social-media', root, (s) => occupied.has(s)))
+    expect(await allocateUniqueProjectSlug('social-media', root, (s) => occupied.has(s)))
       .toBe(`social-media-${short}-2`);
   });
 });
@@ -80,10 +100,17 @@ describe('recommendPlacement', () => {
       samplePaths: ['/projects/social-media/queue.md'],
       sampleTitles: ['Queue'],
     },
+    {
+      slug: 'email-campaign',
+      directoryPrefix: '/projects/email-campaign/',
+      documentCount: 1,
+      samplePaths: ['/projects/email-campaign/brief.md'],
+      sampleTitles: ['Brief'],
+    },
   ];
 
-  it('prefers extend when a matching document exists', () => {
-    const result = recommendPlacement({
+  it('prefers extend when a matching document exists', async () => {
+    const result = await recommendPlacement({
       title: 'Social media',
       leaf: 'queue.md',
       catalog,
@@ -94,8 +121,8 @@ describe('recommendPlacement', () => {
     expect(result.path).toBe('/projects/social-media/queue.md');
   });
 
-  it('adds to an existing folder when no leaf match', () => {
-    const result = recommendPlacement({
+  it('adds to an existing folder when no leaf match', async () => {
+    const result = await recommendPlacement({
       proposedSlug: 'social-media',
       leaf: 'plan.md',
       catalog,
@@ -105,8 +132,18 @@ describe('recommendPlacement', () => {
     expect(result.directoryPrefix).toBe('/projects/social-media/');
   });
 
-  it('creates a new folder when nothing matches', () => {
-    const result = recommendPlacement({
+  it('does not soft-match character substrings into extend/add', async () => {
+    const result = await recommendPlacement({
+      title: 'AI',
+      catalog,
+      documentsInFolder: [doc('/projects/email-campaign/brief.md')],
+    });
+    expect(result.action).toBe('create_folder');
+    expect(result.slug).toBe('ai');
+  });
+
+  it('creates a new folder when nothing matches', async () => {
+    const result = await recommendPlacement({
       title: 'Evan neurology prep',
       catalog: [],
     });
@@ -115,9 +152,9 @@ describe('recommendPlacement', () => {
     expect(result.directoryPrefix).toBe('/projects/evan-neurology-prep/');
   });
 
-  it('allocates a unique slug when prefer_new_folder and name taken', () => {
+  it('allocates a unique slug when prefer_new_folder and name taken', async () => {
     const root = '00000000-0000-4000-8000-00000000abcd';
-    const result = recommendPlacement({
+    const result = await recommendPlacement({
       proposedSlug: 'social-media',
       preferNewFolder: true,
       catalog,
@@ -126,6 +163,25 @@ describe('recommendPlacement', () => {
     expect(result.action).toBe('create_folder');
     expect(result.slug).toBe(`social-media-${collisionShortId(root)}`);
     expect(result.allocated).toBe(true);
+  });
+
+  it('checks -new collisions when no rootTaskId', async () => {
+    const occupiedCatalog = [
+      ...catalog,
+      {
+        slug: 'social-media-new',
+        directoryPrefix: '/projects/social-media-new/',
+        documentCount: 1,
+        samplePaths: ['/projects/social-media-new/x.md'],
+        sampleTitles: [],
+      },
+    ];
+    const result = await recommendPlacement({
+      proposedSlug: 'social-media',
+      preferNewFolder: true,
+      catalog: occupiedCatalog,
+    });
+    expect(result.slug).toBe('social-media-new-2');
   });
 });
 

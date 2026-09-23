@@ -6,7 +6,8 @@
 import type { WorkingDocsRepo } from './working-docs-repo.js';
 import { markdownFenceFor } from '../memory/okf.js';
 import {
-  allocateUniqueProjectSlugAsync,
+  allocateUniqueProjectSlug,
+  collisionShortId,
   projectDirectoryPrefix,
   resolveOwnedWorkspacePrefix,
   suggestProjectSlug,
@@ -21,13 +22,19 @@ import {
   type ResumableWriteResult,
 } from './resumable-progress.js';
 
+/** Legacy leaf used under per-task UUID folders before #1819. */
 export const ACCUMULATOR_DOC_LEAF = 'accumulator.md';
 export const ACCUMULATOR_DOC_TYPE = 'resumable-accumulator';
 
+/** Task-scoped spill leaf — safe inside shared slug folders (#1819 review). */
+export function accumulatorDocLeaf(rootTaskId: string): string {
+  return `accumulator-${collisionShortId(rootTaskId)}.md`;
+}
+
 /** Workspace path for a spilled accumulator under a resolved directory prefix. */
-export function accumulatorDocPath(workspacePrefix: string): string {
+export function accumulatorDocPath(workspacePrefix: string, rootTaskId: string): string {
   const prefix = workspacePrefix.endsWith('/') ? workspacePrefix : `${workspacePrefix}/`;
-  return `${prefix}${ACCUMULATOR_DOC_LEAF}`;
+  return `${prefix}${accumulatorDocLeaf(rootTaskId)}`;
 }
 
 /** Serialize an inline accumulator value into OKF markdown body text. */
@@ -60,7 +67,7 @@ export async function spillInlineAccumulator(
   repo: WorkingDocsRepo,
   params: SpillInlineAccumulatorParams,
 ): Promise<ResumableDocumentPointer> {
-  const path = accumulatorDocPath(params.workspacePrefix);
+  const path = accumulatorDocPath(params.workspacePrefix, params.rootTaskId);
   const body = formatAccumulatorDocumentBody(params.inlineValue);
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -76,15 +83,23 @@ export async function spillInlineAccumulator(
         });
         return documentAccumulatorPointer(path);
       } catch {
-        // Another writer created accumulator.md between read and create — retry.
+        // Another writer created the leaf between read and create — retry.
         continue;
       }
+    }
+
+    // Never take over another task's document (shared-folder hazard).
+    if (existing.taskId != null && existing.taskId !== params.rootTaskId) {
+      throw new Error(
+        `resumable-accumulator-spill: ${path} belongs to task ${existing.taskId}, not ${params.rootTaskId}`,
+      );
     }
 
     const result = await repo.update(path, {
       body,
       expectedVersion: existing.version,
-      taskId: params.rootTaskId,
+      // Only stamp ownership when the row has none yet.
+      ...(existing.taskId == null ? { taskId: params.rootTaskId } : {}),
     });
     if (result.ok) {
       return documentAccumulatorPointer(path);
@@ -130,13 +145,10 @@ export async function resolveSpillWorkspacePrefix(
   if (resolved) return resolved;
 
   const suggested = suggestProjectSlug(params.title ?? 'project');
-  const allocated = await allocateUniqueProjectSlugAsync(
+  const allocated = await allocateUniqueProjectSlug(
     suggested,
     params.rootTaskId,
-    async (slug) => {
-      const docs = await params.workingDocsRepo.listByPrefix(projectDirectoryPrefix(slug));
-      return docs.length > 0;
-    },
+    (slug) => params.workingDocsRepo.projectPrefixHasLiveDocs(slug),
   );
   return projectDirectoryPrefix(allocated);
 }
@@ -152,7 +164,7 @@ export async function prepareResumableBlockWithSpill(
   if (isDocumentPointer(input.accumulator)) return first;
 
   const workspacePrefix = await resolveSpillWorkspacePrefix(spill);
-  const path = accumulatorDocPath(workspacePrefix);
+  const path = accumulatorDocPath(workspacePrefix, spill.rootTaskId);
   const pointer = documentAccumulatorPointer(path);
   const preparedPointer = prepareResumableBlock({ ...input, accumulator: pointer });
   if (!preparedPointer.ok) return preparedPointer;

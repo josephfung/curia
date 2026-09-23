@@ -2,7 +2,11 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { normalizeDocPath } from '../../../../src/memory/okf.js';
-import { validateProjectsWritePath } from '../../../../src/agents/document-placement.js';
+import {
+  isLegacyUuidProjectDir,
+  projectSlugFromPath,
+  validateProjectsWritePath,
+} from '../../../../src/agents/document-placement.js';
 import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
 import {
   appendDirectoryLog,
@@ -15,10 +19,25 @@ import {
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit']);
 
-function resolveAssociatedTaskId(ctx: ToolContext, inputTaskId?: string): string | undefined {
-  if (typeof inputTaskId === 'string' && inputTaskId.trim()) return inputTaskId.trim();
-  const bound = boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
-  return bound?.taskId;
+/**
+ * Ownership stamp for archival / prefix resolution is the *project root* task id
+ * (#1819 review). Bound wake ids may be subtasks.
+ */
+async function resolveAssociatedRootTaskId(
+  ctx: ToolContext,
+  inputTaskId?: string,
+): Promise<string | undefined> {
+  let candidate: string | undefined;
+  if (typeof inputTaskId === 'string' && inputTaskId.trim()) {
+    candidate = inputTaskId.trim();
+  } else {
+    const bound = boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
+    candidate = bound?.taskId;
+  }
+  if (!candidate) return undefined;
+  if (!ctx.taskRepo) return candidate;
+  const root = await ctx.taskRepo.resolveProjectRootTaskId(candidate);
+  return root ?? candidate;
 }
 
 export class DocWriteHandler implements ToolHandler {
@@ -56,8 +75,18 @@ export class DocWriteHandler implements ToolHandler {
       return { success: false, error: reservedError };
     }
 
+    const associatedTaskId = await resolveAssociatedRootTaskId(ctx, input.task_id);
+
     if (input.mode === 'create') {
-      const projectsError = validateProjectsWritePath(input.path);
+      const segment = projectSlugFromPath(input.path);
+      let legacyFolderOccupied = false;
+      if (segment && isLegacyUuidProjectDir(segment)) {
+        legacyFolderOccupied = await ctx.workingDocs!.projectPrefixHasLiveDocs(segment);
+      }
+      const projectsError = validateProjectsWritePath(input.path, {
+        boundRootTaskId: associatedTaskId,
+        legacyFolderOccupied,
+      });
       if (projectsError) {
         return { success: false, error: projectsError };
       }
@@ -67,7 +96,6 @@ export class DocWriteHandler implements ToolHandler {
     const normalized = normalizeDocPath(input.path);
     const summary = typeof input.summary === 'string' ? input.summary : `${input.mode} ${normalized}`;
     const ttlWarning = ttlDaysFrontmatterWarning(normalized, input.frontmatter);
-    const associatedTaskId = resolveAssociatedTaskId(ctx, input.task_id);
 
     try {
       const repo = ctx.workingDocs!;
