@@ -1,10 +1,10 @@
 // uuid.ts — the one UUID-shape check for the whole codebase.
 //
 // Before this module the same "is this a real contact/node/job UUID" regex was
-// declared 31 separate times across src/ and skills/ (curia#1879 — which counted
+// declared 30 separate times across src/ and skills/ (curia#1879 — which counted
 // 29, having grepped only for the `[0-9a-f]` spelling). Nothing was broken —
-// gen_random_uuid() output passes every variant — but 31 independent definitions
-// are 31 independent chances to drift, and two of them already had.
+// gen_random_uuid() output passes every variant — but 30 independent definitions
+// are 30 independent chances to drift, and two of them already had.
 //
 // ---------------------------------------------------------------------------
 // The decision: LOOSE, not strict.
