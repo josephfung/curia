@@ -20,6 +20,7 @@ export function principalCaller(overrides: Partial<VoiceCallerContext> = {}): Vo
       kind: 'principal',
     },
     silentLogger,
+    'voice-test-fixture',
   );
   return {
     contactId,

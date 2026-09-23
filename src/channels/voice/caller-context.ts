@@ -103,7 +103,7 @@ export async function resolveConsoleVoiceCaller(opts: {
   // ContactResolver.resolve('voice', …) so a future real caller token still hits
   // resolveByChannelIdentity (#1598). Construction shares buildPrincipalSenderContext
   // with ContactResolver so the migration-055 kind warning cannot drift (#1627).
-  const senderContext = buildPrincipalSenderContext(principal, opts.logger);
+  const senderContext = buildPrincipalSenderContext(principal, opts.logger, 'voice-console');
   return toCallerContext(senderContext, 'voice', VOICE_CONSOLE_SENDER_ID);
 }
 
