@@ -20,12 +20,27 @@
 //     choice if we ever want time-sortable ids;
 //   - any other hex string of the right shape.
 //
-// That is the right trade because of what these checks are *for*. Every call
-// site is guarding a value that is about to be handed to Postgres as a `uuid`
-// — either an id we generated, or one echoed back to us from the database, or
-// an LLM-supplied argument that might be a contact *name* rather than a
-// contact *id*. The job is to stop a malformed string reaching a UUID cast and
-// blowing up as a 22P02 error. It is not to certify RFC conformance.
+// That is the right trade because of what these checks are *for*. Most call
+// sites guard a value about to be handed to Postgres as a `uuid` — either an id
+// we generated, or one echoed back to us from the database, or an LLM-supplied
+// argument that might be a contact *name* rather than a contact *id*. The job is
+// to stop a malformed string reaching a UUID cast and blowing up as a 22P02
+// error. It is not to certify RFC conformance.
+//
+// A handful of call sites are not SQL guards at all, and loose is right for them
+// too, for their own reasons:
+//
+//   - `src/agents/loader.ts` and `src/scheduler/scheduler.ts` check a contact id
+//     before interpolating it into model-visible prompt text. That is a
+//     prompt-injection guard: what matters is that the value is an inert
+//     identifier rather than arbitrary prose, which shape alone establishes. The
+//     RFC version nibble tells you nothing about injection risk.
+//   - `src/agents/document-placement.ts` classifies a legacy project folder-name
+//     segment as "a UUID, therefore not a human-chosen slug" — again a question
+//     about shape, not provenance.
+//   - `src/channels/email/nylas-message-id.ts` distinguishes an outbound_context
+//     entry id from a provider-native Nylas message id. Nylas ids are never
+//     UUID-shaped, so shape is the whole discriminator.
 //
 // Strictness buys nothing against that threat model (a strict-valid UUID that
 // names no row is just as useless as a non-conforming one — the lookup fails
