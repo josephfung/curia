@@ -404,8 +404,23 @@ export class WorkingDocsRepo {
     return rows.length > 0;
   }
 
+  /** True when a live document exists at exactly `path` (no body load). */
+  async livePathExists(path: string): Promise<boolean> {
+    const normalized = normalizeDocPath(path);
+    const { rows } = await this.pool.query<{ ok: number }>(
+      `SELECT 1 AS ok
+         FROM working_documents
+        WHERE path = $1
+          AND archived_at IS NULL
+        LIMIT 1`,
+      [normalized],
+    );
+    return rows.length > 0;
+  }
+
   /**
    * Top-level `/projects/` directory summaries without loading document bodies (#1819).
+   * Ordered by recent activity so the prompt-sized window prefers live work.
    */
   async listProjectDirectorySummaries(options?: { maxDirectories?: number }): Promise<Array<{
     slug: string;
@@ -434,7 +449,7 @@ export class WorkingDocsRepo {
          AND path LIKE '/projects/%/%'
          AND (regexp_match(path, '^/projects/([^/]+)'))[1] IS NOT NULL
        GROUP BY 1
-       ORDER BY 1
+       ORDER BY MAX(updated_at) DESC, 1 ASC
        LIMIT $1`,
       [max],
     );

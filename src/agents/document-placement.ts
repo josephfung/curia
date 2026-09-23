@@ -63,6 +63,13 @@ export interface RecommendPlacementInput {
   rootTaskId?: string;
   /** Live documents under matching folders — used to pick an extend target. */
   documentsInFolder?: WorkingDocRow[];
+  /**
+   * Authoritative occupancy check (e.g. DB EXISTS). Used so a prompt-capped catalog
+   * cannot miss folders outside the window (#1819 review).
+   */
+  prefixOccupied?: (slug: string) => boolean | Promise<boolean>;
+  /** Cheap leaf existence check — enables `extend` without loading folder bodies. */
+  leafExists?: (path: string) => boolean | Promise<boolean>;
 }
 
 /** True when the segment is a legacy UUID project directory name. */
@@ -307,7 +314,11 @@ export async function recommendPlacement(
   const suggested = fromProposed
     ?? suggestProjectSlug(input.title ?? input.intent ?? 'project');
 
-  const occupied = (slug: string) => input.catalog.some(c => c.slug === slug);
+  const occupied = async (slug: string): Promise<boolean> => {
+    if (input.catalog.some(c => c.slug === slug)) return true;
+    if (input.prefixOccupied) return Boolean(await input.prefixOccupied(slug));
+    return false;
+  };
 
   if (input.preferNewFolder) {
     const allocatedSlug = await allocateUniqueProjectSlug(
@@ -321,7 +332,7 @@ export async function recommendPlacement(
       slug: allocatedSlug,
       directoryPrefix,
       path: `${directoryPrefix}${leaf}`,
-      reason: occupied(suggested) && allocatedSlug !== suggested
+      reason: (await occupied(suggested)) && allocatedSlug !== suggested
         ? `Folder /projects/${suggested}/ is occupied — allocated unique slug '${allocatedSlug}' for a new folder.`
         : `Create a new project folder at ${directoryPrefix}.`,
       allocated: allocatedSlug !== suggested,
@@ -330,16 +341,37 @@ export async function recommendPlacement(
     };
   }
 
-  const match = findCatalogMatch(input.catalog, suggested);
+  let match = findCatalogMatch(input.catalog, suggested);
+  // Exact folder may sit outside the prompt-sized catalog window — check the DB.
+  if (!match && isWellFormedProjectSlug(suggested) && input.prefixOccupied
+    && await input.prefixOccupied(suggested)) {
+    match = {
+      entry: {
+        slug: suggested,
+        directoryPrefix: projectDirectoryPrefix(suggested),
+        documentCount: 0,
+        samplePaths: [],
+        sampleTitles: [],
+      },
+      kind: 'exact',
+    };
+  }
+
   if (match) {
     // Soft (word) matches never auto-extend — only exact folder hits may (#1819 review).
     if (match.kind === 'exact') {
-      const extendPath = pickExtendPath(
+      const candidatePath = normalizeDocPath(`${match.entry.directoryPrefix}${leaf}`);
+      const extendFromDocs = pickExtendPath(
         match.entry.directoryPrefix,
         leaf,
         input.documentsInFolder,
         leafWasDefault,
       );
+      const extendFromLeaf = !extendFromDocs && input.leafExists
+        && await input.leafExists(candidatePath)
+        ? candidatePath
+        : undefined;
+      const extendPath = extendFromDocs ?? extendFromLeaf;
       if (extendPath) {
         return {
           action: 'extend',
@@ -348,7 +380,7 @@ export async function recommendPlacement(
           path: extendPath,
           reason: `Existing document ${extendPath} matches this work — prefer append or section-edit.`,
           collisionShortId: shortId,
-          alternatives: input.catalog.filter(c => c.slug !== match.entry.slug).slice(0, 5),
+          alternatives: input.catalog.filter(c => c.slug !== match!.entry.slug).slice(0, 5),
         };
       }
     }
@@ -361,7 +393,7 @@ export async function recommendPlacement(
         ? `Folder ${match.entry.directoryPrefix} soft-matches the suggested slug — add there rather than extending blindly.`
         : `Existing folder ${match.entry.directoryPrefix} matches — add a new document there rather than creating a sibling folder.`,
       collisionShortId: shortId,
-      alternatives: input.catalog.filter(c => c.slug !== match.entry.slug).slice(0, 5),
+      alternatives: input.catalog.filter(c => c.slug !== match!.entry.slug).slice(0, 5),
     };
   }
 
