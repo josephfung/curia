@@ -20,10 +20,9 @@ import {
   ttlDaysFrontmatterWarning,
   validateWritePath,
 } from '../../../_shared/doc-workspace.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit']);
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Ownership stamp for archival / prefix resolution is the *project root* task id
@@ -42,7 +41,7 @@ async function resolveAssociatedRootTaskId(
     if (isUnresolvedPlaceholder(candidate)) {
       return { ok: false, error: unresolvedPlaceholderError('task_id', candidate) };
     }
-    if (!UUID_RE.test(candidate)) {
+    if (!isUuid(candidate)) {
       return { ok: false, error: 'task_id must be a task UUID' };
     }
   } else {
@@ -51,7 +50,7 @@ async function resolveAssociatedRootTaskId(
   }
   if (!candidate) return { ok: true, taskId: undefined };
   // Bound metadata should already be a UUID; still guard before the uuid column.
-  if (!UUID_RE.test(candidate)) {
+  if (!isUuid(candidate)) {
     return { ok: false, error: 'task_id must be a task UUID' };
   }
   if (!ctx.taskRepo) return { ok: true, taskId: candidate };

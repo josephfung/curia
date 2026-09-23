@@ -9,10 +9,9 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { IdentityStatus } from '../../../../src/contacts/types.js';
 import { IdentityNotFoundError } from '../../../../src/contacts/types.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
 const VALID_STATUSES = new Set<string>(['active', 'defunct', 'bounced']);
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class ContactSetIdentityStatusHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -26,7 +25,7 @@ export class ContactSetIdentityStatusHandler implements ToolHandler {
     if (!identity_id || typeof identity_id !== 'string') {
       return { success: false, error: 'Missing required input: identity_id (string)' };
     }
-    if (!UUID_RE.test(identity_id)) {
+    if (!isUuid(identity_id)) {
       return {
         success: false,
         error: "identity_id must be a valid UUID. Use contact-lookup to obtain identity UUIDs.",

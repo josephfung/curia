@@ -18,6 +18,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { CANONICAL_ATTRIBUTE_MAP, normalizePhone } from '../../../../src/contacts/canonical-attribute-guard.js';
 import { ContactValidationError } from '../../../../src/contacts/contact-service.js';
 import type { ContactCanonicalFields } from '../../../../src/contacts/types.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
 // Derive the valid field key set from CANONICAL_ATTRIBUTE_MAP values so this
 // allowlist stays in sync with the KG guard without duplicating it.
@@ -36,8 +37,7 @@ export class ContactUpdateHandler implements ToolHandler {
     }
 
     // Validate UUID format — the DB column rejects non-UUIDs with a cryptic 22P02 error.
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!UUID_RE.test(contact_id)) {
+    if (!isUuid(contact_id)) {
       return {
         success: false,
         error: "contact_id must be a valid UUID. Use contact-lookup or entity-context to obtain the contact's UUID first.",

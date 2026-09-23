@@ -19,11 +19,7 @@ import type { JobRow } from './scheduler-service.js';
 import type { OutboundContextService } from '../dispatch/outbound-context.js';
 import { classifyError } from '../errors/classify.js';
 import { findTemplateTokens } from '../skills/_shared/placeholder-guard.js';
-
-// Mirrors UUID_FORMAT in src/agents/loader.ts — both gate a contact ID before it is
-// substituted into model-visible text. Kept local rather than imported so the scheduler
-// does not take a dependency on the agent loader for one regex.
-const UUID_FORMAT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../util/uuid.js';
 
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
@@ -325,7 +321,7 @@ export function interpolateTaskContent(
 ): { content: string; principalReplacements: number; principalResolved: boolean; unresolvedTokens: string[] } {
   // Same defense-in-depth UUID check as interpolateRuntimeContext: never let a value from
   // outside the UUID-generating path become free text inside a model-visible payload.
-  const resolved = UUID_FORMAT.test(principalContactId ?? '') ? (principalContactId ?? '') : '';
+  const resolved = isUuid(principalContactId) ? (principalContactId ?? '') : '';
   // Reports what was actually substituted, not merely whether an argument was supplied —
   // a malformed ID is as unusable as a missing one and must warn the same way.
   const principalResolved = resolved !== '';

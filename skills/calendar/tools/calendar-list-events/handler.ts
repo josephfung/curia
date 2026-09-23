@@ -17,6 +17,7 @@ import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestam
 import { isSystemOriginated, isPrincipalOriginated } from '../../../../src/contacts/principal.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
 import { guardNylasExplicitCalendarIdentity } from '../../../../src/skills/_shared/calendar-identity-guard.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
 export class CalendarListEventsHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -46,8 +47,6 @@ export class CalendarListEventsHandler implements ToolHandler {
       // Resolve which calendar(s) to query.
       // Priority: explicit calendarId > explicit contactId lookup > caller auto-lookup.
       let calendarIds: string[];
-
-      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
       if (calendarId && typeof calendarId === 'string') {
         // Principal-scoped task + calendar registered to a non-principal contact → fail closed (#1854).
@@ -83,7 +82,7 @@ export class CalendarListEventsHandler implements ToolHandler {
             error: `contactId override is not allowed for this caller — only system-context (scheduled) invocations and principal callers may look up calendars by contactId`,
           };
         }
-        if (!UUID_RE.test(contactId)) {
+        if (!isUuid(contactId)) {
           return {
             success: false,
             error: `Invalid contactId — must be a UUID, got "${contactId}"`,
@@ -105,7 +104,7 @@ export class CalendarListEventsHandler implements ToolHandler {
         //   'system'       — scheduled-job invocations (see makeSystemOriginator in contacts/principal.ts)
         //   'primary-user' — CLI sessions where the principal DB lookup failed at bootstrap
         // Both cause a Postgres parse error if passed to a UUID column.
-        if (!UUID_RE.test(ctx.caller.contactId)) {
+        if (!isUuid(ctx.caller.contactId)) {
           ctx.log.warn(
             { contactId: ctx.caller.contactId },
             "calendar-list-events: caller contactId is not a UUID — pass contactId (the principal's contact ID from the agent's system prompt) for scheduled invocations",

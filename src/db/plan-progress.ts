@@ -4,6 +4,7 @@
 // tasks.progress JSONB — no schema migration.
 
 import { serializedUtf8Bytes } from './resumable-progress.js';
+import { isUuid } from '../util/uuid.js';
 
 /** Max serialized size (UTF-8 bytes) of the entire plan block. */
 export const PLAN_BLOCK_MAX_BYTES = 8192;
@@ -41,8 +42,6 @@ export type PlanWriteResult =
 
 /** Child statuses that count as resolved for the "X of Y" rollup. */
 const RESOLVED_CHILD_STATUSES = new Set(['done', 'cancelled', 'failed']);
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function planBlockBytes(block: PlanProgressBlock): number {
   return serializedUtf8Bytes(block);
@@ -85,7 +84,7 @@ function parseTaskId(raw: unknown): string | null | undefined {
   if (typeof raw !== 'string') return undefined;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return undefined;
-  return UUID_RE.test(trimmed) ? trimmed : undefined;
+  return isUuid(trimmed) ? trimmed : undefined;
 }
 
 function readTaskIdField(raw: Record<string, unknown>): unknown {

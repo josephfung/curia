@@ -1,12 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
-
-// UUID v4 format: 8-4-4-4-12 hex groups separated by hyphens.
-// Used to validate agentContactId before system prompt interpolation —
-// guards against prompt injection if the ID source ever changes from
-// the current gen_random_uuid() call in bootstrap.ts.
-const UUID_FORMAT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../util/uuid.js';
 
 /**
  * Shape of an agent YAML config file.
@@ -210,7 +205,7 @@ export function interpolateRuntimeContext(
       // The current bootstrap always produces a Postgres-generated UUID, but an
       // explicit check here ensures a future change (env var, config, etc.) can't
       // accidentally inject arbitrary text into the system prompt.
-      UUID_FORMAT.test(context.agentContactId ?? '') ? (context.agentContactId ?? '') : '',
+      isUuid(context.agentContactId) ? (context.agentContactId ?? '') : '',
     )
     .replace(
       /\$\{principal_contact_id\}/g,
@@ -220,6 +215,6 @@ export function interpolateRuntimeContext(
       // readiness gate (check: principal-contact) before this code ever runs
       // on a real prompt, so the empty-string fallback is unreachable in
       // practice — pure belt-and-suspenders.
-      UUID_FORMAT.test(context.principalContactId ?? '') ? (context.principalContactId ?? '') : '',
+      isUuid(context.principalContactId) ? (context.principalContactId ?? '') : '',
     );
 }

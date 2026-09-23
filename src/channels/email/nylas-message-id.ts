@@ -5,16 +5,15 @@
 // UUIDs rendered in [ACTIVE OUTBOUND CONTEXT]. Rejecting the UUID shape
 // catches the #1817 confusion before any Nylas call (Gate C or handler).
 
-/**
- * RFC UUID form — the outbound_context row id shape. Nylas message IDs never
- * match this pattern.
- */
-const OUTBOUND_CONTEXT_ENTRY_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../util/uuid.js';
 
-/** True when value is shaped like an outbound_context entry_id, not a Nylas message id. */
+/**
+ * True when value is shaped like an outbound_context entry_id, not a Nylas
+ * message id. Nylas message IDs are provider-native and never UUID-shaped, so
+ * the shared (shape-only) matcher is sufficient to tell the two apart.
+ */
 export function looksLikeOutboundContextEntryId(value: string): boolean {
-  return OUTBOUND_CONTEXT_ENTRY_ID_RE.test(value.trim());
+  return isUuid(value.trim());
 }
 
 /** Actionable error when reply_to_message_id is an outbound_context entry UUID. */

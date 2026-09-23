@@ -40,6 +40,11 @@ export interface PiiMatch {
 // output (conversation IDs, task IDs, contact IDs) and must be shielded from
 // PII pattern matching — some patterns (credit card, phone) false-positive on
 // UUID hex digit segments.
+//
+// Deliberately NOT src/util/uuid.ts's isUuid(): this one *finds* UUIDs inside
+// free-form log text, so it is \b-bounded and /g, where isUuid() is anchored
+// and stateless. Different job, different shape — do not consolidate the two
+// (#1879).
 const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
 /**

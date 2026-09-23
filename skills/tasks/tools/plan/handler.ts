@@ -28,8 +28,8 @@ import {
 } from '../../../../src/agents/plan-execution.js';
 import { computePlanRollup, readPlanBlock } from '../../../../src/db/plan-progress.js';
 import type { TaskRow } from '../../../../src/db/queries/tasks.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TERMINAL_STATUSES = new Set(['done', 'cancelled', 'failed']);
 
 export class PlanHandler implements ToolHandler {
@@ -50,7 +50,7 @@ export class PlanHandler implements ToolHandler {
         error: 'Missing task_id — provide it explicitly or run on a task-bound scheduler wake',
       };
     }
-    if (!UUID_RE.test(taskId)) {
+    if (!isUuid(taskId)) {
       return { success: false, error: 'task_id must be a valid UUID' };
     }
 

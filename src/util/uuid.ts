@@ -67,8 +67,9 @@ const UUID_RE = new RegExp(`^${UUID_PATTERN}$`, 'i');
  * the RFC-4122 version and variant nibbles (v7 and the nil UUID both pass).
  *
  * Accepts `unknown` so call sites can pass LLM tool arguments straight in
- * without a typeof guard of their own.
+ * without a typeof guard of their own, and narrows to `string` on success so a
+ * guard clause (`if (!isUuid(x)) return badRequest();`) leaves `x` usable.
  */
-export function isUuid(value: unknown): boolean {
+export function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_RE.test(value);
 }

@@ -1,7 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { ContactTier, TaskOriginator } from '../../../../src/contacts/types.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../../../src/util/uuid.js';
 
 // 'principal' is a structural tier assigned only to the CEO contact. It cannot
 // be granted via chat or UI — it is set at bootstrap and protected by API guards.
@@ -24,7 +23,7 @@ export class ContactSetTierHandler implements ToolHandler {
       reason?: string;
     };
 
-    if (!contact_id || typeof contact_id !== 'string' || !UUID_RE.test(contact_id)) {
+    if (!contact_id || typeof contact_id !== 'string' || !isUuid(contact_id)) {
       return { success: false, error: 'Missing or invalid required input: contact_id (UUID)' };
     }
     if (!tier || typeof tier !== 'string') {
@@ -39,7 +38,7 @@ export class ContactSetTierHandler implements ToolHandler {
 
     const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
     const actorId = ctx.caller?.contactId ?? originator?.contactId;
-    if (!actorId || !UUID_RE.test(actorId)) {
+    if (!actorId || !isUuid(actorId)) {
       return { success: false, error: 'Cannot determine valid actor identity — neither caller nor originator provides a valid UUID contactId' };
     }
 

@@ -23,16 +23,13 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { DECAY_CLASSES, SENSITIVITY_LEVELS, NODE_TYPES } from '../../../../src/memory/types.js';
 import type { DecayClass, Sensitivity, NodeType, KgNode } from '../../../../src/memory/types.js';
 import { buildCanonicalPatch } from '../../../../src/contacts/canonical-attribute-guard.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
 const DECAY_CLASSES_SET: ReadonlySet<string> = new Set(DECAY_CLASSES);
 const SENSITIVITY_LEVELS_SET: ReadonlySet<string> = new Set(SENSITIVITY_LEVELS);
 // 'fact' is not a valid entity type — entities hold facts as linked nodes, not as themselves.
 const ENTITY_NODE_TYPES = NODE_TYPES.filter(t => t !== 'fact');
 const ENTITY_NODE_TYPES_SET: ReadonlySet<string> = new Set(ENTITY_NODE_TYPES);
-
-// UUID pattern — used to detect when the caller is passing a node ID directly.
-// Matches any UUID-shaped string (all versions/variants), not just v4.
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Why a canonical contact attribute landed in the KG instead of the contact record. */
 type CanonicalRedirectSkipReason = 'lookup_failed' | 'no_contact_record' | 'normalization_failed';
@@ -135,7 +132,9 @@ export class MemoryStoreHandler implements ToolHandler {
 
       const resolvedEntityType = (entity_type as NodeType | undefined) ?? 'concept';
 
-      if (UUID_PATTERN.test(entity)) {
+      // A UUID-shaped `entity` means the caller passed a node ID directly rather
+      // than a label to resolve.
+      if (isUuid(entity)) {
         // entity_type has no effect when a UUID is supplied — the node type is already
         // determined by the existing KG node. Log a warning so LLM callers notice the mismatch.
         if (entity_type !== undefined) {

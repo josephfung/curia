@@ -1,7 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../../../src/util/uuid.js';
 
 export class ContactGrantPermissionHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -43,7 +42,7 @@ export class ContactGrantPermissionHandler implements ToolHandler {
     // guards the audit trail against malformed metadata.
     const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
     const actorContactId = ctx.caller?.contactId ?? originator?.contactId;
-    if (!actorContactId || !UUID_RE.test(actorContactId)) {
+    if (!actorContactId || !isUuid(actorContactId)) {
       return { success: false, error: 'Cannot determine valid actor identity for audit trail — neither caller nor originator provides a valid UUID contactId' };
     }
 

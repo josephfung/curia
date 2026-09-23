@@ -6,8 +6,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../../../src/util/uuid.js';
 
 export class TaskCompleteHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -19,7 +18,7 @@ export class TaskCompleteHandler implements ToolHandler {
     if (!input.task_id || typeof input.task_id !== 'string') {
       return { success: false, error: 'Missing required input: task_id (string)' };
     }
-    if (!UUID_RE.test(input.task_id)) {
+    if (!isUuid(input.task_id)) {
       return { success: false, error: 'task_id must be a valid UUID' };
     }
     if (input.completion_note !== undefined) {

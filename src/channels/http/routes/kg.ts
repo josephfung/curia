@@ -18,6 +18,13 @@ import { assertSecret, compareSecrets, hashToken, type SessionStore } from '../s
 import { resolveConsoleOriginator } from '../console-originator.js';
 import { markdownToHtml } from '../../../format/markdown-to-html.js';
 import { fetchChatHistoryPage } from '../chat-history-page.js';
+// Reject malformed ids at the API boundary with a 400 — Postgres UUID columns
+// throw a cast error on bad input, which would otherwise surface as a 500.
+// This used to be a local regex that had drifted stricter than every other copy
+// (RFC v1-v5 only), which would have 400'd a legitimate v7 or nil id for no
+// reason anyone could see. See src/util/uuid.ts for why loose is the right
+// choice here: the check guards the SQL cast, not RFC conformance (#1879).
+import { isUuid } from '../../../util/uuid.js';
 import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 
 export interface KnowledgeGraphRouteOptions {
@@ -200,7 +207,7 @@ export async function knowledgeGraphRoutes(
 
     // Reject malformed UUIDs before they reach SQL — Postgres would throw a cast error
     // and surface as a 500 rather than a useful 400 for the caller.
-    if (nodeId && !UUID_RE.test(nodeId)) {
+    if (nodeId && !isUuid(nodeId)) {
       return reply.status(400).send({ error: 'Invalid node_id: must be a valid UUID.' });
     }
 
@@ -291,10 +298,6 @@ export async function knowledgeGraphRoutes(
     // Task-lifecycle values introduced by migration 049
     'open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled',
   ];
-  // Reused across contacts endpoints — Postgres UUID columns throw cast errors on bad input
-  // so we reject at the API boundary with a 400 instead.
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
   // Full DB row shape for the tasks table (all columns post-migration-049).
   // The enriched variant (used for GET list) includes joined fields from
   // contacts and a correlated subquery for the next scheduled wake-up time.
@@ -461,7 +464,7 @@ export async function knowledgeGraphRoutes(
       typeof body.conversationId === 'string' && body.conversationId.trim().length > 0
         ? body.conversationId.trim()
         : null;
-    if (conversationId && !UUID_RE.test(conversationId)) {
+    if (conversationId && !isUuid(conversationId)) {
       return reply.status(400).send({ error: 'Invalid conversationId: must be a valid UUID.' });
     }
 
@@ -477,7 +480,7 @@ export async function knowledgeGraphRoutes(
     const sourceAgentId = typeof body.sourceAgentId === 'string' && body.sourceAgentId.trim()
       ? body.sourceAgentId.trim()
       : null;
-    if (sourceAgentId && !UUID_RE.test(sourceAgentId)) {
+    if (sourceAgentId && !isUuid(sourceAgentId)) {
       return reply.status(400).send({ error: 'Invalid sourceAgentId: must be a valid UUID.' });
     }
     const waitingOnText = typeof body.waitingOnText === 'string' && body.waitingOnText.trim()
@@ -547,7 +550,7 @@ export async function knowledgeGraphRoutes(
   app.patch('/api/kg/tasks/:id', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
-    if (!UUID_RE.test(id)) {
+    if (!isUuid(id)) {
       return reply.status(400).send({ error: 'Invalid task id.' });
     }
     const body = request.body as {
@@ -655,7 +658,7 @@ export async function knowledgeGraphRoutes(
         : body.conversationId === null
         ? null
         : row.conversation_id;
-    if (conversationId && !UUID_RE.test(conversationId)) {
+    if (conversationId && !isUuid(conversationId)) {
       return reply.status(400).send({ error: 'Invalid conversationId: must be a valid UUID.' });
     }
 
@@ -754,7 +757,7 @@ export async function knowledgeGraphRoutes(
   app.delete('/api/kg/tasks/:id', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
-    if (!UUID_RE.test(id)) {
+    if (!isUuid(id)) {
       return reply.status(400).send({ error: 'Invalid task id.' });
     }
     try {
@@ -926,7 +929,7 @@ export async function knowledgeGraphRoutes(
       typeof body.kgNodeId === 'string' && body.kgNodeId.trim().length > 0
         ? body.kgNodeId.trim()
         : undefined;
-    if (kgNodeId && !UUID_RE.test(kgNodeId)) {
+    if (kgNodeId && !isUuid(kgNodeId)) {
       return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
     }
 
@@ -1008,7 +1011,7 @@ export async function knowledgeGraphRoutes(
         : body.kgNodeId === null
         ? null
         : undefined;
-    if (typeof normalizedKgNodeId === 'string' && !UUID_RE.test(normalizedKgNodeId)) {
+    if (typeof normalizedKgNodeId === 'string' && !isUuid(normalizedKgNodeId)) {
       return reply.status(400).send({ error: 'Invalid kgNodeId: must be a valid UUID.' });
     }
 
@@ -1134,7 +1137,7 @@ export async function knowledgeGraphRoutes(
   app.get('/api/kg/contacts/:id/overrides', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
-    if (!UUID_RE.test(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
+    if (!isUuid(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
 
     try {
       const contact = await contactService.getContact(id);
@@ -1154,7 +1157,7 @@ export async function knowledgeGraphRoutes(
   app.get('/api/kg/contacts/:id/identities', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
-    if (!UUID_RE.test(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
+    if (!isUuid(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
 
     try {
       const contact = await contactService.getContact(id);
@@ -1177,7 +1180,7 @@ export async function knowledgeGraphRoutes(
   app.post('/api/kg/contacts/:id/identities', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id } = request.params as { id: string };
-    if (!UUID_RE.test(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
+    if (!isUuid(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
 
     const body = (request.body ?? {}) as {
       channel?: unknown;
@@ -1234,7 +1237,7 @@ export async function knowledgeGraphRoutes(
   app.patch('/api/kg/contacts/:id/identities/:identityId', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id, identityId } = request.params as { id: string; identityId: string };
-    if (!UUID_RE.test(id) || !UUID_RE.test(identityId)) {
+    if (!isUuid(id) || !isUuid(identityId)) {
       return reply.status(400).send({ error: 'Invalid contact or identity ID.' });
     }
 
@@ -1287,7 +1290,7 @@ export async function knowledgeGraphRoutes(
   app.delete('/api/kg/contacts/:id/identities/:identityId', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id, identityId } = request.params as { id: string; identityId: string };
-    if (!UUID_RE.test(id) || !UUID_RE.test(identityId)) {
+    if (!isUuid(id) || !isUuid(identityId)) {
       return reply.status(400).send({ error: 'Invalid contact or identity ID.' });
     }
 
@@ -1322,7 +1325,7 @@ export async function knowledgeGraphRoutes(
     };
     const primaryContactId = typeof body.primaryContactId === 'string' ? body.primaryContactId : '';
     const secondaryContactId = typeof body.secondaryContactId === 'string' ? body.secondaryContactId : '';
-    if (!UUID_RE.test(primaryContactId) || !UUID_RE.test(secondaryContactId)) {
+    if (!isUuid(primaryContactId) || !isUuid(secondaryContactId)) {
       return reply.status(400).send({ error: 'primaryContactId and secondaryContactId must be valid UUIDs.' });
     }
     if (primaryContactId === secondaryContactId) {
@@ -1368,7 +1371,7 @@ export async function knowledgeGraphRoutes(
   app.delete('/api/kg/contacts/:id/overrides/:permission', KG_RATE, async (request, reply) => {
     if (!assertSecret(request, reply, webAppBootstrapSecret, sessions)) return;
     const { id, permission } = request.params as { id: string; permission: string };
-    if (!UUID_RE.test(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
+    if (!isUuid(id)) return reply.status(400).send({ error: 'Invalid contact ID.' });
     if (!/^[a-z][a-z0-9_]*$/.test(permission)) {
       return reply.status(400).send({ error: 'Invalid permission name.' });
     }
