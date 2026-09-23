@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
 import { WorkingMemory } from '../../src/memory/working-memory.js';
+import { backfillDirectChannelSenders } from '../../src/memory/direct-sender-backfill.js';
 import { createLogger } from '../../src/logger.js';
 import { VOICE_GREETING_USER_MESSAGE } from '../../src/channels/voice/greeting.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
@@ -24,8 +25,18 @@ async function seedContact(pool: pg.Pool, name: string): Promise<string> {
   return row.id;
 }
 
+const DIRECT_IDS = [
+  'signal:crh-1599-peer',
+  'signal:group=crh-1599',
+  'sms:crh-1599-peer',
+  'email:crh-1599-old',
+];
+
 async function cleanup(pool: pg.Pool): Promise<void> {
-  await pool.query(`DELETE FROM working_memory WHERE conversation_id LIKE $1`, [`${PREFIX}%`]);
+  await pool.query(
+    `DELETE FROM working_memory WHERE conversation_id LIKE $1 OR conversation_id = ANY($2::text[])`,
+    [`${PREFIX}%`, DIRECT_IDS],
+  );
   await pool.query(`DELETE FROM contacts WHERE display_name LIKE $1`, [`${PREFIX}%`]);
 }
 
@@ -112,5 +123,57 @@ describeIf('contact recent history SQL (#1599)', () => {
       'can you move the board prep to 4?',
       'no, you have the investor call then',
     ]);
+  });
+
+  it('stamps historical Signal 1:1 and SMS rows so an old null sender stops hiding replies', async () => {
+    const alice = await seedContact(pool, 'direct-alice');
+    await pool.query(
+      `INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, source)
+       VALUES ($1, 'signal', 'crh-1599-peer', 'manual'),
+              ($1, 'sms', 'crh-1599-peer', 'manual')`,
+      [alice],
+    );
+    const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    await pool.query(
+      `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id)
+       VALUES
+         ('signal:crh-1599-peer', 'coordinator', 'user', 'old signal line', $2, true, NULL, NULL),
+         ('signal:crh-1599-peer', 'coordinator', 'user', 'today on signal', $3, false, $1, 'signal'),
+         ('signal:crh-1599-peer', 'coordinator', 'assistant', 'signal reply kept', $3, false, NULL, 'signal'),
+         ('signal:group=crh-1599', 'coordinator', 'user', 'group line', $2, true, NULL, NULL),
+         ('sms:crh-1599-peer', 'coordinator', 'user', 'old sms line', $2, true, NULL, NULL),
+         ('email:crh-1599-old', 'coordinator', 'user', 'old email line', $2, true, NULL, NULL)`,
+      [alice, old, now],
+    );
+
+    const before = await memory.getContactRecentHistory({
+      contactId: alice,
+      agentId: 'coordinator',
+      excludeConversationId: 'email:somewhere-else',
+      since: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    expect(before.map(t => t.content)).toEqual(['today on signal']);
+
+    const stamped = await backfillDirectChannelSenders(pool, createLogger('error'), { batchSize: 1 });
+    expect(stamped.signalRows).toBe(1);
+    expect(stamped.smsRows).toBe(1);
+
+    const after = await memory.getContactRecentHistory({
+      contactId: alice,
+      agentId: 'coordinator',
+      excludeConversationId: 'email:somewhere-else',
+      since: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    expect(after.map(t => t.content)).toEqual(['today on signal', 'signal reply kept']);
+
+    const leftovers = await pool.query<{ conversation_id: string; sender_contact_id: string | null }>(
+      `SELECT conversation_id, sender_contact_id
+       FROM working_memory
+       WHERE conversation_id = ANY($1::text[]) AND role = 'user' AND content IN ('group line', 'old email line')
+       ORDER BY conversation_id`,
+      [['signal:group=crh-1599', 'email:crh-1599-old']],
+    );
+    expect(leftovers.rows.map(row => row.sender_contact_id)).toEqual([null, null]);
   });
 });

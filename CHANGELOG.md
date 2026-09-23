@@ -55,6 +55,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Contact recent history** — old Signal and SMS rows no longer hide that thread's replies. (#1599)
 - **Document placement** — root `task_id` stamp, task-scoped spill leaf, wake-only catalog, word soft-match. (#1819)
 - **`doc-place` / `doc-write`** — DB occupancy for capped catalogs; leaf `extend`; guarded `task_id`. (#1819)
 - **`doc-write` / archival** — claim unowned docs on append; leave shared `log.md` unowned. (#1819)
