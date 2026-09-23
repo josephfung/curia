@@ -183,6 +183,44 @@ describe('recommendPlacement', () => {
     });
     expect(result.slug).toBe('social-media-new-2');
   });
+
+  it('uses prefixOccupied when the folder sits outside the catalog window', async () => {
+    const result = await recommendPlacement({
+      proposedSlug: 'vendor-review',
+      leaf: 'plan.md',
+      catalog: [],
+      prefixOccupied: (slug) => slug === 'vendor-review',
+      leafExists: async () => false,
+    });
+    expect(result.action).toBe('add_to_folder');
+    expect(result.directoryPrefix).toBe('/projects/vendor-review/');
+  });
+
+  it('extends via leafExists without documentsInFolder', async () => {
+    const result = await recommendPlacement({
+      proposedSlug: 'vendor-review',
+      leaf: 'brief.md',
+      catalog: [],
+      prefixOccupied: (slug) => slug === 'vendor-review',
+      leafExists: (path) => path === '/projects/vendor-review/brief.md',
+    });
+    expect(result.action).toBe('extend');
+    expect(result.path).toBe('/projects/vendor-review/brief.md');
+  });
+
+  it('allocates via prefixOccupied when prefer_new_folder and catalog misses the hit', async () => {
+    const root = '00000000-0000-4000-8000-00000000abcd';
+    const result = await recommendPlacement({
+      proposedSlug: 'vendor-review',
+      preferNewFolder: true,
+      catalog: [],
+      rootTaskId: root,
+      prefixOccupied: (slug) => slug === 'vendor-review',
+    });
+    expect(result.action).toBe('create_folder');
+    expect(result.slug).toBe(`vendor-review-${collisionShortId(root)}`);
+    expect(result.allocated).toBe(true);
+  });
 });
 
 describe('resolveOwnedWorkspacePrefix / catalog', () => {

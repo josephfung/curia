@@ -150,6 +150,42 @@ describe('DocWriteHandler', () => {
     if (!result.success) expect(result.error).toMatch(/UUID|kebab-case|slug/i);
   });
 
+  it('rejects unresolved placeholder task_id without throwing', async () => {
+    const resolveRoot = vi.fn();
+    const ctx = makeCtx({
+      path: '/projects/social-media/brief.md',
+      mode: 'create',
+      type: 'brief',
+      body: 'hello',
+      task_id: '${principal_contact_id}',
+    });
+    (ctx as { taskRepo?: { resolveProjectRootTaskId: typeof resolveRoot } }).taskRepo = {
+      resolveProjectRootTaskId: resolveRoot,
+    };
+    const result = await new DocWriteHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/Unresolved template placeholder/);
+    expect(resolveRoot).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-UUID task_id without throwing', async () => {
+    const resolveRoot = vi.fn();
+    const ctx = makeCtx({
+      path: '/projects/social-media/brief.md',
+      mode: 'create',
+      type: 'brief',
+      body: 'hello',
+      task_id: 'not-a-uuid',
+    });
+    (ctx as { taskRepo?: { resolveProjectRootTaskId: typeof resolveRoot } }).taskRepo = {
+      resolveProjectRootTaskId: resolveRoot,
+    };
+    const result = await new DocWriteHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/task UUID/);
+    expect(resolveRoot).not.toHaveBeenCalled();
+  });
+
   it('allows create under an existing legacy UUID project directory', async () => {
     const uuid = '3467d2d0-1695-4d90-9789-3319ba5a2c65';
     const repo = makeRepo({

@@ -1,7 +1,7 @@
 {
   "name": "doc-place",
   "description": "Recommend where a project document belongs in the OKF workspace before writing. Returns a structured placement decision: extend an existing document, add to an existing /projects/<slug>/ folder, or create a new kebab-case folder (never a task UUID). Call this before creating a new project folder. Does not write — follow up with doc-write at the recommended path.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

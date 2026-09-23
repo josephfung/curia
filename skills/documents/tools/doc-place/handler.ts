@@ -23,7 +23,7 @@ export class DocPlaceHandler implements ToolHandler {
       const timezone = ctx.timezone ?? 'UTC';
       const displayTimezone = timezone === 'UTC' ? 'UTC' : formatDisplayTimezone(timezone, new Date());
 
-      // Summary query — no document bodies (#1819 review).
+      // Summary query — no document bodies; recent-activity window (#1819 review).
       const catalog = await ctx.workingDocs!.listProjectDirectorySummaries();
 
       const bound = boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
@@ -44,8 +44,9 @@ export class DocPlaceHandler implements ToolHandler {
       const leaf = typeof input.leaf === 'string' ? input.leaf : undefined;
       const preferNewFolder = input.prefer_new_folder === true;
 
-      // Single recommendPlacement call. Without per-folder bodies, exact matches
-      // become add_to_folder rather than extend — agents can still doc-read + append.
+      // Single recommendPlacement call. DB occupancy + leaf existence sit outside the
+      // prompt-sized catalog so folders beyond the window still match / allocate, and
+      // exact leaf hits still surface as `extend` without loading folder bodies.
       const recommendation = await recommendPlacement({
         intent,
         title,
@@ -54,6 +55,8 @@ export class DocPlaceHandler implements ToolHandler {
         preferNewFolder,
         catalog,
         rootTaskId,
+        prefixOccupied: (slug) => ctx.workingDocs!.projectPrefixHasLiveDocs(slug),
+        leafExists: (path) => ctx.workingDocs!.livePathExists(path),
       });
 
       return {

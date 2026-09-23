@@ -9,6 +9,10 @@ import {
 } from '../../../../src/agents/document-placement.js';
 import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
 import {
+  isUnresolvedPlaceholder,
+  unresolvedPlaceholderError,
+} from '../../../../src/skills/_shared/placeholder-guard.js';
+import {
   appendDirectoryLog,
   mapDocumentRow,
   mapWriteConflict,
@@ -18,26 +22,41 @@ import {
 } from '../../../_shared/doc-workspace.js';
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit']);
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Ownership stamp for archival / prefix resolution is the *project root* task id
  * (#1819 review). Bound wake ids may be subtasks.
+ *
+ * Returns `{ ok: true, taskId }` or `{ ok: false, error }` — never throws. Callers
+ * must validate model-supplied `task_id` before any uuid-column lookup.
  */
 async function resolveAssociatedRootTaskId(
   ctx: ToolContext,
   inputTaskId?: string,
-): Promise<string | undefined> {
+): Promise<{ ok: true; taskId: string | undefined } | { ok: false; error: string }> {
   let candidate: string | undefined;
   if (typeof inputTaskId === 'string' && inputTaskId.trim()) {
     candidate = inputTaskId.trim();
+    if (isUnresolvedPlaceholder(candidate)) {
+      return { ok: false, error: unresolvedPlaceholderError('task_id', candidate) };
+    }
+    if (!UUID_RE.test(candidate)) {
+      return { ok: false, error: 'task_id must be a task UUID' };
+    }
   } else {
     const bound = boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
     candidate = bound?.taskId;
   }
-  if (!candidate) return undefined;
-  if (!ctx.taskRepo) return candidate;
+  if (!candidate) return { ok: true, taskId: undefined };
+  // Bound metadata should already be a UUID; still guard before the uuid column.
+  if (!UUID_RE.test(candidate)) {
+    return { ok: false, error: 'task_id must be a task UUID' };
+  }
+  if (!ctx.taskRepo) return { ok: true, taskId: candidate };
   const root = await ctx.taskRepo.resolveProjectRootTaskId(candidate);
-  return root ?? candidate;
+  return { ok: true, taskId: root ?? candidate };
 }
 
 export class DocWriteHandler implements ToolHandler {
@@ -75,29 +94,35 @@ export class DocWriteHandler implements ToolHandler {
       return { success: false, error: reservedError };
     }
 
-    const associatedTaskId = await resolveAssociatedRootTaskId(ctx, input.task_id);
-
-    if (input.mode === 'create') {
-      const segment = projectSlugFromPath(input.path);
-      let legacyFolderOccupied = false;
-      if (segment && isLegacyUuidProjectDir(segment)) {
-        legacyFolderOccupied = await ctx.workingDocs!.projectPrefixHasLiveDocs(segment);
-      }
-      const projectsError = validateProjectsWritePath(input.path, {
-        boundRootTaskId: associatedTaskId,
-        legacyFolderOccupied,
-      });
-      if (projectsError) {
-        return { success: false, error: projectsError };
-      }
-    }
-
     const timezone = ctx.timezone ?? 'UTC';
     const normalized = normalizeDocPath(input.path);
     const summary = typeof input.summary === 'string' ? input.summary : `${input.mode} ${normalized}`;
     const ttlWarning = ttlDaysFrontmatterWarning(normalized, input.frontmatter);
 
     try {
+      // Root / legacy occupancy lookups live inside try so bad task_id or transient
+      // DB errors return { success: false } instead of throwing (#1819 review).
+      const associated = await resolveAssociatedRootTaskId(ctx, input.task_id);
+      if (!associated.ok) {
+        return { success: false, error: associated.error };
+      }
+      const associatedTaskId = associated.taskId;
+
+      if (input.mode === 'create') {
+        const segment = projectSlugFromPath(input.path);
+        let legacyFolderOccupied = false;
+        if (segment && isLegacyUuidProjectDir(segment)) {
+          legacyFolderOccupied = await ctx.workingDocs!.projectPrefixHasLiveDocs(segment);
+        }
+        const projectsError = validateProjectsWritePath(input.path, {
+          boundRootTaskId: associatedTaskId,
+          legacyFolderOccupied,
+        });
+        if (projectsError) {
+          return { success: false, error: projectsError };
+        }
+      }
+
       const repo = ctx.workingDocs!;
       let result;
 
