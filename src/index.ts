@@ -139,6 +139,7 @@ import { applyVaultSecrets } from './secrets/apply-vault-secrets.js';
 import { applyChannelVaultSecrets } from './channels/apply-channel-vault-secrets.js';
 import { SensitivityClassifier } from './memory/sensitivity.js';
 import { DreamEngine } from './memory/dream-engine.js';
+import { backfillDirectChannelSenders } from './memory/direct-sender-backfill.js';
 import type { DecayConfig } from './memory/dream-engine.js';
 import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
@@ -3314,6 +3315,19 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.fatal({ err }, 'Fatal error during channel adapter startup — invoking shutdown');
     await shutdown(1);
+  }
+
+  // Historical Signal 1:1 and SMS senders. Migration 090 only stamps seven
+  // days inside the boot transaction; older null rows would mark those
+  // threads shared. Batched and idempotent, and not awaited — a large table
+  // must not delay listen. The next start continues anything left null.
+  if (!setupRequiredAtBoot) {
+    void backfillDirectChannelSenders(pool, logger).catch((err) => {
+      logger.error(
+        { err },
+        'Direct-channel sender backfill failed — long-lived Signal and SMS replies stay hidden until the next start',
+      );
+    });
   }
 
   // 8. CLI channel — only started when stdin is an interactive TTY (i.e., local dev).

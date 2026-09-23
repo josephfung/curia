@@ -15,9 +15,14 @@
 -- cue is not a thing the caller said, so it stays unattributed. The recall
 -- read ignores that exact cue when deciding a call is shared.
 --
--- Each UPDATE is limited to the last 7 days. Recall only reads the local day
--- (or a rolling 24 hours), so older rows can never appear in the block, and a
--- full rewrite of working_memory must not sit inside the boot transaction.
+-- Each UPDATE is limited to the last 7 days so a full rewrite of
+-- working_memory does not sit inside the boot transaction. Recall only
+-- renders rows from the local day, but the shared-conversation check reads
+-- every user row, including archived ones. An older null sender on a
+-- long-lived Signal 1:1 or SMS thread would hide that thread's replies.
+-- Those older rows are stamped after boot by backfillDirectChannelSenders
+-- (src/memory/direct-sender-backfill.ts), in batches, and only where the
+-- sender is still null. Email, Slack, and Signal groups are not backfilled.
 
 ALTER TABLE working_memory
   ADD COLUMN sender_contact_id UUID NULL REFERENCES contacts(id) ON DELETE SET NULL,
