@@ -123,4 +123,34 @@ describe('ContactResolver', () => {
     expect(result.authorization).toBeNull();
     expect(result.authorizationEvalFailed).toBe(true);
   });
+
+  it('warns via buildPrincipalSenderContext when principal kind is stale (migration-055)', async () => {
+    const PRINCIPAL_ID = '11111111-1111-1111-1111-111111111111';
+    const stalePrincipal = {
+      id: PRINCIPAL_ID,
+      displayName: 'CEO',
+      role: 'ceo',
+      systemRole: 'principal' as const,
+      kgNodeId: null,
+      tier: 'principal' as const,
+      kind: 'person' as const,
+    };
+    const contactServiceStub = {
+      findContactBySystemRole: vi.fn().mockResolvedValue(stalePrincipal),
+    } as unknown as ContactService;
+
+    const warnLogger = createSilentLogger();
+    const warnSpy = vi.spyOn(warnLogger, 'warn');
+    const withWarn = new ContactResolver(contactServiceStub, entityMemory, undefined, warnLogger);
+
+    const result = await withWarn.resolve('cli', 'any-id');
+    expect(result.resolved).toBe(true);
+    if (!result.resolved) return;
+    expect(result.kind).toBe('principal');
+    expect(result.contactId).toBe(PRINCIPAL_ID);
+    expect(warnSpy).toHaveBeenCalledWith(
+      { contactId: PRINCIPAL_ID, kind: 'person' },
+      'principal contact has kind != "principal" — migration-055 backfill may have missed this row',
+    );
+  });
 });

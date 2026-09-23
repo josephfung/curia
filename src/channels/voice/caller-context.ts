@@ -9,12 +9,12 @@
 
 import type { ContactResolver } from '../../contacts/contact-resolver.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import { buildPrincipalSenderContext } from '../../contacts/build-principal-sender-context.js';
 import { isBlockedSender, isUnknownSenderIgnored } from '../../contacts/channel-sender-policy.js';
 import type {
   ChannelPolicyConfig,
   ContactTier,
   InboundSenderContext,
-  SenderContext,
   SystemRole,
   TaskOriginator,
 } from '../../contacts/types.js';
@@ -41,54 +41,6 @@ export interface VoiceCallerContext {
 export type ResolveVoiceCallerResult =
   | { ok: true; caller: VoiceCallerContext }
   | { ok: false; reason: 'unknown_sender' | 'blocked' };
-
-/**
- * Build a SenderContext for the principal contact (or the synthetic CLI/web fallback).
- * Used by the console voice transport — principal-proven by the bootstrap secret,
- * same standing as the `'web'` channel short-circuit, but deliberately NOT routed
- * through ContactResolver.resolve('voice', …) so a future real caller token still
- * hits resolveByChannelIdentity (#1598).
- */
-export function buildPrincipalSenderContext(principal: {
-  id: string;
-  displayName: string;
-  role: string | null;
-  systemRole: SystemRole | null;
-  kgNodeId: string | null;
-  tier?: ContactTier;
-} | null): SenderContext {
-  if (principal) {
-    return {
-      resolved: true,
-      contactId: principal.id,
-      displayName: principal.displayName,
-      role: principal.role,
-      systemRole: 'principal',
-      verified: true,
-      kgNodeId: principal.kgNodeId,
-      knowledgeSummary: '',
-      authorization: null,
-      contactConfidence: 1.0,
-      tier: 'principal',
-      kind: 'principal',
-    };
-  }
-  // Fresh install / DB blip — same synthetic fallback ContactResolver uses for cli/web.
-  return {
-    resolved: true,
-    contactId: 'primary-user',
-    displayName: 'CEO',
-    role: 'ceo',
-    systemRole: 'principal',
-    verified: true,
-    kgNodeId: null,
-    knowledgeSummary: '',
-    authorization: null,
-    contactConfidence: 1.0,
-    tier: 'principal',
-    kind: 'principal',
-  };
-}
 
 function toCallerContext(
   senderContext: InboundSenderContext,
@@ -146,7 +98,12 @@ export async function resolveConsoleVoiceCaller(opts: {
   if (!principal) {
     opts.logger.warn('No principal contact found for voice session; using synthetic principal');
   }
-  const senderContext = buildPrincipalSenderContext(principal);
+  // Console voice is principal-proven by the bootstrap secret (same standing as the
+  // `'web'` channel short-circuit), but deliberately NOT routed through
+  // ContactResolver.resolve('voice', …) so a future real caller token still hits
+  // resolveByChannelIdentity (#1598). Construction shares buildPrincipalSenderContext
+  // with ContactResolver so the migration-055 kind warning cannot drift (#1627).
+  const senderContext = buildPrincipalSenderContext(principal, opts.logger);
   return toCallerContext(senderContext, 'voice', VOICE_CONSOLE_SENDER_ID);
 }
 
