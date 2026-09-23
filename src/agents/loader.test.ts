@@ -26,4 +26,14 @@ describe('discoverAgentManifests', () => {
     expect(found[0]!.error).toBeTruthy();
     expect(found[0]!.name).toBe('busted'); // falls back to filename
   });
+
+  it('captures an invalid agent name instead of throwing (#1882)', () => {
+    fs.writeFileSync(
+      path.join(dir, 'bad-name.yaml'),
+      'name: Bad_Name\ndescription: x\nmodel:\n  tier: fast\nsystem_prompt: hi\n',
+    );
+    const found = discoverAgentManifests(dir);
+    expect(found[0]!.config).toBeNull();
+    expect(found[0]!.error).toMatch(/Invalid agent name/);
+  });
 });

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
+import { AGENT_NAME_RULE, isAgentName } from './agent-name.js';
 import { isUuid } from '../util/uuid.js';
 
 /**
@@ -81,6 +82,14 @@ export function loadAgentConfig(filePath: string): AgentYamlConfig {
     config = yaml.load(raw) as AgentYamlConfig;
   } catch (err) {
     throw new Error(`Invalid YAML in agent config at ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Same character class as tasks.source_agent_id (#1882) — reject at load so the
+  // roster and POST /api/kg/tasks cannot drift apart.
+  if (typeof config.name !== 'string' || !isAgentName(config.name)) {
+    throw new Error(
+      `Invalid agent name in ${filePath}: ${JSON.stringify(config.name)} (must be ${AGENT_NAME_RULE})`,
+    );
   }
 
   // Interpolate ${persona.*} placeholders in the system prompt.

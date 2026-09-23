@@ -225,7 +225,7 @@ describe('knowledgeGraphRoutes', () => {
   // with the shared shape-only matcher. Pin the widened boundary here, where the
   // behaviour actually changed: a v7 id is a legitimate identifier that the old
   // regex would have 400'd with no visible cause. The check still exists — it
-  // only stops being an RFC conformance test. Empty rows → 404 (#1881).
+  // only stops being an RFC conformance test.
   it('accepts a v7 node_id that the old strict regex would have rejected', async () => {
     const app = Fastify();
     await app.register(knowledgeGraphRoutes, {
@@ -239,19 +239,36 @@ describe('knowledgeGraphRoutes', () => {
       eventRouter: createMockEventRouter(),
     });
 
-    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({ rows: [] });
+    const v7Id = '018f3a9c-7b21-7d4e-8f6a-1c2b3d4e5f60';
+    const nodeRow = {
+      id: v7Id,
+      type: 'person',
+      label: 'V7',
+      properties: {},
+      confidence: 1,
+      decay_class: 'stable',
+      source: 'test',
+      created_at: '2026-01-01T00:00:00Z',
+      last_confirmed_at: '2026-01-01T00:00:00Z',
+      sensitivity: 'normal',
+    };
+    (pool.query as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ rows: [nodeRow], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
     const response = await app.inject({
       method: 'GET',
-      url: '/api/kg/graph?node_id=018f3a9c-7b21-7d4e-8f6a-1c2b3d4e5f60',
+      url: `/api/kg/graph?node_id=${v7Id}`,
       headers: { 'x-web-bootstrap-secret': 'secret-1' },
     });
 
-    // Not 400: shape check passed. 404: the id names no row (#1881).
-    expect(response.statusCode).toBe(404);
+    // Assert the success status, not merely "not 400" — a 500 after pool.query was
+    // invoked would satisfy the weaker form. And assert the id actually bound to the
+    // query, so this fails if the value is dropped or rewritten on the way through.
+    expect(response.statusCode).toBe(200);
     expect(pool.query).toHaveBeenCalled();
     const [, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown[]];
-    expect(params[0]).toBe('018f3a9c-7b21-7d4e-8f6a-1c2b3d4e5f60');
+    expect(params[0]).toBe(v7Id);
 
     await app.close();
   });
@@ -1074,7 +1091,40 @@ describe('knowledgeGraphRoutes', () => {
       await app.close();
     });
 
-    it('rejects a malformed sourceAgentId with 400 (#1882)', async () => {
+    it.each([
+      ['coordinator', 'known agent'],
+      ['a'.repeat(64), 'max length'],
+    ])('accepts sourceAgentId %j (%s) (#1882)', async (name) => {
+      const contactService = createContactService();
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'task-ok', agent_id: 'coordinator', title: 'follow up with vendor' }],
+      });
+      const { app } = await setupTasksApp(contactService);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/tasks',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { ...validPayload, sourceAgentId: name },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const insertCall = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const params = insertCall[1] as unknown[];
+      expect(params[9]).toBe(name);
+      await app.close();
+    });
+
+    it.each([
+      ['a'.repeat(65), 'over length'],
+      ['coord\u0000inator', 'control char'],
+      ['Coordinator', 'uppercase'],
+      ['1agent', 'leading digit'],
+      ['-agent', 'leading hyphen'],
+      ['my_agent', 'underscore'],
+      ['Bad Agent!', 'space and punctuation'],
+    ])('rejects sourceAgentId %j (%s) with 400 (#1882)', async (name) => {
       const contactService = createContactService();
       const { app } = await setupTasksApp(contactService);
 
@@ -1082,7 +1132,7 @@ describe('knowledgeGraphRoutes', () => {
         method: 'POST',
         url: '/api/kg/tasks',
         headers: { 'x-web-bootstrap-secret': 'secret-1' },
-        payload: { ...validPayload, sourceAgentId: 'Bad Agent!' },
+        payload: { ...validPayload, sourceAgentId: name },
       });
 
       expect(res.statusCode).toBe(400);
