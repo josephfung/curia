@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Contact recent history** — voice and email recall the same contact's other turns today. (#1599)
+- **Contact recent history** — 1:1 voice and email recall that contact's other turns today. (#1599)
 - **Document placement (`doc-place`)** — shared placement policy; agents choose readable `/projects/` folders. (#1819)
 - **Calendar identity guard** — principal-scoped wrong-identity reads fail closed as `IDENTITY_MISMATCH`, not empty success. (#1854)
 - **`ErrorType` / `tool.result` (public API)** — `IDENTITY_MISMATCH`; failure payloads may carry `errorType`. (#1854)

@@ -12,7 +12,12 @@
 -- Backfill covers the conversation ids that encode a single peer (Signal 1:1,
 -- SMS, and voice sessions). Email threads, Slack threads, and Signal groups
 -- do not — those senders are stamped on write from here on. The voice greeting
--- cue is not a thing the caller said, so it stays unattributed.
+-- cue is not a thing the caller said, so it stays unattributed. The recall
+-- read ignores that exact cue when deciding a call is shared.
+--
+-- Each UPDATE is limited to the last 7 days. Recall only reads the local day
+-- (or a rolling 24 hours), so older rows can never appear in the block, and a
+-- full rewrite of working_memory must not sit inside the boot transaction.
 
 ALTER TABLE working_memory
   ADD COLUMN sender_contact_id UUID NULL REFERENCES contacts(id) ON DELETE SET NULL,
@@ -29,6 +34,7 @@ SET sender_contact_id = cci.contact_id,
 FROM contact_channel_identities cci
 WHERE wm.role = 'user'
   AND wm.sender_contact_id IS NULL
+  AND wm.created_at >= now() - interval '7 days'
   AND wm.conversation_id LIKE 'signal:%'
   AND wm.conversation_id NOT LIKE 'signal:group=%'
   AND cci.channel = 'signal'
@@ -40,6 +46,7 @@ SET sender_contact_id = cci.contact_id,
 FROM contact_channel_identities cci
 WHERE wm.role = 'user'
   AND wm.sender_contact_id IS NULL
+  AND wm.created_at >= now() - interval '7 days'
   AND wm.conversation_id LIKE 'sms:%'
   AND cci.channel = 'sms'
   AND cci.channel_identifier = substring(wm.conversation_id FROM '^sms:(.+)$');
@@ -51,6 +58,7 @@ FROM voice_sessions vs
 WHERE wm.conversation_id = vs.conversation_id
   AND wm.role = 'user'
   AND wm.sender_contact_id IS NULL
+  AND wm.created_at >= now() - interval '7 days'
   AND vs.caller_contact_id IS NOT NULL
   AND wm.content IS DISTINCT FROM '[Call connected — open the conversation.]';
 

@@ -953,8 +953,10 @@ export class VoiceRuntime {
             role: 'user',
             content: VOICE_GREETING_USER_MESSAGE,
           }, {
-            // The cue is not something the caller said. Leaving the sender
-            // unset keeps it out of contact-scoped recall.
+            // The cue is not something the caller said, so it stays
+            // unattributed and is not rendered as their words. The recall
+            // read ignores this exact row when deciding the call is shared,
+            // so the spoken replies still come back later.
             channelId: 'voice',
           });
           try {
