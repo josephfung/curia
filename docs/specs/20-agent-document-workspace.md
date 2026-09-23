@@ -136,7 +136,7 @@ Five skills, auto-pinned into every workspace-enabled agent (§7):
 | `doc-list` | none | 0.1.0 | List documents under a path prefix — the `index.md` projection of a directory. |
 | `doc-search` | none | 0.1.0 | **Case-sensitive substring** grep across bodies (`line.includes(query)`); `path_prefix` defaults to the whole workspace; capped at 50 matches. |
 | `doc-place` | none | 0.1.0 | Read-only placement recommendation (`extend` / `add_to_folder` / `create_folder`) from the shared placement module (#1819). |
-| `doc-write` | low | 0.3.0 | Create / append / replace / section-edit at a path; appends a `log.md` entry; returns `conflict: true` on version mismatch; stamps `task_id` from the bound task when omitted; rejects malformed `/projects/` folder names. |
+| `doc-write` | low | 0.3.1 | Create / append / replace / section-edit at a path; appends a `log.md` entry; returns `conflict: true` on version mismatch; stamps `task_id` to the **project-root** task when omitted; rejects new UUID-named folders. |
 
 `doc-write` carries `action_risk: low` (an internal-state write); the four read / recommend
 skills are `action_risk: none`. Placement algorithms live in
@@ -167,8 +167,10 @@ The resumable accumulator (spec 19 §10) is bounded — a 4 KB inline cap
 (`RESUMABLE_BLOCK_MAX_BYTES = 8192`). On overflow it spills into the workspace under the
 **resolved workspace prefix** for the root task (pointer / owned `/projects/` docs / legacy
 UUID directory), or — when nothing exists yet — under a uniqueness-allocated suggested
-slug from the task title (`allocateUniqueProjectSlug`, #1819). The spill document is
-`accumulator.md` (`type: resumable-accumulator`) with `task_id` set to the root task, and
+slug from the task title (`allocateUniqueProjectSlug`, #1819). The spill document leaf is
+**task-scoped** (`accumulator-<8 hex of root task id>.md`, `type: resumable-accumulator`)
+so shared slug folders cannot overwrite another project's accumulator, with `task_id` set
+to the root task, and
 `progress.resumable` stores a `{ kind: 'document', path, section? }` pointer
 (`isDocumentPointer`, `src/db/resumable-progress.ts`) in place of the inline text. This is
 the workspace's first production consumer: unbounded working output has a durable home

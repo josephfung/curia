@@ -37,6 +37,7 @@ function makeRepo(overrides: Partial<WorkingDocsRepo> = {}): WorkingDocsRepo {
     append: vi.fn().mockResolvedValue({ ok: true, document: appended }),
     update: vi.fn(),
     editSection: vi.fn(),
+    projectPrefixHasLiveDocs: vi.fn().mockResolvedValue(false),
     ...overrides,
   } as unknown as WorkingDocsRepo;
 }
@@ -93,7 +94,9 @@ describe('DocWriteHandler', () => {
     expect(repo.create).toHaveBeenCalled();
   });
 
-  it('auto-stamps task_id from bound task metadata when omitted', async () => {
+  it('auto-stamps the project-root task_id when a subtask is bound', async () => {
+    const rootId = '00000000-0000-4000-8000-000000000001';
+    const childId = '00000000-0000-4000-8000-000000000002';
     const repo = makeRepo({
       read: vi.fn()
         .mockResolvedValueOnce(null)
@@ -106,12 +109,18 @@ describe('DocWriteHandler', () => {
       body: 'hello',
     }, repo);
     (ctx as { taskMetadata?: Record<string, unknown> }).taskMetadata = {
-      boundTask: { taskId: '00000000-0000-4000-8000-000000000001' },
+      boundTask: { taskId: childId },
+    };
+    (ctx as { taskRepo?: { resolveProjectRootTaskId: (id: string) => Promise<string> } }).taskRepo = {
+      resolveProjectRootTaskId: vi.fn(async (id: string) => {
+        expect(id).toBe(childId);
+        return rootId;
+      }),
     };
     const result = await new DocWriteHandler().execute(ctx);
     expect(result.success).toBe(true);
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({
-      taskId: '00000000-0000-4000-8000-000000000001',
+      taskId: rootId,
     }));
   });
 
@@ -126,13 +135,29 @@ describe('DocWriteHandler', () => {
     if (!result.success) expect(result.error).toMatch(/kebab-case|slug/i);
   });
 
-  it('allows create under a legacy UUID project directory', async () => {
+  it('rejects inventing a brand-new UUID project folder', async () => {
+    const uuid = '3467d2d0-1695-4d90-9789-3319ba5a2c65';
+    const repo = makeRepo({
+      projectPrefixHasLiveDocs: vi.fn().mockResolvedValue(false),
+    });
+    const result = await new DocWriteHandler().execute(makeCtx({
+      path: `/projects/${uuid}/brief.md`,
+      mode: 'create',
+      type: 'brief',
+      body: 'nope',
+    }, repo));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/UUID|kebab-case|slug/i);
+  });
+
+  it('allows create under an existing legacy UUID project directory', async () => {
     const uuid = '3467d2d0-1695-4d90-9789-3319ba5a2c65';
     const repo = makeRepo({
       read: vi.fn()
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(null),
       create: vi.fn().mockResolvedValue(makeDoc({ path: `/projects/${uuid}/brief.md` })),
+      projectPrefixHasLiveDocs: vi.fn().mockResolvedValue(true),
     });
     const result = await new DocWriteHandler().execute(makeCtx({
       path: `/projects/${uuid}/brief.md`,

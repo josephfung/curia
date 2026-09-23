@@ -3,11 +3,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 import { requireWorkingDocs } from '../../../_shared/doc-workspace.js';
-import {
-  listProjectDirectorySummaries,
-  PROJECTS_ROOT_PREFIX,
-  recommendPlacement,
-} from '../../../../src/agents/document-placement.js';
+import { recommendPlacement } from '../../../../src/agents/document-placement.js';
 import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
 
 export class DocPlaceHandler implements ToolHandler {
@@ -27,8 +23,8 @@ export class DocPlaceHandler implements ToolHandler {
       const timezone = ctx.timezone ?? 'UTC';
       const displayTimezone = timezone === 'UTC' ? 'UTC' : formatDisplayTimezone(timezone, new Date());
 
-      const projectDocs = await ctx.workingDocs!.listByPrefix(PROJECTS_ROOT_PREFIX);
-      const catalog = listProjectDirectorySummaries(projectDocs);
+      // Summary query — no document bodies (#1819 review).
+      const catalog = await ctx.workingDocs!.listProjectDirectorySummaries();
 
       const bound = boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
       let rootTaskId = bound?.taskId;
@@ -48,7 +44,9 @@ export class DocPlaceHandler implements ToolHandler {
       const leaf = typeof input.leaf === 'string' ? input.leaf : undefined;
       const preferNewFolder = input.prefer_new_folder === true;
 
-      const preview = recommendPlacement({
+      // Single recommendPlacement call. Without per-folder bodies, exact matches
+      // become add_to_folder rather than extend — agents can still doc-read + append.
+      const recommendation = await recommendPlacement({
         intent,
         title,
         proposedSlug: proposed,
@@ -56,22 +54,6 @@ export class DocPlaceHandler implements ToolHandler {
         preferNewFolder,
         catalog,
         rootTaskId,
-        documentsInFolder: projectDocs,
-      });
-
-      const documentsInFolder = preview.action === 'create_folder'
-        ? projectDocs
-        : await ctx.workingDocs!.listByPrefix(preview.directoryPrefix);
-
-      const recommendation = recommendPlacement({
-        intent,
-        title,
-        proposedSlug: proposed,
-        leaf,
-        preferNewFolder,
-        catalog,
-        rootTaskId,
-        documentsInFolder,
       });
 
       return {

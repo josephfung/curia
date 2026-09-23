@@ -104,8 +104,6 @@ import {
   collisionShortId,
   formatPlacementGuidanceBlock,
   formatProjectsCatalogBlock,
-  listProjectDirectorySummaries,
-  PROJECTS_ROOT_PREFIX,
   suggestProjectSlug,
 } from './document-placement.js';
 import {
@@ -387,28 +385,29 @@ export class AgentRuntime {
           }
         }
 
-        const projectDocs = await this.config.workingDocsRepo.listByPrefix(PROJECTS_ROOT_PREFIX);
-        const catalog = listProjectDirectorySummaries(projectDocs);
-        const suggested = suggestProjectSlug(rootTitle ?? 'project');
-        const shortId = rootTaskId ? collisionShortId(rootTaskId) : undefined;
-        promptContent = `${promptContent}\n\n${formatProjectsCatalogBlock(catalog, {
-          suggestedSlug: suggested,
-          collisionShortId: shortId,
-        })}`;
-        promptContent = `${promptContent}\n\n${formatPlacementGuidanceBlock()}`;
-        // Catalog + placement count as workspace injection for resumable guidance (#1819).
-        workspaceManifestInjected = true;
+        // Catalog + placement only on real task wakes — not ordinary chat turns (#1819 review).
+        if (rootTaskId) {
+          const catalog = await this.config.workingDocsRepo.listProjectDirectorySummaries();
+          const suggested = suggestProjectSlug(rootTitle ?? 'project');
+          const shortId = collisionShortId(rootTaskId);
+          promptContent = `${promptContent}\n\n${formatProjectsCatalogBlock(catalog, {
+            suggestedSlug: suggested,
+            collisionShortId: shortId,
+          })}`;
+          promptContent = `${promptContent}\n\n${formatPlacementGuidanceBlock()}`;
+          workspaceManifestInjected = true;
 
-        const prefix = await resolveWorkspaceDirectoryPrefix(originalContent, {
-          resolveRootTaskId: resolveRoot,
-          listLiveByTaskId: (id) => this.config.workingDocsRepo!.listLiveByTaskId(id),
-          listByPrefix: (p) => this.config.workingDocsRepo!.listByPrefix(p),
-        });
-        if (prefix) {
-          const documents = await this.config.workingDocsRepo.listByPrefix(prefix);
-          const manifest = buildIndexProjection(prefix, documents);
-          promptContent = `${promptContent}\n\n${formatWorkspaceManifestBlock(prefix, manifest)}`;
-          injectedWorkspaceManifestPath = indexPathForDirectory(prefix);
+          const prefix = await resolveWorkspaceDirectoryPrefix(originalContent, {
+            rootTaskId,
+            listLiveByTaskId: (id) => this.config.workingDocsRepo!.listLiveByTaskId(id),
+            listByPrefix: (p) => this.config.workingDocsRepo!.listByPrefix(p),
+          });
+          if (prefix) {
+            const documents = await this.config.workingDocsRepo.listByPrefix(prefix);
+            const manifest = buildIndexProjection(prefix, documents);
+            promptContent = `${promptContent}\n\n${formatWorkspaceManifestBlock(prefix, manifest)}`;
+            injectedWorkspaceManifestPath = indexPathForDirectory(prefix);
+          }
         }
       } catch (err) {
         logger.warn({ err, agentId }, 'Document workspace manifest injection failed — proceeding without manifest');

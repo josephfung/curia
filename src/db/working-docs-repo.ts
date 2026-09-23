@@ -389,6 +389,65 @@ export class WorkingDocsRepo {
   }
 
   /**
+   * Cheap occupancy check for `/projects/<slug>/` — no body columns (#1819 review).
+   */
+  async projectPrefixHasLiveDocs(slug: string): Promise<boolean> {
+    const prefix = `/projects/${slug}/`;
+    const { rows } = await this.pool.query<{ ok: number }>(
+      `SELECT 1 AS ok
+         FROM working_documents
+        WHERE archived_at IS NULL
+          AND path LIKE $1 ESCAPE '\\'
+        LIMIT 1`,
+      [`${escapeLikePattern(prefix)}%`],
+    );
+    return rows.length > 0;
+  }
+
+  /**
+   * Top-level `/projects/` directory summaries without loading document bodies (#1819).
+   */
+  async listProjectDirectorySummaries(options?: { maxDirectories?: number }): Promise<Array<{
+    slug: string;
+    directoryPrefix: string;
+    documentCount: number;
+    samplePaths: string[];
+    sampleTitles: string[];
+  }>> {
+    const max = options?.maxDirectories ?? 40;
+    const { rows } = await this.pool.query<{
+      slug: string;
+      document_count: string;
+      sample_paths: string[] | null;
+      sample_titles: Array<string | null> | null;
+    }>(
+      `SELECT
+         (regexp_match(path, '^/projects/([^/]+)'))[1] AS slug,
+         COUNT(*)::text AS document_count,
+         (array_agg(path ORDER BY updated_at DESC))[1:5] AS sample_paths,
+         (array_agg(
+            NULLIF(BTRIM(frontmatter->>'title'), '')
+            ORDER BY updated_at DESC
+          ))[1:5] AS sample_titles
+       FROM working_documents
+       WHERE archived_at IS NULL
+         AND path LIKE '/projects/%/%'
+         AND (regexp_match(path, '^/projects/([^/]+)'))[1] IS NOT NULL
+       GROUP BY 1
+       ORDER BY 1
+       LIMIT $1`,
+      [max],
+    );
+    return rows.map(row => ({
+      slug: row.slug,
+      directoryPrefix: `/projects/${row.slug}/`,
+      documentCount: Number.parseInt(row.document_count, 10),
+      samplePaths: (row.sample_paths ?? []).filter(Boolean),
+      sampleTitles: (row.sample_titles ?? []).filter((t): t is string => typeof t === 'string' && t.length > 0),
+    }));
+  }
+
+  /**
    * Soft-delete expired `/scratch/<conversation-id>/…` documents past their TTL (#1212).
    * Non-scratch paths are never touched. TTL is derived from `updated_at` and either
    * frontmatter `ttl_days` (scratch only) or the configured default.

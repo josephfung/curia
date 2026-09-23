@@ -297,4 +297,38 @@ describeIf('WorkingDocsRepo (integration)', () => {
 
     await pool.query('DELETE FROM tasks WHERE id = ANY($1::uuid[])', [[taskA.id, taskB.id]]);
   });
+
+  it('subtask-owned docs stamped with root id archive with the project (#1819 review)', async () => {
+    const { TaskRepo } = await import('../../src/db/task-repo.js');
+    const { createSilentLogger: silent } = await import('../../src/logger.js');
+    const noopBus = { publish: async () => {}, subscribe: () => {} };
+    const taskRepo = new TaskRepo(pool, noopBus as never, silent());
+
+    const parent = await taskRepo.createTask({
+      agentId: 'coordinator',
+      title: 'Root archival parent',
+      source: 'agent',
+    });
+    const child = await taskRepo.createTask({
+      agentId: 'coordinator',
+      title: 'Root archival child',
+      source: 'agent',
+      parentTaskId: parent.id,
+    });
+
+    // Simulate doc-write resolving child → root before stamp.
+    await repo.create({
+      path: '/projects/root-archival/brief.md',
+      type: 'brief',
+      body: 'from subtask',
+      taskId: parent.id,
+    });
+
+    expect(await taskRepo.resolveProjectRootTaskId(child.id)).toBe(parent.id);
+    const archived = await repo.archiveProjectWorkspaceDocs(parent.id);
+    expect(archived).toBe(1);
+    expect(await repo.read('/projects/root-archival/brief.md')).toBeNull();
+
+    await pool.query('DELETE FROM tasks WHERE id = ANY($1::uuid[])', [[parent.id, child.id]]);
+  });
 });
