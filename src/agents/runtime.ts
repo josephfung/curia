@@ -14,6 +14,13 @@ import { createHash } from 'node:crypto';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import { historyForLlm, LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
+import {
+  CONTACT_RECENT_HISTORY_TIER,
+  contactRecentHistoryApplies,
+  contactRecentHistorySince,
+  formatContactRecentHistoryBlock,
+  persistableContactId,
+} from '../memory/contact-recent-history.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
@@ -871,6 +878,12 @@ export class AgentRuntime {
     const delegatedTask = isDelegatedSpecialistTask(taskEvent.payload.metadata);
 
     const senderCtx = taskEvent.payload.senderContext;
+    // Stamped onto user turns so a later conversation can recall this contact
+    // without scanning every thread (#1599). Non-UUIDs are dropped.
+    const attributedSenderContactId = senderCtx?.resolved
+      ? persistableContactId(senderCtx.contactId)
+      : undefined;
+    const turnChannelId = taskEvent.payload.channelId;
     if (senderCtx?.resolved) {
       // Sanitize sender fields before prompt inclusion — these originate from
       // external sources (self-claimed names, imported roles) and could contain
@@ -1156,6 +1169,16 @@ export class AgentRuntime {
 
     // Load conversation history LAST — it has partial inclusion (truncation)
     // so it takes whatever budget remains after higher-priority tiers are secured.
+    // The contact-scoped read runs alongside it; it is charged only after
+    // history is allocated so it cannot crowd out the live transcript (#1599).
+    const contactRecentPromise = this.loadContactRecentBlock({
+      memory,
+      channelId: turnChannelId,
+      contactId: attributedSenderContactId,
+      agentId,
+      conversationId,
+      timezone: this.config.timezone,
+    });
     const rawHistory = memory
       ? await memory.getHistory(conversationId, agentId)
       : [];
@@ -1174,8 +1197,29 @@ export class AgentRuntime {
       );
     }
 
+    // Contact recent history is background from other conversations. History
+    // was allocated first, so a long digest is dropped rather than pushing
+    // out resolved entities (already charged) or the live transcript.
+    const contactRecent = await contactRecentPromise;
+    if (contactRecent.considered) {
+      const blockMessage: Message[] = contactRecent.block
+        ? [{ role: 'system', content: contactRecent.block }]
+        : [];
+      if (contactRecent.block && ctxBudget.allocate(CONTACT_RECENT_HISTORY_TIER, blockMessage)) {
+        messages.push(blockMessage[0]!);
+      } else if (!contactRecent.block) {
+        ctxBudget.allocate(CONTACT_RECENT_HISTORY_TIER, []);
+      } else {
+        logger.info(
+          { agentId, conversationId },
+          'Contact recent-history dropped by context budget — active transcript kept',
+        );
+      }
+    }
+
     // Append history and user message to complete the messages array.
-    // Final order: system prompt → sender context → bullpen → history → user message.
+    // Final order: system prompt → sender context → bullpen → resolved entities
+    // → contact recent history → history → user message.
     messages.push(...budgetedHistory);
     messages.push({ role: 'user', content: promptContent });
 
@@ -1208,7 +1252,10 @@ export class AgentRuntime {
 
     // Persist the incoming user message
     if (memory) {
-      await memory.addTurn(conversationId, agentId, { role: 'user', content: originalContent });
+      await memory.addTurn(conversationId, agentId, { role: 'user', content: originalContent }, {
+        senderContactId: attributedSenderContactId ?? null,
+        channelId: turnChannelId,
+      });
     }
 
     // Publish context budget telemetry — captures per-tier token estimates even if
@@ -1459,7 +1506,9 @@ export class AgentRuntime {
               });
 
               if (memory) {
-                await memory.addTurn(conversationId, agentId, { role: 'assistant', content: clarificationContent });
+                await memory.addTurn(conversationId, agentId, { role: 'assistant', content: clarificationContent }, {
+                  channelId: turnChannelId,
+                });
               }
 
               const clarificationResponse = createAgentResponse({
@@ -1511,7 +1560,9 @@ export class AgentRuntime {
               const escalationContent = parts.join(' ');
 
               if (memory) {
-                await memory.addTurn(conversationId, agentId, { role: 'assistant', content: escalationContent });
+                await memory.addTurn(conversationId, agentId, { role: 'assistant', content: escalationContent }, {
+                  channelId: turnChannelId,
+                });
               }
 
               const escalationResponse = createAgentResponse({
@@ -2307,7 +2358,9 @@ export class AgentRuntime {
 
     // Persist the assistant response
     if (memory) {
-      await memory.addTurn(conversationId, agentId, { role: 'assistant', content: prepared.content });
+      await memory.addTurn(conversationId, agentId, { role: 'assistant', content: prepared.content }, {
+        channelId: turnChannelId,
+      });
     }
 
     const responseEvent = createAgentResponse({
@@ -2832,7 +2885,9 @@ export class AgentRuntime {
     });
 
     if (memory) {
-      await memory.addTurn(conversationId, agentId, { role: 'assistant', content });
+      await memory.addTurn(conversationId, agentId, { role: 'assistant', content }, {
+        channelId: taskEvent.payload.channelId,
+      });
     }
 
     const responseEvent = createAgentResponse({
@@ -2966,7 +3021,58 @@ export class AgentRuntime {
     // error reply — maybeSummarize inside addTurn can issue an LLM call (#1767).
     // Must not throw: a memory failure here would re-enter handleTask's catch
     // and double-publish.
-    await this.persistLlmFailureTurn(conversationId, taskEvent.payload.content);
+    await this.persistLlmFailureTurn(conversationId, taskEvent.payload.content, taskEvent.payload.channelId);
+  }
+
+  /**
+   * Other conversations with this contact, rendered for the budget tier.
+   * Ineligible channels and non-UUID contacts skip the read. Failures resolve
+   * to an empty block so a recall outage cannot fail the turn.
+   */
+  private loadContactRecentBlock(args: {
+    memory: WorkingMemory | undefined;
+    channelId: string;
+    contactId: string | undefined;
+    agentId: string;
+    conversationId: string;
+    timezone: string | undefined;
+  }): Promise<{ considered: boolean; block: string | null }> {
+    const { memory, channelId, contactId, agentId, conversationId, timezone } = args;
+    if (!memory || !contactId || !contactRecentHistoryApplies(channelId)) {
+      return Promise.resolve({ considered: false, block: null });
+    }
+    const window = contactRecentHistorySince(new Date(), timezone);
+    return memory.getContactRecentHistory({
+      contactId,
+      agentId,
+      excludeConversationId: conversationId,
+      since: window.since,
+    }).then(
+      (turns) => {
+        try {
+          return {
+            considered: true,
+            block: formatContactRecentHistoryBlock(turns, {
+              timezone,
+              windowLabel: window.windowLabel,
+            }),
+          };
+        } catch (err) {
+          this.config.logger.error(
+            { err, agentId, conversationId },
+            'Failed to render contact recent history — this turn has no cross-conversation recall',
+          );
+          return { considered: true, block: null };
+        }
+      },
+      (err: unknown) => {
+        this.config.logger.error(
+          { err, agentId, conversationId },
+          'Failed to load contact recent history — this turn has no cross-conversation recall',
+        );
+        return { considered: true, block: null };
+      },
+    );
   }
 
   /**
@@ -2977,6 +3083,7 @@ export class AgentRuntime {
   private async persistLlmFailureTurn(
     conversationId: string,
     expectedUserContent: string,
+    channelId: string,
   ): Promise<void> {
     const { memory, agentId, logger } = this.config;
     if (!memory) return;
@@ -2995,6 +3102,8 @@ export class AgentRuntime {
       await memory.addTurn(conversationId, agentId, {
         role: 'assistant',
         content: LLM_FAILURE_TURN_CONTENT,
+      }, {
+        channelId,
       });
     } catch (err) {
       logger.error(

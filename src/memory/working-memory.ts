@@ -7,6 +7,18 @@ import {
   withDbRetry,
 } from '../db/resilience.js';
 import { rewriteLlmFailureTurns } from './llm-failure-turn.js';
+import {
+  CONTACT_RECENT_HISTORY_MAX_TURNS,
+  normalizeAddTurnAttribution,
+  persistableContactId,
+  selectContactRecentTurns,
+  type AddTurnAttribution,
+  type ContactRecentHistoryQuery,
+  type ContactRecentSourceTurn,
+  type ContactRecentTurn,
+} from './contact-recent-history.js';
+
+export type { AddTurnAttribution, ContactRecentHistoryQuery, ContactRecentTurn };
 
 export interface ConversationTurn {
   role: 'user' | 'assistant' | 'system';
@@ -40,8 +52,15 @@ export interface SummarizationConfig {
 }
 
 interface StorageBackend {
-  add(conversationId: string, agentId: string, turn: ConversationTurn): Promise<void>;
+  add(
+    conversationId: string,
+    agentId: string,
+    turn: ConversationTurn,
+    meta?: AddTurnAttribution,
+  ): Promise<void>;
   get(conversationId: string, agentId: string, maxTurns?: number): Promise<ConversationTurn[]>;
+  /** Contact-scoped turns from other conversations. See selectContactRecentTurns. */
+  getContactRecent(query: ContactRecentHistoryQuery): Promise<ContactRecentTurn[]>;
   /** Delete all turns whose expires_at is in the past. Returns the number of rows deleted. */
   purgeExpired(): Promise<number>;
 }
@@ -84,8 +103,9 @@ export class WorkingMemory {
     conversationId: string,
     agentId: string,
     turn: ConversationTurn,
+    meta?: AddTurnAttribution,
   ): Promise<void> {
-    await this.backend.add(conversationId, agentId, turn);
+    await this.backend.add(conversationId, agentId, turn, meta);
   }
 
   async getHistory(
@@ -98,6 +118,28 @@ export class WorkingMemory {
     // summarization, and new readers never see the raw marker (#1775). Callers
     // that must inspect storage (persist pairing, diagnostics, tests) pass `{ raw: true }`.
     if (options?.raw) return turns;
+    return rewriteLlmFailureTurns(turns);
+  }
+
+  /**
+   * Recent turns this contact authored in other conversations, plus assistant
+   * replies from conversations where they are the only attributed sender.
+   * Non-UUID contact ids return [] without touching the database.
+   */
+  async getContactRecentHistory(query: ContactRecentHistoryQuery): Promise<ContactRecentTurn[]> {
+    const contactId = persistableContactId(query.contactId);
+    if (!contactId) return [];
+    if (!(query.since instanceof Date) || Number.isNaN(query.since.getTime())) return [];
+    const requested = query.maxTurns ?? CONTACT_RECENT_HISTORY_MAX_TURNS;
+    if (!Number.isFinite(requested) || requested <= 0) return [];
+    const normalized: ContactRecentHistoryQuery = {
+      ...query,
+      contactId,
+      maxTurns: Math.min(50, Math.floor(requested)),
+      excludeConversationId: query.excludeConversationId ?? '',
+    };
+    const turns = await this.backend.getContactRecent(normalized);
+    if (query.raw) return turns;
     return rewriteLlmFailureTurns(turns);
   }
 
@@ -123,20 +165,61 @@ class PostgresBackend implements StorageBackend {
     private ttlDays?: number,
   ) {}
 
-  async add(conversationId: string, agentId: string, turn: ConversationTurn): Promise<void> {
+  async add(
+    conversationId: string,
+    agentId: string,
+    turn: ConversationTurn,
+    meta?: AddTurnAttribution,
+  ): Promise<void> {
     this.logger.debug({ conversationId, agentId, role: turn.role }, 'working_memory: adding turn');
     const expiresAt = this.ttlDays != null
       ? new Date(Date.now() + this.ttlDays * 24 * 60 * 60 * 1000)
       : null;
+    const attribution = normalizeAddTurnAttribution(meta);
+    if (attribution.senderDropped) {
+      this.logger.warn(
+        { conversationId, agentId },
+        'working_memory: ignoring non-UUID sender_contact_id',
+      );
+    }
     // Critical path: reading/writing working memory must fail fast with a
     // classified DATABASE_UNAVAILABLE error so the runtime can publish
     // agent.error rather than hang (#1381 / spec 05).
     try {
-      await this.pool.query(
-        `INSERT INTO working_memory (conversation_id, agent_id, role, content, expires_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [conversationId, agentId, turn.role, turn.content, expiresAt],
-      );
+      if (attribution.createdAt) {
+        await this.pool.query(
+          `INSERT INTO working_memory (
+             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id, created_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            conversationId,
+            agentId,
+            turn.role,
+            turn.content,
+            expiresAt,
+            attribution.senderContactId,
+            attribution.channelId,
+            attribution.createdAt,
+          ],
+        );
+      } else {
+        await this.pool.query(
+          `INSERT INTO working_memory (
+             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            conversationId,
+            agentId,
+            turn.role,
+            turn.content,
+            expiresAt,
+            attribution.senderContactId,
+            attribution.channelId,
+          ],
+        );
+      }
     } catch (err) {
       if (isDbUnavailableError(err)) {
         const agentErr = createDbUnavailableAgentError('working-memory', err);
@@ -202,6 +285,91 @@ class PostgresBackend implements StorageBackend {
         this.logger.error(
           { err: agentErr, conversationId, agentId },
           'working_memory: get failed — database unavailable',
+        );
+        throw Object.assign(new Error(agentErr.message), {
+          code: agentErr.context.code,
+          agentError: agentErr,
+        });
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * SQL twin of selectContactRecentTurns. User turns must match the contact.
+   * Assistant and system turns come only from conversations with no other
+   * sender and no unattributed user turn (including archived rows).
+   */
+  async getContactRecent(query: ContactRecentHistoryQuery): Promise<ContactRecentTurn[]> {
+    const limit = query.maxTurns ?? CONTACT_RECENT_HISTORY_MAX_TURNS;
+    try {
+      const result = await this.pool.query<{
+        role: string;
+        content: string;
+        conversation_id: string;
+        channel_id: string | null;
+        created_at: Date;
+      }>(
+        `SELECT role, content, conversation_id, channel_id, created_at, id
+         FROM (
+           SELECT wm.role, wm.content, wm.conversation_id, wm.channel_id, wm.created_at, wm.id
+           FROM working_memory wm
+           JOIN (
+             SELECT DISTINCT conversation_id
+             FROM working_memory
+             WHERE sender_contact_id = $1::uuid
+               AND agent_id = $2
+               AND role = 'user'
+               AND archived = false
+               AND created_at >= $3
+               AND conversation_id <> $4
+           ) participated ON participated.conversation_id = wm.conversation_id
+           WHERE wm.agent_id = $2
+             AND wm.archived = false
+             AND wm.created_at >= $3
+             AND (
+               (wm.role = 'user' AND wm.sender_contact_id = $1::uuid)
+               OR (
+                 wm.role IN ('assistant', 'system')
+                 AND wm.conversation_id NOT IN (
+                   SELECT wm2.conversation_id
+                   FROM working_memory wm2
+                   WHERE wm2.agent_id = $2
+                     AND wm2.role = 'user'
+                     AND wm2.conversation_id = wm.conversation_id
+                     AND (
+                       wm2.sender_contact_id IS NULL
+                       OR wm2.sender_contact_id <> $1::uuid
+                     )
+                 )
+               )
+             )
+           ORDER BY wm.created_at DESC, wm.id DESC
+           LIMIT $5
+         ) recent
+         ORDER BY created_at ASC, id ASC`,
+        [
+          query.contactId,
+          query.agentId,
+          query.since,
+          query.excludeConversationId ?? '',
+          limit,
+        ],
+      );
+
+      return result.rows.map((row) => ({
+        role: row.role as ContactRecentTurn['role'],
+        content: row.content,
+        conversationId: row.conversation_id,
+        channelId: row.channel_id,
+        createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+      }));
+    } catch (err) {
+      if (isDbUnavailableError(err)) {
+        const agentErr = createDbUnavailableAgentError('working-memory', err);
+        this.logger.error(
+          { err: agentErr, contactId: query.contactId, agentId: query.agentId },
+          'working_memory: contact recent history failed — database unavailable',
         );
         throw Object.assign(new Error(agentErr.message), {
           code: agentErr.context.code,
@@ -460,27 +628,51 @@ class PostgresBackend implements StorageBackend {
  * Does not implement summarization — use integration tests for end-to-end coverage.
  */
 class InMemoryBackend implements StorageBackend {
-  private store = new Map<string, ConversationTurn[]>();
+  private store = new Map<string, ContactRecentSourceTurn[]>();
+  private seq = 0;
 
   private key(conversationId: string, agentId: string): string {
     return `${conversationId}:${agentId}`;
   }
 
-  async add(conversationId: string, agentId: string, turn: ConversationTurn): Promise<void> {
+  async add(
+    conversationId: string,
+    agentId: string,
+    turn: ConversationTurn,
+    meta?: AddTurnAttribution,
+  ): Promise<void> {
+    const attribution = normalizeAddTurnAttribution(meta);
     const k = this.key(conversationId, agentId);
     const turns = this.store.get(k) ?? [];
-    turns.push(turn);
+    turns.push({
+      conversationId,
+      agentId,
+      role: turn.role,
+      content: turn.content,
+      senderContactId: attribution.senderContactId,
+      channelId: attribution.channelId,
+      createdAt: attribution.createdAt ?? new Date(),
+      archived: false,
+      seq: this.seq++,
+    });
     this.store.set(k, turns);
   }
 
   async get(conversationId: string, agentId: string, maxTurns?: number): Promise<ConversationTurn[]> {
     const k = this.key(conversationId, agentId);
     const turns = this.store.get(k) ?? [];
-    if (maxTurns && turns.length > maxTurns) {
+    const visible = turns.map((row) => ({ role: row.role, content: row.content }));
+    if (maxTurns && visible.length > maxTurns) {
       // Return the last N turns (most recent), preserving chronological order
-      return turns.slice(-maxTurns);
+      return visible.slice(-maxTurns);
     }
-    return [...turns];
+    return visible;
+  }
+
+  async getContactRecent(query: ContactRecentHistoryQuery): Promise<ContactRecentTurn[]> {
+    const rows: ContactRecentSourceTurn[] = [];
+    for (const turns of this.store.values()) rows.push(...turns);
+    return selectContactRecentTurns(rows, query);
   }
 
   async purgeExpired(): Promise<number> {

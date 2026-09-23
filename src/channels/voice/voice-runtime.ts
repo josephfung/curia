@@ -36,6 +36,13 @@ import { VOICE_ASYNC_OFFRAMP_GUIDANCE } from '../../agents/prompts/voice-async-o
 import { TurnDateResolveTracker } from '../../agents/delegate-brief-date-validation.js';
 import type { WorkingMemory } from '../../memory/working-memory.js';
 import { historyForLlm, LLM_FAILURE_TURN_CONTENT } from '../../memory/llm-failure-turn.js';
+import {
+  CONTACT_RECENT_HISTORY_MAX_TURNS,
+  contactRecentHistorySince,
+  formatContactRecentHistoryBlock,
+  type ContactRecentTurn,
+} from '../../memory/contact-recent-history.js';
+import { persistableCallerContactId } from './caller-contact-id.js';
 import { sanitizeOutput } from '../../skills/sanitize.js';
 import { formatTimeContextBlock } from '../../time/time-context.js';
 import type { AudioTransport } from './audio-transport.js';
@@ -75,9 +82,10 @@ const MAX_HISTORY_MESSAGES = 8;
  */
 const VOICE_HISTORY_MAX_TURNS = 20;
 /**
- * Deadline for the per-turn working_memory history read. Pool checkout timeouts
- * do not bound the query itself — a stalled read must not stall the spoken turn,
- * so on expiry the turn falls back to in-process history.
+ * Deadline shared by the per-turn working_memory history read and the
+ * contact-scoped recall read. Pool checkout timeouts do not bound the query
+ * itself — a stalled read must not stall the spoken turn, so on expiry the
+ * turn falls back to in-process history and skips cross-conversation recall.
  */
 const DEFAULT_HISTORY_READ_TIMEOUT_MS = 1_000;
 /** Ignore tiny interim blobs (echo / noise) when deciding barge-in. */
@@ -117,6 +125,34 @@ function stringTurns(messages: Message[]): Array<{ role: Message['role']; conten
     if (typeof m.content === 'string') out.push({ role: m.role, content: m.content });
   }
   return out;
+}
+
+type DeadlineRace<T> =
+  | { status: 'ok'; value: T }
+  | { status: 'timeout' }
+  | { status: 'error'; err: unknown };
+
+/**
+ * Race `read` against an absolute deadline. A late rejection is the caller's
+ * job to absorb — this helper settles exactly once.
+ */
+function raceDeadline<T>(read: Promise<T>, deadlineAt: number): Promise<DeadlineRace<T>> {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) return Promise.resolve({ status: 'timeout' });
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (result: DeadlineRace<T>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({ status: 'timeout' }), remaining);
+    read.then(
+      value => finish({ status: 'ok', value }),
+      (err: unknown) => finish({ status: 'error', err }),
+    );
+  });
 }
 
 /** True when `prefix` is the leading role/content sequence of `full`. */
@@ -339,9 +375,10 @@ export interface VoiceRuntimeConfig {
   timezone?: string;
   /**
    * Deadline (ms) for per-turn Postgres reads on the spoken critical path
-   * (working_memory history and outbound-context getActive). On expiry the
-   * turn degrades — in-process history / no context injection — rather than
-   * stalling. Default 1000ms.
+   * (working_memory history, contact-scoped recall, and outbound-context
+   * getActive). On expiry the turn degrades — in-process history / no
+   * cross-conversation block / no context injection — rather than stalling.
+   * Default 1000ms. History and contact recall share one deadline.
    */
   historyReadTimeoutMs?: number;
   /**
@@ -709,9 +746,12 @@ export class VoiceRuntime {
        * utterance can be persisted before the assistant runs.
        */
       priorHistory?: Message[];
+      /** Cross-conversation recall block. Omitted when the caller loaded history itself and passed null. */
+      contactRecent?: string | null;
       assembleMessages: (ctx: {
         systemPrompt: string;
         priorHistory: Message[];
+        contactRecent: string | null;
       }) => Message[];
       /** Wire coordinator tools + filler (user turns). Greeting passes false. */
       withTools: boolean;
@@ -752,7 +792,13 @@ export class VoiceRuntime {
 
       if (session.ending || controller.signal.aborted) return;
 
-      const priorHistory = opts.priorHistory ?? await this.loadTurnHistory(session);
+      let priorHistory = opts.priorHistory;
+      let contactRecent = opts.contactRecent ?? null;
+      if (!priorHistory) {
+        const loaded = await this.loadTurnContext(session);
+        priorHistory = loaded.history;
+        contactRecent = loaded.contactRecent;
+      }
       if (session.ending || controller.signal.aborted) return;
 
       const turnStartedAt = Date.now();
@@ -771,7 +817,7 @@ export class VoiceRuntime {
       const systemPrompt = await this.buildTurnSystemPrompt(session);
       if (session.ending || controller.signal.aborted) return;
 
-      const messages = opts.assembleMessages({ systemPrompt, priorHistory });
+      const messages = opts.assembleMessages({ systemPrompt, priorHistory, contactRecent });
 
       let tools: ToolDefinition[] | undefined;
       let invokeTool: ((call: ToolCall) => Promise<{ content: string; is_error?: boolean }>) | undefined;
@@ -881,7 +927,7 @@ export class VoiceRuntime {
       // No tools — keep the open short and latency-tight; outbound context is
       // already in the system prompt when present.
       withTools: false,
-      assembleMessages: ({ systemPrompt, priorHistory }) => [
+      assembleMessages: ({ systemPrompt, priorHistory, contactRecent }) => [
         {
           role: 'system',
           content: `${systemPrompt}\n\n${buildVoiceGreetingInstruction({
@@ -889,6 +935,7 @@ export class VoiceRuntime {
             displayName: session.caller.displayName,
           })}`,
         },
+        ...(contactRecent ? [{ role: 'system' as const, content: contactRecent }] : []),
         ...priorHistory,
         { role: 'user', content: VOICE_GREETING_USER_MESSAGE },
       ],
@@ -905,14 +952,20 @@ export class VoiceRuntime {
           await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
             role: 'user',
             content: VOICE_GREETING_USER_MESSAGE,
+          }, {
+            // The cue is not something the caller said. Leaving the sender
+            // unset keeps it out of contact-scoped recall.
+            channelId: 'voice',
           });
           try {
             await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
               role: 'assistant',
               content: finalText,
+            }, {
+              channelId: 'voice',
             });
           } catch (assistantErr) {
-            // Cue landed but the spoken reply did not — next loadTurnHistory will
+            // Cue landed but the spoken reply did not — next loadTurnContext will
             // see a cue-only prefix and lose the fact Curia already greeted.
             this.log.warn(
               { sessionId: session.sessionId, err: assistantErr },
@@ -1032,7 +1085,7 @@ export class VoiceRuntime {
     // registered under signal:/email:/scheduler:/bullpen ids (#1817). Empty
     // result → null → prompt unchanged. Failure and deadline expiry are
     // best-effort: log and continue without the bridge (parity with dispatcher
-    // failure mode + loadTurnHistory latency contract).
+    // failure mode + loadTurnContext latency contract).
     //
     // Gate on liveTurn (#1598): "messages you've sent" is principal-audience
     // content — never inject it for a non-principal voice caller.
@@ -1112,12 +1165,14 @@ export class VoiceRuntime {
   /**
    * Load spoken-turn context from working_memory — the same rows console chat
    * history reads — so persistence and LLM context are single-sourced (#1551).
-   * Falls back to the in-process session history when no store is configured,
-   * the read fails or exceeds its deadline, or the store reads back empty while
-   * the in-process copy is not (a prior addTurn write failed warn-only): a
-   * degraded slim turn beats failing — or stalling — the call. Callers invoke
-   * this BEFORE persisting the current utterance, so the returned turns are
-   * strictly prior history.
+   * Also loads contact-scoped turns from other conversations (#1599) under the
+   * same deadline. Falls back to the in-process session history when no store
+   * is configured, the history read fails or exceeds its deadline, or the store
+   * reads back empty while the in-process copy is not (a prior addTurn write
+   * failed warn-only): a degraded slim turn beats failing — or stalling — the
+   * call. A timed-out or failed contact read drops only that block. Callers
+   * invoke this BEFORE persisting the current utterance, so the returned turns
+   * are strictly prior history.
    *
    * Every return path is passed through {@link spokenHistoryForLlm} so leftover
    * unpaired `user` rows (crash before the pairing write, a previous process)
@@ -1126,58 +1181,104 @@ export class VoiceRuntime {
    * `persistIncompleteAssistantTurn` — with the heard reply when TTS already
    * spoke, otherwise the failure marker (#1776).
    */
-  private async loadTurnHistory(session: ActiveSession): Promise<Message[]> {
+  private async loadTurnContext(
+    session: ActiveSession,
+  ): Promise<{ history: Message[]; contactRecent: string | null }> {
     const fallback = (): Message[] => spokenHistoryForLlm(stringTurns(session.history));
-    if (!this.config.workingMemory) return fallback();
+    if (!this.config.workingMemory) return { history: fallback(), contactRecent: null };
     const timeoutMs = this.config.historyReadTimeoutMs ?? DEFAULT_HISTORY_READ_TIMEOUT_MS;
-    const read = this.config.workingMemory.getHistory(
+    const deadlineAt = Date.now() + timeoutMs;
+    const memory = this.config.workingMemory;
+    const historyRead = memory.getHistory(
       session.conversationId,
       VOICE_HISTORY_AGENT_ID,
       { maxTurns: VOICE_HISTORY_MAX_TURNS },
     );
     // A read that loses the deadline race settles later with no awaiter —
     // absorb its eventual rejection so it cannot become an unhandled rejection.
-    read.catch(err => {
+    historyRead.catch(err => {
       this.log.debug(
         { sessionId: session.sessionId, err },
         'late working-memory history read failure (turn already proceeded)',
       );
     });
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      const outcome = await Promise.race([
-        read,
-        new Promise<'timeout'>(resolve => {
-          timer = setTimeout(() => resolve('timeout'), timeoutMs);
-        }),
-      ]);
-      if (outcome === 'timeout') {
-        this.log.warn(
-          { sessionId: session.sessionId, timeoutMs },
-          'working-memory history read exceeded the voice deadline; falling back to in-process history',
-        );
-        return fallback();
-      }
+
+    const contactId = persistableCallerContactId(session.caller.contactId);
+    const recentWindow = contactRecentHistorySince(new Date(), this.config.timezone);
+    const contactRead: Promise<ContactRecentTurn[] | null> =
+      contactId && typeof memory.getContactRecentHistory === 'function'
+        ? memory.getContactRecentHistory({
+          contactId,
+          agentId: VOICE_HISTORY_AGENT_ID,
+          excludeConversationId: session.conversationId,
+          since: recentWindow.since,
+          maxTurns: CONTACT_RECENT_HISTORY_MAX_TURNS,
+        }).then(
+          turns => turns,
+          (err: unknown) => {
+            this.log.warn(
+              { sessionId: session.sessionId, err },
+              'contact recent-history read failed; proceeding without it',
+            );
+            return null;
+          },
+        )
+        : Promise.resolve(null);
+
+    const [historyOutcome, contactOutcome] = await Promise.all([
+      raceDeadline(historyRead, deadlineAt),
+      raceDeadline(contactRead, deadlineAt),
+    ]);
+
+    let history: Message[];
+    if (historyOutcome.status === 'timeout') {
+      this.log.warn(
+        { sessionId: session.sessionId, timeoutMs },
+        'working-memory history read exceeded the voice deadline; falling back to in-process history',
+      );
+      history = fallback();
+    } else if (historyOutcome.status === 'error') {
+      this.log.warn(
+        { sessionId: session.sessionId, err: historyOutcome.err },
+        'failed to load voice history from working memory; falling back to in-process history',
+      );
+      history = fallback();
+    } else {
       // A prior addTurn may have failed (warn-only), leaving the store behind
       // the in-process copy (including a store that sanitizes to empty because
       // it still ends on an unpaired user). Prefer the longer in-process copy
       // only when it continues the store as a prefix — otherwise the store
       // wins so an earlier process's turns are not dropped (#1776).
-      const sanitized = spokenHistoryForLlm(outcome);
+      const sanitized = spokenHistoryForLlm(historyOutcome.value);
       if (session.history.length > 0) {
         const fb = fallback();
-        if (fb.length > sanitized.length && isHistoryPrefix(sanitized, fb)) return fb;
+        history = fb.length > sanitized.length && isHistoryPrefix(sanitized, fb) ? fb : sanitized;
+      } else {
+        history = sanitized;
       }
-      return sanitized;
-    } catch (err) {
-      this.log.warn(
-        { sessionId: session.sessionId, err },
-        'failed to load voice history from working memory; falling back to in-process history',
-      );
-      return fallback();
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
     }
+
+    let contactRecent: string | null = null;
+    if (contactOutcome.status === 'timeout') {
+      this.log.warn(
+        { sessionId: session.sessionId, timeoutMs },
+        'contact recent-history read exceeded the voice deadline; proceeding without it',
+      );
+    } else if (contactOutcome.status === 'ok' && contactOutcome.value) {
+      try {
+        contactRecent = formatContactRecentHistoryBlock(contactOutcome.value, {
+          timezone: this.config.timezone,
+          windowLabel: recentWindow.windowLabel,
+        });
+      } catch (err) {
+        this.log.warn(
+          { sessionId: session.sessionId, err },
+          'contact recent-history block failed to render; proceeding without it',
+        );
+      }
+    }
+
+    return { history, contactRecent };
   }
 
   /**
@@ -1230,6 +1331,8 @@ export class VoiceRuntime {
       await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
         role: 'assistant',
         content: assistantContent,
+      }, {
+        channelId: 'voice',
       });
     } catch (err) {
       this.log.warn(
@@ -1262,7 +1365,7 @@ export class VoiceRuntime {
     // BEFORE persisting this utterance, so the current user message is appended
     // to the LLM context exactly once (turns are serialized per session, so the
     // read cannot race the write below).
-    const priorHistory = await this.loadTurnHistory(session);
+    const turnContext = await this.loadTurnContext(session);
     if (session.ending) return;
 
     const storedUserContent = sanitizeOutput(utterance);
@@ -1274,6 +1377,9 @@ export class VoiceRuntime {
         await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
           role: 'user',
           content: storedUserContent,
+        }, {
+          senderContactId: persistableCallerContactId(session.caller.contactId) ?? null,
+          channelId: 'voice',
         });
         userTurnPersisted = true;
       } catch (err) {
@@ -1293,7 +1399,8 @@ export class VoiceRuntime {
       ttfaLogKey: 'voice.ttfa_ms',
       ttfaLogMessage: 'voice time-to-first-audio',
       failureLogMessage: 'voice turn failed',
-      priorHistory,
+      priorHistory: turnContext.history,
+      contactRecent: turnContext.contactRecent,
       withTools: true,
       persistIncomplete: (spokenText) => this.persistIncompleteAssistantTurn(session, {
         inProcessContent: utterance,
@@ -1301,8 +1408,9 @@ export class VoiceRuntime {
         spokenText,
         persistToStore: userTurnPersisted,
       }),
-      assembleMessages: ({ systemPrompt, priorHistory: prior }) => [
+      assembleMessages: ({ systemPrompt, priorHistory: prior, contactRecent }) => [
         { role: 'system', content: systemPrompt },
+        ...(contactRecent ? [{ role: 'system' as const, content: contactRecent }] : []),
         ...prior,
         userMessage,
       ],
@@ -1318,6 +1426,8 @@ export class VoiceRuntime {
           await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
             role: 'assistant',
             content: finalText,
+          }, {
+            channelId: 'voice',
           });
         } catch (err) {
           this.log.warn(
