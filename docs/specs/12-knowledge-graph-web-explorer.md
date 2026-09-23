@@ -27,6 +27,7 @@ If `WEB_APP_BOOTSTRAP_SECRET` is missing, the KG API routes are not registered a
 - `GET /api/kg/graph`
   - Query params: `node_id`, `depth`, `limit`
   - Purpose: neighborhood traversal for a selected node; falls back to recent nodes when no `node_id` is provided.
+  - A well-formed `node_id` that names no `kg_nodes` row → `404 { error: "Node not found: <id>" }`. An isolated node (exists, no edges) → `200` with that node in `nodes` and `edges: []` (#1881).
 
 ## Graph layout
 

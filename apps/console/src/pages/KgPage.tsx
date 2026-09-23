@@ -472,12 +472,17 @@ export default function KgPage() {
 
   // ── Load a node's neighborhood and replace canvas ─────────────────────────
 
-  async function loadNeighborhood(nodeId: string) {
+  type NeighborhoodLoadResult =
+    | { ok: true }
+    | { ok: false; notFoundMessage?: string };
+
+  /** Returns ok:false when the node was not found (or the load failed before render). */
+  async function loadNeighborhood(nodeId: string): Promise<NeighborhoodLoadResult> {
     const cy = cyRef.current;
     if (!cy) {
       console.error('[KgPage] loadNeighborhood called before Cytoscape was initialized');
       setStatus('Graph not ready — please refresh');
-      return;
+      return { ok: false };
     }
     neighborhoodAbortRef.current?.abort();
     const controller = new AbortController();
@@ -489,13 +494,16 @@ export default function KgPage() {
         { signal: controller.signal },
       );
       if (res.status === 404) {
-        // Distinguish "no such node" from an empty neighborhood — do not clear the canvas (#1881).
-        setStatus(await errorMessage(res));
-        return;
+        // Drop the dead deep-link so refresh does not re-hit the same 404 (#1881).
+        const notFoundMessage = await errorMessage(res);
+        setSelectedNode(null);
+        syncUrl(searchRef.current, undefined);
+        setStatus(notFoundMessage);
+        return { ok: false, notFoundMessage };
       }
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
-      if (cy.destroyed()) return;
+      if (cy.destroyed()) return { ok: false };
       renderGraph(cy, data);
       // Animate the viewport to center on the focal node after the layout settles.
       const focalEl = cy.getElementById(nodeId);
@@ -512,10 +520,12 @@ export default function KgPage() {
       cy.elements().removeClass('focal');
       if (focused) cy.getElementById(focused.id).addClass('focal');
       setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
+      return { ok: true };
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (err instanceof DOMException && err.name === 'AbortError') return { ok: false };
       console.error('[KgPage] neighborhood load failed:', err);
       setStatus(`Failed to load: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      return { ok: false };
     }
   }
 
@@ -534,7 +544,14 @@ export default function KgPage() {
         { signal: controller.signal },
       );
       if (res.status === 404) {
-        // Keep the current canvas; the expanded id is gone (#1881).
+        // onetap already selected this node and wrote ?node= — clear the stale
+        // element, selection, and URL so the user cannot re-tap the same dead id (#1881).
+        if (!cy.destroyed()) {
+          cy.getElementById(nodeId).remove();
+          updateDegrees(cy);
+        }
+        setSelectedNode(null);
+        syncUrl(searchRef.current, undefined);
         setStatus(await errorMessage(res));
         return;
       }
@@ -619,8 +636,17 @@ export default function KgPage() {
 
     if (initialNode) {
       // Restore ?node= from URL via loadNeighborhood, which handles render,
-      // focal class, viewport centering, and URL sync in one shot.
-      void loadNeighborhood(initialNode);
+      // focal class, viewport centering, and URL sync in one shot. On 404 the
+      // dead id is cleared from the URL; fall back to the hero graph so the
+      // user sees a graph with the not-found status rather than a blank canvas (#1881).
+      void (async () => {
+        const result = await loadNeighborhood(initialNode);
+        if (!result.ok) {
+          await loadHeroGraph();
+          // loadHeroGraph overwrites status — restore the actionable not-found message.
+          if (result.notFoundMessage) setStatus(result.notFoundMessage);
+        }
+      })();
     } else {
       // Default view: focus on the principal's KG node so the graph opens on
       // a meaningful starting point. Falls back to the hero graph if the
@@ -635,8 +661,8 @@ export default function KgPage() {
             }> };
             const principal = contacts.find(c => c.systemRole === 'principal');
             if (principal?.kgNodeId) {
-              await loadNeighborhood(principal.kgNodeId);
-              return;
+              const result = await loadNeighborhood(principal.kgNodeId);
+              if (result.ok) return;
             }
           } else {
             console.error('[KgPage] principal node lookup: contacts fetch failed with status', res.status);
