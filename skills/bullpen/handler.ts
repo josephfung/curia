@@ -15,10 +15,9 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/type
 import { createAgentDiscuss } from '../../src/bus/events.js';
 import type { TaskOriginator } from '../../src/contacts/types.js';
 import { parseSchedulerRunJobId } from '../../src/scheduler/conversation-id.js';
-
-/** Loose UUID shape — enough to tell a model-grabbed id from a short name. */
-const UUID_SHAPE =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+// Shape-only, which is all this needs: it only has to tell a model-grabbed id
+// from a short thread name.
+import { isUuid } from '../../src/util/uuid.js';
 
 /**
  * Classify a missing-thread miss for agent-facing copy (#1828).
@@ -52,7 +51,7 @@ export function classifyBullpenThreadMiss(
     };
   }
   const generic = `No bullpen thread with ID ${threadId} exists`;
-  if (jobId && UUID_SHAPE.test(threadId)) {
+  if (jobId && isUuid(threadId)) {
     return {
       jobIdAsThreadId: false,
       error:

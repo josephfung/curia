@@ -17,6 +17,27 @@ describe('parseSchedulerRunJobId (#1828)', () => {
     expect(parseSchedulerRunJobId('scheduler:not-a-uuid:run-001')).toBeUndefined();
   });
 
+  // #1879 loosened this from RFC v1-v5 to shape-only. These pin that choice: the
+  // failure mode of rejecting here is silent (callers read undefined as "not a
+  // scheduled run", never as "malformed id"), so a future tightening must break
+  // a test rather than quietly stop deriving job ids.
+  it('accepts a v7 middle segment (shape-only since #1879)', () => {
+    expect(
+      parseSchedulerRunJobId('scheduler:018f3a9c-7b21-7d4e-8f6a-1c2b3d4e5f60:run-001'),
+    ).toBe('018f3a9c-7b21-7d4e-8f6a-1c2b3d4e5f60');
+  });
+
+  it('accepts a nil middle segment (shape-only since #1879)', () => {
+    expect(
+      parseSchedulerRunJobId('scheduler:00000000-0000-0000-0000-000000000000:run-001'),
+    ).toBe('00000000-0000-0000-0000-000000000000');
+  });
+
+  it('still requires a full UUID shape in the middle', () => {
+    expect(parseSchedulerRunJobId('scheduler:123e4567-e89b-12d3-a456:run-001')).toBeUndefined();
+    expect(parseSchedulerRunJobId('scheduler:123e4567e89b12d3a456426614174000:run-001')).toBeUndefined();
+  });
+
   it('rejects non-scheduler and empty ids', () => {
     expect(parseSchedulerRunJobId('signal:+15551234567')).toBeUndefined();
     expect(parseSchedulerRunJobId('delegate-abc')).toBeUndefined();
