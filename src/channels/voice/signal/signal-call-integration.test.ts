@@ -174,7 +174,7 @@ function fakeSharedSessionStore(): {
         id,
         conversationId: input.conversationId,
         livekitRoom: input.livekitRoom,
-        principalContactId: input.principalContactId ?? null,
+        callerContactId: input.callerContactId ?? null,
         status: 'starting',
         startedAt: new Date(),
         endedAt: null,
@@ -281,10 +281,10 @@ describe('SignalCallBridge -> VoiceRuntime (end-to-end, #1672)', () => {
     rpc.emit('callEvent', connectedEvent(callId));
     await vi.waitFor(() => expect(runtime.activeSessionCount).toBe(1));
 
-    // The bridge inserted a row with signal metadata, and via the shared
-    // UUID_RE gate the resolved principal's contactId was persisted.
+    // The bridge inserted a row with signal metadata, and the shared
+    // caller-contact gate persisted the resolved caller's contactId.
     expect(createCalls).toHaveLength(1);
-    expect(createCalls[0]!.principalContactId).toBe(PRINCIPAL_CONTACT_ID);
+    expect(createCalls[0]!.callerContactId).toBe(PRINCIPAL_CONTACT_ID);
     expect(createCalls[0]!.metadata).toMatchObject({
       channel: 'signal',
       callerNumber: DEFAULT_NUMBER,

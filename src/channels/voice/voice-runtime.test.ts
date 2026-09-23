@@ -102,7 +102,7 @@ function fakeStore(): { store: VoiceSessionStore; statuses: string[]; ended: str
     id,
     conversationId: `voice:${id}`,
     livekitRoom: `voice-${id}`,
-    principalContactId: null,
+    callerContactId: null,
     status: status as VoiceSessionRecord['status'],
     startedAt: new Date(Date.now() - 1000),
     endedAt: status === 'ended' ? new Date() : null,

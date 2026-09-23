@@ -30,6 +30,7 @@ import type { Logger } from '../../../logger.js';
 import type { SignalCallEvent } from '../../signal/call-types.js';
 import type { SignalRpcClient } from '../../signal/signal-rpc-client.js';
 import type { AudioTransport } from '../audio-transport.js';
+import { persistableCallerContactId } from '../caller-contact-id.js';
 import type { VoiceCallerContext } from '../caller-context.js';
 import { resolveSignalVoiceCaller } from '../caller-context.js';
 import type { ResolveSignalVoiceCallerResult } from '../caller-context.js';
@@ -37,13 +38,6 @@ import type { VoiceSessionStore } from '../session-store.js';
 import type { VoiceRuntime } from '../voice-runtime.js';
 import { SignalAudioTransport } from './signal-audio-transport.js';
 import type { SignalAudioTransportOpts } from './signal-audio-transport.js';
-
-/**
- * voice_sessions.principal_contact_id is UUID — only persist real contact ids.
- * Copied from voice-adapter.ts:15 (kept local rather than exported/shared —
- * this bridge is a separate call graph and the regex is two lines).
- */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Hard per-call duration cap default (seconds). v1 hard-stops with no spoken
  * wrap-up — see the enforceCap() doc comment below. */
@@ -405,7 +399,7 @@ export class SignalCallBridge {
         id: sessionId,
         conversationId,
         livekitRoom: roomName,
-        principalContactId: UUID_RE.test(caller.contactId) ? caller.contactId : undefined,
+        callerContactId: persistableCallerContactId(caller.contactId),
         metadata: {
           channel: 'signal',
           callerNumber: ev.number,

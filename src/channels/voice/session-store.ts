@@ -6,7 +6,7 @@ export interface VoiceSessionRecord {
   id: string;
   conversationId: string;
   livekitRoom: string;
-  principalContactId: string | null;
+  callerContactId: string | null;
   status: VoiceSessionStatus;
   startedAt: Date;
   endedAt: Date | null;
@@ -18,7 +18,7 @@ interface VoiceSessionRow {
   id: string;
   conversation_id: string;
   livekit_room: string;
-  principal_contact_id: string | null;
+  caller_contact_id: string | null;
   status: VoiceSessionStatus;
   started_at: Date;
   ended_at: Date | null;
@@ -30,7 +30,7 @@ export interface CreateVoiceSessionInput {
   id?: string;
   conversationId: string;
   livekitRoom: string;
-  principalContactId?: string;
+  callerContactId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -39,14 +39,14 @@ export class VoiceSessionStore {
 
   async create(input: CreateVoiceSessionInput): Promise<VoiceSessionRecord> {
     const result = await this.pool.query<VoiceSessionRow>(
-      `INSERT INTO voice_sessions (id, conversation_id, livekit_room, principal_contact_id, status, metadata)
+      `INSERT INTO voice_sessions (id, conversation_id, livekit_room, caller_contact_id, status, metadata)
        VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, 'starting', $5::jsonb)
-       RETURNING id, conversation_id, livekit_room, principal_contact_id, status, started_at, ended_at, end_reason, metadata`,
+       RETURNING id, conversation_id, livekit_room, caller_contact_id, status, started_at, ended_at, end_reason, metadata`,
       [
         input.id ?? null,
         input.conversationId,
         input.livekitRoom,
-        input.principalContactId ?? null,
+        input.callerContactId ?? null,
         JSON.stringify(input.metadata ?? {}),
       ],
     );
@@ -55,7 +55,7 @@ export class VoiceSessionStore {
 
   async get(id: string): Promise<VoiceSessionRecord | null> {
     const result = await this.pool.query<VoiceSessionRow>(
-      `SELECT id, conversation_id, livekit_room, principal_contact_id, status, started_at, ended_at, end_reason, metadata
+      `SELECT id, conversation_id, livekit_room, caller_contact_id, status, started_at, ended_at, end_reason, metadata
        FROM voice_sessions
        WHERE id = $1`,
       [id],
@@ -69,7 +69,7 @@ export class VoiceSessionStore {
       `UPDATE voice_sessions
        SET status = $2
        WHERE id = $1 AND status <> 'ended'
-       RETURNING id, conversation_id, livekit_room, principal_contact_id, status, started_at, ended_at, end_reason, metadata`,
+       RETURNING id, conversation_id, livekit_room, caller_contact_id, status, started_at, ended_at, end_reason, metadata`,
       [id, status],
     );
     const row = result.rows[0];
@@ -81,7 +81,7 @@ export class VoiceSessionStore {
       `UPDATE voice_sessions
        SET status = 'ended', ended_at = COALESCE(ended_at, NOW()), end_reason = $2
        WHERE id = $1 AND status <> 'ended'
-       RETURNING id, conversation_id, livekit_room, principal_contact_id, status, started_at, ended_at, end_reason, metadata`,
+       RETURNING id, conversation_id, livekit_room, caller_contact_id, status, started_at, ended_at, end_reason, metadata`,
       [id, reason],
     );
     const row = result.rows[0];
@@ -109,7 +109,7 @@ function mapRow(row: VoiceSessionRow): VoiceSessionRecord {
     id: row.id,
     conversationId: row.conversation_id,
     livekitRoom: row.livekit_room,
-    principalContactId: row.principal_contact_id,
+    callerContactId: row.caller_contact_id,
     status: row.status,
     startedAt: row.started_at,
     endedAt: row.ended_at,
