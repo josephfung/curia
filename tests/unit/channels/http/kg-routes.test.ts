@@ -225,7 +225,7 @@ describe('knowledgeGraphRoutes', () => {
   // with the shared shape-only matcher. Pin the widened boundary here, where the
   // behaviour actually changed: a v7 id is a legitimate identifier that the old
   // regex would have 400'd with no visible cause. The check still exists — it
-  // only stops being an RFC conformance test.
+  // only stops being an RFC conformance test. Empty rows → 404 (#1881).
   it('accepts a v7 node_id that the old strict regex would have rejected', async () => {
     const app = Fastify();
     await app.register(knowledgeGraphRoutes, {
@@ -247,13 +247,143 @@ describe('knowledgeGraphRoutes', () => {
       headers: { 'x-web-bootstrap-secret': 'secret-1' },
     });
 
-    // Assert the success status, not merely "not 400" — a 500 after pool.query was
-    // invoked would satisfy the weaker form. And assert the id actually bound to the
-    // query, so this fails if the value is dropped or rewritten on the way through.
-    expect(response.statusCode).toBe(200);
+    // Not 400: shape check passed. 404: the id names no row (#1881).
+    expect(response.statusCode).toBe(404);
     expect(pool.query).toHaveBeenCalled();
     const [, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown[]];
     expect(params[0]).toBe('018f3a9c-7b21-7d4e-8f6a-1c2b3d4e5f60');
+
+    await app.close();
+  });
+
+  it('returns 404 when node_id names no row (#1881)', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
+    });
+
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({ rows: [] });
+
+    const missingId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/kg/graph?node_id=${missingId}`,
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error).toBe(`Node not found: ${missingId}`);
+    // Only the traversal query — no edge fetch after an empty anchor.
+    expect(pool.query).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
+  it('returns 404 for the nil UUID when it names no row (#1881)', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
+    });
+
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({ rows: [] });
+
+    const nilId = '00000000-0000-0000-0000-000000000000';
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/kg/graph?node_id=${nilId}`,
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error).toBe(`Node not found: ${nilId}`);
+    expect(pool.query).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('returns 200 with the node and empty edges for an isolated node (#1881)', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
+    });
+
+    const isolatedId = '11111111-2222-4333-8444-555555555555';
+    const isolatedNode = {
+      id: isolatedId,
+      type: 'person',
+      label: 'Isolated',
+      properties: {},
+      confidence: 1,
+      decay_class: 'stable',
+      source: 'test',
+      created_at: '2026-01-01T00:00:00Z',
+      last_confirmed_at: '2026-01-01T00:00:00Z',
+      sensitivity: 'normal',
+    };
+    (pool.query as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ rows: [isolatedNode], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/kg/graph?node_id=${isolatedId}`,
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { nodes: Array<{ id: string }>; edges: unknown[] };
+    expect(body.nodes).toHaveLength(1);
+    expect(body.nodes[0]!.id).toBe(isolatedId);
+    expect(body.edges).toEqual([]);
+    expect(pool.query).toHaveBeenCalledTimes(2);
+
+    await app.close();
+  });
+
+  it('returns 200 with empty arrays when no node_id and the graph is empty (#1881)', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
+    });
+
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({ rows: [] });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/kg/graph',
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ nodes: [], edges: [] });
 
     await app.close();
   });
@@ -918,6 +1048,46 @@ describe('knowledgeGraphRoutes', () => {
         expect.objectContaining({ taskId: 'task-2', channel: 'console' }),
         expect.stringContaining('WITHOUT principal lineage'),
       );
+      await app.close();
+    });
+
+    it('accepts a legitimate agent name as sourceAgentId (#1882)', async () => {
+      const contactService = createContactService();
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'task-3', agent_id: 'coordinator', title: 'follow up with vendor' }],
+      });
+      const { app } = await setupTasksApp(contactService);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/tasks',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { ...validPayload, sourceAgentId: 'health-service' },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const insertCall = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const params = insertCall[1] as unknown[];
+      // source_agent_id is the 10th INSERT param ($10).
+      expect(params[9]).toBe('health-service');
+      await app.close();
+    });
+
+    it('rejects a malformed sourceAgentId with 400 (#1882)', async () => {
+      const contactService = createContactService();
+      const { app } = await setupTasksApp(contactService);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/kg/tasks',
+        headers: { 'x-web-bootstrap-secret': 'secret-1' },
+        payload: { ...validPayload, sourceAgentId: 'Bad Agent!' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/Invalid sourceAgentId/);
+      expect(pool.query).not.toHaveBeenCalled();
       await app.close();
     });
   });

@@ -310,17 +310,6 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
     );
   }
 
-  // Render a read-only UUID field (for system-managed FKs with no link behaviour).
-  function uuidField(label: string, value: string | null) {
-    if (!value) return null;
-    return (
-      <div className="form-field">
-        <label>{label}</label>
-        <div className="form-field-readonly cell-mono" style={{ fontSize: 11, wordBreak: 'break-all' }}>{value}</div>
-      </div>
-    );
-  }
-
   return (
     <aside className="drawer">
       <div className="drawer-header">
@@ -441,7 +430,12 @@ function TaskEditDrawer({ task, creating, onClose, onSaved, onDeleted, lookupTas
               )}
               {relatedTaskLink('Parent task', task?.parentTaskId ?? null)}
               {relatedTaskLink('Blocked by', task?.blockedByTaskId ?? null)}
-              {uuidField('Source agent ID', task?.sourceAgentId ?? null)}
+              {task?.sourceAgentId && (
+                <div className="form-field">
+                  <label>Source agent</label>
+                  <div className="form-field-readonly">{task.sourceAgentId}</div>
+                </div>
+              )}
             </>
           )}
 

@@ -488,6 +488,11 @@ export default function KgPage() {
         `/api/kg/graph?node_id=${encodeURIComponent(nodeId)}&depth=2`,
         { signal: controller.signal },
       );
+      if (res.status === 404) {
+        // Distinguish "no such node" from an empty neighborhood — do not clear the canvas (#1881).
+        setStatus(await errorMessage(res));
+        return;
+      }
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
       if (cy.destroyed()) return;
@@ -528,6 +533,11 @@ export default function KgPage() {
         `/api/kg/graph?node_id=${encodeURIComponent(nodeId)}&depth=1`,
         { signal: controller.signal },
       );
+      if (res.status === 404) {
+        // Keep the current canvas; the expanded id is gone (#1881).
+        setStatus(await errorMessage(res));
+        return;
+      }
       if (!res.ok) throw new Error(await errorMessage(res));
       const data = await res.json() as { nodes: ApiKgNode[]; edges: ApiKgEdge[] };
 
