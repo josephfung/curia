@@ -6,17 +6,25 @@ import { UUID_PATTERN } from '../util/uuid.js';
 /** Prefix for structured, order-independent dedup-pair tags on review tasks. */
 export const DEDUP_PAIR_TAG_PREFIX = 'dedup-pair:';
 
-// UUID_PATTERN spells both hex cases, so the 'i' here is redundant for the ids —
-// it is kept because these two regexes have their own literals whose existing
-// case-insensitivity is behaviour: 'dedup-pair:' keys and the 'Contact A ID:'
-// line format (including the [AB] group) have always matched in any case. Do not
-// drop these flags as "now redundant"; that would narrow what parses.
+// The 'i' here is genuinely redundant: UUID_PATTERN spells both hex cases and the
+// only other literal in this regex is the ':' separator, so the flag cannot change
+// what matches. Kept only because removing it is churn, not because it does work.
+//
+// It is NOT what makes the 'dedup-pair:' prefix case-insensitive — nothing does.
+// extractPairKeyFromTags() gates on tag.startsWith(DEDUP_PAIR_TAG_PREFIX), which is
+// case-sensitive, and strips the prefix before this regex ever sees the string.
 const CANONICAL_PAIR_KEY_RE = new RegExp(`^(${UUID_PATTERN}):(${UUID_PATTERN})$`, 'i');
 
 // Regex to extract contact IDs from task descriptions filed by contact-find-duplicates
 // or the dedup-contacts maintenance script:
 //   "Contact A ID: <uuid>  (Display Name)"
 //   "Contact B ID: <uuid>  (Display Name)"
+//
+// Both flags here ARE load-bearing, for different reasons:
+//   - 'i' is what accepts label casing other than the exact "Contact A ID:" — e.g.
+//     "contact a id:" or "CONTACT B ID:". Dropping it narrows what parses.
+//   - 'g' is required by the description.matchAll() call below. Dropping it throws
+//     TypeError at runtime rather than narrowing the match.
 const CONTACT_ID_LINE_RE = new RegExp(
   `Contact ([AB]) ID: (${UUID_PATTERN})`,
   'gi',
