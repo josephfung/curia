@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`buildPrincipalSenderContext`** — single contacts helper for principal SenderContext; voice gains migration-055 warn. (#1627)
 - **Voice sessions** — `caller_contact_id` replaces `principal_contact_id` for any caller. (#1629)
+- **UUID validation** — one shared `isUuid()` in `src/util/uuid.ts` replaces 29 independently-declared copies of the same regex across `src/` and `skills/`. The KG HTTP routes' copy had drifted stricter (RFC v1–v5 only) and would have rejected a legitimate v7 or nil UUID with an unexplained 400; it now matches the rest of the codebase. (#1879)
 - **`stampOriginator`** — moved from `src/dispatch/` to `src/contacts/`. (#1628)
 - **`ExecutionLayer.invoke`** — preserves handler-set `errorType` (unblocks `AUTH_FAILURE` / `IDENTITY_MISMATCH`). (#1854)
 - **Calendar tools (public API)** — `allowed_callers` now exclude the coordinator so discovery cannot re-open a direct path. (#1853)
