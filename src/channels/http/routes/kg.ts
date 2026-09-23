@@ -85,6 +85,13 @@ function normalizeLimit(raw: string | undefined, fallback: number, max: number):
   return Math.max(1, Math.min(parsed, max));
 }
 
+/** Agent-name shape for `tasks.source_agent_id` — see decision comment at the POST guard (#1882). */
+const AGENT_NAME_RE = /^[a-z][a-z0-9-]{0,63}$/;
+
+function isAgentName(value: string): boolean {
+  return AGENT_NAME_RE.test(value);
+}
+
 export async function knowledgeGraphRoutes(
   app: FastifyInstance,
   options: KnowledgeGraphRouteOptions,
@@ -244,6 +251,12 @@ export async function knowledgeGraphRoutes(
         );
 
     if (nodeResult.rows.length === 0) {
+      // With a focal node_id the CTE anchor is that node itself: zero rows means it
+      // does not exist. An isolated node still yields exactly one row (itself) and
+      // an empty edge list below — keep that as 200 so callers can tell the two apart (#1881).
+      if (nodeId) {
+        return reply.status(404).send({ error: `Node not found: ${nodeId}` });
+      }
       return reply.send({ nodes: [], edges: [] });
     }
 
@@ -478,14 +491,16 @@ export async function knowledgeGraphRoutes(
     const sourceAgentId = typeof body.sourceAgentId === 'string' && body.sourceAgentId.trim()
       ? body.sourceAgentId.trim()
       : null;
-    // @TODO (#1882): this guard is wrong, independently of #1879 — it is NOT an
-    // instance of the cast-guard rationale the other checks in this file share.
-    // `tasks.source_agent_id` is TEXT and holds agent *names* (scheduler.ts writes
-    // `config.name`; health-service writes the literal 'health-service'), so there is
-    // no uuid cast to protect and this 400s every legitimate value while admitting
-    // only UUIDs. Left as-is so #1879 stays a pure consolidation.
-    if (sourceAgentId && !isUuid(sourceAgentId)) {
-      return reply.status(400).send({ error: 'Invalid sourceAgentId: must be a valid UUID.' });
+    // Decision (#1882): `tasks.source_agent_id` is TEXT holding agent *names*
+    // (agents/*.yaml `name`, plus system labels like `health-service`) — not UUIDs.
+    // Accept the same character class those names use: start with a letter, then
+    // lowercase alphanumerics / hyphens, max 64 chars. Do not require the name to
+    // be a currently-registered agent; historical rows and system writers can
+    // outlive a rename, and this POST is not the roster gate.
+    if (sourceAgentId && !isAgentName(sourceAgentId)) {
+      return reply.status(400).send({
+        error: 'Invalid sourceAgentId: must be an agent name (1–64 chars, start with a letter, then lowercase letters, digits, or hyphens).',
+      });
     }
     const waitingOnText = typeof body.waitingOnText === 'string' && body.waitingOnText.trim()
       ? body.waitingOnText.trim()
