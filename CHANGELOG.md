@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`buildPrincipalSenderContext`** — single contacts helper for principal SenderContext; voice gains migration-055 warn. (#1627)
 - **Voice sessions** — `caller_contact_id` replaces `principal_contact_id` for any caller. (#1629)
 - **`stampOriginator`** — moved from `src/dispatch/` to `src/contacts/`. (#1628)
 - **`ExecutionLayer.invoke`** — preserves handler-set `errorType` (unblocks `AUTH_FAILURE` / `IDENTITY_MISMATCH`). (#1854)

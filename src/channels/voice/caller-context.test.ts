@@ -6,7 +6,6 @@ import type { ContactService } from '../../contacts/contact-service.js';
 import { loadAuthConfig } from '../../contacts/config-loader.js';
 import type { ChannelPolicyConfig, SenderContext } from '../../contacts/types.js';
 import {
-  buildPrincipalSenderContext,
   resolveConsoleVoiceCaller,
   resolveSignalVoiceCaller,
   resolveVoiceCallerFromToken,
@@ -53,30 +52,6 @@ function partnerSender(): SenderContext {
   };
 }
 
-describe('buildPrincipalSenderContext', () => {
-  it('forces systemRole/tier/kind to principal even if the row is stale', () => {
-    const ctx = buildPrincipalSenderContext({
-      id: PRINCIPAL_ID,
-      displayName: 'Joseph',
-      role: 'ceo',
-      systemRole: null,
-      kgNodeId: 'kg-1',
-      tier: 'known',
-    });
-    expect(ctx.systemRole).toBe('principal');
-    expect(ctx.tier).toBe('principal');
-    expect(ctx.kind).toBe('principal');
-    expect(ctx.contactId).toBe(PRINCIPAL_ID);
-  });
-
-  it('falls back to the synthetic primary-user principal when no row exists', () => {
-    const ctx = buildPrincipalSenderContext(null);
-    expect(ctx.contactId).toBe('primary-user');
-    expect(ctx.systemRole).toBe('principal');
-    expect(ctx.tier).toBe('principal');
-  });
-});
-
 describe('resolveConsoleVoiceCaller', () => {
   it('resolves the principal and stamps liveTurn=true via stampOriginator', async () => {
     const contactService = {
@@ -87,6 +62,7 @@ describe('resolveConsoleVoiceCaller', () => {
         systemRole: 'principal',
         kgNodeId: null,
         tier: 'principal',
+        kind: 'principal',
       }),
     } as unknown as ContactService;
 
@@ -97,6 +73,31 @@ describe('resolveConsoleVoiceCaller', () => {
     expect(caller.originator.systemRole).toBe('principal');
     expect(caller.originator.channel).toBe('voice');
     expect(caller.originator.tier).toBe('principal');
+  });
+
+  it('warns when the principal row has a stale kind (migration-055) via the shared helper', async () => {
+    const contactService = {
+      findContactBySystemRole: vi.fn().mockResolvedValue({
+        id: PRINCIPAL_ID,
+        displayName: 'Joseph',
+        role: 'ceo',
+        systemRole: 'principal',
+        kgNodeId: null,
+        tier: 'principal',
+        kind: 'person',
+      }),
+    } as unknown as ContactService;
+    const warnLogger = pino({ level: 'silent' });
+    const warnSpy = vi.spyOn(warnLogger, 'warn');
+
+    const caller = await resolveConsoleVoiceCaller({ contactService, logger: warnLogger });
+    expect(caller.liveTurn).toBe(true);
+    expect(caller.contactId).toBe(PRINCIPAL_ID);
+    expect(caller.senderContext.resolved && caller.senderContext.kind).toBe('principal');
+    expect(warnSpy).toHaveBeenCalledWith(
+      { contactId: PRINCIPAL_ID, kind: 'person' },
+      'principal contact has kind != "principal" — migration-055 backfill may have missed this row',
+    );
   });
 
   it('falls back to synthetic principal when findContactBySystemRole returns null', async () => {

@@ -1,25 +1,26 @@
 import type { VoiceCallerContext } from './caller-context.js';
 import { VOICE_CONSOLE_SENDER_ID } from './caller-context.js';
+import { buildPrincipalSenderContext } from '../../contacts/build-principal-sender-context.js';
+import { createSilentLogger } from '../../logger.js';
 
 const PRINCIPAL_ID = '11111111-1111-1111-1111-111111111111';
+const silentLogger = createSilentLogger();
 
 /** Principal console caller fixture for adapter / bridge tests. */
 export function principalCaller(overrides: Partial<VoiceCallerContext> = {}): VoiceCallerContext {
   const contactId = overrides.contactId ?? PRINCIPAL_ID;
-  const senderContext = {
-    resolved: true as const,
-    contactId,
-    displayName: overrides.displayName ?? 'Joseph',
-    role: 'ceo',
-    systemRole: 'principal' as const,
-    verified: true,
-    kgNodeId: null,
-    knowledgeSummary: '',
-    authorization: null,
-    contactConfidence: 1.0,
-    tier: 'principal' as const,
-    kind: 'principal' as const,
-  };
+  const displayName = overrides.displayName ?? 'Joseph';
+  const senderContext = buildPrincipalSenderContext(
+    {
+      id: contactId,
+      displayName,
+      role: 'ceo',
+      systemRole: 'principal',
+      kgNodeId: null,
+      kind: 'principal',
+    },
+    silentLogger,
+  );
   return {
     contactId,
     displayName: senderContext.displayName,
