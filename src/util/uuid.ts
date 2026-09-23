@@ -54,12 +54,22 @@
 // the behaviour of every call site at once.
 //
 // ---------------------------------------------------------------------------
-// Deliberately NOT sharing this module:
+// The complete list of UUID regexes that are NOT this module:
 // ---------------------------------------------------------------------------
+//
+// As of #1879 there is exactly one, and it is deliberate:
 //
 //   - `src/pii/scrubber.ts` uses a `\b`-bounded /g scan to *find* UUIDs inside
 //     free text and redact them. Different job, different shape (unanchored,
 //     stateful). It must stay separate — do not "consolidate" it here later.
+//
+// Two files compose `UUID_PATTERN` into a larger regex rather than calling
+// `isUuid()` — `src/contacts/dedup-pair-key.ts` and
+// `src/scheduler/conversation-id.ts`. Those still share this source of truth.
+//
+// If you add another UUID regex anywhere, either import from here or add it to
+// this list with a reason. The list is meant to stay exhaustive; the whole point
+// of #1879 was that 29 copies had accumulated with nobody tracking them.
 
 /**
  * The UUID body as a pattern *string*, with no anchors and no flags, for

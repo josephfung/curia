@@ -221,6 +221,40 @@ describe('knowledgeGraphRoutes', () => {
     await app.close();
   });
 
+  // #1879 replaced this route's local RFC-strict regex (v1-v5 + [89ab] variant)
+  // with the shared shape-only matcher. Pin the widened boundary here, where the
+  // behaviour actually changed: a v7 id is a legitimate identifier that the old
+  // regex would have 400'd with no visible cause. The check still exists — it
+  // only stops being an RFC conformance test.
+  it('accepts a v7 node_id that the old strict regex would have rejected', async () => {
+    const app = Fastify();
+    await app.register(knowledgeGraphRoutes, {
+      pool,
+      logger: createLogger(),
+      webAppBootstrapSecret: 'secret-1',
+      secureCookies: false,
+      sessions: new Map(),
+      contactService: {} as unknown as ContactService,
+      bus: createMockBus(),
+      eventRouter: createMockEventRouter(),
+    });
+
+    (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({ rows: [] });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/kg/graph?node_id=018f3a9c-7b21-7d4e-8f6a-1c2b3d4e5f60',
+      headers: { 'x-web-bootstrap-secret': 'secret-1' },
+    });
+
+    // The id reaches the query instead of being rejected at the boundary —
+    // the inverse of the 'not-a-uuid' case above, which never touches the DB.
+    expect(response.statusCode).not.toBe(400);
+    expect(pool.query).toHaveBeenCalled();
+
+    await app.close();
+  });
+
   it('returns 503 when the secret is not configured', async () => {
     // This exercises the defensive assertSecret path. In normal operation the
     // http-adapter does not register the routes when the secret is absent, but
