@@ -497,6 +497,8 @@ export default function KgPage() {
       if (res.status === 404) {
         // Drop the dead deep-link so refresh does not re-hit the same 404 (#1881).
         const notFoundMessage = await errorMessage(res);
+        // Body read can lose a race with a newer click that aborted this controller.
+        if (controller.signal.aborted) return { ok: false, aborted: true };
         setSelectedNode(null);
         syncUrl(searchRef.current, undefined);
         setStatus(notFoundMessage);
@@ -550,13 +552,15 @@ export default function KgPage() {
       if (res.status === 404) {
         // onetap already selected this node and wrote ?node= — clear the stale
         // element, selection, and URL so the user cannot re-tap the same dead id (#1881).
+        const notFoundMessage = await errorMessage(res);
+        if (controller.signal.aborted) return;
         if (!cy.destroyed()) {
           cy.getElementById(nodeId).remove();
           updateDegrees(cy);
         }
         setSelectedNode(null);
         syncUrl(searchRef.current, undefined);
-        setStatus(await errorMessage(res));
+        setStatus(notFoundMessage);
         return;
       }
       if (!res.ok) throw new Error(await errorMessage(res));
