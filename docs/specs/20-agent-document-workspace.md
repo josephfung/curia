@@ -136,8 +136,8 @@ Five skills, auto-pinned into every workspace-enabled agent (§7):
 | `doc-read` | none | 0.1.0 | Read a document, or one `##` section (section-heading match is **case-insensitive**). |
 | `doc-list` | none | 0.1.0 | List documents under a path prefix — the `index.md` projection of a directory. |
 | `doc-search` | none | 0.1.0 | **Case-sensitive substring** grep across bodies (`line.includes(query)`); `path_prefix` defaults to the whole workspace; capped at 50 matches. |
-| `doc-place` | none | 0.1.0 | Read-only placement recommendation (`extend` / `add_to_folder` / `create_folder`) from the shared placement module (#1819). |
-| `doc-write` | low | 0.3.1 | Create / append / replace / section-edit at a path; appends a `log.md` entry; returns `conflict: true` on version mismatch; stamps `task_id` to the **project-root** task when omitted; rejects new UUID-named folders. |
+| `doc-place` | none | 0.1.1 | Read-only placement recommendation (`extend` / `add_to_folder` / `create_folder`) from the shared placement module (#1819). |
+| `doc-write` | low | 0.3.3 | Create / append / replace / section-edit at a path; appends a `log.md` entry; returns `conflict: true` on version mismatch; stamps `task_id` to the **project-root** task when omitted (including append / section-edit on unowned docs); rejects new UUID-named folders. Shared `log.md` stays unowned. |
 
 `doc-write` carries `action_risk: low` (an internal-state write); the four read / recommend
 skills are `action_risk: none`. Placement algorithms live in
@@ -199,9 +199,10 @@ non-fatal, after which the project's workspace documents are archived (`archived
 workspace is the source; the KG is the durable sink.
 
 Archival (`WorkingDocsRepo.archiveProjectWorkspaceDocs`) matches live rows by
-`task_id = <root>` **or** the legacy path prefix `/projects/<root-uuid>/…` only. Shared
-slug folders are never swept by path — documents written into them must carry `task_id`
-(auto-stamped by `doc-write` / spill) so ownership archival can find them (#1819).
+`task_id = <root>` **or** the legacy path prefix `/projects/<root-uuid>/…` only, and
+**excludes** reserved directory `log.md` files (shared audit trail — never task-owned).
+Shared slug folders are never swept by path — documents written into them must carry
+`task_id` (auto-stamped by `doc-write` / spill) so ownership archival can find them (#1819).
 
 ## 11. Configuration
 

@@ -53,6 +53,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Document placement** — root `task_id` stamp, task-scoped spill leaf, wake-only catalog, word soft-match. (#1819)
 - **`doc-place` / `doc-write`** — DB occupancy for capped catalogs; leaf `extend`; guarded `task_id`. (#1819)
+- **`doc-write` / archival** — claim unowned docs on append; leave shared `log.md` unowned. (#1819)
+- **Slug allocation** — long occupied slugs reserve suffix room instead of self-colliding. (#1819)
 - **Voice greeting** — non-principal callers no longer get principal framing on the opening turn. (#1874)
 - **Delegated specialists** — harness-set requester identity replaces the low-trust unknown-sender block. (#1871)
 - **Voice off-ramp** — internal coordinator tasks get requester identity without specialist framing. (#1871)
