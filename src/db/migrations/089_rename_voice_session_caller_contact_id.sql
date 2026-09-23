@@ -33,6 +33,7 @@ BEGIN
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'voice_sessions'::regclass
       AND conname = 'voice_sessions_principal_contact_id_fkey'
+      AND contype = 'f'
   ) THEN
     ALTER TABLE voice_sessions
       RENAME CONSTRAINT voice_sessions_principal_contact_id_fkey
@@ -48,6 +49,7 @@ BEGIN
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'voice_sessions'::regclass
       AND conname = 'voice_sessions_caller_contact_id_fkey'
+      AND contype = 'f'
   ) THEN
     ALTER TABLE voice_sessions
       RENAME CONSTRAINT voice_sessions_caller_contact_id_fkey
