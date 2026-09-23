@@ -21,6 +21,7 @@ import { DateTime } from 'luxon';
 import { VOICE_GREETING_USER_MESSAGE } from '../channels/voice/greeting.js';
 import { parseSlackConversationId } from '../channels/slack/message-converter.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
+import { isUuid } from '../util/uuid.js';
 
 /** context.budget tier name. Charged after resolved_entities and the live transcript. */
 export const CONTACT_RECENT_HISTORY_TIER = 'contact_recent_history';
@@ -45,8 +46,6 @@ export const CONTACT_RECENT_HISTORY_MAX_TURNS = 8;
 
 /** Per-turn character cap inside the rendered block. */
 export const CONTACT_RECENT_HISTORY_TURN_CHARS = 500;
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Channels whose inbound turns should see this tier. Scheduler, bullpen, and
@@ -162,8 +161,8 @@ function emailReplyAudienceIsPrivate(
  * UUID column and its foreign key never see them.
  */
 export function persistableContactId(contactId: string | null | undefined): string | undefined {
-  if (typeof contactId !== 'string') return undefined;
-  return UUID_RE.test(contactId) ? contactId.toLowerCase() : undefined;
+  if (!isUuid(contactId)) return undefined;
+  return contactId.toLowerCase();
 }
 
 export interface AddTurnAttribution {
