@@ -124,6 +124,95 @@ describe('DocWriteHandler', () => {
     }));
   });
 
+  it('claims unowned docs on append without overwriting an existing owner', async () => {
+    const rootId = '00000000-0000-4000-8000-000000000001';
+    const otherOwner = '00000000-0000-4000-8000-000000000099';
+    const unowned = makeDoc({ path: '/projects/shared/brief.md', taskId: null, version: 1 });
+    const owned = makeDoc({ path: '/projects/shared/brief.md', taskId: otherOwner, version: 2 });
+    const append = vi.fn()
+      .mockResolvedValueOnce({ ok: true, document: makeDoc({ path: unowned.path, taskId: rootId, version: 2 }) })
+      .mockResolvedValueOnce({ ok: true, document: owned });
+    const repo = makeRepo({
+      read: vi.fn()
+        .mockResolvedValueOnce(unowned)
+        .mockResolvedValueOnce(null) // log.md
+        .mockResolvedValueOnce(owned)
+        .mockResolvedValueOnce(makeDoc({ path: '/projects/shared/log.md', version: 1 })),
+      append,
+    });
+
+    const ctxUnowned = makeCtx({
+      path: '/projects/shared/brief.md',
+      mode: 'append',
+      content: 'more',
+      expected_version: 1,
+    }, repo);
+    (ctxUnowned as { taskMetadata?: Record<string, unknown> }).taskMetadata = {
+      boundTask: { taskId: rootId },
+    };
+    (ctxUnowned as { taskRepo?: { resolveProjectRootTaskId: (id: string) => Promise<string> } }).taskRepo = {
+      resolveProjectRootTaskId: vi.fn(async () => rootId),
+    };
+    expect((await new DocWriteHandler().execute(ctxUnowned)).success).toBe(true);
+    expect(append).toHaveBeenCalledWith(
+      '/projects/shared/brief.md',
+      expect.objectContaining({ taskId: rootId }),
+    );
+
+    const ctxOwned = makeCtx({
+      path: '/projects/shared/brief.md',
+      mode: 'append',
+      content: 'more',
+      expected_version: 2,
+    }, repo);
+    (ctxOwned as { taskMetadata?: Record<string, unknown> }).taskMetadata = {
+      boundTask: { taskId: rootId },
+    };
+    (ctxOwned as { taskRepo?: { resolveProjectRootTaskId: (id: string) => Promise<string> } }).taskRepo = {
+      resolveProjectRootTaskId: vi.fn(async () => rootId),
+    };
+    expect((await new DocWriteHandler().execute(ctxOwned)).success).toBe(true);
+    // Handler still passes associatedTaskId; repo COALESCE preserves otherOwner.
+    const briefAppends = append.mock.calls.filter(
+      (call: unknown[]) => call[0] === '/projects/shared/brief.md',
+    );
+    expect(briefAppends).toHaveLength(2);
+    expect(briefAppends[1]).toEqual([
+      '/projects/shared/brief.md',
+      expect.objectContaining({ taskId: rootId }),
+    ]);
+  });
+
+  it('creates directory log.md without a task_id stamp', async () => {
+    const rootId = '00000000-0000-4000-8000-000000000001';
+    const create = vi.fn()
+      .mockResolvedValueOnce(makeDoc({ path: '/projects/x/new.md' }))
+      .mockResolvedValueOnce(makeDoc({ path: '/projects/x/log.md', taskId: null }));
+    const repo = makeRepo({
+      read: vi.fn().mockResolvedValue(null),
+      create,
+    });
+    const ctx = makeCtx({
+      path: '/projects/x/new.md',
+      mode: 'create',
+      type: 'note',
+      body: 'hello',
+    }, repo);
+    (ctx as { taskMetadata?: Record<string, unknown> }).taskMetadata = {
+      boundTask: { taskId: rootId },
+    };
+    (ctx as { taskRepo?: { resolveProjectRootTaskId: (id: string) => Promise<string> } }).taskRepo = {
+      resolveProjectRootTaskId: vi.fn(async () => rootId),
+    };
+    const result = await new DocWriteHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    const logCreate = create.mock.calls.find(
+      (call: unknown[]) => (call[0] as { path?: string }).path === '/projects/x/log.md',
+    );
+    expect(logCreate).toBeDefined();
+    expect((logCreate![0] as { taskId?: string }).taskId).toBeUndefined();
+  });
+
   it('rejects malformed project folder names on create', async () => {
     const result = await new DocWriteHandler().execute(makeCtx({
       path: '/projects/Not A Slug/brief.md',

@@ -63,12 +63,16 @@ export async function appendDirectoryLog(
   documentPath: string,
   operation: string,
   summary: string,
-  taskId?: string,
+  _taskId?: string,
 ): Promise<void> {
   const repo = ctx.workingDocs!;
   const logPath = logPathForDocument(documentPath);
   const iso = new Date().toISOString();
   const entry = formatLogEntry(iso, operation, summary);
+  // Intentionally ignore `_taskId`: directory log.md is shared across tasks in the
+  // folder and must stay unowned so one project's archival cannot remove the audit trail
+  // (#1819 CodeRabbit).
+  void _taskId;
 
   try {
     const maxAttempts = 3;
@@ -80,7 +84,6 @@ export async function appendDirectoryLog(
             path: logPath,
             type: 'log',
             body: entry,
-            taskId,
             conversationId: ctx.conversationId ?? undefined,
             agentId: ctx.agentId ?? undefined,
           });

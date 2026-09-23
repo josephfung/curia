@@ -69,6 +69,11 @@ export interface UpdateWorkingDocParams {
 export interface AppendWorkingDocParams {
   content: string;
   expectedVersion: number;
+  /**
+   * Claim ownership when the document currently has `task_id IS NULL`.
+   * Existing owners are preserved (COALESCE semantics).
+   */
+  taskId?: string;
 }
 
 export interface EditSectionParams {
@@ -77,6 +82,11 @@ export interface EditSectionParams {
   mode?: 'replace' | 'append';
   /** Per-section optimistic version — independent of document version. */
   expectedSectionVersion?: number;
+  /**
+   * Claim ownership when the document currently has `task_id IS NULL`.
+   * Existing owners are preserved (COALESCE semantics).
+   */
+  taskId?: string;
 }
 
 interface DbWorkingDocRow {
@@ -225,7 +235,11 @@ export class WorkingDocsRepo {
              body = $4,
              version = version + 1,
              byte_size = $5,
-             task_id = CASE WHEN $6 THEN $7 ELSE task_id END,
+             task_id = CASE
+               WHEN NOT ($6::boolean) THEN task_id
+               WHEN $7::uuid IS NULL THEN NULL
+               ELSE COALESCE(task_id, $7::uuid)
+             END,
              conversation_id = CASE WHEN $8 THEN $9 ELSE conversation_id END,
              agent_id = CASE WHEN $10 THEN $11 ELSE agent_id END,
              updated_at = now()
@@ -278,6 +292,8 @@ export class WorkingDocsRepo {
     return this.update(path, {
       body,
       expectedVersion: params.expectedVersion,
+      // Claim-if-null is enforced in update()'s COALESCE semantics.
+      ...(params.taskId ? { taskId: params.taskId } : {}),
     });
   }
 
@@ -325,6 +341,10 @@ export class WorkingDocsRepo {
              version = version + 1,
              section_versions = $3::jsonb,
              byte_size = $4,
+             task_id = CASE
+               WHEN $7::boolean AND task_id IS NULL THEN $8::uuid
+               ELSE task_id
+             END,
              updated_at = now()
          WHERE path = $1
            AND archived_at IS NULL
@@ -337,6 +357,8 @@ export class WorkingDocsRepo {
           byteSize,
           sectionKey,
           currentSectionVersion,
+          params.taskId !== undefined && params.taskId !== null,
+          params.taskId ?? null,
         ],
       );
       if (!rows[0]) {
@@ -443,7 +465,7 @@ export class WorkingDocsRepo {
          (array_agg(
             NULLIF(BTRIM(frontmatter->>'title'), '')
             ORDER BY updated_at DESC
-          ))[1:5] AS sample_titles
+          ) FILTER (WHERE NULLIF(BTRIM(frontmatter->>'title'), '') IS NOT NULL))[1:5] AS sample_titles
        FROM working_documents
        WHERE archived_at IS NULL
          AND path LIKE '/projects/%/%'
@@ -544,6 +566,9 @@ export class WorkingDocsRepo {
    *
    * Never archives by a shared readable slug prefix — that would silently delete
    * another task's documents when one project completes.
+   *
+   * Reserved directory `log.md` files are never archived here: they are a shared
+   * audit trail and must stay unowned (#1819 CodeRabbit).
    */
   async archiveProjectWorkspaceDocs(rootTaskId: string): Promise<number> {
     const pathPrefix = `/projects/${rootTaskId}/`;
@@ -557,6 +582,7 @@ export class WorkingDocsRepo {
               SET archived_at = now(),
                   updated_at = now()
             WHERE archived_at IS NULL
+              AND path !~ '/log\\.md$'
               AND (
                 task_id = $1::uuid
                 OR path LIKE $2 ESCAPE '\\'

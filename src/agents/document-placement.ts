@@ -123,19 +123,22 @@ export async function allocateUniqueProjectSlug(
   rootTaskId: string,
   prefixOccupied: (slug: string) => boolean | Promise<boolean>,
 ): Promise<string> {
-  const base = normalizeProposedSlug(proposed) ?? suggestProjectSlug(proposed);
-  if (!(await prefixOccupied(base))) return base;
+  const full = normalizeProposedSlug(proposed) ?? suggestProjectSlug(proposed);
+  if (!(await prefixOccupied(full))) return full;
 
   const short = collisionShortId(rootTaskId) || 'task';
-  const withShort = `${base}-${short}`.slice(0, MAX_PROJECT_SLUG_LENGTH).replace(/-$/g, '');
+  // Reserve room for `-${short}-${n}` (n < 1000) so suffixes are never truncated away
+  // (#1819 CodeRabbit: a 64-char occupied base used to collide with itself forever).
+  const reserve = short.length + 1 + 4; // hyphen + short + hyphen + up to 3-digit n, rounded
+  const base = full.slice(0, MAX_PROJECT_SLUG_LENGTH - reserve).replace(/-+$/g, '') || 'project';
+  const withShort = `${base}-${short}`;
   if (!(await prefixOccupied(withShort))) return withShort;
 
   for (let n = 2; n < 1000; n++) {
-    const candidate = `${withShort}-${n}`.slice(0, MAX_PROJECT_SLUG_LENGTH).replace(/-$/g, '');
+    const candidate = `${withShort}-${n}`;
     if (isWellFormedProjectSlug(candidate) && !(await prefixOccupied(candidate))) return candidate;
   }
-  // Extremely pathological — still avoid UUID folders.
-  return `${withShort}-x`.slice(0, MAX_PROJECT_SLUG_LENGTH);
+  throw new Error(`Could not allocate a unique project slug for '${full}'`);
 }
 
 /** Directory prefix for a project slug. */
@@ -474,7 +477,11 @@ export function formatProjectsCatalogBlock(
     return lines.join('\n');
   }
   for (const s of summaries) {
-    const titles = s.sampleTitles.length > 0 ? ` — ${s.sampleTitles.slice(0, 2).join('; ')}` : '';
+    // Strip newlines/backticks so agent-authored titles cannot inject prompt headings.
+    const clean = (t: string): string => t.replace(/[\r\n`]+/g, ' ').trim().slice(0, 120);
+    const titles = s.sampleTitles.length > 0
+      ? ` — ${s.sampleTitles.slice(0, 2).map(clean).join('; ')}`
+      : '';
     lines.push(`- \`${s.directoryPrefix}\` (${s.documentCount} docs)${titles}`);
   }
   return lines.join('\n');

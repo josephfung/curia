@@ -168,6 +168,7 @@ export class DocWriteHandler implements ToolHandler {
           result = await repo.append(normalized, {
             content: input.content,
             expectedVersion: input.expected_version,
+            ...(associatedTaskId ? { taskId: associatedTaskId } : {}),
           });
           if (!result.ok) {
             return { success: true, data: mapWriteConflict(result, timezone) };
@@ -194,7 +195,7 @@ export class DocWriteHandler implements ToolHandler {
             frontmatter: input.frontmatter,
             body: input.body,
             expectedVersion: input.expected_version,
-            ...(current.taskId == null && associatedTaskId ? { taskId: associatedTaskId } : {}),
+            ...(associatedTaskId ? { taskId: associatedTaskId } : {}),
           });
           if (!result.ok) {
             return { success: true, data: mapWriteConflict(result, timezone) };
@@ -225,6 +226,7 @@ export class DocWriteHandler implements ToolHandler {
             content: input.content,
             mode: 'replace',
             expectedSectionVersion: input.expected_section_version,
+            ...(associatedTaskId ? { taskId: associatedTaskId } : {}),
           });
           if (!result.ok) {
             return { success: true, data: mapWriteConflict(result, timezone) };
