@@ -2625,6 +2625,9 @@ async function main(): Promise<void> {
         email: resolvedEmailAccounts[0]?.selfEmail || undefined,
         phone: config.signalPhoneNumber || undefined,
       },
+      // Every owned mailbox. Email recall requires one of these on the thread
+      // so a BCC (Curia absent from To/CC) cannot look like a 1:1 (#1599).
+      selfEmails: resolvedEmailAccounts.map(a => a.selfEmail),
       // Principal's verified channel identities — injected per-task into ALL agents so
       // every agent knows where to reach the CEO without inferring addresses. Sourced from
       // the startup-cached principalIdentities array (already filtered to verified + active).

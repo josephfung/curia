@@ -240,6 +240,8 @@ describe('contactRecentHistoryAudienceIsPrivate', () => {
     ],
   };
 
+  const office = ['office@example.com'];
+
   it('allows a direct Signal chat, SMS, a Slack DM, and a two-party email', () => {
     expect(contactRecentHistoryAudienceIsPrivate({
       channelId: 'signal',
@@ -257,6 +259,20 @@ describe('contactRecentHistoryAudienceIsPrivate', () => {
       channelId: 'email',
       conversationId: 'email:thread-1',
       metadata: emailPrivate,
+      selfEmails: office,
+    })).toBe(true);
+    expect(contactRecentHistoryAudienceIsPrivate({
+      channelId: 'email',
+      conversationId: 'email:thread-ops',
+      metadata: {
+        curiaRole: 'to',
+        primaryRecipientEmails: [],
+        participants: [
+          { email: 'alice@example.com', role: 'from' },
+          { email: 'ops@example.com', role: 'to' },
+        ],
+      },
+      selfEmails: ['curia@example.com', 'ops@example.com'],
     })).toBe(true);
     expect(contactRecentHistoryAudienceIsPrivate({
       channelId: 'voice',
@@ -296,6 +312,28 @@ describe('contactRecentHistoryAudienceIsPrivate', () => {
     expect(contactRecentHistoryAudienceIsPrivate({
       channelId: 'email',
       conversationId: 'email:thread-unknown',
+      selfEmails: office,
+    })).toBe(false);
+    // BCC / alias / forward: converter reports curiaRole 'to' and an empty
+    // primary-recipient list because it never found Curia. Neither party is
+    // an owned mailbox.
+    expect(contactRecentHistoryAudienceIsPrivate({
+      channelId: 'email',
+      conversationId: 'email:thread-bcc',
+      metadata: {
+        curiaRole: 'to',
+        primaryRecipientEmails: [],
+        participants: [
+          { email: 'alice@example.com', role: 'from' },
+          { email: 'bob@example.com', role: 'to' },
+        ],
+      },
+      selfEmails: office,
+    })).toBe(false);
+    expect(contactRecentHistoryAudienceIsPrivate({
+      channelId: 'email',
+      conversationId: 'email:thread-1',
+      metadata: emailPrivate,
     })).toBe(false);
   });
 });

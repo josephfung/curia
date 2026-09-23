@@ -119,6 +119,7 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       logger,
       memory,
       timezone: 'America/Toronto',
+      selfEmails: ['office@example.com'],
     });
     runtime.register();
 
@@ -177,6 +178,7 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       logger,
       memory,
       timezone: 'America/Toronto',
+      selfEmails: ['office@example.com'],
     });
     runtime.register();
 
@@ -259,6 +261,7 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       logger,
       memory,
       timezone: 'America/Toronto',
+      selfEmails: ['office@example.com'],
       contextBudget: { responseReserve: 1000 },
       modelRegistry: registry,
       conversationEntities,
@@ -321,6 +324,7 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       logger,
       memory,
       timezone: 'America/Toronto',
+      selfEmails: ['office@example.com'],
     });
     runtime.register();
 
@@ -355,6 +359,30 @@ describe('AgentRuntime contact recent history (#1599)', () => {
         ],
       },
       parentEventId: 'parent-cc',
+    }));
+
+    expect(blockText(messagesOf(llm.chat))).toBeUndefined();
+    expect(messagesOf(llm.chat).map(m => m.content).join('\n')).not.toContain('do not tell Bob');
+
+    // BCC: converter reports curiaRole 'to' and no extra To because Curia was
+    // not on the headers. Bob is the visible recipient.
+    llm.chat.mockClear();
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-bcc',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'note to Bob',
+      senderContext: ALICE_SENDER,
+      metadata: {
+        curiaRole: 'to',
+        primaryRecipientEmails: [],
+        participants: [
+          { email: 'alice@example.com', role: 'from' },
+          { email: 'bob@example.com', role: 'to' },
+        ],
+      },
+      parentEventId: 'parent-bcc',
     }));
 
     expect(blockText(messagesOf(llm.chat))).toBeUndefined();
@@ -399,6 +427,7 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       logger,
       memory,
       timezone: 'America/Toronto',
+      selfEmails: ['office@example.com'],
     });
     runtime.register();
 
