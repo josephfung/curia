@@ -23,7 +23,7 @@ import { fetchChatHistoryPage } from '../chat-history-page.js';
 // anyone could see. They now share the codebase matcher — see src/util/uuid.ts for
 // why shape-only is the right check here (#1879).
 //
-// @TODO (#1879 follow-up): the sourceAgentId guard below is the odd one out and is
+// @TODO (#1882): the sourceAgentId guard below is the odd one out and is
 // wrong independently of this change. `tasks.source_agent_id` is TEXT and holds
 // agent *names* (scheduler.ts writes `config.name`; health-service writes the
 // literal 'health-service'), so there is no uuid cast to guard and the check 400s
