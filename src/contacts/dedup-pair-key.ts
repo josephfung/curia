@@ -6,6 +6,11 @@ import { UUID_PATTERN } from '../util/uuid.js';
 /** Prefix for structured, order-independent dedup-pair tags on review tasks. */
 export const DEDUP_PAIR_TAG_PREFIX = 'dedup-pair:';
 
+// UUID_PATTERN spells both hex cases, so the 'i' here is redundant for the ids —
+// it is kept because these two regexes have their own literals whose existing
+// case-insensitivity is behaviour: 'dedup-pair:' keys and the 'Contact A ID:'
+// line format (including the [AB] group) have always matched in any case. Do not
+// drop these flags as "now redundant"; that would narrow what parses.
 const CANONICAL_PAIR_KEY_RE = new RegExp(`^(${UUID_PATTERN}):(${UUID_PATTERN})$`, 'i');
 
 // Regex to extract contact IDs from task descriptions filed by contact-find-duplicates

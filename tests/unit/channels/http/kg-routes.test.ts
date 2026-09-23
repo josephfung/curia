@@ -247,10 +247,13 @@ describe('knowledgeGraphRoutes', () => {
       headers: { 'x-web-bootstrap-secret': 'secret-1' },
     });
 
-    // The id reaches the query instead of being rejected at the boundary —
-    // the inverse of the 'not-a-uuid' case above, which never touches the DB.
-    expect(response.statusCode).not.toBe(400);
+    // Assert the success status, not merely "not 400" — a 500 after pool.query was
+    // invoked would satisfy the weaker form. And assert the id actually bound to the
+    // query, so this fails if the value is dropped or rewritten on the way through.
+    expect(response.statusCode).toBe(200);
     expect(pool.query).toHaveBeenCalled();
+    const [, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown[]];
+    expect(params[0]).toBe('018f3a9c-7b21-7d4e-8f6a-1c2b3d4e5f60');
 
     await app.close();
   });
