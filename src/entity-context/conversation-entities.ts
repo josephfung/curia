@@ -8,8 +8,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 import type { ResolvedEntityCard } from '../agents/resolved-entities.js';
 import { MAX_RESOLVED_ENTITIES } from '../agents/resolved-entities.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../util/uuid.js';
 
 interface ContactCardSource {
   get(contactId: string): ResolvedEntityCard | undefined;
@@ -113,7 +112,7 @@ function normalizeIds(contactIds: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const id of contactIds) {
-    if (!UUID_RE.test(id)) continue;
+    if (!isUuid(id)) continue;
     const normalized = id.toLowerCase();
     if (seen.has(normalized)) continue;
     seen.add(normalized);

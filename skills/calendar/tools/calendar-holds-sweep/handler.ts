@@ -27,13 +27,10 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isHoldEvent, isHoldStale } from '../../../../src/channels/calendar/holds.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from '../../../../src/skills/_shared/placeholder-guard.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
 // Default maximum hold age in days.
 const DEFAULT_MAX_AGE_DAYS = 7;
-
-// contactId reaches Postgres as a uuid column, where a non-UUID string is a parse error
-// rather than an empty result. Mirrors the check in calendar-list-events.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Sweep window: list events from 14 days in the past through 14 days ahead (symmetric ±14d).
 // The lookback into the past is critical for AC #6: Nylas filters out events that have
@@ -63,7 +60,9 @@ export class CalendarHoldsSweepHandler implements ToolHandler {
     if (isUnresolvedPlaceholder(contactId)) {
       return { success: false, error: unresolvedPlaceholderError('contactId', contactId) };
     }
-    if (!UUID_RE.test(contactId)) {
+    // contactId reaches Postgres as a uuid column, where a non-UUID string is a parse
+    // error rather than an empty result. Same check as calendar-list-events.
+    if (!isUuid(contactId)) {
       return { success: false, error: `Invalid contactId — must be a UUID, got "${contactId}"` };
     }
 

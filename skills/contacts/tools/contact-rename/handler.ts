@@ -6,6 +6,7 @@
 // This skill uses contactService, which is a universal service.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
 export class ContactRenameHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -25,8 +26,7 @@ export class ContactRenameHandler implements ToolHandler {
     // Validate contact_id is a UUID — the DB column is UUID type and will
     // reject slug-style IDs with a cryptic 22P02 error.
     // The agent must obtain the real UUID via contact-lookup or contact-list first.
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!UUID_RE.test(contact_id)) {
+    if (!isUuid(contact_id)) {
       return {
         success: false,
         error: "contact_id must be a valid UUID. Use contact-lookup or contact-list to obtain the contact's UUID first.",

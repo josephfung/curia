@@ -8,6 +8,7 @@
 import { docDirectory, normalizeDocPath } from '../memory/okf.js';
 import type { WorkingDocRow } from '../db/working-docs-repo.js';
 import type { ResumableDocumentPointer } from '../db/resumable-progress.js';
+import { isUuid } from '../util/uuid.js';
 
 /** Max length for a project folder slug (kebab-case segment under /projects/). */
 export const MAX_PROJECT_SLUG_LENGTH = 64;
@@ -15,8 +16,6 @@ export const MAX_PROJECT_SLUG_LENGTH = 64;
 /** Canonical projects root prefix. */
 export const PROJECTS_ROOT_PREFIX = '/projects/';
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WELL_FORMED_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function normalizeDirectoryPrefix(prefix: string): string {
@@ -74,7 +73,7 @@ export interface RecommendPlacementInput {
 
 /** True when the segment is a legacy UUID project directory name. */
 export function isLegacyUuidProjectDir(segment: string): boolean {
-  return UUID_RE.test(segment);
+  return isUuid(segment);
 }
 
 /** True for kebab-case project slugs suitable as *new* folder names (not UUIDs). */

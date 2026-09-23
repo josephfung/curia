@@ -10,8 +10,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { InvalidExclusionPairError } from '../../../../src/contacts/dedup-exclusions.js';
 import { ContactNotFoundError } from '../../../../src/contacts/types.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../../../src/util/uuid.js';
 
 /** Postgres SQLSTATE for undefined_table — migration 084 has not been applied. */
 const PG_UNDEFINED_TABLE = '42P01';
@@ -22,10 +21,10 @@ export class ContactDedupExcludeHandler implements ToolHandler {
     const contactAId = input['contact_a_id'];
     const contactBId = input['contact_b_id'];
 
-    if (typeof contactAId !== 'string' || !UUID_RE.test(contactAId)) {
+    if (typeof contactAId !== 'string' || !isUuid(contactAId)) {
       return { success: false, error: 'contact_a_id must be a valid UUID' };
     }
-    if (typeof contactBId !== 'string' || !UUID_RE.test(contactBId)) {
+    if (typeof contactBId !== 'string' || !isUuid(contactBId)) {
       return { success: false, error: 'contact_b_id must be a valid UUID' };
     }
     if (contactAId.toLowerCase() === contactBId.toLowerCase()) {

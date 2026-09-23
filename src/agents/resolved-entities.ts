@@ -6,8 +6,7 @@
 // vanish. Callers persist the IDs (not the snapshot text) and re-render a
 // fresh block from the current contact row.
 
-/** Contact IDs captured from a specialist reply. UUID form, lowercase. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../util/uuid.js';
 
 /** How many most-recent contacts a turn will re-inject. */
 export const MAX_RESOLVED_ENTITIES = 12;
@@ -122,7 +121,7 @@ export function parseResolvedContactIds(text: string): string[] {
     const body = block[1] ?? '';
     for (const contact of body.matchAll(CONTACT_RE)) {
       const id = attrs(contact[1] ?? '')['id'];
-      if (!id || !UUID_RE.test(id)) continue;
+      if (!id || !isUuid(id)) continue;
       const normalized = id.toLowerCase();
       if (seen.has(normalized)) continue;
       seen.add(normalized);
@@ -167,7 +166,7 @@ export function collectResolvedContactIds(value: unknown): string[] {
       for (const [key, child] of Object.entries(node)) {
         if ((key === 'resolvedContactIds' || key === 'resolved_contact_ids') && Array.isArray(child)) {
           for (const item of child) {
-            if (typeof item === 'string' && UUID_RE.test(item)) ids.push(item.toLowerCase());
+            if (isUuid(item)) ids.push(item.toLowerCase());
           }
           continue;
         }

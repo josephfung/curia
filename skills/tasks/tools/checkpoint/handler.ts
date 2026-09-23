@@ -11,8 +11,7 @@ import {
 } from '../../../../src/agents/resumable-task.js';
 import { readResumableBlock } from '../../../../src/db/resumable-progress.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../../../src/util/uuid.js';
 
 function boundTaskFromToolContext(ctx: ToolContext): BoundTaskContext | null {
   return boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
@@ -38,7 +37,7 @@ export class CheckpointHandler implements ToolHandler {
         error: 'Missing task_id — provide it explicitly or run on a task-bound scheduler wake',
       };
     }
-    if (!UUID_RE.test(taskId)) {
+    if (!isUuid(taskId)) {
       return { success: false, error: 'task_id must be a valid UUID' };
     }
 

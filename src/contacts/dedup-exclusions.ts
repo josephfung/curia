@@ -10,6 +10,8 @@
 // exclusion goes through normalizeExclusionPair() so a pair passed in either order
 // or either casing always resolves to the same row.
 
+import { isUuid } from '../util/uuid.js';
+
 /** A contact pair in canonical stored order: contactAId < contactBId, both lowercase. */
 export interface ExclusionPair {
   contactAId: string;
@@ -24,8 +26,6 @@ export class InvalidExclusionPairError extends Error {
   }
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Normalize a contact pair into the canonical order the table stores.
  *
@@ -38,10 +38,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * silently match nothing at read time.
  */
 export function normalizeExclusionPair(aId: string, bId: string): ExclusionPair {
-  if (!UUID_RE.test(aId)) {
+  if (!isUuid(aId)) {
     throw new InvalidExclusionPairError(`contact id is not a valid UUID: "${aId}"`);
   }
-  if (!UUID_RE.test(bId)) {
+  if (!isUuid(bId)) {
     throw new InvalidExclusionPairError(`contact id is not a valid UUID: "${bId}"`);
   }
 

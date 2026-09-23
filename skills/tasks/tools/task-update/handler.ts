@@ -6,12 +6,10 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
+import { isUuid } from '../../../../src/util/uuid.js';
 
 const VALID_STATUSES = new Set(['open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled']);
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
-
-// Patterns that look like UUIDs — lightweight check before sending to DB.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Strict ISO-8601 datetime with timezone offset. Rejects loose strings that new Date() would accept.
 const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -33,7 +31,7 @@ export class TaskUpdateHandler implements ToolHandler {
     if (!input.task_id || typeof input.task_id !== 'string') {
       return { success: false, error: 'Missing required input: task_id (string)' };
     }
-    if (!UUID_RE.test(input.task_id)) {
+    if (!isUuid(input.task_id)) {
       return { success: false, error: 'task_id must be a valid UUID' };
     }
 
@@ -58,7 +56,7 @@ export class TaskUpdateHandler implements ToolHandler {
       return { success: false, error: 'progress_note must be 2000 characters or fewer' };
     }
     if (input.blocked_by_task_id !== undefined && input.blocked_by_task_id !== null) {
-      if (typeof input.blocked_by_task_id !== 'string' || !UUID_RE.test(input.blocked_by_task_id)) {
+      if (typeof input.blocked_by_task_id !== 'string' || !isUuid(input.blocked_by_task_id)) {
         return { success: false, error: 'blocked_by_task_id must be a valid UUID' };
       }
     }

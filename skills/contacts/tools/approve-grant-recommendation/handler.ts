@@ -1,14 +1,13 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../../../src/util/uuid.js';
 
 // SECURITY: sensitivity: "elevated" — authorization is enforced solely by the execution-layer
 // live-principal gate (#1126). No handler-level re-check.
 export class ApproveGrantRecommendationHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const { recommendation_id } = ctx.input as { recommendation_id?: string };
-    if (!recommendation_id || !UUID_RE.test(recommendation_id)) {
+    if (!recommendation_id || !isUuid(recommendation_id)) {
       return { success: false, error: 'Missing or invalid required input: recommendation_id (UUID)' };
     }
     if (!ctx.contactService) {
@@ -17,7 +16,7 @@ export class ApproveGrantRecommendationHandler implements ToolHandler {
 
     const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
     const actorId = ctx.caller?.contactId ?? originator?.contactId;
-    if (!actorId || !UUID_RE.test(actorId)) {
+    if (!actorId || !isUuid(actorId)) {
       return { success: false, error: 'Cannot determine valid actor identity for audit trail' };
     }
 

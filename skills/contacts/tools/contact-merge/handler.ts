@@ -19,8 +19,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { ContactNotFoundError } from '../../../../src/contacts/types.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isUuid } from '../../../../src/util/uuid.js';
 
 export class ContactMergeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -36,10 +35,10 @@ export class ContactMergeHandler implements ToolHandler {
     if (!secondary_contact_id || typeof secondary_contact_id !== 'string') {
       return { success: false, error: 'Missing required input: secondary_contact_id (string)' };
     }
-    if (!UUID_RE.test(primary_contact_id)) {
+    if (!isUuid(primary_contact_id)) {
       return { success: false, error: `primary_contact_id must be a valid UUID. Use contact-lookup to find the real ID.` };
     }
-    if (!UUID_RE.test(secondary_contact_id)) {
+    if (!isUuid(secondary_contact_id)) {
       return { success: false, error: `secondary_contact_id must be a valid UUID. Use contact-lookup to find the real ID.` };
     }
     if (primary_contact_id === secondary_contact_id) {

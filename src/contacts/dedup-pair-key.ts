@@ -1,7 +1,10 @@
+// This file composes the UUID body into larger regexes rather than matching a
+// bare id, so it shares the pattern *string* from src/util/uuid.ts rather than
+// the isUuid() matcher. Same source of truth either way.
+import { UUID_PATTERN } from '../util/uuid.js';
+
 /** Prefix for structured, order-independent dedup-pair tags on review tasks. */
 export const DEDUP_PAIR_TAG_PREFIX = 'dedup-pair:';
-
-const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
 const CANONICAL_PAIR_KEY_RE = new RegExp(`^(${UUID_PATTERN}):(${UUID_PATTERN})$`, 'i');
 
