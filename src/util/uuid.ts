@@ -69,21 +69,31 @@
 // `src/scheduler/conversation-id.ts`. Those still share this source of truth.
 //
 // If you add another UUID regex anywhere, either import from here or add it to
-// this list with a reason. The list is meant to stay exhaustive; the whole point
-// of #1879 was that 29 copies had accumulated with nobody tracking them.
+// this list with a reason. The list is meant to stay exhaustive, and
+// `tests/unit/uuid-single-source.test.ts` enforces that — it scans src/ and
+// skills/ and fails on any new copy. That scan is what should have caught the two
+// `[0-9a-fA-F]` copies #1879's own `[0-9a-f]` grep walked straight past.
 
 /**
- * The UUID body as a pattern *string*, with no anchors and no flags, for
- * composing into larger regexes (see `src/contacts/dedup-pair-key.ts`).
+ * The UUID body as a pattern *string* — no anchors, no flags needed — for
+ * composing into larger regexes (see `src/contacts/dedup-pair-key.ts` and
+ * `src/scheduler/conversation-id.ts`).
+ *
+ * The hex class spells both cases (`[0-9a-fA-F]`) rather than relying on the
+ * composer to add `/i`. That matters: a composed regex usually has literal text
+ * around the UUID, and `/i` case-folds *that* too. `conversation-id.ts` composes
+ * a `scheduler:` prefix and must keep it case-sensitive, so the pattern has to
+ * carry its own case-insensitivity instead of borrowing a flag.
  *
  * Prefer {@link isUuid} for plain "is this an id?" checks.
  */
 export const UUID_PATTERN =
-  '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+  '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 
 // Module-scope and stateless: no /g flag, so there is no `lastIndex` to carry
-// between calls, and one compile serves every call site.
-const UUID_RE = new RegExp(`^${UUID_PATTERN}$`, 'i');
+// between calls, and one compile serves every call site. No /i either — the
+// pattern's hex class already covers both cases.
+const UUID_RE = new RegExp(`^${UUID_PATTERN}$`);
 
 /**
  * True when `value` has the shape of a UUID and can safely be cast to a

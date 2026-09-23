@@ -22,14 +22,6 @@ import { fetchChatHistoryPage } from '../chat-history-page.js';
 // (RFC v1-v5 only), which would have 400'd a legitimate v7 or nil id for no reason
 // anyone could see. They now share the codebase matcher — see src/util/uuid.ts for
 // why shape-only is the right check here (#1879).
-//
-// @TODO (#1882): the sourceAgentId guard below is the odd one out and is
-// wrong independently of this change. `tasks.source_agent_id` is TEXT and holds
-// agent *names* (scheduler.ts writes `config.name`; health-service writes the
-// literal 'health-service'), so there is no uuid cast to guard and the check 400s
-// every legitimate value while admitting only UUIDs. Pre-existing, left alone here
-// so this stays a pure consolidation — but it is not an example of the rationale
-// above, and should not be read as one.
 import { isUuid } from '../../../util/uuid.js';
 import { validateTaskErrorBudget } from '../../../tasks/task-error-budget.js';
 
@@ -486,6 +478,12 @@ export async function knowledgeGraphRoutes(
     const sourceAgentId = typeof body.sourceAgentId === 'string' && body.sourceAgentId.trim()
       ? body.sourceAgentId.trim()
       : null;
+    // @TODO (#1882): this guard is wrong, independently of #1879 — it is NOT an
+    // instance of the cast-guard rationale the other checks in this file share.
+    // `tasks.source_agent_id` is TEXT and holds agent *names* (scheduler.ts writes
+    // `config.name`; health-service writes the literal 'health-service'), so there is
+    // no uuid cast to protect and this 400s every legitimate value while admitting
+    // only UUIDs. Left as-is so #1879 stays a pure consolidation.
     if (sourceAgentId && !isUuid(sourceAgentId)) {
       return reply.status(400).send({ error: 'Invalid sourceAgentId: must be a valid UUID.' });
     }

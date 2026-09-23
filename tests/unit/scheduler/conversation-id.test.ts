@@ -33,6 +33,25 @@ describe('parseSchedulerRunJobId (#1828)', () => {
     ).toBe('00000000-0000-0000-0000-000000000000');
   });
 
+  // The prefix is a literal, so it must stay case-sensitive. Composing UUID_PATTERN
+  // with an 'i' flag (the obvious way to keep uppercase hex working) would case-fold
+  // `scheduler:` too and quietly widen what parses; UUID_PATTERN spells both hex
+  // cases itself so the flag is not needed. These two pin both halves of that.
+  it('keeps the scheduler: prefix case-sensitive', () => {
+    expect(
+      parseSchedulerRunJobId('SCHEDULER:123e4567-e89b-12d3-a456-426614174000:run-001'),
+    ).toBeUndefined();
+    expect(
+      parseSchedulerRunJobId('Scheduler:123e4567-e89b-12d3-a456-426614174000:run-001'),
+    ).toBeUndefined();
+  });
+
+  it('still accepts uppercase hex in the job UUID', () => {
+    expect(
+      parseSchedulerRunJobId('scheduler:123E4567-E89B-12D3-A456-426614174000:run-001'),
+    ).toBe('123E4567-E89B-12D3-A456-426614174000');
+  });
+
   it('still requires a full UUID shape in the middle', () => {
     expect(parseSchedulerRunJobId('scheduler:123e4567-e89b-12d3-a456:run-001')).toBeUndefined();
     expect(parseSchedulerRunJobId('scheduler:123e4567e89b12d3a456426614174000:run-001')).toBeUndefined();
