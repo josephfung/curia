@@ -163,7 +163,7 @@ function setup(opts: SetupOptions = {}) {
     id: input.id ?? randomUUID(),
     conversationId: input.conversationId,
     livekitRoom: input.livekitRoom,
-    principalContactId: input.principalContactId ?? null,
+    callerContactId: input.callerContactId ?? null,
     status: 'starting' as const,
     startedAt: new Date('2026-08-20T12:00:00Z'),
     endedAt: null,
@@ -258,9 +258,8 @@ describe('SignalCallBridge', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: expect.stringMatching(/^voice:/),
       livekitRoom: `signal-call:${callId.toString()}`,
-      // The resolved contactId is a real UUID, so it passes the UUID_RE gate
-      // and is persisted as principal_contact_id.
-      principalContactId: '33333333-3333-3333-3333-333333333333',
+      // The resolved contactId is a real UUID, so it is persisted as caller_contact_id.
+      callerContactId: '33333333-3333-3333-3333-333333333333',
       metadata: {
         channel: 'signal',
         callerNumber: DEFAULT_NUMBER,
@@ -329,8 +328,8 @@ describe('SignalCallBridge', () => {
     expect(call.caller.tier).toBe('unknown');
     expect(call.caller.liveTurn).toBe(false);
     // Unknown caller's contactId is the E.164 number (not a UUID) — the
-    // UUID-only principal_contact_id column must stay unset.
-    expect(create.mock.calls[0]![0].principalContactId).toBeUndefined();
+    // UUID-only caller_contact_id column must stay unset.
+    expect(create.mock.calls[0]![0].callerContactId).toBeUndefined();
   });
 
   it('rejects an unknown caller when signal unknown_sender is ignore', async () => {
@@ -540,7 +539,7 @@ describe('SignalCallBridge', () => {
               id: input.id ?? 'session-dup',
               conversationId: input.conversationId,
               livekitRoom: input.livekitRoom,
-              principalContactId: input.principalContactId ?? null,
+              callerContactId: input.callerContactId ?? null,
               status: 'starting' as const,
               startedAt: new Date('2026-08-20T12:00:00Z'),
               endedAt: null,
@@ -581,7 +580,7 @@ describe('SignalCallBridge', () => {
               id: input.id ?? 'session-aborted',
               conversationId: input.conversationId,
               livekitRoom: input.livekitRoom,
-              principalContactId: input.principalContactId ?? null,
+              callerContactId: input.callerContactId ?? null,
               status: 'starting' as const,
               startedAt: new Date('2026-08-20T12:00:00Z'),
               endedAt: null,

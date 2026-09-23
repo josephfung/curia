@@ -43,13 +43,13 @@ function fakeStore() {
     id?: string;
     conversationId: string;
     livekitRoom: string;
-    principalContactId?: string;
+    callerContactId?: string;
     metadata?: Record<string, unknown>;
   }) => ({
     id: input.id ?? 'session-1',
     conversationId: input.conversationId,
     livekitRoom: input.livekitRoom,
-    principalContactId: input.principalContactId ?? null,
+    callerContactId: input.callerContactId ?? null,
     status: 'starting' as const,
     startedAt,
     endedAt: null,
@@ -60,7 +60,7 @@ function fakeStore() {
     id,
     conversationId: `voice:${id}`,
     livekitRoom: `voice-${id}`,
-    principalContactId: null,
+    callerContactId: null,
     status: 'ended' as const,
     startedAt,
     endedAt,
@@ -122,7 +122,7 @@ describe('VoiceAdapter', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: result.body.conversationId,
       livekitRoom: result.body.roomName,
-      principalContactId: PRINCIPAL_ID,
+      callerContactId: PRINCIPAL_ID,
       metadata: { source: 'test' },
     }));
     expect(mintVoiceParticipantToken).toHaveBeenCalledWith(

@@ -26,6 +26,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Voice sessions** — `caller_contact_id` replaces `principal_contact_id` for any caller. (#1629)
 - **`stampOriginator`** — moved from `src/dispatch/` to `src/contacts/`. (#1628)
 - **`ExecutionLayer.invoke`** — preserves handler-set `errorType` (unblocks `AUTH_FAILURE` / `IDENTITY_MISMATCH`). (#1854)
 - **Calendar tools (public API)** — `allowed_callers` now exclude the coordinator so discovery cannot re-open a direct path. (#1853)

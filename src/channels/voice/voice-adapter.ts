@@ -4,15 +4,14 @@ import type { OutboundMessageEvent } from '../../bus/events.js';
 import { createVoiceSessionEnded, createVoiceSessionStarted } from '../../bus/events.js';
 import type { Logger } from '../../logger.js';
 import type { Channel } from '../channel.js';
+import { persistableCallerContactId } from './caller-contact-id.js';
+import { mintVoiceParticipantToken } from './livekit/token.js';
 import type { VoiceSessionBridge, VoiceSessionCreateRequest, VoiceSessionCreateResult } from './session-bridge.js';
 import type { VoiceSessionStore } from './session-store.js';
 import type { VoiceRuntime } from './voice-runtime.js';
-import { mintVoiceParticipantToken } from './livekit/token.js';
 
 /** LiveKit identity for the server-side agent participant that VoiceRuntime joins as. */
 const AGENT_IDENTITY = 'curia-agent';
-/** voice_sessions.principal_contact_id is UUID — only persist real contact ids. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface VoiceAdapterConfig {
   bus: EventBus;
@@ -97,15 +96,11 @@ export class VoiceAdapter implements Channel {
       },
     );
 
-    // voice_sessions.principal_contact_id is UUID NULL ON DELETE SET NULL — only store
-    // a real contact UUID (synthetic 'primary-user' stays null).
-    const principalContactId = UUID_RE.test(caller.contactId) ? caller.contactId : undefined;
-
     const session = await this.config.sessionStore.create({
       id: sessionId,
       conversationId,
       livekitRoom: roomName,
-      principalContactId,
+      callerContactId: persistableCallerContactId(caller.contactId),
       metadata: req.metadata,
     });
 
