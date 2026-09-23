@@ -109,12 +109,12 @@ describe('resolveWorkspacePrefixFromTaskContent', () => {
     expect(prefix).toBe('/projects/audit/');
   });
 
-  it('falls back to /projects/<task_id>/ when task_id is present', () => {
+  it('returns null when only task_id is present (no invented UUID folder)', () => {
     const prefix = resolveWorkspacePrefixFromTaskContent(JSON.stringify({
       task_id: 'abc-123',
       title: 'Audit',
     }));
-    expect(prefix).toBe('/projects/abc-123/');
+    expect(prefix).toBeNull();
   });
 
   it('returns null for non-JSON content', () => {
@@ -192,12 +192,46 @@ describe('parseTaskWakePayload / resume helpers (#1210)', () => {
     expect(pointer?.path).toBe('/projects/root/accumulator.md');
   });
 
-  it('walks to the project root for child task wakes', async () => {
-    const prefix = await resolveWorkspaceDirectoryPrefix(
+  it('walks to the project root and resolves owned or legacy prefixes', async () => {
+    const root = '00000000-0000-4000-8000-000000000099';
+    const withoutDocs = await resolveWorkspaceDirectoryPrefix(
       JSON.stringify({ task_id: 'child-task' }),
-      async () => 'root-task',
+      {
+        resolveRootTaskId: async () => root,
+        listLiveByTaskId: async () => [],
+        listByPrefix: async () => [],
+      },
     );
-    expect(prefix).toBe('/projects/root-task/');
+    expect(withoutDocs).toBeNull();
+
+    const withOwned = await resolveWorkspaceDirectoryPrefix(
+      JSON.stringify({ task_id: 'child-task' }),
+      {
+        resolveRootTaskId: async () => root,
+        listLiveByTaskId: async () => [
+          doc('/projects/social-media/brief.md', {
+            taskId: root,
+            updatedAt: '2026-06-29T12:00:00.000Z',
+          }),
+        ],
+        listByPrefix: async () => [],
+      },
+    );
+    expect(withOwned).toBe('/projects/social-media/');
+
+    const withLegacy = await resolveWorkspaceDirectoryPrefix(
+      JSON.stringify({ task_id: 'child-task' }),
+      {
+        resolveRootTaskId: async () => root,
+        listLiveByTaskId: async () => [],
+        listByPrefix: async (prefix) => (
+          prefix === `/projects/${root}/`
+            ? [doc(`/projects/${root}/brief.md`)]
+            : []
+        ),
+      },
+    );
+    expect(withLegacy).toBe(`/projects/${root}/`);
   });
 
   it('formats spilled accumulator content for resume injection', () => {

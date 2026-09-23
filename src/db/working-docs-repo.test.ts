@@ -192,5 +192,31 @@ describe('WorkingDocsRepo (unit)', () => {
     expect(archiveQuery?.params?.[0]).toBe(rootTaskId);
     expect(archiveQuery?.params?.[1]).toBe('/projects/00000000-0000-4000-8000-000000000001/%');
     expect(archiveQuery?.sql).toContain('task_id = $1::uuid');
+    // Path arm is UUID-folder only — must not use a shared slug prefix (#1819).
+    expect(archiveQuery?.params?.[1]).not.toContain('social-media');
+  });
+
+  it('listLiveByTaskId queries by task_id', async () => {
+    const taskId = '00000000-0000-4000-8000-000000000002';
+    const client = makeClient({
+      query: async () => ({ rows: [], rowCount: 0 } as unknown as QueryResult),
+    });
+    const poolQuery = vi.fn(async (_sql: string, params?: unknown[]) => {
+      expect(params?.[0]).toBe(taskId);
+      return {
+        rows: [{ ...BASE_ROW, task_id: taskId, path: '/projects/shared/a.md' }],
+        rowCount: 1,
+      } as QueryResult;
+    });
+    const pool = {
+      connect: vi.fn(async () => client),
+      query: poolQuery,
+    } as unknown as Pool;
+    const repo = new WorkingDocsRepo(pool, createSilentLogger());
+    const rows = await repo.listLiveByTaskId(taskId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.path).toBe('/projects/shared/a.md');
+    expect(poolQuery).toHaveBeenCalled();
+    expect(String(poolQuery.mock.calls[0]![0])).toContain('task_id = $1::uuid');
   });
 });

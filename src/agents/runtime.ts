@@ -96,8 +96,18 @@ import {
   extractSectionContent,
   formatAccumulatorResumeBlock,
   formatWorkspaceManifestBlock,
+  indexPathForDirectory,
+  parseTaskWakePayload,
   resolveWorkspaceDirectoryPrefix,
 } from './document-workspace.js';
+import {
+  collisionShortId,
+  formatPlacementGuidanceBlock,
+  formatProjectsCatalogBlock,
+  listProjectDirectorySummaries,
+  PROJECTS_ROOT_PREFIX,
+  suggestProjectSlug,
+} from './document-placement.js';
 import {
   collectResolvedContactIds,
   formatResolvedEntitiesBlock,
@@ -356,17 +366,49 @@ export class AgentRuntime {
     // too (#1210). Best-effort: a missing repo or parse failure must not abort the task.
     // Parse originalContent only — never the post-append string.
     let workspaceManifestInjected = false;
+    let injectedWorkspaceManifestPath: string | undefined;
     if (this.config.documentWorkspaceEnabled && this.config.workingDocsRepo) {
       try {
         const resolveRoot = this.config.taskRepo
           ? (taskId: string) => this.config.taskRepo!.resolveProjectRootTaskId(taskId)
           : undefined;
-        const prefix = await resolveWorkspaceDirectoryPrefix(originalContent, resolveRoot);
+        const wakePayload = parseTaskWakePayload(originalContent);
+        let rootTaskId: string | undefined;
+        let rootTitle: string | undefined;
+        if (wakePayload && typeof wakePayload.task_id === 'string' && wakePayload.task_id.length > 0) {
+          rootTaskId = wakePayload.task_id;
+          if (resolveRoot) {
+            const root = await resolveRoot(wakePayload.task_id);
+            if (root) rootTaskId = root;
+          }
+          if (this.config.taskRepo && rootTaskId) {
+            const rootTask = await this.config.taskRepo.getTask(rootTaskId);
+            rootTitle = rootTask?.title;
+          }
+        }
+
+        const projectDocs = await this.config.workingDocsRepo.listByPrefix(PROJECTS_ROOT_PREFIX);
+        const catalog = listProjectDirectorySummaries(projectDocs);
+        const suggested = suggestProjectSlug(rootTitle ?? 'project');
+        const shortId = rootTaskId ? collisionShortId(rootTaskId) : undefined;
+        promptContent = `${promptContent}\n\n${formatProjectsCatalogBlock(catalog, {
+          suggestedSlug: suggested,
+          collisionShortId: shortId,
+        })}`;
+        promptContent = `${promptContent}\n\n${formatPlacementGuidanceBlock()}`;
+        // Catalog + placement count as workspace injection for resumable guidance (#1819).
+        workspaceManifestInjected = true;
+
+        const prefix = await resolveWorkspaceDirectoryPrefix(originalContent, {
+          resolveRootTaskId: resolveRoot,
+          listLiveByTaskId: (id) => this.config.workingDocsRepo!.listLiveByTaskId(id),
+          listByPrefix: (p) => this.config.workingDocsRepo!.listByPrefix(p),
+        });
         if (prefix) {
           const documents = await this.config.workingDocsRepo.listByPrefix(prefix);
           const manifest = buildIndexProjection(prefix, documents);
           promptContent = `${promptContent}\n\n${formatWorkspaceManifestBlock(prefix, manifest)}`;
-          workspaceManifestInjected = true;
+          injectedWorkspaceManifestPath = indexPathForDirectory(prefix);
         }
       } catch (err) {
         logger.warn({ err, agentId }, 'Document workspace manifest injection failed — proceeding without manifest');
@@ -554,6 +596,9 @@ export class AgentRuntime {
       originalContent,
       taskEvent.payload.channelId,
     );
+    if (boundTaskCtx && injectedWorkspaceManifestPath) {
+      boundTaskCtx = { ...boundTaskCtx, workspaceManifestPath: injectedWorkspaceManifestPath };
+    }
 
     // Scheduler-bound task wakes carry metadata/content progress that can be empty or stale.
     // Reload from the task row so harness guidance (plan rollup, checkpoint resume) is fresh (#1238).

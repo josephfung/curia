@@ -33,7 +33,7 @@ const TASK_TOOLS = [
   'plan',
   'checkpoint',
 ] as const;
-const DOC_TOOLS = ['doc-read', 'doc-list', 'doc-write', 'doc-search'] as const;
+const DOC_TOOLS = ['doc-read', 'doc-list', 'doc-write', 'doc-search', 'doc-place'] as const;
 
 describe('parseSkillMd', () => {
   it('parses Anthropic-compatible frontmatter + body', () => {

@@ -1,7 +1,7 @@
 {
   "name": "doc-write",
   "description": "Write to the OKF document workspace. Modes: `create` (new document — requires `type`, optional `body`/`frontmatter`), `append` (add content — requires `content` + `expected_version`), `replace` (swap full body — requires `body` + `expected_version`), `section-edit` (replace a `##` section — requires `section`, `content`, optional `expected_section_version`). Every successful write appends an entry to the directory's reserved `log.md`. On version mismatch returns `conflict: true` with the latest document versions — re-read and retry. **Retention:** `/projects/…` is durable (never auto-purged). `/scratch/<conversation-id>/…` is ephemeral — omit `ttl_days` to inherit the configured scratch TTL, set `ttl_days: <n>` to override, or `ttl_days: 0` to opt out. `ttl_days` on non-scratch paths is ignored (a `retention_warning` is returned).",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -15,7 +15,7 @@
     "expected_version": "number? (required for append/replace — from last doc-read)",
     "expected_section_version": "number? (optional for section-edit — per-section optimistic version)",
     "summary": "string? (one-line description for log.md — defaults to mode + path)",
-    "task_id": "string? (optional association)",
+    "task_id": "string? (optional — defaults to the bound task id when omitted)",
     "conversation_id": "string? (optional association)"
   },
   "outputs": {

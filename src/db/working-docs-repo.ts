@@ -375,6 +375,19 @@ export class WorkingDocsRepo {
     return rows.map(mapRow);
   }
 
+  /** Live documents associated with a task via `task_id` (#1819 placement ownership). */
+  async listLiveByTaskId(taskId: string): Promise<WorkingDocRow[]> {
+    const { rows } = await this.pool.query<DbWorkingDocRow>(
+      `SELECT ${DOC_COLUMNS}
+       FROM working_documents
+       WHERE task_id = $1::uuid
+         AND archived_at IS NULL
+       ORDER BY updated_at DESC, path ASC`,
+      [taskId],
+    );
+    return rows.map(mapRow);
+  }
+
   /**
    * Soft-delete expired `/scratch/<conversation-id>/…` documents past their TTL (#1212).
    * Non-scratch paths are never touched. TTL is derived from `updated_at` and either
@@ -448,8 +461,15 @@ export class WorkingDocsRepo {
   }
 
   /**
-   * Archive all live workspace documents for a completed project (#1241).
-   * Matches rows by task_id and by `/projects/<rootTaskId>/…` path prefix.
+   * Archive all live workspace documents for a completed project (#1241 / #1819).
+   *
+   * Matches rows by:
+   * - `task_id = root` (ownership — required for shared slug folders), or
+   * - legacy path prefix `/projects/<root-uuid>/…` only (pre-#1819 UUID directories that
+   *   may lack task_id).
+   *
+   * Never archives by a shared readable slug prefix — that would silently delete
+   * another task's documents when one project completes.
    */
   async archiveProjectWorkspaceDocs(rootTaskId: string): Promise<number> {
     const pathPrefix = `/projects/${rootTaskId}/`;

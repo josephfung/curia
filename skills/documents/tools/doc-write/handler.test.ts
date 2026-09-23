@@ -93,6 +93,56 @@ describe('DocWriteHandler', () => {
     expect(repo.create).toHaveBeenCalled();
   });
 
+  it('auto-stamps task_id from bound task metadata when omitted', async () => {
+    const repo = makeRepo({
+      read: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null),
+    });
+    const ctx = makeCtx({
+      path: '/projects/social-media/brief.md',
+      mode: 'create',
+      type: 'brief',
+      body: 'hello',
+    }, repo);
+    (ctx as { taskMetadata?: Record<string, unknown> }).taskMetadata = {
+      boundTask: { taskId: '00000000-0000-4000-8000-000000000001' },
+    };
+    const result = await new DocWriteHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: '00000000-0000-4000-8000-000000000001',
+    }));
+  });
+
+  it('rejects malformed project folder names on create', async () => {
+    const result = await new DocWriteHandler().execute(makeCtx({
+      path: '/projects/Not A Slug/brief.md',
+      mode: 'create',
+      type: 'brief',
+      body: 'nope',
+    }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/kebab-case|slug/i);
+  });
+
+  it('allows create under a legacy UUID project directory', async () => {
+    const uuid = '3467d2d0-1695-4d90-9789-3319ba5a2c65';
+    const repo = makeRepo({
+      read: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null),
+      create: vi.fn().mockResolvedValue(makeDoc({ path: `/projects/${uuid}/brief.md` })),
+    });
+    const result = await new DocWriteHandler().execute(makeCtx({
+      path: `/projects/${uuid}/brief.md`,
+      mode: 'create',
+      type: 'brief',
+      body: 'legacy',
+    }, repo));
+    expect(result.success).toBe(true);
+  });
+
   it('rejects direct create of reserved index.md', async () => {
     const result = await new DocWriteHandler().execute(makeCtx({
       path: '/projects/x/index.md',

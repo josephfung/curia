@@ -128,9 +128,10 @@ export function buildResumableTaskGuidanceBlock(options?: {
   if (options?.workspaceManifestInjected) {
     lines.push(
       '',
-      'This project has a document workspace. On resume, a **## Workspace Manifest** block is',
-      'appended to your task message (index projection only). Re-read it before continuing;',
-      'use `doc-read` for document bodies and specific sections.',
+      'This project has a document workspace. On resume, a **## Projects Catalog**, placement',
+      'guidance, and (when a dedicated folder is already resolved) a **## Workspace Manifest**',
+      'are appended to your task message. Call `doc-place` before creating a new `/projects/`',
+      'folder; use `doc-read` for document bodies and specific sections.',
     );
     if (options.workspaceManifestPath) {
       lines.push(`Index path: \`${options.workspaceManifestPath}\`.`);
@@ -139,6 +140,7 @@ export function buildResumableTaskGuidanceBlock(options?: {
     lines.push(
       '',
       `This project has a document workspace. Re-read the manifest at \`${options.workspaceManifestPath}\` on resume before continuing.`,
+      'Call `doc-place` before creating a new `/projects/` folder.',
     );
   }
 

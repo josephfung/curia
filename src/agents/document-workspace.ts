@@ -7,6 +7,10 @@ import {
 } from '../memory/okf.js';
 import type { ResumableDocumentPointer } from '../db/resumable-progress.js';
 import { isDocumentPointer } from '../db/resumable-progress.js';
+import {
+  projectDirectoryPrefix,
+  resolveOwnedWorkspacePrefix,
+} from './document-placement.js';
 
 export const INDEX_FILENAME = 'index.md';
 export const LOG_FILENAME = 'log.md';
@@ -143,10 +147,54 @@ export function parseTaskWakePayload(content: string): Record<string, unknown> |
   return parsed as Record<string, unknown>;
 }
 
-function resolveWorkspacePrefixFromPayload(
-  payload: Record<string, unknown>,
-  rootTaskId?: string,
-): string | null {
+/**
+ * Sync prefix resolution from wake payload alone (#1819).
+ * Returns the document-pointer directory when present; otherwise null.
+ * Does **not** invent `/projects/<task-uuid>/` — ownership / legacy lookup is async
+ * via `resolveWorkspaceDirectoryPrefix`.
+ */
+function resolveWorkspacePrefixFromPayload(payload: Record<string, unknown>): string | null {
+  const pointer = documentPointerFromProgress(payload.progress);
+  if (pointer) {
+    return docDirectory(pointer.path);
+  }
+  return null;
+}
+
+/** Parse scheduler / task-wake JSON content for a workspace directory prefix (pointer-only). */
+export function resolveWorkspacePrefixFromTaskContent(content: string): string | null {
+  const payload = parseTaskWakePayload(content);
+  if (!payload) return null;
+  return resolveWorkspacePrefixFromPayload(payload);
+}
+
+export interface ResolveWorkspaceDirectoryOptions {
+  resolveRootTaskId?: (taskId: string) => Promise<string | null>;
+  /** Live documents owned by the root task (`task_id = root`). */
+  listLiveByTaskId?: (rootTaskId: string) => Promise<WorkingDocRow[]>;
+  /** Live documents under a path prefix (used for legacy UUID folders). */
+  listByPrefix?: (prefix: string) => Promise<WorkingDocRow[]>;
+}
+
+/**
+ * Resolve the workspace directory prefix for a wake payload (#1819).
+ * Order: document pointer → owned `/projects/` docs → legacy UUID prefix → null.
+ * Never invents `/projects/<uuid>/` when the agent has not placed documents yet.
+ */
+export async function resolveWorkspaceDirectoryPrefix(
+  content: string,
+  resolveRootTaskIdOrOptions?:
+    | ((taskId: string) => Promise<string | null>)
+    | ResolveWorkspaceDirectoryOptions,
+): Promise<string | null> {
+  const options: ResolveWorkspaceDirectoryOptions =
+    typeof resolveRootTaskIdOrOptions === 'function'
+      ? { resolveRootTaskId: resolveRootTaskIdOrOptions }
+      : (resolveRootTaskIdOrOptions ?? {});
+
+  const payload = parseTaskWakePayload(content);
+  if (!payload) return null;
+
   const pointer = documentPointerFromProgress(payload.progress);
   if (pointer) {
     return docDirectory(pointer.path);
@@ -157,33 +205,26 @@ function resolveWorkspacePrefixFromPayload(
     : null;
   if (!taskId) return null;
 
-  // Convention: project documents live under /projects/<root-task-id>/ (#1210).
-  const resolvedRoot = rootTaskId ?? taskId;
-  return `/projects/${resolvedRoot}/`;
-}
-
-/** Parse scheduler / task-wake JSON content for a workspace directory prefix. */
-export function resolveWorkspacePrefixFromTaskContent(content: string): string | null {
-  const payload = parseTaskWakePayload(content);
-  if (!payload) return null;
-  return resolveWorkspacePrefixFromPayload(payload);
-}
-
-/** Resolve the workspace directory prefix, optionally walking to the project-root task. */
-export async function resolveWorkspaceDirectoryPrefix(
-  content: string,
-  resolveRootTaskId?: (taskId: string) => Promise<string | null>,
-): Promise<string | null> {
-  const payload = parseTaskWakePayload(content);
-  if (!payload) return null;
-
-  let rootTaskId: string | undefined;
-  if (resolveRootTaskId && typeof payload.task_id === 'string' && payload.task_id.length > 0) {
-    const root = await resolveRootTaskId(payload.task_id);
+  let rootTaskId = taskId;
+  if (options.resolveRootTaskId) {
+    const root = await options.resolveRootTaskId(taskId);
     if (root) rootTaskId = root;
   }
 
-  return resolveWorkspacePrefixFromPayload(payload, rootTaskId);
+  const ownedDocuments = options.listLiveByTaskId
+    ? await options.listLiveByTaskId(rootTaskId)
+    : [];
+  const legacyPrefix = projectDirectoryPrefix(rootTaskId);
+  const legacyUuidDocuments = options.listByPrefix
+    ? await options.listByPrefix(legacyPrefix)
+    : undefined;
+
+  return resolveOwnedWorkspacePrefix({
+    rootTaskId,
+    pointer: null,
+    ownedDocuments,
+    legacyUuidDocuments,
+  });
 }
 
 /** Read a document pointer from scheduler / task-wake JSON content. */

@@ -63,6 +63,7 @@ export async function appendDirectoryLog(
   documentPath: string,
   operation: string,
   summary: string,
+  taskId?: string,
 ): Promise<void> {
   const repo = ctx.workingDocs!;
   const logPath = logPathForDocument(documentPath);
@@ -79,6 +80,7 @@ export async function appendDirectoryLog(
             path: logPath,
             type: 'log',
             body: entry,
+            taskId,
             conversationId: ctx.conversationId ?? undefined,
             agentId: ctx.agentId ?? undefined,
           });

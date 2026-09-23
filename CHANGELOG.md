@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Document placement (`doc-place`)** — shared placement policy; agents choose readable `/projects/` folders. (#1819)
 - **Calendar identity guard** — principal-scoped wrong-identity reads fail closed as `IDENTITY_MISMATCH`, not empty success. (#1854)
 - **`ErrorType` / `tool.result` (public API)** — `IDENTITY_MISMATCH`; failure payloads may carry `errorType`. (#1854)
 - **Late specialist results** — a timed-out delegation now hands the specialist's late result back so follow-up work completes. (#1799)
