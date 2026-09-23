@@ -87,7 +87,7 @@ export async function resolveConsoleVoiceCaller(opts: {
   } catch (err) {
     // Narrow to real pg/SQLSTATE errors (five-character alphanumeric code) before
     // suppressing — a TypeError or programming bug must not be silently promoted to
-    // a synthetic principal identity. Mirrors contact-resolver.ts:79-89 (#1598).
+    // a synthetic principal identity. Mirrors ContactResolver.resolve (#1598).
     const sqlState = err !== null && typeof err === 'object' && 'code' in err
       ? (err as { code?: unknown }).code
       : undefined;
