@@ -224,7 +224,7 @@ These replace the former `enable_task_management` flag (two capabilities welded 
 
 **`documents`** (`skills/documents/SKILL.md`):
 
-1. **Expands** to `doc-read`, `doc-list`, `doc-write`, `doc-search`.
+1. **Expands** to `doc-read`, `doc-list`, `doc-write`, `doc-search`, `doc-place`.
 2. **Injects** the Document Workspace guidance block.
 3. **Enables** the document-workspace runtime surface (`documentWorkspaceEnabled`).
 
