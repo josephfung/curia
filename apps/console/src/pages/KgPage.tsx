@@ -474,7 +474,8 @@ export default function KgPage() {
 
   type NeighborhoodLoadResult =
     | { ok: true }
-    | { ok: false; notFoundMessage?: string };
+    | { ok: false; aborted: true }
+    | { ok: false; aborted?: false; notFoundMessage?: string };
 
   /** Returns ok:false when the node was not found (or the load failed before render). */
   async function loadNeighborhood(nodeId: string): Promise<NeighborhoodLoadResult> {
@@ -522,7 +523,10 @@ export default function KgPage() {
       setStatus(`${data.nodes.length} nodes · ${data.edges.length} edges`);
       return { ok: true };
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return { ok: false };
+      // Another load took over neighborhoodAbortRef — do not hero-fallback (#1881 review).
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return { ok: false, aborted: true };
+      }
       console.error('[KgPage] neighborhood load failed:', err);
       setStatus(`Failed to load: ${err instanceof Error ? err.message : 'Unknown error'}`);
       return { ok: false };
@@ -639,12 +643,13 @@ export default function KgPage() {
       // focal class, viewport centering, and URL sync in one shot. On 404 the
       // dead id is cleared from the URL; fall back to the hero graph so the
       // user sees a graph with the not-found status rather than a blank canvas (#1881).
+      // Skip fallback when this load was aborted by a newer click (do not steal the canvas).
       void (async () => {
         const result = await loadNeighborhood(initialNode);
-        if (!result.ok) {
+        if (!result.ok && !result.aborted && result.notFoundMessage) {
           await loadHeroGraph();
           // loadHeroGraph overwrites status — restore the actionable not-found message.
-          if (result.notFoundMessage) setStatus(result.notFoundMessage);
+          setStatus(result.notFoundMessage);
         }
       })();
     } else {
@@ -662,7 +667,8 @@ export default function KgPage() {
             const principal = contacts.find(c => c.systemRole === 'principal');
             if (principal?.kgNodeId) {
               const result = await loadNeighborhood(principal.kgNodeId);
-              if (result.ok) return;
+              // Success, or aborted because the user already started another load — leave it.
+              if (result.ok || result.aborted) return;
             }
           } else {
             console.error('[KgPage] principal node lookup: contacts fetch failed with status', res.status);
