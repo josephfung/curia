@@ -135,16 +135,18 @@ describeIf('contact recent history SQL (#1599)', () => {
     );
     const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const now = new Date();
+    // Distinct timestamps: equal created_at ties on a random id, so order is not stable.
+    const replyAt = new Date(now.getTime() + 1000);
     await pool.query(
       `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id)
        VALUES
          ('signal:crh-1599-peer', 'coordinator', 'user', 'old signal line', $2, true, NULL, NULL),
          ('signal:crh-1599-peer', 'coordinator', 'user', 'today on signal', $3, false, $1, 'signal'),
-         ('signal:crh-1599-peer', 'coordinator', 'assistant', 'signal reply kept', $3, false, NULL, 'signal'),
+         ('signal:crh-1599-peer', 'coordinator', 'assistant', 'signal reply kept', $4, false, NULL, 'signal'),
          ('signal:group=crh-1599', 'coordinator', 'user', 'group line', $2, true, NULL, NULL),
          ('sms:crh-1599-peer', 'coordinator', 'user', 'old sms line', $2, true, NULL, NULL),
          ('email:crh-1599-old', 'coordinator', 'user', 'old email line', $2, true, NULL, NULL)`,
-      [alice, old, now],
+      [alice, old, now, replyAt],
     );
 
     const before = await memory.getContactRecentHistory({
