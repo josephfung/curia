@@ -87,7 +87,8 @@ When an agent is about to write a project document, choose in this **default ord
    agent picks a kebab-case slug; the harness rejects UUID-shaped or malformed segments.
    If a virgin folder is required and the chosen name is already occupied, allocate
    `<slug>-<8 hex of root task id>` (then `-2`, `-3`, …) via `allocateUniqueProjectSlug`
-   (`src/agents/document-placement.ts`).
+   (`src/agents/document-placement.ts`). The short id is the last 8 hex digits of the
+   root task UUID (dashes stripped) so fixtures that share a leading zero-prefix stay unique.
 
 Discovery before create: call **`doc-place`** (structured recommendation) and/or `doc-list`
 on `/projects/`. On task wake the harness injects a **projects catalog** plus a

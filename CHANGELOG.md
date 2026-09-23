@@ -51,7 +51,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+<<<<<<< HEAD
 - **Voice greeting** — non-principal callers no longer get principal framing on the opening turn. (#1874)
+=======
+- **Document placement** — root `task_id` stamp, task-scoped spill leaf, wake-only catalog, word soft-match. (#1819)
+>>>>>>> b01b6130 (docs: note #1819 review fixes in CHANGELOG and spill leaf spec)
 - **Delegated specialists** — harness-set requester identity replaces the low-trust unknown-sender block. (#1871)
 - **Voice off-ramp** — internal coordinator tasks get requester identity without specialist framing. (#1871)
 - **Calendar RSVP policy** — unknown-sender decline applies only to formal invite responses. (#1871)
