@@ -1092,11 +1092,13 @@ export class TaskRepo {
       if (!rootTaskId) {
         return { ok: false, code: 'invalid_block', message: `task not found: ${taskId}` };
       }
+      const rootTask = rootTaskId === taskId ? current : await this.getTask(rootTaskId);
       prepared = await prepareResumableBlockWithSpill(input, {
         workingDocsRepo: this.workingDocsRepo,
         rootTaskId,
         taskId,
         agentId: callerAgentId,
+        title: rootTask?.title,
       });
     }
     if (!prepared.ok) return prepared;

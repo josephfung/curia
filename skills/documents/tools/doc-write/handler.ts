@@ -1,7 +1,9 @@
-// handler.ts — doc-write skill (#1209).
+// handler.ts — doc-write skill (#1209 / #1819).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { normalizeDocPath } from '../../../../src/memory/okf.js';
+import { validateProjectsWritePath } from '../../../../src/agents/document-placement.js';
+import { boundTaskFromMetadata } from '../../../../src/agents/resumable-task.js';
 import {
   appendDirectoryLog,
   mapDocumentRow,
@@ -12,6 +14,12 @@ import {
 } from '../../../_shared/doc-workspace.js';
 
 const VALID_MODES = new Set(['create', 'append', 'replace', 'section-edit']);
+
+function resolveAssociatedTaskId(ctx: ToolContext, inputTaskId?: string): string | undefined {
+  if (typeof inputTaskId === 'string' && inputTaskId.trim()) return inputTaskId.trim();
+  const bound = boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
+  return bound?.taskId;
+}
 
 export class DocWriteHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -48,10 +56,18 @@ export class DocWriteHandler implements ToolHandler {
       return { success: false, error: reservedError };
     }
 
+    if (input.mode === 'create') {
+      const projectsError = validateProjectsWritePath(input.path);
+      if (projectsError) {
+        return { success: false, error: projectsError };
+      }
+    }
+
     const timezone = ctx.timezone ?? 'UTC';
     const normalized = normalizeDocPath(input.path);
     const summary = typeof input.summary === 'string' ? input.summary : `${input.mode} ${normalized}`;
     const ttlWarning = ttlDaysFrontmatterWarning(normalized, input.frontmatter);
+    const associatedTaskId = resolveAssociatedTaskId(ctx, input.task_id);
 
     try {
       const repo = ctx.workingDocs!;
@@ -71,11 +87,11 @@ export class DocWriteHandler implements ToolHandler {
             type: input.type.trim(),
             frontmatter: input.frontmatter,
             body: input.body ?? '',
-            taskId: input.task_id,
+            taskId: associatedTaskId,
             conversationId: input.conversation_id ?? ctx.conversationId ?? undefined,
             agentId: ctx.agentId ?? undefined,
           });
-          await appendDirectoryLog(ctx, normalized, 'create', summary);
+          await appendDirectoryLog(ctx, normalized, 'create', summary, associatedTaskId);
           return {
             success: true,
             data: {
@@ -103,7 +119,7 @@ export class DocWriteHandler implements ToolHandler {
           if (!result.ok) {
             return { success: true, data: mapWriteConflict(result, timezone) };
           }
-          await appendDirectoryLog(ctx, normalized, 'append', summary);
+          await appendDirectoryLog(ctx, normalized, 'append', summary, associatedTaskId);
           return {
             success: true,
             data: { action: 'appended', document: mapDocumentRow(result.document, timezone) },
@@ -125,11 +141,12 @@ export class DocWriteHandler implements ToolHandler {
             frontmatter: input.frontmatter,
             body: input.body,
             expectedVersion: input.expected_version,
+            ...(current.taskId == null && associatedTaskId ? { taskId: associatedTaskId } : {}),
           });
           if (!result.ok) {
             return { success: true, data: mapWriteConflict(result, timezone) };
           }
-          await appendDirectoryLog(ctx, normalized, 'replace', summary);
+          await appendDirectoryLog(ctx, normalized, 'replace', summary, associatedTaskId);
           return {
             success: true,
             data: {
@@ -164,6 +181,7 @@ export class DocWriteHandler implements ToolHandler {
             normalized,
             'section-edit',
             `${summary} (${input.section.trim()})`,
+            associatedTaskId,
           );
           return {
             success: true,

@@ -248,4 +248,53 @@ describeIf('WorkingDocsRepo (integration)', () => {
     expect(await repo.purgeExpiredScratch(7)).toBe(0);
     expect(await repo.read('/scratch/active/note.md')).not.toBeNull();
   });
+
+  it('archiveProjectWorkspaceDocs does not archive a shared folder sibling owned by another task (#1819)', async () => {
+    const { TaskRepo } = await import('../../src/db/task-repo.js');
+    const { createSilentLogger: silent } = await import('../../src/logger.js');
+    const noopBus = { publish: async () => {}, subscribe: () => {} };
+    const taskRepo = new TaskRepo(pool, noopBus as never, silent());
+
+    const taskA = await taskRepo.createTask({
+      agentId: 'coordinator',
+      title: 'Shared folder archive A',
+      source: 'agent',
+    });
+    const taskB = await taskRepo.createTask({
+      agentId: 'coordinator',
+      title: 'Shared folder archive B',
+      source: 'agent',
+    });
+
+    await repo.create({
+      path: '/projects/shared-folder/a.md',
+      type: 'note',
+      body: 'owned by A',
+      taskId: taskA.id,
+    });
+    await repo.create({
+      path: '/projects/shared-folder/b.md',
+      type: 'note',
+      body: 'owned by B',
+      taskId: taskB.id,
+    });
+    // Outbound link from B — must survive when A completes.
+    await repo.create({
+      path: '/projects/shared-folder/b-index.md',
+      type: 'note',
+      body: 'See [b](/projects/shared-folder/b.md).',
+      taskId: taskB.id,
+    });
+
+    const archived = await repo.archiveProjectWorkspaceDocs(taskA.id);
+    expect(archived).toBe(1);
+    expect(await repo.read('/projects/shared-folder/a.md')).toBeNull();
+    expect(await repo.read('/projects/shared-folder/b.md')).not.toBeNull();
+    expect(await repo.read('/projects/shared-folder/b-index.md')).not.toBeNull();
+
+    const backlinks = await repo.getBacklinks('/projects/shared-folder/b.md');
+    expect(backlinks.map(l => l.sourcePath)).toContain('/projects/shared-folder/b-index.md');
+
+    await pool.query('DELETE FROM tasks WHERE id = ANY($1::uuid[])', [[taskA.id, taskB.id]]);
+  });
 });

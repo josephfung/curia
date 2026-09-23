@@ -27,7 +27,7 @@ const BASE_INPUT = {
 function makeDoc(overrides: Partial<WorkingDocRow> = {}): WorkingDocRow {
   return {
     id: 'doc-id',
-    path: '/projects/root/accumulator.md',
+    path: '/projects/social-media/accumulator.md',
     type: ACCUMULATOR_DOC_TYPE,
     frontmatter: {},
     body: '',
@@ -45,8 +45,9 @@ function makeDoc(overrides: Partial<WorkingDocRow> = {}): WorkingDocRow {
 }
 
 describe('accumulatorDocPath / formatAccumulatorDocumentBody', () => {
-  it('builds the project-root spill path and JSON body', () => {
-    expect(accumulatorDocPath('abc-123')).toBe('/projects/abc-123/accumulator.md');
+  it('builds the spill path under a workspace prefix and JSON body', () => {
+    expect(accumulatorDocPath('/projects/social-media/')).toBe('/projects/social-media/accumulator.md');
+    expect(accumulatorDocPath('/projects/social-media')).toBe('/projects/social-media/accumulator.md');
     const body = formatAccumulatorDocumentBody(['a', 'b']);
     expect(body).toContain('# Accumulator');
     expect(body).toContain('```json');
@@ -69,13 +70,14 @@ describe('spillInlineAccumulator', () => {
 
     const pointer = await spillInlineAccumulator(repo, {
       rootTaskId: 'root',
+      workspacePrefix: '/projects/social-media/',
       agentId: 'social-media',
       inlineValue: ['did:plc:abc'],
     });
 
-    expect(pointer).toEqual(documentAccumulatorPointer('/projects/root/accumulator.md'));
+    expect(pointer).toEqual(documentAccumulatorPointer('/projects/social-media/accumulator.md'));
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/projects/root/accumulator.md',
+      path: '/projects/social-media/accumulator.md',
       type: ACCUMULATOR_DOC_TYPE,
       taskId: 'root',
       agentId: 'social-media',
@@ -90,11 +92,12 @@ describe('spillInlineAccumulator', () => {
 
     const pointer = await spillInlineAccumulator(repo, {
       rootTaskId: 'root',
+      workspacePrefix: '/projects/social-media/',
       inlineValue: ['did:plc:def'],
     });
 
-    expect(pointer.path).toBe('/projects/root/accumulator.md');
-    expect(update).toHaveBeenCalledWith('/projects/root/accumulator.md', expect.objectContaining({
+    expect(pointer.path).toBe('/projects/social-media/accumulator.md');
+    expect(update).toHaveBeenCalledWith('/projects/social-media/accumulator.md', expect.objectContaining({
       expectedVersion: 2,
       taskId: 'root',
     }));
@@ -111,10 +114,11 @@ describe('spillInlineAccumulator', () => {
 
     const pointer = await spillInlineAccumulator(repo, {
       rootTaskId: 'root',
+      workspacePrefix: '/projects/social-media/',
       inlineValue: ['did:plc:abc'],
     });
 
-    expect(pointer.path).toBe('/projects/root/accumulator.md');
+    expect(pointer.path).toBe('/projects/social-media/accumulator.md');
     expect(create).toHaveBeenCalledOnce();
     expect(update).toHaveBeenCalledOnce();
   });
@@ -122,34 +126,81 @@ describe('spillInlineAccumulator', () => {
 
 describe('prepareResumableBlockWithSpill', () => {
   it('passes through valid inline blocks unchanged', async () => {
-    const repo = { create: vi.fn(), read: vi.fn(), update: vi.fn() } as unknown as WorkingDocsRepo;
+    const repo = {
+      create: vi.fn(),
+      read: vi.fn(),
+      update: vi.fn(),
+      listLiveByTaskId: vi.fn(async () => []),
+      listByPrefix: vi.fn(async () => []),
+    } as unknown as WorkingDocsRepo;
     const result = await prepareResumableBlockWithSpill(BASE_INPUT, {
       workingDocsRepo: repo,
-      rootTaskId: 'root',
+      rootTaskId: '00000000-0000-4000-8000-000000000001',
       taskId: 'child',
+      title: 'Social media',
     });
     expect(result.ok).toBe(true);
     expect(repo.create).not.toHaveBeenCalled();
   });
 
-  it('spills inline overflow and stores a document pointer', async () => {
+  it('spills inline overflow under a suggested slug when no workspace exists', async () => {
     const big = 'x'.repeat(RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES);
-    const create = vi.fn(async () => makeDoc());
+    const create = vi.fn(async () => makeDoc({ path: '/projects/social-media/accumulator.md' }));
     const repo = {
       create,
       read: vi.fn(async () => null),
       update: vi.fn(),
+      listLiveByTaskId: vi.fn(async () => []),
+      listByPrefix: vi.fn(async () => []),
     } as unknown as WorkingDocsRepo;
 
     const result = await prepareResumableBlockWithSpill(
       { ...BASE_INPUT, accumulator: [big] },
-      { workingDocsRepo: repo, rootTaskId: 'root', taskId: 'child', agentId: 'agent' },
+      {
+        workingDocsRepo: repo,
+        rootTaskId: '00000000-0000-4000-8000-000000000001',
+        taskId: 'child',
+        agentId: 'agent',
+        title: 'Social media',
+      },
     );
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(isDocumentPointer(result.block.accumulator)).toBe(true);
     expect(resumableBlockBytes(result.block)).toBeLessThanOrEqual(RESUMABLE_BLOCK_MAX_BYTES);
-    expect(create).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/projects/social-media/accumulator.md',
+      taskId: '00000000-0000-4000-8000-000000000001',
+    }));
+  });
+
+  it('reuses an owned workspace prefix when present', async () => {
+    const big = 'x'.repeat(RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES);
+    const root = '00000000-0000-4000-8000-000000000001';
+    const create = vi.fn(async () => makeDoc({ path: '/projects/audit/accumulator.md' }));
+    const repo = {
+      create,
+      read: vi.fn(async () => null),
+      update: vi.fn(),
+      listLiveByTaskId: vi.fn(async () => [
+        makeDoc({
+          path: '/projects/audit/brief.md',
+          taskId: root,
+          updatedAt: '2026-06-29T12:00:00.000Z',
+        }),
+      ]),
+      listByPrefix: vi.fn(async () => []),
+    } as unknown as WorkingDocsRepo;
+
+    const result = await prepareResumableBlockWithSpill(
+      { ...BASE_INPUT, accumulator: [big] },
+      { workingDocsRepo: repo, rootTaskId: root, taskId: 'child', title: 'Other title' },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/projects/audit/accumulator.md',
+    }));
   });
 });

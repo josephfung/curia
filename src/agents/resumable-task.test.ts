@@ -178,7 +178,7 @@ describe('guidance blocks', () => {
 });
 
 describe('bound task resolution', () => {
-  it('reads boundTask from metadata and derives workspace index path', () => {
+  it('reads boundTask from metadata without inventing a UUID workspace path', () => {
     const ctx = resolveBoundTaskContext(
       {
         boundTask: {
@@ -192,8 +192,31 @@ describe('bound task resolution', () => {
       'scheduler',
     );
     expect(ctx?.taskId).toBe('00000000-0000-0000-0000-000000000099');
-    expect(ctx?.workspaceManifestPath).toBe('/projects/00000000-0000-0000-0000-000000000099/index.md');
+    expect(ctx?.workspaceManifestPath).toBeUndefined();
     expect(isResumableTask(ctx!)).toBe(true);
+  });
+
+  it('derives workspace index path from a document pointer in wake content', () => {
+    const ctx = resolveBoundTaskContext(
+      {
+        boundTask: {
+          taskId: '00000000-0000-0000-0000-000000000099',
+          errorBudget: { resumable: true },
+          tags: [],
+          progress: {},
+        },
+      },
+      JSON.stringify({
+        task_id: '00000000-0000-0000-0000-000000000099',
+        progress: {
+          resumable: {
+            accumulator: { kind: 'document', path: '/projects/social-media/accumulator.md' },
+          },
+        },
+      }),
+      'scheduler',
+    );
+    expect(ctx?.workspaceManifestPath).toBe('/projects/social-media/index.md');
   });
 
   it('falls back to scheduler content JSON', () => {

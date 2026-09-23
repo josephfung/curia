@@ -1,0 +1,29 @@
+{
+  "name": "doc-place",
+  "description": "Recommend where a project document belongs in the OKF workspace before writing. Returns a structured placement decision: extend an existing document, add to an existing /projects/<slug>/ folder, or create a new kebab-case folder (never a task UUID). Call this before creating a new project folder. Does not write — follow up with doc-write at the recommended path.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "intent": "string? (what the document is for — used with title to suggest a slug)",
+    "title": "string? (task or work title — preferred source for the suggested slug hint)",
+    "proposed_slug": "string? (LLM-chosen kebab-case folder name to validate / match)",
+    "leaf": "string? (optional document leaf, e.g. brief.md — defaults to brief.md)",
+    "prefer_new_folder": "boolean? (when true, allocate a unique new folder even if a match exists)"
+  },
+  "outputs": {
+    "action": "string (extend | add_to_folder | create_folder)",
+    "slug": "string",
+    "directory_prefix": "string",
+    "path": "string? (suggested document path)",
+    "reason": "string",
+    "allocated": "boolean?",
+    "collision_short_id": "string?",
+    "catalog": "array of {slug, directory_prefix, document_count, sample_paths, sample_titles}",
+    "displayTimezone": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 15000,
+  "capabilities": ["workingDocs", "taskRepo"]
+}

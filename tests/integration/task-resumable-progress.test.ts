@@ -13,6 +13,7 @@ import {
   resumableBlockBytes,
 } from '../../src/db/resumable-progress.js';
 import { accumulatorDocPath } from '../../src/db/resumable-accumulator-spill.js';
+import { suggestProjectSlug, projectDirectoryPrefix } from '../../src/agents/document-placement.js';
 import {
   documentPointerFromTaskContent,
   resolveWorkspaceDirectoryPrefix,
@@ -268,20 +269,23 @@ describeIf('TaskRepo resumable progress (#1172, #1210)', () => {
     const pointer = spill.block.accumulator;
     expect(isDocumentPointer(pointer)).toBe(true);
     if (!isDocumentPointer(pointer)) return;
-    expect(pointer.path).toBe(accumulatorDocPath(parent.id));
+    const expectedPrefix = projectDirectoryPrefix(suggestProjectSlug(parent.title));
+    expect(pointer.path).toBe(accumulatorDocPath(expectedPrefix));
 
     const doc = await workingDocs.read(pointer.path);
     expect(doc?.body).toContain('"did:plc:000000"');
+    expect(doc?.taskId).toBe(parent.id);
 
     const wakeContent = JSON.stringify({
       task_id: child.id,
       progress: (await repo.getTask(child.id))?.progress ?? {},
     });
     expect(documentPointerFromTaskContent(wakeContent)?.path).toBe(pointer.path);
-    expect(await resolveWorkspaceDirectoryPrefix(
-      wakeContent,
-      (taskId) => repo.resolveProjectRootTaskId(taskId),
-    )).toBe(`/projects/${parent.id}/`);
+    expect(await resolveWorkspaceDirectoryPrefix(wakeContent, {
+      resolveRootTaskId: (taskId) => repo.resolveProjectRootTaskId(taskId),
+      listLiveByTaskId: (id) => workingDocs.listLiveByTaskId(id),
+      listByPrefix: (p) => workingDocs.listByPrefix(p),
+    })).toBe(expectedPrefix);
 
     const resumed = await repo.setResumableBlock(child.id, {
       cursor: 'page:11',

@@ -61,13 +61,40 @@ Paths are POSIX-like and directories are just prefixes, so `doc-list` on a prefi
 like `ls` on a folder.
 
 - **`/projects/<slug>/…`** — durable working documents. Never auto-purged; the home for work
-  that must survive across days and feed distillation.
+  that must survive across days and feed distillation. `<slug>` is a **readable kebab-case
+  name** derived from the work (LLM-chosen, harness-validated) — never a raw task UUID for
+  new folders. Legacy `/projects/<task-uuid>/…` paths from before #1819 remain readable.
 - **`/scratch/<conversation-id>/…`** — ephemeral. Swept by the nightly purge after a period
   of inactivity (§9). The reserved shape is `/scratch/<conversation-id>/<leaf>`
   (`SCRATCH_CONVERSATION_PATH_RE`, `src/agents/document-workspace.ts`).
 - **Reserved leaves.** Every directory has an `index.md` (a navigation catalog) and a
   `log.md` (an append-only change history). These names are reserved — generic
   create/replace will not overwrite them (`RESERVED_LEAF_NAMES`).
+
+### Placement policy (#1819)
+
+**Path is organisational; `task_id` is ownership.** A folder may hold documents from more
+than one root task. Completion archival (§10) therefore keys on `task_id` (plus a legacy
+UUID path arm), never on a shared slug prefix.
+
+When an agent is about to write a project document, choose in this **default order**:
+
+1. **Extend an existing document** — append / section-edit a live doc that already holds
+   the ongoing log, queue, checklist, or brief for this work.
+2. **Add to an existing folder** — create a new leaf under an established `/projects/<slug>/`
+   that matches the work (e.g. `/projects/social-media/queue.md`).
+3. **Create a new folder** — only when the work is a genuinely new body of context. The
+   agent picks a kebab-case slug; the harness rejects UUID-shaped or malformed segments.
+   If a virgin folder is required and the chosen name is already occupied, allocate
+   `<slug>-<8 hex of root task id>` (then `-2`, `-3`, …) via `allocateUniqueProjectSlug`
+   (`src/agents/document-placement.ts`).
+
+Discovery before create: call **`doc-place`** (structured recommendation) and/or `doc-list`
+on `/projects/`. On task wake the harness injects a **projects catalog** plus a
+title-derived *suggested* slug (Hybrid); it does **not** invent `/projects/<task-uuid>/`
+as the workspace prefix. Resume resolves the prefix the agent actually used: document
+pointer → live docs owned by the root task → legacy UUID directory → else no dedicated
+manifest.
 
 ## 4. Data model
 
@@ -101,17 +128,20 @@ without a false conflict.
 
 ## 6. Skills (#1209)
 
-Four skills, auto-pinned into every workspace-enabled agent (§7):
+Five skills, auto-pinned into every workspace-enabled agent (§7):
 
 | Skill | `action_risk` | Version | Behavior |
 |---|---|---|---|
 | `doc-read` | none | 0.1.0 | Read a document, or one `##` section (section-heading match is **case-insensitive**). |
 | `doc-list` | none | 0.1.0 | List documents under a path prefix — the `index.md` projection of a directory. |
 | `doc-search` | none | 0.1.0 | **Case-sensitive substring** grep across bodies (`line.includes(query)`); `path_prefix` defaults to the whole workspace; capped at 50 matches. |
-| `doc-write` | low | 0.2.0 | Create / append / replace / section-edit at a path; appends a `log.md` entry; returns `conflict: true` on version mismatch. |
+| `doc-place` | none | 0.1.0 | Read-only placement recommendation (`extend` / `add_to_folder` / `create_folder`) from the shared placement module (#1819). |
+| `doc-write` | low | 0.3.0 | Create / append / replace / section-edit at a path; appends a `log.md` entry; returns `conflict: true` on version mismatch; stamps `task_id` from the bound task when omitted; rejects malformed `/projects/` folder names. |
 
-`doc-write` carries `action_risk: low` (an internal-state write); the three read skills are
-`action_risk: none`.
+`doc-write` carries `action_risk: low` (an internal-state write); the four read / recommend
+skills are `action_risk: none`. Placement algorithms live in
+`src/agents/document-placement.ts` and are shared by `doc-place`, spill, and harness
+injection — not duplicated in prose-only guidance.
 
 ## 7. Harness injection & auto-pin
 
@@ -122,19 +152,23 @@ SKILL.md body via `resolvePinnedSkills` (call site in `src/index.ts`). There is 
 separate document-workspace YAML flag. Agents that historically had
 `enable_task_management` now pin both `tasks` and `documents`.
 
-The guidance block teaches the path conventions, retention rules, and **manifest-first**
-discipline: on resume an agent may receive the directory manifest (the `index.md`
+The guidance block teaches the path conventions, retention rules, **placement policy**
+(§3), and **manifest-first** discipline: on resume an agent may receive a projects catalog
+and (when a dedicated prefix is already resolved) the directory manifest (the `index.md`
 projection) at the **tail** of its task message, then pull document bodies and specific
 sections via `doc-read` as tool results — keeping working text out of the cached
-tools/system prefix so prefix caching survives across providers (the same discipline spec
-20 §3 applies to the resumable nudge).
+tools/system prefix so prefix caching survives across providers (the same discipline the
+resumable nudge uses).
 
 ## 8. Accumulator spill (#1210)
 
 The resumable accumulator (spec 19 §10) is bounded — a 4 KB inline cap
 (`RESUMABLE_INLINE_ACCUMULATOR_MAX_BYTES = 4096`) and an 8 KB block cap
-(`RESUMABLE_BLOCK_MAX_BYTES = 8192`). On overflow it spills into the workspace at
-`/projects/<root-task-id>/accumulator.md` (`type: resumable-accumulator`), and
+(`RESUMABLE_BLOCK_MAX_BYTES = 8192`). On overflow it spills into the workspace under the
+**resolved workspace prefix** for the root task (pointer / owned `/projects/` docs / legacy
+UUID directory), or — when nothing exists yet — under a uniqueness-allocated suggested
+slug from the task title (`allocateUniqueProjectSlug`, #1819). The spill document is
+`accumulator.md` (`type: resumable-accumulator`) with `task_id` set to the root task, and
 `progress.resumable` stores a `{ kind: 'document', path, section? }` pointer
 (`isDocumentPointer`, `src/db/resumable-progress.ts`) in place of the inline text. This is
 the workspace's first production consumer: unbounded working output has a durable home
@@ -160,6 +194,11 @@ deliverable** — never the per-item worklog — is distilled through the existi
 `extract-facts` / `extract-relationships` gates, capped per project, best-effort and
 non-fatal, after which the project's workspace documents are archived (`archived_at`). The
 workspace is the source; the KG is the durable sink.
+
+Archival (`WorkingDocsRepo.archiveProjectWorkspaceDocs`) matches live rows by
+`task_id = <root>` **or** the legacy path prefix `/projects/<root-uuid>/…` only. Shared
+slug folders are never swept by path — documents written into them must carry `task_id`
+(auto-stamped by `doc-write` / spill) so ownership archival can find them (#1819).
 
 ## 11. Configuration
 
