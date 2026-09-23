@@ -6,6 +6,7 @@ import type { LLMProvider, Message } from '../../../src/agents/llm/provider.js';
 import type { ModelRegistry } from '../../../src/agents/llm/model-registry.js';
 import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
+import { VOICE_GREETING_USER_MESSAGE } from '../../../src/channels/voice/greeting.js';
 import { CONTACT_RECENT_HISTORY_HEADER } from '../../../src/memory/contact-recent-history.js';
 import type { ConversationEntityState } from '../../../src/entity-context/conversation-entities.js';
 import type { ResolvedEntityCard } from '../../../src/agents/resolved-entities.js';
@@ -13,6 +14,15 @@ import type { ResolvedEntityCard } from '../../../src/agents/resolved-entities.j
 const ALICE = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const CAROL = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 const EARLIER = new Date();
+
+const PRIVATE_EMAIL = {
+  curiaRole: 'to',
+  primaryRecipientEmails: [] as string[],
+  participants: [
+    { email: 'alice@example.com', role: 'from' },
+    { email: 'office@example.com', role: 'to' },
+  ],
+};
 
 const ALICE_SENDER = {
   resolved: true as const,
@@ -119,6 +129,7 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       senderId: 'alice@example.com',
       content: 'following up on a new thread',
       senderContext: ALICE_SENDER,
+      metadata: PRIVATE_EMAIL,
       parentEventId: 'parent-1',
     }));
 
@@ -261,6 +272,7 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       senderId: 'alice@example.com',
       content: 'new email',
       senderContext: ALICE_SENDER,
+      metadata: PRIVATE_EMAIL,
       parentEventId: 'parent-budget',
     }));
 
@@ -283,5 +295,127 @@ describe('AgentRuntime contact recent history (#1599)', () => {
     expect(tiers[historyAt]!.included).toBe(true);
     expect(tiers[contactAt]!.included).toBe(false);
     expect(tiers[contactAt]!.droppedReason).toBe('budget_exceeded');
+  });
+
+  it('does not inject a private 1:1 into a Signal group or a CC email', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const llm = provider();
+    const memory = WorkingMemory.createInMemory();
+    await memory.addTurn('signal:+1555', 'coordinator', {
+      role: 'user',
+      content: 'do not tell Bob the offer is 4.2',
+    }, {
+      senderContactId: ALICE,
+      channelId: 'signal',
+      createdAt: EARLIER,
+    });
+
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider: llm,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      memory,
+      timezone: 'America/Toronto',
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'signal:group=g1',
+      channelId: 'signal',
+      senderId: '+1555',
+      content: 'posting in the group',
+      senderContext: ALICE_SENDER,
+      parentEventId: 'parent-group',
+    }));
+
+    expect(blockText(messagesOf(llm.chat))).toBeUndefined();
+    expect(messagesOf(llm.chat).map(m => m.content).join('\n')).not.toContain('do not tell Bob');
+
+    llm.chat.mockClear();
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-cc',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'looping Bob in',
+      senderContext: ALICE_SENDER,
+      metadata: {
+        curiaRole: 'cc',
+        primaryRecipientEmails: ['bob@example.com'],
+        participants: [
+          { email: 'alice@example.com', role: 'from' },
+          { email: 'bob@example.com', role: 'to' },
+          { email: 'office@example.com', role: 'cc' },
+        ],
+      },
+      parentEventId: 'parent-cc',
+    }));
+
+    expect(blockText(messagesOf(llm.chat))).toBeUndefined();
+    expect(messagesOf(llm.chat).map(m => m.content).join('\n')).not.toContain('do not tell Bob');
+  });
+
+  it('recalls the spoken refusal from a call that opened with the greeting cue', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const llm = provider();
+    const memory = WorkingMemory.createInMemory();
+    await memory.addTurn('voice:earlier', 'coordinator', {
+      role: 'user',
+      content: VOICE_GREETING_USER_MESSAGE,
+    }, {
+      channelId: 'voice',
+      createdAt: EARLIER,
+    });
+    await memory.addTurn('voice:earlier', 'coordinator', {
+      role: 'user',
+      content: 'can you move the board prep to 4?',
+    }, {
+      senderContactId: ALICE,
+      channelId: 'voice',
+      createdAt: new Date(EARLIER.getTime() + 1000),
+    });
+    await memory.addTurn('voice:earlier', 'coordinator', {
+      role: 'assistant',
+      content: 'no, you have the investor call then',
+    }, {
+      channelId: 'voice',
+      createdAt: new Date(EARLIER.getTime() + 2000),
+    });
+
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider: llm,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      memory,
+      timezone: 'America/Toronto',
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-new',
+      channelId: 'email',
+      senderId: 'alice@example.com',
+      content: 'following up by email',
+      senderContext: ALICE_SENDER,
+      metadata: PRIVATE_EMAIL,
+      parentEventId: 'parent-voice',
+    }));
+
+    const block = blockText(messagesOf(llm.chat));
+    expect(block).toContain('can you move the board prep to 4?');
+    expect(block).toContain('no, you have the investor call then');
+    expect(block).not.toContain(VOICE_GREETING_USER_MESSAGE);
   });
 });

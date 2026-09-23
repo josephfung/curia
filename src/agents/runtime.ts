@@ -17,6 +17,7 @@ import { historyForLlm, LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } fro
 import {
   CONTACT_RECENT_HISTORY_TIER,
   contactRecentHistoryApplies,
+  contactRecentHistoryAudienceIsPrivate,
   contactRecentHistorySince,
   formatContactRecentHistoryBlock,
   persistableContactId,
@@ -1178,6 +1179,7 @@ export class AgentRuntime {
       agentId,
       conversationId,
       timezone: this.config.timezone,
+      metadata: taskEvent.payload.metadata,
     });
     const rawHistory = memory
       ? await memory.getHistory(conversationId, agentId)
@@ -3036,9 +3038,18 @@ export class AgentRuntime {
     agentId: string;
     conversationId: string;
     timezone: string | undefined;
+    metadata: Record<string, unknown> | undefined;
   }): Promise<{ considered: boolean; block: string | null }> {
-    const { memory, channelId, contactId, agentId, conversationId, timezone } = args;
+    const { memory, channelId, contactId, agentId, conversationId, timezone, metadata } = args;
     if (!memory || !contactId || !contactRecentHistoryApplies(channelId)) {
+      return Promise.resolve({ considered: false, block: null });
+    }
+    // A group or CC'd thread would put a private 1:1 in front of other people.
+    if (!contactRecentHistoryAudienceIsPrivate({ channelId, conversationId, metadata })) {
+      this.config.logger.debug(
+        { agentId, conversationId, channelId },
+        'Contact recent-history skipped — this reply is heard by more than the contact',
+      );
       return Promise.resolve({ considered: false, block: null });
     }
     const window = contactRecentHistorySince(new Date(), timezone);

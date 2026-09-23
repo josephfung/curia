@@ -2028,6 +2028,45 @@ describe('VoiceRuntime contact recent history (#1599)', () => {
     expect(contents.join('\n')).not.toContain('noted both the venue and the code');
   });
 
+  it('recalls the spoken reply from an earlier call that opened with the greeting cue', async () => {
+    const caller = principalCaller();
+    const wm = WorkingMemory.createInMemory();
+    await wm.addTurn('voice:earlier', 'coordinator', { role: 'user', content: VOICE_GREETING_USER_MESSAGE }, {
+      channelId: 'voice',
+    });
+    await wm.addTurn('voice:earlier', 'coordinator', { role: 'user', content: 'can you move the board prep to 4?' }, {
+      senderContactId: caller.contactId,
+      channelId: 'voice',
+    });
+    await wm.addTurn('voice:earlier', 'coordinator', { role: 'assistant', content: 'no, you have the investor call then' }, {
+      channelId: 'voice',
+    });
+
+    const llm = new FakeStreamProvider([reply('You have the investor call then.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: wm,
+      timezone: 'America/Toronto',
+    });
+    await runtime.startSession({
+      sessionId: 'recall-cue',
+      conversationId: 'voice:recall-cue',
+      roomName: 'voice-recall-cue',
+      agentToken: 'tok',
+      caller,
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'what did you say about the board prep', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('recall-cue');
+
+    const contents = textContents(llm.seenMessages[0]!);
+    const block = contents.find(c => c.includes(CONTACT_RECENT_HISTORY_HEADER));
+    expect(block).toContain('can you move the board prep to 4?');
+    expect(block).toContain('no, you have the investor call then');
+    expect(block).not.toContain(VOICE_GREETING_USER_MESSAGE);
+  });
+
   it('keeps the live transcript when the contact recall read misses the deadline', async () => {
     const stalled = {
       addTurn: vi.fn(async () => {}),

@@ -9,6 +9,7 @@ import {
 import { rewriteLlmFailureTurns } from './llm-failure-turn.js';
 import {
   CONTACT_RECENT_HISTORY_MAX_TURNS,
+  CONTACT_RECENT_HISTORY_NON_PARTICIPANT_USER_CONTENT,
   normalizeAddTurnAttribution,
   persistableContactId,
   selectContactRecentTurns,
@@ -298,7 +299,11 @@ class PostgresBackend implements StorageBackend {
   /**
    * SQL twin of selectContactRecentTurns. User turns must match the contact.
    * Assistant and system turns come only from conversations with no other
-   * sender and no unattributed user turn (including archived rows).
+   * sender and no unattributed user turn (including archived rows). The
+   * synthetic voice greeting cue ($6) is not a participant.
+   *
+   * `id` is only a stable tie-break when two rows share `created_at`. It is
+   * not insertion order. The privacy predicate does not depend on that order.
    */
   async getContactRecent(query: ContactRecentHistoryQuery): Promise<ContactRecentTurn[]> {
     const limit = query.maxTurns ?? CONTACT_RECENT_HISTORY_MAX_TURNS;
@@ -337,6 +342,10 @@ class PostgresBackend implements StorageBackend {
                    WHERE wm2.agent_id = $2
                      AND wm2.role = 'user'
                      AND wm2.conversation_id = wm.conversation_id
+                     AND NOT (
+                       wm2.sender_contact_id IS NULL
+                       AND wm2.content = $6
+                     )
                      AND (
                        wm2.sender_contact_id IS NULL
                        OR wm2.sender_contact_id <> $1::uuid
@@ -354,6 +363,7 @@ class PostgresBackend implements StorageBackend {
           query.since,
           query.excludeConversationId ?? '',
           limit,
+          CONTACT_RECENT_HISTORY_NON_PARTICIPANT_USER_CONTENT,
         ],
       );
 
