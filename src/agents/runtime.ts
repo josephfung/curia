@@ -179,6 +179,11 @@ export interface AgentConfig {
     email?: string;
     phone?: string;
   };
+  /**
+   * Every owned mailbox. Email contact-recent recall requires one of these
+   * on a two-party thread. Empty or omitted skips email recall (#1599).
+   */
+  selfEmails?: readonly string[];
   /** The agent's own contact ID (a UUID). When provided, a "Contact ID: <uuid>" line is
    *  added to the "## Your Contact Details" block so the agent can reference its own
    *  identity for self-directed lookups. Passed only for the coordinator (specialists use
@@ -1180,6 +1185,7 @@ export class AgentRuntime {
       conversationId,
       timezone: this.config.timezone,
       metadata: taskEvent.payload.metadata,
+      selfEmails: this.config.selfEmails,
     });
     const rawHistory = memory
       ? await memory.getHistory(conversationId, agentId)
@@ -3039,13 +3045,14 @@ export class AgentRuntime {
     conversationId: string;
     timezone: string | undefined;
     metadata: Record<string, unknown> | undefined;
+    selfEmails: readonly string[] | undefined;
   }): Promise<{ considered: boolean; block: string | null }> {
-    const { memory, channelId, contactId, agentId, conversationId, timezone, metadata } = args;
+    const { memory, channelId, contactId, agentId, conversationId, timezone, metadata, selfEmails } = args;
     if (!memory || !contactId || !contactRecentHistoryApplies(channelId)) {
       return Promise.resolve({ considered: false, block: null });
     }
     // A group or CC'd thread would put a private 1:1 in front of other people.
-    if (!contactRecentHistoryAudienceIsPrivate({ channelId, conversationId, metadata })) {
+    if (!contactRecentHistoryAudienceIsPrivate({ channelId, conversationId, metadata, selfEmails })) {
       this.config.logger.debug(
         { agentId, conversationId, channelId },
         'Contact recent-history skipped — this reply is heard by more than the contact',

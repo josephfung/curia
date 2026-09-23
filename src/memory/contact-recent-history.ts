@@ -87,6 +87,13 @@ export function contactRecentHistoryAudienceIsPrivate(args: {
   channelId: string;
   conversationId: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Owned mailbox addresses. Email recall requires one of them to be on the
+   * thread. Absent or empty fails closed: `curiaRole: 'to'` with an empty
+   * primary-recipient list is also what the converter returns when it cannot
+   * find Curia at all (BCC, alias, forward).
+   */
+  selfEmails?: readonly string[];
 }): boolean {
   switch (args.channelId) {
     case 'signal':
@@ -101,18 +108,29 @@ export function contactRecentHistoryAudienceIsPrivate(args: {
     case 'slack':
       return parseSlackConversationId(args.conversationId)?.isDm === true;
     case 'email':
-      return emailReplyAudienceIsPrivate(args.metadata);
+      return emailReplyAudienceIsPrivate(args.metadata, args.selfEmails);
     default:
       return false;
   }
 }
 
 /**
- * A two-party email: the sender, the office, no CC, and no other To address.
- * `curiaRole: 'to'` plus an empty `primaryRecipientEmails` is how the email
- * converter reports "Curia is the only To". Absent fields fail closed.
+ * A two-party email: the sender, one owned mailbox, no CC, and no other To.
+ * One of the two addresses must be an owned mailbox. Two strangers with the
+ * permissive converter default (`curiaRole: 'to'`, empty primary recipients)
+ * are not a private audience.
  */
-function emailReplyAudienceIsPrivate(metadata: Record<string, unknown> | undefined): boolean {
+function emailReplyAudienceIsPrivate(
+  metadata: Record<string, unknown> | undefined,
+  selfEmails: readonly string[] | undefined,
+): boolean {
+  const office = new Set<string>();
+  for (const raw of selfEmails ?? []) {
+    if (typeof raw !== 'string') continue;
+    const email = raw.trim().toLowerCase();
+    if (email.length > 0) office.add(email);
+  }
+  if (office.size === 0) return false;
   if (!metadata) return false;
   if (metadata.curiaRole !== 'to') return false;
   if (!Array.isArray(metadata.primaryRecipientEmails) || metadata.primaryRecipientEmails.length > 0) {
@@ -131,7 +149,11 @@ function emailReplyAudienceIsPrivate(metadata: Record<string, unknown> | undefin
     if (email.length === 0) return false;
     emails.add(email);
   }
-  return emails.size === 2;
+  if (emails.size !== 2) return false;
+  for (const email of emails) {
+    if (office.has(email)) return true;
+  }
+  return false;
 }
 
 /**
