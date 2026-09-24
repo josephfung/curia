@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
-import { BullpenService } from '../../src/memory/bullpen.js';
+import { BULLPEN_PENDING_WINDOW_MINUTES, BullpenService } from '../../src/memory/bullpen.js';
 import { createLogger } from '../../src/logger.js';
 
 const { Pool } = pg;
@@ -56,16 +56,95 @@ describeIf('BullpenService integration (Postgres)', () => {
     expect(after!.thread.lastMessageAt!.getTime()).toBeGreaterThanOrEqual(before!.thread.lastMessageAt!.getTime());
   });
 
-  it('getPendingThreadsForAgent respects time window', async () => {
-    const { thread } = await service.openThread(`${runId} — Old thread`, 'coordinator', ['coordinator', 'agent-b'], 'Old', []);
-    // Force last_message_at to be 2 hours ago
+  async function backdateThread(threadId: string, age: string): Promise<void> {
     await pool.query(
-      `UPDATE bullpen_threads SET last_message_at = NOW() - INTERVAL '2 hours' WHERE id = $1`,
-      [thread.id],
+      `UPDATE bullpen_threads SET last_message_at = NOW() - $2::interval WHERE id = $1`,
+      [threadId, age],
     );
-    // 60-minute window should exclude this thread
-    const pending = await service.getPendingThreadsForAgent('agent-b', 60);
-    expect(pending.find(p => p.threadId === thread.id)).toBeUndefined();
+  }
+
+  // The recency predicate runs in Postgres. A mock cannot tell minutes from
+  // milliseconds: excluding a two-hour-old row also passes when `60` is read as
+  // 60ms. The 30-minute row is what fails that regression. (#1899)
+  it('getPendingThreadsForAgent applies the window in minutes against real rows (#1899)', async () => {
+    const agentId = `agent-${runId}-minutes`;
+    const creator = `creator-${runId}-minutes`;
+    const { thread: inside } = await service.openThread(
+      `${runId} — 30 min`,
+      creator,
+      [creator, agentId],
+      'recent',
+      [agentId],
+    );
+    const { thread: outside } = await service.openThread(
+      `${runId} — 90 min`,
+      creator,
+      [creator, agentId],
+      'stale',
+      [agentId],
+    );
+    await backdateThread(inside.id, '30 minutes');
+    await backdateThread(outside.id, '90 minutes');
+
+    const ids = (await service.getPendingThreadsForAgent(agentId, 60)).map(p => p.threadId);
+    expect(ids).toContain(inside.id);
+    expect(ids).not.toContain(outside.id);
+  });
+
+  it('default window recovers an hours-old handoff and keeps the seen and self-sender guards (#1899)', async () => {
+    const agentId = `agent-${runId}-default`;
+    const creator = `creator-${runId}-default`;
+
+    const { thread: halfHour } = await service.openThread(
+      `${runId} — 30 min default`,
+      creator,
+      [creator, agentId],
+      'please handle this',
+      [agentId],
+    );
+    const { thread: elevenHours } = await service.openThread(
+      `${runId} — 11 hours`,
+      creator,
+      [creator, agentId],
+      'please handle this',
+      [agentId],
+    );
+    const { thread: eightDays } = await service.openThread(
+      `${runId} — 8 days`,
+      creator,
+      [creator, agentId],
+      'please handle this',
+      [agentId],
+    );
+    const { thread: seen } = await service.openThread(
+      `${runId} — seen`,
+      creator,
+      [creator, agentId],
+      'please handle this',
+      [agentId],
+    );
+    const { thread: selfLast } = await service.openThread(
+      `${runId} — self last`,
+      creator,
+      [creator, agentId],
+      'please handle this',
+      [agentId],
+    );
+    await service.postMessage(selfLast.id, agentId, 'done', []);
+
+    await backdateThread(halfHour.id, '30 minutes');
+    await backdateThread(elevenHours.id, '11 hours');
+    await backdateThread(eightDays.id, '8 days');
+    await backdateThread(seen.id, '11 hours');
+    await service.markThreadsSeen(agentId, [seen.id]);
+    await backdateThread(selfLast.id, '11 hours');
+
+    const ids = (await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES)).map(p => p.threadId);
+    expect(ids).toContain(halfHour.id);
+    expect(ids).toContain(elevenHours.id);
+    expect(ids).not.toContain(eightDays.id);
+    expect(ids).not.toContain(seen.id);
+    expect(ids).not.toContain(selfLast.id);
   });
 
   it('closeThread prevents further posts', async () => {

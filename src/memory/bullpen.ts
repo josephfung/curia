@@ -60,6 +60,13 @@ export interface PendingThreadContext {
 // only kicks in for genuinely long conversations. (#1090)
 const RECENT_MSG_LIMIT = 15;
 
+// How far back pending-thread injection looks, in minutes. Seven days covers the
+// slowest scheduled participant (contacts, twice a week) with slack for a missed
+// run, and still drops abandoned threads. The read watermark and the "latest
+// sender is not me" guard stop re-actioning; this bound is only a backstop.
+// Scheduler-channel tasks do not inject this tier (#1609). ADR-043. (#1899)
+export const BULLPEN_PENDING_WINDOW_MINUTES = 7 * 24 * 60;
+
 // -- Backend interface --
 
 interface BullpenBackend {
@@ -70,7 +77,7 @@ interface BullpenBackend {
   closeThread(threadId: string): Promise<void>;
   getThread(threadId: string): Promise<{ thread: BullpenThread; messages: BullpenMessage[] } | null>;
   findThreadBySourceMessageId(sourceMessageId: string): Promise<{ thread: BullpenThread; message: BullpenMessage } | null>;
-  getPendingThreadsForAgent(agentId: string, windowMs: number): Promise<PendingThreadContext[]>;
+  getPendingThreadsForAgent(agentId: string, windowMinutes: number): Promise<PendingThreadContext[]>;
   // Advance the per-agent read watermark for the given threads to each thread's current
   // last_message_at. Unknown thread ids are ignored. Idempotent and monotonic (#1065).
   markThreadsSeen(agentId: string, threadIds: string[]): Promise<void>;
@@ -134,14 +141,16 @@ class InMemoryBullpenBackend implements BullpenBackend {
     return { thread: { ...thread }, messages: [...(this.messages.get(threadId) ?? [])] };
   }
 
-  async getPendingThreadsForAgent(agentId: string, windowMs: number): Promise<PendingThreadContext[]> {
-    const cutoff = new Date(Date.now() - windowMs);
+  async getPendingThreadsForAgent(agentId: string, windowMinutes: number): Promise<PendingThreadContext[]> {
+    // Inclusive of the newest instant, exclusive of the far edge — matches the
+    // Postgres predicate `last_message_at > NOW() - window`.
+    const cutoffMs = Date.now() - windowMinutes * 60 * 1000;
     const result: PendingThreadContext[] = [];
 
     for (const [threadId, thread] of this.threads) {
       if (thread.status !== 'open') continue;
       if (!thread.participants.includes(agentId)) continue;
-      if (!thread.lastMessageAt || thread.lastMessageAt < cutoff) continue;
+      if (!thread.lastMessageAt || thread.lastMessageAt.getTime() <= cutoffMs) continue;
 
       // Read watermark (#1065): skip threads the agent has already seen up to their
       // current latest message — only re-surface when newer activity has arrived.
@@ -348,8 +357,10 @@ class PostgresBullpenBackend implements BullpenBackend {
     return { thread, message };
   }
 
-  async getPendingThreadsForAgent(agentId: string, windowMs: number): Promise<PendingThreadContext[]> {
-    const windowSeconds = windowMs / 1000;
+  async getPendingThreadsForAgent(agentId: string, windowMinutes: number): Promise<PendingThreadContext[]> {
+    // Minutes in, seconds at the SQL boundary. A millisecond parameter here is
+    // what made a 60-minute window look like 60ms (#1899).
+    const windowSeconds = windowMinutes * 60;
     const threadsRes = await this.pool.query<{
       id: string; topic: string; message_count: number; last_message_at: Date;
     }>(
@@ -553,7 +564,7 @@ export class BullpenService {
   }
 
   async getPendingThreadsForAgent(agentId: string, windowMinutes: number): Promise<PendingThreadContext[]> {
-    return this.backend.getPendingThreadsForAgent(agentId, windowMinutes * 60 * 1000);
+    return this.backend.getPendingThreadsForAgent(agentId, windowMinutes);
   }
 
   /**
@@ -585,7 +596,9 @@ export function formatBullpenContext(pending: PendingThreadContext[]): string {
     lines.push('');
     lines.push(`Thread "${thread.topic}" (thread_id: ${thread.threadId}, ${thread.totalMessages} total messages${showing}):`);
     for (const msg of thread.recentMessages) {
-      const ts = msg.createdAt.toTimeString().slice(0, 5);
+      // Date plus time, UTC. A time-of-day stamp reads as "just now" once the
+      // pending window spans more than an hour (#1899).
+      const ts = `${msg.createdAt.toISOString().slice(0, 16).replace('T', ' ')}Z`;
       const mentions = msg.mentionedAgentIds.length > 0
         ? msg.mentionedAgentIds.map(id => `@${id}`).join(' ') + ' '
         : '';

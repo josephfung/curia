@@ -73,7 +73,7 @@ import {
   activeSkillNameSetsEqual,
 } from '../db/active-skills-progress.js';
 import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
-import { formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
+import { BULLPEN_PENDING_WINDOW_MINUTES, formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
 import { parseSchedulerRunJobId } from '../scheduler/conversation-id.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -228,7 +228,8 @@ export interface AgentConfig {
   /** Optional Bullpen service for pending thread context injection.
    *  When provided, pending threads are injected as a system message before every LLM call. */
   bullpenService?: BullpenService;
-  /** How far back to look for active threads, in minutes. Default: 60. */
+  /** How far back to look for active threads, in minutes.
+   *  Defaults to BULLPEN_PENDING_WINDOW_MINUTES (seven days, ADR-043). */
   bullpenWindowMinutes?: number;
   /** Model registry — used to look up context window sizes per model.
    *  Optional for test convenience; defaults to a no-op registry that returns 0
@@ -2584,7 +2585,7 @@ export class AgentRuntime {
     try {
       const pendingThreads = await this.config.bullpenService.getPendingThreadsForAgent(
         agentId,
-        this.config.bullpenWindowMinutes ?? 60,
+        this.config.bullpenWindowMinutes ?? BULLPEN_PENDING_WINDOW_MINUTES,
       );
 
       // Record every injected thread so it can be watermarked at task completion.
