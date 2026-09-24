@@ -74,7 +74,7 @@ function makeMockExecutionLayer(result?: ToolResult): ExecutionLayer {
 
 describe('ApproveActionHandler', () => {
   // #1126: authorization is enforced solely by the execution-layer live-principal gate
-  // (covered in src/skills/execution.test.ts). The handler no longer re-checks origination,
+  // (covered in tests/unit/skills/execution.policy.test.ts). The handler no longer re-checks origination,
   // so the old "rejects non-CEO callers" handler test has been removed.
 
   it('returns error when executionLayer is missing', async () => {

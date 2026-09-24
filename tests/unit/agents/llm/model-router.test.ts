@@ -1,0 +1,135 @@
+import { describe, it, expect } from 'vitest';
+import { ModelRouter, type ModelRoutingConfig } from '../../../../src/agents/llm/model-router.js';
+import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
+import { createSilentLogger } from '../../../../src/logger.js';
+
+const logger = createSilentLogger();
+const registry = new ModelRegistry(logger);
+
+const defaultConfig: ModelRoutingConfig = {
+  tiers: {
+    fast: { model: 'claude-haiku-4-5' },
+    standard: { model: 'claude-sonnet-4-6' },
+    powerful: { model: 'claude-opus-4-6' },
+  },
+  default_tier: 'standard',
+};
+
+describe('ModelRouter', () => {
+  it('resolves fast tier to the configured model', () => {
+    const router = new ModelRouter(defaultConfig, registry, logger);
+    const result = router.resolve('fast');
+    expect(result).toEqual({ model: 'claude-haiku-4-5', tier: 'fast' });
+  });
+
+  it('resolves standard tier to the configured model', () => {
+    const router = new ModelRouter(defaultConfig, registry, logger);
+    const result = router.resolve('standard');
+    expect(result).toEqual({ model: 'claude-sonnet-4-6', tier: 'standard' });
+  });
+
+  it('resolves powerful tier to the configured model', () => {
+    const router = new ModelRouter(defaultConfig, registry, logger);
+    const result = router.resolve('powerful');
+    expect(result).toEqual({ model: 'claude-opus-4-6', tier: 'powerful' });
+  });
+
+  it('throws on unknown tier', () => {
+    const router = new ModelRouter(defaultConfig, registry, logger);
+    expect(() => router.resolve('ultra')).toThrow('Unknown model tier');
+  });
+
+  it('passes needs through without validation', () => {
+    const router = new ModelRouter(defaultConfig, registry, logger);
+    const result = router.resolve('standard', ['vision', 'large_context']);
+    expect(result.model).toBe('claude-sonnet-4-6');
+  });
+
+  it('falls back to default_tier when tier is omitted', () => {
+    const router = new ModelRouter(defaultConfig, registry, logger);
+    const result = router.resolve(undefined);
+    expect(result).toEqual({ model: 'claude-sonnet-4-6', tier: 'standard' });
+  });
+
+  it('throws at construction if a tier config is missing', () => {
+    const config: ModelRoutingConfig = {
+      tiers: {
+        fast: { model: 'claude-haiku-4-5' },
+        standard: { model: 'claude-sonnet-4-6' },
+        // @ts-expect-error — intentionally omitting powerful to test validation
+        powerful: undefined,
+      },
+      default_tier: 'standard',
+    };
+    expect(() => new ModelRouter(config, registry, logger)).toThrow('model_routing.tiers.powerful');
+  });
+
+  it('throws at construction if a tier has empty model', () => {
+    const config: ModelRoutingConfig = {
+      tiers: {
+        fast: { model: 'claude-haiku-4-5' },
+        standard: { model: '' },
+        powerful: { model: 'claude-opus-4-6' },
+      },
+      default_tier: 'standard',
+    };
+    expect(() => new ModelRouter(config, registry, logger)).toThrow('model_routing.tiers.standard');
+  });
+
+  it('throws at construction if a tier references an unknown model', () => {
+    const config: ModelRoutingConfig = {
+      tiers: {
+        fast: { model: 'claude-haiku-4-5' },
+        standard: { model: 'unknown-model-xyz' },
+        powerful: { model: 'claude-opus-4-6' },
+      },
+      default_tier: 'standard',
+    };
+    expect(() => new ModelRouter(config, registry, logger)).toThrow('not found in the model registry');
+  });
+
+  // curia-deploy#226 repoints `standard` away from deepseek/deepseek-v4-pro.
+  // Each candidate has to construct cleanly and resolve to itself, or the
+  // deploy fails at boot rather than at call time (#1804).
+  it.each([
+    'deepseek/deepseek-v4.1-flash',
+    'deepseek/deepseek-v4-pro-0813',
+    'z-ai/glm-5.3-flash',
+    'qwen/qwen3.8-flash',
+  ])('accepts %s as the standard tier model', (model) => {
+    const config: ModelRoutingConfig = {
+      tiers: {
+        fast: { model: 'claude-haiku-4-5' },
+        standard: { model },
+        powerful: { model: 'claude-opus-4-6' },
+      },
+      default_tier: 'standard',
+    };
+    const router = new ModelRouter(config, registry, logger);
+    expect(router.resolve('standard').model).toBe(model);
+  });
+});
+
+describe('ModelRouter.getFallbackTier', () => {
+  const router = new ModelRouter(defaultConfig, registry, logger);
+
+  it('fast falls back to standard', () => {
+    expect(router.getFallbackTier('fast')).toBe('standard');
+  });
+
+  it('standard falls back to powerful', () => {
+    expect(router.getFallbackTier('standard')).toBe('powerful');
+  });
+
+  it('powerful falls back to standard', () => {
+    expect(router.getFallbackTier('powerful')).toBe('standard');
+  });
+
+  it('fallback tier resolves to a valid model', () => {
+    // Fallback tier always succeeds — all tiers are validated at construction.
+    const fastFallback = router.getFallbackTier('fast');
+    const resolved = router.resolve(fastFallback);
+    expect(resolved.model).toBe('claude-sonnet-4-6');
+    expect(resolved.tier).toBe('standard');
+  });
+});

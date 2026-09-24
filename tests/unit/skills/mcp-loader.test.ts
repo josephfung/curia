@@ -52,7 +52,7 @@ const logger = createSilentLogger();
 // Vault double. These tests don't exercise vault resolution — none of their
 // fixtures use an env: sentinel or an "env:" fixed_input — so an empty vault
 // (get() always null) is sufficient. The 4th loadMcpServers arg is required
-// as of #913; vault-resolution behavior is unit-tested in src/skills/mcp-loader.test.ts.
+// as of #913; vault-resolution behavior is unit-tested in tests/unit/skills/mcp-loader.fixed-inputs.test.ts.
 const secrets = {
   get: async (): Promise<string | null> => null,
 } as unknown as import('../../../src/secrets/secrets-service.js').SecretsService;

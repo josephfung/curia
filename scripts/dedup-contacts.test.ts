@@ -11,7 +11,7 @@
 //   3. Principal-involving pair → task created (no merge), even if structural
 //   4. Excluded pair → skipped (no merge, no task)
 //   5. Dry-run mode → no writes of any kind (no merges, no tasks)
-// Exclusion pair-normalization unit tests live in src/contacts/dedup-exclusions.test.ts;
+// Exclusion pair-normalization unit tests live in tests/unit/contacts/dedup-exclusions.test.ts;
 // the table itself is covered by tests/integration/contact-dedup-exclusions.test.ts.
 
 import { describe, it, expect, vi, beforeEach, type MockedFunction } from 'vitest';

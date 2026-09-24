@@ -26,7 +26,9 @@
     "noUnusedParameters": false
   },
   // Covers all test source files. Test handlers import from ../../src (or ../src),
-  // so tsc follows those references automatically.
+  // so tsc follows those references automatically. Backend unit tests live under
+  // tests/unit/ — src/**/*.test.ts is not included, and tsconfig.json excludes it
+  // so a co-located suite is covered by nothing until it moves (#848).
   //
   // scripts/**/*.test.ts is here rather than in tsconfig.scripts.json because it is
   // mock-heavy test code that wants this project's relaxed rules — and because
@@ -34,7 +36,6 @@
   // itself is included for the same reason: it was in nobody's project either.
   "include": [
     "tests/**/*.ts",
-    "src/**/*.test.ts",
     "apps/**/*.test.ts",
     "scripts/**/*.test.ts",
     "vitest.config.ts"

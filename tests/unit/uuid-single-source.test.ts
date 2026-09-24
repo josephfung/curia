@@ -28,7 +28,7 @@
 //   validation regex from a redaction scan, which is why the scrubber needs an
 //   explicit entry rather than being auto-detected.
 // - **Production code only.** Tests legitimately assert on UUID shape — e.g.
-//   tests/unit/memory/types.test.ts and src/agents/late-delegation.test.ts check
+//   tests/unit/memory/types.test.ts and tests/unit/agents/late-delegation.test.ts check
 //   randomUUID() output. Those are assertions about generated values, not identifier
 //   validation, so *.test.ts is skipped.
 // - **Not SQL.** Migrations use Postgres `~*` matches, which this does not walk.

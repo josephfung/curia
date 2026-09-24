@@ -256,8 +256,8 @@ Cover, at minimum:
 - **Inbound normalization** — platform event → `inbound.message` / `inbound.reaction` fields (including dedupe and allowlist filtering if your channel has them).
 - **Outbound delivery** — `outbound.message` for your channel → the correct `OutboundGateway.send` request; other channels' events are ignored.
 - **`extractRecipients`** — assert that group/conversation ids come back `principalEligible: false` and per-human ids come back `true`, and that a foreign request shape returns `null`.
-- **Catalog** — the new descriptor is present with the right required keys (`catalog.test.ts`).
-- **Conformance** — the adapter satisfies `channel-conformance.test.ts` (shared `Channel`-interface checks).
+- **Catalog** — the new descriptor is present with the right required keys (`tests/unit/channels/catalog.test.ts`).
+- **Conformance** — the adapter satisfies `tests/unit/channels/channel-conformance.test.ts` (shared `Channel`-interface checks).
 
 Integration tests should run through a real bus instance so events flow the full dispatch pipeline.
 

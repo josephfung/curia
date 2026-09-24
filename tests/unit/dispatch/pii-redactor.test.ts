@@ -1,0 +1,218 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PiiRedactor } from '../../../src/dispatch/pii-redactor.js';
+import { createSilentLogger } from '../../../src/logger.js';
+import type { Logger } from '../../../src/logger.js';
+import type { EventBus } from '../../../src/bus/bus.js';
+
+// Minimal mock bus satisfying the EventBus.publish() interface that PiiRedactor uses.
+// PiiRedactor only calls bus.publish(layer, event) — we don't need subscribe or constructor args.
+function createMockBus() {
+  return {
+    publish: vi.fn().mockResolvedValue(undefined),
+    subscribe: vi.fn(),
+  } as unknown as EventBus;
+}
+
+const defaultConfig = {
+  enabled: true,
+  default: 'block' as const,
+  channel_policies: {
+    email: { allow: ['email'] },
+    signal: { allow: [] },
+  },
+};
+
+describe('PiiRedactor', () => {
+  let bus: EventBus;
+  let mockBusPublish: ReturnType<typeof vi.fn>;
+  let redactor: PiiRedactor;
+  let logger: Logger;
+
+  beforeEach(() => {
+    bus = createMockBus();
+    // Cast to access the mock publish for assertion purposes
+    mockBusPublish = (bus as unknown as { publish: ReturnType<typeof vi.fn> }).publish;
+    logger = createSilentLogger();
+    redactor = new PiiRedactor({
+      config: defaultConfig,
+      bus,
+      logger,
+      extraPatterns: [],
+    });
+  });
+
+  it('redacts a credit card number on email channel', async () => {
+    const result = await redactor.redact('Your card is 4111 1111 1111 1111.', 'email');
+    expect(result.content).toContain('[REDACTED: CREDIT_CARD]');
+    expect(result.content).not.toContain('4111');
+    expect(result.redactions).toHaveLength(1);
+    expect(result.redactions[0]!.patternLabel).toMatch(/credit_card/i);
+  });
+
+  it('allows email addresses in email channel (in allow list)', async () => {
+    const result = await redactor.redact('Contact user@example.com for help.', 'email');
+    expect(result.content).toContain('user@example.com');
+    expect(result.redactions).toHaveLength(0);
+  });
+
+  it('redacts email addresses in signal channel (not in allow list)', async () => {
+    const result = await redactor.redact('Contact user@example.com for help.', 'signal');
+    expect(result.content).toContain('[REDACTED:');
+    expect(result.content).not.toContain('user@example.com');
+  });
+
+  it('bypasses redaction when disabled', async () => {
+    const disabled = new PiiRedactor({
+      config: { ...defaultConfig, enabled: false },
+      bus,
+      logger,
+      extraPatterns: [],
+    });
+    const result = await disabled.redact('Card: 4111 1111 1111 1111', 'email');
+    expect(result.content).toContain('4111');
+  });
+
+  it('blocks all PII on unlisted channels (default: block)', async () => {
+    // 'sms' is not in channel_policies; default is 'block', so email PII must be redacted
+    const result = await redactor.redact('Contact user@example.com', 'sms');
+    expect(result.content).toContain('[REDACTED:');
+  });
+
+  it('returns original content when no PII detected', async () => {
+    const text = 'Just a normal message.';
+    const result = await redactor.redact(text, 'email');
+    expect(result.content).toBe(text);
+    expect(result.redactions).toHaveLength(0);
+  });
+
+  it('does not publish bus event when no redactions', async () => {
+    await redactor.redact('Clean message', 'email');
+    expect(mockBusPublish).not.toHaveBeenCalled();
+  });
+
+  it('publishes outbound.pii_redacted event on redaction', async () => {
+    await redactor.redact(
+      'Card: 4111 1111 1111 1111',
+      'email',
+      { conversationId: 'conv-1', recipientId: 'r@example.com' },
+    );
+    expect(mockBusPublish).toHaveBeenCalledWith(
+      'dispatch',
+      expect.objectContaining({ type: 'outbound.pii_redacted' }),
+    );
+  });
+
+  it('bypasses redaction when recipientContactId matches ceoContactId', async () => {
+    // Simulates the case where startup resolved the principal's UUID and stored it.
+    const ceoUUID = 'b1a2c3d4-e5f6-7890-abcd-ef1234567890';
+    const redactorWithCeoId = new PiiRedactor({
+      config: defaultConfig,
+      bus,
+      logger,
+      extraPatterns: [],
+      ceoContactId: ceoUUID,
+    });
+
+    // Recipient is CEO — should pass through unredacted via structural UUID bypass.
+    const result = await redactorWithCeoId.redact(
+      'Your card is 4111 1111 1111 1111.',
+      'email',
+      { recipientContactId: ceoUUID },
+    );
+    expect(result.content).toContain('4111 1111 1111 1111');
+    expect(result.redactions).toHaveLength(0);
+    expect(mockBusPublish).not.toHaveBeenCalled();
+  });
+
+  it('does NOT bypass redaction when recipientContactId differs from ceoContactId', async () => {
+    const ceoUUID = 'b1a2c3d4-e5f6-7890-abcd-ef1234567890';
+    const redactorWithCeoId = new PiiRedactor({
+      config: defaultConfig,
+      bus,
+      logger,
+      extraPatterns: [],
+      ceoContactId: ceoUUID,
+    });
+
+    // Recipient is someone else — redaction must apply
+    const result = await redactorWithCeoId.redact(
+      'Your card is 4111 1111 1111 1111.',
+      'email',
+      { recipientContactId: 'ffffffff-ffff-ffff-ffff-ffffffffffff' },
+    );
+    expect(result.content).toContain('[REDACTED: CREDIT_CARD]');
+    expect(result.redactions).toHaveLength(1);
+  });
+
+  it('initializing ceoContactId from findContactBySystemRole result bypasses redaction for that recipient (#1049)', async () => {
+    // Mirrors the startup wiring in src/index.ts: the principal contact id comes from
+    // contactService.findContactBySystemRole('principal'), not from CEO_PRIMARY_EMAIL.
+    const principalUUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const findContactBySystemRole = async (systemRole: string) =>
+      systemRole === 'principal' ? { id: principalUUID } : null;
+
+    const principal = await findContactBySystemRole('principal');
+    const redactorFromResolution = new PiiRedactor({
+      config: defaultConfig,
+      bus,
+      logger,
+      extraPatterns: [],
+      ceoContactId: principal?.id,
+    });
+
+    const result = await redactorFromResolution.redact(
+      'Your card is 4111 1111 1111 1111.',
+      'email',
+      { recipientContactId: principalUUID },
+    );
+    expect(result.content).toContain('4111 1111 1111 1111');
+    expect(result.redactions).toHaveLength(0);
+    expect(mockBusPublish).not.toHaveBeenCalled();
+  });
+
+  it('redaction entries do not contain the original PII value', async () => {
+    const result = await redactor.redact('Card: 4111 1111 1111 1111', 'email');
+    expect(JSON.stringify(result.redactions)).not.toContain('4111');
+  });
+
+  it('redacts multiple distinct PII spans, preserving order and both tokens', async () => {
+    // Both credit_card and phone_us are blocked on signal (empty allow list).
+    // This exercises the end-to-start replacement loop for n > 1 matches.
+    const result = await redactor.redact(
+      'Card: 4111 1111 1111 1111 and call +1 (555) 867-5309.',
+      'signal',
+    );
+    expect(result.content).not.toContain('4111');
+    expect(result.content).not.toContain('867-5309');
+    expect(result.content).toContain('[REDACTED: CREDIT_CARD]');
+    expect(result.content).toMatch(/\[REDACTED: PHONE/);
+    expect(result.redactions).toHaveLength(2);
+    // Redactions must be returned in original start-position order (credit card first)
+    expect(result.redactions[0]!.patternLabel).toMatch(/credit_card/i);
+    expect(result.redactions[1]!.patternLabel).toMatch(/phone/i);
+  });
+
+  it('explicit channel policy fully overrides default: allow (channel policy takes precedence)', async () => {
+    // A channel with an explicit policy entry (even empty allow list) does NOT
+    // inherit default: 'allow'. All PII on that channel follows the channel policy.
+    const redactorWithAllowDefault = new PiiRedactor({
+      config: {
+        ...defaultConfig,
+        default: 'allow',  // would pass everything on channels without a policy
+        channel_policies: {
+          email: { allow: [] },  // explicit empty policy — blocks everything on email
+        },
+      },
+      bus,
+      logger: createSilentLogger(),
+      extraPatterns: [],
+    });
+    const result = await redactorWithAllowDefault.redact(
+      'Contact user@example.com',
+      'email',
+    );
+    // email channel has explicit policy with empty allow list → redacted despite default: 'allow'
+    expect(result.content).toContain('[REDACTED:');
+    expect(result.content).not.toContain('user@example.com');
+  });
+});
