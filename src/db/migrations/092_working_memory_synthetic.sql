@@ -28,7 +28,7 @@
 -- Content markers are used exactly once, below, to classify rows already stored,
 -- where the same false positive is a bounded one-time event on existing data
 -- rather than a standing predicate on attacker-controlled input. They are the
--- SQL twin of SYNTHETIC_USER_TURN_MARKERS in src/memory/synthetic-user-turn.ts.
+-- SQL twin of HISTORICAL_SYNTHETIC_LIKE_PATTERNS in src/memory/synthetic-user-turn.ts.
 -- A marker added later needs its OWN migration: node-pg-migrate records this one
 -- as run, so editing it would silently do nothing for any existing database.
 
