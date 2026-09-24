@@ -32,7 +32,7 @@ describe('backfillDirectChannelSenders', () => {
 
     const result = await backfillDirectChannelSenders(pool, logger(), { batchSize: 2 });
 
-    expect(result).toEqual({ signalRows: 2, smsRows: 1, skippedSynthetic: 0 });
+    expect(result).toEqual({ signalRows: 2, smsRows: 1, syntheticRowsRemaining: 0 });
     expect(updates).toHaveLength(4);
     const signal = updates[0]!;
     const sms = updates[2]!;
@@ -85,19 +85,19 @@ describe('backfillDirectChannelSenders', () => {
     }
     expect(params.every(args => args.length === 1)).toBe(true);
 
-    // The skipped count is what distinguishes a run that correctly held rows back
-    // from one whose filter silently stopped matching. Both report the same
-    // stamped totals.
-    expect(result.skippedSynthetic).toBe(6);
+    // Standing remainder, not "rows this pass skipped". A caught-up run stamps
+    // nothing and can still report these rows. If the filter stops excluding
+    // them, they get stamped and this count falls.
+    expect(result.syntheticRowsRemaining).toBe(6);
     expect(log.info).toHaveBeenCalledWith(
-      expect.objectContaining({ skippedSynthetic: 6 }),
-      expect.stringContaining('skippedSynthetic'),
+      expect.objectContaining({ syntheticRowsRemaining: 6 }),
+      expect.stringContaining('syntheticRowsRemaining'),
     );
   });
 
-  it('reports an unknown skipped count rather than zero when the count query fails', async () => {
-    // Reporting 0 here would read as "nothing was held back", which is exactly
-    // the wrong conclusion to hand an operator.
+  it('reports an unknown remainder rather than zero when the count query fails', async () => {
+    // Reporting 0 here would read as "no synthetic rows remain unstamped", which
+    // hides a failed count.
     const client = {
       query: vi.fn(async () => ({ rowCount: 0 })),
       release: vi.fn(),
@@ -110,7 +110,7 @@ describe('backfillDirectChannelSenders', () => {
 
     const result = await backfillDirectChannelSenders(pool, log, { batchSize: 2 });
 
-    expect(result.skippedSynthetic).toBeNull();
+    expect(result.syntheticRowsRemaining).toBeNull();
     expect(log.warn).toHaveBeenCalled();
   });
 
@@ -132,7 +132,7 @@ describe('backfillDirectChannelSenders', () => {
 
     const result = await backfillDirectChannelSenders(pool, log, { batchSize: 2 });
 
-    expect(result).toEqual({ signalRows: 0, smsRows: 0, skippedSynthetic: null });
+    expect(result).toEqual({ signalRows: 0, smsRows: 0, syntheticRowsRemaining: null });
     expect(log.error).toHaveBeenCalled();
     expect(updates).toBe(2);
   });

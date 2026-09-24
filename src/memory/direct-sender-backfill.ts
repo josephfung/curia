@@ -17,10 +17,12 @@
 // the recall read tests, so the two cannot disagree about what counts as a
 // participant.
 //
-// The count of rows skipped that way is logged next to the count stamped. Both
-// are needed to read a run: a pass that correctly skips every synthetic row and
-// a pass whose filter silently stopped working produce the same `stamped` number
-// and differ only here.
+// After the batches, the log includes syntheticRowsRemaining: every synthetic
+// Signal 1:1 or SMS user row that still has a null sender. It is a standing
+// total, not the number this pass skipped. A caught-up boot stamps nothing and
+// can still report a non-zero remainder. If the synthetic = false filter stops
+// working, those rows get stamped and the remainder falls — that drop, next to
+// the stamped count, is the signal.
 //
 // Runs after boot, in batches, and only updates rows that are still null.
 // A second start is a no-op once the table is caught up.
@@ -129,8 +131,11 @@ async function backfillChannel(
   }
 }
 
-/** Rows this pass deliberately left alone because Curia wrote them (#1892). */
-const SKIPPED_SYNTHETIC_COUNT = `
+/**
+ * Standing total of synthetic Signal 1:1 and SMS user rows that are still
+ * unstamped (#1892). Not limited to the rows this pass touched.
+ */
+const SYNTHETIC_ROWS_REMAINING = `
 SELECT count(*)::int AS n
 FROM working_memory
 WHERE role = 'user'
@@ -143,16 +148,16 @@ WHERE role = 'user'
 `;
 
 /**
- * Count the rows the exclusion is holding back. A failure to count must not fail
- * the backfill — the stamping already succeeded — but it must not quietly report
+ * Count synthetic rows still unstamped. A failure to count must not fail the
+ * backfill — the stamping already succeeded — but it must not quietly report
  * zero either, so the caller gets null and the log says the count is unknown.
  */
-async function countSkippedSynthetic(pool: DbPool, logger: Logger): Promise<number | null> {
+async function countSyntheticRowsRemaining(pool: DbPool, logger: Logger): Promise<number | null> {
   try {
-    const result = await pool.query<{ n: number }>(SKIPPED_SYNTHETIC_COUNT);
+    const result = await pool.query<{ n: number }>(SYNTHETIC_ROWS_REMAINING);
     return result.rows[0]?.n ?? 0;
   } catch (err) {
-    logger.warn({ err }, 'direct-sender backfill: could not count skipped synthetic rows');
+    logger.warn({ err }, 'direct-sender backfill: could not count synthetic rows still unstamped');
     return null;
   }
 }
@@ -165,14 +170,14 @@ export async function backfillDirectChannelSenders(
   pool: DbPool,
   logger: Logger,
   options?: { batchSize?: number },
-): Promise<{ signalRows: number; smsRows: number; skippedSynthetic: number | null }> {
+): Promise<{ signalRows: number; smsRows: number; syntheticRowsRemaining: number | null }> {
   const batchSize = options?.batchSize ?? DIRECT_SENDER_BACKFILL_BATCH;
   const signalRows = await backfillChannel(pool, SIGNAL_UPDATE, batchSize, logger, 'signal');
   const smsRows = await backfillChannel(pool, SMS_UPDATE, batchSize, logger, 'sms');
-  const skippedSynthetic = await countSkippedSynthetic(pool, logger);
+  const syntheticRowsRemaining = await countSyntheticRowsRemaining(pool, logger);
   logger.info(
-    { signalRows, smsRows, skippedSynthetic },
-    'direct-sender backfill finished — skippedSynthetic is how many rows the synthetic exclusion held back',
+    { signalRows, smsRows, syntheticRowsRemaining },
+    'direct-sender backfill finished — syntheticRowsRemaining is the standing count of synthetic Signal/SMS rows still unstamped, not how many this pass skipped',
   );
-  return { signalRows, smsRows, skippedSynthetic };
+  return { signalRows, smsRows, syntheticRowsRemaining };
 }

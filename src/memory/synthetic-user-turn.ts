@@ -54,8 +54,10 @@ export const CONTENT_BLOCK_REWRITE_MARKER = '[OUTBOUND CONTENT FILTER — REWRIT
 export const LATE_SPECIALIST_RESULT_MARKER = '[Late specialist result — ';
 
 /**
- * SQL `LIKE` patterns that classify already-stored synthetic turns, and the
- * authority migration 092 is checked against.
+ * Bindable SQL `LIKE` patterns that classify already-stored synthetic turns.
+ * Migration 092 is checked against these. Apostrophes are literal here: a
+ * caller binding the pattern passes it as a parameter. The migration doubles
+ * them (`'` → `''`) only because the same text sits inside a SQL string literal.
  *
  * Deliberately patterns rather than prefixes: the secret-capture resume briefs
  * (`src/secrets/secret-capture-resume-subscriber.ts`) are ordinary prose that
@@ -71,6 +73,6 @@ export const HISTORICAL_SYNTHETIC_LIKE_PATTERNS: readonly string[] = [
   `${CONTENT_BLOCK_REWRITE_MARKER}%`,
   `${LATE_SPECIALIST_RESULT_MARKER}%`,
   // Both secret-capture variants, which diverge after the display name.
-  `The secret ''%'' was just captured and saved to the vault.%`,
-  `The secret ''%'' that a specialist asked for was just captured and saved to the vault.%`,
+  "The secret '%' was just captured and saved to the vault.%",
+  "The secret '%' that a specialist asked for was just captured and saved to the vault.%",
 ];

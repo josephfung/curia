@@ -58,15 +58,12 @@ WHERE role = 'user'
   AND synthetic = true
   AND sender_contact_id IS NOT NULL;
 
--- The shared-conversation check reads every user row in a participated
--- conversation, including archived ones, so this cannot be a partial index on
--- archived = false the way idx_wm_sender_active is.
-CREATE INDEX idx_wm_synthetic_user
-  ON working_memory (conversation_id, agent_id)
-  WHERE role = 'user' AND synthetic = true;
+-- No index. Both readers filter synthetic = false, the default and nearly every
+-- row, so a partial index on that predicate is the table. A partial index on
+-- synthetic = true cannot serve that predicate — it is the complement — and the
+-- only query it would match is the once-per-boot remainder count.
 
 -- Down Migration
 -- Dropping the column loses the classification; the sender ids cleared above are
 -- not restored, because the value they held was wrong.
-DROP INDEX IF EXISTS idx_wm_synthetic_user;
 ALTER TABLE working_memory DROP COLUMN IF EXISTS synthetic;
