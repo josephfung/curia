@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
-import { DelegationGuard } from '../../../src/agents/delegation-guard.js';
+import { DelegationGuard, delegationKey } from '../../../src/agents/delegation-guard.js';
 import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
@@ -1023,6 +1023,54 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
     expect((result.data as { reason: string }).reason).toBe('already_in_flight');
     expect(published).toEqual([]);
     expect(open.findInFlight).toHaveBeenCalledOnce();
+  });
+
+  it('does not consume a retryable attempt when the handle is still open', async () => {
+    const task = 'Draft the post';
+    const key = delegationKey('social-media', task);
+    const guard = new DelegationGuard();
+    guard.recordInvocation(key);
+    guard.recordFailure(key, {
+      agent: 'social-media',
+      reason: 'tool_error',
+      retryable: true,
+      message: 'specialist failed once',
+    });
+
+    const { bus, published } = listeningBus();
+    const refused = await handler.execute(makeCtx(
+      { agent: 'social-media', task },
+      {
+        bus,
+        agentRegistry: registry(),
+        conversationId: 'signal:+15551212',
+        delegationGuard: guard,
+        openDelegationLookup: lookup({ agent: 'social-media', conversationId: 'signal:+15551212' }),
+      },
+    ));
+
+    expect(refused.success).toBe(true);
+    if (!refused.success) return;
+    expect((refused.data as { reason: string }).reason).toBe('already_in_flight');
+    expect(published).toEqual([]);
+    expect(guard.canAttempt(key)).toBe(true);
+
+    const next = await handler.execute(makeCtx(
+      { agent: 'social-media', task },
+      {
+        bus,
+        agentRegistry: registry(),
+        conversationId: 'signal:+15551212',
+        delegationGuard: guard,
+        openDelegationLookup: lookup(null),
+      },
+    ));
+
+    expect(next.success).toBe(true);
+    if (!next.success) return;
+    expect((next.data as { failed?: boolean }).failed).toBeUndefined();
+    expect((next.data as { response?: string }).response).toContain('specialist done');
+    expect(published).toEqual(['social-media']);
   });
 
   it('refuses to dispatch when the lookup fails', async () => {

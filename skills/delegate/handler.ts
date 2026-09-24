@@ -279,8 +279,8 @@ export class DelegateHandler implements ToolHandler {
     // re-run its side effects. This handler is the second gate — it is what actually publishes the
     // specialist task, and it validates only the token's agent, never the task — so the check has
     // to live here too, not only in the runtime.
+    const dKey = delegationKey(agent, task);
     if (ctx.delegationGuard) {
-      const dKey = delegationKey(agent, task);
       // The delivered record is keyed on the ORIGINAL task. A resume's `task` is the CEO's new
       // direction, so the key has to be resolved from the token too — otherwise the block misses
       // exactly the shape a resume normally takes and this handler publishes the work again.
@@ -310,10 +310,6 @@ export class DelegateHandler implements ToolHandler {
             escalated: ctx.delegationGuard.isEscalated(blockKey),
           },
         };
-      }
-      // A resume continuation does not consume an attempt — unchanged from #1171.
-      if (!hasResumeToken) {
-        ctx.delegationGuard.recordInvocation(dKey);
       }
     }
 
@@ -402,6 +398,13 @@ export class DelegateHandler implements ToolHandler {
     // agent-mismatch error; an open handle must not replace that with already_in_flight.
     const inFlightRefusal = await refuseIfInFlight(ctx, agent);
     if (inFlightRefusal) return inFlightRefusal;
+
+    // Record only once this call is past the in-flight refusal. That refusal did
+    // not start a specialist, so it must not consume an attempt. A resume
+    // continuation still does not consume one (#1171).
+    if (ctx.delegationGuard && !hasResumeToken) {
+      ctx.delegationGuard.recordInvocation(dKey);
+    }
 
     ctx.log.info(
       { targetAgent: agent, task: effectiveTask.slice(0, 100), timeoutMs: specialistTimeoutMs },
