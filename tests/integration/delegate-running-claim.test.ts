@@ -392,6 +392,13 @@ describeIf('dispatch-time delegation claim (#1893)', () => {
       originConversationId: origin,
       originChannelId: 'signal',
       originSenderId: '+15551212',
+      originator: {
+        contactId: 'contact-1',
+        systemRole: 'principal',
+        channel: 'signal',
+        initiatedAt: '2026-09-24T00:00:00.000Z',
+        tier: 'principal',
+      },
       expiresAt: new Date(Date.now() + 60_000),
     });
     expect(acquired.acquired).toBe(true);
@@ -410,6 +417,7 @@ describeIf('dispatch-time delegation claim (#1893)', () => {
     expect(live.abandoned).toBe(0);
     const stillRunning = await getPendingDelegationByDelegateEventId(pool, acquired.claim.delegateEventId);
     expect(stillRunning?.status).toBe('running');
+    expect(stillRunning?.originator).toMatchObject({ contactId: 'contact-1', channel: 'signal' });
 
     await pool.query(
       `UPDATE pending_delegations SET expires_at = now() - interval '1 second' WHERE delegate_event_id = $1`,

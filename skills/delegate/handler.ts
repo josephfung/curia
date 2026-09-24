@@ -37,7 +37,7 @@ import {
   type InFlightDelegation,
 } from '../../src/db/queries/pending-delegations.js';
 import { clampDelegateWaitTimeoutMs } from '../../src/agents/delegate-timeout.js';
-import { parseSchedulerJobId } from '../../src/agents/late-delegation.js';
+import { parseSchedulerJobId, parseStoredOriginator } from '../../src/agents/late-delegation.js';
 import {
   EXECUTION_PAUSED_PROTOCOL,
   formatPausedProgressMessage,
@@ -451,6 +451,84 @@ export class DelegateHandler implements ToolHandler {
       parentEventId: `delegate-${randomUUID()}`,
     });
 
+    // Claim before subscribing. A refusal returns before the response listener
+    // and its timer exist, so a busy conversation does not accumulate subscribers
+    // that never settle.
+    let acquiredDelegateEventId: string | undefined;
+    if (ctx.openDelegationLookup?.acquireRunning) {
+      const originAgentId = ctx.agentId;
+      const originConversationId = ctx.conversationId;
+      const originChannelId = ctx.channelId;
+      const originSenderId = ctx.senderId;
+      if (
+        typeof originAgentId !== 'string' || originAgentId === ''
+        || typeof originConversationId !== 'string' || originConversationId === ''
+        || typeof originChannelId !== 'string' || originChannelId === ''
+        || typeof originSenderId !== 'string' || originSenderId === ''
+      ) {
+        ctx.log.error(
+          { targetAgent: agent, hasSender: typeof originSenderId === 'string' },
+          'Cannot claim a running delegation — refusing to dispatch without an origin',
+        );
+        return {
+          success: false,
+          error: `Could not claim the in-flight slot for '${agent}'. Not starting another run.`,
+          errorType: 'DATABASE_UNAVAILABLE',
+        };
+      }
+      const rawOriginator = ctx.taskMetadata?.['originator'];
+      const originator = typeof rawOriginator === 'object' && rawOriginator !== null && !Array.isArray(rawOriginator)
+        ? parseStoredOriginator(rawOriginator as Record<string, unknown>)
+        : undefined;
+      let acquired: AcquireRunningResult;
+      try {
+        const schedulerJobId = parseSchedulerJobId(originConversationId);
+        acquired = await ctx.openDelegationLookup.acquireRunning({
+          delegateEventId: taskEvent.id,
+          delegateConversationId: conversationId,
+          targetAgent: agent,
+          delegateTask: effectiveTask,
+          originAgentId,
+          originConversationId,
+          originChannelId,
+          originSenderId,
+          ...(ctx.taskEventId !== undefined && { originTaskEventId: ctx.taskEventId }),
+          ...(schedulerJobId !== undefined && { schedulerJobId }),
+          ...(originator !== undefined && { originator }),
+          expiresAt: runningClaimExpiresAt(new Date(), specialistTimeoutMs),
+        });
+      } catch (err) {
+        ctx.log.error(
+          { err, targetAgent: agent, originConversationId },
+          'Dispatch claim failed — refusing to start another specialist run',
+        );
+        return {
+          success: false,
+          error: `Could not claim the in-flight slot for '${agent}'. Not starting another run.`,
+          errorType: 'DATABASE_UNAVAILABLE',
+        };
+      }
+      if (!acquired.acquired) {
+        ctx.log.warn(
+          {
+            targetAgent: agent,
+            originConversationId,
+            delegateEventId: acquired.inFlight.delegateEventId,
+          },
+          'Blocked delegate — another turn claimed this specialist in this conversation',
+        );
+        return inFlightResult(agent, acquired.inFlight);
+      }
+      acquiredDelegateEventId = acquired.claim.delegateEventId;
+    }
+
+    // Record only once this call holds the claim (or no claim is wired). An
+    // in-flight refusal did not start a specialist, so it must not consume an
+    // attempt. A resume continuation still does not consume one (#1171).
+    if (ctx.delegationGuard && !hasResumeToken) {
+      ctx.delegationGuard.recordInvocation(dKey);
+    }
+
     // Set up a one-time listener for the specialist's response BEFORE
     // publishing the task, so we don't miss a fast response.
     // TODO: The EventBus has no unsubscribe mechanism, so this subscriber
@@ -549,80 +627,12 @@ export class DelegateHandler implements ToolHandler {
     // while responsePromise had no rejection handler yet — causing an unhandledRejection
     // that crashes the process. Promise.all attaches handlers to both promises immediately,
     // closing that window. See: https://github.com/josephfung/curia/issues/73
-    // Set only on the timeout path. Every other post-publish exit releases the claim
-    // in the finally below. Timeout promotes the same row into the #1858 handle.
-    let acquiredDelegateEventId: string | undefined;
+    // Set only when the wait timer itself fires — that rejection carries
+    // delegateEventId, which is what the runtime promotes. A specialist that
+    // reports reason 'timeout' does not, and retaining the claim would block
+    // the conversation until the sweep re-delivered the answer.
     let retainRunningClaim = false;
     try {
-      if (ctx.openDelegationLookup?.acquireRunning) {
-        const originAgentId = ctx.agentId;
-        const originConversationId = ctx.conversationId;
-        const originChannelId = ctx.channelId;
-        const originSenderId = ctx.senderId;
-        if (
-          typeof originAgentId !== 'string' || originAgentId === ''
-          || typeof originConversationId !== 'string' || originConversationId === ''
-          || typeof originChannelId !== 'string' || originChannelId === ''
-          || typeof originSenderId !== 'string' || originSenderId === ''
-        ) {
-          ctx.log.error(
-            { targetAgent: agent, hasSender: typeof originSenderId === 'string' },
-            'Cannot claim a running delegation — refusing to dispatch without an origin',
-          );
-          return {
-            success: false,
-            error: `Could not claim the in-flight slot for '${agent}'. Not starting another run.`,
-            errorType: 'DATABASE_UNAVAILABLE',
-          };
-        }
-        let acquired: AcquireRunningResult;
-        try {
-          const schedulerJobId = parseSchedulerJobId(originConversationId);
-          acquired = await ctx.openDelegationLookup.acquireRunning({
-            delegateEventId: taskEvent.id,
-            delegateConversationId: conversationId,
-            targetAgent: agent,
-            delegateTask: effectiveTask,
-            originAgentId,
-            originConversationId,
-            originChannelId,
-            originSenderId,
-            ...(ctx.taskEventId !== undefined && { originTaskEventId: ctx.taskEventId }),
-            ...(schedulerJobId !== undefined && { schedulerJobId }),
-            expiresAt: runningClaimExpiresAt(new Date(), specialistTimeoutMs),
-          });
-        } catch (err) {
-          ctx.log.error(
-            { err, targetAgent: agent, originConversationId },
-            'Dispatch claim failed — refusing to start another specialist run',
-          );
-          return {
-            success: false,
-            error: `Could not claim the in-flight slot for '${agent}'. Not starting another run.`,
-            errorType: 'DATABASE_UNAVAILABLE',
-          };
-        }
-        if (!acquired.acquired) {
-          ctx.log.warn(
-            {
-              targetAgent: agent,
-              originConversationId,
-              delegateEventId: acquired.inFlight.delegateEventId,
-            },
-            'Blocked delegate — another turn claimed this specialist in this conversation',
-          );
-          return inFlightResult(agent, acquired.inFlight);
-        }
-        acquiredDelegateEventId = acquired.claim.delegateEventId;
-      }
-
-      // Record only once this call holds the claim (or no claim is wired). An
-      // in-flight refusal did not start a specialist, so it must not consume an
-      // attempt. A resume continuation still does not consume one (#1171).
-      if (ctx.delegationGuard && !hasResumeToken) {
-        ctx.delegationGuard.recordInvocation(dKey);
-      }
-
       const [response] = await Promise.all([
         responsePromise,
         ctx.bus.publish('dispatch', taskEvent),
@@ -751,9 +761,10 @@ export class DelegateHandler implements ToolHandler {
       };
     } catch (err) {
       if (isStructuredDelegateFailure(err)) {
-        // The specialist started. Keep the claim so the timeout subscriber can
-        // promote it; releasing here would let a second run begin beside it.
-        if (err.reason === 'timeout') retainRunningClaim = true;
+        // The wait timer started the specialist and set delegateEventId. Keep
+        // the claim so the timeout subscriber can promote it. A specialist
+        // failure that merely uses the reason 'timeout' has no id to promote.
+        if (err.reason === 'timeout' && err.delegateEventId !== undefined) retainRunningClaim = true;
         const message = formatStructuredFailureMessage(err.agent, err.reason);
         ctx.log.error(
           {
@@ -795,8 +806,9 @@ export class DelegateHandler implements ToolHandler {
         try {
           await ctx.openDelegationLookup.releaseRunning(acquiredDelegateEventId);
         } catch (err) {
-          // The claim expires with the wait. A failed release blocks until the sweep,
-          // which is safer than throwing away a result the caller already has.
+          // releaseRunning marks the row delivered when the delete throws, so the
+          // sweep cannot re-send a result this caller already has. This log is the
+          // case where that mark failed too — the row stays running until expires_at.
           ctx.log.error(
             { err, targetAgent: agent, delegateEventId: acquiredDelegateEventId },
             'Failed to release the running delegation claim',

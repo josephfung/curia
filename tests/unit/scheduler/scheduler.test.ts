@@ -298,6 +298,8 @@ describe('Scheduler', () => {
             attempt: 1,
           },
         },
+        agent_task_id: 'task-retry-1',
+        task_tags: ['delegation-retry', 'calendar'],
         originator: {
           contactId: 'contact-1',
           systemRole: 'principal',
@@ -332,6 +334,9 @@ describe('Scheduler', () => {
         channelId: 'signal',
         senderId: '+15551212',
       }));
+      const closeCall = pool.query.mock.calls.find((call) => String(call[0]).includes("'delegation-retry'"));
+      expect(String(closeCall?.[0])).toContain("status = 'done'");
+      expect(closeCall?.[1]).toEqual(['task-retry-1']);
     });
 
     it('passes intentAnchor in event payload for persistent tasks', async () => {

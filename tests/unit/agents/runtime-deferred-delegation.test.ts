@@ -96,6 +96,7 @@ async function runTurn(opts: {
   toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
   invoke: ExecutionLayer['invoke'];
   metadata?: Record<string, unknown>;
+  defaultDelegateTimeoutMs?: number;
 }): Promise<{ createTask: ReturnType<typeof vi.fn> }> {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
@@ -112,6 +113,9 @@ async function runTurn(opts: {
     executionLayer: execution,
     taskRepo,
     skillToolDefs: [DELEGATE_TOOL],
+    ...(opts.defaultDelegateTimeoutMs !== undefined && {
+      defaultDelegateTimeoutMs: opts.defaultDelegateTimeoutMs,
+    }),
   });
   runtime.register();
   await bus.publish('dispatch', createAgentTask({
@@ -186,5 +190,18 @@ describe('runtime deferred delegation (#1893)', () => {
     });
 
     expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('does not wake earlier than the configured delegate wait', async () => {
+    const before = Date.now();
+    const { createTask } = await runTurn({
+      toolCalls: [{ id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Book Tuesday' } }],
+      invoke: async () => inFlightData('calendar'),
+      defaultDelegateTimeoutMs: 240_000,
+    });
+
+    const params = createTask.mock.calls[0]![0] as { wakeAt: Date };
+    expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 240_000);
+    expect(params.wakeAt.getTime()).toBeLessThan(before + 240_000 + 5_000);
   });
 });
