@@ -12,6 +12,8 @@ import { Scheduler } from '../../src/scheduler/scheduler.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
 import { createLogger } from '../../src/logger.js';
 
+const CLAIMED_AT = new Date('2026-09-24T12:00:00.000Z');
+
 const MOCK_PROVENANCE = {
   requestedModel: 'mock-model',
   actualModel: 'mock-model',
@@ -114,7 +116,7 @@ describe('Scheduler task-bound dispatch integration', () => {
     const pool = {
       query: vi.fn()
         .mockResolvedValueOnce({ rows: [fakeTaskWakeRow()] })  // SELECT due jobs
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),     // UPDATE claim
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ run_started_at: CLAIMED_AT }] }),     // UPDATE claim
     };
 
     const scheduler = new Scheduler({
@@ -220,7 +222,7 @@ describe('Scheduler task-bound dispatch integration', () => {
     const pool = {
       query: vi.fn()
         .mockResolvedValueOnce({ rows: [fakeTaskWakeRow()] })  // SELECT due jobs
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),     // UPDATE claim
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ run_started_at: CLAIMED_AT }] }),     // UPDATE claim
     };
 
     const scheduler = new Scheduler({
@@ -295,7 +297,7 @@ describe('Scheduler task-bound dispatch integration', () => {
             task_title: 'Call Steve re: partnership',
           })],
         })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ run_started_at: CLAIMED_AT }] }),
     };
 
     const scheduler = new Scheduler({
@@ -379,7 +381,7 @@ describe('Scheduler task-bound dispatch integration', () => {
             originator: null,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ run_started_at: CLAIMED_AT }] }),
     };
 
     const scheduler = new Scheduler({
