@@ -65,6 +65,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Delegate dispatch claim** — overlapping calls before the wait expires start one run and queue the rest. (#1893)
 - **Deferred delegation** — a brief behind a pending handle waits until that handle can clear. (#1893)
+- **Bullpen pending threads** — an unread thread stays visible for seven days, past the old one-hour cutoff. (#1899)
+- **Bullpen context timestamps** — show the UTC date beside the time so older threads stay distinguishable. (#1899)
 - **`delegate` (public API)** — open same-conversation handles return `already_in_flight` instead of a second run. (#1858)
 - **`delegate`** — an in-flight refusal no longer consumes a retryable attempt. (#1858)
 - **Scheduler** — a rejected fire reverts its row when the claim timestamp has microseconds. (#1160)

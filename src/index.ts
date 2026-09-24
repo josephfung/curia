@@ -143,7 +143,7 @@ import { backfillDirectChannelSenders } from './memory/direct-sender-backfill.js
 import type { DecayConfig } from './memory/dream-engine.js';
 import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
-import { BullpenService } from './memory/bullpen.js';
+import { BULLPEN_PENDING_WINDOW_MINUTES, BullpenService } from './memory/bullpen.js';
 import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
 import { TempFileStore } from './skills/temp-file-store.js';
 import { ConversationCheckpointProcessor } from './checkpoint/processor.js';
@@ -2680,7 +2680,7 @@ async function main(): Promise<void> {
         maxConsecutiveErrors: agentConfig.error_budget.max_errors ?? DEFAULT_ERROR_BUDGET.maxConsecutiveErrors,
       } : undefined,
       bullpenService,
-      bullpenWindowMinutes: 60,
+      bullpenWindowMinutes: BULLPEN_PENDING_WINDOW_MINUTES,
       // Coordinator only (#1818). A specialist's delegate conversation has no
       // stored identities, and begin() on an empty set would fail closed on
       // any person-shaped send from that specialist.

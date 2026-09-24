@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { BullpenService, formatBullpenContext } from '../../../src/memory/bullpen.js';
+import { BULLPEN_PENDING_WINDOW_MINUTES, BullpenService, formatBullpenContext } from '../../../src/memory/bullpen.js';
 import type { PendingThreadContext } from '../../../src/memory/bullpen.js';
 
 describe('BullpenService (in-memory)', () => {
@@ -99,6 +99,44 @@ describe('BullpenService (in-memory)', () => {
     const { thread } = await service.openThread('Test', 'coordinator', ['coordinator'], 'Hi', []);
     await service.closeThread(thread.id, 'coordinator');
     await expect(service.postMessage(thread.id, 'coordinator', 'Late', [], true)).rejects.toThrow('closed');
+  });
+
+  // Both rows are required. A 90-minute-old exclusion alone also passes when the
+  // argument is read as milliseconds (everything is outside a 60ms window).
+  it('getPendingThreadsForAgent applies the window in minutes (#1899)', async () => {
+    vi.useFakeTimers();
+    const t0 = new Date('2026-09-24T12:00:00Z');
+    try {
+      vi.setSystemTime(t0);
+      const { thread: outside } = await service.openThread('Outside', 'coordinator', ['coordinator', 'agent-b'], 'old', []);
+      vi.setSystemTime(new Date(t0.getTime() + 60 * 60 * 1000));
+      const { thread: inside } = await service.openThread('Inside', 'coordinator', ['coordinator', 'agent-b'], 'newer', []);
+      // Query 90 minutes after the older thread: it is outside a 60-minute window,
+      // the newer thread is 30 minutes old and inside it.
+      vi.setSystemTime(new Date(t0.getTime() + 90 * 60 * 1000));
+      const ids = (await service.getPendingThreadsForAgent('agent-b', 60)).map(t => t.threadId);
+      expect(ids).toContain(inside.id);
+      expect(ids).not.toContain(outside.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('default window still returns a thread many hours old and drops one past seven days (#1899)', async () => {
+    vi.useFakeTimers();
+    const queryAt = new Date('2026-09-24T12:00:00Z');
+    try {
+      vi.setSystemTime(new Date(queryAt.getTime() - 8 * 24 * 60 * 60 * 1000));
+      const { thread: abandoned } = await service.openThread('Abandoned', 'coordinator', ['coordinator', 'agent-b'], 'weeks old', []);
+      vi.setSystemTime(new Date(queryAt.getTime() - 11 * 60 * 60 * 1000));
+      const { thread: recent } = await service.openThread('Recent', 'coordinator', ['coordinator', 'agent-b'], 'hours old', []);
+      vi.setSystemTime(queryAt);
+      const ids = (await service.getPendingThreadsForAgent('agent-b', BULLPEN_PENDING_WINDOW_MINUTES)).map(t => t.threadId);
+      expect(ids).toContain(recent.id);
+      expect(ids).not.toContain(abandoned.id);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('getPendingThreadsForAgent returns only threads where latest sender is not the agent', async () => {
@@ -273,6 +311,10 @@ describe('formatBullpenContext', () => {
   it('includes the close_after convention note when threads are present', () => {
     const out = formatBullpenContext([makePending()]);
     expect(out).toContain('close_after');
+  });
+
+  it('stamps each message with a UTC date (#1899)', () => {
+    expect(formatBullpenContext([makePending()])).toContain('1970-01-01 00:00Z');
   });
 
   it('shows "first + last N" header and middle-omitted hint when thread is truncated (#1090)', () => {

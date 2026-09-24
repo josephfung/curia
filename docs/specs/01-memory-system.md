@@ -31,7 +31,7 @@ Short-lived context for active agent conversations. Stored in the `working_memor
 Shared workspace where agents — and the user — have structured, threaded conversations:
 - Any agent can open a thread addressed to other agents
 - Flows through the bus as `agent.discuss` events (same security model)
-- Threaded and async — agents subscribe to `agent.discuss` events and respond when addressed. The dispatcher also checks for pending Bullpen threads when routing any `agent.task`, ensuring agents see discussion messages even if they only activate via inbound user messages.
+- Threaded and async — agents subscribe to `agent.discuss` events and respond when addressed. The dispatcher also checks for pending Bullpen threads when routing any `agent.task`, ensuring agents see discussion messages even if they only activate via inbound user messages. That injection looks back seven days (`BULLPEN_PENDING_WINDOW_MINUTES`, [ADR-043](../adr/043-bullpen-pending-window.md)): an open thread the agent has not seen, and did not author the latest message on, stays pending across that window so a missed `agent.discuss` dispatch can be recovered on a later interactive or bullpen-origin wake. Scheduler-channel tasks do not inject the tier (#1609). Message stamps in the injected block include the UTC date.
 - All threads are logged, auditable, and visible to the user via dashboard
 - Dispatcher can mediate stuck discussions or escalate to user
 
