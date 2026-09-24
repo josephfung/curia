@@ -2339,10 +2339,14 @@ async function main(): Promise<void> {
   // validated here (the JSON-schema startup check only covers default.yaml, not local overrides,
   // and cannot express the derived_child >= same_task invariant). Throws → boot fails loudly.
   const bypassLadder = resolveBypassLadder(yamlConfig.autonomy?.bypass_ladder);
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, openDelegationLookup: {
-    findInFlight: (targetAgent, originConversationId) =>
+  // Before the execution layer so the in-flight lookup (#1858) shares the same flag as
+  // the subscriber and sweep below. Wiring the lookup while those are off would let a
+  // pending row block that agent in that conversation with nothing left to resolve it.
+  const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
+  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway, schedulerService, entityMemory, agentPersona, nylasCalendarClient, entityContextAssembler, agentContactId: agentIdentityContactId, autonomyService, secretsService, executiveProfileService, officeIdentityService, browserService, bullpenService, approvalTrigger, escalationJudge, actionLogRepo, auditLogRepo, diagnosticsRepo, taskRepo, workingDocsRepo, confidencePipeline, tempFileStore, infraLlmService, outboundContextService, exportControlService, timezone: config.timezone, selfEmail: resolvedEmailAccounts[0]?.selfEmail, selfEmails: resolvedEmailAccounts.map(a => a.selfEmail), skillOutputMaxLength: yamlConfig.skillOutput?.maxLength, defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs, appOrigin: config.appOrigin, httpPort: config.httpPort, bypassLadder, resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings, principalIdentities, sensitivityClassifier, skillRegistry, ...(lateDeliveryConfig.enabled ? { openDelegationLookup: {
+    findInFlight: (targetAgent: string, originConversationId: string) =>
       findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
-  } });
+  } } : {}) });
 
   // Two-pass agent registration:
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
@@ -2985,7 +2989,6 @@ async function main(): Promise<void> {
   // Wired AFTER the dispatcher for the same reason as the secret-capture resume above: a woken
   // agent's reply needs a routing entry seeded via registerExternalTaskRouting, or the dispatcher
   // finds none for a task it never saw arrive and drops it.
-  const lateDeliveryConfig = resolveLateDeliveryConfig(yamlConfig.delegate);
   let lateDelegationSweep: LateDelegationSweep | undefined;
   if (lateDeliveryConfig.enabled) {
     // Every registered agent, not just the heartbeat-eligible ones: the question here is only
@@ -3024,7 +3027,7 @@ async function main(): Promise<void> {
     lateDelegationSweep.start();
   } else {
     logger.warn(
-      'delegate.lateDelivery.enabled is false — late specialist responses will be orphaned (#1799 disabled)',
+      'delegate.lateDelivery.enabled is false — late specialist responses will be orphaned, and in-flight duplicate protection is off (#1799, #1858)',
     );
   }
 

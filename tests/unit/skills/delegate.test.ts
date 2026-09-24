@@ -3,6 +3,7 @@ import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { DelegationGuard } from '../../../src/agents/delegation-guard.js';
+import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
@@ -799,7 +800,8 @@ describe('delegate manifest', () => {
     const outputs = (manifest as unknown as { outputs: Record<string, string> }).outputs;
     expect(outputs['reason']).toContain('already_in_flight');
     expect(outputs['in_flight']).toContain('already_in_flight');
-    expect(outputs['elapsed_wait_ms']).toContain('already_in_flight');
+    expect(outputs['open_handle_age_ms']).toContain('already_in_flight');
+    expect(outputs['elapsed_wait_ms']).toBeUndefined();
     expect(outputs['delegate_event_id']).toBeDefined();
   });
 });
@@ -868,7 +870,7 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
       failed?: boolean;
       reason: string;
       delegate_event_id: string;
-      elapsed_wait_ms: number;
+      open_handle_age_ms: number;
       message: string;
     };
     expect(data.in_flight).toBe(true);
@@ -876,8 +878,10 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
     expect(data.failed).toBeUndefined();
     expect(data.reason).toBe('already_in_flight');
     expect(data.delegate_event_id).toBe('delegate-27cababc');
-    expect(Math.abs(data.elapsed_wait_ms - (Date.now() - started.getTime()))).toBeLessThan(2_000);
-    expect(data.message).toContain('still running');
+    expect(Math.abs(data.open_handle_age_ms - (Date.now() - started.getTime()))).toBeLessThan(2_000);
+    expect(data.message).toBe(
+      "Specialist 'social-media' is already working on an open request in this conversation.",
+    );
     expect(published).toEqual([]);
     expect(open.findInFlight).toHaveBeenCalledWith('social-media', 'signal:+15551212');
   });
@@ -954,6 +958,71 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
 
     expect(otherConversation.success && otherAgent.success).toBe(true);
     expect(published).toEqual(['social-media', 'calendar']);
+  });
+
+  it('keeps the decode and cross-agent errors when a handle is also open (#995)', async () => {
+    const { bus, published } = listeningBus();
+    const open = lookup({ agent: 'social-media', conversationId: 'signal:+15551212' });
+    const base = {
+      bus,
+      agentRegistry: registry(),
+      conversationId: 'signal:+15551212',
+      openDelegationLookup: open,
+    };
+
+    const malformed = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'continue', resume_token: '!!!not base64 json!!!' },
+      base,
+    ));
+    const crossAgent = await handler.execute(makeCtx(
+      {
+        agent: 'social-media',
+        task: 'continue',
+        resume_token: encodeResumeToken({
+          agent: 'calendar',
+          originalTask: 'book the room',
+          context: 'waiting on the CEO',
+        }),
+      },
+      base,
+    ));
+
+    expect(malformed.success).toBe(false);
+    expect(crossAgent.success).toBe(false);
+    if (malformed.success || crossAgent.success) return;
+    expect(malformed.error).toContain('could not be decoded');
+    expect(crossAgent.error).toContain("generated for agent 'calendar'");
+    expect(published).toEqual([]);
+    // Validation runs first, so a bad token never becomes already_in_flight.
+    expect(open.findInFlight).not.toHaveBeenCalled();
+  });
+
+  it('refuses a validated resume while an unrelated handle for that agent is open', async () => {
+    const { bus, published } = listeningBus();
+    const open = lookup({ agent: 'social-media', conversationId: 'signal:+15551212' });
+    const result = await handler.execute(makeCtx(
+      {
+        agent: 'social-media',
+        task: 'the CEO said send it',
+        resume_token: encodeResumeToken({
+          agent: 'social-media',
+          originalTask: 'draft the post',
+          context: 'paused for approval',
+        }),
+      },
+      {
+        bus,
+        agentRegistry: registry(),
+        conversationId: 'signal:+15551212',
+        openDelegationLookup: open,
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { reason: string }).reason).toBe('already_in_flight');
+    expect(published).toEqual([]);
+    expect(open.findInFlight).toHaveBeenCalledOnce();
   });
 
   it('refuses to dispatch when the lookup fails', async () => {

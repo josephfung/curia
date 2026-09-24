@@ -37,6 +37,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ExecutionLayer.invoke`** — preserves handler-set `errorType` (unblocks `AUTH_FAILURE` / `IDENTITY_MISMATCH`). (#1854)
 - **Calendar tools (public API)** — `allowed_callers` now exclude the coordinator so discovery cannot re-open a direct path. (#1853)
 - **Coordinator outbound guidance** — absent block means withheld on non-principal turns, not empty. (#1848)
+- **`delegate` outputs (public API)** — `already_in_flight` adds `in_flight` and `open_handle_age_ms`. Skill v1.8.0. (#1858)
 - **`delegate` outputs (public API)** — `declined` marks a specialist refusal as distinct from an answer. Skill v1.7.0. (#1871)
 - **`delegate` outputs (public API)** — `resolvedContactIds` keeps contact IDs after output sanitization. Skill v1.6.0. (#1818)
 - **Identity gate** — `filter.identityGate` selects enforce, shadow, or off. (#1818)

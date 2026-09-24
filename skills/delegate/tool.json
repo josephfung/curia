@@ -31,7 +31,7 @@
     "delegate_event_id": "string? (in-flight or timed-out delegation's agent.task id)",
     "delegate_conversation_id": "string?",
     "wait_timeout_ms": "number?",
-    "elapsed_wait_ms": "number? (ms since the open handle was created; set with already_in_flight)"
+    "open_handle_age_ms": "number? (ms since the pending handle was opened, which is after the wait expired; set with already_in_flight)"
   },
   "permissions": [],
   "secrets": [],
