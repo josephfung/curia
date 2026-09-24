@@ -654,6 +654,9 @@ export interface YamlConfig {
     /** Default assumed duration in seconds for scheduled jobs that declare no expectedDurationSeconds.
      *  Used by the watchdog to compute recovery timeouts. Default: 600. */
     defaultExpectedDurationSeconds?: number;
+    /** Max agent runs the scheduler will execute at once. Further due jobs stay
+     *  pending until a slot frees. Default: 6. */
+    maxInFlight?: number;
   };
   tasks?: {
     /** BacklogHeartbeat tick interval in minutes. Default 60. */
@@ -1330,6 +1333,13 @@ export function loadYamlConfig(configDir: string): YamlConfig {
     // A zero or negative duration would make the watchdog immediately flag all jobs as stuck.
     throw new Error(
       `scheduler.defaultExpectedDurationSeconds must be a positive integer (seconds), got: ${schedulerDefaultDuration}`,
+    );
+  }
+  const schedulerMaxInFlight = config.scheduler?.maxInFlight;
+  if (schedulerMaxInFlight !== undefined && (!Number.isInteger(schedulerMaxInFlight) || schedulerMaxInFlight < 1)) {
+    // Zero would claim nothing on every poll; a fraction is not a slot count.
+    throw new Error(
+      `scheduler.maxInFlight must be a positive integer, got: ${String(schedulerMaxInFlight)}`,
     );
   }
 

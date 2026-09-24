@@ -11,7 +11,7 @@ import {
   createScheduleDriftPaused,
   createAgentTask,
 } from '../bus/events.js';
-import type { AgentResponseEvent, AgentErrorEvent } from '../bus/events.js';
+import type { AgentResponseEvent, AgentErrorEvent, AgentTaskEvent, ScheduleFiredEvent } from '../bus/events.js';
 import { makeWakeContext } from '../autonomy/effective-standing.js';
 import type { DriftDetector } from './drift-detector.js';
 import type { DreamEngine } from '../memory/dream-engine.js';
@@ -23,6 +23,9 @@ import { isUuid } from '../util/uuid.js';
 
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
+
+/** Default cap on scheduler-started agent runs executing at once (#1160). */
+export const DEFAULT_MAX_IN_FLIGHT = 6;
 
 // Watchdog runs every 5 minutes to detect jobs stuck mid-run.
 export const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
@@ -395,7 +398,12 @@ export interface SchedulerConfig {
    *  payloads at fire time (#1800). Undefined in setup-required mode (no principal yet),
    *  in which case the token resolves to an empty string and the fire is logged. */
   principalContactId?: string;
+  /** Max agent runs this process will have in flight. Default: DEFAULT_MAX_IN_FLIGHT.
+   *  Sourced from config.scheduler.maxInFlight. */
+  maxInFlight?: number;
 }
+
+type FireOutcome = 'dispatched' | 'skipped' | 'saturated';
 
 export class Scheduler {
   private pool: Pool;
@@ -407,6 +415,11 @@ export class Scheduler {
   private outboundContextService?: OutboundContextService;
   private defaultExpectedDurationSeconds: number;
   private principalContactId?: string;
+  private readonly maxInFlight: number;
+  /** Runs whose publish has been handed off and has not settled. */
+  private inFlight = 0;
+  /** Settling handles so tests can wait out a detached publish. */
+  private inFlightRuns = new Set<Promise<void>>();
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private watchdogHandle: ReturnType<typeof setInterval> | null = null;
   private cleanupHandle: ReturnType<typeof setInterval> | null = null;
@@ -441,6 +454,11 @@ export class Scheduler {
     this.outboundContextService = config.outboundContextService;
     this.defaultExpectedDurationSeconds = config.defaultExpectedDurationSeconds ?? DEFAULT_EXPECTED_DURATION_SECONDS;
     this.principalContactId = config.principalContactId;
+    const maxInFlight = config.maxInFlight ?? DEFAULT_MAX_IN_FLIGHT;
+    if (!Number.isInteger(maxInFlight) || maxInFlight < 1) {
+      throw new Error(`scheduler maxInFlight must be a positive integer, got: ${String(maxInFlight)}`);
+    }
+    this.maxInFlight = maxInFlight;
   }
 
   /**
@@ -553,7 +571,7 @@ export class Scheduler {
       }, OUTBOUND_CONTEXT_CLEANUP_INTERVAL_MS);
     }
 
-    this.logger.info({ intervalMs: POLL_INTERVAL_MS }, 'Scheduler started');
+    this.logger.info({ intervalMs: POLL_INTERVAL_MS, maxInFlight: this.maxInFlight }, 'Scheduler started');
   }
 
   /**
@@ -598,11 +616,22 @@ export class Scheduler {
   }
 
   /**
-   * Poll for due jobs and fire each one.
+   * Poll for due jobs and hand each claimed job to the bounded runner.
    * Public for testing — normally called by the interval.
    *
-   * Uses FOR UPDATE SKIP LOCKED to safely claim jobs in a concurrent environment
-   * (multiple scheduler instances won't double-fire the same job).
+   * Mutual exclusion is the atomic claim UPDATE in fireJob, guarded on
+   * `status IN ('pending','failed')` and, for cron, `next_run_at <= now()`
+   * (#1124, #1159). That predicate is what makes overlapping polls and multiple
+   * scheduler processes safe. A `FOR UPDATE SKIP LOCKED` on this read would
+   * release as soon as the SELECT returned — before the claim — so it is not
+   * used. The read is a plain SELECT with `LIMIT` = free slots.
+   *
+   * Agent runs are not awaited. Each successful claim reserves one in-flight
+   * slot and publishes on a detached promise, so this method returns without
+   * waiting on the agent even when a run lasts minutes. The cap
+   * (`scheduler.maxInFlight`, default 6) bounds how many of those runs execute
+   * at once. When no slot is free the poll claims nothing; due jobs stay
+   * pending for the next tick.
    *
    * Stamps lastTickAt on every call, before the query — this is the scheduler's actual
    * 30s liveness cadence, read by HealthService's checkScheduler (#1359). Stamped even
@@ -611,6 +640,14 @@ export class Scheduler {
    */
   async pollDueJobs(): Promise<void> {
     this.lastTickAt = new Date();
+    const slots = this.maxInFlight - this.inFlight;
+    if (slots <= 0) {
+      this.logger.debug(
+        { inFlight: this.inFlight, maxInFlight: this.maxInFlight },
+        'scheduler: in-flight cap reached; leaving due jobs for the next poll',
+      );
+      return;
+    }
     try {
       const sql = `
         SELECT sj.*,
@@ -625,9 +662,10 @@ export class Scheduler {
          WHERE sj.status IN ('pending', 'failed')
            AND sj.next_run_at <= now()
          ORDER BY sj.next_run_at ASC
-         FOR UPDATE OF sj SKIP LOCKED
+         LIMIT $1
       `;
-      const { rows } = await this.pool.query(sql);
+      const { rows } = await this.pool.query(sql, [slots]);
+      let dispatched = 0;
 
       for (const row of rows) {
         // Map the snake_case DB row to the camelCase JobRow shape.
@@ -660,48 +698,69 @@ export class Scheduler {
           originator: row.originator ?? null,
         };
         try {
-          await this.fireJob(job);
-        } catch (err) {
-          this.logger.error({ err, jobId: job.id }, 'Failed to fire job — reverting to pending for retry');
-          // Clean up the pendingJobs entry that fireJob sets before publishing.
-          // Without this, a publish failure after pendingJobs.set() leaks an
-          // orphaned entry that the watchdog won't clean (job reverts to 'pending',
-          // not 'running', so the watchdog's WHERE clause never matches).
-          for (const [eventId, pendingJobId] of this.pendingJobs) {
-            if (pendingJobId === job.id) {
-              this.pendingJobs.delete(eventId);
-              this.pendingFailureMessages.delete(eventId);
-              break;
-            }
+          const outcome = await this.fireJob(job);
+          if (outcome === 'saturated') {
+            // A slot freed between the SELECT and here is picked up next tick.
+            // Rows not yet claimed stay pending — claiming them would start the
+            // watchdog clock before the agent runs.
+            this.logger.debug(
+              { inFlight: this.inFlight, maxInFlight: this.maxInFlight },
+              'scheduler: in-flight cap reached; leaving remaining due jobs unclaimed',
+            );
+            break;
           }
-          // Revert the job to its prior status so it can be retried next poll.
-          // If this revert also fails, the job stays in 'running' — logged below.
-          await this.pool.query(
-            `UPDATE scheduled_jobs SET status = 'pending' WHERE id = $1 AND status = 'running'`,
-            [job.id],
-          ).catch((revertErr) => {
-            this.logger.error({ revertErr, jobId: job.id }, 'Failed to revert job status after fire failure — job may be stuck in running');
-          });
+          if (outcome === 'dispatched') dispatched += 1;
+        } catch (err) {
+          // Claim/build failures only. A detached publish rejection reverts
+          // itself inside dispatchPublish — fireJob has already returned.
+          await this.revertFailedFire(job.id, err);
         }
       }
 
-      if (rows.length > 0) {
-        this.logger.info({ count: rows.length }, 'Polled and fired due jobs');
+      if (dispatched > 0) {
+        this.logger.info({ count: dispatched }, 'Polled and fired due jobs');
       }
     } catch (err) {
       this.logger.error({ err }, 'Error polling due jobs');
     }
+    // One microtask so a publish that has already settled invokes its follow-up
+    // event before callers observe the poll as done. A publish whose promise is
+    // still pending — the agent run — is not awaited.
+    await Promise.resolve();
   }
 
   /**
-   * Fire a single job: set status to running, publish schedule.fired + agent.task.
+   * Claim one job and hand its publish to the bounded runner.
+   *
+   * Reserves an in-flight slot before any await so overlapping polls cannot
+   * both pass the cap. The slot is released here unless the publish was handed
+   * off, in which case the detached promise releases it when the run settles.
+   *
+   * Returns `saturated` without claiming when the cap is full. Due jobs stay
+   * pending for the next poll.
+   */
+  private async fireJob(job: JobRow): Promise<FireOutcome> {
+    if (this.inFlight >= this.maxInFlight) return 'saturated';
+    this.inFlight += 1;
+    try {
+      const outcome = await this.claimAndDispatch(job);
+      if (outcome !== 'dispatched') this.inFlight -= 1;
+      return outcome;
+    } catch (err) {
+      this.inFlight -= 1;
+      throw err;
+    }
+  }
+
+  /**
+   * Claim a single job and build its events. The caller owns the in-flight slot.
    *
    * For persistent tasks (linked agent_task), includes progress and task_payload
    * in content for agent context. The intent anchor is passed separately in the
    * event payload so the runtime can inject it into the system prompt as a
    * non-negotiable behavioral instruction.
    */
-  private async fireJob(job: JobRow): Promise<void> {
+  private async claimAndDispatch(job: JobRow): Promise<Exclude<FireOutcome, 'saturated'>> {
     // Atomically claim the job by setting status to 'running' only if it's still
     // in a claimable state. The rowCount check prevents double-firing if another
     // scheduler instance (or overlapping poll) claimed the same job.
@@ -750,7 +809,7 @@ export class Scheduler {
               AND timezone = $4`,
           [job.id, agentErr.message, job.cronExpr, job.timezone],
         );
-        return;
+        return 'skipped';
       }
       // Optimistic-concurrency guard on cron_expr/timezone: if updateJob() changes
       // the expression between the poll SELECT and this claim UPDATE, the WHERE won't
@@ -758,16 +817,17 @@ export class Scheduler {
       // it with the correct (updated) expression and next_run_at.
       //
       // next_run_at <= now() re-checks the SAME predicate the poll SELECT used, so the
-      // claim is idempotent against overlapping poll cycles. The agent runs synchronously
-      // inside fireJob (bus.publish awaits handlers), so a single poll can take minutes to
-      // drain while the 30s interval keeps launching new polls. A job still 'pending' when
-      // poll B's SELECT runs gets captured into poll B's in-memory list; poll A then claims
-      // and fires it, and completeJobRun resets the recurring job to 'pending'. Without this
-      // guard, poll B's later claim would succeed (status is 'pending' again) and fire a
-      // duplicate — e.g. two daily digests on 2026-06-24. With it, the first claim advances
-      // next_run_at to the future, so any stale concurrent claim matches 0 rows and skips.
+      // claim is idempotent against overlapping poll cycles. pollDueJobs returns as soon
+      // as the publish is handed off, so two polls (or two scheduler processes) can both
+      // SELECT a row that is still pending. Poll A claims it and advances next_run_at;
+      // completeJobRun may reset the recurring job to 'pending' before poll B reaches its
+      // claim. Without this guard, poll B's claim would succeed (status is 'pending'
+      // again) and fire a duplicate — e.g. two daily digests on 2026-06-24. With it, the
+      // first claim advances next_run_at into the future, so any stale concurrent claim
+      // matches 0 rows and skips.
       // (#1124 advanced next_run_at but only shielded the NEXT poll's SELECT, not a
-      // concurrent poll already holding the row.)
+      // concurrent poll already holding the row. #1159 added this predicate. #1160
+      // detached the agent run from the poll; the predicate is still the mutex.)
       // Clear last_run_summary at claim so completeJobRun's COALESCE prefers an
       // explicit scheduler-report from *this* run over a stale prior summary (#1829).
       // last_run_context is intentionally left alone — it carries continuity state
@@ -807,13 +867,13 @@ export class Scheduler {
         { jobId: job.id, cronExpr: job.cronExpr },
         'Claim matched 0 rows; skipping fire (already claimed, cron/timezone drift, or next_run_at already advanced by a prior poll)',
       );
-      return;
+      return 'skipped';
     }
     // rowCount === null is an anomalous pg driver state (UPDATE always returns a count).
     // Treat it as 0 but log at warn so it's visible in production.
     if (claimResult.rowCount === null) {
       this.logger.warn({ jobId: job.id }, 'Claim UPDATE returned null rowCount — treating as already claimed, skipping fire');
-      return;
+      return 'skipped';
     }
 
     // Build the agent.task content. Do NOT inject a bare job UUID here — agents
@@ -884,13 +944,13 @@ export class Scheduler {
       );
     }
 
-    // Publish schedule.fired for audit trail.
+    // Built now, published with agent.task on the detached runner. parentEventId
+    // is the event id, which exists before publish.
     const firedEvent = createScheduleFired({
       jobId: job.id,
       agentId: job.agentId,
       agentTaskId: job.agentTaskId,
     });
-    await this.bus.publish('system', firedEvent);
 
     // Use a unique per-run conversationId so that each scheduler invocation gets
     // its own conversation thread. Re-using just the job ID would let unrelated
@@ -947,18 +1007,72 @@ export class Scheduler {
       metadata,
       parentEventId: firedEvent.id,
     });
-    // Track the mapping BEFORE publishing — bus.publish() awaits all handlers
-    // synchronously, so the agent may finish and emit agent.response before
-    // publish() returns. If we set the entry after publish, handleCompletion
-    // sees an empty map and silently drops the completion.
+    // Track the mapping BEFORE publishing. dispatchPublish starts bus.publish
+    // immediately, and publish awaits handlers, so the agent may emit
+    // agent.response before publish() returns. Setting the entry after that
+    // would make handleCompletion see an empty map and drop the completion.
     this.pendingJobs.set(taskEvent.id, job.id);
+    this.dispatchPublish(job, firedEvent, taskEvent);
+    return 'dispatched';
+  }
 
+  /**
+   * Publish schedule.fired and agent.task without blocking the poll.
+   * The in-flight slot reserved by fireJob is released when this promise settles,
+   * including when publish rejects and the job is reverted to pending.
+   */
+  private dispatchPublish(job: JobRow, firedEvent: ScheduleFiredEvent, taskEvent: AgentTaskEvent): void {
+    const run = this.publishFire(job, firedEvent, taskEvent)
+      .catch((err: unknown) => this.revertFailedFire(job.id, err))
+      .finally(() => {
+        this.inFlight -= 1;
+      });
+    this.inFlightRuns.add(run);
+    void run.finally(() => {
+      this.inFlightRuns.delete(run);
+    });
+  }
+
+  private async publishFire(job: JobRow, firedEvent: ScheduleFiredEvent, taskEvent: AgentTaskEvent): Promise<void> {
+    await this.bus.publish('system', firedEvent);
     await this.bus.publish('system', taskEvent);
-
     this.logger.info(
       { jobId: job.id, agentId: job.agentId, taskEventId: taskEvent.id },
       'Job fired',
     );
+  }
+
+  /**
+   * Undo a claim that never became a running agent. Clears any pendingJobs
+   * entry so a late agent.response cannot complete a job we just un-claimed.
+   * The UPDATE matches only status='running', so a job that was never claimed
+   * (or already completed) is left alone.
+   */
+  private async revertFailedFire(jobId: string, err: unknown): Promise<void> {
+    this.logger.error({ err, jobId }, 'Failed to fire job — reverting to pending for retry');
+    for (const [eventId, pendingJobId] of this.pendingJobs) {
+      if (pendingJobId === jobId) {
+        this.pendingJobs.delete(eventId);
+        this.pendingFailureMessages.delete(eventId);
+        break;
+      }
+    }
+    await this.pool.query(
+      `UPDATE scheduled_jobs SET status = 'pending' WHERE id = $1 AND status = 'running'`,
+      [jobId],
+    ).catch((revertErr: unknown) => {
+      this.logger.error({ revertErr, jobId }, 'Failed to revert job status after fire failure — job may be stuck in running');
+    });
+  }
+
+  /**
+   * Resolves when every detached publish has settled.
+   * Polls do not await agent runs; tests wait here to observe the handoff.
+   */
+  async drainInFlight(): Promise<void> {
+    while (this.inFlightRuns.size > 0) {
+      await Promise.allSettled([...this.inFlightRuns]);
+    }
   }
 
   /**

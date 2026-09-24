@@ -148,6 +148,11 @@ scheduler:
   # Raise this if you run long-running scheduled jobs without explicit duration hints.
   defaultExpectedDurationSeconds: 600  # 10 minutes
 
+  # Max agent runs the scheduler will have in flight at once. A poll claims at most
+  # this many due jobs and does not wait for them; further due jobs stay pending
+  # until a slot frees. 6 matches the observed production peak (see #1160).
+  maxInFlight: 6
+
 health:
   # Thresholds for time-based liveness checks
   liveness:

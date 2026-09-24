@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Scheduler, POLL_INTERVAL_MS, WATCHDOG_INTERVAL_MS, computeRecoveryTimeout, MAX_PRIOR_SUMMARY_CHARS, MAX_PRIOR_CONTEXT_CHARS, TRUNCATED_MARKER } from '../../../src/scheduler/scheduler.js';
+import { Scheduler, POLL_INTERVAL_MS, WATCHDOG_INTERVAL_MS, computeRecoveryTimeout, MAX_PRIOR_SUMMARY_CHARS, MAX_PRIOR_CONTEXT_CHARS, TRUNCATED_MARKER, DEFAULT_MAX_IN_FLIGHT } from '../../../src/scheduler/scheduler.js';
 import type { AgentYamlConfig } from '../../../src/agents/loader.js';
 
 // -- Mock helpers --
@@ -85,6 +85,14 @@ function burstCounts(s: Scheduler): Map<string, number> {
 
 function pendingJobs(s: Scheduler): Map<string, string> {
   return (s as unknown as { pendingJobs: Map<string, string> }).pendingJobs;
+}
+
+function inFlightOf(s: Scheduler): number {
+  return (s as unknown as { inFlight: number }).inFlight;
+}
+
+function drainInFlight(s: Scheduler): Promise<void> {
+  return s.drainInFlight();
 }
 
 describe('Scheduler', () => {
@@ -2826,6 +2834,186 @@ describe('Scheduler', () => {
       expect(schedulerService.recoverStuckJob).toHaveBeenCalledTimes(2);
       expect(logger.error).toHaveBeenCalled();
       expect(bus.publish).toHaveBeenCalledOnce();
+    });
+  });
+
+  // -- bounded concurrency (#1160) --
+
+  describe('bounded concurrency (#1160)', () => {
+    function agentTaskPublishes(): number {
+      return bus.publish.mock.calls.filter((call) => {
+        const event = call[1] as { type?: string } | undefined;
+        return event?.type === 'agent.task';
+      }).length;
+    }
+
+    it('selects due jobs with LIMIT and without a row lock', async () => {
+      pool.query.mockResolvedValueOnce({ rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).not.toContain('FOR UPDATE');
+      expect(sql).not.toContain('SKIP LOCKED');
+      expect(sql).toContain('LIMIT $1');
+      expect(params).toEqual([DEFAULT_MAX_IN_FLIGHT]);
+    });
+
+    it('returns while an agent run is still in flight', async () => {
+      const row = fakeDbRow();
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string }) => {
+        if (event.type === 'agent.task') return gate;
+        return Promise.resolve();
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      expect(agentTaskPublishes()).toBe(1);
+      expect(inFlightOf(scheduler)).toBe(1);
+      expect(pendingJobs(scheduler).size).toBe(1);
+
+      release();
+      await drainInFlight(scheduler);
+      expect(inFlightOf(scheduler)).toBe(0);
+    });
+
+    it('caps in-flight runs and leaves the overflow unclaimed', async () => {
+      scheduler = new Scheduler({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pool: pool as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bus: bus as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        logger: logger as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        schedulerService: schedulerService as any,
+        maxInFlight: 2,
+      });
+      const rows = [1, 2, 3, 4].map((n) => fakeDbRow({ id: `job-${n}` }));
+      const releases: Array<() => void> = [];
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string }) => {
+        if (event.type !== 'agent.task') return Promise.resolve();
+        return new Promise<void>((resolve) => { releases.push(resolve); });
+      });
+      pool.query.mockResolvedValue({ rows, rowCount: 1 });
+
+      await scheduler.pollDueJobs();
+
+      expect(releases).toHaveLength(2);
+      expect(inFlightOf(scheduler)).toBe(2);
+      const claimCalls = pool.query.mock.calls.filter((call) => String(call[0]).includes('run_started_at'));
+      expect(claimCalls).toHaveLength(2);
+
+      const callsAtCap = pool.query.mock.calls.length;
+      await scheduler.pollDueJobs();
+      // Saturated: no SELECT, no further claims, no further publishes.
+      expect(pool.query.mock.calls.length).toBe(callsAtCap);
+      expect(releases).toHaveLength(2);
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ inFlight: 2, maxInFlight: 2 }),
+        expect.stringContaining('in-flight cap reached'),
+      );
+
+      releases[0]!();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(inFlightOf(scheduler)).toBe(1);
+
+      pool.query.mockClear();
+      await scheduler.pollDueJobs();
+      const [sql, params] = pool.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('LIMIT $1');
+      expect(params).toEqual([1]);
+      expect(releases).toHaveLength(3);
+      expect(inFlightOf(scheduler)).toBe(2);
+
+      for (const release of releases) release();
+      await drainInFlight(scheduler);
+      expect(inFlightOf(scheduler)).toBe(0);
+    });
+
+    it('does not re-fire a job whose agent run outlives a later poll (#1159)', async () => {
+      const row = fakeDbRow();
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string }) => {
+        if (event.type === 'agent.task') return gate;
+        return Promise.resolve();
+      });
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      await scheduler.pollDueJobs();
+      expect(agentTaskPublishes()).toBe(1);
+
+      // Stale overlapping SELECT still returns the row. The claim matches 0
+      // because the first claim advanced next_run_at (or the row is running).
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+      await scheduler.pollDueJobs();
+
+      expect(agentTaskPublishes()).toBe(1);
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1' }),
+        expect.stringContaining('skipping fire'),
+      );
+
+      release();
+      await drainInFlight(scheduler);
+    });
+
+    it('reverts to pending and clears pendingJobs when the detached publish rejects', async () => {
+      const row = fakeDbRow();
+      pool.query
+        .mockResolvedValueOnce({ rows: [row] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValue({ rowCount: 1, rows: [] });
+      bus.publish.mockRejectedValueOnce(new Error('audit hook failed'));
+
+      await scheduler.pollDueJobs();
+      await drainInFlight(scheduler);
+
+      expect(pendingJobs(scheduler).size).toBe(0);
+      expect(inFlightOf(scheduler)).toBe(0);
+      const revert = pool.query.mock.calls.find((call) => String(call[0]).includes("status = 'pending'"));
+      expect(revert?.[1]).toEqual(['job-1']);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1', err: expect.any(Error) }),
+        'Failed to fire job — reverting to pending for retry',
+      );
+    });
+
+    it('reverts a claim that throws before publish, on the poll itself', async () => {
+      const row = fakeDbRow();
+      pool.query
+        .mockResolvedValueOnce({ rows: [row] })
+        .mockRejectedValueOnce(new Error('claim failed'))
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+      expect(pendingJobs(scheduler).size).toBe(0);
+      expect(inFlightOf(scheduler)).toBe(0);
+      const revert = pool.query.mock.calls.find((call) => String(call[0]).includes("status = 'pending'"));
+      expect(revert?.[1]).toEqual(['job-1']);
+    });
+
+    it('rejects a non-positive maxInFlight at construction', () => {
+      expect(() => new Scheduler({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pool: pool as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bus: bus as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        logger: logger as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        schedulerService: schedulerService as any,
+        maxInFlight: 0,
+      })).toThrow(/maxInFlight must be a positive integer/);
     });
   });
 });

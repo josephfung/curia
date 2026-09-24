@@ -87,16 +87,16 @@ The Docker container does not set `TZ`. Even if it did, relying on a host-level 
 
 ## Scheduler Loop
 
-The scheduler runs inside the main process and checks for due jobs every 30 seconds:
+The scheduler runs inside the main process and checks for due jobs every 30 seconds. A poll does not wait for the agent run.
 
-1. Query: `SELECT * FROM scheduled_jobs WHERE next_run_at <= now() AND status IN ('pending', 'failed') FOR UPDATE SKIP LOCKED`
-2. For each due job:
-   - Set `status = 'running'` (atomically via the FOR UPDATE lock)
-   - Publish `agent.task` to the bus with the job's `task_payload`
-   - On success: update `last_run_at`, calculate `next_run_at` from cron_expr (or set `status = 'completed'` for one-shot), reset `consecutive_failures = 0`
-   - On failure: increment `consecutive_failures`, set `last_error`, if >= 3 set `status = 'suspended'` and notify user
+1. Read up to `scheduler.maxInFlight` minus the runs already in flight (default cap 6):
+   `SELECT ... FROM scheduled_jobs WHERE next_run_at <= now() AND status IN ('pending', 'failed') ORDER BY next_run_at LIMIT $slots`
+2. For each selected job, claim it with an atomic `UPDATE` that sets `status = 'running'` only while `status IN ('pending', 'failed')`. Cron claims also require `next_run_at <= now()` and advance `next_run_at` to the following occurrence.
+3. Hand `schedule.fired` and `agent.task` to a detached runner and return. The runner holds one in-flight slot until publish settles. Publish awaits bus subscribers, so the slot covers the agent run.
+4. When the cap is full, the poll claims nothing. Due jobs stay `pending` until a slot frees on a later tick.
+5. On completion the bus subscriber calls `completeJobRun`: update `last_run_at`, calculate the next `next_run_at` (or `completed` for a one-shot), reset `consecutive_failures`. On failure, increment `consecutive_failures`, set `last_error`, and at 3 consecutive failures set `status = 'suspended'` and notify the user.
 
-The `FOR UPDATE SKIP LOCKED` pattern ensures that if the scheduler loop overlaps (e.g., a job takes longer than 30s), the same job isn't claimed twice.
+The claim `UPDATE` is the mutual-exclusion primitive across overlapping polls and multiple scheduler processes. A row lock on the read would release when the `SELECT` returned, before the claim, so the poll does not use `FOR UPDATE SKIP LOCKED`. The `next_run_at <= now()` predicate on the cron claim is what stops a stale poll from firing a second copy after the first claim already advanced the schedule (#1124, #1159, #1160).
 
 ---
 
