@@ -44,9 +44,10 @@ describe('historical classification is carried by a migration', () => {
     ).join('\n');
 
     for (const pattern of HISTORICAL_SYNTHETIC_LIKE_PATTERNS) {
-      // The patterns already carry SQL-escaped quotes, so they appear verbatim
-      // inside the migration's string literals.
-      expect(sql, `no migration classifies rows matching ${pattern}`).toContain(`'${pattern}'`);
+      // Patterns are bindable LIKE text. Inside the migration they sit in a SQL
+      // string literal, so each apostrophe is doubled there and only there.
+      const literal = `'${pattern.replaceAll("'", "''")}'`;
+      expect(sql, `no migration classifies rows matching ${pattern}`).toContain(literal);
     }
   });
 });

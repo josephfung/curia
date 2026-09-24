@@ -9,7 +9,11 @@ import { backfillDirectChannelSenders } from '../../src/memory/direct-sender-bac
 import { createLogger } from '../../src/logger.js';
 import { VOICE_GREETING_USER_MESSAGE } from '../../src/channels/voice/greeting.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
-import { LATE_SPECIALIST_RESULT_MARKER } from '../../src/memory/synthetic-user-turn.js';
+import {
+  CONTENT_BLOCK_REWRITE_MARKER,
+  HISTORICAL_SYNTHETIC_LIKE_PATTERNS,
+  LATE_SPECIALIST_RESULT_MARKER,
+} from '../../src/memory/synthetic-user-turn.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -206,10 +210,11 @@ describeIf('contact recent history SQL (#1599)', () => {
     );
 
     const stamped = await backfillDirectChannelSenders(pool, createLogger('error'), { batchSize: 10 });
-    // Only the real human turn is stamped. The synthetic one is skipped, and the
-    // skip is counted rather than being invisible.
+    // Only the real human turn is stamped. syntheticRowsRemaining is the
+    // table-wide standing total of unstamped synthetic Signal/SMS rows, so other
+    // fixtures can add to it. This conversation contributes one.
     expect(stamped.signalRows).toBe(1);
-    expect(stamped.skippedSynthetic).toBeGreaterThanOrEqual(1);
+    expect(stamped.syntheticRowsRemaining).toBeGreaterThanOrEqual(1);
 
     const senders = await pool.query<{ content: string; sender_contact_id: string | null }>(
       `SELECT content, sender_contact_id
@@ -239,15 +244,27 @@ describeIf('contact recent history SQL (#1599)', () => {
     // that already ran 090 and a fresh one both reach this migration.
     const alice = await seedContact(pool, 'migration-091');
     const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    // Exactly the shape 090 leaves behind: a brief Curia wrote, carrying the
+    // Exactly the shape 090 leaves behind: briefs Curia wrote, each carrying the
     // human peer's contact id because the conversation-id pattern matched.
-    const syntheticContent = `${LATE_SPECIALIST_RESULT_MARKER}social-media, delivered 2026-09-20]\n\nDone.`;
+    // Both secret-capture wordings are here so the apostrophe in the LIKE pattern
+    // is executed as a bound parameter, not only matched as migration source.
+    const briefs = [
+      VOICE_GREETING_USER_MESSAGE,
+      `${CONTENT_BLOCK_REWRITE_MARKER}\n\nRewrite it.`,
+      `${LATE_SPECIALIST_RESULT_MARKER}social-media, delivered 2026-09-20]\n\nDone.`,
+      "The secret 'Aeroplan password' was just captured and saved to the vault. Original request: check the balance.",
+      "The secret 'Aeroplan password' that a specialist asked for was just captured and saved to the vault. The specialist 'calendar' paused waiting for it.",
+    ];
+    const untouched = [
+      'a real line',
+      "The secret 'plan' was discussed yesterday.",
+    ];
+    const contents = [...briefs, ...untouched];
     await pool.query(
       `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id, synthetic)
-       VALUES
-         ('signal:crh-1599-peer', 'coordinator', 'user', $2, $3, true, $1, 'signal', false),
-         ('signal:crh-1599-peer', 'coordinator', 'user', 'a real line', $3, true, $1, 'signal', false)`,
-      [alice, syntheticContent, old],
+       SELECT 'signal:crh-1599-peer', 'coordinator', 'user', content, $2, true, $1, 'signal', false
+       FROM unnest($3::text[]) AS content`,
+      [alice, old, contents],
     );
 
     const classify = `
@@ -259,27 +276,34 @@ describeIf('contact recent history SQL (#1599)', () => {
       UPDATE working_memory SET sender_contact_id = NULL
       WHERE role = 'user' AND synthetic = true AND sender_contact_id IS NOT NULL
         AND conversation_id = 'signal:crh-1599-peer'`;
-    // Same pattern the migration carries, scoped to this fixture's conversation.
-    const pattern = `${LATE_SPECIALIST_RESULT_MARKER}%`;
 
-    const classified = await pool.query(classify, [pattern]);
-    expect(classified.rowCount).toBe(1);
+    let classified = 0;
+    for (const pattern of HISTORICAL_SYNTHETIC_LIKE_PATTERNS) {
+      const result = await pool.query(classify, [pattern]);
+      classified += result.rowCount ?? 0;
+    }
+    expect(classified).toBe(briefs.length);
     const cleared = await pool.query(clear);
-    expect(cleared.rowCount).toBe(1);
+    expect(cleared.rowCount).toBe(briefs.length);
 
     const rows = await pool.query<{ content: string; sender_contact_id: string | null; synthetic: boolean }>(
       `SELECT content, sender_contact_id, synthetic FROM working_memory
-       WHERE conversation_id = 'signal:crh-1599-peer' AND role = 'user' ORDER BY content`,
+       WHERE conversation_id = 'signal:crh-1599-peer' AND role = 'user'`,
     );
     const byContent = new Map(rows.rows.map(r => [r.content, r]));
-    // The synthetic row lost the stamp 090 would have applied…
-    expect(byContent.get(syntheticContent)?.sender_contact_id).toBeNull();
-    expect(byContent.get(syntheticContent)?.synthetic).toBe(true);
-    // …and the real turn beside it kept its attribution.
-    expect(byContent.get('a real line')?.sender_contact_id).toBe(alice);
+    for (const brief of briefs) {
+      expect(byContent.get(brief)?.sender_contact_id).toBeNull();
+      expect(byContent.get(brief)?.synthetic).toBe(true);
+    }
+    for (const line of untouched) {
+      expect(byContent.get(line)?.sender_contact_id).toBe(alice);
+      expect(byContent.get(line)?.synthetic).toBe(false);
+    }
 
     // Second application touches nothing.
-    expect((await pool.query(classify, [pattern])).rowCount).toBe(0);
+    for (const pattern of HISTORICAL_SYNTHETIC_LIKE_PATTERNS) {
+      expect((await pool.query(classify, [pattern])).rowCount).toBe(0);
+    }
     expect((await pool.query(clear)).rowCount).toBe(0);
   });
 
