@@ -1558,6 +1558,8 @@ export class Dispatcher {
         senderId: ctx.senderId,
         accountId: ctx.accountId,
         content: buildContentBlockRewriteTask(ctx.content, findings),
+        // Curia's brief to itself, not a message from the person on this thread (#1892).
+        syntheticTurn: true,
         metadata: { contentBlockRewrite: true, contentBlockRetryAttempt: nextAttempt },
         parentEventId: event.id,
       });

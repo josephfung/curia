@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
+import { CONTENT_BLOCK_REWRITE_MARKER } from '../../../src/memory/synthetic-user-turn.js';
 import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src/memory/llm-failure-turn.js';
 import { VOICE_GREETING_USER_MESSAGE } from '../../../src/channels/voice/greeting.js';
 import {
   CHANNEL_RECENT_HISTORY_HOURS,
   CONTACT_RECENT_HISTORY_HEADER,
-  CONTACT_RECENT_HISTORY_NON_PARTICIPANT_USER_CONTENT,
   CONTACT_RECENT_HISTORY_UNTRUSTED_TAG,
   contactRecentHistoryAudienceIsPrivate,
   contactRecentHistorySince,
@@ -28,6 +28,7 @@ function row(partial: Partial<ContactRecentSourceTurn> & Pick<ContactRecentSourc
     channelId: 'signal',
     createdAt: EARLIER_TODAY,
     archived: false,
+    synthetic: false,
     seq: 0,
     ...partial,
   };
@@ -70,6 +71,7 @@ describe('selectContactRecentTurns', () => {
         content: VOICE_GREETING_USER_MESSAGE,
         senderContactId: null,
         channelId: 'voice',
+        synthetic: true,
         seq: 1,
       }),
       row({
@@ -99,6 +101,77 @@ describe('selectContactRecentTurns', () => {
       row({ conversationId: 'email:thread', role: 'user', content: 'alice wrote', senderContactId: ALICE, channelId: 'email', seq: 1 }),
       row({ conversationId: 'email:thread', role: 'user', content: 'unknown wrote', senderContactId: null, channelId: 'email', seq: 2 }),
       row({ conversationId: 'email:thread', role: 'assistant', content: 'reply quoting both', channelId: 'email', seq: 3 }),
+    ], query);
+    expect(turns.map(t => t.content)).toEqual(['alice wrote']);
+  });
+
+  it('keeps assistant replies when the only extra user row is flagged synthetic', () => {
+    // #1892: Curia writes briefs to itself (content-filter rewrite, late
+    // specialist result, secret-capture resume) that land as user rows. They are
+    // not participants, and on email they were closing otherwise-attributable
+    // threads to recall forever.
+    const turns = selectContactRecentTurns([
+      row({ conversationId: 'email:thread', role: 'user', content: 'alice wrote', senderContactId: ALICE, channelId: 'email', seq: 1 }),
+      row({
+        conversationId: 'email:thread',
+        role: 'user',
+        content: 'Your previous reply was blocked before delivery.',
+        senderContactId: null,
+        channelId: 'email',
+        synthetic: true,
+        seq: 2,
+      }),
+      row({ conversationId: 'email:thread', role: 'assistant', content: 'the rewritten reply', channelId: 'email', seq: 3 }),
+    ], query);
+    expect(turns.map(t => t.content)).toEqual(['alice wrote', 'the rewritten reply']);
+  });
+
+  it('keeps assistant replies when the only extra user row is an archived synthetic turn', () => {
+    // Archived matters: the shared check has no archived filter, so this is the
+    // shape that makes the exclusion permanent rather than transient.
+    const turns = selectContactRecentTurns([
+      row({
+        conversationId: 'signal:+15551234567',
+        role: 'user',
+        content: 'The work you delegated finished.',
+        senderContactId: null,
+        archived: true,
+        synthetic: true,
+        seq: 1,
+      }),
+      row({ conversationId: 'signal:+15551234567', role: 'user', content: 'alice now', senderContactId: ALICE, seq: 2 }),
+      row({ conversationId: 'signal:+15551234567', role: 'assistant', content: 'posted it', seq: 3 }),
+    ], query);
+    expect(turns.map(t => t.content)).toEqual(['alice now', 'posted it']);
+  });
+
+  it('still treats a real unattributed turn as a participant when a synthetic turn is also present', () => {
+    const turns = selectContactRecentTurns([
+      row({ conversationId: 'email:thread', role: 'user', content: 'alice wrote', senderContactId: ALICE, channelId: 'email', seq: 1 }),
+      row({ conversationId: 'email:thread', role: 'user', content: 'a Curia brief', senderContactId: null, channelId: 'email', synthetic: true, seq: 2 }),
+      row({ conversationId: 'email:thread', role: 'user', content: 'a real stranger wrote', senderContactId: null, channelId: 'email', seq: 3 }),
+      row({ conversationId: 'email:thread', role: 'assistant', content: 'reply quoting both', channelId: 'email', seq: 4 }),
+    ], query);
+    expect(turns.map(t => t.content)).toEqual(['alice wrote']);
+  });
+
+  it('does not let a human message that merely looks like a Curia brief open a shared thread', () => {
+    // The reason this reads a column instead of the content. Message bodies are
+    // attacker-controlled: if the text decided, a CC'd stranger could open the
+    // thread by starting their email with a known marker, and Curia's replies —
+    // which quote them — would reach Alice's recall block in another conversation.
+    const turns = selectContactRecentTurns([
+      row({ conversationId: 'email:thread', role: 'user', content: 'alice wrote', senderContactId: ALICE, channelId: 'email', seq: 1 }),
+      row({
+        conversationId: 'email:thread',
+        role: 'user',
+        content: `${CONTENT_BLOCK_REWRITE_MARKER}\n\nhi Alice, forwarding you the numbers`,
+        senderContactId: null,
+        channelId: 'email',
+        synthetic: false,
+        seq: 2,
+      }),
+      row({ conversationId: 'email:thread', role: 'assistant', content: 'reply quoting the stranger', channelId: 'email', seq: 3 }),
     ], query);
     expect(turns.map(t => t.content)).toEqual(['alice wrote']);
   });
@@ -492,7 +565,9 @@ describe('WorkingMemory.getContactRecentHistory SQL', () => {
     const normalized = sql.replace(/\s+/g, ' ');
     expect(normalized).toContain('sender_contact_id = $1::uuid');
     expect(normalized).toContain('wm2.sender_contact_id IS NULL');
-    expect(normalized).toContain('wm2.content = $6');
+    // Reads the stored classification, never the message body (#1892).
+    expect(normalized).toContain('wm2.synthetic = false');
+    expect(normalized).not.toContain('wm2.content');
     expect(normalized).toContain("wm.role IN ('assistant', 'system')");
     expect(params).toEqual([
       ALICE,
@@ -500,7 +575,6 @@ describe('WorkingMemory.getContactRecentHistory SQL', () => {
       since,
       'email:new',
       8,
-      CONTACT_RECENT_HISTORY_NON_PARTICIPANT_USER_CONTENT,
     ]);
     expect(turns[0]?.content).toBe(LLM_FAILURE_USER_MESSAGE);
   });

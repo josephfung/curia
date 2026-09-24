@@ -91,6 +91,10 @@ describe('SecretCaptureResumeSubscriber', () => {
     // completeness from its own conversation history.
     expect(task.payload.content).toContain('Aeroplan password');
     expect(task.payload.content).toContain('check the Aeroplan balance');
+    // #1892: this brief re-enters on the ORIGINAL conversation id, so on Signal or
+    // SMS an unflagged row would be stamped with the human peer and later recalled
+    // as something they said. senderId stays the originator for routing and Gate C.
+    expect(task.payload.syntheticTurn).toBe(true);
   });
 
   it('seeds dispatcher routing for the resume task BEFORE publishing it (#972)', async () => {

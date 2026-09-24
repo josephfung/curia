@@ -1,12 +1,13 @@
 /**
  * Synthetic user message that triggers the opening turn.
  *
- * Contact-recent recall treats this exact string as Curia's own row, not
- * another participant (`isSyntheticVoiceGreetingCue` in
- * `src/memory/contact-recent-history.ts`, bound as SQL `$6`). Migration 090
- * leaves matching rows unstamped. Rewording this constant does not rewrite
- * rows already stored; those calls would look shared and drop the spoken
- * replies. If the wording changes, keep recognizing the previous text.
+ * Contact-recent recall treats this as Curia's own row, not another
+ * participant. It is one entry in `SYNTHETIC_USER_TURN_MARKERS`
+ * (`src/memory/synthetic-user-turn.ts`), which the recall read and the sender
+ * backfill both consume, and which migration 091 mirrors in SQL. Rewording
+ * this constant does not rewrite rows already stored; those calls would look
+ * shared and drop the spoken replies. If the wording changes, keep recognizing
+ * the previous text by leaving the old string in that list.
  */
 export const VOICE_GREETING_USER_MESSAGE =
   '[Call connected — open the conversation.]';

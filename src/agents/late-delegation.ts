@@ -34,6 +34,7 @@ import {
 } from '../db/queries/pending-delegations.js';
 import { EXECUTION_PAUSED_PROTOCOL } from './resumable-task.js';
 import { toLocalIso } from '../time/timestamp.js';
+import { LATE_SPECIALIST_RESULT_MARKER } from '../memory/synthetic-user-turn.js';
 
 /** Mirrors CLARIFICATION_PROTOCOL in skills/request-clarification/handler.ts. Duplicated as a
  *  literal rather than imported so src/ does not depend on a tool handler module — the same
@@ -407,7 +408,9 @@ export function buildLateResultBrief(params: LateResultBriefParams): string {
   // One complete sentence per element — never hard-wrapped mid-sentence. A model reads either
   // shape, but an unbroken sentence survives being grepped for, quoted in a log, or asserted on.
   const lines = [
-    `[Late specialist result — ${targetAgent}, delivered ${deliveredAtDisplay}]`,
+    // Marker prefix is registered in synthetic-user-turn.ts so contact recall and
+    // the sender backfill can tell this apart from a human message (#1892).
+    `${LATE_SPECIALIST_RESULT_MARKER}${targetAgent}, delivered ${deliveredAtDisplay}]`,
     '',
     `The work you delegated to '${targetAgent}' timed out from your side, but the specialist kept running, finished, and returned this result:`,
     '',
@@ -841,6 +844,9 @@ async function publishLateWake(opts: PublishLateWakeOptions): Promise<PublishLat
     channelId: handle.originChannelId,
     senderId: handle.originSenderId,
     content: brief,
+    // The wake brief is Curia reporting to itself. senderId carries the original
+    // requester for routing, but nobody said this (#1892).
+    syntheticTurn: true,
     metadata: {
       ...(originator !== undefined && { originator }),
       wakeContext: makeWakeContext(true),

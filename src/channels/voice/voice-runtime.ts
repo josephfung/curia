@@ -1382,6 +1382,8 @@ export class VoiceRuntime {
         }, {
           senderContactId: persistableCallerContactId(session.caller.contactId) ?? null,
           channelId: 'voice',
+          // The opening cue is Curia's own row, not something the caller said (#1892).
+          synthetic: storedUserContent === VOICE_GREETING_USER_MESSAGE,
         });
         userTurnPersisted = true;
       } catch (err) {

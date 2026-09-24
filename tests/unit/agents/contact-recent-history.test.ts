@@ -456,6 +456,8 @@ describe('AgentRuntime contact recent history (#1599)', () => {
       content: VOICE_GREETING_USER_MESSAGE,
     }, {
       channelId: 'voice',
+      // As VoiceRuntime writes it — Curia's own opening row, not the caller's (#1892).
+      synthetic: true,
       createdAt: EARLIER,
     });
     await memory.addTurn('voice:earlier', 'coordinator', {

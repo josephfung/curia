@@ -246,6 +246,9 @@ export class SecretCaptureResumeSubscriber {
       channelId,
       senderId,
       content,
+      // Curia telling itself the secret landed. senderId is the originator, for
+      // routing and Gate C — but this text is not something they said (#1892).
+      syntheticTurn: true,
       metadata: { originator: routingOriginator },
       // Thread back to the originating agent.task when known so the causal chain is intact;
       // fall back to this event's id otherwise (agent.task requires a parentEventId).
