@@ -3059,7 +3059,7 @@ export class AgentRuntime {
       );
       return Promise.resolve({ considered: false, block: null });
     }
-    const window = contactRecentHistorySince(new Date(), timezone);
+    const window = contactRecentHistorySince(new Date(), timezone, channelId);
     return memory.getContactRecentHistory({
       contactId,
       agentId,

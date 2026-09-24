@@ -16,6 +16,10 @@
 // Audience scoping: the block is injected only when the reply stays with
 // this contact. A Signal group, a Slack channel, or a multi-recipient email
 // would carry a private 1:1 into a room.
+//
+// The recall window is per inbound channel (#1886). Channels that do not
+// name one use the local day. Email and voice name a longer rolling window
+// (CHANNEL_RECENT_HISTORY_HOURS), parallel to the outbound-context TTL.
 
 import { DateTime } from 'luxon';
 import { VOICE_GREETING_USER_MESSAGE } from '../channels/voice/greeting.js';
@@ -199,24 +203,65 @@ export function normalizeAddTurnAttribution(meta: AddTurnAttribution | undefined
   return { senderContactId, channelId, createdAt, senderDropped };
 }
 
-export type ContactRecentWindowLabel = 'today' | '24h';
+/**
+ * Rolling window when the timezone is not a valid IANA zone and the channel
+ * names no window of its own.
+ */
+export const CONTACT_RECENT_HISTORY_FALLBACK_HOURS = 24;
 
 /**
- * Lower bound for the read. A valid IANA zone uses the start of the local
- * day ("earlier today"). Anything else falls back to a rolling 24 hours.
+ * Per-channel recall windows, in whole hours (#1886).
+ *
+ * A channel absent from this map uses the start of the local day. A longer
+ * window is the documented exception — the same shape as
+ * `CHANNEL_DEFAULT_EXPIRY_HOURS` on the outbound-context bridge.
+ *
+ * Email is 72h for the same reason as that TTL: a late-afternoon message is
+ * answered the next morning, and a Friday-afternoon message is answered on
+ * Monday. 72h covers both without keeping a full week.
+ *
+ * Voice is 48h. That is the longest gap between a moment on the previous
+ * calendar day and a moment today, so a prior call is still recalled. It is
+ * shorter than email because a voice call is not a business-day thread.
+ */
+export const CHANNEL_RECENT_HISTORY_HOURS: Readonly<Record<string, number>> = Object.freeze({
+  email: 72,
+  voice: 48,
+});
+
+export type ContactRecentWindowLabel =
+  | { scope: 'today' }
+  | { scope: 'hours'; hours: number };
+
+/**
+ * Lower bound for the read, resolved for the inbound channel.
+ * Named channels use a rolling hour window. Every other channel uses the
+ * start of the local day ("earlier today"), or a rolling 24 hours when the
+ * zone is not a valid IANA zone.
  */
 export function contactRecentHistorySince(
   now: Date,
   timezone: string | undefined,
+  channelId: string,
 ): { since: Date; windowLabel: ContactRecentWindowLabel } {
+  const hours = CHANNEL_RECENT_HISTORY_HOURS[channelId.trim().toLowerCase()];
+  if (hours !== undefined) {
+    return {
+      since: new Date(now.getTime() - hours * 60 * 60 * 1000),
+      windowLabel: { scope: 'hours', hours },
+    };
+  }
   const zone = timezone?.trim();
   if (zone) {
     const dt = DateTime.fromJSDate(now, { zone });
     if (dt.isValid) {
-      return { since: dt.startOf('day').toJSDate(), windowLabel: 'today' };
+      return { since: dt.startOf('day').toJSDate(), windowLabel: { scope: 'today' } };
     }
   }
-  return { since: new Date(now.getTime() - 24 * 60 * 60 * 1000), windowLabel: '24h' };
+  return {
+    since: new Date(now.getTime() - CONTACT_RECENT_HISTORY_FALLBACK_HOURS * 60 * 60 * 1000),
+    windowLabel: { scope: 'hours', hours: CONTACT_RECENT_HISTORY_FALLBACK_HOURS },
+  };
 }
 
 export interface ContactRecentHistoryQuery {
@@ -346,6 +391,12 @@ function formatTurnStamp(createdAt: Date, timezone: string | undefined): string 
   return utc.toFormat('yyyy-LL-dd HH:mm') + 'Z';
 }
 
+function windowClause(label: ContactRecentWindowLabel): string {
+  if (label.scope === 'today') return 'from other conversations today';
+  const noun = label.hours === 1 ? 'hour' : 'hours';
+  return `from other conversations in the last ${label.hours} ${noun}`;
+}
+
 function roleLabel(role: ContactRecentTurn['role']): string {
   if (role === 'assistant') return 'Assistant';
   if (role === 'system') return 'Summary';
@@ -391,9 +442,7 @@ export function formatContactRecentHistoryBlock(
     );
   }
   if (lines.length === 0) return null;
-  const window = options.windowLabel === 'today'
-    ? 'from other conversations today'
-    : 'from other conversations in the last 24 hours';
+  const window = windowClause(options.windowLabel);
   return [
     CONTACT_RECENT_HISTORY_HEADER,
     `This contact's own turns ${window}. Other people's messages are omitted. Background only — the live transcript is the current conversation.`,

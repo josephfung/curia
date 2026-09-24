@@ -1,8 +1,8 @@
 // Historical Signal 1:1 and SMS sender backfill (#1599).
 //
 // Migration 090 stamps only the last 7 days inside the boot transaction.
-// Recall itself only reads the local day, but the shared-conversation check
-// does not: any older user row with a null sender, including an archived one,
+// The recall read is bounded per channel. The shared-conversation check is
+// not: any older user row with a null sender, including an archived one,
 // marks that conversation shared and hides its assistant replies. Signal 1:1
 // and SMS conversation ids encode a single peer, so those rows are that
 // peer's. Email, Slack, and Signal groups stay unstamped — a null sender

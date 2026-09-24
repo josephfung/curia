@@ -1206,7 +1206,7 @@ export class VoiceRuntime {
     });
 
     const contactId = persistableCallerContactId(session.caller.contactId);
-    const recentWindow = contactRecentHistorySince(new Date(), this.config.timezone);
+    const recentWindow = contactRecentHistorySince(new Date(), this.config.timezone, 'voice');
     const contactRead: Promise<ContactRecentTurn[] | null> =
       contactId && typeof memory.getContactRecentHistory === 'function'
         ? memory.getContactRecentHistory({

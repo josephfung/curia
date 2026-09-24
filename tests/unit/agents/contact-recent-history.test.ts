@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { DateTime } from 'luxon';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask, type AgentResponseEvent, type ContextBudgetEvent } from '../../../src/bus/events.js';
@@ -91,10 +92,16 @@ async function seedPrior(memory: WorkingMemory): Promise<void> {
     channelId: 'email',
     createdAt: new Date(EARLIER.getTime() + 4000),
   });
-  await memory.addTurn('email:thread-old', 'coordinator', { role: 'user', content: 'yesterday leftover' }, {
+  // 65h is Friday 16:00 → Monday 09:00, inside the 72h email window.
+  await memory.addTurn('email:thread-old', 'coordinator', { role: 'user', content: 'friday afternoon offer' }, {
     senderContactId: ALICE,
     channelId: 'email',
-    createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000),
+    createdAt: new Date(Date.now() - 65 * 60 * 60 * 1000),
+  });
+  await memory.addTurn('email:thread-old', 'coordinator', { role: 'user', content: 'outside the email window' }, {
+    senderContactId: ALICE,
+    channelId: 'email',
+    createdAt: new Date(Date.now() - 96 * 60 * 60 * 1000),
   });
 }
 
@@ -141,9 +148,12 @@ describe('AgentRuntime contact recent history (#1599)', () => {
     expect(block).toContain('the prior thread asked for Thursday');
     expect(block).toContain('see you Thursday');
     expect(block).toContain('alice own line');
+    expect(block).toContain('friday afternoon offer');
+    expect(block).toContain('in the last 72 hours');
+    expect(block).not.toContain('from other conversations today');
     expect(block).not.toContain('carol secret line');
     expect(block).not.toContain('noted everyone on the thread');
-    expect(block).not.toContain('yesterday leftover');
+    expect(block).not.toContain('outside the email window');
     expect(block).not.toContain('following up on a new thread');
     expect(messages.some(m => m.role === 'user' && m.content === 'following up on a new thread')).toBe(true);
     const blockAt = messages.findIndex(m => typeof m.content === 'string' && m.content.includes(CONTACT_RECENT_HISTORY_HEADER));
@@ -160,6 +170,52 @@ describe('AgentRuntime contact recent history (#1599)', () => {
     });
     expect(stamped.some(t => t.role === 'user' && t.content === 'following up on a new thread')).toBe(true);
     expect(stamped.some(t => t.role === 'assistant' && t.content === 'Noted.')).toBe(true);
+  });
+
+  it('keeps a Signal reply on the local day', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const llm = provider();
+    const memory = WorkingMemory.createInMemory();
+    const earlierToday = DateTime.now().setZone('America/Toronto').startOf('day').plus({ minutes: 30 }).toJSDate();
+    await memory.addTurn('signal:+15551212', 'coordinator', { role: 'user', content: 'earlier today on signal' }, {
+      senderContactId: ALICE,
+      channelId: 'signal',
+      createdAt: earlierToday,
+    });
+    await memory.addTurn('signal:+15559999', 'coordinator', { role: 'user', content: 'yesterday on signal' }, {
+      senderContactId: ALICE,
+      channelId: 'signal',
+      createdAt: new Date(Date.now() - 30 * 60 * 60 * 1000),
+    });
+    const runtime = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are helpful.',
+      provider: llm,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      memory,
+      timezone: 'America/Toronto',
+    });
+    runtime.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'signal:+15550000',
+      channelId: 'signal',
+      senderId: '+15551212',
+      content: 'new signal chat',
+      senderContext: ALICE_SENDER,
+      parentEventId: 'parent-signal',
+    }));
+
+    const block = blockText(messagesOf(llm.chat));
+    expect(block).toContain('earlier today on signal');
+    expect(block).toContain('from other conversations today');
+    expect(block).not.toContain('yesterday on signal');
+    expect(block).not.toContain('in the last 72 hours');
   });
 
   it('does not recall contact history on a scheduler run', async () => {
