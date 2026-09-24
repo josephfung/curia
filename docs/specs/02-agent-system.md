@@ -93,6 +93,12 @@ Two further invariants govern the wake:
 - **The brief never restates the original delegated instruction.** #1064 is the precedent: a notify
   `agent.task` that echoed the original intent made the coordinator re-execute it and send a
   duplicate. The original brief is already in the conversation the wake re-enters.
+- **A new inbound cannot start a second run while the handle is open (#1858).** The in-memory
+  guard does not survive the turn, and the coordinator rewords the brief, so neither stops the
+  retry. Before publishing, `delegate` looks up `pending_delegations` for `status = 'pending'`
+  on the same target agent and originating conversation. A hit returns `already_in_flight` with
+  the existing `delegate_event_id` and `elapsed_wait_ms`, and does not dispatch. Task prose is
+  not part of the match. A claimed or resolved handle does not block the next delegation.
 
 The wake restores the stored `originator` (so the follow-up steps still clear the autonomy gate),
 marks itself `derived` via `wakeContext` (so the standing ladder can only downgrade authority), and

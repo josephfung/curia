@@ -324,6 +324,10 @@ export interface ToolContext {
   /** Per-task-turn guard against blind identical re-delegation (#1171). Populated by the
    *  agent runtime and read by the delegate skill. */
   delegationGuard?: import('../agents/delegation-guard.js').DelegationGuard;
+  /** Read-only check for an unresolved timed-out delegation in this conversation (#1858).
+   *  Set by the execution layer on `delegate` only, from the process pool. Absent when no
+   *  pool is wired (unit tests, smoke) — the handler then cannot see open handles. */
+  openDelegationLookup?: import('../db/queries/pending-delegations.js').OpenDelegationLookup;
   /** date-resolve outputs from earlier in this agent turn (#1612). Populated by the runtime
    *  / voice bridge and read by the delegate skill for brief validation. */
   turnDateResolveResults?: readonly import('../agents/delegate-brief-date-validation.js').TurnDateResolveResult[];

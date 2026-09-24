@@ -25,6 +25,14 @@ export const MAX_RETRYABLE_IDENTICAL_DELEGATIONS = 2;
  */
 export const ALREADY_DELIVERED_REASON = 'already_delivered';
 
+/**
+ * Guard reason when a specialist already has an unresolved `pending_delegations` handle in the
+ * originating conversation (#1858). Sibling of `already_delivered`: that one means the work
+ * finished, this one means it is still running. Task prose is not part of the match — the
+ * coordinator rewords the brief on every retry, which is how the identical-task guard missed it.
+ */
+export const ALREADY_IN_FLIGHT_REASON = 'already_in_flight';
+
 export interface DelegationFailureInfo {
   agent: string;
   reason: AgentResponseFailureReason | string;

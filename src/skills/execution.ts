@@ -277,6 +277,10 @@ export class ExecutionLayer {
    *  'sensitivityClassifier' in capabilities. Built once at startup from
    *  yamlConfig.sensitivity_rules and reused across skills and EntityMemory. */
   private sensitivityClassifier?: SensitivityClassifier;
+  /** Read-only pending-delegation lookup, attached to `delegate` only (#1858).
+   *  Not a manifest capability: declaring one would fail-closed every ExecutionLayer
+   *  that loads the real delegate tool without a pool (integration tests, smoke). */
+  private openDelegationLookup?: import('../db/queries/pending-delegations.js').OpenDelegationLookup;
 
   constructor(registry: ToolRegistry, logger: Logger, options?: {
     bus?: EventBus;
@@ -326,6 +330,8 @@ export class ExecutionLayer {
     sensitivityClassifier?: SensitivityClassifier;
     /** Skill (bundle) registry — enables unified discovery + skill-activate (#1495). */
     skillRegistry?: SkillRegistry;
+    /** Pending-delegation lookup for the delegate skill (#1858). */
+    openDelegationLookup?: import('../db/queries/pending-delegations.js').OpenDelegationLookup;
   }) {
     this.registry = registry;
     this.skillRegistry = options?.skillRegistry;
@@ -370,6 +376,7 @@ export class ExecutionLayer {
     this.principalIdentities = options?.principalIdentities ?? [];
     this.exportControlService = options?.exportControlService;
     this.sensitivityClassifier = options?.sensitivityClassifier;
+    this.openDelegationLookup = options?.openDelegationLookup;
   }
 
   /**
@@ -1695,6 +1702,11 @@ export class ExecutionLayer {
       // (appOrigin in prod, http://localhost:{httpPort} in dev). Harmless for other skills.
       appOrigin: this.appOrigin,
       httpPort: this.httpPort,
+      // In-flight delegation check (#1858). Only `delegate` reads it; other skills
+      // must not gain a query path into pending_delegations.
+      ...(manifest.name === 'delegate' && this.openDelegationLookup
+        ? { openDelegationLookup: this.openDelegationLookup }
+        : {}),
     };
 
     // Capability-gated service injection.
