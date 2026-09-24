@@ -1702,10 +1702,14 @@ export class ExecutionLayer {
       // (appOrigin in prod, http://localhost:{httpPort} in dev). Harmless for other skills.
       appOrigin: this.appOrigin,
       httpPort: this.httpPort,
-      // In-flight delegation check (#1858). Only `delegate` reads it; other skills
-      // must not gain a query path into pending_delegations.
+      // In-flight delegation check (#1858) and the dispatch claim (#1893). Only
+      // `delegate` reads them; other skills must not gain a path into the table.
+      // senderId is the same gate: the claim's origin_sender_id column is NOT NULL.
       ...(manifest.name === 'delegate' && this.openDelegationLookup
         ? { openDelegationLookup: this.openDelegationLookup }
+        : {}),
+      ...(manifest.name === 'delegate' && options?.senderId
+        ? { senderId: options.senderId }
         : {}),
     };
 

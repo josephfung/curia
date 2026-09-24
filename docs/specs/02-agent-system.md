@@ -63,10 +63,11 @@ The lifecycle now:
 1. On timeout, the runtime publishes `delegation.timed_out` carrying the delegate `agent.task`
    event id — the value the specialist stamps as `parentEventId` on its eventual response — plus
    the originating routing and the id of the CEO review task the escalation created.
-2. `LateDelegationSubscriber` (system layer) persists that as a row in `pending_delegations`.
-   `UNIQUE (delegate_event_id)` makes the handle idempotent, and `status` is a three-step lease
-   (`pending` → `claimed` + `claim_token` → `resolved`) so an actor that crashes mid-delivery
-   leaves recoverable work rather than a row claiming work that never happened.
+2. `LateDelegationSubscriber` (system layer) persists that as a row in `pending_delegations`,
+   or promotes the dispatch-time `running` claim for the same `delegate_event_id` in place.
+   `UNIQUE (delegate_event_id)` makes the handle idempotent, and `status` is a lease
+   (`running` → `pending` → `claimed` + `claim_token` → `resolved`) so an actor that crashes
+   mid-delivery leaves recoverable work rather than a row claiming work that never happened.
 3. When the late response arrives, it is classified. A usable result re-enters the **originating
    agent in its original conversation** with a brief carrying the specialist's output, and the
    review task is closed. Every other outcome — the specialist ultimately failed, came back with a
@@ -93,21 +94,24 @@ Two further invariants govern the wake:
 - **The brief never restates the original delegated instruction.** #1064 is the precedent: a notify
   `agent.task` that echoed the original intent made the coordinator re-execute it and send a
   duplicate. The original brief is already in the conversation the wake re-enters.
-- **Once a delegate wait has timed out, a new inbound cannot start a second run of that
-  specialist in the same conversation (#1858).** The handle exists only after the runtime
-  publishes `delegation.timed_out`, so two delegations that both start inside the wait window
-  are still unguarded (#1893). Before publishing, and only after a `resume_token` has been validated,
-  `delegate` looks up `pending_delegations` for `status = 'pending'` on the same target agent
-  and originating conversation. A hit returns `already_in_flight` with the existing
-  `delegate_event_id` and `open_handle_age_ms` (age of the handle, which opens after the wait
-  expires — not time since the specialist started) and does not dispatch. Task prose is not
-  part of the match. The block is that agent in that conversation for as long as the row stays
-  pending: up to `delegate.lateDelivery.ttlMinutes` (default 60). A Signal conversation id is
-  stable for the whole thread, so a specialist that never answers is unreachable there until
-  the sweep abandons the handle. A claimed or resolved handle does not block the next
-  delegation. Rows are never deleted, so retention is a correctness concern: a pending row
-  nothing resolves keeps blocking. The result is not a failure, so a coordinator that ignores
-  the prompt can call `delegate` again in the same turn; the prompt is what stops that loop.
+- **A specialist is claimed when the run is published, not only after the wait expires
+  (#1893, #1858).** Before publishing, and only after a `resume_token` has been validated,
+  `delegate` inserts a `pending_delegations` row with `status = 'running'` for that target
+  agent and originating conversation. A partial unique index makes the insert the claim: a
+  second call, whatever its brief says, returns `already_in_flight` with the existing
+  `delegate_event_id` and `open_handle_age_ms` and does not dispatch. Age on a running row
+  is time since dispatch; age on a pending row starts when the wait expires (or when that
+  claim is promoted). Every return except timeout deletes the running row. A timeout does not: the same
+  row becomes the `pending` handle, and the lookup matches both statuses. The running row's
+  `expires_at` is the wait plus a short grace, so the sweep abandons a claim orphaned by a
+  crash in about the wait, not the late-delivery hour. A pending row still blocks until the
+  sweep abandons it (`delegate.lateDelivery.ttlMinutes`, default 60). A claimed or resolved
+  handle does not block the next delegation. A brief that never dispatched — claim conflict,
+  `already_in_flight`, or a later call skipped after escalation — is stored as a backlog task
+  that wakes the originating agent in the originating conversation. A timeout is not queued
+  again. Retries of one busy specialist are capped, and the wake is not earlier than the wait.
+  The result is not a failure, so a coordinator that ignores the prompt can call `delegate`
+  again in the same turn; the prompt is what stops that loop.
 
 The wake restores the stored `originator` (so the follow-up steps still clear the autonomy gate),
 marks itself `derived` via `wakeContext` (so the standing ladder can only downgrade authority), and

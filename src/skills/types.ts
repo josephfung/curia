@@ -192,6 +192,9 @@ export interface ToolContext {
   /** Channel ID from the originating task event (e.g. "http", "internal", "signal").
    *  Used with agentId and taskEventId to construct the memory write source key. */
   channelId?: string;
+  /** Inbound sender id from the originating task (#1893). `delegate` writes it onto
+   *  the dispatch claim; other skills do not receive it. */
+  senderId?: string;
   /** Pre-constructed source key for entityMemory.storeFact() calls, matching the
    *  format that AgentRuntime.resetRateLimit() uses: `agent:{id}/task:{id}/channel:{id}`.
    *  Skills writing to entity memory should use this as the `source` parameter so the
