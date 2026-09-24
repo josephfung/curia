@@ -19,6 +19,8 @@ A probe against the production database on 2026-09-24 changed the inputs to that
 
 **3. The TTL does not age the problem out.** #1887 reasoned that unstamped rows would normally expire and that permanence came from `archived` rows being exempt from `purgeExpired`. In production, **1,129 of 1,185** email user rows have `expires_at IS NULL`, so `purgeExpired` never considers them at all. Only 23 rows are archived. The residue is permanent for reasons that have nothing to do with archiving, and is roughly fifty times larger than the archived-only framing suggests.
 
+This is a statement about retention, not about attribution: it says which rows persist, not which are wrongly scoped. See the Decision for the recoverable subset, which is smaller.
+
 **4. Nothing is currently broken.** 936 email threads are from April–June 2026 and 29 are from September, with zero threads spanning both. `participated` requires a recent attributed turn, so no dormant thread is losing anything today. The first reply to any of those 936 threads arms it permanently. This is a latent trap, not an active fault, which is what makes fixing it before it fires worth doing.
 
 Also relevant to the comparison: migration 090's seven-day window covers 15 of 1,185 email rows. As written it does effectively nothing for email, so "leave 090 alone" was never the conservative choice it appeared to be.
@@ -37,7 +39,9 @@ Three constraints shape the implementation:
 
 A row that does not resolve stays null and its conversation stays shared, which is today's behaviour. The backfill can be incomplete without being wrong. That fail-safe property is the core reason A was chosen over B, and it remains true independent of the measured hit rate.
 
-**C was rejected** on the strength of findings 1 and 3. The measured cost of A is roughly a day, most of which — the observability work below — C also requires. The measured cost of C is 1,129 permanently mis-scoped rows across 757 recoverable threads and 176 contacts, growing with every email thread that ever resumes.
+**C was rejected** on findings 1 and 3. The measured cost of A is roughly a day, most of which — the observability work below — C also requires.
+
+The cost of C is **947 rows whose sender is recoverable but would stay unattributed**, across 757 threads and 176 contacts, growing with every email thread that ever resumes. Finding 3's 1,129 is a *retention* count, not this: it is every in-scope row that will never be purged, and it includes the 227 whose senders are real people with no contact record. Those 227 are correctly null under any option, so counting them as a cost of C would overstate it. The two measures overlap on **902 rows** — recoverable, unattributed, and never expiring, which is the subset for which "permanently" is literally true. The remaining 45 recoverable rows carry a TTL and would eventually be purged unarchived.
 
 **Observability ships regardless.** A conversation excluded from contact recall by the shared check emits a log line naming the conversation and the reason. #1887's sharpest observation is that today an affected thread produces a correct-looking but incomplete block with no counter and no log line, and that silence is what made this class of fault invisible until it was looked for directly. That holds whichever option was chosen.
 
