@@ -309,6 +309,7 @@ describe('Scheduler', () => {
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
       pool.query.mockResolvedValueOnce(claimed());
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
 
       await scheduler.pollDueJobs();
       await scheduler.drainInFlight();
@@ -337,6 +338,41 @@ describe('Scheduler', () => {
       const closeCall = pool.query.mock.calls.find((call) => String(call[0]).includes("'delegation-retry'"));
       expect(String(closeCall?.[0])).toContain("status = 'done'");
       expect(closeCall?.[1]).toEqual(['task-retry-1']);
+      expect(logger.warn.mock.calls.map((call) => call[1])).not.toContain(
+        'Delegation retry wake fired but no open delegation-retry task matched — BacklogHeartbeat may re-run the brief',
+      );
+    });
+
+    it('warns when the delegation-retry task is no longer open (#1893)', async () => {
+      scheduler.setExternalRoutingRegistrar(vi.fn());
+      const row = fakeDbRow({
+        cron_expr: null,
+        run_at: new Date().toISOString(),
+        task_payload: {
+          type: 'task-wake',
+          delegationRetry: {
+            conversationId: 'signal:+15551212',
+            channelId: 'signal',
+            senderId: '+15551212',
+            targetAgent: 'calendar',
+            brief: 'Book Tuesday at 10',
+            attempt: 1,
+          },
+        },
+        agent_task_id: 'task-retry-1',
+        task_tags: ['delegation-retry', 'calendar'],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+      pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+      await scheduler.pollDueJobs();
+      await scheduler.drainInFlight();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        { jobId: 'job-1', taskId: 'task-retry-1' },
+        'Delegation retry wake fired but no open delegation-retry task matched — BacklogHeartbeat may re-run the brief',
+      );
     });
 
     it('passes intentAnchor in event payload for persistent tasks', async () => {

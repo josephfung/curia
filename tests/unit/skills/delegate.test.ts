@@ -1139,6 +1139,64 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
     expect((blocked.data as { delegate_event_id: string }).delegate_event_id).toBe('delegate-existing');
     expect(published).toEqual([]);
   });
+
+  it('dispatches when invoke omits senderId (#1893)', async () => {
+    const acquireRunning = vi.fn(async () => ({
+      acquired: true as const,
+      claim: { delegateEventId: 'delegate-claim' },
+    }));
+    const agentRegistry = registry();
+    const bus = new EventBus(logger);
+    const published: string[] = [];
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type !== 'agent.task') return;
+      published.push(event.payload.agentId);
+      const { createAgentResponse } = await import('../../../src/bus/events.js');
+      await bus.publish('agent', createAgentResponse({
+        agentId: event.payload.agentId,
+        conversationId: event.payload.conversationId,
+        content: 'specialist done',
+        parentEventId: event.id,
+      }));
+    });
+    const toolRegistry = new ToolRegistry();
+    const manifest: ToolManifest = {
+      name: 'delegate',
+      description: 'Delegate',
+      version: '1.8.1',
+      sensitivity: 'normal',
+      action_risk: 'none',
+      capabilities: ['bus', 'agentRegistry'],
+      inputs: { agent: 'string', task: 'string' },
+      outputs: { response: 'string' },
+      permissions: [],
+      secrets: [],
+      timeout: 30_000,
+    };
+    toolRegistry.register(manifest, handler);
+    const execution = new ExecutionLayer(toolRegistry, logger, {
+      bus,
+      agentRegistry,
+      openDelegationLookup: {
+        findInFlight: async () => null,
+        acquireRunning,
+        releaseRunning: async () => {},
+      },
+    });
+
+    const result = await execution.invoke(
+      'delegate',
+      { agent: 'calendar', task: 'Reserve the room' },
+      undefined,
+      { conversationId: 'signal:+15551212', agentId: 'coordinator', channelId: 'signal' },
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { response?: string }).response).toContain('specialist done');
+    expect(published).toEqual(['calendar']);
+    expect(acquireRunning).not.toHaveBeenCalled();
+  });
 });
 
 describe('DelegateHandler dispatch claim (#1893)', () => {
@@ -1381,11 +1439,37 @@ describe('DelegateHandler dispatch claim (#1893)', () => {
     expect(params?.[0]?.originator).toBeUndefined();
   });
 
-  it('refuses to dispatch when the claim cannot record an origin', async () => {
+  it('refuses to dispatch when the claim insert throws', async () => {
+    const { bus, published } = respondingBus('specialist done');
+    const acquireRunning = vi.fn(async () => {
+      throw new Error('connection refused');
+    });
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Reserve the room' },
+      {
+        bus,
+        agentRegistry: registry(),
+        openDelegationLookup: {
+          findInFlight: async () => null,
+          acquireRunning,
+          releaseRunning: async () => {},
+        },
+        ...origin(),
+      },
+    ));
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.errorType).toBe('DATABASE_UNAVAILABLE');
+    expect(published).toEqual([]);
+    expect(acquireRunning).toHaveBeenCalledOnce();
+  });
+
+  it('dispatches without a claim when the origin has no sender', async () => {
     const { bus, published } = respondingBus('specialist done');
     const claim = holdingClaim();
     const result = await handler.execute(makeCtx(
-      { agent: 'calendar', task: 'Book the room' },
+      { agent: 'calendar', task: 'Reserve the room' },
       {
         bus,
         agentRegistry: registry(),
@@ -1396,10 +1480,31 @@ describe('DelegateHandler dispatch claim (#1893)', () => {
       },
     ));
 
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { response?: string }).response).toContain('specialist done');
+    expect(published).toEqual(['calendar']);
+    expect(claim.acquireRunning).not.toHaveBeenCalled();
+    expect(claim.releaseRunning).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when the response listener cannot be armed', async () => {
+    const bus = new EventBus(logger);
+    const claim = holdingClaim();
+    const subscribe = bus.subscribe.bind(bus);
+    vi.spyOn(bus, 'subscribe').mockImplementation((eventType, layer, handler) => {
+      if (eventType === 'agent.response') throw new Error('subscribe failed');
+      return subscribe(eventType, layer, handler);
+    });
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Reserve the room' },
+      { bus, agentRegistry: registry(), openDelegationLookup: claim.lookup, ...origin() },
+    ));
+
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.errorType).toBe('DATABASE_UNAVAILABLE');
-    expect(published).toEqual([]);
-    expect(claim.acquireRunning).not.toHaveBeenCalled();
+    expect(result.error).toContain('subscribe failed');
+    expect(claim.acquireRunning).toHaveBeenCalledOnce();
+    expect(claim.releaseRunning).toHaveBeenCalledWith('delegate-claim');
   });
 });

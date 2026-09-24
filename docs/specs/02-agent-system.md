@@ -99,7 +99,10 @@ Two further invariants govern the wake:
   `delegate` inserts a `pending_delegations` row with `status = 'running'` for that target
   agent and originating conversation. A partial unique index makes the insert the claim: a
   second call, whatever its brief says, returns `already_in_flight` with the existing
-  `delegate_event_id` and `open_handle_age_ms` and does not dispatch. Age on a running row
+  `delegate_event_id` and `open_handle_age_ms` and does not dispatch. A call with no
+  origin to store — the turn never supplied a sender — logs the gap and publishes
+  without a claim, so voice and an approval re-invoke still start the specialist.
+  An insert that throws still does not dispatch. Age on a running row
   is time since dispatch; age on a pending row starts when the wait expires (or when that
   claim is promoted). Every return except the wait-timer timeout deletes the running row.
   A specialist that reports `reason: 'timeout'` has already finished, so that row is

@@ -1223,7 +1223,7 @@ export class Scheduler {
       return;
     }
     try {
-      await this.pool.query(
+      const res = await this.pool.query(
         `UPDATE tasks
             SET status = 'done', updated_at = now()
           WHERE id = $1
@@ -1231,6 +1231,12 @@ export class Scheduler {
             AND 'delegation-retry' = ANY(tags)`,
         [job.agentTaskId],
       );
+      if ((res.rowCount ?? 0) === 0) {
+        this.logger.warn(
+          { jobId: job.id, taskId: job.agentTaskId },
+          'Delegation retry wake fired but no open delegation-retry task matched — BacklogHeartbeat may re-run the brief',
+        );
+      }
     } catch (err) {
       this.logger.error(
         { err, jobId: job.id, taskId: job.agentTaskId },

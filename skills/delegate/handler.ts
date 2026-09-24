@@ -453,8 +453,12 @@ export class DelegateHandler implements ToolHandler {
 
     // Claim before subscribing. A refusal returns before the response listener
     // and its timer exist, so a busy conversation does not accumulate subscribers
-    // that never settle.
+    // that never settle. The try covers the claim: a throw while arming the
+    // listener still releases it.
     let acquiredDelegateEventId: string | undefined;
+    let retainRunningClaim = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    try {
     if (ctx.openDelegationLookup?.acquireRunning) {
       const originAgentId = ctx.agentId;
       const originConversationId = ctx.conversationId;
@@ -466,16 +470,14 @@ export class DelegateHandler implements ToolHandler {
         || typeof originChannelId !== 'string' || originChannelId === ''
         || typeof originSenderId !== 'string' || originSenderId === ''
       ) {
-        ctx.log.error(
-          { targetAgent: agent, hasSender: typeof originSenderId === 'string' },
-          'Cannot claim a running delegation — refusing to dispatch without an origin',
+        // A missing sender is a caller that never plumbed InvokeOptions.senderId
+        // (voice, approval re-invoke). origin_sender_id is NOT NULL, so we cannot
+        // write the claim. Dispatch anyway — refusing here turns delegation off.
+        ctx.log.warn(
+          { targetAgent: agent, hasSender: typeof originSenderId === 'string' && originSenderId !== '' },
+          'Delegate call has no origin for a dispatch claim — starting the specialist without overlap protection',
         );
-        return {
-          success: false,
-          error: `Could not claim the in-flight slot for '${agent}'. Not starting another run.`,
-          errorType: 'DATABASE_UNAVAILABLE',
-        };
-      }
+      } else {
       const rawOriginator = ctx.taskMetadata?.['originator'];
       const originator = typeof rawOriginator === 'object' && rawOriginator !== null && !Array.isArray(rawOriginator)
         ? parseStoredOriginator(rawOriginator as Record<string, unknown>)
@@ -520,6 +522,7 @@ export class DelegateHandler implements ToolHandler {
         return inFlightResult(agent, acquired.inFlight);
       }
       acquiredDelegateEventId = acquired.claim.delegateEventId;
+      }
     }
 
     // Record only once this call holds the claim (or no claim is wired). An
@@ -535,7 +538,6 @@ export class DelegateHandler implements ToolHandler {
     // persists after the delegation completes. The settled guard makes it
     // a near-zero-cost no-op after resolution. Phase 5 should add
     // bus.unsubscribe() or a one-shot subscription pattern.
-    let timeoutHandle: NodeJS.Timeout;
     const responsePromise = new Promise<string>((resolve, reject) => {
       let settled = false;
 
@@ -627,12 +629,10 @@ export class DelegateHandler implements ToolHandler {
     // while responsePromise had no rejection handler yet — causing an unhandledRejection
     // that crashes the process. Promise.all attaches handlers to both promises immediately,
     // closing that window. See: https://github.com/josephfung/curia/issues/73
-    // Set only when the wait timer itself fires — that rejection carries
-    // delegateEventId, which is what the runtime promotes. A specialist that
-    // reports reason 'timeout' does not, and retaining the claim would block
-    // the conversation until the sweep re-delivered the answer.
-    let retainRunningClaim = false;
-    try {
+    // retainRunningClaim is set only when the wait timer itself fires — that
+    // rejection carries delegateEventId, which is what the runtime promotes.
+    // A specialist that reports reason 'timeout' does not, and retaining the
+    // claim would block the conversation until the sweep re-delivered the answer.
       const [response] = await Promise.all([
         responsePromise,
         ctx.bus.publish('dispatch', taskEvent),
@@ -800,8 +800,9 @@ export class DelegateHandler implements ToolHandler {
       ctx.log.error({ err, targetAgent: agent }, 'Delegation failed');
       return { success: false, error: message };
     } finally {
-      // Always clean up the timeout on any exit path
-      clearTimeout(timeoutHandle!);
+      // Always clean up the timeout on any exit path. Unset when we returned
+      // before the listener was armed (claim conflict, acquire failure).
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       if (acquiredDelegateEventId && !retainRunningClaim && ctx.openDelegationLookup?.releaseRunning) {
         try {
           await ctx.openDelegationLookup.releaseRunning(acquiredDelegateEventId);
