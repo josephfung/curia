@@ -345,8 +345,8 @@ export function selectContactRecentTurns(
 
   // Any other attributed sender, or an unattributed user turn, means the
   // conversation is shared. Assistant replies in a shared conversation can
-  // quote the other participant, so they stay out. The voice greeting cue is
-  // Curia's synthetic row, not a participant.
+  // quote the other participant, so they stay out. A row flagged synthetic is
+  // Curia's own brief, not a participant.
   const shared = new Set<string>();
   for (const row of rows) {
     if (row.agentId !== query.agentId || row.role !== 'user') continue;
@@ -392,7 +392,7 @@ export function selectContactRecentTurns(
  * Reads the stored classification rather than the content: the writer knew what
  * it minted, and inferring it from an attacker-controlled message body would let
  * a crafted inbound message drop its own conversation from the shared check.
- * Migration 091 classified the rows that predate the column.
+ * Migration 092 classified the rows that predate the column.
  */
 function isSyntheticNonParticipantTurn(row: ContactRecentSourceTurn): boolean {
   return row.synthetic;

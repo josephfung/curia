@@ -17,12 +17,13 @@
 //
 // Live rows do NOT use this module. The writer knows what it minted, so it says
 // so: `agent.task` carries `syntheticTurn`, the runtime forwards it to
-// `addTurn`, and it lands in `working_memory.synthetic`. Both readers test that
-// column. An unregistered path defaults to false, which means "treat as a
-// participant" — the fail-closed direction.
+// `addTurn`, and it lands in `working_memory.synthetic`. The voice opening cue
+// never publishes `agent.task`; VoiceRuntime sets the same column on the cue's
+// `addTurn`. Both readers test that column. An unregistered path defaults to
+// false, which means "treat as a participant" — the fail-closed direction.
 //
 // What lives here is the ONE job content matching is still fit for: classifying
-// rows stored before the column existed (migration 091). Matching on content is
+// rows stored before the column existed (migration 092). Matching on content is
 // a lossy reconstruction of a fact the writer had and discarded, and lossy in
 // the dangerous direction — an inbound message that happens to open with a known
 // marker would be dropped from the shared check, letting assistant replies that
@@ -32,8 +33,9 @@
 // bounded and inspectable event.
 //
 // Adding a synthetic turn type therefore means setting `syntheticTurn` at its
-// publish site. It needs an entry here only if rows of that shape are already
-// stored, and then it needs its own migration — 091 cannot be edited once run.
+// publish site, or `synthetic: true` on a direct `addTurn`. It needs an entry
+// here only if rows of that shape are already stored, and then it needs its own
+// migration — 092 cannot be edited once run.
 
 import { VOICE_GREETING_USER_MESSAGE } from '../channels/voice/greeting.js';
 
@@ -53,7 +55,7 @@ export const LATE_SPECIALIST_RESULT_MARKER = '[Late specialist result — ';
 
 /**
  * SQL `LIKE` patterns that classify already-stored synthetic turns, and the
- * authority migration 091 is checked against.
+ * authority migration 092 is checked against.
  *
  * Deliberately patterns rather than prefixes: the secret-capture resume briefs
  * (`src/secrets/secret-capture-resume-subscriber.ts`) are ordinary prose that

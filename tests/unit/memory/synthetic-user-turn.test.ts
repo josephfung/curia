@@ -34,9 +34,9 @@ describe('HISTORICAL_SYNTHETIC_LIKE_PATTERNS', () => {
 
 describe('historical classification is carried by a migration', () => {
   it('has some migration covering every pattern', async () => {
-    // Deliberately scans all migrations rather than pinning to 091. A pattern
+    // Deliberately scans all migrations rather than pinning to 092. A pattern
     // added later needs its OWN migration: node-pg-migrate records a migration as
-    // run, so editing 091 after it has shipped repairs nothing on any existing
+    // run, so editing 092 after it has shipped repairs nothing on any existing
     // database while still turning this assertion green.
     const files = (await readdir(MIGRATIONS_DIR)).filter(f => f.endsWith('.sql'));
     const sql = (

@@ -953,11 +953,11 @@ export class VoiceRuntime {
             role: 'user',
             content: VOICE_GREETING_USER_MESSAGE,
           }, {
-            // The cue is not something the caller said, so it stays
-            // unattributed and is not rendered as their words. The recall
-            // read ignores this exact row when deciding the call is shared,
-            // so the spoken replies still come back later.
+            // The cue is Curia's own row, not something the caller said.
+            // The column is what recall and the sender backfill read, so the
+            // spoken replies still come back later (#1892).
             channelId: 'voice',
+            synthetic: true,
           });
           try {
             await this.config.workingMemory.addTurn(session.conversationId, VOICE_HISTORY_AGENT_ID, {
@@ -1382,8 +1382,6 @@ export class VoiceRuntime {
         }, {
           senderContactId: persistableCallerContactId(session.caller.contactId) ?? null,
           channelId: 'voice',
-          // The opening cue is Curia's own row, not something the caller said (#1892).
-          synthetic: storedUserContent === VOICE_GREETING_USER_MESSAGE,
         });
         userTurnPersisted = true;
       } catch (err) {

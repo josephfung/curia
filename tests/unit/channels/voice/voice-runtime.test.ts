@@ -1781,11 +1781,49 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
       content: VOICE_GREETING_USER_MESSAGE,
     }, {
       channelId: 'voice',
+      // Curia's own opening row. Without this the null sender closes the call
+      // to contact recall (#1892).
+      synthetic: true,
     });
     expect(addTurn).toHaveBeenNthCalledWith(2, 'voice:g4', 'coordinator', {
       role: 'assistant',
       content: 'Hey boss.',
     }, {
+      channelId: 'voice',
+    });
+  });
+
+  it('does not flag caller speech as synthetic when it matches the greeting cue', async () => {
+    // The cue is synthetic because VoiceRuntime wrote it. A person saying the
+    // same words is a participant; matching the text must not drop them (#1892).
+    const llm = new FakeStreamProvider([replyScript('Go ahead.')]);
+    const addTurn = vi.fn(async () => {});
+    const workingMemory = {
+      addTurn,
+      getHistory: vi.fn(async () => []),
+    } as unknown as WorkingMemory;
+
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory,
+    });
+
+    await runtime.startSession({
+      sessionId: 'g4-said-cue',
+      conversationId: 'voice:g4-said-cue',
+      roomName: 'voice-g4-said-cue',
+      agentToken: 'tok',
+      caller: principalCaller(),
+      openingGreeting: false,
+    });
+    stt.emit({ text: VOICE_GREETING_USER_MESSAGE, isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('g4-said-cue');
+
+    const userWrite = addTurn.mock.calls.find((call) => call[2]?.role === 'user');
+    expect(userWrite?.[2]).toEqual({ role: 'user', content: VOICE_GREETING_USER_MESSAGE });
+    expect(userWrite?.[3]).toEqual({
+      senderContactId: '11111111-1111-1111-1111-111111111111',
       channelId: 'voice',
     });
   });

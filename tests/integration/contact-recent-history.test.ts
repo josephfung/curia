@@ -232,8 +232,8 @@ describeIf('contact recent history SQL (#1599)', () => {
     expect(after.map(t => t.content)).toEqual(['today on signal', 'signal reply kept']);
   });
 
-  it("migration 091's repair clears a stamp 090 left on a synthetic row, idempotently (#1892)", async () => {
-    // 091 has already run by the time this suite connects, so re-running its two
+  it("migration 092's repair clears a stamp 090 left on a synthetic row, idempotently (#1892)", async () => {
+    // 092 has already run by the time this suite connects, so re-running its two
     // statements is the only way to exercise them. That is also what proves the
     // idempotency claim: a second application must be a no-op, because a database
     // that already ran 090 and a fresh one both reach this migration.
