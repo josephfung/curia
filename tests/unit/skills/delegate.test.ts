@@ -1,8 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DelegateHandler } from '../../../skills/delegate/handler.js';
-import type { ToolContext } from '../../../src/skills/types.js';
+import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
+import { DelegationGuard } from '../../../src/agents/delegation-guard.js';
 import { EventBus } from '../../../src/bus/bus.js';
+import { ExecutionLayer } from '../../../src/skills/execution.js';
+import { ToolRegistry } from '../../../src/skills/registry.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -790,5 +793,233 @@ describe('delegate manifest', () => {
 
   it('tells the model the wait window is not its to set', () => {
     expect(manifest.description).toContain('do not pass a timeout');
+  });
+
+  it('documents already_in_flight on the outputs (#1858)', () => {
+    const outputs = (manifest as unknown as { outputs: Record<string, string> }).outputs;
+    expect(outputs['reason']).toContain('already_in_flight');
+    expect(outputs['in_flight']).toContain('already_in_flight');
+    expect(outputs['elapsed_wait_ms']).toContain('already_in_flight');
+    expect(outputs['delegate_event_id']).toBeDefined();
+  });
+});
+
+describe('DelegateHandler in-flight guard (#1858)', () => {
+  const handler = new DelegateHandler();
+  const openedAt = new Date(Date.now() - 125_000);
+
+  function registry(): AgentRegistry {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('social-media', { role: 'specialist', description: 'Social' });
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+    return agentRegistry;
+  }
+
+  function listeningBus(): { bus: EventBus; published: string[] } {
+    const bus = new EventBus(logger);
+    const published: string[] = [];
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type !== 'agent.task') return;
+      published.push(event.payload.agentId);
+      const { createAgentResponse } = await import('../../../src/bus/events.js');
+      await bus.publish('agent', createAgentResponse({
+        agentId: event.payload.agentId,
+        conversationId: event.payload.conversationId,
+        content: 'specialist done',
+        parentEventId: event.id,
+      }));
+    });
+    return { bus, published };
+  }
+
+  function lookup(hit: { agent: string; conversationId: string } | null) {
+    return {
+      findInFlight: vi.fn(async (agent: string, conversationId: string) => {
+        if (hit && agent === hit.agent && conversationId === hit.conversationId) {
+          return { delegateEventId: 'delegate-27cababc', createdAt: openedAt };
+        }
+        return null;
+      }),
+    };
+  }
+
+  it('returns the open handle and does not dispatch a second run', async () => {
+    const { bus, published } = listeningBus();
+    const started = new Date(Date.now() - 125_000);
+    const open = {
+      findInFlight: vi.fn(async () => ({ delegateEventId: 'delegate-27cababc', createdAt: started })),
+    };
+    const result = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'COORDINATOR RELAY — verified CEO approval for k8m5' },
+      {
+        bus,
+        agentRegistry: registry(),
+        conversationId: 'signal:+15551212',
+        openDelegationLookup: open,
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as {
+      in_flight: boolean;
+      blocked: boolean;
+      failed?: boolean;
+      reason: string;
+      delegate_event_id: string;
+      elapsed_wait_ms: number;
+      message: string;
+    };
+    expect(data.in_flight).toBe(true);
+    expect(data.blocked).toBe(true);
+    expect(data.failed).toBeUndefined();
+    expect(data.reason).toBe('already_in_flight');
+    expect(data.delegate_event_id).toBe('delegate-27cababc');
+    expect(Math.abs(data.elapsed_wait_ms - (Date.now() - started.getTime()))).toBeLessThan(2_000);
+    expect(data.message).toContain('still running');
+    expect(published).toEqual([]);
+    expect(open.findInFlight).toHaveBeenCalledWith('social-media', 'signal:+15551212');
+  });
+
+  it('refuses a reworded task for the same agent and conversation', async () => {
+    const { bus, published } = listeningBus();
+    const open = lookup({ agent: 'social-media', conversationId: 'signal:+15551212' });
+    const first = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'COORDINATOR RELAY — verified CEO approval for k8m5' },
+      { bus, agentRegistry: registry(), conversationId: 'signal:+15551212', openDelegationLookup: open },
+    ));
+    const second = await handler.execute(makeCtx(
+      { agent: 'social-media', task: '[Routing CEO reply — entry_id k8m5] The principal has replied Approve' },
+      { bus, agentRegistry: registry(), conversationId: 'signal:+15551212', openDelegationLookup: open },
+    ));
+
+    expect(first.success && second.success).toBe(true);
+    if (!first.success || !second.success) return;
+    expect((first.data as { reason: string }).reason).toBe('already_in_flight');
+    expect((second.data as { reason: string }).reason).toBe('already_in_flight');
+    expect((second.data as { delegate_event_id: string }).delegate_event_id).toBe('delegate-27cababc');
+    expect(published).toEqual([]);
+  });
+
+  it('a fresh delegation guard does not clear an open handle', async () => {
+    const { bus, published } = listeningBus();
+    const result = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'The principal has replied — send the draft' },
+      {
+        bus,
+        agentRegistry: registry(),
+        conversationId: 'signal:+15551212',
+        delegationGuard: new DelegationGuard(),
+        openDelegationLookup: lookup({ agent: 'social-media', conversationId: 'signal:+15551212' }),
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { reason: string }).reason).toBe('already_in_flight');
+    expect(published).toEqual([]);
+  });
+
+  it('dispatches once the lookup reports no open handle', async () => {
+    const { bus, published } = listeningBus();
+    const result = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'Draft the next post' },
+      {
+        bus,
+        agentRegistry: registry(),
+        conversationId: 'signal:+15551212',
+        openDelegationLookup: lookup(null),
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { response?: string }).response).toContain('specialist done');
+    expect((result.data as { in_flight?: boolean }).in_flight).toBeUndefined();
+    expect(published).toEqual(['social-media']);
+  });
+
+  it('does not treat a different conversation or specialist as in flight', async () => {
+    const { bus, published } = listeningBus();
+    const open = lookup({ agent: 'social-media', conversationId: 'signal:+15551212' });
+    const otherConversation = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'Same specialist, other thread' },
+      { bus, agentRegistry: registry(), conversationId: 'signal:+1999', openDelegationLookup: open },
+    ));
+    const otherAgent = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Same thread, other specialist' },
+      { bus, agentRegistry: registry(), conversationId: 'signal:+15551212', openDelegationLookup: open },
+    ));
+
+    expect(otherConversation.success && otherAgent.success).toBe(true);
+    expect(published).toEqual(['social-media', 'calendar']);
+  });
+
+  it('refuses to dispatch when the lookup fails', async () => {
+    const { bus, published } = listeningBus();
+    const result = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'Draft the post' },
+      {
+        bus,
+        agentRegistry: registry(),
+        conversationId: 'signal:+15551212',
+        openDelegationLookup: {
+          findInFlight: async () => { throw new Error('connection refused'); },
+        },
+      },
+    ));
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.errorType).toBe('DATABASE_UNAVAILABLE');
+    expect(published).toEqual([]);
+  });
+
+  it('execution layer forwards the lookup into delegate', async () => {
+    const findInFlight = vi.fn(async () => ({
+      delegateEventId: 'delegate-existing',
+      createdAt: openedAt,
+    }));
+    const agentRegistry = registry();
+    const bus = new EventBus(logger);
+    const published: string[] = [];
+    bus.subscribe('agent.task', 'agent', (event) => {
+      if (event.type === 'agent.task') published.push(event.payload.agentId);
+    });
+    const toolRegistry = new ToolRegistry();
+    const manifest: ToolManifest = {
+      name: 'delegate',
+      description: 'Delegate',
+      version: '1.8.0',
+      sensitivity: 'normal',
+      action_risk: 'none',
+      capabilities: ['bus', 'agentRegistry'],
+      inputs: { agent: 'string', task: 'string' },
+      outputs: { response: 'string' },
+      permissions: [],
+      secrets: [],
+      timeout: 30_000,
+    };
+    toolRegistry.register(manifest, handler);
+    const execution = new ExecutionLayer(toolRegistry, logger, {
+      bus,
+      agentRegistry,
+      openDelegationLookup: { findInFlight },
+    });
+
+    const blocked = await execution.invoke(
+      'delegate',
+      { agent: 'social-media', task: 'reworded brief' },
+      undefined,
+      { conversationId: 'signal:+15551212', agentId: 'coordinator' },
+    );
+
+    expect(findInFlight).toHaveBeenCalledWith('social-media', 'signal:+15551212');
+    expect(blocked.success).toBe(true);
+    if (!blocked.success) return;
+    expect((blocked.data as { reason: string }).reason).toBe('already_in_flight');
+    expect((blocked.data as { delegate_event_id: string }).delegate_event_id).toBe('delegate-existing');
+    expect(published).toEqual([]);
   });
 });

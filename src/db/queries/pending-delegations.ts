@@ -181,6 +181,57 @@ export async function recordPendingDelegation(
   return { row: existing, created: false };
 }
 
+/** An unresolved timed-out delegation still running for one specialist in one conversation (#1858). */
+export interface InFlightDelegation {
+  /** The delegate agent.task event id of the run that is still open. */
+  delegateEventId: string;
+  /** When the handle was opened. The wait had already elapsed by then. */
+  createdAt: Date;
+}
+
+/**
+ * Read-only lookup the delegate skill consults before starting another specialist run.
+ * Implementations query `pending_delegations`; tests supply a fake.
+ */
+export interface OpenDelegationLookup {
+  findInFlight(targetAgent: string, originConversationId: string): Promise<InFlightDelegation | null>;
+}
+
+/**
+ * The oldest unresolved handle for this specialist in this originating conversation, or null.
+ *
+ * "Unresolved" is `status = 'pending'` (resolution IS NULL): the wait timed out and the
+ * specialist has not answered yet, so a second run would overlap it. A claimed or resolved
+ * handle means that run has already finished. Task text is deliberately not a predicate —
+ * the coordinator rewords it between attempts (#1858). An expired-but-still-pending row still
+ * matches: the specialist may yet complete and send, and the sweep is what closes it.
+ */
+export async function findInFlightPendingDelegation(
+  pool: Pool,
+  params: { targetAgent: string; originConversationId: string },
+): Promise<InFlightDelegation | null> {
+  const { rows } = await pool.query<{ delegate_event_id: string; created_at: Date | string }>(
+    `SELECT delegate_event_id, created_at
+       FROM pending_delegations
+      WHERE target_agent = $1
+        AND origin_conversation_id = $2
+        AND status = 'pending'
+        AND resolution IS NULL
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [params.targetAgent, params.originConversationId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const createdAt = row.created_at instanceof Date ? row.created_at : new Date(row.created_at);
+  if (Number.isNaN(createdAt.getTime())) {
+    throw new Error(
+      `pending_delegations.created_at is not a valid timestamp for ${row.delegate_event_id}`,
+    );
+  }
+  return { delegateEventId: row.delegate_event_id, createdAt };
+}
+
 /** Read a handle by its correlation key, whatever its status. */
 export async function getPendingDelegationByDelegateEventId(
   pool: Pool,
