@@ -169,7 +169,7 @@ describe('Scheduler fire path — placeholder resolution', () => {
   async function fireAndCaptureContent(row: Record<string, unknown>): Promise<string> {
     pool.query
       .mockResolvedValueOnce({ rows: [row] })
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{ run_started_at: new Date('2026-09-24T12:00:00.000Z') }] }); // claim update
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ run_started_at: '2026-09-24 12:00:00.123456+00' }] }); // claim update
 
     let content = '';
     bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: { content?: string } }) => {

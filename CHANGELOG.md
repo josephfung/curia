@@ -58,6 +58,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scheduler** — a rejected fire reverts its row when the claim timestamp has microseconds. (#1160)
 - **`GET /api/kg/graph`** — nonexistent `node_id` returns 404 instead of an empty 200. (#1881)
 - **`POST /api/kg/tasks`** — `sourceAgentId` accepts agent names; column stays TEXT. (#1882)
 - **Agent names** — load-time validation matches `source_agent_id` so the roster cannot drift. (#1882)

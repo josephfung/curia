@@ -801,7 +801,7 @@ export class Scheduler {
     // both mean 0 rows updated, i.e. another poller already claimed the job.
     let claimResult: {
       rowCount: number | null;
-      rows?: ReadonlyArray<{ run_started_at?: Date | string | null }>;
+      rows?: ReadonlyArray<{ run_started_at?: unknown }>;
     };
     if (job.cronExpr) {
       // Compute next_run_at before the claim UPDATE so it can be written atomically.
@@ -873,7 +873,7 @@ export class Scheduler {
             AND cron_expr = $4
             AND timezone = $5
             AND next_run_at <= now()
-          RETURNING run_started_at`,
+          RETURNING run_started_at::text AS run_started_at`,
         ['running', job.id, nextRunAt, job.cronExpr, job.timezone],
       );
     } else {
@@ -884,7 +884,7 @@ export class Scheduler {
                 last_run_summary = NULL
           WHERE id = $2
             AND status IN ('pending', 'failed')
-          RETURNING run_started_at`,
+          RETURNING run_started_at::text AS run_started_at`,
         ['running', job.id],
       );
     }
@@ -907,17 +907,21 @@ export class Scheduler {
       return 'skipped';
     }
     // The value the claim wrote. A later revert matches this exact timestamp so
-    // it cannot undo a newer run of the same job (#1160). pg returns timestamptz
-    // as a Date; pass that value back unchanged.
-    const runStartedAt = claimResult.rows?.[0]?.run_started_at ?? null;
-    if (runStartedAt == null) {
+    // it cannot undo a newer run of the same job (#1160).
+    //
+    // pg parses timestamptz as a Date and drops microseconds. now() has
+    // microseconds, so sending that Date back compares unequal and the revert
+    // matches 0 rows, leaving the job running. ::text keeps the full value;
+    // the revert casts it back to timestamptz.
+    const runStartedAt = claimResult.rows?.[0]?.run_started_at;
+    if (typeof runStartedAt !== 'string' || runStartedAt.length === 0) {
       this.logger.error(
         { jobId: job.id },
-        'Claim UPDATE returned no run_started_at — reverting without dispatch',
+        'Claim UPDATE returned no run_started_at text — reverting without dispatch',
       );
       // No task event exists yet, so the unscoped revert is the one that just
       // claimed this row. Dispatch has not started.
-      await this.revertFailedFire(job.id, new Error('claim returned no run_started_at'));
+      await this.revertFailedFire(job.id, new Error('claim returned no run_started_at text'));
       return 'skipped';
     }
 
@@ -1073,7 +1077,7 @@ export class Scheduler {
     job: JobRow,
     firedEvent: ScheduleFiredEvent,
     taskEvent: AgentTaskEvent,
-    runStartedAt: Date | string,
+    runStartedAt: string,
   ): void {
     const timeoutMs = this.slotTimeoutMs(job);
     let slotHeld = true;
@@ -1163,7 +1167,7 @@ export class Scheduler {
   private async revertFailedFire(
     jobId: string,
     err: unknown,
-    generation?: { taskEventId: string; runStartedAt: Date | string },
+    generation?: { taskEventId: string; runStartedAt: string },
   ): Promise<void> {
     this.logger.error({ err, jobId }, 'Failed to fire job — reverting to pending for retry');
     if (generation) {
@@ -1176,7 +1180,7 @@ export class Scheduler {
             SET status = 'pending'
           WHERE id = $1
             AND status = 'running'
-            AND run_started_at = $2`,
+            AND run_started_at = $2::timestamptz`,
         [jobId, generation.runStartedAt],
       ).catch((revertErr: unknown) => {
         this.logger.error({ revertErr, jobId }, 'Failed to revert job status after fire failure — job may be stuck in running');
