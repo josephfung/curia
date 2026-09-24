@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`ToolContext` (public API)** — `delegate` receives `senderId` so the dispatch claim records who asked. (#1893)
 - **`agent.task` (public API)** — optional `syntheticTurn` marks a brief Curia wrote to itself. (#1892)
 - **Scheduler** — polls hand due jobs to a capped runner and free hung slots at recovery timeout. (#1160)
 - **Unit test layout** — `src/**/*.test.ts` moved into the `tests/unit/` mirror. (#848)
@@ -61,6 +62,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Delegate dispatch claim** — overlapping calls before the wait expires start one run and queue the rest. (#1893)
 - **`delegate` (public API)** — open same-conversation handles return `already_in_flight` instead of a second run. (#1858)
 - **`delegate`** — an in-flight refusal no longer consumes a retryable attempt. (#1858)
 - **Scheduler** — a rejected fire reverts its row when the claim timestamp has microseconds. (#1160)

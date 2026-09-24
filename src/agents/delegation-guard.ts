@@ -212,6 +212,37 @@ export interface DelegateFailureResult extends DelegationFailureInfo {
   escalated?: boolean;
 }
 
+/** A delegate result that refused to start because the specialist is already running (#1858, #1893). */
+export function parseDelegateInFlightData(
+  data: unknown,
+  logger?: Logger,
+): { agent: string; delegateEventId?: string } | null {
+  if (data === null || data === undefined) return null;
+  let record: Record<string, unknown>;
+  if (typeof data === 'string') {
+    try {
+      record = JSON.parse(data) as Record<string, unknown>;
+    } catch (err) {
+      logger?.warn(
+        { err, dataPreview: data.slice(0, 200) },
+        'Failed to parse delegate in-flight payload — treating as not in flight',
+      );
+      return null;
+    }
+  } else if (typeof data === 'object' && !Array.isArray(data)) {
+    record = data as Record<string, unknown>;
+  } else {
+    return null;
+  }
+  if (record['in_flight'] !== true || record['reason'] !== ALREADY_IN_FLIGHT_REASON) return null;
+  if (typeof record['agent'] !== 'string' || record['agent'] === '') return null;
+  const delegateEventId = record['delegate_event_id'];
+  return {
+    agent: record['agent'],
+    ...(typeof delegateEventId === 'string' && delegateEventId !== '' && { delegateEventId }),
+  };
+}
+
 /** Parse a delegate skill success payload that carries structured failure fields. */
 export function parseDelegateFailureData(data: unknown, logger?: Logger): DelegateFailureResult | null {
   if (data === null || data === undefined) return null;

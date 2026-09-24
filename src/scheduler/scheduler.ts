@@ -20,6 +20,11 @@ import type { OutboundContextService } from '../dispatch/outbound-context.js';
 import { classifyError } from '../errors/classify.js';
 import { findTemplateTokens } from '../skills/_shared/placeholder-guard.js';
 import { isUuid } from '../util/uuid.js';
+import type { TaskOriginator } from '../contacts/types.js';
+import {
+  formatDelegationRetryWakeContent,
+  readDelegationRetryWake,
+} from '../agents/deferred-delegation.js';
 
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
@@ -420,6 +425,16 @@ export class Scheduler {
   private defaultExpectedDurationSeconds: number;
   private principalContactId?: string;
   private readonly maxInFlight: number;
+  /** Seeds dispatcher routing for a delegation-retry wake in the original conversation. */
+  private externalRoutingRegistrar?: (
+    taskEventId: string,
+    routing: {
+      channelId: string;
+      conversationId: string;
+      senderId: string;
+      originator: TaskOriginator;
+    },
+  ) => void;
   /** Runs whose publish has been handed off and has not settled. */
   private inFlight = 0;
   /** Settling handles so tests can wait out a detached publish. */
@@ -463,6 +478,14 @@ export class Scheduler {
       throw new Error(`scheduler maxInFlight must be a positive integer, got: ${String(maxInFlight)}`);
     }
     this.maxInFlight = maxInFlight;
+  }
+
+  /**
+   * Called once the dispatcher exists. A deferred delegation wakes in the
+   * originating conversation, which the dispatcher never saw arrive (#1893).
+   */
+  setExternalRoutingRegistrar(registrar: NonNullable<Scheduler['externalRoutingRegistrar']>): void {
+    this.externalRoutingRegistrar = registrar;
   }
 
   /**
@@ -1039,13 +1062,27 @@ export class Scheduler {
       }
     }
 
+    // A deferred delegation wakes in the conversation that queued it (#1893).
+    // Every other job keeps the per-run scheduler thread.
+    const delegationRetry = readDelegationRetryWake(job.taskPayload);
+    if (delegationRetry) {
+      metadata = {
+        ...(metadata ?? {}),
+        delegationRetry: {
+          attempt: delegationRetry.attempt,
+          targetAgent: delegationRetry.targetAgent,
+        },
+      };
+    }
+
     // Publish agent.task so the coordinator picks up the work.
     const taskEvent = createAgentTask({
       agentId: job.agentId,
-      conversationId: `scheduler:${job.id}:${runId}`,
-      channelId: 'scheduler',
-      senderId: 'scheduler',
-      content,
+      conversationId: delegationRetry?.conversationId ?? `scheduler:${job.id}:${runId}`,
+      channelId: delegationRetry?.channelId ?? 'scheduler',
+      senderId: delegationRetry?.senderId ?? 'scheduler',
+      content: delegationRetry ? formatDelegationRetryWakeContent(delegationRetry) : content,
+      ...(delegationRetry && { syntheticTurn: true }),
       // Pass the anchor in the payload so the runtime injects it into the system
       // prompt. null (no linked agent_task) becomes undefined (field omitted).
       intentAnchor: job.intentAnchor ?? undefined,
@@ -1056,6 +1093,28 @@ export class Scheduler {
       metadata,
       parentEventId: firedEvent.id,
     });
+    if (delegationRetry) {
+      const originator = job.originator ?? {
+        contactId: 'unresolved',
+        systemRole: null,
+        channel: delegationRetry.channelId,
+        initiatedAt: new Date().toISOString(),
+        tier: null,
+      };
+      if (this.externalRoutingRegistrar) {
+        this.externalRoutingRegistrar(taskEvent.id, {
+          channelId: delegationRetry.channelId,
+          conversationId: delegationRetry.conversationId,
+          senderId: delegationRetry.senderId,
+          originator,
+        });
+      } else {
+        this.logger.warn(
+          { jobId: job.id, conversationId: delegationRetry.conversationId },
+          'Delegation retry wake has no routing registrar — the reply may not reach the principal',
+        );
+      }
+    }
     // Track the mapping BEFORE publishing. dispatchPublish starts bus.publish
     // immediately, and publish awaits handlers, so the agent may emit
     // agent.response before publish() returns. Setting the entry after that

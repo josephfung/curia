@@ -67,7 +67,7 @@ export interface PendingDelegationRow {
   /** Scheduled job behind the originating turn, when there was one. */
   schedulerJobId: string | null;
   reviewTaskId: string | null;
-  status: 'pending' | 'claimed' | 'resolved';
+  status: 'running' | 'pending' | 'claimed' | 'resolved';
   /** When the current actor took its lease; null while pending. */
   claimedAt: Date | null;
   /** Proof of ownership for this lease — required to finalize or release it. */
@@ -104,7 +104,7 @@ function mapRow(row: DbPendingDelegationRow): PendingDelegationRow {
     schedulerJobId: row.scheduler_job_id,
     reviewTaskId: row.review_task_id,
     // The CHECK constraint on the column keeps this cast honest.
-    status: row.status as 'pending' | 'claimed' | 'resolved',
+    status: row.status as PendingDelegationRow['status'],
     claimedAt: row.claimed_at,
     claimToken: row.claim_token,
     resolution: row.resolution as LateDelegationResolution | null,
@@ -136,6 +136,10 @@ export interface RecordPendingDelegationParams {
  * Open a handle for a timed-out delegation. Idempotent on delegate_event_id: a duplicate
  * delegation.timed_out (bus re-delivery, operator replay) returns the existing row rather than
  * a second handle — one delegation must never resolve twice.
+ *
+ * A dispatch-time `running` claim for this same event (#1893) is promoted in place: status
+ * becomes `pending` and `expires_at` becomes the late-delivery TTL. That is the #1858 handle,
+ * not a second row.
  */
 export async function recordPendingDelegation(
   pool: Pool,
@@ -147,7 +151,14 @@ export async function recordPendingDelegation(
        origin_agent_id, origin_conversation_id, origin_channel_id, origin_sender_id,
        origin_task_event_id, originator, scheduler_job_id, review_task_id, expires_at
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13)
-     ON CONFLICT (delegate_event_id) DO NOTHING
+     ON CONFLICT (delegate_event_id) DO UPDATE
+       SET status = 'pending',
+           expires_at = EXCLUDED.expires_at,
+           review_task_id = COALESCE(EXCLUDED.review_task_id, pending_delegations.review_task_id),
+           delegate_task = EXCLUDED.delegate_task,
+           originator = COALESCE(EXCLUDED.originator, pending_delegations.originator),
+           scheduler_job_id = COALESCE(EXCLUDED.scheduler_job_id, pending_delegations.scheduler_job_id)
+       WHERE pending_delegations.status = 'running'
      RETURNING ${COLUMNS}`,
     [
       params.delegateEventId,
@@ -186,8 +197,10 @@ export interface InFlightDelegation {
   /** The delegate agent.task event id of the run that is still open. */
   delegateEventId: string;
   /**
-   * When the handle was opened. That is after the delegate wait expired, so age
-   * measured from here is not how long the specialist has been running.
+   * When the row was written. A `running` claim is written at dispatch, so this is
+   * the start of the specialist run. A `pending` handle is written after the wait
+   * expires (or promoted from the claim at that moment), so age measured from a
+   * pending row is not how long the specialist has been running.
    */
   createdAt: Date;
 }
@@ -198,18 +211,24 @@ export interface InFlightDelegation {
  */
 export interface OpenDelegationLookup {
   findInFlight(targetAgent: string, originConversationId: string): Promise<InFlightDelegation | null>;
+  /**
+   * Atomic dispatch-time claim (#1893). Absent when a test only stubs the
+   * post-timeout lookup. A conflict is an in-flight refusal — the insert is the check.
+   */
+  acquireRunning?(params: AcquireRunningDelegationParams): Promise<AcquireRunningResult>;
+  /** Delete a `running` claim. A no-op once the row has been promoted to `pending`. */
+  releaseRunning?(delegateEventId: string): Promise<void>;
 }
 
 /**
  * The oldest unresolved handle for this specialist in this originating conversation, or null.
  *
- * Pending is the unresolved state. Migration 086's CHECK already forces
- * `resolution IS NULL` whenever `status = 'pending'`, so this query does not
- * repeat that predicate. A claimed or resolved handle means that run has
- * finished. Task text is deliberately not a predicate — the coordinator
- * rewords it between attempts (#1858). An expired-but-still-pending row still
- * matches: the specialist may yet complete and send, and the sweep is what
- * closes it.
+ * `running` is a dispatch claim that has not returned yet. `pending` is the
+ * post-timeout handle. Migration 086's CHECK forces `resolution IS NULL` for both,
+ * so this query does not repeat that predicate. A claimed or resolved handle means
+ * that run has finished. Task text is deliberately not a predicate — the coordinator
+ * rewords it between attempts (#1858). An expired-but-still-open row still matches:
+ * the specialist may yet complete and send, and the sweep is what closes it.
  */
 export async function findInFlightPendingDelegation(
   pool: Pool,
@@ -220,7 +239,7 @@ export async function findInFlightPendingDelegation(
        FROM pending_delegations
       WHERE target_agent = $1
         AND origin_conversation_id = $2
-        AND status = 'pending'
+        AND status IN ('running', 'pending')
       ORDER BY created_at ASC
       LIMIT 1`,
     [params.targetAgent, params.originConversationId],
@@ -234,6 +253,103 @@ export async function findInFlightPendingDelegation(
     );
   }
   return { delegateEventId: row.delegate_event_id, createdAt };
+}
+
+/**
+ * How long a crashed process may keep a dispatch claim after the wait itself.
+ * The claim's expires_at is the wait plus this grace, so the sweep does not
+ * abandon a row in the gap between the wait ending and the timeout promotion,
+ * and a dead process still frees the specialist in about the wait — not the
+ * late-delivery hour.
+ */
+export const RUNNING_CLAIM_GRACE_MS = 60_000;
+
+export function runningClaimExpiresAt(now: Date, waitTimeoutMs: number): Date {
+  return new Date(now.getTime() + waitTimeoutMs + RUNNING_CLAIM_GRACE_MS);
+}
+
+export interface AcquireRunningDelegationParams {
+  delegateEventId: string;
+  delegateConversationId: string;
+  targetAgent: string;
+  delegateTask: string;
+  originAgentId: string;
+  originConversationId: string;
+  originChannelId: string;
+  originSenderId: string;
+  originTaskEventId?: string;
+  schedulerJobId?: string;
+  expiresAt: Date;
+}
+
+export type AcquireRunningResult =
+  | { acquired: true; claim: { delegateEventId: string } }
+  | { acquired: false; inFlight: InFlightDelegation };
+
+/**
+ * Claim the specialist for this originating conversation. One statement: a pending
+ * or running row blocks the insert, and the partial unique index breaks the race
+ * where two turns both saw the slot empty.
+ */
+export async function acquireRunningDelegation(
+  pool: Pool,
+  params: AcquireRunningDelegationParams,
+): Promise<AcquireRunningResult> {
+  const { rows } = await pool.query<{ delegate_event_id: string }>(
+    `INSERT INTO pending_delegations (
+       delegate_event_id, delegate_conversation_id, target_agent, delegate_task,
+       origin_agent_id, origin_conversation_id, origin_channel_id, origin_sender_id,
+       origin_task_event_id, scheduler_job_id, expires_at, status
+     )
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'running'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM pending_delegations
+         WHERE target_agent = $3
+           AND origin_conversation_id = $6
+           AND status IN ('running', 'pending')
+      )
+     ON CONFLICT (target_agent, origin_conversation_id) WHERE status = 'running'
+     DO NOTHING
+     RETURNING delegate_event_id`,
+    [
+      params.delegateEventId,
+      params.delegateConversationId,
+      params.targetAgent,
+      params.delegateTask,
+      params.originAgentId,
+      params.originConversationId,
+      params.originChannelId,
+      params.originSenderId,
+      params.originTaskEventId ?? null,
+      params.schedulerJobId ?? null,
+      params.expiresAt,
+    ],
+  );
+  if (rows[0]) return { acquired: true, claim: { delegateEventId: rows[0].delegate_event_id } };
+
+  const inFlight = await findInFlightPendingDelegation(pool, {
+    targetAgent: params.targetAgent,
+    originConversationId: params.originConversationId,
+  });
+  if (inFlight) return { acquired: false, inFlight };
+  // The blocking row disappeared between the insert and this read. Fail closed:
+  // starting the run is how a second message reaches the principal.
+  return {
+    acquired: false,
+    inFlight: { delegateEventId: params.delegateEventId, createdAt: new Date() },
+  };
+}
+
+/** Drop a dispatch claim. Promoting the row to `pending` makes this a no-op. */
+export async function releaseRunningDelegation(
+  pool: Pool,
+  delegateEventId: string,
+): Promise<void> {
+  await pool.query(
+    `DELETE FROM pending_delegations
+      WHERE delegate_event_id = $1 AND status = 'running'`,
+    [delegateEventId],
+  );
 }
 
 /** Read a handle by its correlation key, whatever its status. */
@@ -282,6 +398,7 @@ export async function claimPendingDelegation(
       WHERE delegate_event_id = $1
         AND (
           status = 'pending'
+          OR status = 'running'
           OR (status = 'claimed' AND claimed_at < now() - make_interval(secs => $5::int))
         )
       RETURNING ${COLUMNS}`,
@@ -357,8 +474,9 @@ export async function setPendingDelegationWakeEventId(
 
 /**
  * Unfinished handles, oldest expiry first — what the sweep walks on every tick. Includes handles
- * whose lease expired mid-flight: that is the crash-recovery path, and skipping them would leave
- * the very work this table exists to protect half-done.
+ * whose lease expired mid-flight, and dispatch claims whose wait-derived expiry has passed
+ * (the process died while the specialist was running). A live claim is not listed: its
+ * handler still owns it.
  */
 export async function listOpenPendingDelegations(
   pool: Pool,
@@ -368,6 +486,7 @@ export async function listOpenPendingDelegations(
   const { rows } = await pool.query<DbPendingDelegationRow>(
     `SELECT ${COLUMNS} FROM pending_delegations
       WHERE status = 'pending'
+         OR (status = 'running' AND expires_at <= now())
          OR (status = 'claimed' AND claimed_at < now() - make_interval(secs => $1::int))
       ORDER BY expires_at ASC
       LIMIT $2`,

@@ -1140,3 +1140,170 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
     expect(published).toEqual([]);
   });
 });
+
+describe('DelegateHandler dispatch claim (#1893)', () => {
+  const handler = new DelegateHandler();
+
+  function registry(): AgentRegistry {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('social-media', { role: 'specialist', description: 'Social' });
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+    return agentRegistry;
+  }
+
+  function origin(overrides?: Partial<ToolContext>): Partial<ToolContext> {
+    return {
+      agentId: 'coordinator',
+      conversationId: 'signal:+15551212',
+      channelId: 'signal',
+      senderId: '+15551212',
+      taskEventId: 'origin-task-1',
+      ...overrides,
+    };
+  }
+
+  function respondingBus(content: string): { bus: EventBus; published: string[] } {
+    const bus = new EventBus(logger);
+    const published: string[] = [];
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type !== 'agent.task') return;
+      published.push(event.payload.agentId);
+      const { createAgentResponse } = await import('../../../src/bus/events.js');
+      await bus.publish('agent', createAgentResponse({
+        agentId: event.payload.agentId,
+        conversationId: event.payload.conversationId,
+        content,
+        parentEventId: event.id,
+      }));
+    });
+    return { bus, published };
+  }
+
+  function holdingClaim() {
+    const releaseRunning = vi.fn(async () => {});
+    const acquireRunning = vi.fn(async () => ({
+      acquired: true as const,
+      claim: { delegateEventId: 'delegate-claim' },
+    }));
+    return {
+      releaseRunning,
+      acquireRunning,
+      lookup: {
+        findInFlight: async () => null,
+        acquireRunning,
+        releaseRunning,
+      },
+    };
+  }
+
+  it.each([
+    ['decline', '<specialist_decline reason="no_access">The calendar is not connected.</specialist_decline>'],
+    ['clarification', JSON.stringify({
+      _curia_protocol: 'clarification_request',
+      question: 'Which day?',
+      context: 'booking the room',
+      resume_token: 'token-1',
+    })],
+    ['pause', JSON.stringify({
+      _curia_protocol: 'execution_paused',
+      done: 1,
+      total: 4,
+      next: 'book the rest',
+      message: 'Paused after 1 of 4.',
+    })],
+  ])('releases the claim on the %s path', async (_label, content) => {
+    const { bus, published } = respondingBus(content);
+    const claim = holdingClaim();
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Book the room' },
+      { bus, agentRegistry: registry(), openDelegationLookup: claim.lookup, ...origin() },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(published).toEqual(['calendar']);
+    expect(claim.acquireRunning).toHaveBeenCalledOnce();
+    expect(claim.releaseRunning).toHaveBeenCalledWith('delegate-claim');
+  });
+
+  it('retains the claim on the timeout path', async () => {
+    vi.useFakeTimers();
+    const bus = new EventBus(logger);
+    const published: string[] = [];
+    bus.subscribe('agent.task', 'agent', (event) => {
+      if (event.type === 'agent.task') published.push(event.payload.agentId);
+    });
+    const claim = holdingClaim();
+    const pending = handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Book the room', timeout_ms: 1000 },
+      { bus, agentRegistry: registry(), openDelegationLookup: claim.lookup, ...origin() },
+    ));
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await pending;
+    vi.useRealTimers();
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { reason: string }).reason).toBe('timeout');
+    expect(published).toEqual(['calendar']);
+    expect(claim.releaseRunning).not.toHaveBeenCalled();
+  });
+
+  it('a claim conflict does not dispatch, whatever the brief says', async () => {
+    const { bus, published } = respondingBus('specialist done');
+    const releaseRunning = vi.fn(async () => {});
+    let held = false;
+    const acquireRunning = vi.fn(async (params: { delegateTask: string }) => {
+      if (held) {
+        return {
+          acquired: false as const,
+          inFlight: { delegateEventId: 'delegate-first', createdAt: new Date() },
+        };
+      }
+      held = true;
+      expect(params.delegateTask).not.toBe('');
+      return { acquired: true as const, claim: { delegateEventId: 'delegate-first' } };
+    });
+    const lookup = { findInFlight: async () => null, acquireRunning, releaseRunning };
+    const base = { bus, agentRegistry: registry(), openDelegationLookup: lookup, ...origin() };
+
+    const first = handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Reserve the first room' },
+      base,
+    ));
+    const second = handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Reserve the second room — different prose' },
+      base,
+    ));
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.success && secondResult.success).toBe(true);
+    if (!firstResult.success || !secondResult.success) return;
+    expect((firstResult.data as { response?: string }).response).toContain('specialist done');
+    expect((secondResult.data as { reason: string }).reason).toBe('already_in_flight');
+    expect(published).toEqual(['calendar']);
+    expect(releaseRunning).toHaveBeenCalledOnce();
+  });
+
+  it('refuses to dispatch when the claim cannot record an origin', async () => {
+    const { bus, published } = respondingBus('specialist done');
+    const claim = holdingClaim();
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Book the room' },
+      {
+        bus,
+        agentRegistry: registry(),
+        openDelegationLookup: claim.lookup,
+        conversationId: 'signal:+15551212',
+        agentId: 'coordinator',
+        channelId: 'signal',
+      },
+    ));
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.errorType).toBe('DATABASE_UNAVAILABLE');
+    expect(published).toEqual([]);
+    expect(claim.acquireRunning).not.toHaveBeenCalled();
+  });
+});

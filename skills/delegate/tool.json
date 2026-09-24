@@ -1,7 +1,7 @@
 {
   "name": "delegate",
-  "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description. How long to wait for the specialist is set by the runtime — do not pass a timeout. If the result reason is already_in_flight, that specialist is still working in this conversation: tell the user, and do not call delegate for them again.",
-  "version": "1.8.0",
+  "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description. How long to wait for the specialist is set by the runtime — do not pass a timeout. If the result reason is already_in_flight, that specialist is still working in this conversation: tell the user the request is queued, and do not call delegate for them again.",
+  "version": "1.8.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -31,7 +31,7 @@
     "delegate_event_id": "string? (in-flight or timed-out delegation's agent.task id)",
     "delegate_conversation_id": "string?",
     "wait_timeout_ms": "number?",
-    "open_handle_age_ms": "number? (ms since the pending handle was opened, which is after the wait expired; set with already_in_flight)"
+    "open_handle_age_ms": "number? (ms since the already_in_flight row was written; a running claim starts at dispatch, a pending handle starts when the wait expires)"
   },
   "permissions": [],
   "secrets": [],

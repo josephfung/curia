@@ -84,6 +84,7 @@ import {
   escalateDelegationFailure,
   findAlreadyDeliveredKey,
   parseDelegateFailureData,
+  parseDelegateInFlightData,
   seedAlreadyDelivered,
   type DelegationFailureInfo,
 } from './delegation-guard.js';
@@ -96,6 +97,11 @@ import {
 } from './delegated-task-context.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
+import {
+  DEFAULT_DEFERRED_WAKE_MS,
+  enqueueUndispatchedDelegation,
+  readDelegationRetryAttempt,
+} from './deferred-delegation.js';
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import {
@@ -1356,6 +1362,41 @@ export class AgentRuntime {
     }
     const turnDateResolveTracker = new TurnDateResolveTracker();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
+    // Wait used to schedule a brief that did not dispatch (#1893). Updated when a
+    // delegate call's timeout is resolved, so the wake is not earlier than that wait.
+    let deferredWakeMs = DEFAULT_DEFERRED_WAKE_MS;
+    const queuedUndispatchedBriefs = new Set<string>();
+    const queueUndispatchedDelegation = async (targetAgent: string, brief: string): Promise<void> => {
+      if (targetAgent === '' || brief === '') return;
+      const key = `${targetAgent}\0${brief}`;
+      if (queuedUndispatchedBriefs.has(key)) return;
+      queuedUndispatchedBriefs.add(key);
+      const prior = readDelegationRetryAttempt(taskEvent.payload.metadata);
+      // A retry wake continues the chain for its specialist. A different specialist
+      // on that turn starts at 1 — the cap is per busy specialist, not per turn.
+      const attempt = prior.targetAgent === targetAgent ? prior.attempt + 1 : 1;
+      try {
+        await enqueueUndispatchedDelegation({
+          taskRepo: this.config.taskRepo,
+          logger,
+          originAgentId: agentId,
+          originConversationId: conversationId,
+          originChannelId: taskEvent.payload.channelId,
+          originSenderId: taskEvent.payload.senderId,
+          targetAgent,
+          brief,
+          wakeAt: new Date(Date.now() + deferredWakeMs),
+          ...(originator !== undefined && { originator }),
+          attempt,
+        });
+      } catch (err) {
+        queuedUndispatchedBriefs.delete(key);
+        logger.error(
+          { err, agentId, conversationId, targetAgent },
+          'Failed to queue an undispatched delegation — the brief was not saved',
+        );
+      }
+    };
 
     // Tool-use loop: call LLM, handle tool calls, feed results back, repeat.
     // The Anthropic API requires the full conversation context including the
@@ -1614,6 +1655,19 @@ export class AgentRuntime {
           // When escalation or identity mismatch is pending mid-batch, skip
           // remaining tools (matches the former `break` after those flags are set).
           if (pendingDelegationEscalation) {
+            // This call never reached the handler. Queue the brief; the one that
+            // timed out must not be queued (late delivery already covers it).
+            if (
+              toolCall.name === 'delegate'
+              && typeof toolCall.input === 'object'
+              && toolCall.input !== null
+              && !Array.isArray(toolCall.input)
+            ) {
+              const skipped = toolCall.input as Record<string, unknown>;
+              const skippedAgent = typeof skipped['agent'] === 'string' ? skipped['agent'].replace(/^@/, '') : '';
+              const skippedTask = typeof skipped['task'] === 'string' ? skipped['task'] : '';
+              await queueUndispatchedDelegation(skippedAgent, skippedTask);
+            }
             return {
               content: 'Skipped — delegation failure escalation pending for this turn.',
               is_error: true,
@@ -1719,6 +1773,10 @@ export class AgentRuntime {
               }
 
               skillInput = resolvedInput;
+              const injectedWait = resolvedInput['timeout_ms'];
+              if (typeof injectedWait === 'number' && Number.isInteger(injectedWait) && injectedWait > 0) {
+                deferredWakeMs = injectedWait;
+              }
             }
           }
 
@@ -2029,6 +2087,15 @@ export class AgentRuntime {
             ) {
               const delegatePaused = parseDelegatePausedData(result.data, logger);
               if (!delegatePaused) {
+                const inFlight = parseDelegateInFlightData(result.data, logger);
+                if (inFlight) {
+                  // The call did not dispatch. A timeout must not reach this branch:
+                  // that result has failed: true and no in_flight flag, and late
+                  // delivery already wakes it.
+                  const delegateInput = skillInput as Record<string, unknown>;
+                  const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+                  await queueUndispatchedDelegation(inFlight.agent, delegateTask);
+                }
                 const delegateFailure = parseDelegateFailureData(result.data, logger);
                 if (delegateFailure) {
                   const delegateInput = skillInput as Record<string, unknown>;

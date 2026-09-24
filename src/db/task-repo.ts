@@ -70,6 +70,12 @@ export interface CreateTaskParams {
   createdBy?: string;
   /** When set, creates a linked one-shot scheduled_jobs row in the same transaction. */
   wakeAt?: Date;
+  /**
+   * Replaces the default `{ "type": "task-wake" }` payload on that job. Must still
+   * be a task-wake envelope. Used so a deferred delegation wakes in the originating
+   * conversation (#1893).
+   */
+  wakePayload?: Record<string, unknown>;
   /** Lineage to stamp on the task (#1125) — copied from the creating event's originator
    *  (ctx.taskMetadata.originator). For child tasks (parentTaskId set) it is capped to the
    *  parent's lineage, never above it. Absent/null → no lineage (agent / no-bypass). */
@@ -212,6 +218,7 @@ export class TaskRepo {
       resumable,
       progressNote,
       escalation,
+      wakePayload,
     } = params;
 
     const resolvedCreatedBy = createdBy ?? agentId;
@@ -289,7 +296,7 @@ export class TaskRepo {
         ),
         _wake_job AS (
           INSERT INTO scheduled_jobs (agent_id, run_at, task_payload, status, next_run_at, created_by, timezone, task_id, originator)
-          SELECT $19, $20, '{"type":"task-wake"}'::jsonb, 'pending', $20, $21, $22, new_task.id, new_task.originator
+          SELECT $19, $20, $23::jsonb, 'pending', $20, $21, $22, new_task.id, new_task.originator
           FROM new_task
         )
         SELECT * FROM new_task
@@ -300,6 +307,8 @@ export class TaskRepo {
         wakeAt,            // $20 — run_at / next_run_at
         resolvedCreatedBy, // $21 — created_by
         this.timezone,     // $22 — timezone
+        // $23 — default envelope, or a delegation-retry envelope (#1893).
+        JSON.stringify(wakePayload ?? { type: 'task-wake' }),
       ]);
       row = rows[0] as DbTaskRow | undefined
         ?? (() => { throw new Error('task-repo: createTask CTE returned no row'); })();

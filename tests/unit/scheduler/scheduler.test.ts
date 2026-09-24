@@ -281,6 +281,59 @@ describe('Scheduler', () => {
       expect(event2.payload.conversationId).toMatch(/^scheduler:job-1:[0-9a-f-]{36}$/);
     });
 
+    it('wakes a deferred delegation in the originating conversation (#1893)', async () => {
+      const register = vi.fn();
+      scheduler.setExternalRoutingRegistrar(register);
+      const row = fakeDbRow({
+        cron_expr: null,
+        run_at: new Date().toISOString(),
+        task_payload: {
+          type: 'task-wake',
+          delegationRetry: {
+            conversationId: 'signal:+15551212',
+            channelId: 'signal',
+            senderId: '+15551212',
+            targetAgent: 'calendar',
+            brief: 'Book Tuesday at 10',
+            attempt: 1,
+          },
+        },
+        originator: {
+          contactId: 'contact-1',
+          systemRole: 'principal',
+          channel: 'signal',
+          initiatedAt: '2026-09-24T00:00:00.000Z',
+        },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+      await scheduler.drainInFlight();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, {
+        id: string;
+        payload: {
+          conversationId: string;
+          channelId: string;
+          senderId: string;
+          content: string;
+          syntheticTurn?: boolean;
+        };
+      }];
+      expect(taskEvent.payload.conversationId).toBe('signal:+15551212');
+      expect(taskEvent.payload.channelId).toBe('signal');
+      expect(taskEvent.payload.senderId).toBe('+15551212');
+      expect(taskEvent.payload.syntheticTurn).toBe(true);
+      expect(taskEvent.payload.content).toContain('Book Tuesday at 10');
+      expect(taskEvent.payload.content).not.toContain('scheduler:');
+      expect(register).toHaveBeenCalledWith(taskEvent.id, expect.objectContaining({
+        conversationId: 'signal:+15551212',
+        channelId: 'signal',
+        senderId: '+15551212',
+      }));
+    });
+
     it('passes intentAnchor in event payload for persistent tasks', async () => {
       const row = fakeDbRow({
         agent_task_id: 'task-aaa',
