@@ -1198,10 +1198,45 @@ export class Scheduler {
   private async publishFire(job: JobRow, firedEvent: ScheduleFiredEvent, taskEvent: AgentTaskEvent): Promise<void> {
     await this.bus.publish('system', firedEvent);
     await this.bus.publish('system', taskEvent);
+    if (readDelegationRetryWake(job.taskPayload)) {
+      await this.closeDelegationRetryTask(job);
+    }
     this.logger.info(
       { jobId: job.id, agentId: job.agentId, taskEventId: taskEvent.id },
       'Job fired',
     );
+  }
+
+  /**
+   * The retry task's job is to hold the brief until this wake. Once the wake
+   * has been published, an open row is what BacklogHeartbeat re-runs — the
+   * brief as a generic poke, with no delegationRetry cap. Close it here.
+   * A failure is logged and not rethrown: the wake already went out, and
+   * failing publishFire would revert the job and fire it again.
+   */
+  private async closeDelegationRetryTask(job: JobRow): Promise<void> {
+    if (!job.agentTaskId) {
+      this.logger.warn(
+        { jobId: job.id },
+        'Delegation retry wake has no linked task — BacklogHeartbeat cannot be stopped from re-running it',
+      );
+      return;
+    }
+    try {
+      await this.pool.query(
+        `UPDATE tasks
+            SET status = 'done', updated_at = now()
+          WHERE id = $1
+            AND status IN ('open', 'in_progress', 'waiting', 'blocked')
+            AND 'delegation-retry' = ANY(tags)`,
+        [job.agentTaskId],
+      );
+    } catch (err) {
+      this.logger.error(
+        { err, jobId: job.id, taskId: job.agentTaskId },
+        'Delegation retry wake fired but the backlog task stayed open — BacklogHeartbeat may re-run the brief',
+      );
+    }
   }
 
   /**

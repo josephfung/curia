@@ -13,8 +13,10 @@
 
 ALTER TABLE pending_delegations DROP CONSTRAINT IF EXISTS pending_delegations_status_check;
 
--- The original CHECK was declared inline on the column, so its name is the Postgres
--- default. Drop whichever check still names the old status set, then add the widened one.
+-- Postgres stores `CHECK (status IN (...))` as `status = ANY (ARRAY[...])`, so a
+-- match on the source text `status IN (` never finds the constraint. Drop any
+-- remaining status-membership check that does not already allow `running`
+-- (a restored dump may have renamed the default `pending_delegations_status_check`).
 DO $$
 DECLARE r record;
 BEGIN
@@ -22,9 +24,11 @@ BEGIN
     SELECT con.conname
       FROM pg_constraint con
       JOIN pg_class rel ON rel.oid = con.conrelid
-     WHERE rel.relname = 'pending_delegations'
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+     WHERE nsp.nspname = 'public'
+       AND rel.relname = 'pending_delegations'
        AND con.contype = 'c'
-       AND pg_get_constraintdef(con.oid) ILIKE '%status IN (%'
+       AND pg_get_constraintdef(con.oid) ILIKE '%status = ANY (%'
        AND pg_get_constraintdef(con.oid) NOT ILIKE '%running%'
   LOOP
     EXECUTE format('ALTER TABLE pending_delegations DROP CONSTRAINT %I', r.conname);
@@ -53,6 +57,28 @@ CREATE INDEX idx_pending_delegations_in_flight
 CREATE UNIQUE INDEX idx_pending_delegations_one_running
   ON pending_delegations (target_agent, origin_conversation_id)
   WHERE status = 'running';
+
+-- Fail the migration if a status check that does not mention `running` survived.
+-- Otherwise every acquire would violate the old check at runtime and delegation
+-- would refuse to dispatch with no signal here.
+DO $$
+DECLARE def text;
+BEGIN
+  FOR def IN
+    SELECT pg_get_constraintdef(con.oid)
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+     WHERE nsp.nspname = 'public'
+       AND rel.relname = 'pending_delegations'
+       AND con.contype = 'c'
+       AND pg_get_constraintdef(con.oid) ILIKE '%status%'
+  LOOP
+    IF def NOT ILIKE '%running%' THEN
+      RAISE EXCEPTION 'pending_delegations status check still rejects running: %', def;
+    END IF;
+  END LOOP;
+END $$;
 
 -- The sweep walks expired running claims the same way it walks pending handles.
 DROP INDEX IF EXISTS idx_pending_delegations_open;

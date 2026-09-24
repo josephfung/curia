@@ -2670,6 +2670,7 @@ async function main(): Promise<void> {
       // Agent registry — allows the runtime to look up the target agent's
       // expected_duration_seconds when injecting delegate timeouts (#387).
       agentRegistry,
+      defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {
@@ -2822,7 +2823,6 @@ async function main(): Promise<void> {
     staleWaitThresholdHours: tasksConfig.staleWaitThresholdHours,
   });
 
-  scheduler.start();
   backlogHeartbeat.start();
 
   const resumableContinuationSubscriber = new ResumableContinuationSubscriber({
@@ -2862,7 +2862,8 @@ async function main(): Promise<void> {
     deliverableKgPromotionSubscriber.start();
   }
 
-  logger.info('Scheduler started');
+  // Deferred-delegation routing is registered with the scheduler below, after
+  // the dispatcher exists. The poll loop starts only once that registrar is set.
 
   // Log the scrubber status after the logger is available (patterns are loaded at module
   // init time, before pino exists, so any load-time failures are deferred to here).
@@ -2960,6 +2961,11 @@ async function main(): Promise<void> {
   scheduler.setExternalRoutingRegistrar(
     (taskEventId, routing) => dispatcher.registerExternalTaskRouting(taskEventId, routing),
   );
+  // Arm the poll only after the registrar is set. The first tick is one interval
+  // later; starting the clock earlier lets a boot that overruns that interval
+  // fire a due retry whose reply has no dispatcher routing.
+  scheduler.start();
+  logger.info('Scheduler started');
 
   // Reaction → approval mapper (#1479): channel-agnostic inbound.reaction handling.
   // Registered after ExecutionLayer so approve can re-invoke the blocked skill.

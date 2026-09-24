@@ -101,15 +101,23 @@ Two further invariants govern the wake:
   second call, whatever its brief says, returns `already_in_flight` with the existing
   `delegate_event_id` and `open_handle_age_ms` and does not dispatch. Age on a running row
   is time since dispatch; age on a pending row starts when the wait expires (or when that
-  claim is promoted). Every return except timeout deletes the running row. A timeout does not: the same
-  row becomes the `pending` handle, and the lookup matches both statuses. The running row's
-  `expires_at` is the wait plus a short grace, so the sweep abandons a claim orphaned by a
-  crash in about the wait, not the late-delivery hour. A pending row still blocks until the
-  sweep abandons it (`delegate.lateDelivery.ttlMinutes`, default 60). A claimed or resolved
-  handle does not block the next delegation. A brief that never dispatched — claim conflict,
-  `already_in_flight`, or a later call skipped after escalation — is stored as a backlog task
-  that wakes the originating agent in the originating conversation. A timeout is not queued
-  again. Retries of one busy specialist are capped, and the wake is not earlier than the wait.
+  claim is promoted). Every return except the wait-timer timeout deletes the running row.
+  A specialist that reports `reason: 'timeout'` has already finished, so that row is
+  released too. If the delete throws, the row is marked resolved as `delivered` so the
+  sweep does not send the same result again. The running row stores the validated
+  originator, so a claim recovered after a crash wakes with its lineage. A wait-timer
+  timeout does not delete the row: the same row becomes the `pending` handle, and the
+  lookup matches both statuses. The running row's `expires_at` is the wait plus a short
+  grace, so the sweep abandons a claim orphaned by a crash in about the wait, not the
+  late-delivery hour. A pending row still blocks until the sweep abandons it
+  (`delegate.lateDelivery.ttlMinutes`, default 60). A claimed or resolved handle does not
+  block the next delegation. A brief that never dispatched — claim conflict,
+  `already_in_flight`, or a later call skipped after escalation — is stored as a backlog
+  task that wakes the originating agent in the originating conversation. The wake is not
+  earlier than the wait the handler will use (`delegate.defaultTimeoutMs` when no
+  duration hint is injected). The task is closed when that wake is dispatched, so the
+  heartbeat does not re-run the brief. A timeout is not queued again. Retries of one
+  busy specialist are capped. A wake missing its channel or sender is not written.
   The result is not a failure, so a coordinator that ignores the prompt can call `delegate`
   again in the same turn; the prompt is what stops that loop.
 

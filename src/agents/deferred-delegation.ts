@@ -12,7 +12,12 @@ import type { TaskOriginator } from '../contacts/types.js';
 /** How many times one busy specialist may re-queue the same chain. */
 export const MAX_DEFERRED_DELEGATION_ATTEMPTS = 3;
 
-/** Floor when the runtime has not yet resolved a wait. Matches config's delegate default. */
+/**
+ * Floor when neither config nor a resolved wait is available. Matches the
+ * handler's hard-coded DEFAULT_SPECIALIST_TIMEOUT_MS. A deployment override of
+ * `delegate.defaultTimeoutMs` is applied by the runtime; this constant is not
+ * that override.
+ */
 export const DEFAULT_DEFERRED_WAKE_MS = 90_000;
 
 export interface DelegationRetryWake {
@@ -148,10 +153,22 @@ export async function enqueueUndispatchedDelegation(
     );
     return 'unavailable';
   }
-  if (brief === '' || targetAgent === '' || originConversationId === '') {
+  if (
+    brief === ''
+    || targetAgent === ''
+    || originConversationId === ''
+    || originChannelId === ''
+    || originSenderId === ''
+  ) {
     logger.error(
-      { targetAgent, originConversationId, briefLength: brief.length },
-      'Cannot queue an undispatched delegation — missing agent, brief, or conversation',
+      {
+        targetAgent,
+        originConversationId,
+        originChannelId,
+        hasSender: originSenderId !== '',
+        briefLength: brief.length,
+      },
+      'Cannot queue an undispatched delegation — missing agent, brief, conversation, channel, or sender',
     );
     return 'unavailable';
   }

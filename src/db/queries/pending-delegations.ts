@@ -18,6 +18,7 @@
 
 import type { Pool } from 'pg';
 import type { LateDelegationResolution } from '../../bus/events.js';
+import type { TaskOriginator } from '../../contacts/types.js';
 
 // -- DB row shape (snake_case, mirrors Postgres column names) --
 
@@ -279,6 +280,9 @@ export interface AcquireRunningDelegationParams {
   originSenderId: string;
   originTaskEventId?: string;
   schedulerJobId?: string;
+  /** Validated lineage. A crashed claim is recovered from this row, so a null here
+   *  wakes the follow-up with no autonomy standing. */
+  originator?: TaskOriginator;
   expiresAt: Date;
 }
 
@@ -299,9 +303,9 @@ export async function acquireRunningDelegation(
     `INSERT INTO pending_delegations (
        delegate_event_id, delegate_conversation_id, target_agent, delegate_task,
        origin_agent_id, origin_conversation_id, origin_channel_id, origin_sender_id,
-       origin_task_event_id, scheduler_job_id, expires_at, status
+       origin_task_event_id, scheduler_job_id, originator, expires_at, status
      )
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'running'
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, 'running'
       WHERE NOT EXISTS (
         SELECT 1 FROM pending_delegations
          WHERE target_agent = $3
@@ -322,6 +326,7 @@ export async function acquireRunningDelegation(
       params.originSenderId,
       params.originTaskEventId ?? null,
       params.schedulerJobId ?? null,
+      params.originator ? JSON.stringify(params.originator) : null,
       params.expiresAt,
     ],
   );
@@ -340,16 +345,47 @@ export async function acquireRunningDelegation(
   };
 }
 
-/** Drop a dispatch claim. Promoting the row to `pending` makes this a no-op. */
+/**
+ * Drop a dispatch claim. Promoting the row to `pending` makes the delete a no-op.
+ *
+ * A delete that throws leaves the row `running`. The sweep would then find the
+ * specialist's answer in audit_log and deliver it again, on top of the result
+ * this caller already returned. The fallback marks that row resolved as
+ * `delivered` so the sweep skips it. If the mark also fails, the error propagates
+ * and the row stays running until `expires_at`.
+ */
 export async function releaseRunningDelegation(
   pool: Pool,
   delegateEventId: string,
 ): Promise<void> {
-  await pool.query(
-    `DELETE FROM pending_delegations
-      WHERE delegate_event_id = $1 AND status = 'running'`,
-    [delegateEventId],
-  );
+  try {
+    await pool.query(
+      `DELETE FROM pending_delegations
+        WHERE delegate_event_id = $1 AND status = 'running'`,
+      [delegateEventId],
+    );
+    return;
+  } catch (deleteErr) {
+    try {
+      const settled = await pool.query(
+        `UPDATE pending_delegations
+            SET status = 'resolved',
+                resolution = 'delivered',
+                claimed_at = now(),
+                claim_token = gen_random_uuid(),
+                resolved_at = now()
+          WHERE delegate_event_id = $1 AND status = 'running'`,
+        [delegateEventId],
+      );
+      if ((settled.rowCount ?? 0) > 0) return;
+    } catch (settleErr) {
+      throw new Error(
+        `release running delegation ${delegateEventId} failed, and marking it delivered failed`,
+        { cause: settleErr },
+      );
+    }
+    throw deleteErr;
+  }
 }
 
 /** Read a handle by its correlation key, whatever its status. */

@@ -1285,6 +1285,102 @@ describe('DelegateHandler dispatch claim (#1893)', () => {
     expect(releaseRunning).toHaveBeenCalledOnce();
   });
 
+  it('does not listen for a response when the claim is refused', async () => {
+    const { bus, published } = respondingBus('specialist done');
+    const subscribe = vi.spyOn(bus, 'subscribe');
+    const acquireRunning = vi.fn(async () => ({
+      acquired: false as const,
+      inFlight: { delegateEventId: 'delegate-first', createdAt: new Date() },
+    }));
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Reserve the room' },
+      {
+        bus,
+        agentRegistry: registry(),
+        openDelegationLookup: { findInFlight: async () => null, acquireRunning, releaseRunning: async () => {} },
+        ...origin(),
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { reason: string }).reason).toBe('already_in_flight');
+    expect(published).toEqual([]);
+    expect(subscribe.mock.calls.filter((call) => call[0] === 'agent.response')).toEqual([]);
+  });
+
+  it('releases the claim when the specialist reports timeout', async () => {
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type !== 'agent.task') return;
+      const { createAgentResponse } = await import('../../../src/bus/events.js');
+      await bus.publish('agent', createAgentResponse({
+        agentId: event.payload.agentId,
+        conversationId: event.payload.conversationId,
+        content: 'timed out inside the specialist',
+        isError: true,
+        reason: 'timeout',
+        retryable: false,
+        parentEventId: event.id,
+      }));
+    });
+    const claim = holdingClaim();
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Reserve the room' },
+      { bus, agentRegistry: registry(), openDelegationLookup: claim.lookup, ...origin() },
+    ));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { reason: string }).reason).toBe('timeout');
+    expect((result.data as { delegate_event_id?: string }).delegate_event_id).toBeUndefined();
+    expect(claim.releaseRunning).toHaveBeenCalledWith('delegate-claim');
+  });
+
+  it('stores a validated originator on the claim', async () => {
+    const { bus } = respondingBus('specialist done');
+    const claim = holdingClaim();
+    const originator = {
+      contactId: 'contact-1',
+      systemRole: 'principal' as const,
+      channel: 'signal',
+      initiatedAt: '2026-09-24T00:00:00.000Z',
+      tier: 'principal' as const,
+    };
+    await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Reserve the room' },
+      {
+        bus,
+        agentRegistry: registry(),
+        openDelegationLookup: claim.lookup,
+        ...origin(),
+        taskMetadata: { originator },
+      },
+    ));
+
+    expect(claim.acquireRunning).toHaveBeenCalledWith(expect.objectContaining({
+      originator: expect.objectContaining({ contactId: 'contact-1', channel: 'signal' }),
+    }));
+  });
+
+  it('does not store an originator the recovery path would reject', async () => {
+    const { bus } = respondingBus('specialist done');
+    const claim = holdingClaim();
+    await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Reserve the room' },
+      {
+        bus,
+        agentRegistry: registry(),
+        openDelegationLookup: claim.lookup,
+        ...origin(),
+        taskMetadata: { originator: { contactId: 'contact-1' } },
+      },
+    ));
+
+    const params = claim.acquireRunning.mock.calls[0] as unknown as [{ originator?: unknown }] | undefined;
+    expect(params?.[0]?.originator).toBeUndefined();
+  });
+
   it('refuses to dispatch when the claim cannot record an origin', async () => {
     const { bus, published } = respondingBus('specialist done');
     const claim = holdingClaim();

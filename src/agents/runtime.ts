@@ -248,6 +248,11 @@ export interface AgentConfig {
   /** Task repo — used to resolve project-root workspace prefixes on resume (#1210). */
   taskRepo?: TaskRepo;
   /**
+   * `delegate.defaultTimeoutMs`. The floor for a queued brief when the runtime
+   * did not inject a per-call wait. Same value the delegate handler uses.
+   */
+  defaultDelegateTimeoutMs?: number;
+  /**
    * Conversation-scoped contact IDs (#1818). When set, identities resolved by
    * a delegation are remembered and re-injected next turn from the current
    * contact row — working memory does not keep tool results.
@@ -1362,9 +1367,15 @@ export class AgentRuntime {
     }
     const turnDateResolveTracker = new TurnDateResolveTracker();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
-    // Wait used to schedule a brief that did not dispatch (#1893). Updated when a
-    // delegate call's timeout is resolved, so the wake is not earlier than that wait.
-    let deferredWakeMs = DEFAULT_DEFERRED_WAKE_MS;
+    // Wait used to schedule a brief that did not dispatch (#1893). Starts at the
+    // configured delegate wait — the same fallback the handler uses when no
+    // duration hint is injected — and rises if a call's timeout_ms is resolved.
+    const configuredWait = this.config.defaultDelegateTimeoutMs;
+    let deferredWakeMs = typeof configuredWait === 'number'
+      && Number.isInteger(configuredWait)
+      && configuredWait > 0
+      ? configuredWait
+      : DEFAULT_DEFERRED_WAKE_MS;
     const queuedUndispatchedBriefs = new Set<string>();
     const queueUndispatchedDelegation = async (targetAgent: string, brief: string): Promise<void> => {
       if (targetAgent === '' || brief === '') return;
