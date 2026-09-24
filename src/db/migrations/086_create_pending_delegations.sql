@@ -68,8 +68,10 @@ CREATE TABLE pending_delegations (
   )
 );
 
--- The only hot query: unfinished handles, oldest expiry first (sweep tick). Covers both a
--- pending handle and one whose lease was abandoned mid-flight.
+-- Sweep tick: unfinished handles, oldest expiry first. Covers both a pending
+-- handle and one whose lease was abandoned mid-flight. Not the only hot query —
+-- delegate's in-flight lookup (target agent + originating conversation) is
+-- indexed separately in migration 091.
 CREATE INDEX idx_pending_delegations_open
   ON pending_delegations (expires_at)
   WHERE status IN ('pending', 'claimed');

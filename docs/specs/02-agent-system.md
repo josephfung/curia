@@ -93,18 +93,29 @@ Two further invariants govern the wake:
 - **The brief never restates the original delegated instruction.** #1064 is the precedent: a notify
   `agent.task` that echoed the original intent made the coordinator re-execute it and send a
   duplicate. The original brief is already in the conversation the wake re-enters.
-- **A new inbound cannot start a second run while the handle is open (#1858).** The in-memory
-  guard does not survive the turn, and the coordinator rewords the brief, so neither stops the
-  retry. Before publishing, `delegate` looks up `pending_delegations` for `status = 'pending'`
-  on the same target agent and originating conversation. A hit returns `already_in_flight` with
-  the existing `delegate_event_id` and `elapsed_wait_ms`, and does not dispatch. Task prose is
-  not part of the match. A claimed or resolved handle does not block the next delegation.
+- **Once a delegate wait has timed out, a new inbound cannot start a second run of that
+  specialist in the same conversation (#1858).** The handle exists only after the runtime
+  publishes `delegation.timed_out`, so two delegations that both start inside the wait window
+  are still unguarded (#1893). Before publishing, and only after a `resume_token` has been validated,
+  `delegate` looks up `pending_delegations` for `status = 'pending'` on the same target agent
+  and originating conversation. A hit returns `already_in_flight` with the existing
+  `delegate_event_id` and `open_handle_age_ms` (age of the handle, which opens after the wait
+  expires — not time since the specialist started) and does not dispatch. Task prose is not
+  part of the match. The block is that agent in that conversation for as long as the row stays
+  pending: up to `delegate.lateDelivery.ttlMinutes` (default 60). A Signal conversation id is
+  stable for the whole thread, so a specialist that never answers is unreachable there until
+  the sweep abandons the handle. A claimed or resolved handle does not block the next
+  delegation. Rows are never deleted, so retention is a correctness concern: a pending row
+  nothing resolves keeps blocking. The result is not a failure, so a coordinator that ignores
+  the prompt can call `delegate` again in the same turn; the prompt is what stops that loop.
 
 The wake restores the stored `originator` (so the follow-up steps still clear the autonomy gate),
 marks itself `derived` via `wakeContext` (so the standing ladder can only downgrade authority), and
 deliberately does not carry `liveTurn` — it crosses an async boundary (#1126).
 
-`delegate.lateDelivery.enabled: false` disables the whole mechanism.
+`delegate.lateDelivery.enabled: false` disables the whole mechanism, including the in-flight
+lookup. Open handles are then neither resolved nor consulted, so turning the knob off does not
+leave a permanent block behind.
 
 ### Coordinator Config
 

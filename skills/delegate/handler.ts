@@ -78,16 +78,15 @@ function isStructuredDelegateFailure(err: unknown): err is StructuredDelegateFai
   );
 }
 
-/** Milliseconds since the open handle was created. Never negative, never fractional. */
-function elapsedWaitMs(createdAt: Date): number {
+/** Milliseconds since the handle was opened. Never negative, never fractional.
+ *  This is not time-since-dispatch: the row is written after the wait expires. */
+function openHandleAgeMs(createdAt: Date): number {
   const ms = Date.now() - createdAt.getTime();
   if (!Number.isFinite(ms)) return 0;
   return Math.max(0, Math.trunc(ms));
 }
 
 function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
-  const elapsed = elapsedWaitMs(hit.createdAt);
-  const seconds = Math.max(1, Math.round(elapsed / 1000));
   return {
     success: true,
     data: {
@@ -99,13 +98,74 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
       reason: ALREADY_IN_FLIGHT_REASON,
       retryable: false,
       delegate_event_id: hit.delegateEventId,
-      elapsed_wait_ms: elapsed,
-      message:
-        `Specialist '${agent}' is already working on an open request in this conversation ` +
-        `(in flight for about ${seconds}s). Tell the CEO that work is still running. ` +
-        'Do not delegate to this specialist again until it finishes.',
+      // Age of the handle, not of the specialist run. The handle is opened after the
+      // wait expires, so adding nothing here and stating a duration would understate
+      // by the whole wait window.
+      open_handle_age_ms: openHandleAgeMs(hit.createdAt),
+      // Principal-safe. Directives to the coordinator live in its prompt, not here —
+      // the prompt tells the model this sentence is safe to relay.
+      message: `Specialist '${agent}' is already working on an open request in this conversation.`,
     },
   };
+}
+
+/**
+ * Refuse when this specialist already has an unresolved handle in the originating
+ * conversation (#1858). Returns null when the call may proceed.
+ *
+ * A resume_token continues a specialist that has already stopped (it paused to ask
+ * the CEO). Blocking that resume because some other delegation to the same agent
+ * timed out is a deliberate fail-closed trade-off: the match is agent × conversation
+ * and cannot tell the parked task from the one still running. Starting the resume
+ * would be a second concurrent run beside the timed-out specialist. Call this only
+ * after a resume token has been validated, so a corrupt or cross-agent token still
+ * gets its specific error.
+ */
+async function refuseIfInFlight(ctx: ToolContext, agent: string): Promise<ToolResult | null> {
+  const originConversationId = ctx.conversationId;
+  if (!ctx.openDelegationLookup) {
+    // Intentionally unwired when late delivery is disabled. Proceeding is today's
+    // behaviour; consulting stranded rows with the subscriber and sweep off would
+    // block that agent in that conversation permanently. The boot log says so.
+    return null;
+  }
+  if (typeof originConversationId !== 'string' || originConversationId === '') {
+    ctx.log.warn(
+      { targetAgent: agent },
+      'Delegate call has no originating conversation — cannot match an in-flight handle',
+    );
+    return null;
+  }
+
+  let inFlight: InFlightDelegation | null;
+  try {
+    inFlight = await ctx.openDelegationLookup.findInFlight(agent, originConversationId);
+  } catch (err) {
+    // Fail closed. Starting the run when we could not prove the specialist is idle is
+    // how the duplicate CEO message happens. A database outage is tracked apart from
+    // the consecutive-error budget.
+    ctx.log.error(
+      { err, targetAgent: agent, originConversationId },
+      'In-flight delegation check failed — refusing to start another specialist run',
+    );
+    return {
+      success: false,
+      error: `Could not check whether '${agent}' is already running in this conversation. Not starting another run.`,
+      errorType: 'DATABASE_UNAVAILABLE',
+    };
+  }
+  if (!inFlight) return null;
+
+  ctx.log.warn(
+    {
+      targetAgent: agent,
+      originConversationId,
+      delegateEventId: inFlight.delegateEventId,
+      openHandleAgeMs: openHandleAgeMs(inFlight.createdAt),
+    },
+    'Blocked delegate — specialist already has an unresolved handle in this conversation',
+  );
+  return inFlightResult(agent, inFlight);
 }
 
 function formatStructuredFailureMessage(agent: string, reason: AgentResponseFailureReason): string {
@@ -207,55 +267,6 @@ export class DelegateHandler implements ToolHandler {
           'Rejected calendar delegate brief — date handoff validation failed',
         );
         return { success: false, error: briefValidation.error };
-      }
-    }
-
-    // In-flight guard (#1858). A timed-out specialist keeps running, and the identical-task
-    // guard cannot see the retry: the coordinator rewords the brief, and a new inbound
-    // starts a fresh DelegationGuard. The durable signal is an unresolved pending_delegations
-    // row for this agent in this originating conversation. Task prose is not consulted.
-    // Resume continuations are included — a resume is still a second specialist run.
-    const originConversationId = ctx.conversationId;
-    if (!ctx.openDelegationLookup) {
-      ctx.log.warn(
-        { targetAgent: agent },
-        'No open-delegation lookup wired — cannot refuse a second run of an in-flight specialist',
-      );
-    } else if (typeof originConversationId !== 'string' || originConversationId === '') {
-      ctx.log.warn(
-        { targetAgent: agent },
-        'Delegate call has no originating conversation — cannot match an in-flight handle',
-      );
-    } else {
-      let inFlight: InFlightDelegation | null;
-      try {
-        inFlight = await ctx.openDelegationLookup.findInFlight(agent, originConversationId);
-      } catch (err) {
-        // Fail closed. Starting the run when we could not prove the specialist is idle is
-        // how the duplicate CEO message happens. A database outage is tracked apart from
-        // the consecutive-error budget.
-        ctx.log.error(
-          { err, targetAgent: agent, originConversationId },
-          'In-flight delegation check failed — refusing to start another specialist run',
-        );
-        return {
-          success: false,
-          error: `Could not check whether '${agent}' is already running in this conversation. Not starting another run.`,
-          errorType: 'DATABASE_UNAVAILABLE',
-        };
-      }
-      if (inFlight) {
-        const elapsed = elapsedWaitMs(inFlight.createdAt);
-        ctx.log.warn(
-          {
-            targetAgent: agent,
-            originConversationId,
-            delegateEventId: inFlight.delegateEventId,
-            elapsedWaitMs: elapsed,
-          },
-          'Blocked delegate — specialist already has an unresolved handle in this conversation',
-        );
-        return inFlightResult(agent, inFlight);
       }
     }
 
@@ -386,6 +397,11 @@ export class DelegateHandler implements ToolHandler {
         'Resuming task with resume_token — constructed task brief from original context + CEO direction',
       );
     }
+
+    // After resume-token validation (#995). A bad token must still get its decode or
+    // agent-mismatch error; an open handle must not replace that with already_in_flight.
+    const inFlightRefusal = await refuseIfInFlight(ctx, agent);
+    if (inFlightRefusal) return inFlightRefusal;
 
     ctx.log.info(
       { targetAgent: agent, task: effectiveTask.slice(0, 100), timeoutMs: specialistTimeoutMs },

@@ -218,8 +218,11 @@ describeIf('in-flight delegation (#1858)', () => {
       expect(secondData['reason']).toBe('already_in_flight');
       expect(secondData['in_flight']).toBe(true);
       expect(secondData['delegate_event_id']).toBe(delegateEventId);
-      expect(typeof secondData['elapsed_wait_ms']).toBe('number');
-      expect(secondData['elapsed_wait_ms'] as number).toBeGreaterThanOrEqual(0);
+      expect(typeof secondData['open_handle_age_ms']).toBe('number');
+      expect(secondData['open_handle_age_ms'] as number).toBeGreaterThanOrEqual(0);
+      expect(secondData['message']).toBe(
+        "Specialist 'social-media' is already working on an open request in this conversation.",
+      );
       expect(specialistTasks).toBe(1);
       expect(principalMessages).toEqual([]);
 

@@ -185,7 +185,10 @@ export async function recordPendingDelegation(
 export interface InFlightDelegation {
   /** The delegate agent.task event id of the run that is still open. */
   delegateEventId: string;
-  /** When the handle was opened. The wait had already elapsed by then. */
+  /**
+   * When the handle was opened. That is after the delegate wait expired, so age
+   * measured from here is not how long the specialist has been running.
+   */
   createdAt: Date;
 }
 
@@ -200,11 +203,13 @@ export interface OpenDelegationLookup {
 /**
  * The oldest unresolved handle for this specialist in this originating conversation, or null.
  *
- * "Unresolved" is `status = 'pending'` (resolution IS NULL): the wait timed out and the
- * specialist has not answered yet, so a second run would overlap it. A claimed or resolved
- * handle means that run has already finished. Task text is deliberately not a predicate —
- * the coordinator rewords it between attempts (#1858). An expired-but-still-pending row still
- * matches: the specialist may yet complete and send, and the sweep is what closes it.
+ * Pending is the unresolved state. Migration 086's CHECK already forces
+ * `resolution IS NULL` whenever `status = 'pending'`, so this query does not
+ * repeat that predicate. A claimed or resolved handle means that run has
+ * finished. Task text is deliberately not a predicate — the coordinator
+ * rewords it between attempts (#1858). An expired-but-still-pending row still
+ * matches: the specialist may yet complete and send, and the sweep is what
+ * closes it.
  */
 export async function findInFlightPendingDelegation(
   pool: Pool,
@@ -216,7 +221,6 @@ export async function findInFlightPendingDelegation(
       WHERE target_agent = $1
         AND origin_conversation_id = $2
         AND status = 'pending'
-        AND resolution IS NULL
       ORDER BY created_at ASC
       LIMIT 1`,
     [params.targetAgent, params.originConversationId],
