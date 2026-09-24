@@ -560,7 +560,9 @@ describe('WorkingMemory.getContactRecentHistory SQL', () => {
       maxTurns: 8,
     });
 
-    expect(query).toHaveBeenCalledOnce();
+    // Two statements: the recall itself, then the diagnostic that names what the
+    // shared check excluded (#1887). The recall is the first.
+    expect(query).toHaveBeenCalledTimes(2);
     const [sql, params] = query.mock.calls[0]! as [string, unknown[]];
     const normalized = sql.replace(/\s+/g, ' ');
     expect(normalized).toContain('sender_contact_id = $1::uuid');
@@ -577,5 +579,79 @@ describe('WorkingMemory.getContactRecentHistory SQL', () => {
       8,
     ]);
     expect(turns[0]?.content).toBe(LLM_FAILURE_USER_MESSAGE);
+  });
+
+  describe('shared-check exclusions are observable (#1887)', () => {
+    function poolFor(mainRows: unknown[], exclusionRows: unknown[]): { pool: DbPool; log: Record<string, ReturnType<typeof vi.fn>> } {
+      const query = vi.fn(async (sql: string) => (
+        sql.includes('unattributed_turns') ? { rows: exclusionRows } : { rows: mainRows }
+      ));
+      const pool = { query, connect: vi.fn() } as unknown as DbPool;
+      const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      return { pool, log };
+    }
+
+    const ask = (pool: DbPool, log: unknown) => WorkingMemory
+      .createWithPostgres(pool, log as never)
+      .getContactRecentHistory({
+        contactId: ALICE,
+        agentId: 'coordinator',
+        excludeConversationId: 'email:new',
+        since: EARLIER_TODAY,
+      });
+
+    it('names each excluded conversation and why its assistant turns are missing', async () => {
+      // This is the whole point of #1887: an excluded conversation otherwise
+      // produces a well-formed block that is merely incomplete, with nothing to
+      // grep for.
+      const { pool, log } = poolFor([], [
+        { conversation_id: 'email:thread-a', unattributed_turns: '2', other_sender_turns: '0' },
+        { conversation_id: 'signal:group=g1', unattributed_turns: '0', other_sender_turns: '3' },
+      ]);
+
+      await ask(pool, log);
+
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          contactId: ALICE,
+          excluded: [
+            { conversationId: 'email:thread-a', unattributedTurns: 2, otherSenderTurns: 0 },
+            { conversationId: 'signal:group=g1', unattributedTurns: 0, otherSenderTurns: 3 },
+          ],
+        }),
+        expect.stringContaining('excluded by the shared-conversation check'),
+      );
+    });
+
+    it('stays quiet when nothing was excluded', async () => {
+      const { pool, log } = poolFor([], []);
+      await ask(pool, log);
+      expect(log.info).not.toHaveBeenCalled();
+    });
+
+    it('still returns the recall when the diagnostic query fails, and says the answer is unknown', async () => {
+      // Diagnostics must never take down a recall that already succeeded — but a
+      // failure must not read as "nothing was excluded" either.
+      const query = vi.fn(async (sql: string) => {
+        if (sql.includes('unattributed_turns')) throw new Error('statement timeout');
+        return {
+          rows: [{
+            role: 'assistant',
+            content: 'the reply',
+            conversation_id: 'signal:+1555',
+            channel_id: 'signal',
+            created_at: EARLIER_TODAY,
+          }],
+        };
+      });
+      const pool = { query, connect: vi.fn() } as unknown as DbPool;
+      const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const turns = await ask(pool, log);
+
+      expect(turns.map(t => t.content)).toEqual(['the reply']);
+      expect(log.warn).toHaveBeenCalled();
+      expect(log.info).not.toHaveBeenCalled();
+    });
   });
 });

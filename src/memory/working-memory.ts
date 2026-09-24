@@ -150,6 +150,44 @@ export class WorkingMemory {
 }
 
 /**
+ * Conversations the shared-conversation check removed from this contact's recall,
+ * one row each, with the counts that explain why (#1887).
+ *
+ * The tier's failure mode is silence: an excluded conversation still produces a
+ * well-formed, plausible block that is simply missing Curia's replies, with
+ * nothing in the logs to distinguish it from a contact who genuinely said less.
+ * That is what made an entire class of attribution bug invisible until someone
+ * went looking. This query is what makes an incomplete block diagnosable.
+ *
+ * Same parameters and same participated set as {@link CONTACT_RECENT_HISTORY_SQL},
+ * so it reads the same index and cannot disagree with it about which
+ * conversations are in scope.
+ */
+export const CONTACT_RECENT_HISTORY_EXCLUSIONS_SQL = `SELECT
+           wm2.conversation_id,
+           count(*) FILTER (WHERE wm2.sender_contact_id IS NULL)     AS unattributed_turns,
+           count(*) FILTER (WHERE wm2.sender_contact_id IS NOT NULL) AS other_sender_turns
+         FROM working_memory wm2
+         JOIN (
+           SELECT DISTINCT conversation_id
+           FROM working_memory
+           WHERE sender_contact_id = $1::uuid
+             AND agent_id = $2
+             AND role = 'user'
+             AND archived = false
+             AND created_at >= $3
+             AND conversation_id <> $4
+         ) participated ON participated.conversation_id = wm2.conversation_id
+         WHERE wm2.agent_id = $2
+           AND wm2.role = 'user'
+           AND wm2.synthetic = false
+           AND (
+             wm2.sender_contact_id IS NULL
+             OR wm2.sender_contact_id <> $1::uuid
+           )
+         GROUP BY wm2.conversation_id`;
+
+/**
  * SQL twin of {@link selectContactRecentTurns}. `$3` is the channel window.
  * The participation lookup is the scan `idx_wm_sender_active` exists for.
  *
@@ -354,6 +392,46 @@ class PostgresBackend implements StorageBackend {
    * `id` is only a stable tie-break when two rows share `created_at`. It is
    * not insertion order. The privacy predicate does not depend on that order.
    */
+  /**
+   * Name the conversations the shared check removed, and why (#1887).
+   *
+   * Diagnostics only: a failure here must never fail a recall that already
+   * succeeded, and must never be mistaken for "nothing was excluded", so the
+   * error path says so explicitly rather than logging an empty result.
+   */
+  private async logSharedExclusions(query: ContactRecentHistoryQuery): Promise<void> {
+    try {
+      const { rows } = await this.pool.query<{
+        conversation_id: string;
+        unattributed_turns: string;
+        other_sender_turns: string;
+      }>(
+        CONTACT_RECENT_HISTORY_EXCLUSIONS_SQL,
+        [query.contactId, query.agentId, query.since, query.excludeConversationId ?? ''],
+      );
+      if (rows.length === 0) return;
+      this.logger.info(
+        {
+          contactId: query.contactId,
+          agentId: query.agentId,
+          excluded: rows.map((row) => ({
+            conversationId: row.conversation_id,
+            // Both can be non-zero: a thread may hold an unknown sender and a
+            // different known contact.
+            unattributedTurns: Number(row.unattributed_turns),
+            otherSenderTurns: Number(row.other_sender_turns),
+          })),
+        },
+        'contact recall: conversations excluded by the shared-conversation check — their assistant turns are not in the block',
+      );
+    } catch (err) {
+      this.logger.warn(
+        { err, contactId: query.contactId, agentId: query.agentId },
+        'contact recall: could not determine which conversations the shared check excluded',
+      );
+    }
+  }
+
   async getContactRecent(query: ContactRecentHistoryQuery): Promise<ContactRecentTurn[]> {
     const limit = query.maxTurns ?? CONTACT_RECENT_HISTORY_MAX_TURNS;
     try {
@@ -373,6 +451,8 @@ class PostgresBackend implements StorageBackend {
           limit,
         ],
       );
+
+      await this.logSharedExclusions(query);
 
       return result.rows.map((row) => ({
         role: row.role as ContactRecentTurn['role'],
