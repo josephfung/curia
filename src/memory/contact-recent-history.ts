@@ -10,8 +10,11 @@
 // contact's own user turns are returned. Assistant and summary turns are
 // included only when that contact is the sole attributed sender. A null
 // sender or anyone else makes the conversation shared, and those replies can
-// quote the other people. The synthetic voice greeting cue is not a
-// participant: it is Curia's own row, so it does not mark the call shared.
+// quote the other people. A row flagged `synthetic` is not a participant: it is
+// one Curia wrote to itself, so it does not mark the conversation shared on any
+// channel. That flag is set by the writer, never inferred from the message body
+// — a crafted inbound message must not be able to drop its own conversation
+// from this check.
 //
 // Audience scoping: the block is injected only when the reply stays with
 // this contact. A Signal group, a Slack channel, or a multi-recipient email
@@ -22,7 +25,6 @@
 // (CHANNEL_RECENT_HISTORY_HOURS), parallel to the outbound-context TTL.
 
 import { DateTime } from 'luxon';
-import { VOICE_GREETING_USER_MESSAGE } from '../channels/voice/greeting.js';
 import { parseSlackConversationId } from '../channels/slack/message-converter.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { isUuid } from '../util/uuid.js';
@@ -38,12 +40,6 @@ export const CONTACT_RECENT_HISTORY_HEADER = '[RECENT ACTIVITY WITH THIS CONTACT
  * text, so it must not sit in the system prompt as instructions.
  */
 export const CONTACT_RECENT_HISTORY_UNTRUSTED_TAG = 'untrusted_turn_json';
-
-/**
- * User-row content the shared-conversation test ignores. The voice opening
- * cue is written as role `user` with a null sender; it is not another person.
- */
-export const CONTACT_RECENT_HISTORY_NON_PARTICIPANT_USER_CONTENT = VOICE_GREETING_USER_MESSAGE;
 
 /** Most recent turns returned. Small on purpose so the tier cannot swamp the live transcript. */
 export const CONTACT_RECENT_HISTORY_MAX_TURNS = 8;
@@ -175,6 +171,12 @@ export interface AddTurnAttribution {
   /** Channel the turn arrived on (`signal`, `email`, `voice`, …). */
   channelId?: string | null;
   /**
+   * True when this is a row Curia wrote to itself rather than a message from a
+   * person (#1892). Only ever set by the path that minted the turn; anything
+   * that omits it is treated as a participant's words.
+   */
+  synthetic?: boolean;
+  /**
    * Row timestamp override. Production writes omit this and use the clock.
    * Tests set it so the same-day window is deterministic.
    */
@@ -184,6 +186,7 @@ export interface AddTurnAttribution {
 export function normalizeAddTurnAttribution(meta: AddTurnAttribution | undefined): {
   senderContactId: string | null;
   channelId: string | null;
+  synthetic: boolean;
   createdAt: Date | null;
   /** True when the caller passed a sender id that is not a contact UUID. */
   senderDropped: boolean;
@@ -200,7 +203,9 @@ export function normalizeAddTurnAttribution(meta: AddTurnAttribution | undefined
   if (meta?.createdAt instanceof Date && !Number.isNaN(meta.createdAt.getTime())) {
     createdAt = meta.createdAt;
   }
-  return { senderContactId, channelId, createdAt, senderDropped };
+  // Strict equality, not truthiness: only an explicit `true` marks a row as
+  // Curia's own. Anything else means a person said it.
+  return { senderContactId, channelId, synthetic: meta?.synthetic === true, createdAt, senderDropped };
 }
 
 /**
@@ -307,6 +312,8 @@ export interface ContactRecentSourceTurn {
   createdAt: Date;
   /** Archived rows never render, but another sender's archived user turn still marks the conversation shared. */
   archived: boolean;
+  /** `working_memory.synthetic` — Curia's own row, not a participant's message (#1892). */
+  synthetic: boolean;
   seq: number;
 }
 
@@ -344,7 +351,7 @@ export function selectContactRecentTurns(
   for (const row of rows) {
     if (row.agentId !== query.agentId || row.role !== 'user') continue;
     if (!participated.has(row.conversationId)) continue;
-    if (isSyntheticVoiceGreetingCue(row)) continue;
+    if (isSyntheticNonParticipantTurn(row)) continue;
     if (row.senderContactId?.toLowerCase() !== contactId) shared.add(row.conversationId);
   }
 
@@ -379,9 +386,16 @@ export function selectContactRecentTurns(
   }));
 }
 
-function isSyntheticVoiceGreetingCue(row: ContactRecentSourceTurn): boolean {
-  return row.senderContactId == null
-    && row.content === CONTACT_RECENT_HISTORY_NON_PARTICIPANT_USER_CONTENT;
+/**
+ * A user row Curia wrote to itself, so it is not evidence of another participant.
+ *
+ * Reads the stored classification rather than the content: the writer knew what
+ * it minted, and inferring it from an attacker-controlled message body would let
+ * a crafted inbound message drop its own conversation from the shared check.
+ * Migration 091 classified the rows that predate the column.
+ */
+function isSyntheticNonParticipantTurn(row: ContactRecentSourceTurn): boolean {
+  return row.synthetic;
 }
 
 export function channelLabelForConversation(channelId: string | null, conversationId: string): string {

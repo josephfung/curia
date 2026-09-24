@@ -313,6 +313,9 @@ describe('LateDelegationSubscriber — agent.response matching (#1799)', () => {
     expect((wake.payload.metadata?.originator as Record<string, unknown>)?.contactId).toBe('contact-ceo');
     expect(wake.payload.metadata?.wakeContext).toEqual({ derived: true });
     expect(wake.payload.liveTurn).toBeUndefined();
+    // #1892: the wake brief is Curia reporting to itself. senderId carries the
+    // original requester for routing, but nobody said this text.
+    expect(wake.payload.syntheticTurn).toBe(true);
   });
 
   it('does not register reply routing for a scheduler origin', async () => {

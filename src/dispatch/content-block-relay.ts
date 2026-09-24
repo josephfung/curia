@@ -7,6 +7,7 @@
  */
 
 import { NO_REPLY_SENTINEL } from './no-reply.js';
+import { CONTENT_BLOCK_REWRITE_MARKER } from '../memory/synthetic-user-turn.js';
 import type { TaskOriginator } from '../contacts/types.js';
 
 /** Maximum rewrite retries after the first content-filter block (2 retries → 3 send attempts). */
@@ -55,7 +56,9 @@ export function buildContentBlockRewriteTask(
   const ruleNames = findings.map((f) => f.rule).join(', ');
   const audienceLeak = findings.some((f) => f.rule === 'llm-judge-audience-leak');
   const lines = [
-    '[OUTBOUND CONTENT FILTER — REWRITE REQUIRED]',
+    // Registered in synthetic-user-turn.ts so contact recall and the sender
+    // backfill can tell this apart from a human message (#1892).
+    CONTENT_BLOCK_REWRITE_MARKER,
     '',
     'Your previous reply was blocked before delivery. You have two options:',
     '',

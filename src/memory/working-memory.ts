@@ -9,7 +9,6 @@ import {
 import { rewriteLlmFailureTurns } from './llm-failure-turn.js';
 import {
   CONTACT_RECENT_HISTORY_MAX_TURNS,
-  CONTACT_RECENT_HISTORY_NON_PARTICIPANT_USER_CONTENT,
   normalizeAddTurnAttribution,
   persistableContactId,
   selectContactRecentTurns,
@@ -153,6 +152,10 @@ export class WorkingMemory {
 /**
  * SQL twin of {@link selectContactRecentTurns}. `$3` is the channel window.
  * The participation lookup is the scan `idx_wm_sender_active` exists for.
+ *
+ * A row flagged `synthetic` is one Curia wrote to itself, so it is not evidence
+ * of another participant (#1892). Reading the column rather than the content is
+ * deliberate: see `synthetic-user-turn.ts`.
  */
 export const CONTACT_RECENT_HISTORY_SQL = `SELECT role, content, conversation_id, channel_id, created_at, id
          FROM (
@@ -181,10 +184,7 @@ export const CONTACT_RECENT_HISTORY_SQL = `SELECT role, content, conversation_id
                    WHERE wm2.agent_id = $2
                      AND wm2.role = 'user'
                      AND wm2.conversation_id = wm.conversation_id
-                     AND NOT (
-                       wm2.sender_contact_id IS NULL
-                       AND wm2.content = $6
-                     )
+                     AND wm2.synthetic = false
                      AND (
                        wm2.sender_contact_id IS NULL
                        OR wm2.sender_contact_id <> $1::uuid
@@ -237,7 +237,25 @@ class PostgresBackend implements StorageBackend {
       if (attribution.createdAt) {
         await this.pool.query(
           `INSERT INTO working_memory (
-             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id, created_at
+             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id, synthetic, created_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            conversationId,
+            agentId,
+            turn.role,
+            turn.content,
+            expiresAt,
+            attribution.senderContactId,
+            attribution.channelId,
+            attribution.synthetic,
+            attribution.createdAt,
+          ],
+        );
+      } else {
+        await this.pool.query(
+          `INSERT INTO working_memory (
+             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id, synthetic
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
@@ -248,23 +266,7 @@ class PostgresBackend implements StorageBackend {
             expiresAt,
             attribution.senderContactId,
             attribution.channelId,
-            attribution.createdAt,
-          ],
-        );
-      } else {
-        await this.pool.query(
-          `INSERT INTO working_memory (
-             conversation_id, agent_id, role, content, expires_at, sender_contact_id, channel_id
-           )
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [
-            conversationId,
-            agentId,
-            turn.role,
-            turn.content,
-            expiresAt,
-            attribution.senderContactId,
-            attribution.channelId,
+            attribution.synthetic,
           ],
         );
       }
@@ -369,7 +371,6 @@ class PostgresBackend implements StorageBackend {
           query.since,
           query.excludeConversationId ?? '',
           limit,
-          CONTACT_RECENT_HISTORY_NON_PARTICIPANT_USER_CONTENT,
         ],
       );
 
@@ -669,6 +670,7 @@ class InMemoryBackend implements StorageBackend {
       channelId: attribution.channelId,
       createdAt: attribution.createdAt ?? new Date(),
       archived: false,
+      synthetic: attribution.synthetic,
       seq: this.seq++,
     });
     this.store.set(k, turns);

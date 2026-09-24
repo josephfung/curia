@@ -2143,6 +2143,9 @@ describe('Dispatcher content-block relay (#1355)', () => {
     expect(agentTasks[0]!.payload.content).toContain('calendar specialist found 4 events');
     expect(agentTasks[0]!.payload.content).toContain(NO_REPLY_SENTINEL);
     expect(agentTasks[0]!.payload.metadata?.contentBlockRewrite).toBe(true);
+    // #1892: Curia's brief to itself. Without this the row is stored as an
+    // unattributed human turn and permanently closes the thread to contact recall.
+    expect(agentTasks[0]!.payload.syntheticTurn).toBe(true);
   });
 
   it('publishes a salvage outbound after retries are exhausted', async () => {

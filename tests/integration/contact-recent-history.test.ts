@@ -9,6 +9,7 @@ import { backfillDirectChannelSenders } from '../../src/memory/direct-sender-bac
 import { createLogger } from '../../src/logger.js';
 import { VOICE_GREETING_USER_MESSAGE } from '../../src/channels/voice/greeting.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
+import { LATE_SPECIALIST_RESULT_MARKER } from '../../src/memory/synthetic-user-turn.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -48,7 +49,7 @@ describeIf('contact recent history SQL (#1599)', () => {
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     await requireCuriaTestDatabase(pool);
-    await pool.query('SELECT sender_contact_id, channel_id FROM working_memory LIMIT 0');
+    await pool.query('SELECT sender_contact_id, channel_id, synthetic FROM working_memory LIMIT 0');
     memory = WorkingMemory.createWithPostgres(pool, createLogger('error'));
   });
 
@@ -95,7 +96,8 @@ describeIf('contact recent history SQL (#1599)', () => {
     await memory.addTurn(`${PREFIX}voice:earlier`, 'coordinator', {
       role: 'user',
       content: VOICE_GREETING_USER_MESSAGE,
-    }, { channelId: 'voice', createdAt: at(5_000) });
+      // Curia's own opening row, exactly as VoiceRuntime writes it (#1892).
+    }, { channelId: 'voice', synthetic: true, createdAt: at(5_000) });
     await memory.addTurn(`${PREFIX}voice:earlier`, 'coordinator', {
       role: 'user',
       content: 'can you move the board prep to 4?',
@@ -180,6 +182,107 @@ describeIf('contact recent history SQL (#1599)', () => {
     expect(leftovers.rows.map(row => row.sender_contact_id)).toEqual([null, null]);
   });
 
+  it('leaves a synthetic user turn unstamped and still returns the replies (#1892)', async () => {
+    const alice = await seedContact(pool, 'synthetic-alice');
+    await pool.query(
+      `INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, source)
+       VALUES ($1, 'signal', 'crh-1599-peer', 'manual')`,
+      [alice],
+    );
+    const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const replyAt = new Date(now.getTime() + 1000);
+    // The archived synthetic row is the shape that made this permanent: the
+    // shared check has no archived filter and no time bound, so before #1892
+    // this one row hid 'signal reply kept' forever.
+    await pool.query(
+      `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id, synthetic)
+       VALUES
+         ('signal:crh-1599-peer', 'coordinator', 'user', 'a Curia brief', $2, true, NULL, NULL, true),
+         ('signal:crh-1599-peer', 'coordinator', 'user', 'real signal line', $2, true, NULL, NULL, false),
+         ('signal:crh-1599-peer', 'coordinator', 'user', 'today on signal', $3, false, $1, 'signal', false),
+         ('signal:crh-1599-peer', 'coordinator', 'assistant', 'signal reply kept', $4, false, NULL, 'signal', false)`,
+      [alice, old, now, replyAt],
+    );
+
+    const stamped = await backfillDirectChannelSenders(pool, createLogger('error'), { batchSize: 10 });
+    // Only the real human turn is stamped. The synthetic one is skipped, and the
+    // skip is counted rather than being invisible.
+    expect(stamped.signalRows).toBe(1);
+    expect(stamped.skippedSynthetic).toBeGreaterThanOrEqual(1);
+
+    const senders = await pool.query<{ content: string; sender_contact_id: string | null }>(
+      `SELECT content, sender_contact_id
+       FROM working_memory
+       WHERE conversation_id = 'signal:crh-1599-peer' AND role = 'user' AND archived = true
+       ORDER BY content`,
+      [],
+    );
+    const bySender = new Map(senders.rows.map(r => [r.content, r.sender_contact_id]));
+    expect(bySender.get('real signal line')).toBe(alice);
+    expect(bySender.get('a Curia brief')).toBeNull();
+
+    // And the unstamped synthetic row does not close the thread to recall.
+    const after = await memory.getContactRecentHistory({
+      contactId: alice,
+      agentId: 'coordinator',
+      excludeConversationId: 'email:somewhere-else',
+      since: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    expect(after.map(t => t.content)).toEqual(['today on signal', 'signal reply kept']);
+  });
+
+  it("migration 091's repair clears a stamp 090 left on a synthetic row, idempotently (#1892)", async () => {
+    // 091 has already run by the time this suite connects, so re-running its two
+    // statements is the only way to exercise them. That is also what proves the
+    // idempotency claim: a second application must be a no-op, because a database
+    // that already ran 090 and a fresh one both reach this migration.
+    const alice = await seedContact(pool, 'migration-091');
+    const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    // Exactly the shape 090 leaves behind: a brief Curia wrote, carrying the
+    // human peer's contact id because the conversation-id pattern matched.
+    const syntheticContent = `${LATE_SPECIALIST_RESULT_MARKER}social-media, delivered 2026-09-20]\n\nDone.`;
+    await pool.query(
+      `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id, synthetic)
+       VALUES
+         ('signal:crh-1599-peer', 'coordinator', 'user', $2, $3, true, $1, 'signal', false),
+         ('signal:crh-1599-peer', 'coordinator', 'user', 'a real line', $3, true, $1, 'signal', false)`,
+      [alice, syntheticContent, old],
+    );
+
+    const classify = `
+      UPDATE working_memory SET synthetic = true
+      WHERE role = 'user' AND synthetic = false
+        AND content LIKE $1
+        AND conversation_id = 'signal:crh-1599-peer'`;
+    const clear = `
+      UPDATE working_memory SET sender_contact_id = NULL
+      WHERE role = 'user' AND synthetic = true AND sender_contact_id IS NOT NULL
+        AND conversation_id = 'signal:crh-1599-peer'`;
+    // Same pattern the migration carries, scoped to this fixture's conversation.
+    const pattern = `${LATE_SPECIALIST_RESULT_MARKER}%`;
+
+    const classified = await pool.query(classify, [pattern]);
+    expect(classified.rowCount).toBe(1);
+    const cleared = await pool.query(clear);
+    expect(cleared.rowCount).toBe(1);
+
+    const rows = await pool.query<{ content: string; sender_contact_id: string | null; synthetic: boolean }>(
+      `SELECT content, sender_contact_id, synthetic FROM working_memory
+       WHERE conversation_id = 'signal:crh-1599-peer' AND role = 'user' ORDER BY content`,
+    );
+    const byContent = new Map(rows.rows.map(r => [r.content, r]));
+    // The synthetic row lost the stamp 090 would have applied…
+    expect(byContent.get(syntheticContent)?.sender_contact_id).toBeNull();
+    expect(byContent.get(syntheticContent)?.synthetic).toBe(true);
+    // …and the real turn beside it kept its attribution.
+    expect(byContent.get('a real line')?.sender_contact_id).toBe(alice);
+
+    // Second application touches nothing.
+    expect((await pool.query(classify, [pattern])).rowCount).toBe(0);
+    expect((await pool.query(clear)).rowCount).toBe(0);
+  });
+
   it('plans the widest window on idx_wm_sender_active with a created_at bound', async () => {
     const widest = Math.max(...Object.values(CHANNEL_RECENT_HISTORY_HOURS));
     const alice = await seedContact(pool, 'explain-alice');
@@ -206,7 +309,7 @@ describeIf('contact recent history SQL (#1599)', () => {
     const since = new Date(Date.now() - widest * 60 * 60 * 1000);
     const explained = await pool.query<{ 'QUERY PLAN': unknown }>(
       `EXPLAIN (FORMAT JSON) ${CONTACT_RECENT_HISTORY_SQL}`,
-      [alice, 'coordinator', since, `${PREFIX}explain:live`, 8, VOICE_GREETING_USER_MESSAGE],
+      [alice, 'coordinator', since, `${PREFIX}explain:live`, 8],
     );
     const plan = explained.rows[0]?.['QUERY PLAN'];
     // A few thousand in-window rows often plan as a bitmap scan. Either node

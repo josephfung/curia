@@ -2035,6 +2035,8 @@ describe('VoiceRuntime contact recent history (#1599)', () => {
     const wm = WorkingMemory.createInMemory();
     await wm.addTurn('voice:earlier', 'coordinator', { role: 'user', content: VOICE_GREETING_USER_MESSAGE }, {
       channelId: 'voice',
+      // As VoiceRuntime writes it — Curia's own opening row, not the caller's (#1892).
+      synthetic: true,
     });
     await wm.addTurn('voice:earlier', 'coordinator', { role: 'user', content: 'can you move the board prep to 4?' }, {
       senderContactId: caller.contactId,

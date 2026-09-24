@@ -27,11 +27,12 @@ describe('backfillDirectChannelSenders', () => {
     };
     const pool = {
       connect: vi.fn(async () => client),
+      query: vi.fn(async () => ({ rows: [{ n: 0 }], rowCount: 1 })),
     } as unknown as DbPool;
 
     const result = await backfillDirectChannelSenders(pool, logger(), { batchSize: 2 });
 
-    expect(result).toEqual({ signalRows: 2, smsRows: 1 });
+    expect(result).toEqual({ signalRows: 2, smsRows: 1, skippedSynthetic: 0 });
     expect(updates).toHaveLength(4);
     const signal = updates[0]!;
     const sms = updates[2]!;
@@ -47,6 +48,70 @@ describe('backfillDirectChannelSenders', () => {
     expect(sms).not.toContain('7 days');
     expect(client.query).toHaveBeenCalledWith("SET LOCAL statement_timeout = '5s'");
     expect(client.release).toHaveBeenCalled();
+  });
+
+  it('never stamps a synthetic user turn with the human peer of the thread', async () => {
+    // #1892: these rows are Curia's own briefs. Matching on the conversation-id
+    // pattern alone would attribute them to the peer, and contact recall would
+    // then surface Curia's control messages as something that person said.
+    const updates: string[] = [];
+    const params: unknown[][] = [];
+    const client = {
+      query: vi.fn(async (sql: string, args?: unknown[]) => {
+        const text = sql.replace(/\s+/g, ' ').trim();
+        if (text.startsWith('UPDATE')) {
+          updates.push(text);
+          if (args) params.push(args);
+          return { rowCount: 0 };
+        }
+        return { rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async () => ({ rows: [{ n: 6 }], rowCount: 1 })),
+    } as unknown as DbPool;
+
+    const log = logger();
+    const result = await backfillDirectChannelSenders(pool, log, { batchSize: 2 });
+
+    expect(updates).toHaveLength(2);
+    for (const update of updates) {
+      // The stored classification, never the message body — a crafted inbound
+      // message must not be able to exclude itself from the backfill.
+      expect(update).toContain('wm2.synthetic = false');
+      expect(update).not.toContain('content');
+    }
+    expect(params.every(args => args.length === 1)).toBe(true);
+
+    // The skipped count is what distinguishes a run that correctly held rows back
+    // from one whose filter silently stopped matching. Both report the same
+    // stamped totals.
+    expect(result.skippedSynthetic).toBe(6);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ skippedSynthetic: 6 }),
+      expect.stringContaining('skippedSynthetic'),
+    );
+  });
+
+  it('reports an unknown skipped count rather than zero when the count query fails', async () => {
+    // Reporting 0 here would read as "nothing was held back", which is exactly
+    // the wrong conclusion to hand an operator.
+    const client = {
+      query: vi.fn(async () => ({ rowCount: 0 })),
+      release: vi.fn(),
+    } as unknown as DbPoolClient;
+    const pool = {
+      connect: vi.fn(async () => client),
+      query: vi.fn(async () => { throw new Error('relation does not exist'); }),
+    } as unknown as DbPool;
+    const log = logger();
+
+    const result = await backfillDirectChannelSenders(pool, log, { batchSize: 2 });
+
+    expect(result.skippedSynthetic).toBeNull();
+    expect(log.warn).toHaveBeenCalled();
   });
 
   it('stops the channel on a batch error and still runs the other channel', async () => {
@@ -67,7 +132,7 @@ describe('backfillDirectChannelSenders', () => {
 
     const result = await backfillDirectChannelSenders(pool, log, { batchSize: 2 });
 
-    expect(result).toEqual({ signalRows: 0, smsRows: 0 });
+    expect(result).toEqual({ signalRows: 0, smsRows: 0, skippedSynthetic: null });
     expect(log.error).toHaveBeenCalled();
     expect(updates).toBe(2);
   });
