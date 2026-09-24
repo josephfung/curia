@@ -180,20 +180,13 @@ describeIf('contact recent history SQL (#1599)', () => {
     expect(leftovers.rows.map(row => row.sender_contact_id)).toEqual([null, null]);
   });
 
-  it('plans the widest window on idx_wm_sender_active', async () => {
+  it('plans the widest window on idx_wm_sender_active with a created_at bound', async () => {
     const widest = Math.max(...Object.values(CHANNEL_RECENT_HISTORY_HOURS));
     const alice = await seedContact(pool, 'explain-alice');
-    // Spread filler turns over 30 days so a 72h predicate stays selective.
+    // The queried contact owns the rows, spread over 30 days. sender_contact_id
+    // equality matches all of them; only the created_at range stays selective.
     await pool.query(
-      `WITH fillers AS (
-         INSERT INTO contacts (display_name)
-         SELECT $1 || 'explain-filler-' || g FROM generate_series(1, 40) g
-         RETURNING id
-       ),
-       ids AS (
-         SELECT array_agg(id) AS ids FROM fillers
-       )
-       INSERT INTO working_memory (
+      `INSERT INTO working_memory (
          conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id
        )
        SELECT
@@ -203,27 +196,11 @@ describeIf('contact recent history SQL (#1599)', () => {
          'filler',
          now() - ((g % 720) || ' hours')::interval,
          false,
-         ids.ids[1 + (g % 40)],
+         $2::uuid,
          'email'
-       FROM generate_series(1, 20000) g, ids`,
-      [PREFIX],
+       FROM generate_series(1, 20000) g`,
+      [PREFIX, alice],
     );
-    await memory.addTurn(`${PREFIX}explain:alice-recent`, 'coordinator', {
-      role: 'user',
-      content: 'inside the wide window',
-    }, {
-      senderContactId: alice,
-      channelId: 'email',
-      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-    });
-    await memory.addTurn(`${PREFIX}explain:alice-old`, 'coordinator', {
-      role: 'user',
-      content: 'outside the wide window',
-    }, {
-      senderContactId: alice,
-      channelId: 'email',
-      createdAt: new Date(Date.now() - (widest + 48) * 60 * 60 * 1000),
-    });
     await pool.query('ANALYZE working_memory');
 
     const since = new Date(Date.now() - widest * 60 * 60 * 1000);
@@ -232,26 +209,41 @@ describeIf('contact recent history SQL (#1599)', () => {
       [alice, 'coordinator', since, `${PREFIX}explain:live`, 8, VOICE_GREETING_USER_MESSAGE],
     );
     const plan = explained.rows[0]?.['QUERY PLAN'];
-    expect(indexNamesInPlan(plan), JSON.stringify(plan)).toContain('idx_wm_sender_active');
+    // A few thousand in-window rows often plan as a bitmap scan. Either node
+    // type is the index, and both carry the time bound in Index Cond. A plan
+    // that ignores created_at fails this even if it still names the index.
+    const scan = findPlanNode(
+      plan,
+      (node) => (node['Node Type'] === 'Index Scan' || node['Node Type'] === 'Bitmap Index Scan')
+        && node['Index Name'] === 'idx_wm_sender_active',
+    );
+    expect(scan, JSON.stringify(plan)).toBeDefined();
+    expect(String(scan?.['Index Cond'])).toContain('created_at');
   });
 });
 
-function indexNamesInPlan(plan: unknown): string[] {
-  const names: string[] = [];
-  const visit = (node: unknown): void => {
-    if (node == null || typeof node !== 'object') return;
+function findPlanNode(
+  plan: unknown,
+  predicate: (node: Record<string, unknown>) => boolean,
+): Record<string, unknown> | undefined {
+  const visit = (node: unknown): Record<string, unknown> | undefined => {
+    if (node == null || typeof node !== 'object') return undefined;
     const record = node as Record<string, unknown>;
-    if (typeof record['Index Name'] === 'string') names.push(record['Index Name']);
+    if (predicate(record)) return record;
     const children = record['Plans'];
-    if (Array.isArray(children)) {
-      for (const child of children) visit(child);
+    if (!Array.isArray(children)) return undefined;
+    for (const child of children) {
+      const found = visit(child);
+      if (found) return found;
     }
+    return undefined;
   };
-  if (!Array.isArray(plan)) return names;
+  if (!Array.isArray(plan)) return undefined;
   for (const entry of plan) {
     if (entry != null && typeof entry === 'object' && 'Plan' in entry) {
-      visit((entry as { Plan: unknown }).Plan);
+      const found = visit((entry as { Plan: unknown }).Plan);
+      if (found) return found;
     }
   }
-  return names;
+  return undefined;
 }

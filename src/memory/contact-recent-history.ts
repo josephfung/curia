@@ -218,11 +218,15 @@ export const CONTACT_RECENT_HISTORY_FALLBACK_HOURS = 24;
  *
  * Email is 72h for the same reason as that TTL: a late-afternoon message is
  * answered the next morning, and a Friday-afternoon message is answered on
- * Monday. 72h covers both without keeping a full week.
+ * Monday. 72h covers both without keeping a full week. The bound is not a
+ * guarantee that the Friday message is rendered: the read stays cross-channel
+ * and keeps only the newest CONTACT_RECENT_HISTORY_MAX_TURNS, so a busy
+ * weekend on another channel can crowd that email out.
  *
- * Voice is 48h. That is the longest gap between a moment on the previous
- * calendar day and a moment today, so a prior call is still recalled. It is
- * shorter than email because a voice call is not a business-day thread.
+ * Voice is 48h — about two calendar days, which covers a call from the
+ * previous day in almost all cases. A DST fall-back weekend can leave a call
+ * from the start of yesterday just outside. It is shorter than email because
+ * a voice call is not a business-day thread.
  */
 export const CHANNEL_RECENT_HISTORY_HOURS: Readonly<Record<string, number>> = Object.freeze({
   email: 72,
@@ -244,8 +248,13 @@ export function contactRecentHistorySince(
   timezone: string | undefined,
   channelId: string,
 ): { since: Date; windowLabel: ContactRecentWindowLabel } {
-  const hours = CHANNEL_RECENT_HISTORY_HOURS[channelId.trim().toLowerCase()];
-  if (hours !== undefined) {
+  const key = channelId.trim().toLowerCase();
+  // hasOwn: a plain-object lookup would treat inherited keys (`constructor`)
+  // as a window and produce a NaN bound.
+  const hours = Object.hasOwn(CHANNEL_RECENT_HISTORY_HOURS, key)
+    ? CHANNEL_RECENT_HISTORY_HOURS[key]
+    : undefined;
+  if (typeof hours === 'number') {
     return {
       since: new Date(now.getTime() - hours * 60 * 60 * 1000),
       windowLabel: { scope: 'hours', hours },

@@ -403,6 +403,13 @@ describe('contactRecentHistorySince', () => {
     expect(turns.map(t => t.content)).toEqual(['friday afternoon offer']);
   });
 
+  it('does not treat an inherited object key as a channel window', () => {
+    const window = contactRecentHistorySince(NOW, 'America/Toronto', 'constructor');
+    expect(window.windowLabel).toEqual({ scope: 'today' });
+    expect(Number.isNaN(window.since.getTime())).toBe(false);
+    expect(window.since.toISOString()).toBe('2026-09-23T04:00:00.000Z');
+  });
+
   it('keeps the email window when the zone is not a zone', () => {
     const window = contactRecentHistorySince(NOW, 'Not/AZone', 'email');
     expect(window.windowLabel).toEqual({ scope: 'hours', hours: 72 });
