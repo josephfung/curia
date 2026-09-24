@@ -1263,6 +1263,10 @@ export class AgentRuntime {
       await memory.addTurn(conversationId, agentId, { role: 'user', content: originalContent }, {
         senderContactId: attributedSenderContactId ?? null,
         channelId: turnChannelId,
+        // Curia's own briefs re-enter through agent.task like any other turn and
+        // are stored as role 'user'. Only the publisher knows which is which, so
+        // it says so rather than having the reader guess from content (#1892).
+        synthetic: taskEvent.payload.syntheticTurn === true,
       });
     }
 

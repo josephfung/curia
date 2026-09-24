@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`agent.task` (public API)** — optional `syntheticTurn` marks a brief Curia wrote to itself. (#1892)
 - **Scheduler** — polls hand due jobs to a capped runner and free hung slots at recovery timeout. (#1160)
 - **Unit test layout** — `src/**/*.test.ts` moved into the `tests/unit/` mirror. (#848)
 - **Contact recent history** — email recalls 72 hours and voice 48; other channels stay on today. (#1886)
@@ -63,6 +64,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`delegate`** — an in-flight refusal no longer consumes a retryable attempt. (#1858)
 - **Scheduler** — a rejected fire reverts its row when the claim timestamp has microseconds. (#1160)
 - **`GET /api/kg/graph`** — nonexistent `node_id` returns 404 instead of an empty 200. (#1881)
+- **Contact recall** — briefs Curia writes to itself no longer close a conversation to recall. (#1892)
+- **Sender backfill** — no longer attributes Curia's own briefs to the human peer of a thread. (#1892)
 - **`POST /api/kg/tasks`** — `sourceAgentId` accepts agent names; column stays TEXT. (#1882)
 - **Agent names** — load-time validation matches `source_agent_id` so the roster cannot drift. (#1882)
 - **Contact recent history** — old Signal and SMS rows no longer hide that thread's replies. (#1599)
