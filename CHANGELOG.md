@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`backfill:email-senders`** — one-off script recovering pre-090 email sender attribution from the audit log. (#1887)
 - **Contact recent history** — 1:1 voice and email recall that contact's other turns. (#1599)
 - **Document placement (`doc-place`)** — shared placement policy; agents choose readable `/projects/` folders. (#1819)
 - **Calendar identity guard** — principal-scoped wrong-identity reads fail closed as `IDENTITY_MISMATCH`, not empty success. (#1854)
@@ -66,6 +67,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`GET /api/kg/graph`** — nonexistent `node_id` returns 404 instead of an empty 200. (#1881)
 - **Contact recall** — briefs Curia writes to itself no longer close a conversation to recall. (#1892)
 - **Sender backfill** — no longer attributes Curia's own briefs to the human peer of a thread. (#1892)
+- **Contact recall** — email threads predating migration 090 no longer drop Curia's replies. (#1887)
 - **`POST /api/kg/tasks`** — `sourceAgentId` accepts agent names; column stays TEXT. (#1882)
 - **Agent names** — load-time validation matches `source_agent_id` so the roster cannot drift. (#1882)
 - **Contact recent history** — old Signal and SMS rows no longer hide that thread's replies. (#1599)

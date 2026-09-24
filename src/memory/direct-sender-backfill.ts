@@ -5,7 +5,7 @@
 // not: any older user row with a null sender, including an archived one,
 // marks that conversation shared and hides its assistant replies. Signal 1:1
 // and SMS conversation ids encode a single peer, so those rows are that
-// peer's. Email, Slack, and Signal groups stay unstamped — a null sender
+// peer's. Slack threads and Signal groups stay unstamped — a null sender
 // there is how a multi-party thread stays closed.
 //
 // Synthetic user turns are excluded (#1892). A conversation id says who the
@@ -23,6 +23,13 @@
 // can still report a non-zero remainder. If the synthetic = false filter stops
 // working, those rows get stamped and the remainder falls — that drop, next to
 // the stamped count, is the signal.
+//
+// Email is not handled here, but it is not abandoned either: an email
+// conversation id names a thread, not a person, so the sender has to come from
+// the audit log instead. scripts/backfill-email-senders.ts does that as a
+// one-off, out of band (#1887 / ADR-042). It is deliberately not on this boot
+// path — only a database predating migration 090 has unstamped email rows, so
+// running it on every start would be a permanent no-op everywhere else.
 //
 // Runs after boot, in batches, and only updates rows that are still null.
 // A second start is a no-op once the table is caught up.
