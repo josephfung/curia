@@ -15,6 +15,14 @@
 -- cue is not a thing the caller said, so it stays unattributed. The recall
 -- read ignores that exact cue when deciding a call is shared.
 --
+-- Email is not unrecoverable, only unrecoverable from this table (#1887 /
+-- ADR-042). The per-turn From address is still in audit_log, so
+-- scripts/backfill-email-senders.ts stamps historical email rows out of band.
+-- Run it once on a database that predates this migration; a database created
+-- after it stamps on write and never needs it. Slack threads and Signal groups
+-- stay unstamped on purpose — there a null sender is what keeps a multi-party
+-- thread closed.
+--
 -- Each UPDATE is limited to the last 7 days so a full rewrite of
 -- working_memory does not sit inside the boot transaction. Recall only
 -- renders rows from the local day, but the shared-conversation check reads

@@ -34,6 +34,7 @@
     "redteam:provenance:smoke": "tsx tests/redteam/smoke-provenance.ts",
     "redteam:report": "promptfoo view",
     "backfill:contact-attributes": "tsx --env-file=.env scripts/backfill-contact-attributes.ts",
+    "backfill:email-senders": "tsx --env-file=.env scripts/backfill-email-senders.ts",
     "rederive:contact-tiers": "tsx --env-file=.env scripts/rederive-contact-tiers.ts",
     "report:kg-linkage": "tsx --env-file=.env scripts/kg-node-linkage-report.ts",
     "dedup:contacts": "tsx --env-file=.env scripts/dedup-contacts.ts",
