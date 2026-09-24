@@ -655,7 +655,7 @@ export interface YamlConfig {
      *  Used by the watchdog to compute recovery timeouts. Default: 600. */
     defaultExpectedDurationSeconds?: number;
     /** Max agent runs the scheduler will execute at once. Further due jobs stay
-     *  pending until a slot frees. Default: 6. */
+     *  pending until a slot frees. Default: 8 (headroom above the observed peak of 6). */
     maxInFlight?: number;
   };
   tasks?: {

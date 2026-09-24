@@ -2899,7 +2899,15 @@ describe('Scheduler', () => {
         if (event.type !== 'agent.task') return Promise.resolve();
         return new Promise<void>((resolve) => { releases.push(resolve); });
       });
-      pool.query.mockResolvedValue({ rows, rowCount: 1 });
+      pool.query.mockImplementation((sql: string) => {
+        if (sql.includes('count(*)')) {
+          return Promise.resolve({ rows: [{ due: 4 }], rowCount: 1 });
+        }
+        if (sql.includes('LIMIT')) {
+          return Promise.resolve({ rows, rowCount: 1 });
+        }
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      });
 
       await scheduler.pollDueJobs();
 
@@ -2910,16 +2918,18 @@ describe('Scheduler', () => {
 
       const callsAtCap = pool.query.mock.calls.length;
       await scheduler.pollDueJobs();
-      // Saturated: no SELECT, no further claims, no further publishes.
-      expect(pool.query.mock.calls.length).toBe(callsAtCap);
+      // Saturated: a count of still-due rows, no further claims, no further publishes.
+      const whileCapped = pool.query.mock.calls.slice(callsAtCap);
+      expect(whileCapped).toHaveLength(1);
+      expect(String(whileCapped[0]![0])).toContain('count(*)');
       expect(releases).toHaveLength(2);
-      expect(logger.debug).toHaveBeenCalledWith(
-        expect.objectContaining({ inFlight: 2, maxInFlight: 2 }),
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ inFlight: 2, maxInFlight: 2, deferred: 4 }),
         expect.stringContaining('in-flight cap reached'),
       );
 
       releases[0]!();
-      for (let i = 0; i < 20; i++) await Promise.resolve();
+      for (let i = 0; i < 10 && inFlightOf(scheduler) !== 1; i++) await Promise.resolve();
       expect(inFlightOf(scheduler)).toBe(1);
 
       pool.query.mockClear();
@@ -3000,6 +3010,58 @@ describe('Scheduler', () => {
       expect(inFlightOf(scheduler)).toBe(0);
       const revert = pool.query.mock.calls.find((call) => String(call[0]).includes("status = 'pending'"));
       expect(revert?.[1]).toEqual(['job-1']);
+    });
+
+    it('releases the in-flight slot when a hung run outlives the recovery timeout', async () => {
+      const row = fakeDbRow({ expected_duration_seconds: 60 });
+      const gate = new Promise<void>(() => {});
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string }) => {
+        if (event.type === 'agent.task') return gate;
+        return Promise.resolve();
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await scheduler.pollDueJobs();
+      expect(inFlightOf(scheduler)).toBe(1);
+
+      const timeoutMs = computeRecoveryTimeout(60) * 1000;
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+
+      expect(inFlightOf(scheduler)).toBe(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1', timeoutMs }),
+        expect.stringContaining('released in-flight slot after recovery timeout'),
+      );
+
+      // The slot is free, so a later poll can claim another job while the first
+      // publish is still pending.
+      pool.query.mockResolvedValueOnce({ rows: [fakeDbRow({ id: 'job-2' })] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      await scheduler.pollDueJobs();
+      expect(inFlightOf(scheduler)).toBe(1);
+      expect(agentTaskPublishes()).toBe(2);
+    });
+
+    it('logs and still releases the slot when reverting a failed fire throws', async () => {
+      const row = fakeDbRow();
+      pool.query
+        .mockResolvedValueOnce({ rows: [row] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockImplementationOnce(() => {
+          throw new Error('pool closed');
+        });
+      bus.publish.mockRejectedValueOnce(new Error('audit hook failed'));
+
+      await scheduler.pollDueJobs();
+      await drainInFlight(scheduler);
+
+      expect(inFlightOf(scheduler)).toBe(0);
+      expect(pendingJobs(scheduler).size).toBe(0);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1', err: expect.any(Error) }),
+        'Revert after failed fire threw',
+      );
     });
 
     it('rejects a non-positive maxInFlight at construction', () => {

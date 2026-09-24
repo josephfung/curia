@@ -25,9 +25,13 @@ An in-flight guard that skips a poll while another is running would remove that 
 
 ## What shipped
 
-`pollDueJobs` claims due rows and returns. `bus.publish` of `schedule.fired` and `agent.task` runs on a detached promise. The bus still awaits subscribers, so that promise stays pending for the whole agent run and is what the cap counts.
+`pollDueJobs` claims due rows and returns. `bus.publish` of `schedule.fired` and `agent.task` runs on a detached promise. The bus still awaits subscribers, so that promise stays pending for the whole agent run. The cap counts slots, which are released when publish settles or when the recovery timeout below elapses.
 
-The cap is `scheduler.maxInFlight` (default 6, the observed peak). The poll's `SELECT` uses `LIMIT` = free slots and does not lock rows. A slot is reserved synchronously before the claim `UPDATE`, so two overlapping polls on one process cannot both pass the check. When the cap is full the poll claims nothing; leftover due jobs stay `pending` and are eligible next tick. Claiming them early would start the watchdog clock (`run_started_at`) before the agent runs.
+The cap is `scheduler.maxInFlight`, default **8**. The measured peak is 6, and 559/1110 runs overlapped something else, so a cap of 6 would shed load on the busiest days in the sample — the days when deferral costs the most. 8 leaves that peak unchanged and still bounds the unbounded growth #1650 is about.
+
+The poll's `SELECT` uses `LIMIT` = free slots and does not lock rows. A slot is reserved synchronously before the claim `UPDATE`, so two overlapping polls on one process cannot both pass the check. When the cap is full the poll claims nothing and logs, at `info`, how many due rows it left pending. Leftover jobs stay `pending` and are eligible next tick. Claiming them early would start the watchdog clock (`run_started_at`) before the agent runs.
+
+A slot is not held until `bus.publish` resolves. `handleTask` has no wall-clock timeout, so a stalled run would otherwise keep the slot until process restart, and `recoverStuckJobs` would reset the row without freeing the slot. The slot is released when publish settles or when `computeRecoveryTimeout` elapses (the same `LEAST(expected × 7.5, expected + 3600)` horizon the watchdog uses), whichever comes first. The timeout logs at `warn` and does not cancel the agent. Only the accounting is bounded.
 
 Publish rejection (not an agent failure — the bus swallows subscriber errors) reverts `running` → `pending` and drops the `pendingJobs` entry on the detached promise. Claim and payload errors before the handoff stay on the poll's own catch, same as before.
 

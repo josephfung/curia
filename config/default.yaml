@@ -150,8 +150,9 @@ scheduler:
 
   # Max agent runs the scheduler will have in flight at once. A poll claims at most
   # this many due jobs and does not wait for them; further due jobs stay pending
-  # until a slot frees. 6 matches the observed production peak (see #1160).
-  maxInFlight: 6
+  # until a slot frees. 8 is headroom above the observed production peak of 6
+  # (#1160), so that peak still runs and growth past it is what the cap bounds.
+  maxInFlight: 8
 
 health:
   # Thresholds for time-based liveness checks

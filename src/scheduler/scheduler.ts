@@ -24,8 +24,12 @@ import { isUuid } from '../util/uuid.js';
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
 
-/** Default cap on scheduler-started agent runs executing at once (#1160). */
-export const DEFAULT_MAX_IN_FLIGHT = 6;
+/**
+ * Default cap on scheduler-started agent runs executing at once (#1160).
+ * 8 is headroom above the observed production peak of 6, so the busiest day
+ * in that sample does not shed load. Growth past 8 is what the cap bounds.
+ */
+export const DEFAULT_MAX_IN_FLIGHT = 8;
 
 // Watchdog runs every 5 minutes to detect jobs stuck mid-run.
 export const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
@@ -629,9 +633,10 @@ export class Scheduler {
    * Agent runs are not awaited. Each successful claim reserves one in-flight
    * slot and publishes on a detached promise, so this method returns without
    * waiting on the agent even when a run lasts minutes. The cap
-   * (`scheduler.maxInFlight`, default 6) bounds how many of those runs execute
-   * at once. When no slot is free the poll claims nothing; due jobs stay
-   * pending for the next tick.
+   * (`scheduler.maxInFlight`, default 8) bounds how many of those runs execute
+   * at once. The slot is released when publish settles, or when the watchdog
+   * recovery timeout elapses if the run is still going. When no slot is free
+   * the poll claims nothing; due jobs stay pending for the next tick.
    *
    * Stamps lastTickAt on every call, before the query — this is the scheduler's actual
    * 30s liveness cadence, read by HealthService's checkScheduler (#1359). Stamped even
@@ -642,10 +647,7 @@ export class Scheduler {
     this.lastTickAt = new Date();
     const slots = this.maxInFlight - this.inFlight;
     if (slots <= 0) {
-      this.logger.debug(
-        { inFlight: this.inFlight, maxInFlight: this.maxInFlight },
-        'scheduler: in-flight cap reached; leaving due jobs for the next poll',
-      );
+      await this.logInFlightCap('scheduler: in-flight cap reached; leaving due jobs for the next poll');
       return;
     }
     try {
@@ -701,12 +703,9 @@ export class Scheduler {
           const outcome = await this.fireJob(job);
           if (outcome === 'saturated') {
             // A slot freed between the SELECT and here is picked up next tick.
-            // Rows not yet claimed stay pending — claiming them would start the
+            // Rows from here on stay pending — claiming them would start the
             // watchdog clock before the agent runs.
-            this.logger.debug(
-              { inFlight: this.inFlight, maxInFlight: this.maxInFlight },
-              'scheduler: in-flight cap reached; leaving remaining due jobs unclaimed',
-            );
+            await this.logInFlightCap('scheduler: in-flight cap reached; leaving remaining due jobs unclaimed');
             break;
           }
           if (outcome === 'dispatched') dispatched += 1;
@@ -723,10 +722,36 @@ export class Scheduler {
     } catch (err) {
       this.logger.error({ err }, 'Error polling due jobs');
     }
-    // One microtask so a publish that has already settled invokes its follow-up
-    // event before callers observe the poll as done. A publish whose promise is
-    // still pending — the agent run — is not awaited.
-    await Promise.resolve();
+  }
+
+  /**
+   * info, not debug: prod runs at LOG_LEVEL=info, so a debug line would never
+   * be seen. Saturation is the signal that distinguishes a lateness regression
+   * caused by the cap from the model simply getting slower (#1160).
+   * `deferred` is how many due rows are still pending, not merely that the
+   * cap was reached.
+   */
+  private async logInFlightCap(message: string): Promise<void> {
+    const deferred = await this.countDueJobs();
+    this.logger.info(
+      { inFlight: this.inFlight, maxInFlight: this.maxInFlight, deferred },
+      message,
+    );
+  }
+
+  private async countDueJobs(): Promise<number | undefined> {
+    try {
+      const { rows } = await this.pool.query<{ due: number }>(
+        `SELECT count(*)::int AS due
+           FROM scheduled_jobs
+          WHERE status IN ('pending', 'failed')
+            AND next_run_at <= now()`,
+      );
+      return rows[0]?.due;
+    } catch (err) {
+      this.logger.error({ err }, 'scheduler: failed to count due jobs while at the in-flight cap');
+      return undefined;
+    }
   }
 
   /**
@@ -734,7 +759,8 @@ export class Scheduler {
    *
    * Reserves an in-flight slot before any await so overlapping polls cannot
    * both pass the cap. The slot is released here unless the publish was handed
-   * off, in which case the detached promise releases it when the run settles.
+   * off, in which case dispatchPublish releases it when the run settles or
+   * the recovery timeout elapses.
    *
    * Returns `saturated` without claiming when the cap is full. Due jobs stay
    * pending for the next poll.
@@ -1018,19 +1044,65 @@ export class Scheduler {
 
   /**
    * Publish schedule.fired and agent.task without blocking the poll.
-   * The in-flight slot reserved by fireJob is released when this promise settles,
-   * including when publish rejects and the job is reverted to pending.
+   * The in-flight slot reserved by fireJob is released when this promise settles
+   * (including when publish rejects and the job is reverted to pending), or when
+   * the watchdog recovery timeout elapses — whichever comes first. The timeout
+   * releases only the slot. The agent run keeps going, and recoverStuckJobs
+   * remains responsible for the row.
    */
   private dispatchPublish(job: JobRow, firedEvent: ScheduleFiredEvent, taskEvent: AgentTaskEvent): void {
+    const timeoutMs = this.slotTimeoutMs(job);
+    let slotHeld = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const releaseSlot = (reason: 'settled' | 'timeout'): void => {
+      if (!slotHeld) return;
+      slotHeld = false;
+      if (timer !== undefined) clearTimeout(timer);
+      this.inFlight -= 1;
+      if (reason === 'timeout') {
+        this.logger.warn(
+          {
+            jobId: job.id,
+            agentId: job.agentId,
+            timeoutMs,
+            inFlight: this.inFlight,
+            maxInFlight: this.maxInFlight,
+          },
+          'scheduler: released in-flight slot after recovery timeout; the agent run is still going',
+        );
+      }
+    };
+    // setTimeout fires immediately for delays above 2^31-1 ms. slotTimeoutMs clamps.
+    timer = setTimeout(() => {
+      releaseSlot('timeout');
+    }, timeoutMs);
+    timer.unref();
+
     const run = this.publishFire(job, firedEvent, taskEvent)
       .catch((err: unknown) => this.revertFailedFire(job.id, err))
+      .catch((err: unknown) => {
+        this.logger.error({ err, jobId: job.id }, 'Revert after failed fire threw');
+      })
       .finally(() => {
-        this.inFlight -= 1;
+        releaseSlot('settled');
+        this.inFlightRuns.delete(run);
       });
     this.inFlightRuns.add(run);
-    void run.finally(() => {
-      this.inFlightRuns.delete(run);
-    });
+  }
+
+  /**
+   * How long a handed-off run may hold its slot. Same horizon recoverStuckJobs
+   * uses to decide the row is stuck, so the slot and the row become eligible
+   * to move again together. The watchdog itself still runs on its own interval.
+   */
+  private slotTimeoutMs(job: JobRow): number {
+    const expected = job.expectedDurationSeconds;
+    const seconds = expected != null && expected > 0
+      ? expected
+      : this.defaultExpectedDurationSeconds;
+    const ms = computeRecoveryTimeout(seconds) * 1000;
+    // Node clamps delays above 2^31-1 to 1, which would release the slot immediately.
+    return Math.min(ms, 2_147_483_647);
   }
 
   private async publishFire(job: JobRow, firedEvent: ScheduleFiredEvent, taskEvent: AgentTaskEvent): Promise<void> {
@@ -1067,7 +1139,14 @@ export class Scheduler {
 
   /**
    * Resolves when every detached publish has settled.
-   * Polls do not await agent runs; tests wait here to observe the handoff.
+   *
+   * Test-only. `stop()` does not call this, on purpose: wiring it into
+   * shutdown would need its own timeout. The loop never returns if a publish
+   * stays pending (a hung agent run). The in-flight slot is released separately
+   * when the recovery timeout elapses; this wait is not that release. `index.ts`
+   * still closes the pool after `stop()` without waiting, which is the same
+   * shape as before this change, when the poll promise was never awaited at
+   * shutdown either.
    */
   async drainInFlight(): Promise<void> {
     while (this.inFlightRuns.size > 0) {

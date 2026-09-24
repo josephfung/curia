@@ -116,26 +116,27 @@ describeIf('Scheduler cron claim idempotency (#1159)', () => {
 
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    let signalFired: () => void = () => {};
+    const fired = new Promise<void>((resolve) => { signalFired = resolve; });
     let fires = 0;
     bus.subscribe('agent.task', 'system', () => {
       fires += 1;
+      signalFired();
       return gate;
     });
 
-    // Subscribers from earlier tests run first and each await yields. Flush until
-    // this test's handler has been invoked; the gate keeps the run in flight.
-    const flush = async () => {
-      for (let i = 0; i < 8; i++) await Promise.resolve();
-    };
-
     try {
-      await scheduler.pollDueJobs();
-      await flush();
+      // `fired` resolves from this test's own subscriber, however many earlier
+      // subscribers on the shared bus yield before it.
+      const poll = scheduler.pollDueJobs();
+      await fired;
+      await poll;
       expect(fires).toBe(1);
 
-      // The run is still inside bus.publish. A later poll must not start another one.
+      // The row is already `running` with next_run_at in the future, so this
+      // poll's SELECT matches nothing and never reaches the claim. The check
+      // is that no second fire starts, and the row stays running.
       await scheduler.pollDueJobs();
-      await flush();
       expect(fires).toBe(1);
 
       const mid = await pool.query(
