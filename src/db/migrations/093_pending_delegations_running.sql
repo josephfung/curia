@@ -39,7 +39,11 @@ ALTER TABLE pending_delegations
   ADD CONSTRAINT pending_delegations_status_check
   CHECK (status IN ('running', 'pending', 'claimed', 'resolved'));
 
-ALTER TABLE pending_delegations DROP CONSTRAINT pending_delegations_resolution_shape;
+-- IF EXISTS: a restored dump may have renamed this the same way it renamed the
+-- status check. A renamed shape that still rejects `running` is caught by the
+-- post-condition below, which is the loud failure. A missing name must not
+-- abort the migration before that check runs.
+ALTER TABLE pending_delegations DROP CONSTRAINT IF EXISTS pending_delegations_resolution_shape;
 ALTER TABLE pending_delegations
   ADD CONSTRAINT pending_delegations_resolution_shape CHECK (
     (status = 'running'  AND resolution IS NULL     AND claimed_at IS NULL     AND claim_token IS NULL     AND resolved_at IS NULL) OR

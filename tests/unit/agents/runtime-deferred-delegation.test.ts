@@ -10,6 +10,7 @@ import type { TaskRepo } from '../../../src/db/task-repo.js';
 import { createLogger } from '../../../src/logger.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 import type { ToolResult } from '../../../src/skills/types.js';
+import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 
 const PROVENANCE = {
   requestedModel: 'mock-model',
@@ -97,6 +98,7 @@ async function runTurn(opts: {
   invoke: ExecutionLayer['invoke'];
   metadata?: Record<string, unknown>;
   defaultDelegateTimeoutMs?: number;
+  agentRegistry?: AgentRegistry;
 }): Promise<{ createTask: ReturnType<typeof vi.fn> }> {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
@@ -116,6 +118,7 @@ async function runTurn(opts: {
     ...(opts.defaultDelegateTimeoutMs !== undefined && {
       defaultDelegateTimeoutMs: opts.defaultDelegateTimeoutMs,
     }),
+    ...(opts.agentRegistry !== undefined && { agentRegistry: opts.agentRegistry }),
   });
   runtime.register();
   await bus.publish('dispatch', createAgentTask({
@@ -201,6 +204,35 @@ describe('runtime deferred delegation (#1893)', () => {
     });
 
     const params = createTask.mock.calls[0]![0] as { wakeAt: Date };
+    expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 240_000);
+    expect(params.wakeAt.getTime()).toBeLessThan(before + 240_000 + 5_000);
+  });
+
+  it('does not let a short specialist pull a later retry below the configured wait', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('research', {
+      role: 'specialist',
+      description: 'Research',
+      expectedDurationSeconds: 30,
+    });
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+    const before = Date.now();
+    const { createTask } = await runTurn({
+      toolCalls: [
+        { id: 'call-1', name: 'delegate', input: { agent: 'research', task: 'Look up the venue' } },
+        { id: 'call-2', name: 'delegate', input: { agent: 'calendar', task: 'Reserve the room' } },
+      ],
+      invoke: async (name) => {
+        if (name === 'task-create') return { success: true, data: { task_id: 'review-1' } };
+        return timeoutData('research');
+      },
+      defaultDelegateTimeoutMs: 240_000,
+      agentRegistry,
+    });
+
+    expect(createTask).toHaveBeenCalledOnce();
+    const params = createTask.mock.calls[0]![0] as { description: string; wakeAt: Date };
+    expect(params.description).toBe('Reserve the room');
     expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 240_000);
     expect(params.wakeAt.getTime()).toBeLessThan(before + 240_000 + 5_000);
   });

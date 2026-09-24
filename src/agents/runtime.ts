@@ -1367,15 +1367,17 @@ export class AgentRuntime {
     }
     const turnDateResolveTracker = new TurnDateResolveTracker();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
-    // Wait used to schedule a brief that did not dispatch (#1893). Starts at the
-    // configured delegate wait — the same fallback the handler uses when no
-    // duration hint is injected — and rises if a call's timeout_ms is resolved.
+    // Floor for a brief that did not dispatch (#1893). The handler uses this
+    // same configured wait when no duration hint is injected. A specialist that
+    // did get a timeout keeps its own wait — one number for the turn would let
+    // a short specialist pull a longer one's retry forward.
     const configuredWait = this.config.defaultDelegateTimeoutMs;
-    let deferredWakeMs = typeof configuredWait === 'number'
+    const deferredWakeFloor = typeof configuredWait === 'number'
       && Number.isInteger(configuredWait)
       && configuredWait > 0
       ? configuredWait
       : DEFAULT_DEFERRED_WAKE_MS;
+    const waitByAgent = new Map<string, number>();
     const queuedUndispatchedBriefs = new Set<string>();
     const queueUndispatchedDelegation = async (targetAgent: string, brief: string): Promise<void> => {
       if (targetAgent === '' || brief === '') return;
@@ -1396,7 +1398,7 @@ export class AgentRuntime {
           originSenderId: taskEvent.payload.senderId,
           targetAgent,
           brief,
-          wakeAt: new Date(Date.now() + deferredWakeMs),
+          wakeAt: new Date(Date.now() + (waitByAgent.get(targetAgent) ?? deferredWakeFloor)),
           ...(originator !== undefined && { originator }),
           attempt,
         });
@@ -1785,8 +1787,14 @@ export class AgentRuntime {
 
               skillInput = resolvedInput;
               const injectedWait = resolvedInput['timeout_ms'];
-              if (typeof injectedWait === 'number' && Number.isInteger(injectedWait) && injectedWait > 0) {
-                deferredWakeMs = injectedWait;
+              const namedAgent = typeof resolvedInput['agent'] === 'string' ? resolvedInput['agent'] : '';
+              if (
+                namedAgent !== ''
+                && typeof injectedWait === 'number'
+                && Number.isInteger(injectedWait)
+                && injectedWait > 0
+              ) {
+                waitByAgent.set(namedAgent, injectedWait);
               }
             }
           }
