@@ -611,6 +611,9 @@ describe('WorkingMemory.getContactRecentHistory SQL', () => {
 
       await ask(pool, log);
 
+      // The diagnostic is not awaited by the recall, so it may land after the
+      // turns do. That is the point — it must never hold up a reply.
+      await vi.waitFor(() => expect(log.info).toHaveBeenCalled());
       expect(log.info).toHaveBeenCalledWith(
         expect.objectContaining({
           contactId: ALICE,
@@ -623,9 +626,32 @@ describe('WorkingMemory.getContactRecentHistory SQL', () => {
       );
     });
 
+    it('does not make the caller wait for the diagnostic', async () => {
+      // Voice runs this read under a history deadline, so a log line must not be
+      // able to push it over. The recall resolves while the diagnostic is still
+      // in flight.
+      let releaseDiagnostic: (() => void) | undefined;
+      const blocked = new Promise<void>(resolve => { releaseDiagnostic = resolve; });
+      const query = vi.fn(async (sql: string) => {
+        if (sql.includes('unattributed_turns')) {
+          await blocked;
+          return { rows: [] };
+        }
+        return { rows: [] };
+      });
+      const pool = { query, connect: vi.fn() } as unknown as DbPool;
+      const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      // Resolves even though the diagnostic query has not returned.
+      await expect(ask(pool, log)).resolves.toEqual([]);
+      releaseDiagnostic?.();
+    });
+
     it('stays quiet when nothing was excluded', async () => {
       const { pool, log } = poolFor([], []);
       await ask(pool, log);
+      // Give the unawaited diagnostic a chance to log before asserting it did not.
+      await vi.waitFor(() => expect(pool.query).toHaveBeenCalledTimes(2));
       expect(log.info).not.toHaveBeenCalled();
     });
 
@@ -650,7 +676,7 @@ describe('WorkingMemory.getContactRecentHistory SQL', () => {
       const turns = await ask(pool, log);
 
       expect(turns.map(t => t.content)).toEqual(['the reply']);
-      expect(log.warn).toHaveBeenCalled();
+      await vi.waitFor(() => expect(log.warn).toHaveBeenCalled());
       expect(log.info).not.toHaveBeenCalled();
     });
   });

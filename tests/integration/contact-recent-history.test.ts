@@ -351,12 +351,16 @@ describeIf('contact recent history SQL (#1599)', () => {
     // The assistant turn is missing, and nothing about the block says so.
     expect(before.map(t => t.content)).toEqual(['and the appendix?']);
 
+    // Scoped to this test's conversation, never to database-wide totals: the
+    // backfill reads every unstamped email row in the database, so a row seeded
+    // by another file would make a summary assertion fail for unrelated reasons.
     const report = await runEmailSenderBackfill(pool, { dryRun: true });
     expect(report.applied).toBe(0);
-    expect(report.summary.rowsStampable).toBe(1);
+    expect(report.conversations.find(c => c.conversationId === 'email:crh-1599-old'))
+      .toMatchObject({ rows: 1, stamped: 1, status: 'complete' });
 
     const applied = await runEmailSenderBackfill(pool, { dryRun: false });
-    expect(applied.applied).toBe(1);
+    expect(applied.applied).toBeGreaterThanOrEqual(1);
     expect(applied.conversations.find(c => c.conversationId === 'email:crh-1599-old')?.status).toBe('complete');
 
     const after = await memory.getContactRecentHistory({
@@ -367,8 +371,55 @@ describeIf('contact recent history SQL (#1599)', () => {
     });
     expect(after.map(t => t.content)).toEqual(['and the appendix?', 'appendix attached']);
 
-    // Idempotent: a second run has nothing left to do.
-    expect((await runEmailSenderBackfill(pool, { dryRun: false })).applied).toBe(0);
+    // Idempotent: once stamped, the row is no longer a candidate at all, so the
+    // conversation drops out of the report entirely.
+    const rerun = await runEmailSenderBackfill(pool, { dryRun: false });
+    expect(rerun.conversations.find(c => c.conversationId === 'email:crh-1599-old')).toBeUndefined();
+  });
+
+  it('ignores a synthetic turn rather than reporting the thread as incomplete (#1892)', async () => {
+    // A brief Curia wrote to itself never matches an inbound audit row, so if it
+    // were in scope it would report as unresolved and mark this thread partial —
+    // even though the recall read already ignores it and treats the thread as
+    // private. The backfill has to agree with the reader about what counts.
+    const alice = await seedContact(pool, 'email-synthetic');
+    await pool.query(
+      `INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, source)
+       VALUES ($1, 'email', 'alice3@example.com', 'manual')`,
+      [alice],
+    );
+    const old = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const archivedBody = 'Subject: Q4 planning\n\nDraft attached.';
+
+    await pool.query(
+      `INSERT INTO audit_log (id, timestamp, event_type, source_layer, source_id, payload, conversation_id, target_id, initiator_id, action)
+       VALUES (gen_random_uuid(), $1, 'inbound.message', 'channel', 'email', $2::jsonb,
+               'email:crh-1599-old', 'email:crh-1599-old', 'alice3@example.com', 'receive')`,
+      [old, JSON.stringify({ conversationId: 'email:crh-1599-old', senderId: 'alice3@example.com', content: archivedBody })],
+    );
+    await pool.query(
+      `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id, synthetic)
+       VALUES
+         ('email:crh-1599-old', 'coordinator', 'user', $2, $3, true, NULL, NULL, false),
+         ('email:crh-1599-old', 'coordinator', 'user', $5, $3, true, NULL, NULL, true),
+         ('email:crh-1599-old', 'coordinator', 'user', 'any update?', $4, false, $1, 'email', false),
+         ('email:crh-1599-old', 'coordinator', 'assistant', 'sent it over', $4, false, NULL, 'email', false)`,
+      [alice, archivedBody, old, now, `${CONTENT_BLOCK_REWRITE_MARKER}\n\nYour previous reply was blocked.`],
+    );
+
+    const report = await runEmailSenderBackfill(pool, { dryRun: false });
+    const outcome = report.conversations.find(c => c.conversationId === 'email:crh-1599-old');
+    // One candidate row, not two: the synthetic turn is out of scope.
+    expect(outcome).toMatchObject({ rows: 1, stamped: 1, status: 'complete' });
+
+    const senders = await pool.query<{ synthetic: boolean; sender_contact_id: string | null }>(
+      `SELECT synthetic, sender_contact_id FROM working_memory
+       WHERE conversation_id = 'email:crh-1599-old' AND role = 'user' AND archived = true`,
+    );
+    const synthetic = senders.rows.find(r => r.synthetic);
+    expect(synthetic?.sender_contact_id).toBeNull();
+    expect(senders.rows.find(r => !r.synthetic)?.sender_contact_id).toBe(alice);
   });
 
   it('leaves a thread shared when one of its archived turns is from a non-contact (#1887)', async () => {

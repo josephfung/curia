@@ -452,7 +452,11 @@ class PostgresBackend implements StorageBackend {
         ],
       );
 
-      await this.logSharedExclusions(query);
+      // Deliberately not awaited: this is a log line, and voice runs this read
+      // under a history deadline (spec 01) — a second sequential round trip to
+      // say what was excluded must not be what makes the recall miss it.
+      // logSharedExclusions catches its own errors, so nothing can reject here.
+      void this.logSharedExclusions(query);
 
       return result.rows.map((row) => ({
         role: row.role as ContactRecentTurn['role'],
