@@ -40,6 +40,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ExecutionLayer.invoke`** — preserves handler-set `errorType` (unblocks `AUTH_FAILURE` / `IDENTITY_MISMATCH`). (#1854)
 - **Calendar tools (public API)** — `allowed_callers` now exclude the coordinator so discovery cannot re-open a direct path. (#1853)
 - **Coordinator outbound guidance** — absent block means withheld on non-principal turns, not empty. (#1848)
+- **`delegate` outputs (public API)** — `handle_status` and `handle_expires_at` time a queued retry. Skill v1.9.0. (#1893)
 - **`delegate` outputs (public API)** — `already_in_flight` adds `in_flight` and `open_handle_age_ms`. Skill v1.8.0. (#1858)
 - **`delegate` outputs (public API)** — `declined` marks a specialist refusal as distinct from an answer. Skill v1.7.0. (#1871)
 - **`delegate` outputs (public API)** — `resolvedContactIds` keeps contact IDs after output sanitization. Skill v1.6.0. (#1818)
@@ -63,6 +64,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Delegate dispatch claim** — overlapping calls before the wait expires start one run and queue the rest. (#1893)
+- **Deferred delegation** — a brief behind a pending handle waits until that handle can clear. (#1893)
 - **`delegate` (public API)** — open same-conversation handles return `already_in_flight` instead of a second run. (#1858)
 - **`delegate`** — an in-flight refusal no longer consumes a retryable attempt. (#1858)
 - **Scheduler** — a rejected fire reverts its row when the claim timestamp has microseconds. (#1160)

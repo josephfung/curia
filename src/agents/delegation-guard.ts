@@ -216,7 +216,13 @@ export interface DelegateFailureResult extends DelegationFailureInfo {
 export function parseDelegateInFlightData(
   data: unknown,
   logger?: Logger,
-): { agent: string; delegateEventId?: string } | null {
+): {
+  agent: string;
+  delegateEventId?: string;
+  /** Set when the handler saw the blocking row. A pending row outlives the delegate wait. */
+  handleStatus?: 'running' | 'pending';
+  handleExpiresAt?: Date;
+} | null {
   if (data === null || data === undefined) return null;
   let record: Record<string, unknown>;
   if (typeof data === 'string') {
@@ -237,9 +243,18 @@ export function parseDelegateInFlightData(
   if (record['in_flight'] !== true || record['reason'] !== ALREADY_IN_FLIGHT_REASON) return null;
   if (typeof record['agent'] !== 'string' || record['agent'] === '') return null;
   const delegateEventId = record['delegate_event_id'];
+  const handleStatus = record['handle_status'];
+  const rawExpires = record['handle_expires_at'];
+  let handleExpiresAt: Date | undefined;
+  if (typeof rawExpires === 'string') {
+    const parsed = new Date(rawExpires);
+    if (!Number.isNaN(parsed.getTime())) handleExpiresAt = parsed;
+  }
   return {
     agent: record['agent'],
     ...(typeof delegateEventId === 'string' && delegateEventId !== '' && { delegateEventId }),
+    ...(handleStatus === 'running' || handleStatus === 'pending' ? { handleStatus } : {}),
+    ...(handleExpiresAt !== undefined && { handleExpiresAt }),
   };
 }
 

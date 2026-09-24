@@ -2671,6 +2671,8 @@ async function main(): Promise<void> {
       // expected_duration_seconds when injecting delegate timeouts (#387).
       agentRegistry,
       defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
+      lateDeliveryTtlMinutes: lateDeliveryConfig.ttlMinutes,
+      lateDeliverySweepIntervalMinutes: lateDeliveryConfig.sweepIntervalMinutes,
       // Map YAML snake_case fields to AgentConfig camelCase, falling back to
       // DEFAULT_ERROR_BUDGET values for any omitted fields.
       errorBudget: agentConfig.error_budget ? {

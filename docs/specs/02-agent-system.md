@@ -116,9 +116,13 @@ Two further invariants govern the wake:
   (`delegate.lateDelivery.ttlMinutes`, default 60). A claimed or resolved handle does not
   block the next delegation. A brief that never dispatched — claim conflict,
   `already_in_flight`, or a later call skipped after escalation — is stored as a backlog
-  task that wakes the originating agent in the originating conversation. The wake is not
-  earlier than the wait the handler will use (`delegate.defaultTimeoutMs` when no
-  duration hint is injected). The task is closed when that wake is dispatched, so the
+  task that wakes the originating agent in the originating conversation. A brief
+  blocked by a `running` claim waits out that claim's delegate wait. A brief
+  blocked by a `pending` handle waits until that row's `expires_at` plus one sweep
+  interval — the wait is far shorter than the late-delivery TTL, and waking on it
+  burns the retry cap while the handle is still open. A later call skipped after
+  a timeout of the same specialist uses the expiry the timeout subscriber will
+  write. The task is closed when that wake is dispatched, so the
   heartbeat does not re-run the brief. A timeout is not queued again. Retries of one
   busy specialist are capped. A wake missing its channel or sender is not written.
   The result is not a failure, so a coordinator that ignores the prompt can call `delegate`

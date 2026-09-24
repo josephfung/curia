@@ -103,9 +103,12 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
       reason: ALREADY_IN_FLIGHT_REASON,
       retryable: false,
       delegate_event_id: hit.delegateEventId,
-      // Age of the row. A running claim starts at dispatch; a pending handle starts
-      // when the wait expires (or when that claim is promoted).
+      // Age of the row. A running claim starts at dispatch. A promoted pending
+      // handle keeps that created_at, so age is not how long the handle has left —
+      // handle_expires_at is.
       open_handle_age_ms: openHandleAgeMs(hit.createdAt),
+      ...(hit.status !== undefined && { handle_status: hit.status }),
+      ...(hit.expiresAt !== undefined && { handle_expires_at: hit.expiresAt.toISOString() }),
       // Principal-safe. Directives to the coordinator live in its prompt, not here —
       // the prompt tells the model this sentence is safe to relay.
       message: `Specialist '${agent}' is already working on an open request in this conversation.`,

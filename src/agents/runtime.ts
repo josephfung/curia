@@ -100,6 +100,7 @@ import { computeDelegateTimeoutMs } from './delegate-timeout.js';
 import {
   DEFAULT_DEFERRED_WAKE_MS,
   enqueueUndispatchedDelegation,
+  pendingHandleWakeDelayMs,
   readDelegationRetryAttempt,
 } from './deferred-delegation.js';
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
@@ -252,6 +253,13 @@ export interface AgentConfig {
    * did not inject a per-call wait. Same value the delegate handler uses.
    */
   defaultDelegateTimeoutMs?: number;
+  /**
+   * `delegate.lateDelivery.ttlMinutes` / `sweepIntervalMinutes`. A brief blocked
+   * by a pending handle waits out that handle, not the delegate wait. Defaults
+   * match `DEFAULT_LATE_DELIVERY_CONFIG` when a test omits them.
+   */
+  lateDeliveryTtlMinutes?: number;
+  lateDeliverySweepIntervalMinutes?: number;
   /**
    * Conversation-scoped contact IDs (#1818). When set, identities resolved by
    * a delegation are remembered and re-injected next turn from the current
@@ -1379,7 +1387,14 @@ export class AgentRuntime {
       : DEFAULT_DEFERRED_WAKE_MS;
     const waitByAgent = new Map<string, number>();
     const queuedUndispatchedBriefs = new Set<string>();
-    const queueUndispatchedDelegation = async (targetAgent: string, brief: string): Promise<void> => {
+    // Match DEFAULT_LATE_DELIVERY_CONFIG when a caller did not pass the deployment values.
+    const lateDeliveryTtlMinutes = this.config.lateDeliveryTtlMinutes ?? 60;
+    const lateDeliverySweepMs = (this.config.lateDeliverySweepIntervalMinutes ?? 5) * 60_000;
+    const queueUndispatchedDelegation = async (
+      targetAgent: string,
+      brief: string,
+      wakeDelayMs?: number,
+    ): Promise<void> => {
       if (targetAgent === '' || brief === '') return;
       const key = `${targetAgent}\0${brief}`;
       if (queuedUndispatchedBriefs.has(key)) return;
@@ -1388,6 +1403,9 @@ export class AgentRuntime {
       // A retry wake continues the chain for its specialist. A different specialist
       // on that turn starts at 1 — the cap is per busy specialist, not per turn.
       const attempt = prior.targetAgent === targetAgent ? prior.attempt + 1 : 1;
+      const delay = typeof wakeDelayMs === 'number' && Number.isFinite(wakeDelayMs) && wakeDelayMs > 0
+        ? wakeDelayMs
+        : (waitByAgent.get(targetAgent) ?? deferredWakeFloor);
       try {
         await enqueueUndispatchedDelegation({
           taskRepo: this.config.taskRepo,
@@ -1398,7 +1416,7 @@ export class AgentRuntime {
           originSenderId: taskEvent.payload.senderId,
           targetAgent,
           brief,
-          wakeAt: new Date(Date.now() + (waitByAgent.get(targetAgent) ?? deferredWakeFloor)),
+          wakeAt: new Date(Date.now() + delay),
           ...(originator !== undefined && { originator }),
           attempt,
         });
@@ -1679,7 +1697,23 @@ export class AgentRuntime {
               const skipped = toolCall.input as Record<string, unknown>;
               const skippedAgent = typeof skipped['agent'] === 'string' ? skipped['agent'].replace(/^@/, '') : '';
               const skippedTask = typeof skipped['task'] === 'string' ? skipped['task'] : '';
-              await queueUndispatchedDelegation(skippedAgent, skippedTask);
+              // A timeout promotes this specialist's claim to a pending handle that
+              // outlives the wait. A different specialist is not blocked by that row.
+              const blockedUntilLateDelivery = pendingDelegationEscalation.reason === 'timeout'
+                && pendingDelegationEscalation.possiblySucceeded === true
+                && skippedAgent === pendingDelegationEscalation.agent;
+              await queueUndispatchedDelegation(
+                skippedAgent,
+                skippedTask,
+                blockedUntilLateDelivery
+                  ? pendingHandleWakeDelayMs({
+                    now: Date.now(),
+                    ttlMinutes: lateDeliveryTtlMinutes,
+                    waitTimeoutMs: pendingDelegationEscalation.waitTimeoutMs,
+                    sweepIntervalMs: lateDeliverySweepMs,
+                  })
+                  : undefined,
+              );
             }
             return {
               content: 'Skipped — delegation failure escalation pending for this turn.',
@@ -2113,7 +2147,17 @@ export class AgentRuntime {
                   // delivery already wakes it.
                   const delegateInput = skillInput as Record<string, unknown>;
                   const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
-                  await queueUndispatchedDelegation(inFlight.agent, delegateTask);
+                  // A running claim ends with the wait. A pending handle does not:
+                  // waking on the wait burns the retry cap while the row is still open.
+                  const wakeDelayMs = inFlight.handleStatus === 'pending'
+                    ? pendingHandleWakeDelayMs({
+                      now: Date.now(),
+                      ...(inFlight.handleExpiresAt !== undefined && { expiresAt: inFlight.handleExpiresAt }),
+                      ttlMinutes: lateDeliveryTtlMinutes,
+                      sweepIntervalMs: lateDeliverySweepMs,
+                    })
+                    : undefined;
+                  await queueUndispatchedDelegation(inFlight.agent, delegateTask, wakeDelayMs);
                 }
                 const delegateFailure = parseDelegateFailureData(result.data, logger);
                 if (delegateFailure) {

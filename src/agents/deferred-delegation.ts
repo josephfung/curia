@@ -8,6 +8,7 @@
 import type { Logger } from '../logger.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { TaskOriginator } from '../contacts/types.js';
+import { computeLateDeliveryExpiry } from './late-delegation.js';
 
 /** How many times one busy specialist may re-queue the same chain. */
 export const MAX_DEFERRED_DELEGATION_ATTEMPTS = 3;
@@ -19,6 +20,32 @@ export const MAX_DEFERRED_DELEGATION_ATTEMPTS = 3;
  * that override.
  */
 export const DEFAULT_DEFERRED_WAKE_MS = 90_000;
+
+/**
+ * How long to wait before retrying a brief that a `pending` handle blocked.
+ *
+ * The handle stays until `expires_at`, and the sweep closes it on the following
+ * tick, so the delay is the time left plus one sweep interval. A timeout that
+ * has not written the row yet passes no `expiresAt`: the expiry is the one
+ * `LateDelegationSubscriber` will store (`max(ttl, 2 × wait)`). `created_at`
+ * is not a clock for this — a promoted row keeps the dispatch time, so
+ * ttl minus age wakes while the handle is still open.
+ */
+export function pendingHandleWakeDelayMs(params: {
+  now: number;
+  expiresAt?: Date;
+  ttlMinutes: number;
+  waitTimeoutMs?: number;
+  sweepIntervalMs: number;
+}): number {
+  const sweep = Number.isFinite(params.sweepIntervalMs) && params.sweepIntervalMs > 0
+    ? params.sweepIntervalMs
+    : 0;
+  const expiresAt = params.expiresAt !== undefined && !Number.isNaN(params.expiresAt.getTime())
+    ? params.expiresAt
+    : computeLateDeliveryExpiry(new Date(params.now), params.ttlMinutes, params.waitTimeoutMs);
+  return Math.max(0, expiresAt.getTime() - params.now) + sweep;
+}
 
 export interface DelegationRetryWake {
   conversationId: string;
