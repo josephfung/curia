@@ -1820,9 +1820,10 @@ describe('VoiceRuntime opening greeting (#1596)', () => {
     stt.emit({ text: VOICE_GREETING_USER_MESSAGE, isFinal: true, speechFinal: true });
     await runtime.awaitIdle('g4-said-cue');
 
-    const userWrite = addTurn.mock.calls.find((call) => call[2]?.role === 'user');
-    expect(userWrite?.[2]).toEqual({ role: 'user', content: VOICE_GREETING_USER_MESSAGE });
-    expect(userWrite?.[3]).toEqual({
+    expect(addTurn).toHaveBeenNthCalledWith(1, 'voice:g4-said-cue', 'coordinator', {
+      role: 'user',
+      content: VOICE_GREETING_USER_MESSAGE,
+    }, {
       senderContactId: '11111111-1111-1111-1111-111111111111',
       channelId: 'voice',
     });
