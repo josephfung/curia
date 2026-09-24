@@ -9,6 +9,7 @@ import { backfillDirectChannelSenders } from '../../src/memory/direct-sender-bac
 import { createLogger } from '../../src/logger.js';
 import { VOICE_GREETING_USER_MESSAGE } from '../../src/channels/voice/greeting.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
+import { runEmailSenderBackfill } from '../../scripts/backfill-email-senders.js';
 import {
   CONTENT_BLOCK_REWRITE_MARKER,
   HISTORICAL_SYNTHETIC_LIKE_PATTERNS,
@@ -305,6 +306,111 @@ describeIf('contact recent history SQL (#1599)', () => {
       expect((await pool.query(classify, [pattern])).rowCount).toBe(0);
     }
     expect((await pool.query(clear)).rowCount).toBe(0);
+  });
+
+  it('recovers an archived pre-090 email thread so Curia\'s replies come back (#1887)', async () => {
+    // The exact shape #1887 describes: a long-running email thread whose older
+    // user turns were archived by summarization and never stamped. The shared
+    // check has no archived filter and those rows never expire, so before the
+    // backfill this thread hides every assistant turn, permanently.
+    const alice = await seedContact(pool, 'email-backfill');
+    await pool.query(
+      `INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, source)
+       VALUES ($1, 'email', 'alice@example.com', 'manual')`,
+      [alice],
+    );
+    const old = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const replyAt = new Date(now.getTime() + 1000);
+    const archivedBody = 'Subject: Q3 board deck\n\nHere is the latest draft.';
+
+    // The audit row is the only surviving record of who sent the archived turn.
+    await pool.query(
+      `INSERT INTO audit_log (id, timestamp, event_type, source_layer, source_id, payload, conversation_id, target_id, initiator_id, action)
+       VALUES (gen_random_uuid(), $1, 'inbound.message', 'channel', 'email', $2::jsonb,
+               'email:crh-1599-old', 'email:crh-1599-old', 'alice@example.com', 'receive')`,
+      [old, JSON.stringify({ conversationId: 'email:crh-1599-old', senderId: 'alice@example.com', content: archivedBody })],
+    );
+
+    await pool.query(
+      `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id, synthetic)
+       VALUES
+         ('email:crh-1599-old', 'coordinator', 'user', $2, $3, true, NULL, NULL, false),
+         ('email:crh-1599-old', 'coordinator', 'user', 'and the appendix?', $4, false, $1, 'email', false),
+         ('email:crh-1599-old', 'coordinator', 'assistant', 'appendix attached', $5, false, NULL, 'email', false)`,
+      [alice, archivedBody, old, now, replyAt],
+    );
+
+    const since = new Date(Date.now() - 60 * 60 * 1000);
+    const before = await memory.getContactRecentHistory({
+      contactId: alice,
+      agentId: 'coordinator',
+      excludeConversationId: 'email:somewhere-else',
+      since,
+    });
+    // The assistant turn is missing, and nothing about the block says so.
+    expect(before.map(t => t.content)).toEqual(['and the appendix?']);
+
+    const report = await runEmailSenderBackfill(pool, { dryRun: true });
+    expect(report.applied).toBe(0);
+    expect(report.summary.rowsStampable).toBe(1);
+
+    const applied = await runEmailSenderBackfill(pool, { dryRun: false });
+    expect(applied.applied).toBe(1);
+    expect(applied.conversations.find(c => c.conversationId === 'email:crh-1599-old')?.status).toBe('complete');
+
+    const after = await memory.getContactRecentHistory({
+      contactId: alice,
+      agentId: 'coordinator',
+      excludeConversationId: 'email:somewhere-else',
+      since,
+    });
+    expect(after.map(t => t.content)).toEqual(['and the appendix?', 'appendix attached']);
+
+    // Idempotent: a second run has nothing left to do.
+    expect((await runEmailSenderBackfill(pool, { dryRun: false })).applied).toBe(0);
+  });
+
+  it('leaves a thread shared when one of its archived turns is from a non-contact (#1887)', async () => {
+    // The backfill is allowed to be incomplete; it is not allowed to be wrong.
+    // A real third party who is not a contact keeps the thread closed.
+    const alice = await seedContact(pool, 'email-mixed');
+    await pool.query(
+      `INSERT INTO contact_channel_identities (contact_id, channel, channel_identifier, source)
+       VALUES ($1, 'email', 'alice2@example.com', 'manual')`,
+      [alice],
+    );
+    const old = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const strangerBody = 'Subject: Q3 board deck\n\nLooping in legal.';
+
+    await pool.query(
+      `INSERT INTO audit_log (id, timestamp, event_type, source_layer, source_id, payload, conversation_id, target_id, initiator_id, action)
+       VALUES (gen_random_uuid(), $1, 'inbound.message', 'channel', 'email', $2::jsonb,
+               'email:crh-1599-old', 'email:crh-1599-old', 'stranger@example.com', 'receive')`,
+      [old, JSON.stringify({ conversationId: 'email:crh-1599-old', senderId: 'stranger@example.com', content: strangerBody })],
+    );
+    await pool.query(
+      `INSERT INTO working_memory (conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id, synthetic)
+       VALUES
+         ('email:crh-1599-old', 'coordinator', 'user', $2, $3, true, NULL, NULL, false),
+         ('email:crh-1599-old', 'coordinator', 'user', 'thanks', $4, false, $1, 'email', false),
+         ('email:crh-1599-old', 'coordinator', 'assistant', 'quoting the stranger', $4, false, NULL, 'email', false)`,
+      [alice, strangerBody, old, now],
+    );
+
+    const report = await runEmailSenderBackfill(pool, { dryRun: false });
+    const outcome = report.conversations.find(c => c.conversationId === 'email:crh-1599-old');
+    expect(outcome?.status).toBe('none');
+    expect(outcome?.unresolved[0]?.reason).toBe('sender-not-a-contact');
+
+    const after = await memory.getContactRecentHistory({
+      contactId: alice,
+      agentId: 'coordinator',
+      excludeConversationId: 'email:somewhere-else',
+      since: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    expect(after.map(t => t.content)).toEqual(['thanks']);
   });
 
   it('plans the widest window on idx_wm_sender_active with a created_at bound', async () => {
