@@ -799,7 +799,10 @@ export class Scheduler {
     //
     // rowCount is typed number|null by pg; null must be treated the same as 0 —
     // both mean 0 rows updated, i.e. another poller already claimed the job.
-    let claimResult: { rowCount: number | null };
+    let claimResult: {
+      rowCount: number | null;
+      rows?: ReadonlyArray<{ run_started_at?: Date | string | null }>;
+    };
     if (job.cronExpr) {
       // Compute next_run_at before the claim UPDATE so it can be written atomically.
       // nextRunFromCron() can throw on a corrupt cron expression (e.g. direct DB insert
@@ -869,7 +872,8 @@ export class Scheduler {
             AND status IN ('pending', 'failed')
             AND cron_expr = $4
             AND timezone = $5
-            AND next_run_at <= now()`,
+            AND next_run_at <= now()
+          RETURNING run_started_at`,
         ['running', job.id, nextRunAt, job.cronExpr, job.timezone],
       );
     } else {
@@ -879,7 +883,8 @@ export class Scheduler {
                 run_started_at = now(),
                 last_run_summary = NULL
           WHERE id = $2
-            AND status IN ('pending', 'failed')`,
+            AND status IN ('pending', 'failed')
+          RETURNING run_started_at`,
         ['running', job.id],
       );
     }
@@ -899,6 +904,20 @@ export class Scheduler {
     // Treat it as 0 but log at warn so it's visible in production.
     if (claimResult.rowCount === null) {
       this.logger.warn({ jobId: job.id }, 'Claim UPDATE returned null rowCount — treating as already claimed, skipping fire');
+      return 'skipped';
+    }
+    // The value the claim wrote. A later revert matches this exact timestamp so
+    // it cannot undo a newer run of the same job (#1160). pg returns timestamptz
+    // as a Date; pass that value back unchanged.
+    const runStartedAt = claimResult.rows?.[0]?.run_started_at ?? null;
+    if (runStartedAt == null) {
+      this.logger.error(
+        { jobId: job.id },
+        'Claim UPDATE returned no run_started_at — reverting without dispatch',
+      );
+      // No task event exists yet, so the unscoped revert is the one that just
+      // claimed this row. Dispatch has not started.
+      await this.revertFailedFire(job.id, new Error('claim returned no run_started_at'));
       return 'skipped';
     }
 
@@ -1038,7 +1057,7 @@ export class Scheduler {
     // agent.response before publish() returns. Setting the entry after that
     // would make handleCompletion see an empty map and drop the completion.
     this.pendingJobs.set(taskEvent.id, job.id);
-    this.dispatchPublish(job, firedEvent, taskEvent);
+    this.dispatchPublish(job, firedEvent, taskEvent, runStartedAt);
     return 'dispatched';
   }
 
@@ -1050,7 +1069,12 @@ export class Scheduler {
    * releases only the slot. The agent run keeps going, and recoverStuckJobs
    * remains responsible for the row.
    */
-  private dispatchPublish(job: JobRow, firedEvent: ScheduleFiredEvent, taskEvent: AgentTaskEvent): void {
+  private dispatchPublish(
+    job: JobRow,
+    firedEvent: ScheduleFiredEvent,
+    taskEvent: AgentTaskEvent,
+    runStartedAt: Date | string,
+  ): void {
     const timeoutMs = this.slotTimeoutMs(job);
     let slotHeld = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1079,7 +1103,10 @@ export class Scheduler {
     timer.unref();
 
     const run = this.publishFire(job, firedEvent, taskEvent)
-      .catch((err: unknown) => this.revertFailedFire(job.id, err))
+      .catch((err: unknown) => this.revertFailedFire(job.id, err, {
+        taskEventId: taskEvent.id,
+        runStartedAt,
+      }))
       .catch((err: unknown) => {
         this.logger.error({ err, jobId: job.id }, 'Revert after failed fire threw');
       })
@@ -1115,13 +1142,47 @@ export class Scheduler {
   }
 
   /**
-   * Undo a claim that never became a running agent. Clears any pendingJobs
-   * entry so a late agent.response cannot complete a job we just un-claimed.
-   * The UPDATE matches only status='running', so a job that was never claimed
-   * (or already completed) is left alone.
+   * Undo a claim that never became a running agent.
+   *
+   * The detached path passes the task event and the `run_started_at` the claim
+   * returned. Only that map entry is removed, and the UPDATE matches that
+   * timestamp. After the slot timeout the original publish can still reject,
+   * by which point the watchdog may have reset the row and a later poll claimed
+   * it again. A revert keyed only on job id would drop the newer pendingJobs
+   * entry and set that newer row back to pending.
+   *
+   * The poll catch (claim or payload build threw before a task event existed)
+   * omits the generation. Nothing has been handed off, so there is no newer
+   * run to protect. The UPDATE still matches only status='running'.
+   *
+   * The map check and the UPDATE are independent. A missing map entry does not
+   * skip the UPDATE: completion may have dropped the entry while this
+   * generation's row is still running, and the timestamp predicate is what
+   * keeps a newer run untouched.
    */
-  private async revertFailedFire(jobId: string, err: unknown): Promise<void> {
+  private async revertFailedFire(
+    jobId: string,
+    err: unknown,
+    generation?: { taskEventId: string; runStartedAt: Date | string },
+  ): Promise<void> {
     this.logger.error({ err, jobId }, 'Failed to fire job — reverting to pending for retry');
+    if (generation) {
+      if (this.pendingJobs.get(generation.taskEventId) === jobId) {
+        this.pendingJobs.delete(generation.taskEventId);
+        this.pendingFailureMessages.delete(generation.taskEventId);
+      }
+      await this.pool.query(
+        `UPDATE scheduled_jobs
+            SET status = 'pending'
+          WHERE id = $1
+            AND status = 'running'
+            AND run_started_at = $2`,
+        [jobId, generation.runStartedAt],
+      ).catch((revertErr: unknown) => {
+        this.logger.error({ revertErr, jobId }, 'Failed to revert job status after fire failure — job may be stuck in running');
+      });
+      return;
+    }
     for (const [eventId, pendingJobId] of this.pendingJobs) {
       if (pendingJobId === jobId) {
         this.pendingJobs.delete(eventId);

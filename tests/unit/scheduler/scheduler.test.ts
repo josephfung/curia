@@ -95,6 +95,13 @@ function drainInFlight(s: Scheduler): Promise<void> {
   return s.drainInFlight();
 }
 
+/** Timestamp a successful claim UPDATE returns via RETURNING run_started_at. */
+const CLAIMED_AT = new Date('2026-09-24T12:00:00.000Z');
+
+function claimed(runStartedAt: Date | string = CLAIMED_AT) {
+  return { rowCount: 1, rows: [{ run_started_at: runStartedAt }] };
+}
+
 describe('Scheduler', () => {
   let pool: ReturnType<typeof mockPool>;
   let bus: ReturnType<typeof mockBus>;
@@ -248,7 +255,7 @@ describe('Scheduler', () => {
       // First call: SELECT due jobs
       pool.query.mockResolvedValueOnce({ rows: [row] });
       // Second call: UPDATE status to running
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -281,7 +288,7 @@ describe('Scheduler', () => {
         progress: { step: 3 },
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+      pool.query.mockResolvedValueOnce(claimed()); // claim
 
       await scheduler.pollDueJobs();
 
@@ -296,7 +303,7 @@ describe('Scheduler', () => {
         progress: { step: 3 },
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -310,7 +317,7 @@ describe('Scheduler', () => {
     it('does not pass intentAnchor for jobs without a linked agent_task', async () => {
       const row = fakeDbRow(); // no agent_task_id
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -321,7 +328,7 @@ describe('Scheduler', () => {
     it('forwards expectedDurationSeconds in agent.task payload when set on the job', async () => {
       const row = fakeDbRow({ expected_duration_seconds: 300 });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -332,7 +339,7 @@ describe('Scheduler', () => {
     it('omits expectedDurationSeconds from agent.task payload when null on the job', async () => {
       const row = fakeDbRow({ expected_duration_seconds: null });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -352,12 +359,13 @@ describe('Scheduler', () => {
     it('sets run_started_at when claiming a job', async () => {
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });       // SELECT due jobs
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // UPDATE claim
+      pool.query.mockResolvedValueOnce(claimed()); // UPDATE claim
 
       await scheduler.pollDueJobs();
 
       const [claimSql, claimParams] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(claimSql).toContain('run_started_at');
+      expect(claimSql).toContain('RETURNING run_started_at');
       expect(claimSql).toContain('now()');
       expect(claimParams).toContain('job-1');
     });
@@ -462,7 +470,7 @@ describe('Scheduler', () => {
       schedulerService.nextRunFromCron.mockReturnValueOnce(nextRun);
 
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -491,7 +499,7 @@ describe('Scheduler', () => {
       schedulerService.nextRunFromCron.mockReturnValueOnce(new Date('2026-06-25T09:00:00.000Z'));
 
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -512,7 +520,7 @@ describe('Scheduler', () => {
       schedulerService.nextRunFromCron.mockReturnValueOnce(new Date('2026-06-25T09:00:00.000Z'));
 
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -530,7 +538,7 @@ describe('Scheduler', () => {
       });
 
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -544,7 +552,7 @@ describe('Scheduler', () => {
       const row = fakeDbRow({ cron_expr: null, run_at: new Date('2026-06-24T09:00:00.000Z').toISOString() });
 
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -570,7 +578,7 @@ describe('Scheduler', () => {
             last_run_outcome: null, last_run_summary: null, last_run_context: null,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 }); // claim update
+        .mockResolvedValueOnce(claimed()); // claim update
 
       bus.publish.mockResolvedValue(undefined);
       bus.publish.mockImplementation((_layer: unknown, event: { id: string; type: string }) => {
@@ -606,7 +614,7 @@ describe('Scheduler', () => {
             last_run_context: { events_sent: 6 },
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -646,7 +654,7 @@ describe('Scheduler', () => {
             },
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -691,7 +699,7 @@ describe('Scheduler', () => {
             last_run_context: hugeContext,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -763,7 +771,7 @@ describe('Scheduler', () => {
             last_run_outcome: 'completed', last_run_summary: null, last_run_context: manyKeys,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -814,7 +822,7 @@ describe('Scheduler', () => {
             last_run_context: oversized as unknown as Record<string, unknown>,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -863,7 +871,7 @@ describe('Scheduler', () => {
             last_run_context: stored as unknown as Record<string, unknown>,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -893,7 +901,7 @@ describe('Scheduler', () => {
             last_run_outcome: 'completed', last_run_summary: 'done', last_run_context: null,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -931,7 +939,7 @@ describe('Scheduler', () => {
             last_run_outcome: 'completed', last_run_summary: null, last_run_context: colliding,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -980,7 +988,7 @@ describe('Scheduler', () => {
             last_run_outcome: 'completed', last_run_summary: null, last_run_context: withOwnProto,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -1019,7 +1027,7 @@ describe('Scheduler', () => {
             last_run_context: { events_sent: 6 },
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -1053,7 +1061,7 @@ describe('Scheduler', () => {
             last_run_outcome: null, last_run_summary: null, last_run_context: null,
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1 });
+        .mockResolvedValueOnce(claimed());
 
       bus.publish.mockImplementation((_layer: unknown, event: { type: string; payload?: unknown }) => {
         if (event.type === 'agent.task') Object.assign(taskEvent, event);
@@ -1080,7 +1088,7 @@ describe('Scheduler', () => {
         progress: { notes: [] },
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -1097,7 +1105,7 @@ describe('Scheduler', () => {
         task_payload: { type: 'task-wake' },
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -1120,7 +1128,7 @@ describe('Scheduler', () => {
         progress: { notes: [] },
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -1138,7 +1146,7 @@ describe('Scheduler', () => {
         task_payload: { skill: 'morning-brief' },
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -1164,7 +1172,7 @@ describe('Scheduler', () => {
       };
       const row = fakeDbRow({ originator });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+      pool.query.mockResolvedValueOnce(claimed()); // claim
 
       await scheduler.pollDueJobs();
 
@@ -1175,7 +1183,7 @@ describe('Scheduler', () => {
     it('omits metadata from fired agent.task when job has no originator', async () => {
       const row = fakeDbRow({ originator: null });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+      pool.query.mockResolvedValueOnce(claimed()); // claim
 
       await scheduler.pollDueJobs();
 
@@ -1191,7 +1199,7 @@ describe('Scheduler', () => {
         progress: { resumable: { cursor: null, done: 5, total: 100, accumulator: [], lastSliceUnits: 5, next: 'Continue' } },
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+      pool.query.mockResolvedValueOnce(claimed()); // claim
 
       await scheduler.pollDueJobs();
 
@@ -1217,7 +1225,7 @@ describe('Scheduler', () => {
       const originator = { contactId: 'system', systemRole: 'system', channel: 'declarative', initiatedAt: '2026-06-23T00:00:00.000Z' };
       const row = fakeDbRow({ originator, task_payload: { type: 'task-wake', task_id: 't9', standing: { derived: true } } });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+      pool.query.mockResolvedValueOnce(claimed()); // claim
 
       await scheduler.pollDueJobs();
 
@@ -1231,7 +1239,7 @@ describe('Scheduler', () => {
       // it must still be marked woken so the execution layer applies the ladder / fail-closed path.
       const row = fakeDbRow({ originator: null, task_payload: { type: 'task-wake', task_id: 't0', standing: { derived: false } } });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+      pool.query.mockResolvedValueOnce(claimed()); // claim
 
       await scheduler.pollDueJobs();
 
@@ -1245,7 +1253,7 @@ describe('Scheduler', () => {
       // — intentionally out of scope for the ladder, so it must NOT be marked woken.
       const row = fakeDbRow({ originator: null, task_payload: { type: 'task-wake', task_id: 't1' } });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+      pool.query.mockResolvedValueOnce(claimed()); // claim
 
       await scheduler.pollDueJobs();
 
@@ -1258,7 +1266,7 @@ describe('Scheduler', () => {
       // Default fakeDbRow task_payload is { skill: 'morning-brief' } — a specific scheduled action, not a heartbeat wake.
       const row = fakeDbRow({ originator });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] }); // claim
+      pool.query.mockResolvedValueOnce(claimed()); // claim
 
       await scheduler.pollDueJobs();
 
@@ -1275,7 +1283,7 @@ describe('Scheduler', () => {
       // Set up: fire a job first so the pendingJobs map has an entry
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -1307,7 +1315,7 @@ describe('Scheduler', () => {
     it('threads failedSkills from agent.response into completeJobRun (#1830)', async () => {
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -1348,7 +1356,7 @@ describe('Scheduler', () => {
     it('passes auto-summary truncated to 500 chars on agent.response', async () => {
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -1378,7 +1386,7 @@ describe('Scheduler', () => {
       // Set up: fire a job
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -1433,7 +1441,7 @@ describe('Scheduler', () => {
     it('persists failedSkills on a failed run from agent.response(isError) (#1830)', async () => {
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
       await scheduler.pollDueJobs();
 
       const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
@@ -1490,7 +1498,7 @@ describe('Scheduler', () => {
     it('does not double-complete when both agent.error and agent.response(isError) are published', async () => {
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
       await scheduler.pollDueJobs();
 
       const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
@@ -1544,7 +1552,7 @@ describe('Scheduler', () => {
     it('completes on unpaired agent.response(isError) using content, and warns (#1830)', async () => {
       const row = fakeDbRow();
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
       await scheduler.pollDueJobs();
 
       const [, taskEvent] = bus.publish.mock.calls[1] as [string, { id: string }];
@@ -1647,7 +1655,7 @@ describe('Scheduler', () => {
     it('runs drift check and calls completeJobRun when no drift detected', async () => {
       // Fire the job to populate pendingJobs
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -1690,7 +1698,7 @@ describe('Scheduler', () => {
 
     it('pauses job, publishes drift event, notifies coordinator, and skips completeJobRun when drift detected', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -1741,7 +1749,7 @@ describe('Scheduler', () => {
 
     it('calls completeJobRun when drift detected but below confidence threshold', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -1780,7 +1788,7 @@ describe('Scheduler', () => {
     // feed the drift detector a null "last run" section. Fall back to this run's autoSummary.
     it('passes in-flight autoSummary to drift check when last_run_summary is null (#1829)', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -1821,7 +1829,7 @@ describe('Scheduler', () => {
 
     it('prefers an explicit scheduler-report over autoSummary for the drift check (#1829)', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -1859,7 +1867,7 @@ describe('Scheduler', () => {
 
     it('calls completeJobRun normally when drift check returns null (skipped)', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -1897,7 +1905,7 @@ describe('Scheduler', () => {
       // Non-persistent job (no agent_task_id)
       const simpleRow = fakeDbRow({ agent_task_id: null, intent_anchor: null });
       driftPool.query.mockResolvedValueOnce({ rows: [simpleRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -1937,7 +1945,7 @@ describe('Scheduler', () => {
     // The drift check must be skipped entirely for these jobs, and the job completed normally.
     it('skips drift check for task-wake envelope payloads and completes normally', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -1986,7 +1994,7 @@ describe('Scheduler', () => {
     // stranding the run in 'running' until watchdog recovery (#1086 review).
     it('does not throw when taskPayload is null; job still completes', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -2025,7 +2033,7 @@ describe('Scheduler', () => {
     // must NOT carry the re-executable intent or payload.
     it('drift-pause notification is review-only and carries no re-executable intent', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -2081,7 +2089,7 @@ describe('Scheduler', () => {
     // cannot reintroduce the actionable-instruction failure mode this PR closes (#1064).
     it('collapses a multi-line drift reason to a single line in the notification', async () => {
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -2141,7 +2149,7 @@ describe('Scheduler', () => {
         task_payload: { skill: 'web-search', query: 'report' },
       });
       driftPool.query.mockResolvedValueOnce({ rows: [oneShotRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -2179,7 +2187,7 @@ describe('Scheduler', () => {
       // A recurring job's counter drives checkEveryNBursts and MUST persist between
       // runs — the one-shot eviction must not touch it.
       driftPool.query.mockResolvedValueOnce({ rows: [persistentRow] });
-      driftPool.query.mockResolvedValueOnce({ rows: [] });
+      driftPool.query.mockResolvedValueOnce(claimed());
       await driftScheduler.pollDueJobs();
       const [, taskEvent] = driftBus.publish.mock.calls[1] as [string, { id: string }];
 
@@ -2868,7 +2876,7 @@ describe('Scheduler', () => {
         return Promise.resolve();
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -2906,7 +2914,7 @@ describe('Scheduler', () => {
         if (sql.includes('LIMIT')) {
           return Promise.resolve({ rows, rowCount: 1 });
         }
-        return Promise.resolve({ rows: [], rowCount: 1 });
+        return Promise.resolve(claimed());
       });
 
       await scheduler.pollDueJobs();
@@ -2955,7 +2963,7 @@ describe('Scheduler', () => {
       });
 
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
       await scheduler.pollDueJobs();
       expect(agentTaskPublishes()).toBe(1);
 
@@ -2979,8 +2987,8 @@ describe('Scheduler', () => {
       const row = fakeDbRow();
       pool.query
         .mockResolvedValueOnce({ rows: [row] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
-        .mockResolvedValue({ rowCount: 1, rows: [] });
+        .mockResolvedValueOnce(claimed())
+        .mockResolvedValue(claimed());
       bus.publish.mockRejectedValueOnce(new Error('audit hook failed'));
 
       await scheduler.pollDueJobs();
@@ -2989,7 +2997,8 @@ describe('Scheduler', () => {
       expect(pendingJobs(scheduler).size).toBe(0);
       expect(inFlightOf(scheduler)).toBe(0);
       const revert = pool.query.mock.calls.find((call) => String(call[0]).includes("status = 'pending'"));
-      expect(revert?.[1]).toEqual(['job-1']);
+      expect(String(revert?.[0])).toContain('run_started_at = $2');
+      expect(revert?.[1]).toEqual(['job-1', CLAIMED_AT]);
       expect(logger.error).toHaveBeenCalledWith(
         expect.objectContaining({ jobId: 'job-1', err: expect.any(Error) }),
         'Failed to fire job — reverting to pending for retry',
@@ -3001,7 +3010,7 @@ describe('Scheduler', () => {
       pool.query
         .mockResolvedValueOnce({ rows: [row] })
         .mockRejectedValueOnce(new Error('claim failed'))
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+        .mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
 
@@ -3009,6 +3018,7 @@ describe('Scheduler', () => {
       expect(pendingJobs(scheduler).size).toBe(0);
       expect(inFlightOf(scheduler)).toBe(0);
       const revert = pool.query.mock.calls.find((call) => String(call[0]).includes("status = 'pending'"));
+      expect(String(revert?.[0])).not.toContain('run_started_at');
       expect(revert?.[1]).toEqual(['job-1']);
     });
 
@@ -3020,7 +3030,7 @@ describe('Scheduler', () => {
         return Promise.resolve();
       });
       pool.query.mockResolvedValueOnce({ rows: [row] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
 
       await scheduler.pollDueJobs();
       expect(inFlightOf(scheduler)).toBe(1);
@@ -3037,17 +3047,67 @@ describe('Scheduler', () => {
       // The slot is free, so a later poll can claim another job while the first
       // publish is still pending.
       pool.query.mockResolvedValueOnce({ rows: [fakeDbRow({ id: 'job-2' })] });
-      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      pool.query.mockResolvedValueOnce(claimed());
       await scheduler.pollDueJobs();
       expect(inFlightOf(scheduler)).toBe(1);
       expect(agentTaskPublishes()).toBe(2);
+    });
+
+    it('does not revert a newer claim when an older publish rejects', async () => {
+      const firstStarted = new Date('2026-09-24T12:00:00.000Z');
+      const secondStarted = new Date('2026-09-24T12:30:00.000Z');
+      const row = fakeDbRow({ expected_duration_seconds: 60 });
+      let rejectFirst: (err: Error) => void = () => {};
+      const firstPublish = new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
+      let agentTasks = 0;
+      bus.publish.mockImplementation((_layer: unknown, event: { type: string }) => {
+        if (event.type !== 'agent.task') return Promise.resolve();
+        agentTasks += 1;
+        if (agentTasks === 1) return firstPublish;
+        return Promise.resolve();
+      });
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed(firstStarted));
+      pool.query.mockResolvedValueOnce({ rows: [fakeDbRow({ id: 'job-1', expected_duration_seconds: 60 })] });
+      pool.query.mockResolvedValueOnce(claimed(secondStarted));
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+      await scheduler.pollDueJobs();
+      const firstEventId = [...pendingJobs(scheduler).keys()][0]!;
+      expect(pendingJobs(scheduler).get(firstEventId)).toBe('job-1');
+
+      // Slot timeout frees the slot while the original publish is still pending.
+      // The original map entry is already gone — completion or another cleanup
+      // dropped it — so a revert that scans by job id would hit the newer run.
+      await vi.advanceTimersByTimeAsync(computeRecoveryTimeout(60) * 1000);
+      expect(inFlightOf(scheduler)).toBe(0);
+      pendingJobs(scheduler).delete(firstEventId);
+
+      await scheduler.pollDueJobs();
+      const newer = [...pendingJobs(scheduler).entries()];
+      expect(newer).toHaveLength(1);
+      const [newerEventId] = newer[0]!;
+      expect(newerEventId).not.toBe(firstEventId);
+
+      const callsBeforeReject = pool.query.mock.calls.length;
+      rejectFirst(new Error('audit hook failed'));
+      await drainInFlight(scheduler);
+
+      expect(pendingJobs(scheduler).get(newerEventId)).toBe('job-1');
+      const revert = pool.query.mock.calls.slice(callsBeforeReject).find((call) =>
+        String(call[0]).includes("status = 'pending'"),
+      );
+      expect(String(revert?.[0])).toContain('run_started_at = $2');
+      expect(revert?.[1]).toEqual(['job-1', firstStarted]);
     });
 
     it('logs and still releases the slot when reverting a failed fire throws', async () => {
       const row = fakeDbRow();
       pool.query
         .mockResolvedValueOnce({ rows: [row] })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValueOnce(claimed())
         .mockImplementationOnce(() => {
           throw new Error('pool closed');
         });
