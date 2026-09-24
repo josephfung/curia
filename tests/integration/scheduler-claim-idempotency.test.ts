@@ -150,4 +150,37 @@ describeIf('Scheduler cron claim idempotency (#1159)', () => {
       await scheduler.drainInFlight();
     }
   });
+
+  it('reverts a rejected publish when the claim timestamp has microseconds', async () => {
+    const pastDue = new Date(Date.now() - 60_000).toISOString();
+    const insert = await pool.query(
+      `INSERT INTO scheduled_jobs
+         (agent_id, source_agent_id, run_at, task_payload, status, next_run_at, created_by, timezone)
+       VALUES ($1, $1, $2, $3, 'pending', $2, 'system', 'UTC')
+       RETURNING id`,
+      [AGENT_ID, pastDue, JSON.stringify({ task: 'send digest' })],
+    );
+    const jobId = insert.rows[0]!.id as string;
+
+    // onEvent runs before subscribers and rejects publish. A Date round-trip of
+    // run_started_at drops microseconds, so the revert predicate would miss.
+    const rejectingBus = new EventBus(logger as never, async () => {
+      throw new Error('audit hook failed');
+    });
+    const local = new Scheduler({
+      pool,
+      bus: rejectingBus,
+      logger: logger as never,
+      schedulerService,
+    });
+
+    await local.pollDueJobs();
+    await local.drainInFlight();
+
+    const after = await pool.query(
+      `SELECT status FROM scheduled_jobs WHERE id = $1`,
+      [jobId],
+    );
+    expect(after.rows[0]!.status).toBe('pending');
+  });
 });

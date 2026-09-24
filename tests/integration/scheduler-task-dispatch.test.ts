@@ -12,7 +12,7 @@ import { Scheduler } from '../../src/scheduler/scheduler.js';
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
 import { createLogger } from '../../src/logger.js';
 
-const CLAIMED_AT = new Date('2026-09-24T12:00:00.000Z');
+const CLAIMED_AT = '2026-09-24 12:00:00.123456+00';
 
 const MOCK_PROVENANCE = {
   requestedModel: 'mock-model',

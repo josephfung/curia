@@ -95,10 +95,10 @@ function drainInFlight(s: Scheduler): Promise<void> {
   return s.drainInFlight();
 }
 
-/** Timestamp a successful claim UPDATE returns via RETURNING run_started_at. */
-const CLAIMED_AT = new Date('2026-09-24T12:00:00.000Z');
+/** Text form of timestamptz, including microseconds, as `run_started_at::text` returns it. */
+const CLAIMED_AT = '2026-09-24 12:00:00.123456+00';
 
-function claimed(runStartedAt: Date | string = CLAIMED_AT) {
+function claimed(runStartedAt: string = CLAIMED_AT) {
   return { rowCount: 1, rows: [{ run_started_at: runStartedAt }] };
 }
 
@@ -365,7 +365,7 @@ describe('Scheduler', () => {
 
       const [claimSql, claimParams] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(claimSql).toContain('run_started_at');
-      expect(claimSql).toContain('RETURNING run_started_at');
+      expect(claimSql).toContain('RETURNING run_started_at::text');
       expect(claimSql).toContain('now()');
       expect(claimParams).toContain('job-1');
     });
@@ -546,6 +546,7 @@ describe('Scheduler', () => {
       expect(claimSql).toContain('last_run_summary = NULL');
       expect(claimSql).not.toContain('last_run_context');
       expect(claimSql).not.toContain('next_run_at');
+      expect(claimSql).toContain('RETURNING run_started_at::text');
     });
 
     it('does not include next_run_at in claim UPDATE for one-shot jobs', async () => {
@@ -2997,7 +2998,7 @@ describe('Scheduler', () => {
       expect(pendingJobs(scheduler).size).toBe(0);
       expect(inFlightOf(scheduler)).toBe(0);
       const revert = pool.query.mock.calls.find((call) => String(call[0]).includes("status = 'pending'"));
-      expect(String(revert?.[0])).toContain('run_started_at = $2');
+      expect(String(revert?.[0])).toContain('run_started_at = $2::timestamptz');
       expect(revert?.[1]).toEqual(['job-1', CLAIMED_AT]);
       expect(logger.error).toHaveBeenCalledWith(
         expect.objectContaining({ jobId: 'job-1', err: expect.any(Error) }),
@@ -3054,8 +3055,8 @@ describe('Scheduler', () => {
     });
 
     it('does not revert a newer claim when an older publish rejects', async () => {
-      const firstStarted = new Date('2026-09-24T12:00:00.000Z');
-      const secondStarted = new Date('2026-09-24T12:30:00.000Z');
+      const firstStarted = '2026-09-24 12:00:00.123456+00';
+      const secondStarted = '2026-09-24 12:30:00.654321+00';
       const row = fakeDbRow({ expected_duration_seconds: 60 });
       let rejectFirst: (err: Error) => void = () => {};
       const firstPublish = new Promise<void>((_resolve, reject) => {
@@ -3099,7 +3100,7 @@ describe('Scheduler', () => {
       const revert = pool.query.mock.calls.slice(callsBeforeReject).find((call) =>
         String(call[0]).includes("status = 'pending'"),
       );
-      expect(String(revert?.[0])).toContain('run_started_at = $2');
+      expect(String(revert?.[0])).toContain('run_started_at = $2::timestamptz');
       expect(revert?.[1]).toEqual(['job-1', firstStarted]);
     });
 
