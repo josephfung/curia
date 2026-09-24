@@ -98,6 +98,8 @@ async function runTurn(opts: {
   invoke: ExecutionLayer['invoke'];
   metadata?: Record<string, unknown>;
   defaultDelegateTimeoutMs?: number;
+  lateDeliveryTtlMinutes?: number;
+  lateDeliverySweepIntervalMinutes?: number;
   agentRegistry?: AgentRegistry;
 }): Promise<{ createTask: ReturnType<typeof vi.fn> }> {
   const logger = createLogger('error');
@@ -117,6 +119,12 @@ async function runTurn(opts: {
     skillToolDefs: [DELEGATE_TOOL],
     ...(opts.defaultDelegateTimeoutMs !== undefined && {
       defaultDelegateTimeoutMs: opts.defaultDelegateTimeoutMs,
+    }),
+    ...(opts.lateDeliveryTtlMinutes !== undefined && {
+      lateDeliveryTtlMinutes: opts.lateDeliveryTtlMinutes,
+    }),
+    ...(opts.lateDeliverySweepIntervalMinutes !== undefined && {
+      lateDeliverySweepIntervalMinutes: opts.lateDeliverySweepIntervalMinutes,
     }),
     ...(opts.agentRegistry !== undefined && { agentRegistry: opts.agentRegistry }),
   });
@@ -235,5 +243,60 @@ describe('runtime deferred delegation (#1893)', () => {
     expect(params.description).toBe('Reserve the room');
     expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 240_000);
     expect(params.wakeAt.getTime()).toBeLessThan(before + 240_000 + 5_000);
+  });
+
+  it('wakes a pending-handle block after the handle expires, not on the delegate wait', async () => {
+    const before = Date.now();
+    const expiresAt = new Date(before + 50 * 60_000);
+    const { createTask } = await runTurn({
+      toolCalls: [{ id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Reserve the room' } }],
+      invoke: async () => ({
+        success: true,
+        data: {
+          agent: 'calendar',
+          in_flight: true,
+          blocked: true,
+          reason: 'already_in_flight',
+          retryable: false,
+          delegate_event_id: 'delegate-open',
+          open_handle_age_ms: 10 * 60_000,
+          handle_status: 'pending',
+          handle_expires_at: expiresAt.toISOString(),
+          message: "Specialist 'calendar' is already working on an open request in this conversation.",
+        },
+      }),
+      defaultDelegateTimeoutMs: 240_000,
+      lateDeliveryTtlMinutes: 60,
+      lateDeliverySweepIntervalMinutes: 5,
+    });
+
+    const params = createTask.mock.calls[0]![0] as { wakeAt: Date };
+    const expected = expiresAt.getTime() + 5 * 60_000;
+    expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(expected - 1_000);
+    expect(params.wakeAt.getTime()).toBeLessThan(expected + 5_000);
+    expect(params.wakeAt.getTime()).toBeGreaterThan(before + 240_000);
+  });
+
+  it('wakes a same-specialist skip after the late-delivery window, not the delegate wait', async () => {
+    const before = Date.now();
+    const { createTask } = await runTurn({
+      toolCalls: [
+        { id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Reserve the first room' } },
+        { id: 'call-2', name: 'delegate', input: { agent: 'calendar', task: 'Reserve the second room' } },
+      ],
+      invoke: async (name) => {
+        if (name === 'task-create') return { success: true, data: { task_id: 'review-1' } };
+        return timeoutData('calendar');
+      },
+      defaultDelegateTimeoutMs: 240_000,
+      lateDeliveryTtlMinutes: 60,
+      lateDeliverySweepIntervalMinutes: 5,
+    });
+
+    expect(createTask).toHaveBeenCalledOnce();
+    const params = createTask.mock.calls[0]![0] as { description: string; wakeAt: Date };
+    expect(params.description).toBe('Reserve the second room');
+    expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 65 * 60_000 - 1_000);
+    expect(params.wakeAt.getTime()).toBeLessThan(before + 65 * 60_000 + 5_000);
   });
 });

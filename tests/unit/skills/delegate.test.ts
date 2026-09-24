@@ -801,6 +801,8 @@ describe('delegate manifest', () => {
     expect(outputs['reason']).toContain('already_in_flight');
     expect(outputs['in_flight']).toContain('already_in_flight');
     expect(outputs['open_handle_age_ms']).toContain('already_in_flight');
+    expect(outputs['handle_status']).toContain('pending');
+    expect(outputs['handle_expires_at']).toContain('already_in_flight');
     expect(outputs['elapsed_wait_ms']).toBeUndefined();
     expect(outputs['delegate_event_id']).toBeDefined();
   });

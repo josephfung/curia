@@ -199,11 +199,18 @@ export interface InFlightDelegation {
   delegateEventId: string;
   /**
    * When the row was written. A `running` claim is written at dispatch, so this is
-   * the start of the specialist run. A `pending` handle is written after the wait
-   * expires (or promoted from the claim at that moment), so age measured from a
-   * pending row is not how long the specialist has been running.
+   * the start of the specialist run. A promoted `pending` handle keeps that same
+   * `created_at` — age from it is not how long the handle has left.
    */
   createdAt: Date;
+  /**
+   * `running` is a dispatch claim. `pending` is the post-timeout handle, which
+   * outlives the delegate wait. Absent only on the fail-closed synthetic hit
+   * used when the blocking row vanished between the insert and this read.
+   */
+  status?: 'running' | 'pending';
+  /** When this row stops being eligible. The sweep may close it one interval later. */
+  expiresAt?: Date;
 }
 
 /**
@@ -235,8 +242,13 @@ export async function findInFlightPendingDelegation(
   pool: Pool,
   params: { targetAgent: string; originConversationId: string },
 ): Promise<InFlightDelegation | null> {
-  const { rows } = await pool.query<{ delegate_event_id: string; created_at: Date | string }>(
-    `SELECT delegate_event_id, created_at
+  const { rows } = await pool.query<{
+    delegate_event_id: string;
+    created_at: Date | string;
+    expires_at: Date | string;
+    status: string;
+  }>(
+    `SELECT delegate_event_id, created_at, expires_at, status
        FROM pending_delegations
       WHERE target_agent = $1
         AND origin_conversation_id = $2
@@ -248,12 +260,18 @@ export async function findInFlightPendingDelegation(
   const row = rows[0];
   if (!row) return null;
   const createdAt = row.created_at instanceof Date ? row.created_at : new Date(row.created_at);
-  if (Number.isNaN(createdAt.getTime())) {
+  const expiresAt = row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at);
+  if (Number.isNaN(createdAt.getTime()) || Number.isNaN(expiresAt.getTime())) {
     throw new Error(
-      `pending_delegations.created_at is not a valid timestamp for ${row.delegate_event_id}`,
+      `pending_delegations timestamps are not valid for ${row.delegate_event_id}`,
     );
   }
-  return { delegateEventId: row.delegate_event_id, createdAt };
+  if (row.status !== 'running' && row.status !== 'pending') {
+    throw new Error(
+      `pending_delegations.status is not in flight for ${row.delegate_event_id}`,
+    );
+  }
+  return { delegateEventId: row.delegate_event_id, createdAt, expiresAt, status: row.status };
 }
 
 /**
