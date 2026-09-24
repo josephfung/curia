@@ -1,17 +1,18 @@
 // scheduler-claim-idempotency.test.ts — the cron claim is idempotent against overlapping
-// poll cycles, against real Postgres (#1159).
+// poll cycles, against real Postgres (#1159, #1160).
 //
-// Reproduces the duplicate-daily-digest double-fire: the agent runs synchronously inside
-// fireJob, so one pollDueJobs() drain takes minutes while the 30s interval keeps launching
-// fresh polls. A job still 'pending' when poll B's SELECT runs is captured into poll B's
-// in-memory list; poll A then claims and fires it, completeJobRun resets the recurring job
-// to 'pending', and poll B — still holding the stale row — reaches it and fires a duplicate.
-// The fix re-checks next_run_at <= now() in the claim UPDATE, so the stale re-claim sees a
-// future next_run_at (advanced by the first claim) and matches 0 rows.
+// Reproduces the duplicate-daily-digest double-fire. pollDueJobs returns as soon as the
+// publish is handed off (#1160), so two polls can both SELECT a row that is still pending.
+// Poll A claims it and advances next_run_at; completeJobRun resets the recurring job to
+// 'pending'; poll B — still holding the stale row — reaches its claim. The claim re-checks
+// next_run_at <= now(), so the stale re-claim sees a future next_run_at and matches 0 rows.
 //
-// We drive the REAL Scheduler.fireJob against a REAL row so the production claim SQL is the
-// thing under test — a SQL-substring unit assertion would pass even if the predicate were
-// logically wrong. fireJob is private; the cast is deliberate and scoped to this test.
+// A second case drives pollDueJobs itself: the agent subscriber does not resolve until
+// after a later poll, and that later poll must not fire the job again.
+//
+// fireJob is private; the cast is deliberate and scoped to this test. The production claim
+// SQL is what is under test — a SQL-substring unit assertion would pass even if the
+// predicate were logically wrong.
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
@@ -77,14 +78,16 @@ describeIf('Scheduler cron claim idempotency (#1159)', () => {
 
     // fireJob is private; the cast is intentional so the production claim SQL is exercised.
     const fireJob = (job: JobRow) =>
-      (scheduler as unknown as { fireJob(j: JobRow): Promise<void> }).fireJob(job);
+      (scheduler as unknown as { fireJob(j: JobRow): Promise<unknown> }).fireJob(job);
 
     // Poll A fires the job → claims it, advances next_run_at to the next occurrence.
     await fireJob(staleRow);
+    await scheduler.drainInFlight();
     // The recurring job completes and reverts to 'pending' (the window that reopened the claim).
     await schedulerService.completeJobRun(jobId, true);
     // Poll B reaches the same stale row and attempts to fire it again.
     await fireJob(staleRow);
+    await scheduler.drainInFlight();
 
     // Without the next_run_at guard this is 2 (duplicate digest). With it, the second claim
     // matches 0 rows because the first claim already advanced next_run_at into the future.
@@ -98,5 +101,52 @@ describeIf('Scheduler cron claim idempotency (#1159)', () => {
     );
     expect(after.rows[0]!.status).toBe('pending');
     expect(after.rows[0]!.in_future).toBe(true);
+  });
+
+  it('does not re-fire a cron job whose agent run outlives the next poll (#1160)', async () => {
+    const pastDue = new Date(Date.now() - 60_000).toISOString();
+    const insert = await pool.query(
+      `INSERT INTO scheduled_jobs
+         (agent_id, source_agent_id, cron_expr, task_payload, status, next_run_at, created_by, timezone)
+       VALUES ($1, $1, $2, $3, 'pending', $4, 'system', 'UTC')
+       RETURNING id`,
+      [AGENT_ID, '0 9 * * *', JSON.stringify({ task: 'send digest' }), pastDue],
+    );
+    const jobId = insert.rows[0]!.id as string;
+
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let fires = 0;
+    bus.subscribe('agent.task', 'system', () => {
+      fires += 1;
+      return gate;
+    });
+
+    // Subscribers from earlier tests run first and each await yields. Flush until
+    // this test's handler has been invoked; the gate keeps the run in flight.
+    const flush = async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+    };
+
+    try {
+      await scheduler.pollDueJobs();
+      await flush();
+      expect(fires).toBe(1);
+
+      // The run is still inside bus.publish. A later poll must not start another one.
+      await scheduler.pollDueJobs();
+      await flush();
+      expect(fires).toBe(1);
+
+      const mid = await pool.query(
+        `SELECT status, next_run_at > now() AS in_future FROM scheduled_jobs WHERE id = $1`,
+        [jobId],
+      );
+      expect(mid.rows[0]!.status).toBe('running');
+      expect(mid.rows[0]!.in_future).toBe(true);
+    } finally {
+      release();
+      await scheduler.drainInFlight();
+    }
   });
 });

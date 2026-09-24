@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Scheduler** — polls hand due jobs to a capped runner instead of awaiting each agent run. (#1160)
 - **Unit test layout** — `src/**/*.test.ts` moved into the `tests/unit/` mirror. (#848)
 - **Contact recent history** — email recalls 72 hours and voice 48; other channels stay on today. (#1886)
 - **`buildPrincipalSenderContext`** — single contacts helper for principal SenderContext; voice gains migration-055 warn. (#1627)

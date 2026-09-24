@@ -416,7 +416,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "defaultExpectedDurationSeconds": { "type": "integer", "minimum": 1 }
+        "defaultExpectedDurationSeconds": { "type": "integer", "minimum": 1 },
+        "maxInFlight": { "type": "integer", "minimum": 1 }
       }
     },
     "tasks": {

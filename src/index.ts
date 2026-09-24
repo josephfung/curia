@@ -2133,7 +2133,18 @@ async function main(): Promise<void> {
   // principalContactId is the same value agents receive via interpolateRuntimeContext
   // below — it lets the scheduler resolve ${principal_contact_id} in job payloads at fire
   // time instead of shipping the literal token to the model (#1800).
-  const scheduler = new Scheduler({ pool, bus, logger, schedulerService, driftDetector, dreamEngine, outboundContextService, defaultExpectedDurationSeconds: yamlConfig.scheduler?.defaultExpectedDurationSeconds, principalContactId: principalContact?.id });
+  const scheduler = new Scheduler({
+    pool,
+    bus,
+    logger,
+    schedulerService,
+    driftDetector,
+    dreamEngine,
+    outboundContextService,
+    defaultExpectedDurationSeconds: yamlConfig.scheduler?.defaultExpectedDurationSeconds,
+    maxInFlight: yamlConfig.scheduler?.maxInFlight,
+    principalContactId: principalContact?.id,
+  });
 
   // SuspensionNotifier — emails the CEO when a scheduled job is auto-suspended.
   // Bypasses the LLM pipeline: notifies even when Anthropic is the thing that's down.
