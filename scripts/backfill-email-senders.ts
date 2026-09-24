@@ -101,6 +101,13 @@ WITH target AS (
   WHERE role = 'user'
     AND conversation_id LIKE 'email:%'
     AND sender_contact_id IS NULL
+    -- Rows Curia wrote to itself (#1892). The recall read already ignores them
+    -- when deciding a conversation is shared, so they must be out of scope here
+    -- too: left in, they never match an inbound audit row and would be reported
+    -- as unresolved, marking a thread partial that recall already treats as
+    -- private. That is the same correct-looking-but-wrong output this backfill
+    -- exists to remove.
+    AND synthetic = false
 ),
 matched AS (
   SELECT
