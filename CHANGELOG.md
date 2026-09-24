@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **Contact recent history** — 1:1 voice and email recall that contact's other turns today. (#1599)
+- **Contact recent history** — 1:1 voice and email recall that contact's other turns. (#1599)
 - **Document placement (`doc-place`)** — shared placement policy; agents choose readable `/projects/` folders. (#1819)
 - **Calendar identity guard** — principal-scoped wrong-identity reads fail closed as `IDENTITY_MISMATCH`, not empty success. (#1854)
 - **`ErrorType` / `tool.result` (public API)** — `IDENTITY_MISMATCH`; failure payloads may carry `errorType`. (#1854)
@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Unit test layout** — `src/**/*.test.ts` moved into the `tests/unit/` mirror. (#848)
+- **Contact recent history** — email recalls 72 hours and voice 48; other channels stay on today. (#1886)
 - **`buildPrincipalSenderContext`** — single contacts helper for principal SenderContext; voice gains migration-055 warn. (#1627)
 - **Voice sessions** — `caller_contact_id` replaces `principal_contact_id` for any caller. (#1629)
 - **UUID validation** — one shared `isUuid()` replaces 30 local regexes; two drifted copies no longer reject v7 ids. (#1879)

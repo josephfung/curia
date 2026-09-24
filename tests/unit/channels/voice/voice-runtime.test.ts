@@ -1982,6 +1982,8 @@ describe('VoiceRuntime contact recent history (#1599)', () => {
     const contents = textContents(messages);
     const block = contents.find(c => c.includes(CONTACT_RECENT_HISTORY_HEADER));
     expect(block).toBeDefined();
+    expect(block).toContain('in the last 48 hours');
+    expect(block).not.toContain('from other conversations today');
     expect(block).toContain('the board deck is due Friday');
     expect(block).toContain('I will remind you Thursday.');
     expect(block).not.toContain('bob private plan');
@@ -2065,6 +2067,51 @@ describe('VoiceRuntime contact recent history (#1599)', () => {
     expect(block).toContain('can you move the board prep to 4?');
     expect(block).toContain('no, you have the investor call then');
     expect(block).not.toContain(VOICE_GREETING_USER_MESSAGE);
+  });
+
+  it('recalls a voice call from the previous day and drops the one before that', async () => {
+    const caller = principalCaller();
+    const wm = WorkingMemory.createInMemory();
+    await wm.addTurn('voice:yesterday', 'coordinator', { role: 'user', content: 'move the board prep to 4' }, {
+      senderContactId: caller.contactId,
+      channelId: 'voice',
+      createdAt: new Date(Date.now() - 30 * 60 * 60 * 1000),
+    });
+    await wm.addTurn('voice:yesterday', 'coordinator', { role: 'assistant', content: 'you have the investor call then' }, {
+      channelId: 'voice',
+      createdAt: new Date(Date.now() - 30 * 60 * 60 * 1000 + 1000),
+    });
+    await wm.addTurn('voice:older', 'coordinator', { role: 'user', content: 'the call from two days ago' }, {
+      senderContactId: caller.contactId,
+      channelId: 'voice',
+      createdAt: new Date(Date.now() - 60 * 60 * 60 * 1000),
+    });
+
+    const llm = new FakeStreamProvider([reply('Investor call.')]);
+    const { runtime, stt } = makeRuntime({
+      llm,
+      tts: new SlowTtsProvider(2, 1),
+      workingMemory: wm,
+      timezone: 'America/Toronto',
+    });
+    await runtime.startSession({
+      sessionId: 'recall-prev',
+      conversationId: 'voice:recall-prev',
+      roomName: 'voice-recall-prev',
+      agentToken: 'tok',
+      caller,
+      openingGreeting: false,
+    });
+    stt.emit({ text: 'what did I say last time', isFinal: true, speechFinal: true });
+    await runtime.awaitIdle('recall-prev');
+
+    const contents = textContents(llm.seenMessages[0]!);
+    const block = contents.find(c => c.includes(CONTACT_RECENT_HISTORY_HEADER));
+    expect(block).toContain('move the board prep to 4');
+    expect(block).toContain('you have the investor call then');
+    expect(block).toContain('in the last 48 hours');
+    expect(block).not.toContain('from other conversations today');
+    expect(block).not.toContain('the call from two days ago');
   });
 
   it('keeps the live transcript when the contact recall read misses the deadline', async () => {

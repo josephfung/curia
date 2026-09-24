@@ -3,7 +3,8 @@
 // against Postgres. Skips when DATABASE_URL is unset.
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
-import { WorkingMemory } from '../../src/memory/working-memory.js';
+import { WorkingMemory, CONTACT_RECENT_HISTORY_SQL } from '../../src/memory/working-memory.js';
+import { CHANNEL_RECENT_HISTORY_HOURS } from '../../src/memory/contact-recent-history.js';
 import { backfillDirectChannelSenders } from '../../src/memory/direct-sender-backfill.js';
 import { createLogger } from '../../src/logger.js';
 import { VOICE_GREETING_USER_MESSAGE } from '../../src/channels/voice/greeting.js';
@@ -178,4 +179,79 @@ describeIf('contact recent history SQL (#1599)', () => {
     );
     expect(leftovers.rows.map(row => row.sender_contact_id)).toEqual([null, null]);
   });
+
+  it('plans the widest window on idx_wm_sender_active', async () => {
+    const widest = Math.max(...Object.values(CHANNEL_RECENT_HISTORY_HOURS));
+    const alice = await seedContact(pool, 'explain-alice');
+    // Spread filler turns over 30 days so a 72h predicate stays selective.
+    await pool.query(
+      `WITH fillers AS (
+         INSERT INTO contacts (display_name)
+         SELECT $1 || 'explain-filler-' || g FROM generate_series(1, 40) g
+         RETURNING id
+       ),
+       ids AS (
+         SELECT array_agg(id) AS ids FROM fillers
+       )
+       INSERT INTO working_memory (
+         conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id
+       )
+       SELECT
+         $1 || 'explain:' || (g % 800),
+         'coordinator',
+         'user',
+         'filler',
+         now() - ((g % 720) || ' hours')::interval,
+         false,
+         ids.ids[1 + (g % 40)],
+         'email'
+       FROM generate_series(1, 20000) g, ids`,
+      [PREFIX],
+    );
+    await memory.addTurn(`${PREFIX}explain:alice-recent`, 'coordinator', {
+      role: 'user',
+      content: 'inside the wide window',
+    }, {
+      senderContactId: alice,
+      channelId: 'email',
+      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+    });
+    await memory.addTurn(`${PREFIX}explain:alice-old`, 'coordinator', {
+      role: 'user',
+      content: 'outside the wide window',
+    }, {
+      senderContactId: alice,
+      channelId: 'email',
+      createdAt: new Date(Date.now() - (widest + 48) * 60 * 60 * 1000),
+    });
+    await pool.query('ANALYZE working_memory');
+
+    const since = new Date(Date.now() - widest * 60 * 60 * 1000);
+    const explained = await pool.query<{ 'QUERY PLAN': unknown }>(
+      `EXPLAIN (FORMAT JSON) ${CONTACT_RECENT_HISTORY_SQL}`,
+      [alice, 'coordinator', since, `${PREFIX}explain:live`, 8, VOICE_GREETING_USER_MESSAGE],
+    );
+    const plan = explained.rows[0]?.['QUERY PLAN'];
+    expect(indexNamesInPlan(plan), JSON.stringify(plan)).toContain('idx_wm_sender_active');
+  });
 });
+
+function indexNamesInPlan(plan: unknown): string[] {
+  const names: string[] = [];
+  const visit = (node: unknown): void => {
+    if (node == null || typeof node !== 'object') return;
+    const record = node as Record<string, unknown>;
+    if (typeof record['Index Name'] === 'string') names.push(record['Index Name']);
+    const children = record['Plans'];
+    if (Array.isArray(children)) {
+      for (const child of children) visit(child);
+    }
+  };
+  if (!Array.isArray(plan)) return names;
+  for (const entry of plan) {
+    if (entry != null && typeof entry === 'object' && 'Plan' in entry) {
+      visit((entry as { Plan: unknown }).Plan);
+    }
+  }
+  return names;
+}

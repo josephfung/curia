@@ -151,6 +151,53 @@ export class WorkingMemory {
 }
 
 /**
+ * SQL twin of {@link selectContactRecentTurns}. `$3` is the channel window.
+ * The participation lookup is the scan `idx_wm_sender_active` exists for.
+ */
+export const CONTACT_RECENT_HISTORY_SQL = `SELECT role, content, conversation_id, channel_id, created_at, id
+         FROM (
+           SELECT wm.role, wm.content, wm.conversation_id, wm.channel_id, wm.created_at, wm.id
+           FROM working_memory wm
+           JOIN (
+             SELECT DISTINCT conversation_id
+             FROM working_memory
+             WHERE sender_contact_id = $1::uuid
+               AND agent_id = $2
+               AND role = 'user'
+               AND archived = false
+               AND created_at >= $3
+               AND conversation_id <> $4
+           ) participated ON participated.conversation_id = wm.conversation_id
+           WHERE wm.agent_id = $2
+             AND wm.archived = false
+             AND wm.created_at >= $3
+             AND (
+               (wm.role = 'user' AND wm.sender_contact_id = $1::uuid)
+               OR (
+                 wm.role IN ('assistant', 'system')
+                 AND wm.conversation_id NOT IN (
+                   SELECT wm2.conversation_id
+                   FROM working_memory wm2
+                   WHERE wm2.agent_id = $2
+                     AND wm2.role = 'user'
+                     AND wm2.conversation_id = wm.conversation_id
+                     AND NOT (
+                       wm2.sender_contact_id IS NULL
+                       AND wm2.content = $6
+                     )
+                     AND (
+                       wm2.sender_contact_id IS NULL
+                       OR wm2.sender_contact_id <> $1::uuid
+                     )
+                 )
+               )
+             )
+           ORDER BY wm.created_at DESC, wm.id DESC
+           LIMIT $5
+         ) recent
+         ORDER BY created_at ASC, id ASC`;
+
+/**
  * Postgres-backed storage. Conversation turns are rows in the working_memory table.
  * History is returned in chronological order (oldest first) so the LLM sees
  * the conversation in natural reading order.
@@ -315,48 +362,7 @@ class PostgresBackend implements StorageBackend {
         channel_id: string | null;
         created_at: Date;
       }>(
-        `SELECT role, content, conversation_id, channel_id, created_at, id
-         FROM (
-           SELECT wm.role, wm.content, wm.conversation_id, wm.channel_id, wm.created_at, wm.id
-           FROM working_memory wm
-           JOIN (
-             SELECT DISTINCT conversation_id
-             FROM working_memory
-             WHERE sender_contact_id = $1::uuid
-               AND agent_id = $2
-               AND role = 'user'
-               AND archived = false
-               AND created_at >= $3
-               AND conversation_id <> $4
-           ) participated ON participated.conversation_id = wm.conversation_id
-           WHERE wm.agent_id = $2
-             AND wm.archived = false
-             AND wm.created_at >= $3
-             AND (
-               (wm.role = 'user' AND wm.sender_contact_id = $1::uuid)
-               OR (
-                 wm.role IN ('assistant', 'system')
-                 AND wm.conversation_id NOT IN (
-                   SELECT wm2.conversation_id
-                   FROM working_memory wm2
-                   WHERE wm2.agent_id = $2
-                     AND wm2.role = 'user'
-                     AND wm2.conversation_id = wm.conversation_id
-                     AND NOT (
-                       wm2.sender_contact_id IS NULL
-                       AND wm2.content = $6
-                     )
-                     AND (
-                       wm2.sender_contact_id IS NULL
-                       OR wm2.sender_contact_id <> $1::uuid
-                     )
-                 )
-               )
-             )
-           ORDER BY wm.created_at DESC, wm.id DESC
-           LIMIT $5
-         ) recent
-         ORDER BY created_at ASC, id ASC`,
+        CONTACT_RECENT_HISTORY_SQL,
         [
           query.contactId,
           query.agentId,
