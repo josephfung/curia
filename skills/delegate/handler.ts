@@ -172,6 +172,95 @@ async function refuseIfInFlight(ctx: ToolContext, agent: string): Promise<ToolRe
   return inFlightResult(agent, inFlight);
 }
 
+/**
+ * Claim the specialist for this conversation before the run is published (#1893).
+ *
+ * Three outcomes, and no other:
+ * - `{ ok: true, delegateEventId }` — this call holds the running row.
+ * - `{ ok: true }` with no id — nothing was written. Late delivery is off, or the
+ *   turn has no origin to store (voice, an approval re-invoke). Dispatch anyway.
+ * - `{ ok: false, result }` — do not dispatch. The insert threw, or another turn
+ *   already holds this specialist.
+ */
+async function acquireDispatchClaim(
+  ctx: ToolContext,
+  agent: string,
+  delegateEventId: string,
+  effectiveTask: string,
+  conversationId: string,
+  specialistTimeoutMs: number,
+): Promise<{ ok: true; delegateEventId?: string } | { ok: false; result: ToolResult }> {
+  if (!ctx.openDelegationLookup?.acquireRunning) return { ok: true };
+
+  const originAgentId = ctx.agentId;
+  const originConversationId = ctx.conversationId;
+  const originChannelId = ctx.channelId;
+  const originSenderId = ctx.senderId;
+  if (
+    typeof originAgentId !== 'string' || originAgentId === ''
+    || typeof originConversationId !== 'string' || originConversationId === ''
+    || typeof originChannelId !== 'string' || originChannelId === ''
+    || typeof originSenderId !== 'string' || originSenderId === ''
+  ) {
+    // A missing sender is a caller that never plumbed InvokeOptions.senderId.
+    // origin_sender_id is NOT NULL, so the claim cannot be written. Refusing
+    // here turns delegation off for that caller.
+    ctx.log.warn(
+      { targetAgent: agent, hasSender: typeof originSenderId === 'string' && originSenderId !== '' },
+      'Delegate call has no origin for a dispatch claim — starting the specialist without overlap protection',
+    );
+    return { ok: true };
+  }
+
+  const rawOriginator = ctx.taskMetadata?.['originator'];
+  const originator = typeof rawOriginator === 'object' && rawOriginator !== null && !Array.isArray(rawOriginator)
+    ? parseStoredOriginator(rawOriginator as Record<string, unknown>)
+    : undefined;
+  let acquired: AcquireRunningResult;
+  try {
+    const schedulerJobId = parseSchedulerJobId(originConversationId);
+    acquired = await ctx.openDelegationLookup.acquireRunning({
+      delegateEventId,
+      delegateConversationId: conversationId,
+      targetAgent: agent,
+      delegateTask: effectiveTask,
+      originAgentId,
+      originConversationId,
+      originChannelId,
+      originSenderId,
+      ...(ctx.taskEventId !== undefined && { originTaskEventId: ctx.taskEventId }),
+      ...(schedulerJobId !== undefined && { schedulerJobId }),
+      ...(originator !== undefined && { originator }),
+      expiresAt: runningClaimExpiresAt(new Date(), specialistTimeoutMs),
+    });
+  } catch (err) {
+    ctx.log.error(
+      { err, targetAgent: agent, originConversationId },
+      'Dispatch claim failed — refusing to start another specialist run',
+    );
+    return {
+      ok: false,
+      result: {
+        success: false,
+        error: `Could not claim the in-flight slot for '${agent}'. Not starting another run.`,
+        errorType: 'DATABASE_UNAVAILABLE',
+      },
+    };
+  }
+  if (!acquired.acquired) {
+    ctx.log.warn(
+      {
+        targetAgent: agent,
+        originConversationId,
+        delegateEventId: acquired.inFlight.delegateEventId,
+      },
+      'Blocked delegate — another turn claimed this specialist in this conversation',
+    );
+    return { ok: false, result: inFlightResult(agent, acquired.inFlight) };
+  }
+  return { ok: true, delegateEventId: acquired.claim.delegateEventId };
+}
+
 function formatStructuredFailureMessage(agent: string, reason: AgentResponseFailureReason): string {
   switch (reason) {
     case 'maxTurns':
@@ -453,186 +542,131 @@ export class DelegateHandler implements ToolHandler {
 
     // Claim before subscribing. A refusal returns before the response listener
     // and its timer exist, so a busy conversation does not accumulate subscribers
-    // that never settle. The try covers the claim: a throw while arming the
-    // listener still releases it.
+    // that never settle. The call stays inside the try: a throw while arming the
+    // listener still releases a claim this call acquired.
     let acquiredDelegateEventId: string | undefined;
     let retainRunningClaim = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     try {
-    if (ctx.openDelegationLookup?.acquireRunning) {
-      const originAgentId = ctx.agentId;
-      const originConversationId = ctx.conversationId;
-      const originChannelId = ctx.channelId;
-      const originSenderId = ctx.senderId;
-      if (
-        typeof originAgentId !== 'string' || originAgentId === ''
-        || typeof originConversationId !== 'string' || originConversationId === ''
-        || typeof originChannelId !== 'string' || originChannelId === ''
-        || typeof originSenderId !== 'string' || originSenderId === ''
-      ) {
-        // A missing sender is a caller that never plumbed InvokeOptions.senderId
-        // (voice, approval re-invoke). origin_sender_id is NOT NULL, so we cannot
-        // write the claim. Dispatch anyway — refusing here turns delegation off.
-        ctx.log.warn(
-          { targetAgent: agent, hasSender: typeof originSenderId === 'string' && originSenderId !== '' },
-          'Delegate call has no origin for a dispatch claim — starting the specialist without overlap protection',
-        );
-      } else {
-      const rawOriginator = ctx.taskMetadata?.['originator'];
-      const originator = typeof rawOriginator === 'object' && rawOriginator !== null && !Array.isArray(rawOriginator)
-        ? parseStoredOriginator(rawOriginator as Record<string, unknown>)
-        : undefined;
-      let acquired: AcquireRunningResult;
-      try {
-        const schedulerJobId = parseSchedulerJobId(originConversationId);
-        acquired = await ctx.openDelegationLookup.acquireRunning({
-          delegateEventId: taskEvent.id,
-          delegateConversationId: conversationId,
-          targetAgent: agent,
-          delegateTask: effectiveTask,
-          originAgentId,
-          originConversationId,
-          originChannelId,
-          originSenderId,
-          ...(ctx.taskEventId !== undefined && { originTaskEventId: ctx.taskEventId }),
-          ...(schedulerJobId !== undefined && { schedulerJobId }),
-          ...(originator !== undefined && { originator }),
-          expiresAt: runningClaimExpiresAt(new Date(), specialistTimeoutMs),
-        });
-      } catch (err) {
-        ctx.log.error(
-          { err, targetAgent: agent, originConversationId },
-          'Dispatch claim failed — refusing to start another specialist run',
-        );
-        return {
-          success: false,
-          error: `Could not claim the in-flight slot for '${agent}'. Not starting another run.`,
-          errorType: 'DATABASE_UNAVAILABLE',
-        };
+      const claim = await acquireDispatchClaim(
+        ctx,
+        agent,
+        taskEvent.id,
+        effectiveTask,
+        conversationId,
+        specialistTimeoutMs,
+      );
+      if (!claim.ok) return claim.result;
+      acquiredDelegateEventId = claim.delegateEventId;
+
+      // Record only once this call holds the claim (or no claim is wired). An
+      // in-flight refusal did not start a specialist, so it must not consume an
+      // attempt. A resume continuation still does not consume one (#1171).
+      if (ctx.delegationGuard && !hasResumeToken) {
+        ctx.delegationGuard.recordInvocation(dKey);
       }
-      if (!acquired.acquired) {
-        ctx.log.warn(
-          {
-            targetAgent: agent,
-            originConversationId,
-            delegateEventId: acquired.inFlight.delegateEventId,
-          },
-          'Blocked delegate — another turn claimed this specialist in this conversation',
-        );
-        return inFlightResult(agent, acquired.inFlight);
-      }
-      acquiredDelegateEventId = acquired.claim.delegateEventId;
-      }
-    }
 
-    // Record only once this call holds the claim (or no claim is wired). An
-    // in-flight refusal did not start a specialist, so it must not consume an
-    // attempt. A resume continuation still does not consume one (#1171).
-    if (ctx.delegationGuard && !hasResumeToken) {
-      ctx.delegationGuard.recordInvocation(dKey);
-    }
+      // Set up a one-time listener for the specialist's response BEFORE
+      // publishing the task, so we don't miss a fast response.
+      // TODO: The EventBus has no unsubscribe mechanism, so this subscriber
+      // persists after the delegation completes. The settled guard makes it
+      // a near-zero-cost no-op after resolution. Phase 5 should add
+      // bus.unsubscribe() or a one-shot subscription pattern.
+      const responsePromise = new Promise<string>((resolve, reject) => {
+        let settled = false;
 
-    // Set up a one-time listener for the specialist's response BEFORE
-    // publishing the task, so we don't miss a fast response.
-    // TODO: The EventBus has no unsubscribe mechanism, so this subscriber
-    // persists after the delegation completes. The settled guard makes it
-    // a near-zero-cost no-op after resolution. Phase 5 should add
-    // bus.unsubscribe() or a one-shot subscription pattern.
-    const responsePromise = new Promise<string>((resolve, reject) => {
-      let settled = false;
-
-      timeoutHandle = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          reject({
-            __structuredDelegateFailure: true,
-            agent,
-            reason: 'timeout',
-            // Non-retryable: the specialist may still be running (possibly_succeeded below).
-            // A second delegation risks concurrent duplicate side effects — worse than
-            // escalating a task that turned out dead. Auto-retry would only help the rare
-            // "specialist actually died" case at the cost of duplicate emails in prod.
-            retryable: false,
-            // Correlation ids for late delivery (#1799) — the run we are abandoning here keeps
-            // going, so hand the runtime what it needs to recognise its eventual response.
-            delegateEventId: taskEvent.id,
-            delegateConversationId: conversationId,
-            waitTimeoutMs: specialistTimeoutMs,
-          } satisfies StructuredDelegateFailure);
-        }
-      }, specialistTimeoutMs);
-
-      ctx.bus!.subscribe('agent.response', 'system', async (event) => {
-        if (settled) return; // Skip processing after settlement — prevents double-resolve
-        try {
-          const responseEvent = event as AgentResponseEvent;
-          // Match on the task event ID — the specialist sets parentEventId to the task ID
-          if (responseEvent.parentEventId === taskEvent.id) {
+        timeoutHandle = setTimeout(() => {
+          if (!settled) {
             settled = true;
-            clearTimeout(timeoutHandle);
-            // isError means the specialist hit an unrecoverable error (context overflow,
-            // LLM failure, budget exhaustion). Reject so the catch block returns
-            // { success: false } or a structured failure result when reason is present.
-            if (responseEvent.payload.isError) {
-              const { errorType, reason, retryable } = responseEvent.payload;
-              if (reason !== undefined && retryable !== undefined) {
-                reject({
-                  __structuredDelegateFailure: true,
-                  agent,
-                  reason,
-                  retryable,
-                  ...(errorType !== undefined && { errorType }),
-                } satisfies StructuredDelegateFailure);
-                return;
-              }
-              reject(new Error(`Specialist '${agent}' encountered an error and could not complete the task`));
-            } else {
-              const pausedPayload = parseExecutionPausedPayload(responseEvent.payload.content, ctx.log);
-              if (pausedPayload) {
-                resolve(JSON.stringify({
-                  _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
-                  agent,
-                  task_id: pausedPayload.task_id,
-                  done: pausedPayload.done,
-                  total: pausedPayload.total,
-                  next: pausedPayload.next,
-                  message: formatPausedProgressMessage({
+            reject({
+              __structuredDelegateFailure: true,
+              agent,
+              reason: 'timeout',
+              // Non-retryable: the specialist may still be running (possibly_succeeded below).
+              // A second delegation risks concurrent duplicate side effects — worse than
+              // escalating a task that turned out dead. Auto-retry would only help the rare
+              // "specialist actually died" case at the cost of duplicate emails in prod.
+              retryable: false,
+              // Correlation ids for late delivery (#1799) — the run we are abandoning here keeps
+              // going, so hand the runtime what it needs to recognise its eventual response.
+              delegateEventId: taskEvent.id,
+              delegateConversationId: conversationId,
+              waitTimeoutMs: specialistTimeoutMs,
+            } satisfies StructuredDelegateFailure);
+          }
+        }, specialistTimeoutMs);
+
+        ctx.bus!.subscribe('agent.response', 'system', async (event) => {
+          if (settled) return; // Skip processing after settlement — prevents double-resolve
+          try {
+            const responseEvent = event as AgentResponseEvent;
+            // Match on the task event ID — the specialist sets parentEventId to the task ID
+            if (responseEvent.parentEventId === taskEvent.id) {
+              settled = true;
+              clearTimeout(timeoutHandle);
+              // isError means the specialist hit an unrecoverable error (context overflow,
+              // LLM failure, budget exhaustion). Reject so the catch block returns
+              // { success: false } or a structured failure result when reason is present.
+              if (responseEvent.payload.isError) {
+                const { errorType, reason, retryable } = responseEvent.payload;
+                if (reason !== undefined && retryable !== undefined) {
+                  reject({
+                    __structuredDelegateFailure: true,
+                    agent,
+                    reason,
+                    retryable,
+                    ...(errorType !== undefined && { errorType }),
+                  } satisfies StructuredDelegateFailure);
+                  return;
+                }
+                reject(new Error(`Specialist '${agent}' encountered an error and could not complete the task`));
+              } else {
+                const pausedPayload = parseExecutionPausedPayload(responseEvent.payload.content, ctx.log);
+                if (pausedPayload) {
+                  resolve(JSON.stringify({
+                    _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
+                    agent,
+                    task_id: pausedPayload.task_id,
                     done: pausedPayload.done,
                     total: pausedPayload.total,
                     next: pausedPayload.next,
-                  }),
-                }));
-                return;
+                    message: formatPausedProgressMessage({
+                      done: pausedPayload.done,
+                      total: pausedPayload.total,
+                      next: pausedPayload.next,
+                    }),
+                  }));
+                  return;
+                }
+                resolve(responseEvent.payload.content);
               }
-              resolve(responseEvent.payload.content);
+            }
+          } catch (err) {
+            // Fail fast on malformed events rather than silently hanging until timeout
+            if (!settled) {
+              settled = true;
+              clearTimeout(timeoutHandle);
+              reject(err instanceof Error ? err : new Error(String(err)));
             }
           }
-        } catch (err) {
-          // Fail fast on malformed events rather than silently hanging until timeout
-          if (!settled) {
-            settled = true;
-            clearTimeout(timeoutHandle);
-            reject(err instanceof Error ? err : new Error(String(err)));
-          }
-        }
+        });
       });
-    });
 
-    // Publish the task to the bus — the specialist will pick it up.
-    // We publish as 'dispatch' layer because only dispatch can publish agent.task
-    // per the permission model. Infrastructure skills are trusted to impersonate layers.
-    //
-    // IMPORTANT: await both concurrently via Promise.all rather than sequentially.
-    // The EventBus awaits subscriber handlers in sequence, so publish() does not resolve
-    // until the specialist's full processing chain completes (which can take 60–90s).
-    // If we awaited publish() first and then responsePromise, the 90s timeout could fire
-    // while responsePromise had no rejection handler yet — causing an unhandledRejection
-    // that crashes the process. Promise.all attaches handlers to both promises immediately,
-    // closing that window. See: https://github.com/josephfung/curia/issues/73
-    // retainRunningClaim is set only when the wait timer itself fires — that
-    // rejection carries delegateEventId, which is what the runtime promotes.
-    // A specialist that reports reason 'timeout' does not, and retaining the
-    // claim would block the conversation until the sweep re-delivered the answer.
+      // Publish the task to the bus — the specialist will pick it up.
+      // We publish as 'dispatch' layer because only dispatch can publish agent.task
+      // per the permission model. Infrastructure skills are trusted to impersonate layers.
+      //
+      // IMPORTANT: await both concurrently via Promise.all rather than sequentially.
+      // The EventBus awaits subscriber handlers in sequence, so publish() does not resolve
+      // until the specialist's full processing chain completes (which can take 60–90s).
+      // If we awaited publish() first and then responsePromise, the 90s timeout could fire
+      // while responsePromise had no rejection handler yet — causing an unhandledRejection
+      // that crashes the process. Promise.all attaches handlers to both promises immediately,
+      // closing that window. See: https://github.com/josephfung/curia/issues/73
+      // retainRunningClaim is set only when the wait timer itself fires — that
+      // rejection carries delegateEventId, which is what the runtime promotes.
+      // A specialist that reports reason 'timeout' does not, and retaining the
+      // claim would block the conversation until the sweep re-delivered the answer.
       const [response] = await Promise.all([
         responsePromise,
         ctx.bus.publish('dispatch', taskEvent),
