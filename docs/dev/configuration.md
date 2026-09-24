@@ -154,12 +154,12 @@ Runtime defaults for the scheduler watchdog and recovery logic.
 ```yaml
 scheduler:
   defaultExpectedDurationSeconds: 600   # 10 minutes
-  maxInFlight: 6                        # concurrent agent runs the scheduler may start
+  maxInFlight: 8                        # concurrent agent runs the scheduler may start
 ```
 
 `defaultExpectedDurationSeconds` is used by the watchdog to compute a recovery timeout (`LEAST(expected × 7.5, expected + 3600)`) for scheduled jobs that don't declare an explicit `expectedDurationSeconds`. Raise this if you run long-running scheduled jobs without explicit duration hints. Validated at startup.
 
-`maxInFlight` caps how many scheduled agent runs execute at once. Each poll claims at most this many due jobs and returns without waiting for the agent; further due jobs stay pending until a slot frees on a later tick. Default 6. Validated at startup as a positive integer.
+`maxInFlight` caps how many scheduled agent runs execute at once. Each poll claims at most this many due jobs and returns without waiting for the agent; further due jobs stay pending until a slot frees on a later tick. Default 8, which is headroom above the observed production peak of 6, so that peak still runs. A hung run releases its slot when the watchdog recovery timeout elapses; the agent keeps going. Validated at startup as a positive integer.
 
 ---
 
