@@ -1,0 +1,282 @@
+// secret-capture-resume-subscriber.test.ts — unit tests for the #972 resume subscriber.
+// No DB, no real bus: a fake bus records subscriptions/publishes and lets a test emit events.
+
+import { describe, it, expect, vi } from 'vitest';
+import { createSilentLogger, type Logger } from '../../../src/logger.js';
+import { SecretCaptureResumeSubscriber, type ResumeRoutingRegistrar } from '../../../src/secrets/secret-capture-resume-subscriber.js';
+import type { EventBus } from '../../../src/bus/bus.js';
+import type { BusEvent, Layer, EventType, AgentTaskEvent } from '../../../src/bus/events.js';
+import { createSecretCaptured } from '../../../src/bus/events.js';
+import { encodeResumeToken } from '../../../src/agents/resume-token.js';
+
+function makeFakeBus(opts: { publishThrows?: boolean } = {}) {
+  const handlers = new Map<EventType, Array<(e: BusEvent) => unknown>>();
+  const published: Array<{ layer: Layer; event: BusEvent }> = [];
+  const bus = {
+    subscribe(type: EventType, _layer: Layer, handler: (e: BusEvent) => unknown) {
+      const list = handlers.get(type) ?? [];
+      list.push(handler);
+      handlers.set(type, list);
+    },
+    async publish(layer: Layer, event: BusEvent) {
+      if (opts.publishThrows) throw new Error('bus down');
+      published.push({ layer, event });
+    },
+  } as unknown as EventBus;
+  async function emit(event: BusEvent) {
+    for (const h of handlers.get(event.type) ?? []) await h(event);
+  }
+  return { bus, published, emit };
+}
+
+const ORIGINATOR = {
+  contactId: 'ceo',
+  systemRole: 'principal' as const,
+  channel: 'email',
+  initiatedAt: 't',
+  // Production stamps tier via stampOriginator (#950); omitting it made this
+  // fixture the one CEO-facing shape that decideRelayGateC would escalate (#1733).
+  tier: 'principal' as const,
+};
+
+function makeCapturedEvent(overrides: Partial<Parameters<typeof createSecretCaptured>[0]> = {}) {
+  return createSecretCaptured(
+    {
+      secretName: 'user.aeroplan_password',
+      label: 'Aeroplan password',
+      conversationId: 'conv-1',
+      agentId: 'coordinator',
+      channelId: 'email',
+      taskEventId: 'task-evt-9',
+      resumeIntent: 'check the Aeroplan balance',
+      originator: ORIGINATOR,
+      ...overrides,
+    },
+    'task-evt-9',
+  );
+}
+
+function makeSubscriber(opts: { publishThrows?: boolean; logger?: Logger } = {}) {
+  const { bus, published, emit } = makeFakeBus(opts);
+  // Spy registrar so tests can assert routing is seeded for the resume task.
+  const routingCalls: Array<{ taskEventId: string; routing: Parameters<ResumeRoutingRegistrar>[1] }> = [];
+  const registerRouting: ResumeRoutingRegistrar = (taskEventId, routing) => { routingCalls.push({ taskEventId, routing }); };
+  // Allow callers to inject a custom logger (e.g. one with a spy on warn) for assertion purposes.
+  const logger = opts.logger ?? createSilentLogger();
+  const sub = new SecretCaptureResumeSubscriber(bus, logger, registerRouting);
+  sub.start();
+  return { published, emit, routingCalls };
+}
+
+describe('SecretCaptureResumeSubscriber', () => {
+  it('re-enters the originating agent via a synthetic agent.task with parentEventId threaded', async () => {
+    const { published, emit } = makeSubscriber();
+    await emit(makeCapturedEvent());
+
+    expect(published).toHaveLength(1);
+    const { layer, event } = published[0]!;
+    expect(layer).toBe('system');
+    expect(event.type).toBe('agent.task');
+    const task = event as AgentTaskEvent;
+    expect(task.payload.agentId).toBe('coordinator');
+    expect(task.payload.conversationId).toBe('conv-1');
+    expect(task.payload.channelId).toBe('email');
+    // senderId attributes the resumed turn to whoever started the chain (the originator).
+    expect(task.payload.senderId).toBe('ceo');
+    // parentEventId threads back to the originating agent.task for causal tracing.
+    expect(task.parentEventId).toBe('task-evt-9');
+    // originator is normalized (parseOriginator) so Gate C on skills and relay see the same bag.
+    expect(task.payload.metadata).toEqual({ originator: ORIGINATOR });
+    // The content tells the agent what arrived + the original intent so it can reason about
+    // completeness from its own conversation history.
+    expect(task.payload.content).toContain('Aeroplan password');
+    expect(task.payload.content).toContain('check the Aeroplan balance');
+  });
+
+  it('seeds dispatcher routing for the resume task BEFORE publishing it (#972)', async () => {
+    const { published, emit, routingCalls } = makeSubscriber();
+    await emit(makeCapturedEvent());
+
+    // Routing must be registered for the same task id that is published, with the origin channel,
+    // so the dispatcher delivers the agent's reply back to the user instead of dropping it.
+    expect(routingCalls).toHaveLength(1);
+    const publishedTaskId = (published[0]!.event as AgentTaskEvent).id;
+    expect(routingCalls[0]!.taskEventId).toBe(publishedTaskId);
+    expect(routingCalls[0]!.routing).toEqual({
+      channelId: 'email',
+      conversationId: 'conv-1',
+      senderId: 'ceo',
+      // Gate C on the relay requires originator (#1733) — round-tripped from the capture token.
+      // Must carry tier: 'principal' so CEO-facing resume replies are not escalated.
+      originator: ORIGINATOR,
+    });
+  });
+
+  it('CEO resume originator is allowed by decideRelayGateC (#1733 acceptance)', async () => {
+    const { decideRelayGateC } = await import('../../../src/dispatch/relay-gate-c.js');
+    const { emit, routingCalls } = makeSubscriber();
+    await emit(makeCapturedEvent());
+    const originator = routingCalls[0]!.routing.originator;
+    const outcome = await decideRelayGateC({
+      originator,
+      content: 'Secret was captured — continuing.',
+      conversationId: 'conv-1',
+      channelId: 'email',
+    });
+    expect(outcome).toEqual({
+      kind: 'decide',
+      decision: 'allow',
+      tier: 'principal',
+      reason: 'tier_permits_external_send',
+    });
+  });
+
+  it('does not double-dispatch on duplicate event delivery', async () => {
+    const { published, emit } = makeSubscriber();
+    const event = makeCapturedEvent();
+    await emit(event);
+    await emit(event); // same event id delivered twice
+    expect(published).toHaveLength(1);
+  });
+
+  it('skips (no dispatch) when essential routing is missing', async () => {
+    const { published, emit, routingCalls } = makeSubscriber();
+    // A token minted outside an agent context has no agentId — nothing to route a resume to.
+    await emit(createSecretCaptured({
+      secretName: 'user.x',
+      label: 'X',
+      conversationId: 'conv-1',
+      channelId: 'email',
+      // agentId intentionally absent
+    }));
+    expect(published).toHaveLength(0);
+    expect(routingCalls).toHaveLength(0);
+  });
+
+  it('skips (no dispatch) when minted on a non-user-facing channel (delegated specialist)', async () => {
+    const { published, emit, routingCalls } = makeSubscriber();
+    // A delegated specialist runs on channelId 'internal' with a throwaway conversation — a resume
+    // there could never reach the user, so it must be skipped rather than dead-ended silently.
+    await emit(makeCapturedEvent({ channelId: 'internal', conversationId: 'delegate-abc', agentId: 'some-specialist' }));
+    expect(published).toHaveLength(0);
+    expect(routingCalls).toHaveLength(0);
+  });
+
+  it('falls back to fail-closed unresolved originator when none is present (#1733)', async () => {
+    const { decideRelayGateC } = await import('../../../src/dispatch/relay-gate-c.js');
+    const { published, emit, routingCalls } = makeSubscriber();
+    await emit(createSecretCaptured({
+      secretName: 'user.x',
+      label: 'X',
+      conversationId: 'conv-1',
+      agentId: 'coordinator',
+      channelId: 'email',
+    }));
+    expect(published).toHaveLength(1);
+    const task = published[0]!.event as AgentTaskEvent;
+    expect(typeof task.payload.senderId).toBe('string');
+    expect(task.payload.senderId.length).toBeGreaterThan(0);
+    // Metadata and routing share the same fail-closed originator so Gate C cannot skip.
+    const originator = routingCalls[0]!.routing.originator;
+    expect(task.payload.metadata).toEqual({ originator });
+    expect(originator.tier).toBeNull();
+    expect(originator.systemRole).toBeNull();
+    const outcome = await decideRelayGateC({
+      originator,
+      content: 'Continuing after capture.',
+      conversationId: 'conv-1',
+      channelId: 'email',
+    });
+    expect(outcome).toMatchObject({ kind: 'decide', decision: 'escalate' });
+  });
+
+  it('falls back to fail-closed unresolved originator when originator.contactId is malformed (#1733)', async () => {
+    const { decideRelayGateC } = await import('../../../src/dispatch/relay-gate-c.js');
+    const { published, emit, routingCalls } = makeSubscriber();
+    // A malformed persisted originator (contactId is a number) must not yield a non-string senderId.
+    await emit(makeCapturedEvent({
+      originator: { contactId: 123 as unknown as string, systemRole: 'principal', channel: 'email', initiatedAt: 't' },
+    }));
+    expect(published).toHaveLength(1);
+    const task = published[0]!.event as AgentTaskEvent;
+    expect(task.payload.senderId).toBe('secret-capture');
+    const originator = routingCalls[0]!.routing.originator;
+    expect(task.payload.metadata).toEqual({ originator });
+    const outcome = await decideRelayGateC({
+      originator,
+      content: 'Continuing after capture.',
+      conversationId: 'conv-1',
+      channelId: 'email',
+    });
+    expect(outcome).toMatchObject({ kind: 'decide', decision: 'escalate' });
+  });
+
+  it('rolls back the dedup marker and propagates when publish fails', async () => {
+    const { emit } = makeSubscriber({ publishThrows: true });
+    const event = makeCapturedEvent();
+    // The failure must propagate (catch policy: log + propagate), not be swallowed.
+    await expect(emit(event)).rejects.toThrow('bus down');
+    // After rollback a retry is allowed: a second delivery is attempted again (and throws again),
+    // proving the dedup marker was cleared rather than left blocking the retry.
+    await expect(emit(event)).rejects.toThrow('bus down');
+  });
+
+  it('never leaks a secret value (the event carries none; content is name/intent only)', async () => {
+    const { published, emit } = makeSubscriber();
+    await emit(makeCapturedEvent());
+    // Sanity: the payload only ever references the vault key/label/intent — there is no value
+    // anywhere in the chain to leak, and the content is built from names only.
+    expect(JSON.stringify(published[0]!.event)).not.toContain('hunter2');
+  });
+
+  it('re-enters the coordinator with a re-delegate instruction when a resume_token is present (#995)', async () => {
+    const { published, emit, routingCalls } = makeSubscriber();
+    const resumeToken = encodeResumeToken({ agent: 'accounts-specialist', originalTask: 'log into Aeroplan', context: 'need password' });
+    // Origin points at the COORDINATOR (deliverable), as the capture skill retargeted it.
+    await emit(makeCapturedEvent({
+      label: 'Aeroplan password',
+      conversationId: 'user-conv',
+      channelId: 'email',
+      agentId: 'coordinator',
+      resumeIntent: 'check the Aeroplan balance',
+      resumeToken,
+    }));
+
+    expect(published).toHaveLength(1);
+    const task = published[0]!.event as AgentTaskEvent;
+    expect(task.payload.agentId).toBe('coordinator');
+    expect(task.payload.conversationId).toBe('user-conv');
+    expect(task.payload.channelId).toBe('email');
+    // Content names the specialist to re-delegate to and embeds the token verbatim.
+    expect(task.payload.content).toContain('accounts-specialist');
+    expect(task.payload.content).toContain(resumeToken);
+    // originator preserved; routing seeded for delivery.
+    expect(task.payload.metadata).toEqual({ originator: ORIGINATOR });
+    expect(routingCalls).toHaveLength(1);
+  });
+
+  it('skips with a log when the resume_token cannot be decoded (#995)', async () => {
+    // Use a per-test logger with a warn spy so we can assert the warning was actually emitted.
+    // createSilentLogger() discards output; the spy still intercepts the call.
+    const logger = createSilentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const { published, emit } = makeSubscriber({ logger });
+    await emit(makeCapturedEvent({ conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', resumeToken: '!!!garbage!!!' }));
+    // Must not publish — the bad token is unrecoverable.
+    expect(published).toHaveLength(0);
+    // Must log a warning so a future refactor cannot silently drop the warn call.
+    expect(warnSpy).toHaveBeenCalledOnce();
+    // The warning object must carry the routing context for debuggability, and the message must
+    // mention decode failure or the skip decision.
+    const [meta, message] = warnSpy.mock.calls[0]!;
+    expect(meta).toMatchObject({ secretName: expect.any(String), agentId: 'coordinator' });
+    expect(message).toMatch(/decod|skip/i);
+  });
+
+  it('never leaks the secret value on the re-delegation path (#995)', async () => {
+    const { published, emit } = makeSubscriber();
+    const resumeToken = encodeResumeToken({ agent: 'accounts-specialist', originalTask: 'log into Aeroplan', context: 'need password' });
+    await emit(makeCapturedEvent({ conversationId: 'user-conv', channelId: 'email', agentId: 'coordinator', resumeToken }));
+    expect(JSON.stringify(published[0]!.event)).not.toContain('hunter2');
+  });
+});

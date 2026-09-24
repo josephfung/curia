@@ -38,7 +38,7 @@ describe('ListPendingActionsHandler', () => {
   // #1126: this skill moved from `elevated` to `normal` + allowed_callers:['coordinator'].
   // Authorization (who may call it) is now enforced solely by the execution-layer caller gate,
   // not by a handler-level origination re-check — so the old "rejects non-CEO / allows system /
-  // rejects agent" handler tests are gone. The caller gate is covered in src/skills/execution.test.ts.
+  // rejects agent" handler tests are gone. The caller gate is covered in tests/unit/skills/execution.policy.test.ts.
 
   it('returns error when actionLogRepo is not available', async () => {
     const handler = new ListPendingActionsHandler();

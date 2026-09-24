@@ -1,7 +1,7 @@
 // handler.test.ts — system-secret-capture-request skill.
 //
 // allowed_callers enforcement (setup-wizard only) is the execution layer's job and is covered
-// generically in src/skills/execution.test.ts; the manifest declaration is what wires it. These
+// generically in tests/unit/skills/execution.policy.test.ts; the manifest declaration is what wires it. These
 // tests cover the handler's own behavior: it mints via the SYSTEM name policy and surfaces a
 // rejected (non-declared/non-channel) name as an error.
 

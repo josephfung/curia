@@ -27,6 +27,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Unit test layout** — `src/**/*.test.ts` moved into the `tests/unit/` mirror. (#848)
 - **`buildPrincipalSenderContext`** — single contacts helper for principal SenderContext; voice gains migration-055 warn. (#1627)
 - **Voice sessions** — `caller_contact_id` replaces `principal_contact_id` for any caller. (#1629)
 - **UUID validation** — one shared `isUuid()` replaces 30 local regexes; two drifted copies no longer reject v7 ids. (#1879)

@@ -96,7 +96,7 @@ Two patterns that pass local checks but fail CI regularly:
 ### Testing
 - Vitest for unit and integration tests
 - Integration tests use real Postgres (via Docker), not mocks
-- Tests live next to the code they test, or in `tests/unit/` and `tests/integration/`
+- Unit tests for `src/` live in `tests/unit/` (mirror the source tree). Integration tests live in `tests/integration/`. Skill handler tests stay beside the skill; app tests stay in the app package.
 
 ### pnpm-workspace.yaml — do not edit during worktree setup
 

@@ -9,7 +9,10 @@ export default defineConfig({
     // component test added under packages/ later cannot go missing the same way.
     include: [
       'tests/**/*.test.{ts,tsx}',
-      'src/**/*.test.{ts,tsx}',
+      // Backend unit tests live under tests/unit/ (a mirror of src/). A src/**
+      // glob would let co-located suites run again; tests/unit/src-test-layout.test.ts
+      // rejects those files. Skill handler tests stay next to the skill, and app
+      // tests stay in the app package.
       'skills/**/*.test.{ts,tsx}',
       'apps/**/*.test.{ts,tsx}',
       'scripts/**/*.test.{ts,tsx}',
