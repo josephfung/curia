@@ -309,43 +309,71 @@ describeIf('contact recent history SQL (#1599)', () => {
 
   it('plans the widest window on idx_wm_sender_active with a created_at bound', async () => {
     const widest = Math.max(...Object.values(CHANNEL_RECENT_HISTORY_HOURS));
-    const alice = await seedContact(pool, 'explain-alice');
-    // The queried contact owns the rows, spread over 30 days. sender_contact_id
-    // equality matches all of them; only the created_at range stays selective.
-    await pool.query(
-      `INSERT INTO working_memory (
-         conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id
-       )
-       SELECT
-         $1 || 'explain:' || (g % 800),
-         'coordinator',
-         'user',
-         'filler',
-         now() - ((g % 720) || ' hours')::interval,
-         false,
-         $2::uuid,
-         'email'
-       FROM generate_series(1, 20000) g`,
-      [PREFIX, alice],
-    );
-    await pool.query('ANALYZE working_memory');
+    // Hold the contact row until EXPLAIN finishes. contacts.test.ts and
+    // knowledge-graph.test.ts DELETE FROM contacts with no prefix in afterAll,
+    // and vitest runs files in parallel. A committed contact can vanish during
+    // this insert: RI checks the current row, so a later tuple in the same
+    // statement fails the FK (#1892).
+    const client = await pool.connect();
+    let committed = false;
+    try {
+      await client.query('BEGIN');
+      const seeded = await client.query<{ id: string }>(
+        `INSERT INTO contacts (display_name) VALUES ($1) RETURNING id`,
+        [`${PREFIX}explain-alice`],
+      );
+      const alice = seeded.rows[0]?.id;
+      if (!alice) throw new Error('explain-alice: INSERT INTO contacts returned no rows');
+      // The queried contact owns the rows, spread over 30 days. sender_contact_id
+      // equality matches all of them; only the created_at range stays selective.
+      await client.query(
+        `INSERT INTO working_memory (
+           conversation_id, agent_id, role, content, created_at, archived, sender_contact_id, channel_id
+         )
+         SELECT
+           $1 || 'explain:' || (g % 800),
+           'coordinator',
+           'user',
+           'filler',
+           now() - ((g % 720) || ' hours')::interval,
+           false,
+           $2::uuid,
+           'email'
+         FROM generate_series(1, 20000) g`,
+        [PREFIX, alice],
+      );
+      await client.query('ANALYZE working_memory');
 
-    const since = new Date(Date.now() - widest * 60 * 60 * 1000);
-    const explained = await pool.query<{ 'QUERY PLAN': unknown }>(
-      `EXPLAIN (FORMAT JSON) ${CONTACT_RECENT_HISTORY_SQL}`,
-      [alice, 'coordinator', since, `${PREFIX}explain:live`, 8],
-    );
-    const plan = explained.rows[0]?.['QUERY PLAN'];
-    // A few thousand in-window rows often plan as a bitmap scan. Either node
-    // type is the index, and both carry the time bound in Index Cond. A plan
-    // that ignores created_at fails this even if it still names the index.
-    const scan = findPlanNode(
-      plan,
-      (node) => (node['Node Type'] === 'Index Scan' || node['Node Type'] === 'Bitmap Index Scan')
-        && node['Index Name'] === 'idx_wm_sender_active',
-    );
-    expect(scan, JSON.stringify(plan)).toBeDefined();
-    expect(String(scan?.['Index Cond'])).toContain('created_at');
+      const since = new Date(Date.now() - widest * 60 * 60 * 1000);
+      const explained = await client.query<{ 'QUERY PLAN': unknown }>(
+        `EXPLAIN (FORMAT JSON) ${CONTACT_RECENT_HISTORY_SQL}`,
+        [alice, 'coordinator', since, `${PREFIX}explain:live`, 8],
+      );
+      const plan = explained.rows[0]?.['QUERY PLAN'];
+      // A few thousand in-window rows often plan as a bitmap scan. Either node
+      // type is the index, and both carry the time bound in Index Cond. A plan
+      // that ignores created_at fails this even if it still names the index.
+      const scan = findPlanNode(
+        plan,
+        (node) => (node['Node Type'] === 'Index Scan' || node['Node Type'] === 'Bitmap Index Scan')
+          && node['Index Name'] === 'idx_wm_sender_active',
+      );
+      expect(scan, JSON.stringify(plan)).toBeDefined();
+      expect(String(scan?.['Index Cond'])).toContain('created_at');
+      await client.query('COMMIT');
+      committed = true;
+    } catch (err) {
+      if (!committed) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackErr) {
+          throw new AggregateError([err, rollbackErr], 'plan test failed and rollback failed');
+        }
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 });
 
