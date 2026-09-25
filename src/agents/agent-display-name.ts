@@ -45,17 +45,23 @@ export function containsRawAgentId(text: string, agentId: string): boolean {
 /**
  * Replace registry-id occurrences with the principal-facing label.
  *
- * Same match as {@link containsRawAgentId}: hyphenated ids anywhere,
- * case-insensitively; a single-word id only as a whole word, and not when
- * it is already the "calendar specialist" phrase. A function replacer keeps
- * `$` in the label from being read as a substitution.
+ * Hyphenated and underscored ids are not English, so any occurrence is
+ * replaced. A single-word id is also a common noun (`calendar`, `contacts`),
+ * so only the harness shapes are replaced: a quoted id (`'calendar'`,
+ * `"calendar"`, `` `calendar` ``) and an `@calendar` mention. Bare prose
+ * stays as the specialist wrote it. A function replacer keeps `$` in the
+ * label from being read as a substitution.
  */
 export function redactRawAgentId(text: string, agentId: string, displayName: string): string {
   const id = agentId.trim();
   if (id.length === 0 || id.toLowerCase() === displayName.toLowerCase()) return text;
   const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = id.includes('-') || id.includes('_')
-    ? escaped
-    : `\\b${escaped}\\b(?!\\s+specialist\\b)`;
-  return text.replace(new RegExp(pattern, 'gi'), () => displayName);
+  if (id.includes('-') || id.includes('_')) {
+    return text.replace(new RegExp(escaped, 'gi'), () => displayName);
+  }
+  const quoted = new RegExp(`(['"\`])${escaped}\\1`, 'gi');
+  const mention = new RegExp(`@${escaped}\\b(?!\\s+specialist\\b)`, 'gi');
+  return text
+    .replace(quoted, (match) => `${match[0]}${displayName}${match[match.length - 1]}`)
+    .replace(mention, () => displayName);
 }

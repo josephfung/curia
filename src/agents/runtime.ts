@@ -109,7 +109,6 @@ import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { principalAgentLabel } from './agent-display-name.js';
 import {
   delegationFailureNarrationPrompt,
-  redactAgentIdInTranscript,
   requestAnchor,
   selectDelegationFailureReply,
   transcriptForNarration,
@@ -2682,8 +2681,8 @@ export class AgentRuntime {
   /**
    * Principal-facing reply after a non-retryable delegation failure (#1860).
    *
-   * One narration call, with the failed request in context and the registry id
-   * redacted out of tool results. The model's text is used only when it names
+   * One narration call, with the failed request in context. Tool blocks are
+   * dropped so the call is plain text. The model's text is used only when it names
    * that request and does not leak the id. Otherwise a display-name fallback
    * quotes the request, so two different asks are not the same sentence.
    * The call is direct (not chatWithRetry): a provider failure must not also
@@ -2719,9 +2718,7 @@ export class AgentRuntime {
     if (budget.turnsUsed + 1 < budget.maxTurns) {
       budget.turnsUsed++;
       try {
-        const transcript = transcriptForNarration(
-          redactAgentIdInTranscript(workingMessages, esc.agent, displayName),
-        );
+        const transcript = transcriptForNarration(workingMessages);
         const messages: Message[] = [
           ...transcript,
           {
