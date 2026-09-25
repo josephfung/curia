@@ -5093,23 +5093,27 @@ describe('context budget', () => {
   });
 });
 
-// Bullpen read-watermark (#1065). A thread the agent fulfils out-of-band (a send, a
-// spreadsheet write, anything that leaves no in-thread reply) used to be re-injected into
-// the agent's context on its next wake and re-actioned — a duplicate out-of-band action.
-// The runtime now stamps a per-agent "seen through" watermark on every thread it had in
-// context at successful task completion, so a handled thread is not re-surfaced until
-// genuinely new activity arrives. Action-agnostic: no per-skill allowlist.
-describe('AgentRuntime bullpen read-watermark (#1065)', () => {
+// Bullpen read-watermark (#1065, #1901). A thread the agent fulfils out-of-band (a send,
+// a write, anything that leaves no in-thread reply) must not be re-injected and re-actioned.
+// An @mention that was only ambient context, and that this turn did not act on, stays
+// pending so a lost handoff can be recovered on a later wake. The thread the task was
+// woken for is stamped even when the agent does not reply.
+describe('AgentRuntime bullpen read-watermark (#1065, #1901)', () => {
+  const RELAY = 'Message to send: Your meeting with Lisa is summarized in full for the principal.';
+
   // Real in-memory bullpen with one open thread whose only message is from a
   // non-coordinator creator — mirroring a specialist asking the coordinator to do something.
-  async function makeBullpenWithOpenRequest(creatorAgentId = 'meeting-debrief') {
+  async function makeBullpenWithOpenRequest(
+    creatorAgentId = 'meeting-debrief',
+    options?: { content?: string; mentions?: string[] },
+  ) {
     const bullpenService = BullpenService.createInMemory();
     const { thread } = await bullpenService.openThread(
       'Debrief prompt: Lisa',
       creatorAgentId,
       ['coordinator'],
-      'Message to send: Your meeting with Lisa is summarized…',
-      ['coordinator'],
+      options?.content ?? RELAY,
+      options?.mentions ?? ['coordinator'],
     );
     return { bullpenService, threadId: thread.id };
   }
@@ -5163,10 +5167,10 @@ describe('AgentRuntime bullpen read-watermark (#1065)', () => {
     expect(afterPending.map(t => t.threadId)).not.toContain(threadId);
   });
 
-  it('watermarks a thread that was only injected as ambient context (unrelated wake)', async () => {
-    // The exact repro: the coordinator is woken for an UNRELATED task while the request
-    // thread sits in its ambient context. Handling that task must watermark the ambient
-    // thread so it cannot be re-actioned afterward — no bullpen-origin metadata involved.
+  it('leaves an ignored ambient @mention pending (#1901)', async () => {
+    // Lost handoff: the thread is only ambient context on an unrelated wake, and the
+    // agent answers the user without touching it. Stamping seen here would recover
+    // the handoff at most once.
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
@@ -5176,7 +5180,6 @@ describe('AgentRuntime bullpen read-watermark (#1065)', () => {
     const agent = makeCoordinator(bus, logger, bullpenService, provider);
     agent.register();
 
-    // A plain non-bullpen task — the request thread is only ambient context here.
     await bus.publish('dispatch', createAgentTask({
       agentId: 'coordinator',
       conversationId: 'conv-unrelated',
@@ -5187,7 +5190,149 @@ describe('AgentRuntime bullpen read-watermark (#1065)', () => {
     }));
 
     const afterPending = await bullpenService.getPendingThreadsForAgent('coordinator', 60);
-    expect(afterPending.map(t => t.threadId)).not.toContain(threadId);
+    expect(afterPending.map(t => t.threadId)).toContain(threadId);
+  });
+
+  it('does not watermark an ambient @mention when the tool call is for the waking task (#1901)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+
+    const provider = createToolUseProvider('signal-send', { to: '+1555', message: 'dinner is at 7 on Tuesday' });
+    const agent = makeCoordinator(bus, logger, bullpenService, provider, {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }),
+    } as unknown as ExecutionLayer);
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-unrelated',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'text the principal that dinner is at 7',
+      parentEventId: 'inbound-1',
+    }));
+
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).toContain(threadId);
+  });
+
+  it('watermarks an ambient @mention the agent handled out of band (#1901)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+
+    const provider = createToolUseProvider('signal-send', { to: '+1555', message: RELAY });
+    const agent = makeCoordinator(bus, logger, bullpenService, provider, {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }),
+    } as unknown as ExecutionLayer);
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-unrelated',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'anything else waiting?',
+      parentEventId: 'inbound-1',
+    }));
+
+    expect((await bullpenService.getThread(threadId))?.thread.status).toBe('open');
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).not.toContain(threadId);
+  });
+
+  it('watermarks the woke thread when a bullpen-origin task chooses not to reply (#1901)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+
+    const provider = createMockProvider('nothing to add');
+    const agent = makeCoordinator(bus, logger, bullpenService, provider);
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: threadId,
+      channelId: 'bullpen',
+      senderId: 'meeting-debrief',
+      content: 'You have been mentioned. No reply needed.',
+      metadata: { taskOrigin: 'bullpen', threadId },
+      parentEventId: 'discuss-1',
+    }));
+
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).not.toContain(threadId);
+  });
+
+  it('watermarks an ambient thread whose latest message does not @mention the agent', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest('meeting-debrief', { mentions: [] });
+
+    const provider = createMockProvider('noted');
+    const agent = makeCoordinator(bus, logger, bullpenService, provider);
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-fyi',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'unrelated',
+      parentEventId: 'inbound-1',
+    }));
+
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).not.toContain(threadId);
+  });
+
+  it('watermarks an ambient @mention the agent replied to in-thread (#1901)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+
+    const provider = createToolUseProvider('bullpen', { action: 'reply', thread_id: threadId, content: 'done' });
+    const agent = makeCoordinator(bus, logger, bullpenService, provider, {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: { thread_id: threadId } }),
+    } as unknown as ExecutionLayer);
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-reply',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'unrelated',
+      parentEventId: 'inbound-1',
+    }));
+
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).not.toContain(threadId);
+  });
+
+  it('does not watermark an ambient @mention that was only read (#1901)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+
+    const provider = createToolUseProvider('bullpen', { action: 'get_thread', thread_id: threadId });
+    const agent = makeCoordinator(bus, logger, bullpenService, provider, {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: { thread: {} } }),
+    } as unknown as ExecutionLayer);
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-read',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'unrelated',
+      parentEventId: 'inbound-1',
+    }));
+
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).toContain(threadId);
   });
 
   it('omits a bullpen block that exceeds the context budget and leaves the thread unmarked (#1899)', async () => {
@@ -5205,7 +5350,9 @@ describe('AgentRuntime bullpen read-watermark (#1065)', () => {
       'meeting-debrief',
       ['coordinator'],
       'x'.repeat(20_000),
-      ['coordinator'],
+      // No @mention: a dropped block must stay unmarked. An ignored @mention would
+      // stay pending either way (#1901), so it would not prove the budget clear.
+      [],
     );
 
     const captured: string[] = [];
@@ -5262,14 +5409,16 @@ describe('AgentRuntime bullpen read-watermark (#1065)', () => {
     bus.subscribe('agent.response', 'dispatch', () => {});
     const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
 
-    const provider = createMockProvider('seen');
-    const agent = makeCoordinator(bus, logger, bullpenService, provider);
+    const provider = createToolUseProvider('signal-send', { to: '+1555', message: RELAY });
+    const agent = makeCoordinator(bus, logger, bullpenService, provider, {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }),
+    } as unknown as ExecutionLayer);
     agent.register();
     await bus.publish('dispatch', createAgentTask({
       agentId: 'coordinator', conversationId: 'conv-x', channelId: 'signal',
       senderId: 'user', content: 'unrelated', parentEventId: 'inbound-1',
     }));
-    // Watermarked → not pending.
+    // Handled out of band → not pending, even though the thread is still open.
     expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).not.toContain(threadId);
 
     // New message from the creator advances last_message_at past the watermark.

@@ -594,10 +594,177 @@ export class BullpenService {
    * last_message_at (#1065). After this, getPendingThreadsForAgent will not re-surface
    * those threads to the agent until a newer message arrives — preventing the re-action
    * of an already-handled out-of-band request. Idempotent, monotonic, unknown ids ignored.
+   *
+   * Callers choose which threads to stamp. An ambient @mention the agent did not act on
+   * must not be passed here (#1901); `selectThreadsToWatermark` is that choice.
    */
   async markThreadsSeen(agentId: string, threadIds: string[]): Promise<void> {
     return this.backend.markThreadsSeen(agentId, threadIds);
   }
+}
+
+// -- Read-watermark selection (#1901) --
+
+/**
+ * How much of a shown message must appear in an out-of-band tool call before that
+ * call counts as handling the thread. Long enough that a shared boilerplate prefix
+ * is not a hit; short enough that relaying the request body still matches (#1065).
+ */
+const THREAD_ACTION_EXCERPT_CHARS = 32;
+
+/** A pending thread as shown to the agent, for the completion-time watermark decision. */
+export interface BullpenWatermarkThread {
+  threadId: string;
+  /** True when the latest shown message @mentions the agent completing the task. */
+  mentionsAgent: boolean;
+  /** Bodies of the messages that were injected for this thread. */
+  messageContents: readonly string[];
+}
+
+/** One tool call from the task. `success` is false for handler failures and soft-failures. */
+export interface BullpenToolTouch {
+  name: string;
+  input: unknown;
+  success: boolean;
+}
+
+/**
+ * Snapshot a pending thread for watermark selection. Mention detection uses only the
+ * latest message: an earlier @mention followed by a note that does not mention the
+ * agent is awareness, not an open handoff (#1901).
+ */
+export function pendingThreadWatermarkSnapshot(
+  agentId: string,
+  thread: PendingThreadContext,
+): BullpenWatermarkThread {
+  const latest = thread.recentMessages[thread.recentMessages.length - 1];
+  return {
+    threadId: thread.threadId,
+    mentionsAgent: latest?.mentionedAgentIds.includes(agentId) ?? false,
+    messageContents: thread.recentMessages.map(m => m.content),
+  };
+}
+
+/**
+ * A soft-failure (`success: true` with `data.failed`) did not do the work. Treat it
+ * as not actionable so a failed handoff cannot retire the @mention (#1901).
+ */
+export function toBullpenToolTouch(
+  name: string,
+  input: unknown,
+  result: { success: boolean; data?: unknown },
+): BullpenToolTouch {
+  let success = result.success;
+  const data = result.data;
+  if (
+    success
+    && data !== null
+    && typeof data === 'object'
+    && !Array.isArray(data)
+    && 'failed' in data
+    && data.failed === true
+  ) {
+    success = false;
+  }
+  return { name, input, success };
+}
+
+/**
+ * Thread ids to stamp seen after a successful task (#1065, #1901).
+ *
+ * - The thread this task was woken for is always stamped, including when the agent
+ *   chooses not to reply. That is the bullpen-origin wake.
+ * - An ambient thread whose latest message does not @mention the agent is awareness
+ *   and is stamped so it does not keep returning.
+ * - An ambient @mention stays pending unless this turn acted on it: a successful
+ *   bullpen reply or close for that thread, or any other successful tool call that
+ *   carries the thread id or a distinctive excerpt of a shown message (the out-of-band
+ *   send/write). A read (`get_thread`) and an unrelated tool call do not count.
+ */
+export function selectThreadsToWatermark(args: {
+  wokeThreadId?: string;
+  ambient: readonly BullpenWatermarkThread[];
+  toolTouches: readonly BullpenToolTouch[];
+}): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const add = (id: string): void => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  };
+
+  if (args.wokeThreadId) add(args.wokeThreadId);
+
+  for (const thread of args.ambient) {
+    if (thread.threadId === args.wokeThreadId) continue;
+    if (!thread.mentionsAgent || toolTouchesActOnThread(args.toolTouches, thread)) {
+      add(thread.threadId);
+    }
+  }
+  return ids;
+}
+
+function toolTouchesActOnThread(
+  touches: readonly BullpenToolTouch[],
+  thread: BullpenWatermarkThread,
+): boolean {
+  return touches.some(touch => touchActsOnThread(touch, thread));
+}
+
+function touchActsOnThread(touch: BullpenToolTouch, thread: BullpenWatermarkThread): boolean {
+  if (!touch.success) return false;
+  if (touch.name === 'bullpen') {
+    if (!isPlainRecord(touch.input)) return false;
+    const action = touch.input['action'];
+    const threadId = touch.input['thread_id'];
+    // get_thread is a read. post opens a different thread. Neither retires this @mention.
+    return (action === 'reply' || action === 'close') && threadId === thread.threadId;
+  }
+  const blob = collectStrings(touch.input).join('\n');
+  if (blob.includes(thread.threadId)) return true;
+  return thread.messageContents.some(content => textCarriesThreadMessage(blob, content));
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function collectStrings(value: unknown): string[] {
+  const out: string[] = [];
+  walkStrings(value, out);
+  return out;
+}
+
+function walkStrings(value: unknown, out: string[]): void {
+  if (typeof value === 'string') {
+    out.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) walkStrings(item, out);
+    return;
+  }
+  if (isPlainRecord(value)) {
+    for (const nested of Object.values(value)) walkStrings(nested, out);
+  }
+}
+
+function normalizeForExcerpt(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function textCarriesThreadMessage(haystackRaw: string, messageRaw: string): boolean {
+  const haystack = normalizeForExcerpt(haystackRaw);
+  const message = normalizeForExcerpt(messageRaw);
+  if (message.length < THREAD_ACTION_EXCERPT_CHARS || haystack.length < THREAD_ACTION_EXCERPT_CHARS) {
+    return false;
+  }
+  if (haystack.includes(message)) return true;
+  for (let i = 0; i + THREAD_ACTION_EXCERPT_CHARS <= message.length; i++) {
+    if (haystack.includes(message.slice(i, i + THREAD_ACTION_EXCERPT_CHARS))) return true;
+  }
+  return false;
 }
 
 // -- Context formatter --

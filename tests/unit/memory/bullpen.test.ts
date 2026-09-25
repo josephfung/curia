@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { BULLPEN_PENDING_WINDOW_MINUTES, BullpenService, formatBullpenContext } from '../../../src/memory/bullpen.js';
+import {
+  BULLPEN_PENDING_WINDOW_MINUTES,
+  BullpenService,
+  formatBullpenContext,
+  pendingThreadWatermarkSnapshot,
+  selectThreadsToWatermark,
+  toBullpenToolTouch,
+} from '../../../src/memory/bullpen.js';
 import type { PendingThreadContext } from '../../../src/memory/bullpen.js';
 
 describe('BullpenService (in-memory)', () => {
@@ -372,5 +379,94 @@ describe('formatBullpenContext', () => {
     expect(out).toContain('Middle messages omitted');
     // get_thread hint still present
     expect(out).toContain('get_thread');
+  });
+});
+
+describe('selectThreadsToWatermark (#1901)', () => {
+  const mention = 'zzzz handled-beta-1901-token zzzz relay this mention out of band zzzz';
+  const other = 'qqqq ignored-alpha-1901-token qqqq keep this mention pending qqqq';
+
+  const handled = {
+    threadId: 'handled',
+    mentionsAgent: true,
+    messageContents: [mention],
+  };
+  const ignored = {
+    threadId: 'ignored',
+    mentionsAgent: true,
+    messageContents: [other],
+  };
+  const fyi = {
+    threadId: 'fyi',
+    mentionsAgent: false,
+    messageContents: ['Status only, nobody was mentioned in this note at all.'],
+  };
+
+  it('keeps an untouched ambient @mention and stamps a non-mention plus the woke thread', () => {
+    expect(selectThreadsToWatermark({
+      wokeThreadId: 'woke',
+      ambient: [handled, ignored, fyi],
+      toolTouches: [],
+    })).toEqual(['woke', 'fyi']);
+  });
+
+  it('stamps only the ambient @mention whose text an out-of-band call carried', () => {
+    expect(selectThreadsToWatermark({
+      ambient: [handled, ignored],
+      toolTouches: [{ name: 'signal-send', input: { message: mention }, success: true }],
+    })).toEqual(['handled']);
+  });
+
+  it('stamps a bullpen reply or close and ignores a read of the same thread', () => {
+    expect(selectThreadsToWatermark({
+      ambient: [handled],
+      toolTouches: [{ name: 'bullpen', input: { action: 'reply', thread_id: 'handled', content: 'done' }, success: true }],
+    })).toEqual(['handled']);
+    expect(selectThreadsToWatermark({
+      ambient: [handled],
+      toolTouches: [{ name: 'bullpen', input: { action: 'close', thread_id: 'handled' }, success: true }],
+    })).toEqual(['handled']);
+    expect(selectThreadsToWatermark({
+      ambient: [handled],
+      toolTouches: [{ name: 'bullpen', input: { action: 'get_thread', thread_id: 'handled' }, success: true }],
+    })).toEqual([]);
+    expect(selectThreadsToWatermark({
+      ambient: [handled],
+      toolTouches: [{ name: 'bullpen', input: { action: 'reply', thread_id: 'someone-else' }, success: true }],
+    })).toEqual([]);
+  });
+
+  it('does not treat a failed or soft-failed call as handling', () => {
+    const touch = toBullpenToolTouch('signal-send', { message: mention }, { success: false });
+    expect(touch.success).toBe(false);
+    expect(selectThreadsToWatermark({ ambient: [handled], toolTouches: [touch] })).toEqual([]);
+
+    const soft = toBullpenToolTouch('delegate', { task: mention }, { success: true, data: { failed: true } });
+    expect(soft.success).toBe(false);
+    expect(selectThreadsToWatermark({ ambient: [handled], toolTouches: [soft] })).toEqual([]);
+  });
+
+  it('reads the mention off the latest message only', () => {
+    const snapshot = pendingThreadWatermarkSnapshot('coordinator', {
+      threadId: 't1',
+      topic: 'topic',
+      totalMessages: 2,
+      recentMessages: [
+        {
+          senderAgentId: 'meeting-debrief',
+          content: mention,
+          mentionedAgentIds: ['coordinator'],
+          createdAt: new Date(),
+        },
+        {
+          senderAgentId: 'meeting-debrief',
+          content: 'following up with no mention',
+          mentionedAgentIds: [],
+          createdAt: new Date(),
+        },
+      ],
+    });
+    expect(snapshot.mentionsAgent).toBe(false);
+    expect(snapshot.messageContents).toEqual([mention, 'following up with no mention']);
   });
 });
