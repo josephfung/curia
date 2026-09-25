@@ -13,6 +13,7 @@ import type { TaskRepo } from '../../../src/db/task-repo.js';
 import type { DelegationLateResolvedEvent } from '../../../src/bus/events.js';
 import type { PendingDelegationRow } from '../../../src/db/queries/pending-delegations.js';
 import {
+  CLAIM_LEASE_RENEW_BUDGET_MS,
   CLAIM_LEASE_RENEW_INTERVAL_MS,
   CLAIM_LEASE_SECONDS,
   deterministicWakeEventId,
@@ -92,7 +93,7 @@ interface LeasePool {
   claimsWon: number;
 }
 
-function leasePool(opts: { lateResolved?: boolean } = {}): LeasePool {
+function leasePool(opts: { lateResolved?: boolean; renewThrows?: boolean; auditThrows?: boolean } = {}): LeasePool {
   const row: LeaseState = {
     status: 'pending',
     claimedAt: null,
@@ -123,6 +124,7 @@ function leasePool(opts: { lateResolved?: boolean } = {}): LeasePool {
       return { rows: [dbRow(row)] };
     }
     if (sql.includes('SET claimed_at = now()') && sql.includes('claim_token = $2')) {
+      if (opts.renewThrows) throw new Error('connection reset');
       const token = params[1] as string;
       if (row.status === 'claimed' && row.claimToken === token) {
         row.claimedAt = Date.now();
@@ -153,6 +155,7 @@ function leasePool(opts: { lateResolved?: boolean } = {}): LeasePool {
       return { rows: [], rowCount: 0 };
     }
     if (sql.includes("event_type = 'delegation.late_resolved'")) {
+      if (opts.auditThrows) throw new Error('audit_log unavailable');
       return { rows: opts.lateResolved ? [{ found: 1 }] : [] };
     }
     throw new Error(`unexpected query: ${sql}`);
@@ -362,6 +365,85 @@ describe('resolveLateDelegation lease (#1861)', () => {
     expect(second.resolved).toBe(true);
     expect(second.reviewTaskOutcome).toBe('closed');
     expect(wakeAttempts).toBe(2);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(resolved).toHaveLength(1);
+    expect(lease.row.status).toBe('resolved');
+  });
+
+  it('stops refreshing after the renewal budget so a hung wake can be claimed', async () => {
+    vi.useFakeTimers();
+    const lease = leasePool();
+    const bus = fencingBus();
+    const resolved = collectResolved(bus);
+    const { repo, complete } = openReview();
+
+    let releaseTurn: (() => void) | undefined;
+    const turnGate = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    let enteredTurn: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => { enteredTurn = resolve; });
+    let wakes = 0;
+    bus.subscribe('agent.task', 'system', async () => {
+      wakes += 1;
+      enteredTurn!();
+      await turnGate;
+    });
+
+    const first = resolveLateDelegation(resolutionOpts(lease.pool, bus, repo));
+    await entered;
+    const startedAt = Date.now();
+
+    await vi.advanceTimersByTimeAsync(CLAIM_LEASE_RENEW_BUDGET_MS + CLAIM_LEASE_SECONDS * 1000 + 1_000);
+
+    // The last refresh is inside the budget; the lease after it has lapsed.
+    const lastRefresh = lease.row.claimedAt;
+    expect(lastRefresh).not.toBeNull();
+    expect(lastRefresh! - startedAt).toBeLessThan(CLAIM_LEASE_RENEW_BUDGET_MS);
+    expect(Date.now() - lastRefresh!).toBeGreaterThan(CLAIM_LEASE_SECONDS * 1000);
+    expect(lease.renewals.length).toBe(
+      Math.floor((CLAIM_LEASE_RENEW_BUDGET_MS - 1) / CLAIM_LEASE_RENEW_INTERVAL_MS),
+    );
+
+    const second = await resolveLateDelegation(resolutionOpts(lease.pool, bus, repo));
+
+    expect(second.resolved).toBe(true);
+    expect(second.reviewTaskOutcome).toBe('closed');
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(resolved).toHaveLength(1);
+    expect(wakes).toBe(1);
+
+    releaseTurn!();
+    const firstResult = await first;
+    expect(firstResult).toEqual({ resolved: false });
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(resolved).toHaveLength(1);
+    expect(wakes).toBe(1);
+  });
+
+  it('records the outcome when the post-wake lease refresh fails', async () => {
+    const lease = leasePool({ renewThrows: true });
+    const bus = new EventBus(logger);
+    const resolved = collectResolved(bus);
+    const { repo, complete } = openReview();
+
+    const result = await resolveLateDelegation(resolutionOpts(lease.pool, bus, repo));
+
+    expect(result.resolved).toBe(true);
+    expect(result.reviewTaskOutcome).toBe('closed');
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(resolved).toHaveLength(1);
+    expect(lease.row.status).toBe('resolved');
+  });
+
+  it('records the outcome when the existing-audit lookup fails', async () => {
+    const lease = leasePool({ auditThrows: true });
+    const bus = new EventBus(logger);
+    const resolved = collectResolved(bus);
+    const { repo, complete } = openReview();
+
+    const result = await resolveLateDelegation(resolutionOpts(lease.pool, bus, repo));
+
+    expect(result.resolved).toBe(true);
+    expect(result.reviewTaskOutcome).toBe('closed');
     expect(complete).toHaveBeenCalledTimes(1);
     expect(resolved).toHaveLength(1);
     expect(lease.row.status).toBe('resolved');
