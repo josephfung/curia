@@ -27,14 +27,14 @@ Rejected alternatives:
 
 Injected message stamps use `toLocalIso` in the principal's timezone. A time-of-day-only stamp reads as "just now" once the window is longer than an hour, and a raw UTC stamp asks the model to convert.
 
-Of the five pending slots, four are the newest eligible threads and one is the oldest, so newer traffic cannot keep a missed handoff out of the cap until it ages out of the window.
+Of the five pending slots, four are the newest eligible threads and one is the oldest that has not already been shown and left untouched, so newer traffic cannot keep a missed handoff out of the cap until it ages out of the window. A retry does not pin that oldest slot for the rest of the window.
 
 The injected block tells the model the threads are ambient: answer them with the bullpen tools, and do not fold them into the reply on the channel that woke the agent. Scheduler suppression (#1609) still applies; this line covers the interactive path the suppression does not.
 
 ## Consequences
 
 - An unread open thread whose latest message is 30 minutes old, or many hours old, is returned for a participant who has not seen it and did not speak last. A thread older than seven days is not. A seen thread and a thread the agent spoke last on stay excluded.
-- Updated by #1901: an ambient @mention stays pending when that wake ends without a bullpen reply, a close, or another action on the thread. An out-of-band handle (a send or write that carries the thread) is still watermarked, and it stays quiet until a newer message arrives. The thread a bullpen-origin wake was opened for is watermarked even when the agent does not reply.
+- Updated by #1901: an ambient thread is an open handoff when any message after the agent's own latest post @mentions them, so a later note with no mention does not retire the request. The first wake that leaves that handoff untouched keeps it pending and records the messages shown; the same messages shown again, still untouched, are marked seen, so a paraphrased out-of-band miss is not repeated for the whole window. An out-of-band handle counts when the call carries the thread id or an excerpt of the mention that does not also appear in another handoff shown on that turn. The watermark advances only through the newest message the agent was shown, so a mention that lands during the turn stays unseen. The thread a bullpen-origin wake was opened for is marked seen even when the agent does not reply.
 - A bullpen block that does not fit the context budget is removed before the provider call, and those threads are not watermarked, so a later wake can try again. The `context.budget` event records `droppedReason: budget_exceeded` for a block that was actually omitted.
 - Passing minutes into a milliseconds parameter, or the reverse, fails the Postgres integration test: a 30-minute-old row must be inside a 60-minute window and a 90-minute-old row must be outside it.
 - Scheduler runs still do not see ambient bullpen threads. A specialist whose only wake is a cron tick will not pick up a lost handoff through this path.

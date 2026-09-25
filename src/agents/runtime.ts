@@ -1129,6 +1129,22 @@ export class AgentRuntime {
       && typeof taskMetadataRecord['threadId'] === 'string'
       ? taskMetadataRecord['threadId']
       : undefined;
+    // What the woke thread looked like when this task started. The completion stamp
+    // uses this when the thread is not in the ambient snapshot, so a message posted
+    // during the turn stays unseen (#1901).
+    let wokeShownThrough: Date | undefined;
+    if (wokeBullpenThreadId && this.config.bullpenService) {
+      try {
+        const loaded = await this.config.bullpenService.getThread(wokeBullpenThreadId);
+        const lastShown = loaded?.messages[loaded.messages.length - 1];
+        if (lastShown) wokeShownThrough = lastShown.createdAt;
+      } catch (err) {
+        logger.warn(
+          { err, agentId, threadId: wokeBullpenThreadId },
+          'Could not snapshot woke bullpen thread — watermark falls back to live last_message_at',
+        );
+      }
+    }
 
     // Ambient Bullpen threads are surfaced so an agent is aware of active
     // inter-agent discussions — but NOT inside autonomous scheduler runs (#1609).
@@ -2548,23 +2564,47 @@ export class AgentRuntime {
     await bus.publish('agent', responseEvent);
 
     // Bullpen read-watermark (#1065, #1901). Stamp the woke thread always, ambient
-    // threads the agent did not @mention, and ambient @mentions this turn actually
+    // threads that are not an open handoff, and ambient handoffs this turn actually
     // handled (in-thread reply/close, or an out-of-band call that carries the thread).
-    // An ignored ambient @mention stays pending so a lost handoff can be recovered
-    // again. Skipped on the fallback/error path (and all early returns above) so
-    // unfinished work gets another turn. Best-effort: a watermark write failure must
-    // not turn a completed task into a failure.
-    const threadsToWatermark = selectThreadsToWatermark({
+    // An ignored ambient handoff stays pending the first time and is recorded; the
+    // same messages shown again are stamped. The stamp stops at the newest message
+    // the agent was shown. Skipped on the fallback/error path (and all early returns
+    // above) so unfinished work gets another turn. Best-effort: a watermark write
+    // failure must not turn a completed task into a failure.
+    const watermarkDecision = selectThreadsToWatermark({
       wokeThreadId: wokeBullpenThreadId,
+      wokeShownThrough,
       ambient: [...ambientBullpenThreads.values()],
       toolTouches: bullpenToolTouches,
     });
-    if (!isResponseError && this.config.bullpenService && threadsToWatermark.length > 0) {
+    if (
+      !isResponseError
+      && this.config.bullpenService
+      && (watermarkDecision.watermark.length > 0 || watermarkDecision.defer.length > 0)
+    ) {
       try {
-        await this.config.bullpenService.markThreadsSeen(agentId, threadsToWatermark);
+        if (watermarkDecision.watermark.length > 0) {
+          const shownThroughByThread = new Map<string, Date>();
+          for (const stamp of watermarkDecision.watermark) {
+            if (stamp.shownThrough) shownThroughByThread.set(stamp.threadId, stamp.shownThrough);
+          }
+          await this.config.bullpenService.markThreadsSeen(
+            agentId,
+            watermarkDecision.watermark.map(stamp => stamp.threadId),
+            shownThroughByThread,
+          );
+        }
+        if (watermarkDecision.defer.length > 0) {
+          const deferred = watermarkDecision.defer.flatMap(stamp => (
+            stamp.shownThrough ? [{ threadId: stamp.threadId, shownThrough: stamp.shownThrough }] : []
+          ));
+          if (deferred.length > 0) {
+            await this.config.bullpenService.recordUnhandledInjection(agentId, deferred);
+          }
+        }
       } catch (err) {
         logger.error(
-          { err, agentId, threadCount: threadsToWatermark.length },
+          { err, agentId, threadCount: watermarkDecision.watermark.length, deferredCount: watermarkDecision.defer.length },
           'Failed to mark Bullpen threads seen — they may be re-surfaced on the next wake',
         );
       }
