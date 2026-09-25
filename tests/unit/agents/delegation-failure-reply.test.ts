@@ -29,12 +29,18 @@ describe('principal agent labels (#1860)', () => {
     expect(containsRawAgentId('the calendar', 'calendar')).toBe(true);
   });
 
-  it('redacts a single-word id as a token, not a substring', () => {
+  it('redacts a single-word id only in harness shapes, not in prose', () => {
     const label = 'calendar specialist';
-    expect(redactRawAgentId('the calendar is full', 'calendar', label)).toBe(`the ${label} is full`);
-    expect(redactRawAgentId('Check the Calendar', 'calendar', label)).toBe(`Check the ${label}`);
+    expect(redactRawAgentId('the calendar is full', 'calendar', label)).toBe('the calendar is full');
+    expect(redactRawAgentId("I don't have write access to that calendar", 'calendar', label))
+      .toBe("I don't have write access to that calendar");
     expect(redactRawAgentId('calendarId', 'calendar', label)).toBe('calendarId');
     expect(redactRawAgentId('the calendar specialist', 'calendar', label)).toBe('the calendar specialist');
+    expect(redactRawAgentId("Specialist 'calendar' refused", 'calendar', label))
+      .toBe(`Specialist '${label}' refused`);
+    expect(redactRawAgentId('Specialist "Calendar" refused', 'calendar', label))
+      .toBe(`Specialist "${label}" refused`);
+    expect(redactRawAgentId('ask @calendar about it', 'calendar', label)).toBe(`ask ${label} about it`);
     expect(redactRawAgentId('Social-Media refused', 'social-media', 'social team')).toBe('social team refused');
   });
 });
@@ -63,6 +69,18 @@ describe('delegation failure reply selection (#1860)', () => {
     expect(new Set(texts).size).toBe(branches.length);
     expect(texts[0]).toMatch(/background|completing/i);
     expect(texts[3]).toContain("'social team' refused");
+
+    const calendarProse = formatDelegationFailureFallback({
+      displayName: 'calendar specialist',
+      agentId: 'calendar',
+      reason: 'specialist_decline',
+      declined: true,
+      escalated: false,
+      delegateTask: 'Move Thursday',
+      detail: "I don't have write access to that calendar",
+    });
+    expect(calendarProse).toContain("I don't have write access to that calendar");
+    expect(calendarProse).not.toContain('calendar specialist specialist');
   });
 
   it('keeps a model draft that names the request and hides the id', () => {

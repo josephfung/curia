@@ -5,7 +5,7 @@
 // model-unavailable path and for any draft that still leaks a registry id or
 // never names what was asked.
 
-import type { ContentBlock, Message } from './llm/provider.js';
+import type { Message } from './llm/provider.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { containsRawAgentId, redactRawAgentId } from './agent-display-name.js';
 
@@ -147,35 +147,4 @@ function narrationMessageText(content: Message['content']): string {
     if (block.type === 'text' && block.text.trim().length > 0) parts.push(block.text);
   }
   return parts.join('\n');
-}
-
-/**
- * Registry ids live in delegate tool results. Replace them in those blocks
- * before the narration call so the model is not handed the handle to copy.
- * User and system text is left alone — that is the principal's own wording.
- */
-export function redactAgentIdInTranscript(
-  messages: Message[],
-  agentId: string,
-  displayName: string,
-): Message[] {
-  if (agentId.trim().length === 0) return messages;
-  return messages.map((message) => ({
-    ...message,
-    content: redactMessageContent(message.content, agentId, displayName),
-  }));
-}
-
-function redactMessageContent(
-  content: Message['content'],
-  agentId: string,
-  displayName: string,
-): Message['content'] {
-  if (typeof content === 'string') return content;
-  return content.map((block) => redactBlock(block, agentId, displayName));
-}
-
-function redactBlock(block: ContentBlock, agentId: string, displayName: string): ContentBlock {
-  if (block.type !== 'tool_result') return block;
-  return { ...block, content: redactRawAgentId(block.content, agentId, displayName) };
 }
