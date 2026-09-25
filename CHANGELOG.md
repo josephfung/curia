@@ -29,6 +29,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`tool.result` (public API)** — optional `originConversationId` ties a specialist send to the principal thread. (#1860)
+- **Agent YAML (public API)** — optional `display_name` is the label a principal may see. (#1860)
 - **`EventBus.publish` (public API)** — rejects with `UnownedAgentTaskError` when no registered agent owns the id. (#1898)
 - **`ToolContext` (public API)** — `delegate` receives `senderId` so the dispatch claim records who asked. (#1893)
 - **`agent.task` (public API)** — optional `syntheticTurn` marks a brief Curia wrote to itself. (#1892)
@@ -65,6 +67,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Delegation-failure replies** — the model writes them about the failed request; fallbacks use display names. (#1860)
+- **Reply-lock** — Signal, SMS, and Slack sends count, and the extra narration stays on the bullpen. (#1860)
 - **`delegation.late_resolved`** — a wake that outlives its claim lease emits the outcome once. (#1861)
 - **Late-delegation lease** — renewal stops after 30 minutes so a hung wake stays recoverable. (#1861)
 - **Unknown `agent.task`** — logs an error when no registered agent owns the id. (#1898)

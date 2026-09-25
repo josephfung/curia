@@ -195,10 +195,13 @@ loop becomes visible to operators. See [spec 04 — Channels](04-channels.md).
 ### Duplicate outbound suppression (#847)
 
 When an agent's `agent.response` would translate into an outbound message, the dispatcher
-suppresses it if a human-facing reply (`email-reply` / `email-send`) has already shipped for the
-same routing task. The suppression emits an `outbound.suppressed_duplicate` audit event with
-reason `'human_reply_already_sent'`, preventing the principal (or an external recipient) from
-receiving the same content twice.
+suppresses it if a human-facing reply (`email-reply`, `email-send`, `signal-send`, `sms-send`,
+or `slack-send`) has already shipped to the same sender. A delegated specialist's send counts:
+`tool.result.originConversationId` is the principal conversation, so it locks the coordinator's
+routing entry even though the specialist ran under `delegate-…`. The suppression emits
+`outbound.suppressed_duplicate` with reason `'human_reply_already_sent'`. The withheld text is
+filed on a closed bullpen thread instead of the principal's channel — the agent that did not
+own the send keeps its note internal. (#847, #1860)
 
 ### Explicit no-reply (#1732, #1734)
 

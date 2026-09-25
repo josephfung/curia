@@ -82,6 +82,20 @@ export function isDelegatedSpecialistTask(
 }
 
 /**
+ * Principal conversation a delegated specialist was spawned from (#1860).
+ * Reply-lock matches this so a specialist send suppresses the coordinator relay
+ * even though the specialist's own conversation id is `delegate-…`.
+ */
+export function delegationOriginConversationId(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const origin = metadata?.['delegationOrigin'];
+  if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) return undefined;
+  const id = (origin as Record<string, unknown>)['conversationId'];
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+/**
  * One prompt line. Control characters and Unicode line/paragraph separators
  * (U+2028, U+2029) must not open a new instruction. CR/LF alone is not enough:
  * JavaScript multiline anchors also treat those separators as line breaks.

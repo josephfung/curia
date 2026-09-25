@@ -70,8 +70,11 @@ The gateway emits an `outbound.delivered` event after every successful send. Thi
 The dispatcher translates every `agent.response` with a routing entry into `outbound.message`,
 **except**:
 
-1. **Reply-lock** (`outbound.suppressed_duplicate`) — a human-facing reply skill already
-   succeeded on this task (#847).
+1. **Reply-lock** (`outbound.suppressed_duplicate`) — a human-facing reply skill
+   (`email-reply`, `email-send`, `signal-send`, `sms-send`, `slack-send`) already
+   succeeded to this sender, including a specialist send correlated by
+   `originConversationId`. The withheld narration is filed on a closed bullpen
+   thread (#847, #1860).
 2. **Explicit no-reply** (`outbound.no_reply`) — the agent's entire response is the sentinel
    `NO_REPLY`, or inbound email was classified as auto-generated (#1734). Nothing is
    published to the channel. Reasons: `'agent_declined'` on a normal turn,

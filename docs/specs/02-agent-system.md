@@ -196,6 +196,17 @@ Optional `needs` flags (`vision`, `large_context`, `reasoning`, `coding`, `audio
 
 Specialist agents have internal handles (e.g., `@expense-tracker`, `@research-analyst`) used in the Bullpen and audit log. These are never exposed to external users — they're internal identifiers for the Coordinator and other agents to reference.
 
+Optional `display_name` on the agent YAML is the phrase a principal-facing message may use. When it is absent, the runtime derives one (`social-media` → `social media specialist`). A delegation-failure reply is written by the model with the failed request in context. If that call is unavailable, empty, or still contains the registry id, the fallback uses the display name and quotes the request. Two different asks therefore do not produce the same sentence. (#1860)
+
+### Channel ownership for delegated work
+
+One delegated item produces one message to the principal.
+
+- **Borrow-then-answer** — the coordinator owns the channel. The specialist returns work internally. The coordinator composes the one reply.
+- **Transfer-ownership** — the specialist owns the channel and sends the result (Signal, SMS, Slack, or email). The coordinator does not narrate that send back on the same channel.
+
+Enforcement is not prompt-only. A successful human-facing send (`email-reply`, `email-send`, `signal-send`, `sms-send`, `slack-send`) whose recipient is the inbound sender sets the dispatcher reply-lock. A delegated specialist runs in a `delegate-…` conversation; `tool.result.originConversationId` is the principal conversation, so the specialist's send still locks the coordinator's routing entry. The coordinator's later `agent.response` is not delivered. Its text is filed on a closed bullpen thread (no mentions, so nobody is woken) and the principal does not get a description of a message they already received. A send to someone other than the inbound sender does not lock the reply. (#847, #1860)
+
 ---
 
 ## Agent Definition (Hybrid: YAML + optional TypeScript)

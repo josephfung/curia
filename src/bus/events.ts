@@ -358,6 +358,12 @@ interface ToolResultPayload {
         errorType?: ErrorType;
       };
   durationMs: number;
+  /**
+   * Principal conversation when this skill ran inside a delegated specialist
+   * (#1860). Reply-lock matches it so a specialist send can suppress the
+   * coordinator's relay. Absent on direct-coordinator calls.
+   */
+  originConversationId?: string;
 }
 
 // Agent error payload — published by the agent runtime when an error occurs

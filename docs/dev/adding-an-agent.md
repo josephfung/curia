@@ -29,6 +29,7 @@ See [Adding a Skill](adding-a-tool.md) if you want to add a capability rather th
 name: expense-tracker          # unique identifier; used in logs, delegation, audit trail
 description: |                 # human-readable purpose; shown in the admin UI and audit log
   Tracks and categorizes expenses from receipts and emails.
+display_name: expense tracker  # optional; principal-facing label. Ids stay internal.
 
 # ------------------------------------------------------------------
 # Model (required)
