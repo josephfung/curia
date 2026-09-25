@@ -8,6 +8,7 @@
 import type { Logger } from '../logger.js';
 import type { TaskRepo } from '../db/task-repo.js';
 import type { TaskOriginator } from '../contacts/types.js';
+import { DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS } from './delegate-timeout.js';
 import { computeLateDeliveryExpiry } from './late-delegation.js';
 
 /** How many times one busy specialist may re-queue the same chain. */
@@ -15,11 +16,13 @@ export const MAX_DEFERRED_DELEGATION_ATTEMPTS = 3;
 
 /**
  * Retry delay when a brief never started and neither config nor a resolved
- * wait is available. A deployment override of `delegate.defaultTimeoutMs` is
- * applied by the runtime; this constant is not that override, and it is not
- * the specialist wait (that floor is `DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS`).
+ * wait is available. Matches the handler's fallback
+ * (`DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS`): a shorter delay would wake the retry
+ * before that wait expires (#1893). A deployment override of
+ * `delegate.defaultTimeoutMs` is applied by the runtime; this constant is not
+ * that override.
  */
-export const DEFAULT_DEFERRED_WAKE_MS = 90_000;
+export const DEFAULT_DEFERRED_WAKE_MS = DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS;
 
 /**
  * How long to wait before retrying a brief that a `pending` handle blocked.

@@ -1,9 +1,20 @@
 // A retry wake that cannot be read back must not be written.
 
 import { describe, it, expect, vi } from 'vitest';
-import { enqueueUndispatchedDelegation, pendingHandleWakeDelayMs } from '../../../src/agents/deferred-delegation.js';
+import { DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS } from '../../../src/agents/delegate-timeout.js';
+import {
+  DEFAULT_DEFERRED_WAKE_MS,
+  enqueueUndispatchedDelegation,
+  pendingHandleWakeDelayMs,
+} from '../../../src/agents/deferred-delegation.js';
 import type { TaskRepo } from '../../../src/db/task-repo.js';
 import { createLogger } from '../../../src/logger.js';
+
+describe('DEFAULT_DEFERRED_WAKE_MS', () => {
+  it('matches the handler fallback so an unset wait cannot wake early (#1857)', () => {
+    expect(DEFAULT_DEFERRED_WAKE_MS).toBe(DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS);
+  });
+});
 
 describe('enqueueUndispatchedDelegation', () => {
   it('refuses a wake whose channel or sender would not survive the fire-time read', async () => {
