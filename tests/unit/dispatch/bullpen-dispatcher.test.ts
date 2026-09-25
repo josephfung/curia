@@ -7,6 +7,9 @@ import { createAgentDiscuss } from '../../../src/bus/events.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { Logger } from '../../../src/logger.js';
 
+/** Tests that do not model a roster. Production passes the real registry. */
+const allowAllAgents = { has: () => true } as unknown as AgentRegistry;
+
 function makeBus() {
   const handlers = new Map<string, ((event: unknown) => void)[]>();
   return {
@@ -32,7 +35,7 @@ describe('BullpenDispatcher', () => {
   beforeEach(() => {
     bus = makeBus();
     bullpenService = BullpenService.createInMemory();
-    dispatcher = new BullpenDispatcher(bus as unknown as EventBus, createLogger('error'), bullpenService);
+    dispatcher = new BullpenDispatcher(bus as unknown as EventBus, createLogger('error'), bullpenService, allowAllAgents);
     dispatcher.register();
   });
 
@@ -325,7 +328,47 @@ describe('BullpenDispatcher', () => {
     expect(error).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: thread.id, agentId: 'ghost-agent' }),
-      'BullpenDispatcher: participant is not a loaded agent — skipping task',
+      'BullpenDispatcher: participant is not a registered agent — skipping task',
+    );
+  });
+
+  it('logs one error when the only other participant is unregistered (#1898)', async () => {
+    const localBus = makeBus();
+    const localService = BullpenService.createInMemory();
+    const error = vi.fn();
+    const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn() } as unknown as Logger;
+    const registry = new AgentRegistry();
+    registry.register('coordinator', { role: 'coordinator', description: 'Coordinator' });
+    const localDispatcher = new BullpenDispatcher(
+      localBus as unknown as EventBus,
+      logger,
+      localService,
+      registry,
+    );
+    localDispatcher.register();
+
+    const { thread } = await localService.openThread(
+      'Solo ghost', 'coordinator', ['coordinator', 'ghost-agent'], 'Hello', ['ghost-agent'],
+    );
+    const event = createAgentDiscuss({
+      threadId: thread.id,
+      messageId: 'msg-1',
+      topic: 'Solo ghost',
+      senderAgentId: 'coordinator',
+      participants: ['coordinator', 'ghost-agent'],
+      mentionedAgentIds: ['ghost-agent'],
+      content: 'Hello',
+      parentEventId: 'task-1',
+    });
+    await localBus._trigger('agent.discuss', event);
+
+    const tasks = (localBus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task');
+    expect(tasks).toHaveLength(0);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: thread.id, agentId: 'ghost-agent' }),
+      'BullpenDispatcher: participant is not a registered agent — skipping task',
     );
   });
 

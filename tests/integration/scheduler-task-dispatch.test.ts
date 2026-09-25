@@ -126,6 +126,7 @@ describe('Scheduler task-bound dispatch integration', () => {
       logger,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       schedulerService: schedulerService as any,
+      ownsAgent: () => true,
     });
 
     scheduler.start();
@@ -234,6 +235,7 @@ describe('Scheduler task-bound dispatch integration', () => {
       schedulerService: schedulerService as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       driftDetector: driftDetector as any,
+      ownsAgent: () => true,
     });
 
     scheduler.start();
@@ -307,6 +309,7 @@ describe('Scheduler task-bound dispatch integration', () => {
       logger,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       schedulerService: schedulerService as any,
+      ownsAgent: () => true,
     });
 
     scheduler.start();
@@ -391,6 +394,7 @@ describe('Scheduler task-bound dispatch integration', () => {
       logger,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       schedulerService: schedulerService as any,
+      ownsAgent: () => true,
     });
 
     scheduler.start();

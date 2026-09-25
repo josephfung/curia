@@ -44,7 +44,7 @@ describeIf('Scheduler last_run_summary reset at claim (#1829)', () => {
     onTestDb = true;
     bus = new EventBus(logger as never);
     schedulerService = new SchedulerService(pool, bus, logger as never, 'UTC');
-    scheduler = new Scheduler({ pool, bus, logger: logger as never, schedulerService });
+    scheduler = new Scheduler({ pool, bus, logger: logger as never, schedulerService, ownsAgent: () => true });
   });
   afterAll(async () => { await cleanup(); await pool?.end(); });
   beforeEach(async () => { await cleanup(); });

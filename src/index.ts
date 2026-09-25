@@ -2378,8 +2378,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // After the registry is populated and before any agent.task can be published.
-  // An id no loaded runtime owns is an error, left unacknowledged in the audit log. (#1898)
+  // After pass-1 registration and before scheduler.start(). The registry holds
+  // enabled agents only (agentConfigs is filtered by enabledAgentNames) and has
+  // no unregister, so this predicate is fixed for the process lifetime. The bus
+  // is constructed before the registry exists, which is why this is a setter
+  // rather than a constructor argument. (#1898)
   bus.setAgentOwner((agentId) => agentRegistry.has(agentId));
 
   // Cross-validate allowed_callers in skill manifests against known agent names.

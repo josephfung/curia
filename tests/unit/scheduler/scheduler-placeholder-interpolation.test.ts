@@ -162,6 +162,7 @@ describe('Scheduler fire path — placeholder resolution', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       schedulerService: schedulerService as any,
       principalContactId,
+      ownsAgent: () => true,
     });
   }
 
