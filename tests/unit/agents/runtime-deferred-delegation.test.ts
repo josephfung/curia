@@ -299,4 +299,34 @@ describe('runtime deferred delegation (#1893)', () => {
     expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 65 * 60_000 - 1_000);
     expect(params.wakeAt.getTime()).toBeLessThan(before + 65 * 60_000 + 5_000);
   });
+
+  it('uses the delegate wait when a specialist reports timeout and no handle was opened', async () => {
+    const before = Date.now();
+    const reported = timeoutData('calendar');
+    if (reported.success) {
+      const data = reported.data as Record<string, unknown>;
+      delete data['delegate_event_id'];
+      delete data['delegate_conversation_id'];
+      delete data['wait_timeout_ms'];
+    }
+    const { createTask } = await runTurn({
+      toolCalls: [
+        { id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Reserve the first room' } },
+        { id: 'call-2', name: 'delegate', input: { agent: 'calendar', task: 'Reserve the second room' } },
+      ],
+      invoke: async (name) => {
+        if (name === 'task-create') return { success: true, data: { task_id: 'review-1' } };
+        return reported;
+      },
+      defaultDelegateTimeoutMs: 240_000,
+      lateDeliveryTtlMinutes: 60,
+      lateDeliverySweepIntervalMinutes: 5,
+    });
+
+    expect(createTask).toHaveBeenCalledOnce();
+    const params = createTask.mock.calls[0]![0] as { description: string; wakeAt: Date };
+    expect(params.description).toBe('Reserve the second room');
+    expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(before + 240_000);
+    expect(params.wakeAt.getTime()).toBeLessThan(before + 240_000 + 5_000);
+  });
 });

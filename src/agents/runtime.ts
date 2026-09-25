@@ -1697,10 +1697,14 @@ export class AgentRuntime {
               const skipped = toolCall.input as Record<string, unknown>;
               const skippedAgent = typeof skipped['agent'] === 'string' ? skipped['agent'].replace(/^@/, '') : '';
               const skippedTask = typeof skipped['task'] === 'string' ? skipped['task'] : '';
-              // A timeout promotes this specialist's claim to a pending handle that
-              // outlives the wait. A different specialist is not blocked by that row.
+              // The wait-timer timeout promotes this specialist's claim to a pending
+              // handle that outlives the wait. delegateEventId is what that publish
+              // requires: a specialist that reports timeout has already finished and
+              // released the claim, so there is no handle to wait out. A different
+              // specialist is not blocked by this row either.
               const blockedUntilLateDelivery = pendingDelegationEscalation.reason === 'timeout'
                 && pendingDelegationEscalation.possiblySucceeded === true
+                && pendingDelegationEscalation.delegateEventId !== undefined
                 && skippedAgent === pendingDelegationEscalation.agent;
               await queueUndispatchedDelegation(
                 skippedAgent,

@@ -121,8 +121,10 @@ Two further invariants govern the wake:
   blocked by a `pending` handle waits until that row's `expires_at` plus one sweep
   interval — the wait is far shorter than the late-delivery TTL, and waking on it
   burns the retry cap while the handle is still open. A later call skipped after
-  a timeout of the same specialist uses the expiry the timeout subscriber will
-  write. The task is closed when that wake is dispatched, so the
+  the wait-timer timeout of the same specialist uses the expiry the timeout
+  subscriber will write. A specialist that reports `timeout` has already finished
+  and released its claim, so that skip uses the delegate wait. The task is closed
+  when that wake is dispatched, so the
   heartbeat does not re-run the brief. A timeout is not queued again. Retries of one
   busy specialist are capped. A wake missing its channel or sender is not written.
   The result is not a failure, so a coordinator that ignores the prompt can call `delegate`
