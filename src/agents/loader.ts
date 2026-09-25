@@ -14,8 +14,9 @@ export interface AgentYamlConfig {
   role?: string;
   description?: string;
   /**
-   * Principal-facing name (#1860). Registry ids stay internal; delegation-failure
-   * replies use this string. When omitted, the runtime derives one from `name`.
+   * Principal-facing label for delegation-failure replies (#1860). Not
+   * `persona.display_name`, which is interpolated into the system prompt only.
+   * When omitted, the runtime derives a label from `name`.
    */
   display_name?: string;
   persona?: {
@@ -100,7 +101,8 @@ export function loadAgentConfig(filePath: string): AgentYamlConfig {
   }
 
   // Interpolate ${persona.*} placeholders in the system prompt.
-  // The persona section is the single source of truth for display name, tone, etc.
+  // persona.display_name, tone, and signature are prompt text only. The
+  // principal-facing label is the top-level display_name field (#1860).
   // Keeping them as references in system_prompt avoids duplication and makes
   // persona changes a one-field edit rather than a find-and-replace across the prompt.
   if (config.persona) {

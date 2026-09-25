@@ -122,6 +122,34 @@ export function selectDelegationFailureReply(
 }
 
 /**
+ * Text-only transcript for the narration call.
+ *
+ * The live transcript ends in an assistant `tool_use` followed by a user
+ * `tool_result`. Providers omit `tools` when none are passed, and the
+ * Messages API rejects tool blocks without a tools list. Those blocks are
+ * dropped here. The narration prompt already states the failure, and a
+ * text-only call cannot wander off into another tool round.
+ */
+export function transcriptForNarration(messages: Message[]): Message[] {
+  const out: Message[] = [];
+  for (const message of messages) {
+    const text = narrationMessageText(message.content);
+    if (text.length === 0) continue;
+    out.push({ role: message.role, content: text });
+  }
+  return out;
+}
+
+function narrationMessageText(content: Message['content']): string {
+  if (typeof content === 'string') return content.trim().length === 0 ? '' : content;
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === 'text' && block.text.trim().length > 0) parts.push(block.text);
+  }
+  return parts.join('\n');
+}
+
+/**
  * Registry ids live in delegate tool results. Replace them in those blocks
  * before the narration call so the model is not handed the handle to copy.
  * User and system text is left alone — that is the principal's own wording.

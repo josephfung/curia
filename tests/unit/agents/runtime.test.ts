@@ -7039,6 +7039,103 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(agentResponses[0]!.payload.content).toBe(modelReply);
     expect(agentResponses[0]!.payload.content).not.toContain('social-media');
     expect(provider.chat).toHaveBeenCalledTimes(2);
+    const narration = vi.mocked(provider.chat).mock.calls[1]![0];
+    expect(narration.tools).toBeUndefined();
+    const narrationJson = JSON.stringify(narration.messages);
+    expect(narrationJson).not.toContain('tool_use');
+    expect(narrationJson).not.toContain('tool_result');
+    expect(narrationJson).toContain('Trim the k8m5 draft');
+  });
+
+  it('uses the display-name fallback when the narration call returns a provider error (#1860)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'esc-provider-error' } };
+        if (toolName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(delegationKey(delegateAgent, delegateTask));
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'timeout',
+              retryable: false,
+              message: "Specialist 'calendar' did not respond",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let calls = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [
+              { id: 'call-err', name: 'delegate', input: { agent: 'calendar', task: 'Check my afternoon' } },
+            ],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'error' as const,
+          error: {
+            type: 'RATE_LIMIT' as const,
+            source: 'anthropic',
+            message: '429',
+            retryable: true,
+            context: {},
+            timestamp: new Date(),
+          },
+        };
+      }),
+    };
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1860-provider-error',
+      channelId: 'signal',
+      senderId: '+15551212',
+      content: 'Check my afternoon',
+      parentEventId: 'inbound-1860-provider-error',
+    }));
+
+    expect(agentResponses).toHaveLength(1);
+    const content = agentResponses[0]!.payload.content;
+    expect(content).toContain('calendar specialist');
+    expect(content).toContain('Check my afternoon');
+    expect(content).not.toContain("I'm sorry, I was unable to process");
+    expect(provider.chat).toHaveBeenCalledTimes(2);
   });
 
   it('drops a model draft that leaks the registry id and quotes the request instead (#1860)', async () => {
