@@ -123,12 +123,15 @@ skillOutput:
 # resolves no expected duration for the target (no scheduled-task
 # expectedDurationSeconds and no agent expected_duration_seconds). The coordinator
 # LLM cannot set this — timeout_ms is not in the delegate input schema and the
-# runtime discards any value the model emits. Deployment-specific model latency
-# (e.g. switching the standard tier to a higher-latency model) can be accommodated
-# here without a code change or release.
-# Override in config/local.yaml to match your deployment's model latency.
+# runtime discards any value the model emits.
+#
+# Sized to the pooled p99 (444s) of 1,550 delegate runs before 2026-09-20 — the
+# clean baseline confirmed after #1873, not the degraded 2026-09-20→22 window.
+# Rounded up to 450s. A per-agent expected_duration_seconds still overrides this
+# (duration + bounded headroom). A local.yaml value below 450000 reintroduces
+# false timeouts for hint-less specialists and warns at startup. (#1857)
 delegate:
-  defaultTimeoutMs: 90000   # 90s — appropriate for interactive delegations with Sonnet-class models
+  defaultTimeoutMs: 450000   # 450s — pooled p99 before 2026-09-20, rounded up (#1857)
 
   # Late delivery (#1799). A delegate wait that times out does NOT stop the specialist: it keeps
   # running and eventually publishes a result. These settings control the handle that keeps that

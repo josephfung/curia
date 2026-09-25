@@ -208,6 +208,12 @@ structured findings from your specialist; let the coordinator decide how to pres
 If your specialist runs on a schedule and needs to send output, use `agent_id: coordinator`
 in the schedule block (see the schedule section below).
 
+### `expected_duration_seconds` (optional)
+
+Expected wall-clock duration of a delegated task, in seconds. The runtime adds bounded headroom (25%, capped at three minutes) and uses that as the coordinator's wait, unless the waking scheduled job already supplied `expectedDurationSeconds`. Omit it and the agent inherits `delegate.defaultTimeoutMs` (450s, sized to the pooled p99 of delegate runs before 2026-09-20).
+
+Startup names every specialist that omits the field, so a new agent does not silently inherit the floor. Set a hint when this specialist's measured p99 is above the floor, or when a shorter wait should catch a hang sooner. The computed wait must stay at or under the 895s clamp ([ADR-044](../adr/044-delegate-wait-clamp-ceiling.md)).
+
 ### `allow_discovery` (optional, default: `false`)
 
 When `true`, the agent can call the skill registry at runtime to find and request skills not in its `pinned_skills` list. The runtime handles the approval gate:

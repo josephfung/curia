@@ -1,5 +1,5 @@
 name: calendar
-version: "0.8.1"
+version: "0.8.2"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
@@ -8,6 +8,9 @@ description: >
 model:
   tier: standard  # scheduling + RSVP judgment (relationship tier, sender kind, conflicts)
 allow_discovery: false
+# Delegate-wait hint (#1857). Clean-baseline p99 before 2026-09-20 was 356s
+# (n=201). 300s plus 25% headroom is 375s, under the 895s clamp (ADR-044).
+expected_duration_seconds: 300
 system_prompt: |
   ## Role
   You are the Calendar Specialist. You own the full calendar domain for the executive

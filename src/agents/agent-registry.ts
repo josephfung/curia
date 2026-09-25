@@ -57,4 +57,25 @@ export class AgentRegistry {
       .map(s => `- @${s.name}: ${s.description}`)
       .join('\n');
   }
+
+  /**
+   * Specialists that will inherit `delegate.defaultTimeoutMs` (#1857).
+   * The coordinator is not a delegate target, so it is excluded. Names are
+   * sorted so the startup warning is stable across process starts.
+   */
+  specialistsWithoutDurationHint(): string[] {
+    return this.listSpecialists()
+      .filter((agent) => !isUsableDurationHint(agent.expectedDurationSeconds))
+      .map((agent) => agent.name)
+      .sort((a, b) => a.localeCompare(b));
+  }
+}
+
+function isUsableDurationHint(value: number | undefined): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/** Startup warning text. Names are in the message so a text log line is enough. */
+export function missingDurationHintWarning(names: readonly string[]): string {
+  return `Specialists with no expected_duration_seconds inherit delegate.defaultTimeoutMs: ${names.join(', ')}`;
 }
