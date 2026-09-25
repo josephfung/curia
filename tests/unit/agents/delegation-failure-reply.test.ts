@@ -24,9 +24,15 @@ describe('principal agent labels (#1860)', () => {
     expect(principalAgentLabel('   ')).toBe('specialist');
   });
 
-  it('treats a single-word id as leaked unless it is the specialist phrase', () => {
+  it('treats a single-word id as a leak only in harness shapes', () => {
     expect(containsRawAgentId('the calendar specialist', 'calendar')).toBe(false);
-    expect(containsRawAgentId('the calendar', 'calendar')).toBe(true);
+    expect(containsRawAgentId('the calendar', 'calendar')).toBe(false);
+    expect(containsRawAgentId('Check my calendar for Tuesday afternoon', 'calendar')).toBe(false);
+    expect(containsRawAgentId("Specialist 'calendar' refused", 'calendar')).toBe(true);
+    expect(containsRawAgentId('Specialist "Calendar" refused', 'calendar')).toBe(true);
+    expect(containsRawAgentId('ask @calendar', 'calendar')).toBe(true);
+    expect(principalAgentLabel('calendar', 'calendar')).toBe('calendar specialist');
+    expect(principalAgentLabel('calendar', 'Calendar')).toBe('calendar specialist');
   });
 
   it('redacts a single-word id only in harness shapes, not in prose', () => {
@@ -81,6 +87,33 @@ describe('delegation failure reply selection (#1860)', () => {
     });
     expect(calendarProse).toContain("I don't have write access to that calendar");
     expect(calendarProse).not.toContain('calendar specialist specialist');
+  });
+
+  it('keeps a model draft that quotes a request containing the domain noun', () => {
+    const ask = 'Check my calendar for Tuesday afternoon';
+    const modelText = `I could not finish "${ask}" with the calendar specialist.`;
+    const selected = selectDelegationFailureReply({
+      displayName: 'calendar specialist',
+      agentId: 'calendar',
+      reason: 'timeout',
+      escalated: true,
+      delegateTask: ask,
+      modelText,
+    });
+    expect(selected.via).toBe('model');
+    expect(selected.content).toBe(modelText);
+
+    const leaked = selectDelegationFailureReply({
+      displayName: 'calendar specialist',
+      agentId: 'calendar',
+      reason: 'timeout',
+      escalated: true,
+      delegateTask: ask,
+      modelText: `I could not get "${ask}" back from 'calendar'.`,
+    });
+    expect(leaked.via).toBe('fallback');
+    expect(leaked.content).toContain(ask);
+    expect(leaked.content).not.toContain("'calendar'");
   });
 
   it('keeps a model draft that names the request and hides the id', () => {
