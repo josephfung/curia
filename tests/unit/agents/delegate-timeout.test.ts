@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
+import * as yaml from 'js-yaml';
 import { loadAllAgentConfigs } from '../../../src/agents/loader.js';
-import { loadYamlConfig } from '../../../src/config.js';
 import {
   computeDelegateTimeoutMs,
   clampDelegateWaitTimeoutMs,
@@ -94,8 +94,13 @@ describe('delegate wait sizing (#1857)', () => {
   });
 
   it('ships defaultTimeoutMs at the pooled-p99 floor', () => {
-    const config = loadYamlConfig(configDir);
-    expect(config.delegate?.defaultTimeoutMs).toBe(DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS);
+    // Read default.yaml only. loadYamlConfig merges local.yaml, so a deployment
+    // override of 240000 would fail this assertion of the shipped floor.
+    const parsed = yaml.load(readFileSync(join(configDir, 'default.yaml'), 'utf8'));
+    const timeoutMs = parsed !== null && typeof parsed === 'object' && 'delegate' in parsed
+      ? (parsed as { delegate?: { defaultTimeoutMs?: number } }).delegate?.defaultTimeoutMs
+      : undefined;
+    expect(timeoutMs).toBe(DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS);
     // Pooled p99 was 444s. The floor is that figure, rounded up.
     expect(DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS).toBeGreaterThanOrEqual(444_000);
     expect(clampDelegateWaitTimeoutMs(DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS)).toBeLessThanOrEqual(CLAMP_CEILING_MS);
