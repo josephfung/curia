@@ -28,7 +28,9 @@ import type { ContactTier, SystemRole, TaskOriginator } from '../contacts/types.
 import {
   claimPendingDelegation,
   finalizePendingDelegation,
+  hasDelegationLateResolvedAudit,
   releasePendingDelegationClaim,
+  renewPendingDelegationClaim,
   setPendingDelegationWakeEventId,
   type PendingDelegationRow,
 } from '../db/queries/pending-delegations.js';
@@ -125,8 +127,18 @@ const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
  * How long one actor may hold a handle while it annotates the review task and publishes the
  * audit event. Generously longer than two DB writes and a publish, short enough that a crashed
  * actor's work is picked up on the next sweep tick rather than hours later.
+ *
+ * A woken turn runs inside that publish and routinely outlives this window (#1861). The holder
+ * refreshes the lease on CLAIM_LEASE_RENEW_INTERVAL_MS while the turn is in flight, so the
+ * window stays the crash bound rather than the turn bound.
  */
 export const CLAIM_LEASE_SECONDS = 120;
+
+/**
+ * How often a live holder refreshes its lease. Three ticks fit inside CLAIM_LEASE_SECONDS,
+ * so one delayed tick cannot expire it.
+ */
+export const CLAIM_LEASE_RENEW_INTERVAL_MS = Math.floor((CLAIM_LEASE_SECONDS * 1000) / 3);
 
 /** Namespace for the derived wake event id — changing it would un-fence every existing handle. */
 const WAKE_EVENT_ID_NAMESPACE = 'curia:late-delegation-wake';
@@ -134,13 +146,11 @@ const WAKE_EVENT_ID_NAMESPACE = 'curia:late-delegation-wake';
 /**
  * The wake event id for a handle, derived from its delegate event id rather than random.
  *
- * This is the fence that makes waking the originator idempotent no matter how the lease behaves.
- * `EventBus.publish()` awaits its subscribers, and one of those subscribers is the woken agent's
- * whole turn — minutes of LLM rounds and tool calls. That routinely outlives the 120s lease, so a
- * sweep can re-claim the row while the first turn is still running and try to wake it again. With a
- * derived id the second attempt carries the SAME event id, and the audit logger's write-ahead hook
- * — which inserts into audit_log before any subscriber sees the event — rejects it on the primary
- * key. The duplicate never reaches AgentRuntime.
+ * The holder refreshes its lease while `publish()` awaits the woken turn (#1861), so a live turn
+ * is not re-claimed. This id fences the case that refresh cannot cover: the holder crashed after
+ * the wake was audited, and a later actor tries again. That attempt carries the SAME event id,
+ * and the audit logger's write-ahead hook — which inserts into audit_log before any subscriber
+ * sees the event — rejects it on the primary key. The duplicate never reaches AgentRuntime.
  *
  * Not a true RFC-4122 v5 (that requires SHA-1); SHA-256 truncated to 16 bytes with the version and
  * variant bits set. The requirement here is stability and UUID shape — audit_log.id is a UUID
@@ -626,6 +636,46 @@ export interface ResolveLateDelegationResult {
 }
 
 /**
+ * Refresh the lease until `stop` is called. A tick that loses the token stops itself; a tick
+ * that fails to reach the database is logged and retried, because aborting the in-flight wake
+ * over a refresh blip would drop a result that is already being delivered. If every tick fails,
+ * the lease expires and the sweep recovers it — the same path as a crash.
+ */
+function startClaimLeaseRenewal(opts: {
+  pool: Pool;
+  delegateEventId: string;
+  claimToken: string;
+  logger: Logger;
+}): () => void {
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (stopped) return;
+    void renewPendingDelegationClaim(opts.pool, opts.delegateEventId, opts.claimToken)
+      .then((stillOurs) => {
+        if (stopped || stillOurs) return;
+        stopped = true;
+        clearInterval(timer);
+        opts.logger.warn(
+          { delegateEventId: opts.delegateEventId },
+          'Late delegation: lease renewal lost the claim — another actor holds this handle',
+        );
+      })
+      .catch((err: unknown) => {
+        if (stopped) return;
+        opts.logger.warn(
+          { err, delegateEventId: opts.delegateEventId },
+          'Late delegation: lease renewal failed — will retry on the next tick',
+        );
+      });
+  }, CLAIM_LEASE_RENEW_INTERVAL_MS);
+  timer.unref();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+/**
  * Take the lease on a handle, record the outcome — annotate the review task, publish
  * delegation.late_resolved so every branch is queryable in audit_log — then close the handle.
  *
@@ -633,7 +683,9 @@ export interface ResolveLateDelegationResult {
  * annotation failure or a crash mid-flight leaves an expired lease the sweep re-claims instead of
  * a row that claims work which never happened. `{ resolved: false }` means either another actor
  * holds the lease (a normal race between the live subscriber and a sweep tick) or this attempt
- * failed and is being handed back; `retryable` distinguishes them.
+ * failed and is being handed back; `retryable` distinguishes them. A wake whose subscribers
+ * outlive the lease keeps it refreshed; if the lease is lost anyway, bookkeeping is left to
+ * whoever holds it (#1861).
  */
 export async function resolveLateDelegation(
   opts: ResolveLateDelegationOptions,
@@ -657,53 +709,112 @@ export async function resolveLateDelegation(
   // Wake the originator FIRST on the deliver branch: it is the only irreversible step here, so
   // everything after it is bookkeeping that must not trigger a retry.
   //
-  // The wake's event id is DERIVED from the handle rather than random, which is what makes this
-  // safe against the lease expiring underneath a slow turn. `EventBus.publish()` awaits its
-  // subscribers, and one of them is the woken agent's entire turn — easily longer than the 120s
-  // lease — so another actor can re-claim this row while that turn is still running. Its attempt
-  // carries the same id, and the audit logger's write-ahead insert rejects it before any subscriber
-  // sees it. The stored id below is therefore a record, not the guarantee.
+  // The wake's event id is DERIVED from the handle. `EventBus.publish()` awaits the woken turn,
+  // which outlives the lease, so the holder refreshes `claimed_at` for the duration of that
+  // publish (#1861). The derived id remains the fence when the holder has crashed and a later
+  // actor retries: the audit logger's write-ahead insert rejects the duplicate before any
+  // subscriber sees it. The stored id below is a record, not the guarantee.
   let wakeTaskEventId = claimed.wakeTaskEventId ?? undefined;
-  if (opts.wakeBrief !== undefined) {
-    const wakeEventId = deterministicWakeEventId(claimed.delegateEventId);
+  let stopLeaseRenewal: (() => void) | undefined;
+  try {
+    if (opts.wakeBrief !== undefined) {
+      const wakeEventId = deterministicWakeEventId(claimed.delegateEventId);
 
-    // Record the id BEFORE publishing. A crash in between is then recoverable either way: the row
-    // names the wake, and re-publishing that same id is inert if it already went out.
-    try {
-      await setPendingDelegationWakeEventId(pool, claimed.delegateEventId, wakeEventId);
-    } catch (err) {
-      logger.warn(
-        { err, delegateEventId: claimed.delegateEventId, wakeEventId },
-        'Late delegation: could not record the wake id before publishing — proceeding, the derived id still fences a duplicate',
-      );
-    }
-
-    try {
-      const outcome = await publishLateWake({
-        bus,
-        logger,
-        handle: claimed,
-        brief: opts.wakeBrief,
-        wakeEventId,
-        parentEventId: opts.parentEventId ?? lateResponseEventId,
-        ...(opts.registerRouting !== undefined && { registerRouting: opts.registerRouting }),
-      });
-      // Either this attempt delivered it or an earlier one did; both mean the originator has the
-      // result, and both must close the handle rather than leave it for another pass.
-      void outcome;
-      wakeTaskEventId = wakeEventId;
-    } catch (err) {
-      // Nothing was delivered (the write-ahead hook rejects before subscribers), so a retry is safe
-      // — and necessary, or the result is lost.
-      if (claimed.claimToken) {
-        await releasePendingDelegationClaim(pool, claimed.delegateEventId, claimed.claimToken);
+      // Record the id BEFORE publishing. A crash in between is then recoverable either way: the row
+      // names the wake, and re-publishing that same id is inert if it already went out.
+      try {
+        await setPendingDelegationWakeEventId(pool, claimed.delegateEventId, wakeEventId);
+      } catch (err) {
+        logger.warn(
+          { err, delegateEventId: claimed.delegateEventId, wakeEventId },
+          'Late delegation: could not record the wake id before publishing — proceeding, the derived id still fences a duplicate',
+        );
       }
-      logger.error(
-        { err, delegateEventId: claimed.delegateEventId, originAgentId: claimed.originAgentId },
-        'Late delegation: failed to wake the originating agent — released for retry',
-      );
-      return { resolved: false, retryable: true };
+
+      if (claimed.claimToken) {
+        stopLeaseRenewal = startClaimLeaseRenewal({
+          pool,
+          delegateEventId: claimed.delegateEventId,
+          claimToken: claimed.claimToken,
+          logger,
+        });
+      }
+
+      try {
+        const outcome = await publishLateWake({
+          bus,
+          logger,
+          handle: claimed,
+          brief: opts.wakeBrief,
+          wakeEventId,
+          parentEventId: opts.parentEventId ?? lateResponseEventId,
+          ...(opts.registerRouting !== undefined && { registerRouting: opts.registerRouting }),
+        });
+        // Either this attempt delivered it or an earlier one did; both mean the originator has the
+        // result, and both must close the handle rather than leave it for another pass.
+        void outcome;
+        wakeTaskEventId = wakeEventId;
+      } catch (err) {
+        // Nothing was delivered (the write-ahead hook rejects before subscribers), so a retry is safe
+        // — and necessary, or the result is lost. Stop refreshing first so a late tick cannot
+        // restore the lease this release is handing back.
+        stopLeaseRenewal?.();
+        stopLeaseRenewal = undefined;
+        if (claimed.claimToken) {
+          await releasePendingDelegationClaim(pool, claimed.delegateEventId, claimed.claimToken);
+        }
+        logger.error(
+          { err, delegateEventId: claimed.delegateEventId, originAgentId: claimed.originAgentId },
+          'Late delegation: failed to wake the originating agent — released for retry',
+        );
+        return { resolved: false, retryable: true };
+      }
+
+      stopLeaseRenewal?.();
+      stopLeaseRenewal = undefined;
+
+      // The turn may have outlived every refresh. Extending the lease here is the gate: if this
+      // token no longer owns the row, the actor that took it over records the outcome. Doing it
+      // ourselves would be the second annotation and the second delegation.late_resolved.
+      if (claimed.claimToken) {
+        const stillOurs = await renewPendingDelegationClaim(
+          pool,
+          claimed.delegateEventId,
+          claimed.claimToken,
+        );
+        if (!stillOurs) {
+          logger.warn(
+            { delegateEventId: claimed.delegateEventId, wakeTaskEventId },
+            'Late delegation: lease lost while the wake was in flight — leaving bookkeeping to the current holder',
+          );
+          return { resolved: false };
+        }
+      }
     }
+
+    if (await hasDelegationLateResolvedAudit(pool, claimed.delegateEventId)) {
+      logger.info(
+        { delegateEventId: claimed.delegateEventId, wakeTaskEventId },
+        'Late delegation: outcome already audited — closing the lease without a second resolution',
+      );
+      const finalized = claimed.claimToken
+        ? await finalizePendingDelegation(pool, claimed.delegateEventId, claimed.claimToken)
+        : null;
+      if (!finalized) {
+        logger.warn(
+          { delegateEventId: claimed.delegateEventId },
+          'Late delegation: lease was no longer ours at finalize — another actor owns this handle',
+        );
+        return { resolved: false };
+      }
+      return {
+        resolved: true,
+        resolution: classification.resolution,
+        ...(wakeTaskEventId !== undefined && { wakeTaskEventId }),
+      };
+    }
+  } finally {
+    stopLeaseRenewal?.();
   }
 
   const reviewTaskOutcome = await recordOnReviewTask({

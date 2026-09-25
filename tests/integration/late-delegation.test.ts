@@ -29,6 +29,7 @@ import {
   getPendingDelegationByDelegateEventId,
   recordPendingDelegation,
   releasePendingDelegationClaim,
+  renewPendingDelegationClaim,
 } from '../../src/db/queries/pending-delegations.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
 import { deterministicWakeEventId } from '../../src/agents/late-delegation.js';
@@ -146,6 +147,15 @@ describeIf('Late delegation — delivery, records, audit (#1799)', () => {
       conversation_id: string | null;
       payload: Record<string, unknown>;
     } | undefined) ?? null;
+  }
+
+  async function lateResolvedCount(delegateEventId: string): Promise<number> {
+    const { rows } = await pool.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM audit_log
+        WHERE event_type = 'delegation.late_resolved' AND target_id = $1`,
+      [delegateEventId],
+    );
+    return rows[0]?.n ?? 0;
   }
 
   beforeAll(async () => {
@@ -523,9 +533,9 @@ describeIf('Late delegation — delivery, records, audit (#1799)', () => {
 
     it('cannot deliver a second wake once one is in audit_log, even on a re-claim', async () => {
       // The real-Postgres form of the fence. The wake's event id is derived from the handle, so a
-      // second attempt — which is what a lease expiring under a slow woken turn produces — collides
-      // with the audit_log primary key. The write-ahead hook runs before subscriber delivery, so the
-      // duplicate reaches no agent runtime.
+      // re-claim — a holder that died after the wake was audited — collides with the audit_log
+      // primary key. The write-ahead hook runs before subscriber delivery, so the duplicate
+      // reaches no agent runtime, and the outcome already recorded is not emitted again.
       const reviewTaskId = await createReviewTask();
       const event = timedOutEvent({ reviewTaskId });
       await bus.publish('agent', event);
@@ -549,14 +559,21 @@ describeIf('Late delegation — delivery, records, audit (#1799)', () => {
         [event.payload.delegateEventId],
       );
 
+      const notesBefore = await noteCount(reviewTaskId);
+      const auditsBefore = await lateResolvedCount(event.payload.delegateEventId);
+      expect(auditsBefore).toBe(1);
+
       const result = await sweep.tick();
 
-      // The attempt happened and was fenced: still exactly one wake delivered.
+      // The attempt happened and was fenced: still exactly one wake delivered, and the
+      // bookkeeping that already landed is not repeated (#1861).
       expect(wakes).toHaveLength(1);
       expect(result.recovered).toBe(1);
       const handle = await getPendingDelegationByDelegateEventId(pool, event.payload.delegateEventId);
       expect(handle?.status).toBe('resolved');
       expect(handle?.wakeTaskEventId).toBe(firstWakeId);
+      expect(await lateResolvedCount(event.payload.delegateEventId)).toBe(1);
+      expect(await noteCount(reviewTaskId)).toBe(notesBefore);
     });
 
     it('does not touch a handle whose lease is still live', async () => {
@@ -646,6 +663,46 @@ describeIf('Late delegation — delivery, records, audit (#1799)', () => {
       // B finishes normally with its own token.
       const finalized = await finalizePendingDelegation(pool, delegateEventId, workerB!.claimToken!);
       expect(finalized?.status).toBe('resolved');
+    });
+
+    it('refuses a second claim after the holder renews an expired lease', async () => {
+      const delegateEventId = nextDelegateEventId();
+      await recordPendingDelegation(pool, {
+        delegateEventId,
+        delegateConversationId: 'delegate-conv-renew',
+        targetAgent: 'calendar',
+        delegateTask: 'Detect travel',
+        originAgentId: 'coordinator',
+        originConversationId: 'scheduler:renew-job:run-1',
+        originChannelId: 'scheduler',
+        originSenderId: 'scheduler',
+        expiresAt: new Date(Date.now() + 3_600_000),
+      });
+
+      const holder = await claimPendingDelegation(pool, {
+        delegateEventId,
+        resolution: 'delivered',
+        leaseSeconds: 120,
+      });
+      expect(holder?.claimToken).toBeTruthy();
+
+      // The lease has lapsed the way a long wake would, but the holder is still alive.
+      await pool.query(
+        `UPDATE pending_delegations SET claimed_at = now() - interval '10 minutes' WHERE delegate_event_id = $1`,
+        [delegateEventId],
+      );
+      expect(await renewPendingDelegationClaim(pool, delegateEventId, holder!.claimToken!)).toBe(true);
+
+      const stolen = await claimPendingDelegation(pool, {
+        delegateEventId,
+        resolution: 'delivered',
+        leaseSeconds: 120,
+      });
+      expect(stolen).toBeNull();
+
+      const stillHeld = await getPendingDelegationByDelegateEventId(pool, delegateEventId);
+      expect(stillHeld?.status).toBe('claimed');
+      expect(stillHeld?.claimToken).toBe(holder!.claimToken);
     });
 
     it('leaves a young handle with no response alone', async () => {

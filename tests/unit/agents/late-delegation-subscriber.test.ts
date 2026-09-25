@@ -47,6 +47,9 @@ function fakePool(opts: FakePoolOptions = {}): { pool: pg.Pool; queries: Recorde
     if (sql.includes('UPDATE pending_delegations')) {
       return { rows: [{ ...(opts.existingHandle ?? {}), status: 'claimed', claim_token: 'tok-1' }] };
     }
+    if (sql.includes("event_type = 'delegation.late_resolved'")) {
+      return { rows: [] };
+    }
     throw new Error(`unexpected query: ${sql.slice(0, 80)}`);
   });
   return { pool: { query } as unknown as pg.Pool, queries };
