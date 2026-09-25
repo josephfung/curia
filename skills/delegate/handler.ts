@@ -36,7 +36,10 @@ import {
   type AcquireRunningResult,
   type InFlightDelegation,
 } from '../../src/db/queries/pending-delegations.js';
-import { clampDelegateWaitTimeoutMs } from '../../src/agents/delegate-timeout.js';
+import {
+  clampDelegateWaitTimeoutMs,
+  DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS,
+} from '../../src/agents/delegate-timeout.js';
 import { parseSchedulerJobId, parseStoredOriginator } from '../../src/agents/late-delegation.js';
 import {
   EXECUTION_PAUSED_PROTOCOL,
@@ -49,13 +52,6 @@ import {
   parseSpecialistDeclineMarker,
   SPECIALIST_DECLINE_REASON,
 } from '../../src/agents/specialist-decline.js';
-
-// Default wait for the specialist to respond — appropriate for interactive tasks.
-// Used only when neither config.delegate.defaultTimeoutMs nor a runtime-resolved
-// timeout_ms is available. Long-running work gets a longer window from the runtime,
-// which resolves timeout_ms from the originating agent.task event's
-// expectedDurationSeconds or the target agent's expected_duration_seconds (#1797).
-const DEFAULT_SPECIALIST_TIMEOUT_MS = 90000;
 
 /** Sentinel shape rejected by the response promise when a specialist returns isError with
  *  structured failure fields — caught in execute() and turned into a typed delegate result. */
@@ -335,8 +331,13 @@ export class DelegateHandler implements ToolHandler {
       Number.isInteger(timeout_ms) &&
       timeout_ms > 0 &&
       Number.isFinite(timeout_ms);
+    // No valid timeout_ms and no configured default: use the shipped floor
+    // (config/default.yaml's delegate.defaultTimeoutMs, #1857). Long-running
+    // work still gets its window from the runtime, which resolves timeout_ms
+    // from the task's expectedDurationSeconds or the target agent's
+    // expected_duration_seconds (#1797).
     const specialistTimeoutMs = clampDelegateWaitTimeoutMs(
-      isValidTimeout ? (timeout_ms as number) : (ctx.defaultDelegateTimeoutMs ?? DEFAULT_SPECIALIST_TIMEOUT_MS),
+      isValidTimeout ? (timeout_ms as number) : (ctx.defaultDelegateTimeoutMs ?? DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS),
     );
 
     if (timeout_ms !== undefined && !isValidTimeout) {

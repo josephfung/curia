@@ -145,7 +145,7 @@ Sized to the pooled p99 (444s) of 1,550 delegate runs before 2026-09-20, the cle
 
 This is the **fallback**, used when the runtime resolves no expected duration for the delegation. The runtime resolves the wait window in priority order: a scheduled task's `expectedDurationSeconds`, then the target agent's `expected_duration_seconds` (both plus bounded headroom), then this default. The coordinator LLM is not a source — `timeout_ms` is not in the `delegate` input schema, and the runtime discards any value the model emits (#1797).
 
-Startup also warns with the name of every registered specialist that omits `expected_duration_seconds`. Core agents whose clean-baseline p99 sits near or above the old 240s wait declare one: `calendar` 300, `ceo-inbox` 240, `research-analyst` 240, `meeting-debrief` 210. `writing-scout` (480) and `social-media` (320) live in the deployment repo and need the same field there. The computed wait is clamped at 895s; runs past that ceiling are late-delivery-only ([ADR-044](../adr/044-delegate-wait-clamp-ceiling.md)).
+Startup logs at info the name of every registered specialist that omits `expected_duration_seconds`. That line is an inventory: those agents inherit the floor on purpose. Core agents whose clean-baseline p99 sits near or above the old 240s wait declare one: `calendar` 300, `ceo-inbox` 240, `research-analyst` 240, `meeting-debrief` 210. `writing-scout` (480) and `social-media` (320) live in the deployment repo and need the same field there. The computed wait is clamped at 895s; runs past that ceiling are late-delivery-only ([ADR-044](../adr/044-delegate-wait-clamp-ceiling.md)).
 
 ---
 

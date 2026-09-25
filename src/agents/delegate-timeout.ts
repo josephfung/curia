@@ -25,11 +25,11 @@ export const DELEGATE_SKILL_OUTER_TIMEOUT_MARGIN_MS = 5_000;
 export const DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS = 450_000;
 
 /**
- * True when the configured fallback wait is shorter than the pooled-p99 floor.
- * An unset value counts: the handler then falls back to a 90s constant.
+ * True when an explicit fallback wait is shorter than the pooled-p99 floor.
+ * An unset value does not count: the handler then uses this same floor.
  */
 export function isDelegateDefaultBelowFloor(defaultTimeoutMs: number | undefined): boolean {
-  return defaultTimeoutMs === undefined || defaultTimeoutMs < DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS;
+  return typeof defaultTimeoutMs === 'number' && defaultTimeoutMs < DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS;
 }
 
 /** Maximum extra wait beyond expected_duration_seconds. */

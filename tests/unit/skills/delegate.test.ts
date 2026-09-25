@@ -83,7 +83,9 @@ describe('DelegateHandler', () => {
     }
   });
 
-  it('returns a p99-length specialist response when the wait covers it (#1857)', async () => {
+  // The next three cases pass an explicit wait into the existing timeout path.
+  // They record the #1857 numbers. They do not cover new handler behavior.
+  it('records that a 600s hint wait returns a 576s writing-scout response (#1857)', async () => {
     vi.useFakeTimers();
     try {
       const agentRegistry = new AgentRegistry();
@@ -126,7 +128,7 @@ describe('DelegateHandler', () => {
     }
   });
 
-  it('times out a p99-length writing-scout run against the old 240s wait (#1857)', async () => {
+  it('records that the old 240s wait times out a 576s writing-scout response (#1857)', async () => {
     vi.useFakeTimers();
     try {
       const agentRegistry = new AgentRegistry();
@@ -164,7 +166,7 @@ describe('DelegateHandler', () => {
     }
   });
 
-  it('returns a social-media p99 response under the 450s floor (#1857)', async () => {
+  it('records that the 450s floor returns a 396s social-media response (#1857)', async () => {
     vi.useFakeTimers();
     try {
       const agentRegistry = new AgentRegistry();
@@ -198,6 +200,47 @@ describe('DelegateHandler', () => {
         const data = result.data as { response?: string; reason?: string };
         expect(data.reason).toBeUndefined();
         expect(data.response).toBe('Posted');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the 450s floor when neither timeout_ms nor a configured default is set (#1857)', async () => {
+    vi.useFakeTimers();
+    try {
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+      agentRegistry.register('contacts', { role: 'specialist', description: 'Contacts' });
+      const bus = new EventBus(logger);
+      // Past the old 90s handler constant, inside the shipped floor.
+      const respondAfterMs = 120_000;
+
+      bus.subscribe('agent.task', 'agent', async (event) => {
+        if (event.type === 'agent.task' && event.payload.agentId === 'contacts') {
+          await new Promise((resolve) => setTimeout(resolve, respondAfterMs));
+          const { createAgentResponse } = await import('../../../src/bus/events.js');
+          await bus.publish('agent', createAgentResponse({
+            agentId: 'contacts',
+            conversationId: event.payload.conversationId,
+            content: 'Brief ready',
+            parentEventId: event.id,
+          }));
+        }
+      });
+
+      const executePromise = handler.execute(makeCtx(
+        { agent: 'contacts', task: 'Brief me' },
+        { bus, agentRegistry },
+      ));
+      await vi.advanceTimersByTimeAsync(respondAfterMs);
+      const result = await executePromise;
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { response?: string; reason?: string };
+        expect(data.reason).toBeUndefined();
+        expect(data.response).toBe('Brief ready');
       }
     } finally {
       vi.useRealTimers();

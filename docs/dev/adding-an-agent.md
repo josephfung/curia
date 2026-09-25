@@ -212,7 +212,7 @@ in the schedule block (see the schedule section below).
 
 Expected wall-clock duration of a delegated task, in seconds. The runtime adds bounded headroom (25%, capped at three minutes) and uses that as the coordinator's wait, unless the waking scheduled job already supplied `expectedDurationSeconds`. Omit it and the agent inherits `delegate.defaultTimeoutMs` (450s, sized to the pooled p99 of delegate runs before 2026-09-20).
 
-Startup names every specialist that omits the field, so a new agent does not silently inherit the floor. Set a hint when this specialist's measured p99 is above the floor, or when a shorter wait should catch a hang sooner. The computed wait must stay at or under the 895s clamp ([ADR-044](../adr/044-delegate-wait-clamp-ceiling.md)).
+Omitting the field is valid: the agent inherits the floor, and startup logs its name at info (an inventory, not a warning). Adding a specialist without a hint also means adding its name to the list in `tests/unit/agents/agent-registry.test.ts`. Set a hint when this specialist's measured p99 is above the floor, or when a shorter wait should catch a hang sooner. The computed wait must stay at or under the 895s clamp ([ADR-044](../adr/044-delegate-wait-clamp-ceiling.md)).
 
 ### `allow_discovery` (optional, default: `false`)
 
