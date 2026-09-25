@@ -517,6 +517,10 @@ export class DelegateHandler implements ToolHandler {
         channelId: ctx.channelId,
         agentId: ctx.agentId,
         originalTask: effectiveTask,
+        // The coordinator task whose relay this specialist's sends may lock (#1860).
+        ...(typeof ctx.taskEventId === 'string' && ctx.taskEventId.length > 0
+          ? { taskEventId: ctx.taskEventId }
+          : {}),
       },
     };
     // Preserve the originator forwarding (#972) — without it the specialist loses the chain's

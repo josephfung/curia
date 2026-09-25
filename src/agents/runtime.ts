@@ -99,6 +99,7 @@ import {
 } from './delegation-guard.js';
 import {
   delegationOriginConversationId,
+  delegationOriginTaskEventId,
   harnessRequesterIdentity,
   isDelegatedSpecialistTask,
   parseTaskOriginator,
@@ -1978,6 +1979,10 @@ export class AgentRuntime {
           // the execution layer doesn't have bus access in Phase 3.
           // TODO: When execution layer gets bus access, move this publish there.
           const originConversationId = delegationOriginConversationId(taskEvent.payload.metadata);
+          const originTaskEventId = delegationOriginTaskEventId(taskEvent.payload.metadata);
+          // A specialist send locks the coordinator task that delegated.
+          // A direct send locks the task that invoked the skill.
+          const routingTaskId = originTaskEventId ?? taskEvent.id;
           const resultEvent = createToolResult({
             agentId,
             conversationId,
@@ -1985,6 +1990,7 @@ export class AgentRuntime {
             result,
             durationMs,
             parentEventId: invokeEvent.id,
+            routingTaskId,
             ...(originConversationId !== undefined && { originConversationId }),
           });
           await bus.publish('agent', resultEvent);

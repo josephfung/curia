@@ -43,6 +43,7 @@ import {
   REPLY_LOCK_SKILLS,
   replyLockConversationMatch,
   replyLockEmailRecipients,
+  replyLockRecipientMatches,
   replyLockRecipients,
 } from './reply-lock.js';
 
@@ -1038,15 +1039,39 @@ export class Dispatcher {
   }
 
   /**
+   * Verified active channel identifiers for the inbound contact. Used so a
+   * send on another channel still counts as reaching that person. Lookup
+   * failure matches the sender id only — a missing directory must not lock
+   * an unrelated recipient, and must not throw away the same-channel match.
+   */
+  private async verifiedReplyIdentifiers(contactId: string | undefined): Promise<string[]> {
+    if (!contactId || !this.contactService) return [];
+    try {
+      const identities = await this.contactService.getIdentitiesForContact(contactId);
+      return identities
+        .filter((identity) => identity.verified && identity.status === 'active')
+        .map((identity) => identity.channelIdentifier);
+    } catch (err) {
+      this.logger.warn(
+        { err, contactId },
+        'Dispatcher reply-lock: could not load contact identities — matching the inbound sender id only',
+      );
+      return [];
+    }
+  }
+
+  /**
    * Reply-lock: detect when a human-facing reply skill fires successfully during a task
    * and mark the routing entry so handleAgentResponse can suppress the duplicate outbound.
    *
-   * The tool.result event carries conversationId but not the agent.task ID directly,
-   * so we scan the routing map for an entry with a matching conversation and senderId.
+   * `routingTaskId` is the coordinator task whose relay this send may lock (#1860).
+   * Only that entry is marked, so a second pending task in the same conversation
+   * still relays. Events that omit the id fall back to a conversation scan.
    * Direct calls match conversationId. A delegated specialist runs under `delegate-…`
-   * and stamps `originConversationId` with the principal conversation (#1860). Email,
-   * Signal, SMS, and Slack all lock; a send to someone other than the inbound sender
-   * does not. See #847.
+   * and stamps `originConversationId` with the principal conversation. The recipient
+   * matches the inbound sender, or another verified active identity of that contact,
+   * so a Signal send can lock an email task for the same person. A send to someone
+   * else does not lock. See #847.
    *
    * NOTE: This relies on single-process in-order event delivery — tool.result must be
    * delivered to all subscribers (including this handler) before agent.response is
@@ -1054,7 +1079,7 @@ export class Dispatcher {
    * event loop; multi-process deployments would require a persistent lock instead.
    */
   private async handleToolResult(event: ToolResultEvent): Promise<void> {
-    const { toolName, conversationId, result, originConversationId } = event.payload;
+    const { toolName, conversationId, result, originConversationId, routingTaskId } = event.payload;
 
     // Gate C escalate on reply skills is tracked via authorization.decision
     // (conversationId + taskEventId) — not via tool.result error prose (#1733 review).
@@ -1073,22 +1098,28 @@ export class Dispatcher {
       return;
     }
 
-    // Find every routing entry for this conversation where the reply target includes the
-    // original inbound sender. Multiple entries for the same conversationId are possible
-    // but rare; we set the flag on all of them to be safe.
+    // Prefer the task that invoked the send. A conversation-wide scan is only
+    // for tool.result events that predate routingTaskId.
+    const scopedTaskId = typeof routingTaskId === 'string' && routingTaskId.length > 0
+      ? routingTaskId
+      : undefined;
+    const scopedRouting = scopedTaskId !== undefined ? this.taskRouting.get(scopedTaskId) : undefined;
+    const candidates = scopedTaskId !== undefined
+      ? (scopedRouting !== undefined ? [[scopedTaskId, scopedRouting] as const] : [])
+      : [...this.taskRouting.entries()];
+
     let matched = false;
-    for (const [taskId, routing] of this.taskRouting.entries()) {
-      if (
-        replyLockConversationMatch(routing.conversationId, conversationId, originConversationId) &&
-        recipients.includes(routing.senderId.toLowerCase())
-      ) {
-        routing.humanReplySent = true;
-        matched = true;
-        this.logger.debug(
-          { taskId, conversationId, originConversationId, toolName },
-          'Dispatcher reply-lock: human-facing reply detected — outbound.message will be suppressed',
-        );
-      }
+    for (const [taskId, routing] of candidates) {
+      if (!replyLockConversationMatch(routing.conversationId, conversationId, originConversationId)) continue;
+      const sameChannel = replyLockRecipientMatches(routing.senderId, recipients);
+      const verified = sameChannel ? [] : await this.verifiedReplyIdentifiers(routing.originator?.contactId);
+      if (!sameChannel && !replyLockRecipientMatches(routing.senderId, recipients, verified)) continue;
+      routing.humanReplySent = true;
+      matched = true;
+      this.logger.debug(
+        { taskId, conversationId, originConversationId, toolName },
+        'Dispatcher reply-lock: human-facing reply detected — outbound.message will be suppressed',
+      );
     }
 
     if (!matched) {

@@ -364,6 +364,12 @@ interface ToolResultPayload {
    * coordinator's relay. Absent on direct-coordinator calls.
    */
   originConversationId?: string;
+  /**
+   * `agent.task` id whose relay this send may lock (#1860). For a specialist
+   * this is the coordinator task that delegated, not the specialist's own task.
+   * Absent on publishers that predate the field; the dispatcher then scans.
+   */
+  routingTaskId?: string;
 }
 
 // Agent error payload — published by the agent runtime when an error occurs

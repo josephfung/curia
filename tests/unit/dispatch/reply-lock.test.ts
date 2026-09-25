@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   replyLockConversationMatch,
   replyLockEmailRecipients,
+  replyLockRecipientMatches,
   replyLockRecipients,
 } from '../../../src/dispatch/reply-lock.js';
 
@@ -24,6 +25,13 @@ describe('reply-lock recipients (#1860)', () => {
   it('keeps correspondence elevation on email addresses only', () => {
     expect(replyLockEmailRecipients('email-send', ['a@example.com'])).toEqual(['a@example.com']);
     expect(replyLockEmailRecipients('signal-send', ['+15551212'])).toEqual([]);
+  });
+
+  it('matches the inbound sender or another verified identity', () => {
+    expect(replyLockRecipientMatches('ceo@example.com', ['ceo@example.com'])).toBe(true);
+    expect(replyLockRecipientMatches('ceo@example.com', ['+15551212'])).toBe(false);
+    expect(replyLockRecipientMatches('ceo@example.com', ['+15551212'], ['+15551212'])).toBe(true);
+    expect(replyLockRecipientMatches('ceo@example.com', ['+1999'], ['+15551212'])).toBe(false);
   });
 
   it('matches a specialist send via the originating conversation', () => {
