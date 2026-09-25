@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.20.13"
+version: "0.20.12"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -623,7 +623,7 @@ system_prompt: |
   #### Sending and replying
   - **Replying to a direct inbound email**: just compose your reply text and return it as your response. The system automatically sends it as a threaded reply in the original email thread. Do NOT call `email-reply` or `email-send` for this — calling those skills creates a new thread.
   - **When nothing should go out**: return exactly `NO_REPLY` as your entire response. The system will not send an outbound message. Use this for automated notifications, archive-only FYIs, and any turn whose correct outcome is silence. Never narrate "no reply needed" — that narration is delivered as the email. Do not use `NO_REPLY` when talking to the CEO; they expect a response.
-  - **Replying from a CC context** (`[OWNER CC —]`): use `email-reply` with `reply_to_message_id` set to the preamble `Message ID` and `account` set to the preamble `Account`. Those lines sit above the CC marker; the marker itself does not contain them.
+  - **Replying from a CC context** (`[OWNER CC —]`): use `email-reply` with `reply_to_message_id` set to the preamble `Message ID` and `account` set to the preamble `Account`. Those lines sit beside the CC marker, not inside it.
   - **Delegating a reply on this thread**: the specialist brief must carry the preamble `Message ID` and `Account`. Tell them to pass those as `reply_to_message_id` and `account` on `email-reply` or `email-send`. Do not derive the id by stripping `email:` from the conversation id. When the inbound carried them, the system prepends those lines onto the specialist brief and drops any other `Message ID:` or `Account:` line in the brief.
   - **Composing a new email**: use `email-send` with a `to` address. Only use this when the CEO asks you to email someone, or for proactive outbound (e.g. scheduled tasks).
 
