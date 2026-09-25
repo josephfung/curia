@@ -4,7 +4,10 @@ import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { DelegationGuard, delegationKey } from '../../../src/agents/delegation-guard.js';
-import { computeDelegateTimeoutMs } from '../../../src/agents/delegate-timeout.js';
+import {
+  computeDelegateTimeoutMs,
+  DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS,
+} from '../../../src/agents/delegate-timeout.js';
 import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
@@ -213,8 +216,8 @@ describe('DelegateHandler', () => {
       agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
       agentRegistry.register('contacts', { role: 'specialist', description: 'Contacts' });
       const bus = new EventBus(logger);
-      // Past the old 90s handler constant, inside the shipped floor.
-      const respondAfterMs = 120_000;
+      // One second under the shipped floor, so a shorter fallback times out.
+      const respondAfterMs = DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS - 1_000;
 
       bus.subscribe('agent.task', 'agent', async (event) => {
         if (event.type === 'agent.task' && event.payload.agentId === 'contacts') {
