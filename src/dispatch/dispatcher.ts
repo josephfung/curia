@@ -55,9 +55,11 @@ function redactSenderId(value: string): string {
 
 /**
  * Merge channel-supplied metadata with injection findings and originator context.
- * SECURITY: strips `ceoInitiated` (legacy) and `originator` after all untrusted spreads — so
- * neither channel metadata nor injection metadata can smuggle a forged originator. The trusted
- * `originatorMeta` spread wins last. (The live-principal-turn signal is NOT in this bag at all —
+ * SECURITY: strips `ceoInitiated` (legacy), `originator`, and `delegationOrigin` after all
+ * untrusted spreads — so neither channel metadata nor injection metadata can smuggle a forged
+ * originator or a forged reply-lock task id. The trusted `originatorMeta` spread wins last.
+ * `delegationOrigin` is set only by the delegate skill on the specialist task, never here.
+ * (The live-principal-turn signal is NOT in this bag at all —
  * it is a distinct agent.task payload field stamped separately below, #1126 — so it cannot be
  * forged through metadata. The `livePrincipal: undefined` strip is belt-and-suspenders: it scrubs
  * any stray channel-supplied bag key so no downstream code can ever mistake it for the signal.
@@ -74,6 +76,7 @@ function mergeTaskMetadata(
     ...(injectionMetadata ?? {}),
     ceoInitiated: undefined,          // strip legacy untrusted channel value (after all untrusted spreads)
     originator: undefined,            // strip untrusted channel value (after all untrusted spreads)
+    delegationOrigin: undefined,      // strip untrusted task id — only delegate may stamp this (#1860)
     livePrincipal: undefined,         // defensive scrub — legacy alias; the real signal is the distinct payload field (#1126)
     liveTurn: undefined,              // defensive scrub — keep the real signal OFF the metadata bag so it can never be persisted (#1126)
     syntheticTurn: undefined,         // defensive scrub — same shape as liveTurn; a metadata bag must not be able to mark a human turn as Curia's (#1892)

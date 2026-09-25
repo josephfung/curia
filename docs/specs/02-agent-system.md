@@ -37,7 +37,9 @@ different blocks:
 Detection keys off `delegationOrigin`, not `channelId`. A new internal-channel
 caller does not inherit specialist framing. Channel `internal` with neither a
 validated originator nor `delegationOrigin` still receives the unresolved-sender
-low-trust block.
+low-trust block. Inbound channel metadata cannot supply `delegationOrigin`; the
+dispatcher strips it, the same way it strips a channel-supplied `originator`.
+Only `delegate` stamps the marker, on the specialist task.
 
 Sender judgment that remains in a specialist prompt is task quality scoped to
 that decision. Calendar RSVP policy applies only to a formal-invite CONSULT
@@ -205,7 +207,7 @@ One delegated item produces one message to the principal.
 - **Borrow-then-answer** — the coordinator owns the channel. The specialist returns work internally. The coordinator composes the one reply.
 - **Transfer-ownership** — the specialist owns the channel and sends the result (Signal, SMS, Slack, or email). The coordinator does not narrate that send back on the same channel.
 
-Enforcement is not prompt-only. A successful human-facing send (`email-reply`, `email-send`, `signal-send`, `sms-send`, `slack-send`) sets the dispatcher reply-lock on the task in `tool.result.routingTaskId` only. The recipient matches the inbound sender, or another verified active identity of that contact, so a Signal send can lock an email task for the same person. A delegated specialist runs in a `delegate-…` conversation; `originConversationId` is the principal conversation and `routingTaskId` is the coordinator task that delegated. Another pending task in that conversation still relays. The locked task's later `agent.response` is not delivered. Its text is filed on a closed bullpen thread (no mentions, so nobody is woken). A send to someone else does not lock. (#847, #1860)
+Enforcement is not prompt-only. A successful human-facing send (`email-reply`, `email-send`, `signal-send`, `sms-send`, `slack-send`) sets the dispatcher reply-lock on the task in `tool.result.routingTaskId` only. The recipient matches the inbound sender, or another verified active identity of that contact, so a Signal send can lock an email task for the same person. A delegated specialist runs in a `delegate-…` conversation; `originConversationId` is the principal conversation and `routingTaskId` is the coordinator task that delegated. A direct task's `routingTaskId` is its own id. A channel-supplied `delegationOrigin` is stripped before routing, so it cannot point the lock elsewhere. Another pending task in that conversation still relays. The locked task's later `agent.response` is not delivered. Its text is filed on a closed bullpen thread (no mentions, so nobody is woken). A send to someone else does not lock. (#847, #1860)
 
 ---
 
