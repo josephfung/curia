@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { DateTime } from 'luxon';
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { TaskOriginator } from '../contacts/types.js';
@@ -376,8 +375,10 @@ class PostgresBullpenBackend implements BullpenBackend {
       // seen up to their current latest message (#1065): a thread re-surfaces only when
       // last_message_at advances past seen_through, so a handled out-of-band request is
       // not re-actioned on a later wake.
-      // age_rank = 1 keeps the oldest eligible thread in the five-slot cap so newer
-      // traffic cannot crowd a missed handoff out of the widened window (#1899).
+      // age_rank = 1 keeps the oldest eligible thread inside PENDING_THREAD_CAP so
+      // newer traffic cannot crowd a missed handoff out of the widened window
+      // (#1899). $3 is the newest-slot count (cap - 1); $4 is the cap itself.
+      // Both are bound parameters so the SQL cannot drift from the in-memory cap.
       `WITH eligible AS (
          SELECT t.id, t.topic, t.message_count, t.last_message_at
          FROM bullpen_threads t
@@ -399,10 +400,10 @@ class PostgresBullpenBackend implements BullpenBackend {
        )
        SELECT id, topic, message_count, last_message_at
        FROM ranked
-       WHERE age_rank = 1 OR recency_rank <= 4
+       WHERE age_rank = 1 OR recency_rank <= $3
        ORDER BY last_message_at DESC, id DESC
-       LIMIT 5`,
-      [agentId, windowSeconds],
+       LIMIT $4`,
+      [agentId, windowSeconds, PENDING_THREAD_CAP - 1, PENDING_THREAD_CAP],
     );
 
     const results: PendingThreadContext[] = [];
@@ -644,9 +645,9 @@ export function formatBullpenContext(pending: PendingThreadContext[], timezone?:
 
 function formatBullpenStamp(createdAt: Date, timezone: string | undefined): string {
   const unixSeconds = Math.floor(createdAt.getTime() / 1000);
-  const zone = timezone?.trim();
-  // An invalid IANA zone falls through to toLocalIso's UTC form rather than
-  // failing the whole block — the refresh caller would otherwise drop the tier.
-  const usable = zone && DateTime.fromJSDate(createdAt, { zone }).isValid ? zone : undefined;
-  return toLocalIso(unixSeconds, usable) ?? createdAt.toISOString();
+  const zone = timezone?.trim() || undefined;
+  // TIMEZONE is rejected at startup, so a bad zone never reaches this call.
+  // toLocalIso throws on one anyway; the null fallback is only for an
+  // implausible unix timestamp, which is not a valid message time.
+  return toLocalIso(unixSeconds, zone) ?? createdAt.toISOString();
 }
