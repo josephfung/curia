@@ -1,6 +1,7 @@
 import type { EventBus } from '../bus/bus.js';
 import type { AgentDiscussEvent } from '../bus/events.js';
 import { createAgentTask } from '../bus/events.js';
+import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { Logger } from '../logger.js';
 import type { BullpenService } from '../memory/bullpen.js';
 
@@ -9,6 +10,8 @@ export class BullpenDispatcher {
     private bus: EventBus,
     private logger: Logger,
     private bullpenService: BullpenService,
+    /** When set, a participant that is not a loaded agent is not dispatched. (#1898) */
+    private agentRegistry?: AgentRegistry,
   ) {}
 
   register(): void {
@@ -68,6 +71,16 @@ export class BullpenDispatcher {
 
     let dispatched = 0;
     for (const agentId of otherParticipants) {
+      // A name that no loaded runtime owns must not count as a successful
+      // dispatch. The other participants of the same thread still get tasks.
+      if (this.agentRegistry && !this.agentRegistry.has(agentId)) {
+        this.logger.error(
+          { threadId, agentId },
+          'BullpenDispatcher: participant is not a loaded agent — skipping task',
+        );
+        continue;
+      }
+
       const isMentioned = mentionedAgentIds.includes(agentId);
       const shouldAct = isMentioned;
       const content = threadClosed

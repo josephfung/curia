@@ -275,21 +275,32 @@ export async function loadToolsFromDirectory(
  * Call after both skills and agent configs are loaded. Fails on the first stale
  * or unknown reference — typos must surface at startup, not silently at runtime.
  *
+ * `knownAgentNames` is agents whose YAML actually parsed (enabled or disabled).
+ * Filename stems of broken YAML belong in `unparseableAgents` so a manifest that
+ * names one fails with "unparseable" rather than passing the stem check. (#1898)
+ *
  * 'system' is always a valid caller (checkpoint processor, scheduler).
  */
 export function validateAllowedCallers(
   registry: ToolRegistry,
   knownAgentNames: Set<string>,
+  unparseableAgents?: ReadonlyMap<string, string>,
 ): void {
   for (const skill of registry.list()) {
     for (const caller of skill.manifest.allowed_callers ?? []) {
       if (caller === 'system') continue;
-      if (!knownAgentNames.has(caller)) {
+      if (knownAgentNames.has(caller)) continue;
+      const parseError = unparseableAgents?.get(caller);
+      if (parseError !== undefined) {
         throw new Error(
-          `Tool '${skill.manifest.name}' declares unknown allowed_caller '${caller}'. ` +
-          `Known agents: ${[...knownAgentNames].join(', ')}`,
+          `Tool '${skill.manifest.name}' declares allowed_caller '${caller}', ` +
+          `but that agent's config is unparseable: ${parseError}`,
         );
       }
+      throw new Error(
+        `Tool '${skill.manifest.name}' declares unknown allowed_caller '${caller}'. ` +
+        `Known agents: ${[...knownAgentNames].join(', ')}`,
+      );
     }
   }
 }

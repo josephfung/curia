@@ -410,6 +410,12 @@ export interface SchedulerConfig {
   /** Max agent runs this process will have in flight. Default: DEFAULT_MAX_IN_FLIGHT.
    *  Sourced from config.scheduler.maxInFlight. */
   maxInFlight?: number;
+  /**
+   * When set, a due job whose agentId is not owned by a loaded runtime is
+   * failed (next_run_at cleared) instead of published. Absent in unit tests
+   * that don't model the registry. Production passes agentRegistry.has. (#1898)
+   */
+  ownsAgent?: (agentId: string) => boolean;
 }
 
 type FireOutcome = 'dispatched' | 'skipped' | 'saturated';
@@ -424,6 +430,7 @@ export class Scheduler {
   private outboundContextService?: OutboundContextService;
   private defaultExpectedDurationSeconds: number;
   private principalContactId?: string;
+  private ownsAgent?: (agentId: string) => boolean;
   private readonly maxInFlight: number;
   /** Seeds dispatcher routing for a delegation-retry wake in the original conversation. */
   private externalRoutingRegistrar?: (
@@ -473,6 +480,7 @@ export class Scheduler {
     this.outboundContextService = config.outboundContextService;
     this.defaultExpectedDurationSeconds = config.defaultExpectedDurationSeconds ?? DEFAULT_EXPECTED_DURATION_SECONDS;
     this.principalContactId = config.principalContactId;
+    this.ownsAgent = config.ownsAgent;
     const maxInFlight = config.maxInFlight ?? DEFAULT_MAX_IN_FLIGHT;
     if (!Number.isInteger(maxInFlight) || maxInFlight < 1) {
       throw new Error(`scheduler maxInFlight must be a positive integer, got: ${String(maxInFlight)}`);
@@ -810,6 +818,14 @@ export class Scheduler {
    * non-negotiable behavioral instruction.
    */
   private async claimAndDispatch(job: JobRow): Promise<Exclude<FireOutcome, 'saturated'>> {
+    // Never claim a job nobody will run. Entering 'running' and then waiting
+    // for the slot timeout is what let stuck-job recovery pause a healthy job
+    // for the wrong reason (#1898).
+    if (this.ownsAgent && !this.ownsAgent(job.agentId)) {
+      await this.failUnownedAgent(job);
+      return 'skipped';
+    }
+
     // Atomically claim the job by setting status to 'running' only if it's still
     // in a claimable state. The rowCount check prevents double-firing if another
     // scheduler instance (or overlapping poll) claimed the same job.
@@ -1193,6 +1209,34 @@ export class Scheduler {
     const ms = computeRecoveryTimeout(seconds) * 1000;
     // Node clamps delays above 2^31-1 to 1, which would release the slot immediately.
     return Math.min(ms, 2_147_483_647);
+  }
+
+  /**
+   * Mark a job failed without claiming it, and clear next_run_at so the poll
+   * (status IN pending/failed AND next_run_at <= now()) does not re-select it
+   * every tick. Does not log 'Job fired'.
+   */
+  private async failUnownedAgent(job: JobRow): Promise<void> {
+    const message = `Agent '${job.agentId}' is not loaded — no runtime owns this id`;
+    this.logger.error(
+      { jobId: job.id, agentId: job.agentId },
+      'Job not fired — agent id no loaded runtime owns',
+    );
+    const result = await this.pool.query(
+      `UPDATE scheduled_jobs
+          SET status = 'failed',
+              last_error = $2,
+              next_run_at = NULL
+        WHERE id = $1
+          AND status IN ('pending', 'failed')`,
+      [job.id, message],
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      this.logger.warn(
+        { jobId: job.id, agentId: job.agentId },
+        'Unowned-agent fail matched 0 rows — job was not pending',
+      );
+    }
   }
 
   private async publishFire(job: JobRow, firedEvent: ScheduleFiredEvent, taskEvent: AgentTaskEvent): Promise<void> {

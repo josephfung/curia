@@ -471,4 +471,31 @@ describe('validateAllowedCallers', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('fails when allowed_callers names an agent whose config is unparseable (#1898)', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_ac_unparseable__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'governed-skill', {
+        name: 'governed-skill',
+        description: 'test skill',
+        version: '1.0.0',
+        action_risk: 'none',
+        inputs: {},
+        outputs: {},
+        allowed_callers: ['broken-agent'],
+      });
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
+      const enabledNames = new Set(discoveries.map(d => d.name));
+      await loadToolsFromDirectory(discoveries, registry, logger, enabledNames);
+
+      const knownAgents = new Set(['coordinator']);
+      const unparseable = new Map([['broken-agent', 'YAML parse error']]);
+      expect(() => validateAllowedCallers(registry, knownAgents, unparseable)).toThrow(/unparseable/);
+      expect(() => validateAllowedCallers(registry, knownAgents, unparseable)).toThrow('broken-agent');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

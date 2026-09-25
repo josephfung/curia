@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BullpenHandler } from './handler.js';
 import { BullpenService } from '../../src/memory/bullpen.js';
+import { AgentRegistry } from '../../src/agents/agent-registry.js';
 import { createLogger } from '../../src/logger.js';
 import type { ToolContext } from '../../src/skills/types.js';
 
@@ -18,7 +19,12 @@ function makeCtx(input: Record<string, unknown>, overrides?: Partial<ToolContext
       publish: vi.fn().mockResolvedValue(undefined),
       subscribe: vi.fn(),
     } as unknown as ToolContext['bus'],
-    agentRegistry: { list: vi.fn().mockReturnValue([]) } as unknown as ToolContext['agentRegistry'],
+    // Default stub accepts every name so existing posts stay focused on routing.
+    // The unknown-participant test overrides this with a real registry.
+    agentRegistry: {
+      has: () => true,
+      list: () => [],
+    } as unknown as ToolContext['agentRegistry'],
     ...overrides,
   } as unknown as ToolContext;
 }
@@ -48,6 +54,26 @@ describe('BullpenHandler', () => {
     expect(publishCall[0]).toBe('agent');
     expect(publishCall[1].type).toBe('agent.discuss');
     expect(publishCall[1].payload.threadClosed).toBeUndefined();
+  });
+
+  it('post: rejects a participant that is not a known agent and names the valid ones (#1898)', async () => {
+    const registry = new AgentRegistry();
+    registry.register('coordinator', { role: 'coordinator', description: 'Coordinator' });
+    registry.register('research-agent', { role: 'specialist', description: 'Research' });
+    const ctx = makeCtx({
+      action: 'post',
+      topic: 'Q2 budget',
+      participants: ['coordinator', 'T2125-expense-tracker'],
+      content: 'Can you look into Q2 costs?',
+    }, { agentRegistry: registry });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('T2125-expense-tracker');
+      expect(result.error).toContain('coordinator');
+      expect(result.error).toContain('research-agent');
+    }
+    expect(ctx.bus!.publish).not.toHaveBeenCalled();
   });
 
   it('post: defaults mentionedAgentIds to all participants when omitted', async () => {

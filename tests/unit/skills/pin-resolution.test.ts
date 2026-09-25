@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { parseSkillMd } from '../../../src/skills/skill-md.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
-import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps } from '../../../src/skills/pin-resolution.js';
+import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps, collectPinnedByBundle } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
 
@@ -378,6 +378,35 @@ describe('reportScheduledPinGaps (#1501)', () => {
 
     reportScheduledPinGaps('ceo-inbox', emptyResolution(), true, logger);
     expect(errors).toHaveLength(0);
+  });
+});
+
+describe('collectPinnedByBundle (#1898)', () => {
+  it('reports an agent whose config failed to parse instead of omitting its pins silently', () => {
+    const errors: Array<{ msg: string; ctx: Record<string, unknown> }> = [];
+    const logger = {
+      error: (ctx: Record<string, unknown>, msg: string) => {
+        errors.push({ msg, ctx });
+      },
+      warn: () => {},
+      info: () => {},
+      debug: () => {},
+    } as unknown as import('../../../src/logger.js').Logger;
+
+    const pinned = collectPinnedByBundle([
+      { name: 'ceo-inbox', pinnedSkills: ['email'] },
+      { name: 'broken-agent', pinnedSkills: null, parseError: 'bad yaml' },
+      { name: 'quiet', pinnedSkills: [] },
+    ], logger);
+
+    expect(pinned.get('email')).toEqual(['ceo-inbox']);
+    expect([...pinned.keys()]).toEqual(['email']);
+    expect(errors).toEqual([
+      {
+        msg: 'Pin-gap detection: agent config failed to parse — skill pins are unknown and this agent is omitted from pinnedByBundle',
+        ctx: { agent: 'broken-agent', parseError: 'bad yaml' },
+      },
+    ]);
   });
 });
 

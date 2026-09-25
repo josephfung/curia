@@ -186,6 +186,42 @@ export function reportScheduledPinGaps(
   );
 }
 
+/** One agent contributing to the bundle → pinner map. `pinnedSkills: null` means the YAML did not parse. */
+export interface AgentPinSource {
+  name: string;
+  pinnedSkills: readonly string[] | null;
+  parseError?: string;
+}
+
+/**
+ * Build the bundle → pinning-agents map used by the registry UI (#1724).
+ *
+ * An agent whose config failed to parse has unknown pins. Skipping it with
+ * `config?.pinned_skills` dropped it out of the map with no signal — the same
+ * blind spot the detector exists to catch. Log that omission at error. (#1898)
+ */
+export function collectPinnedByBundle(
+  agents: readonly AgentPinSource[],
+  logger: Logger,
+): Map<string, string[]> {
+  const pinnedByBundle = new Map<string, string[]>();
+  for (const agent of agents) {
+    if (agent.pinnedSkills === null) {
+      logger.error(
+        { agent: agent.name, parseError: agent.parseError },
+        'Pin-gap detection: agent config failed to parse — skill pins are unknown and this agent is omitted from pinnedByBundle',
+      );
+      continue;
+    }
+    for (const pin of agent.pinnedSkills) {
+      const list = pinnedByBundle.get(pin);
+      if (list) list.push(agent.name);
+      else pinnedByBundle.set(pin, [agent.name]);
+    }
+  }
+  return pinnedByBundle;
+}
+
 /** Append instruction blocks to a system prompt (blank-line separated). */
 export function appendSkillInstructions(systemPrompt: string, blocks: string[]): string {
   if (blocks.length === 0) return systemPrompt;

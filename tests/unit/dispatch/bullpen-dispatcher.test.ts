@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BullpenDispatcher } from '../../../src/dispatch/bullpen-dispatcher.js';
 import { BullpenService } from '../../../src/memory/bullpen.js';
+import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { createLogger } from '../../../src/logger.js';
 import { createAgentDiscuss } from '../../../src/bus/events.js';
 import type { EventBus } from '../../../src/bus/bus.js';
+import type { Logger } from '../../../src/logger.js';
 
 function makeBus() {
   const handlers = new Map<string, ((event: unknown) => void)[]>();
@@ -283,6 +285,48 @@ describe('BullpenDispatcher', () => {
     expect(coordTask?.payload.content).toContain('act on the conclusion');
     expect(cTask?.payload.content).toContain('FYI: Final message');
     expect(cTask?.payload.content).not.toContain('act on the conclusion');
+  });
+
+  it('skips an unresolvable participant and still dispatches the rest (#1898)', async () => {
+    const localBus = makeBus();
+    const localService = BullpenService.createInMemory();
+    const error = vi.fn();
+    const logger = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn() } as unknown as Logger;
+    const registry = new AgentRegistry();
+    registry.register('coordinator', { role: 'coordinator', description: 'Coordinator' });
+    registry.register('agent-b', { role: 'specialist', description: 'B' });
+    const localDispatcher = new BullpenDispatcher(
+      localBus as unknown as EventBus,
+      logger,
+      localService,
+      registry,
+    );
+    localDispatcher.register();
+
+    const { thread } = await localService.openThread(
+      'Mixed roster', 'coordinator', ['coordinator', 'agent-b', 'ghost-agent'], 'Hello', ['agent-b', 'ghost-agent'],
+    );
+    const event = createAgentDiscuss({
+      threadId: thread.id,
+      messageId: 'msg-1',
+      topic: 'Mixed roster',
+      senderAgentId: 'coordinator',
+      participants: ['coordinator', 'agent-b', 'ghost-agent'],
+      mentionedAgentIds: ['agent-b', 'ghost-agent'],
+      content: 'Hello',
+      parentEventId: 'task-1',
+    });
+    await localBus._trigger('agent.discuss', event);
+
+    const tasks = (localBus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task')
+      .map(([_l, e]) => (e as { payload: { agentId: string } }).payload.agentId);
+    expect(tasks).toEqual(['agent-b']);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: thread.id, agentId: 'ghost-agent' }),
+      'BullpenDispatcher: participant is not a loaded agent — skipping task',
+    );
   });
 
   it('sets threadClosed false on open-thread dispatch tasks', async () => {
