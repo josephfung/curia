@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { DateTime } from 'luxon';
 import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { TaskOriginator } from '../contacts/types.js';
+import { toLocalIso } from '../time/timestamp.js';
 
 // Postgres error code for unique_violation — used to detect concurrent duplicate
 // INSERT on source_message_id and recover into the dedup path instead of failing.
@@ -66,6 +68,18 @@ const RECENT_MSG_LIMIT = 15;
 // sender is not me" guard stop re-actioning; this bound is only a backstop.
 // Scheduler-channel tasks do not inject this tier (#1609). ADR-043. (#1899)
 export const BULLPEN_PENDING_WINDOW_MINUTES = 7 * 24 * 60;
+
+// Ambient injection cap. Four slots stay newest-first so a busy participant still
+// sees current threads; the fifth is the oldest eligible thread, so a missed
+// handoff is not crowded out of the widened window by newer traffic (#1899).
+const PENDING_THREAD_CAP = 5;
+
+function capPendingThreads<T>(threads: T[], lastMessageAt: (thread: T) => number): T[] {
+  const newestFirst = [...threads].sort((a, b) => lastMessageAt(b) - lastMessageAt(a));
+  if (newestFirst.length <= PENDING_THREAD_CAP) return newestFirst;
+  const oldest = newestFirst[newestFirst.length - 1]!;
+  return [...newestFirst.slice(0, PENDING_THREAD_CAP - 1), oldest];
+}
 
 // -- Backend interface --
 
@@ -179,13 +193,7 @@ class InMemoryBullpenBackend implements BullpenBackend {
       result.push({ threadId, topic: thread.topic, totalMessages: thread.messageCount, recentMessages });
     }
 
-    return result
-      .sort((a, b) => {
-        const ta = this.threads.get(a.threadId)?.lastMessageAt?.getTime() ?? 0;
-        const tb = this.threads.get(b.threadId)?.lastMessageAt?.getTime() ?? 0;
-        return tb - ta;
-      })
-      .slice(0, 5);
+    return capPendingThreads(result, (thread) => this.threads.get(thread.threadId)?.lastMessageAt?.getTime() ?? 0);
   }
 
   async markThreadsSeen(agentId: string, threadIds: string[]): Promise<void> {
@@ -368,18 +376,31 @@ class PostgresBullpenBackend implements BullpenBackend {
       // seen up to their current latest message (#1065): a thread re-surfaces only when
       // last_message_at advances past seen_through, so a handled out-of-band request is
       // not re-actioned on a later wake.
-      `SELECT t.id, t.topic, t.message_count, t.last_message_at
-       FROM bullpen_threads t
-       LEFT JOIN bullpen_thread_reads r ON r.thread_id = t.id AND r.agent_id = $1
-       WHERE t.status = 'open'
-         AND t.participants @> ARRAY[$1]::text[]
-         AND t.last_message_at > NOW() - ($2::numeric * INTERVAL '1 second')
-         AND (r.seen_through IS NULL OR t.last_message_at > r.seen_through)
-         AND (
-           SELECT sender_id FROM bullpen_messages
-           WHERE thread_id = t.id ORDER BY created_at DESC LIMIT 1
-         ) != $1
-       ORDER BY t.last_message_at DESC
+      // age_rank = 1 keeps the oldest eligible thread in the five-slot cap so newer
+      // traffic cannot crowd a missed handoff out of the widened window (#1899).
+      `WITH eligible AS (
+         SELECT t.id, t.topic, t.message_count, t.last_message_at
+         FROM bullpen_threads t
+         LEFT JOIN bullpen_thread_reads r ON r.thread_id = t.id AND r.agent_id = $1
+         WHERE t.status = 'open'
+           AND t.participants @> ARRAY[$1]::text[]
+           AND t.last_message_at > NOW() - ($2::numeric * INTERVAL '1 second')
+           AND (r.seen_through IS NULL OR t.last_message_at > r.seen_through)
+           AND (
+             SELECT sender_id FROM bullpen_messages
+             WHERE thread_id = t.id ORDER BY created_at DESC LIMIT 1
+           ) != $1
+       ),
+       ranked AS (
+         SELECT id, topic, message_count, last_message_at,
+           ROW_NUMBER() OVER (ORDER BY last_message_at ASC, id ASC) AS age_rank,
+           ROW_NUMBER() OVER (ORDER BY last_message_at DESC, id DESC) AS recency_rank
+         FROM eligible
+       )
+       SELECT id, topic, message_count, last_message_at
+       FROM ranked
+       WHERE age_rank = 1 OR recency_rank <= 4
+       ORDER BY last_message_at DESC, id DESC
        LIMIT 5`,
       [agentId, windowSeconds],
     );
@@ -585,8 +606,11 @@ export class BullpenService {
  * Shows up to 5 threads × up to RECENT_MSG_LIMIT messages each. For threads that exceed the
  * limit, the first message (original request) is always pinned alongside the most recent ones
  * so agents never lose the founding context of a long conversation (#1090).
+ *
+ * `timezone` is the principal's IANA zone. Stamps use `toLocalIso` so the model reads
+ * wall-clock digits instead of converting UTC (#1899).
  */
-export function formatBullpenContext(pending: PendingThreadContext[]): string {
+export function formatBullpenContext(pending: PendingThreadContext[], timezone?: string): string {
   if (pending.length === 0) return '';
   const lines: string[] = [`[Bullpen — ${pending.length} active thread${pending.length === 1 ? '' : 's'}]`];
   for (const thread of pending) {
@@ -596,9 +620,7 @@ export function formatBullpenContext(pending: PendingThreadContext[]): string {
     lines.push('');
     lines.push(`Thread "${thread.topic}" (thread_id: ${thread.threadId}, ${thread.totalMessages} total messages${showing}):`);
     for (const msg of thread.recentMessages) {
-      // Date plus time, UTC. A time-of-day stamp reads as "just now" once the
-      // pending window spans more than an hour (#1899).
-      const ts = `${msg.createdAt.toISOString().slice(0, 16).replace('T', ' ')}Z`;
+      const ts = formatBullpenStamp(msg.createdAt, timezone);
       const mentions = msg.mentionedAgentIds.length > 0
         ? msg.mentionedAgentIds.map(id => `@${id}`).join(' ') + ' '
         : '';
@@ -611,7 +633,20 @@ export function formatBullpenContext(pending: PendingThreadContext[]): string {
   // Thread-closure convention (#881): bullpen threads tend to be left open because
   // nothing prompts agents to close them. Surfacing this line on every turn that
   // injects bullpen state gives all agents the convention without per-agent prompt edits.
+  // The ambient line rides with the block (#1609, #1899): widening the window puts
+  // older internal threads on human-channel turns, and channel suppression only
+  // covers scheduler runs.
   lines.push('');
+  lines.push('These are ambient internal threads. Reply only via the bullpen tools, never in your response to the user.');
   lines.push('When your bullpen reply concludes a thread, pass close_after: true so it is closed atomically. Leave it off (or false) if the discussion is still going.');
   return lines.join('\n');
+}
+
+function formatBullpenStamp(createdAt: Date, timezone: string | undefined): string {
+  const unixSeconds = Math.floor(createdAt.getTime() / 1000);
+  const zone = timezone?.trim();
+  // An invalid IANA zone falls through to toLocalIso's UTC form rather than
+  // failing the whole block — the refresh caller would otherwise drop the tier.
+  const usable = zone && DateTime.fromJSDate(createdAt, { zone }).isValid ? zone : undefined;
+  return toLocalIso(unixSeconds, usable) ?? createdAt.toISOString();
 }

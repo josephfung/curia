@@ -1146,6 +1146,7 @@ export class AgentRuntime {
       );
     }
 
+    const watermarkBeforeAmbient = new Set(injectedBullpenThreadIds);
     // Inject pending Bullpen threads as a system message so the agent is aware
     // of active inter-agent discussions. Inserted after sender context (if any),
     // before conversation history — matching spec context budget priority order.
@@ -1157,11 +1158,28 @@ export class AgentRuntime {
 
     // Record bullpen context in the budget for observability. Match by the
     // same `[Bullpen` sentinel that refreshBullpenContext uses so the two
-    // detection sites can't drift apart.
+    // detection sites can't drift apart. Honour the decision: refresh has
+    // already spliced the block in, and a seven-day window makes that block
+    // large enough to overrun a small context window if it is sent anyway (#1899).
     const bullpenMsg = messages.find(
       m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
     );
-    ctxBudget.allocate('bullpen', bullpenMsg ? [bullpenMsg] : []);
+    const bullpenFits = ctxBudget.allocate('bullpen', bullpenMsg ? [bullpenMsg] : []);
+    let ambientBullpenDropped = false;
+    if (bullpenMsg && !bullpenFits) {
+      const idx = messages.findIndex(
+        m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
+      );
+      if (idx !== -1) messages.splice(idx, 1);
+      for (const id of [...injectedBullpenThreadIds]) {
+        if (!watermarkBeforeAmbient.has(id)) injectedBullpenThreadIds.delete(id);
+      }
+      ambientBullpenDropped = true;
+      logger.warn(
+        { agentId, conversationId },
+        'Bullpen context dropped by context budget — pending threads left unmarked so a later wake can retry',
+      );
+    }
 
     // Re-inject contacts resolved earlier in this conversation (#1818).
     // The block is rendered from the current contact row, then charged to its
@@ -1528,7 +1546,7 @@ export class AgentRuntime {
         }.bind(this),
         hooks: {
           beforeRound: async ({ messages: workingMessages, round }) => {
-            if (round > 0 && !suppressAmbientBullpen) {
+            if (round > 0 && !suppressAmbientBullpen && !ambientBullpenDropped) {
               await this.refreshBullpenContext(
                 workingMessages,
                 bullpenInsertAt,
@@ -2597,7 +2615,7 @@ export class AgentRuntime {
       // formatBullpenContext failure preserves the stale message rather than
       // leaving the array with the old message removed and no replacement.
       const newBlock = pendingThreads.length > 0
-        ? formatBullpenContext(pendingThreads)
+        ? formatBullpenContext(pendingThreads, this.config.timezone)
         : null;
 
       // Now atomically swap: remove stale, insert fresh.

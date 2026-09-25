@@ -15,7 +15,7 @@ Scheduler-channel tasks do not inject this tier at all (#1609). An unattended jo
 
 ## Decision
 
-The pending-thread window is **seven days** (`BULLPEN_PENDING_WINDOW_MINUTES`), and every layer of `getPendingThreadsForAgent` names the argument `windowMinutes`. The Postgres predicate converts with `windowMinutes * 60` seconds. The in-memory backend converts with `windowMinutes * 60 * 1000` milliseconds. The service passes the number through.
+The pending-thread window is **seven days**, the `BULLPEN_PENDING_WINDOW_MINUTES` constant in `src/memory/bullpen.ts` (not an environment variable). Every layer of `getPendingThreadsForAgent` names the argument `windowMinutes`. The Postgres predicate converts with `windowMinutes * 60` seconds. The in-memory backend converts with `windowMinutes * 60 * 1000` milliseconds. The service passes the number through.
 
 Seven days covers a contacts-agent gap (Wednesday to Monday, about five days) with slack for a delayed run, and it covers the hours-long gaps of the other schedules. It still drops a thread that has sat unseen for longer than a week.
 
@@ -25,10 +25,16 @@ Rejected alternatives:
 - **Drop the recency predicate and rely on the watermark plus `LIMIT 5`.** Recovers arbitrarily old open threads. A year-old request would re-enter context on the next eligible wake and invite a stale action. A bounded backstop is cheaper than that.
 - **Lift the #1609 scheduler suppression.** That is what put internal bullpen chatter on the principal's Signal. A missed dispatch still has to be recovered on a wake that is allowed to see the tier, or by the primary dispatch path (#1898).
 
-Injected message stamps include the UTC date. A time-of-day-only stamp reads as "just now" once the window is longer than an hour.
+Injected message stamps use `toLocalIso` in the principal's timezone. A time-of-day-only stamp reads as "just now" once the window is longer than an hour, and a raw UTC stamp asks the model to convert.
+
+Of the five pending slots, four are the newest eligible threads and one is the oldest, so newer traffic cannot keep a missed handoff out of the cap until it ages out of the window.
+
+The injected block tells the model the threads are ambient: answer them with the bullpen tools, and do not fold them into the reply on the channel that woke the agent. Scheduler suppression (#1609) still applies; this line covers the interactive path the suppression does not.
 
 ## Consequences
 
 - An unread open thread whose latest message is 30 minutes old, or many hours old, is returned for a participant who has not seen it and did not speak last. A thread older than seven days is not. A seen thread and a thread the agent spoke last on stay excluded.
+- The recovery injection is one-shot. `markThreadsSeen` runs on every successful completion for every thread that was shown, whether or not the agent acted on it (#1065). A handoff that is injected beside an unrelated task and then ignored is marked seen and does not come back for the rest of the week. The seven-day bound widens the chance of that one injection. It does not keep the thread pending until someone acts. Changing the watermark so an unacted @mention stays pending is #1901, not this decision: the current watermark exists specifically so an out-of-band action is not repeated.
+- A bullpen block that does not fit the context budget is removed before the provider call, and those threads are not watermarked, so a later wake can try again. The `context.budget` event records `droppedReason: budget_exceeded` for a block that was actually omitted.
 - Passing minutes into a milliseconds parameter, or the reverse, fails the Postgres integration test: a 30-minute-old row must be inside a 60-minute window and a 90-minute-old row must be outside it.
 - Scheduler runs still do not see ambient bullpen threads. A specialist whose only wake is a cron tick will not pick up a lost handoff through this path.
