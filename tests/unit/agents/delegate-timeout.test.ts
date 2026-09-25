@@ -86,8 +86,8 @@ describe('delegate wait sizing (#1857)', () => {
   const agentsDir = join(import.meta.dirname, '../../../agents');
   const configDir = join(import.meta.dirname, '../../../config');
 
-  it('flags a fallback wait under the pooled-p99 floor', () => {
-    expect(isDelegateDefaultBelowFloor(undefined)).toBe(true);
+  it('flags an explicit fallback wait under the pooled-p99 floor', () => {
+    expect(isDelegateDefaultBelowFloor(undefined)).toBe(false);
     expect(isDelegateDefaultBelowFloor(240_000)).toBe(true);
     expect(isDelegateDefaultBelowFloor(DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS)).toBe(false);
     expect(isDelegateDefaultBelowFloor(DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS + 1)).toBe(false);
@@ -124,7 +124,9 @@ describe('delegate wait sizing (#1857)', () => {
     }
   });
 
-  it('clears measured p99 for the curia-deploy hints #1857 specifies', () => {
+  // Neither agent ships in this repo. This locks the arithmetic those
+  // curia-deploy hints must satisfy; it cannot catch a YAML regression here.
+  it('documents the curia-deploy hint arithmetic (#1857)', () => {
     const byName = new Map(loadAllAgentConfigs(agentsDir).map((config) => [config.name, config]));
     for (const name of ['writing-scout', 'social-media'] as const) {
       const shipped = byName.get(name)?.expected_duration_seconds;

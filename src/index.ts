@@ -2383,11 +2383,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // A specialist with no expected_duration_seconds inherits delegate.defaultTimeoutMs.
-  // Name them at startup so a new agent does not silently pick up the floor. (#1857)
+  // Inventory, not a misconfiguration: these specialists inherit the floor on
+  // purpose. info so a healthy boot does not train operators to ignore the
+  // below-floor warn underneath. (#1857)
   const missingDurationHint = agentRegistry.specialistsWithoutDurationHint();
   if (missingDurationHint.length > 0) {
-    logger.warn(
+    logger.info(
       { agents: missingDurationHint },
       missingDurationHintWarning(missingDurationHint),
     );

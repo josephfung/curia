@@ -14,10 +14,10 @@ import { computeLateDeliveryExpiry } from './late-delegation.js';
 export const MAX_DEFERRED_DELEGATION_ATTEMPTS = 3;
 
 /**
- * Floor when neither config nor a resolved wait is available. Matches the
- * handler's hard-coded DEFAULT_SPECIALIST_TIMEOUT_MS. A deployment override of
- * `delegate.defaultTimeoutMs` is applied by the runtime; this constant is not
- * that override.
+ * Retry delay when a brief never started and neither config nor a resolved
+ * wait is available. A deployment override of `delegate.defaultTimeoutMs` is
+ * applied by the runtime; this constant is not that override, and it is not
+ * the specialist wait (that floor is `DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS`).
  */
 export const DEFAULT_DEFERRED_WAKE_MS = 90_000;
 
