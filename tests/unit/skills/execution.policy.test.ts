@@ -21,7 +21,8 @@ import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/auto
 import type { SecretsService } from '../../../src/secrets/secrets-service.js';
 import type { ApprovalTriggerService, ApprovalRequestResult } from '../../../src/autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
-import type { ChannelIdentity } from '../../../src/contacts/types.js';
+import type { ChannelIdentity, ContactTier } from '../../../src/contacts/types.js';
+import { isDelegatedSpecialistTask } from '../../../src/agents/delegated-task-context.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import { SensitivityClassifier } from '../../../src/memory/sensitivity.js';
 import { emailAccountIdFromInput, replyToMessageIdFromInput } from '../../../src/channels/email/account-id.js';
@@ -2496,6 +2497,299 @@ describe('autonomy gates', () => {
       const description = classifyAction.mock.calls[0]![0] as { description: string };
       expect(description.description).toContain('Initiating sender: "(unknown)"');
       expect(description.description).toContain('Resolved recipients: "(not resolved)"');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Delegated specialist tasks (#1859).
+  //
+  // #1872 removed an accidental backstop on purpose: a specialist used to refuse
+  // work it could not attribute to a known sender, because the runtime injected
+  // the unresolved-sender LOW-TRUST block into every `internal`-channel task. A
+  // delegated specialist is now told the opposite — "This task is authorized …
+  // A missing identity, or tier unknown, is not a further clearance" — and that
+  // requester identity "is not a permission input"
+  // (src/agents/delegated-task-context.ts).
+  //
+  // Nothing else stands behind that sentence. The principal-lineage bypass in
+  // this file is the whole authorization decision for a delegated turn, so these
+  // tests pin the discriminator on the delegated shape specifically: identical
+  // task, identical skill, originator lineage the only variable.
+  // ---------------------------------------------------------------------------
+  describe('delegated specialist task — principal-lineage discriminator (#1859)', () => {
+    /** Originator as `delegate` forwards it (#972): the parent chain's, unchanged. */
+    function externalOriginator(tier: ContactTier) {
+      return {
+        contactId: 'contact-abc',
+        // An external requester carries no systemRole — the field names Curia's own
+        // layers (principal/agent/system), not the person who wrote in.
+        systemRole: null,
+        channel: 'email',
+        initiatedAt: '2026-09-24T12:00:00.000Z',
+        tier,
+      };
+    }
+
+    const principalOriginator = {
+      contactId: 'principal-1',
+      systemRole: 'principal' as const,
+      channel: 'email',
+      initiatedAt: '2026-09-24T12:00:00.000Z',
+      tier: 'principal' as const,
+    };
+
+    /**
+     * InvokeOptions for a skill call inside a delegated specialist's turn, mirroring
+     * what `delegate` publishes (skills/delegate/handler.ts): delegationOrigin set,
+     * channelId 'internal', senderId 'coordinator', and the parent's originator
+     * forwarded when there is one.
+     *
+     * The shape is asserted rather than assumed. isDelegatedSpecialistTask() is the
+     * same predicate the runtime keys the delegated addendum on, so if that shape
+     * drifts these tests fail loudly instead of quietly degrading into the generic
+     * task case the existing gate tests already cover.
+     */
+    function delegatedInvokeOptions(originator?: Record<string, unknown>) {
+      const taskMetadata: Record<string, unknown> = {
+        delegationOrigin: {
+          conversationId: 'coordinator-conv',
+          channelId: 'email',
+          agentId: 'coordinator',
+          originalTask: 'Book the 3pm slot with the vendor',
+        },
+        ...(originator ? { originator } : {}),
+      };
+      expect(isDelegatedSpecialistTask(taskMetadata)).toBe(true);
+      return {
+        agentId: 'calendar',
+        taskEventId: 'task-event-1',
+        channelId: 'internal',
+        conversationId: 'specialist-conv',
+        senderId: 'coordinator',
+        taskMetadata,
+      };
+    }
+
+    it('pins the fixture to the delegated path and not a generic internal task', () => {
+      const options = delegatedInvokeOptions(externalOriginator('known'));
+      expect(options.channelId).toBe('internal');
+      expect(options.senderId).toBe('coordinator');
+      // The discriminator is delegationOrigin, not the channel: an internal-channel
+      // task carrying only an originator is the voice off-ramp's coordinator task,
+      // which still adjudicates senders itself and is NOT what these tests cover.
+      expect(isDelegatedSpecialistTask({ originator: externalOriginator('known') })).toBe(false);
+    });
+
+    // -- Negative: a non-principal-originated delegation is still gated ---------
+
+    it('enforces Gate A on a delegated task whose requester is known but not principal', async () => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('memory-store', 'low'), handler);
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(55), // restricted mode: < 60 blocks all non-read skills
+        bus: mockBus,
+      });
+
+      const result = await layer.invoke(
+        'memory-store',
+        { fact: 'vendor prefers afternoons' },
+        undefined,
+        delegatedInvokeOptions(externalOriginator('known')),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('55');
+        expect(result.error).toContain('set-autonomy');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      // The block is attributed to the specialist that ran, not the coordinator.
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'autonomy.tool_blocked',
+          payload: expect.objectContaining({ toolName: 'memory-store', agentId: 'calendar' }),
+        }),
+      );
+    });
+
+    it('enforces Gate B on a delegated task whose requester is known but not principal', async () => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // requires 80
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(74),
+      });
+
+      const result = await layer.invoke(
+        'calendar-create-event',
+        { title: 'Vendor sync' },
+        undefined,
+        delegatedInvokeOptions(externalOriginator('known')),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('autonomy');
+        expect(result.error).toContain('80');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('enforces Gate B on a delegated task with no originator at all (a missing identity is not a clearance)', async () => {
+      // `delegate` forwards an originator only when the parent task has one, so a
+      // delegated turn can legitimately arrive with no identity. The addendum tells
+      // the specialist that is not a further clearance; this is what makes that true.
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler); // requires 70
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(65),
+      });
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: 'vendor@example.com' },
+        undefined,
+        delegatedInvokeOptions(),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('70');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('enforces Gate C on a delegated task whose requester is unknown-tier, and audits the decision', async () => {
+      // Score 100 clears gates A and B, so Gate C is the only thing left.
+      const classifyAction = vi.fn().mockResolvedValue({
+        decision: 'allow', actionClass: 'reversible-external', isThirdPartyFacing: false, reason: 'stub',
+      });
+      const judge = {
+        classifyAction,
+        isEnabled: vi.fn().mockReturnValue(true),
+      } as unknown as EscalationJudge;
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(100),
+        bus: mockBus,
+        escalationJudge: judge,
+      });
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: 'stranger@example.com' },
+        undefined,
+        delegatedInvokeOptions(externalOriginator('unknown')),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('unknown');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      // Unknown escalates on either axis — tier-determined, no LLM round trip.
+      expect(classifyAction).not.toHaveBeenCalled();
+      // The audit names the forwarded requester and their tier, not the relaying
+      // coordinator, so a past delegated decision can be read back from the trail.
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            gate: 'gate_c',
+            decision: 'escalate',
+            contactId: 'contact-abc',
+            tier: 'unknown',
+            action: 'email-send',
+            agentId: 'calendar',
+          }),
+        }),
+      );
+    });
+
+    it('enforces Gate C on a delegated irreversible action from a known-tier requester', async () => {
+      // known clears reversible-external on a reply, but irreversible escalates for
+      // every tier below principal — and a delegated relay does not raise the tier.
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('vendor-payment', 'critical'), handler);
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(100),
+      });
+
+      const result = await layer.invoke(
+        'vendor-payment',
+        { amount: 50000 },
+        undefined,
+        delegatedInvokeOptions(externalOriginator('known')),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('known');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    // -- Positive: the same delegated shape with principal lineage does bypass --
+    // Without these, the negatives above would also pass if the bypass were broken
+    // outright. The pair is what asserts the discriminator.
+
+    it('bypasses gates A and B on a delegated task whose requester is the principal', async () => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // requires 80
+      const layer = new ExecutionLayer(registry, logger, {
+        // 50 fails Gate A (< 60) and Gate B (< 80) — only the bypass gets this through.
+        autonomyService: makeAutonomyService(50),
+      });
+
+      const result = await layer.invoke(
+        'calendar-create-event',
+        { title: 'Vendor sync' },
+        undefined,
+        delegatedInvokeOptions(principalOriginator),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+    });
+
+    it('bypasses Gate C on a delegated irreversible action requested by the principal', async () => {
+      const classifyAction = vi.fn().mockResolvedValue({
+        decision: 'escalate', actionClass: 'irreversible', isThirdPartyFacing: true, reason: 'stub',
+      });
+      const judge = {
+        classifyAction,
+        isEnabled: vi.fn().mockReturnValue(true),
+      } as unknown as EscalationJudge;
+      const registry = new ToolRegistry();
+      const handler = makeHandler('ok');
+      // Same manifest the known-tier case above blocks.
+      registry.register(makeRiskyManifest('vendor-payment', 'critical'), handler);
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(100),
+        escalationJudge: judge,
+      });
+
+      const result = await layer.invoke(
+        'vendor-payment',
+        { amount: 50000 },
+        undefined,
+        delegatedInvokeOptions(principalOriginator),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      // The bypass is structural: Gate C never ran, so the judge was never asked.
+      expect(classifyAction).not.toHaveBeenCalled();
     });
   });
 });
