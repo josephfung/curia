@@ -109,37 +109,50 @@ function sanitizeEmailField(raw: unknown, maxLen = 254): string {
 }
 
 /**
+ * Mailbox label safe to interpolate into a preamble.
+ *
+ * Strips the same prompt-injection characters as sanitizeNylasMessageId.
+ * Empty, non-string, or stripped-to-empty values fall back to 'curia' — the
+ * same default buildCcPreamble used when the receiving account was unnamed.
+ */
+export function preambleAccountLabel(raw: unknown): string {
+  if (typeof raw !== 'string') return 'curia';
+  const sanitized = raw.replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 200);
+  return sanitized.length > 0 ? sanitized : 'curia';
+}
+
+/**
  * Identifier block prepended to every inbound email task.
  *
- * One code path for the Nylas message id, whether Curia was addressed directly
- * or CC'd. `buildCcPreamble` only adds the CC role marker and Account line.
- * Returns null when there is no sanitized id so the caller omits the line
- * entirely — never "Message ID: " with an empty value.
- *
- * @param nylasMessageId Pre-sanitized id from sanitizeNylasMessageId, or
- *                       undefined when absent or sanitized to empty.
+ * One code path for the Nylas message id and the receiving account, whether
+ * Curia was addressed directly or CC'd. `buildCcPreamble` is only the CC role
+ * marker. The Message ID line is omitted when there is no sanitized id —
+ * never "Message ID: " with an empty value. The Account line is omitted when
+ * `accountLabel` is undefined; a label (including the 'curia' fallback) is
+ * always emitted by the dispatcher.
  */
-export function buildMessageIdBlock(nylasMessageId: string | undefined): string | null {
-  if (!nylasMessageId) return null;
-  return `Message ID: ${nylasMessageId}\n\n`;
+export function buildInboundEmailIdentifierBlock(
+  nylasMessageId: string | undefined,
+  accountLabel: string | undefined,
+): string | null {
+  const lines: string[] = [];
+  if (nylasMessageId) lines.push(`Message ID: ${nylasMessageId}`);
+  if (accountLabel) lines.push(`Account: ${accountLabel}`);
+  if (lines.length === 0) return null;
+  return `${lines.join('\n')}\n\n`;
 }
 
 /**
  * Build the CC role preamble prepended when Curia was CC'd (not directly
  * addressed) on an email.
  *
- * Names who the email was addressed to and which account received it. The
- * Nylas message id is not part of this block — `buildMessageIdBlock` emits
- * that line for every inbound email. Account selection is unchanged: this
- * block still records the receiving account.
+ * Names who the email was addressed to. The Nylas message id and the
+ * receiving account live in `buildInboundEmailIdentifierBlock`, which runs
+ * for every inbound email.
  *
- * @param meta       Parsed email metadata from parseEmailMetadata.
- * @param accountId  The named Nylas account (e.g. "curia"); falls back to 'curia'.
+ * @param meta Parsed email metadata from parseEmailMetadata.
  */
-export function buildCcPreamble(
-  meta: EmailMetadata,
-  accountId: string | undefined,
-): string {
+export function buildCcPreamble(meta: EmailMetadata): string {
   // Sanitize each address before interpolation — primaryRecipientEmails comes
   // from the Nylas To-field (attacker-controlled) and is injected into
   // taskContent after the injection scanner has already run on payload.content.
@@ -162,8 +175,7 @@ export function buildCcPreamble(
     : 'unknown recipients';
 
   return (
-    `[OWNER CC — this email was addressed to ${recipientList}; you were CC'd, not the primary recipient]\n` +
-    `Account: ${accountId ?? 'curia'}\n\n`
+    `[OWNER CC — this email was addressed to ${recipientList}; you were CC'd, not the primary recipient]\n`
   );
 }
 
