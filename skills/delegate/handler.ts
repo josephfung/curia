@@ -334,6 +334,12 @@ export class DelegateHandler implements ToolHandler {
     // Validate target agent exists and isn't the coordinator
     if (!ctx.agentRegistry.has(agent)) {
       const available = ctx.agentRegistry.listSpecialists().map(a => a.name).join(', ');
+      // The tool result is all the model sees. Log it too — a transcript is not
+      // an error signal, and historical threads keep re-teaching the bad name. (#1898)
+      ctx.log.error(
+        { agent, available: available || 'none' },
+        'delegate: target agent not found',
+      );
       return {
         success: false,
         error: `Agent '${agent}' not found. Available specialists: ${available || 'none'}`,

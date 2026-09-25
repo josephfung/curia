@@ -305,15 +305,26 @@ describe('DelegateHandler', () => {
 
   it('returns failure when target agent does not exist', async () => {
     const agentRegistry = new AgentRegistry();
+    agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
     const bus = new EventBus(logger);
+    const error = vi.fn();
     const result = await handler.execute(makeCtx(
       { agent: 'nonexistent', task: 'do something' },
-      { bus, agentRegistry },
+      {
+        bus,
+        agentRegistry,
+        log: { error, warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as unknown as ToolContext['log'],
+      },
     ));
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toContain('not found');
+      expect(result.error).toContain('calendar');
     }
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'nonexistent', available: 'calendar' }),
+      'delegate: target agent not found',
+    );
   });
 
   it('returns failure when trying to delegate to coordinator', async () => {

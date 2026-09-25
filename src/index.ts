@@ -158,7 +158,7 @@ import {
   loadSkillsFromDiscovery,
   registerSyntheticSingletonSkills,
 } from './skills/skill-loader.js';
-import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps } from './skills/pin-resolution.js';
+import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps, collectPinnedByBundle } from './skills/pin-resolution.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { LateDelegationSubscriber } from './agents/late-delegation-subscriber.js';
@@ -2149,6 +2149,8 @@ async function main(): Promise<void> {
     defaultExpectedDurationSeconds: yamlConfig.scheduler?.defaultExpectedDurationSeconds,
     maxInFlight: yamlConfig.scheduler?.maxInFlight,
     principalContactId: principalContact?.id,
+    // Read at fire time, after pass-1 registration below fills the registry.
+    ownsAgent: (agentId) => agentRegistry.has(agentId),
   });
 
   // SuspensionNotifier — emails the CEO when a scheduled job is auto-suspended.
@@ -2376,14 +2378,24 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // After the registry is populated and before any agent.task can be published.
+  // An id no loaded runtime owns is an error, left unacknowledged in the audit log. (#1898)
+  bus.setAgentOwner((agentId) => agentRegistry.has(agentId));
+
   // Cross-validate allowed_callers in skill manifests against known agent names.
   // Must run after both skills and agents are loaded. Unknown names → hard fail.
   try {
-    // Use ALL discovered agent names (enabled + disabled), not just enabled ones, so a
-    // skill that allows a currently-disabled agent as a caller doesn't trip the typo
-    // check. A genuinely unknown name still throws.
-    const knownAgentNames = new Set(agentDiscovery.map(d => d.name));
-    validateAllowedCallers(toolRegistry, knownAgentNames);
+    // Parsed configs only (enabled + disabled). A filename stem whose YAML failed
+    // to parse is not a loaded agent — naming it must say the config is unparseable. (#1898)
+    const knownAgentNames = new Set(
+      agentDiscovery.filter(d => d.config !== null).map(d => d.name),
+    );
+    const unparseableAgents = new Map(
+      agentDiscovery
+        .filter(d => d.config === null)
+        .map(d => [d.name, d.error ?? 'config failed to parse'] as const),
+    );
+    validateAllowedCallers(toolRegistry, knownAgentNames, unparseableAgents);
   } catch (err) {
     logger.fatal({ err }, 'allowed_callers validation failed — fix skill manifests');
     process.exit(1);
@@ -2392,14 +2404,14 @@ async function main(): Promise<void> {
   // Which agents pin each skill bundle. Read from agent manifests on disk so the
   // registry UI can flag a bundle that an agent depends on but which is not enabled —
   // the condition that silently stripped ceo-inbox's 14 tools for a month (#1724).
-  const pinnedByBundle = new Map<string, string[]>();
-  for (const agent of agentDiscovery) {
-    for (const pin of agent.config?.pinned_skills ?? []) {
-      const list = pinnedByBundle.get(pin);
-      if (list) list.push(agent.name);
-      else pinnedByBundle.set(pin, [agent.name]);
-    }
-  }
+  const pinnedByBundle = collectPinnedByBundle(
+    agentDiscovery.map(agent => ({
+      name: agent.name,
+      pinnedSkills: agent.config ? (agent.config.pinned_skills ?? []) : null,
+      parseError: agent.error,
+    })),
+    logger,
+  );
 
   // RegistryService backs the /api/registry/* routes. Seed it with the discovery
   // captured above so the UI can show uninstalled/ghost/error items, not just enabled.
@@ -3059,7 +3071,7 @@ async function main(): Promise<void> {
   checkpointProcessor.register();
 
   // BullpenDispatcher — routes agent.discuss → agent.task for inter-agent Bullpen discussions.
-  const bullpenDispatcher = new BullpenDispatcher(bus, logger, bullpenService);
+  const bullpenDispatcher = new BullpenDispatcher(bus, logger, bullpenService, agentRegistry);
   bullpenDispatcher.register();
 
   // HTTP API channel — started BEFORE channel adapters so the health check endpoint

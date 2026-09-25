@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { EventBus } from '../../../src/bus/bus.js';
+import { EventBus, UnownedAgentTaskError } from '../../../src/bus/bus.js';
 import { createInboundMessage, createAgentTask } from '../../../src/bus/events.js';
 import { createLogger } from '../../../src/logger.js';
 
@@ -155,5 +155,68 @@ describe('EventBus', () => {
 
     // Must resolve — not reject — even though onDelivered threw.
     await expect(bus.publish('channel', event)).resolves.toBeUndefined();
+  });
+
+  it('rejects an agent.task no loaded runtime owns and leaves it unacknowledged (#1898)', async () => {
+    const errors: Array<{ obj: Record<string, unknown>; msg: string }> = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (obj: Record<string, unknown>, msg: string) => { errors.push({ obj, msg }); },
+    };
+    const onEvent = vi.fn();
+    const onDelivered = vi.fn();
+    const handler = vi.fn();
+    bus = new EventBus(logger as unknown as ConstructorParameters<typeof EventBus>[0], onEvent, onDelivered);
+    bus.setAgentOwner((id) => id === 'coordinator');
+    bus.subscribe('agent.task', 'agent', handler);
+
+    const event = createAgentTask({
+      agentId: 'ghost-agent',
+      conversationId: 'scheduler:job-9:run-1',
+      channelId: 'scheduler',
+      senderId: 'scheduler',
+      content: 'do the thing',
+      parentEventId: 'fired-1',
+    });
+
+    await expect(bus.publish('system', event)).rejects.toBeInstanceOf(UnownedAgentTaskError);
+    expect(handler).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith(event);
+    expect(onDelivered).not.toHaveBeenCalled();
+    expect(errors).toEqual([
+      {
+        msg: 'agent.task published for an agent no loaded runtime owns',
+        obj: {
+          agentId: 'ghost-agent',
+          layer: 'system',
+          eventId: event.id,
+          originatingEventId: 'fired-1',
+        },
+      },
+    ]);
+  });
+
+  it('still acknowledges an agent.task a loaded runtime owns', async () => {
+    const onEvent = vi.fn();
+    const onDelivered = vi.fn();
+    const handler = vi.fn();
+    bus = new EventBus(createLogger('error'), onEvent, onDelivered);
+    bus.setAgentOwner((id) => id === 'coordinator');
+    bus.subscribe('agent.task', 'agent', handler);
+
+    const event = createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-1',
+    });
+    await bus.publish('dispatch', event);
+
+    expect(handler).toHaveBeenCalledWith(event);
+    expect(onDelivered).toHaveBeenCalledWith(event.id);
   });
 });

@@ -2,6 +2,32 @@ import type { BusEvent, EventType, Layer } from './events.js';
 import { canPublish, canSubscribe } from './permissions.js';
 import type { Logger } from '../logger.js';
 
+/**
+ * An `agent.task` whose target id is not owned by any loaded runtime.
+ * The audit row is written and left unacknowledged so the startup scan
+ * reports it; subscribers are not invoked. (#1898)
+ */
+export class UnownedAgentTaskError extends Error {
+  readonly agentId: string;
+  readonly layer: Layer;
+  readonly eventId: string;
+  readonly originatingEventId: string | undefined;
+
+  constructor(
+    agentId: string,
+    layer: Layer,
+    eventId: string,
+    originatingEventId: string | undefined,
+  ) {
+    super(`agent.task targets '${agentId}' which no loaded runtime owns`);
+    this.name = 'UnownedAgentTaskError';
+    this.agentId = agentId;
+    this.layer = layer;
+    this.eventId = eventId;
+    this.originatingEventId = originatingEventId;
+  }
+}
+
 type EventHandler = (event: BusEvent) => void | Promise<void>;
 
 // The onEvent hook runs before subscriber delivery — this is intentional.
@@ -20,6 +46,8 @@ export class EventBus {
   private logger: Logger;
   private onEvent?: OnEventHook;
   private onDelivered?: OnDeliveredHook;
+  /** When set, an agent.task for an id this returns false for is an error, not a delivery. */
+  private ownsAgent?: (agentId: string) => boolean;
 
   constructor(logger: Logger, onEvent?: OnEventHook, onDelivered?: OnDeliveredHook) {
     this.logger = logger;
@@ -43,6 +71,15 @@ export class EventBus {
     this.logger.debug({ layer, eventType }, 'Subscriber registered');
   }
 
+  /**
+   * Wire the live agent-ownership check once the registry is populated.
+   * Until this is called, agent.task delivery is unchanged — unit tests that
+   * publish tasks without a registry keep working. Production sets it. (#1898)
+   */
+  setAgentOwner(ownsAgent: (agentId: string) => boolean): void {
+    this.ownsAgent = ownsAgent;
+  }
+
   async publish(layer: Layer, event: BusEvent): Promise<void> {
     // Enforce publish permissions — the layer claiming ownership of an event type
     // must match the allowlist so rogue components can't inject arbitrary events.
@@ -50,6 +87,26 @@ export class EventBus {
       throw new Error(
         `Layer '${layer}' is not authorized to publish '${event.type}'`,
       );
+    }
+
+    const unowned = this.unownedAgentTask(layer, event);
+    if (unowned) {
+      // Write the audit row, then leave it unacknowledged. Delivery was not
+      // handled — acknowledging it is what made this class invisible to the
+      // startup scan. Subscribers are not invoked; they would all no-op.
+      this.logger.error(
+        {
+          agentId: unowned.agentId,
+          layer: unowned.layer,
+          eventId: unowned.eventId,
+          originatingEventId: unowned.originatingEventId,
+        },
+        'agent.task published for an agent no loaded runtime owns',
+      );
+      if (this.onEvent) {
+        await this.onEvent(event);
+      }
+      throw unowned;
     }
 
     this.logger.debug(
@@ -99,5 +156,16 @@ export class EventBus {
         );
       }
     }
+  }
+
+  private unownedAgentTask(layer: Layer, event: BusEvent): UnownedAgentTaskError | undefined {
+    if (event.type !== 'agent.task' || !this.ownsAgent) return undefined;
+    if (this.ownsAgent(event.payload.agentId)) return undefined;
+    return new UnownedAgentTaskError(
+      event.payload.agentId,
+      layer,
+      event.id,
+      event.parentEventId,
+    );
   }
 }

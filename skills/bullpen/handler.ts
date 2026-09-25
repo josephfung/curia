@@ -138,6 +138,22 @@ export class BullpenHandler implements ToolHandler {
             return { success: false, error: "Field 'participants' must contain at least one non-empty agent ID" };
           }
 
+          // Reject names that are not loaded agents before they are persisted.
+          // A drifted casing in the participants array never wakes that agent,
+          // and the wake query cannot tell "nothing pending" from "id mismatch". (#1898)
+          const registry = ctx.agentRegistry;
+          if (!registry) {
+            return { success: false, error: 'agentRegistry not available in context (requires "agentRegistry" capability)' };
+          }
+          const unknownParticipants = cleanParticipants.filter((id) => !registry.has(id));
+          if (unknownParticipants.length > 0) {
+            const valid = registry.list().map((a) => a.name).join(', ');
+            return {
+              success: false,
+              error: `Unknown participant(s): ${unknownParticipants.join(', ')}. Valid agents: ${valid || 'none'}`,
+            };
+          }
+
           const rawMentioned = input['mentioned_agent_ids'];
           // Trim/filter mentions, then constrain to thread participants to prevent out-of-thread fan-out.
           // Default: mention all participants when not specified (caller wants replies when opening a thread).

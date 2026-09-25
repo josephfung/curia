@@ -558,6 +558,45 @@ describe('Scheduler', () => {
       expect(failParams[3]).toBe('UTC');
     });
 
+    it('fails a due job whose agent is not loaded instead of logging Job fired (#1898)', async () => {
+      const row = fakeDbRow({
+        agent_id: 'ghost-agent',
+        cron_expr: null,
+        run_at: new Date('2026-06-24T09:00:00.000Z').toISOString(),
+      });
+      const local = new Scheduler({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pool: pool as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bus: bus as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        logger: logger as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        schedulerService: schedulerService as any,
+        ownsAgent: (id) => id === 'coordinator',
+      });
+
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      await local.pollDueJobs();
+
+      expect(bus.publish).not.toHaveBeenCalled();
+      expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Job fired');
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: 'job-1', agentId: 'ghost-agent' }),
+        'Job not fired — agent id no loaded runtime owns',
+      );
+      const [sql, params] = pool.query.mock.calls[1] as [string, unknown[]];
+      expect(sql).toContain("status = 'failed'");
+      expect(sql).toContain('next_run_at = NULL');
+      expect(sql).toContain("status IN ('pending', 'failed')");
+      expect(sql).not.toContain('run_started_at = now()');
+      expect(params[0]).toBe('job-1');
+      expect(params[1]).toContain('ghost-agent');
+      local.stop();
+    });
+
     it('advances next_run_at in claim UPDATE for cron jobs', async () => {
       const row = fakeDbRow(); // cron_expr: '0 9 * * *', timezone: 'UTC'
       const nextRun = new Date('2026-06-24T09:00:00.000Z');
