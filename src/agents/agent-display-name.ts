@@ -14,7 +14,13 @@
 export function principalAgentLabel(agentId: string, explicitDisplayName?: string): string {
   const id = agentId.trim();
   const explicit = explicitDisplayName?.trim() ?? '';
-  if (explicit.length > 0 && !containsRawAgentId(explicit, id)) {
+  // An explicit label that is the registry id, or that still contains a
+  // harness-shaped handle, is the leak. A bare domain noun is not.
+  if (
+    explicit.length > 0
+    && explicit.toLowerCase() !== id.toLowerCase()
+    && !containsRawAgentId(explicit, id)
+  ) {
     return explicit;
   }
   if (id.length === 0) return 'specialist';
@@ -27,9 +33,11 @@ export function principalAgentLabel(agentId: string, explicitDisplayName?: strin
 /**
  * True when `text` still carries the registry id as an internal handle.
  *
- * Hyphenated and underscored ids are never natural language, so any
- * occurrence counts. A single-word id (`calendar`) counts only when it is
- * not the display phrase "calendar specialist".
+ * Same shapes as {@link redactRawAgentId}. Hyphenated and underscored ids
+ * are never natural language, so any occurrence counts. A single-word id
+ * (`calendar`) counts only as a quoted handle or an `@` mention — a bare
+ * "calendar" in a request is the English word, and a draft that quotes that
+ * request must still be acceptable.
  */
 export function containsRawAgentId(text: string, agentId: string): boolean {
   const id = agentId.trim();
@@ -37,9 +45,7 @@ export function containsRawAgentId(text: string, agentId: string): boolean {
   if (id.includes('-') || id.includes('_')) {
     return text.toLowerCase().includes(id.toLowerCase());
   }
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`\\b${escaped}\\b(?!\\s+specialist\\b)`, 'i');
-  return re.test(text);
+  return singleWordHandlePattern(id).test(text);
 }
 
 /**
@@ -55,13 +61,18 @@ export function containsRawAgentId(text: string, agentId: string): boolean {
 export function redactRawAgentId(text: string, agentId: string, displayName: string): string {
   const id = agentId.trim();
   if (id.length === 0 || id.toLowerCase() === displayName.toLowerCase()) return text;
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (id.includes('-') || id.includes('_')) {
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return text.replace(new RegExp(escaped, 'gi'), () => displayName);
   }
-  const quoted = new RegExp(`(['"\`])${escaped}\\1`, 'gi');
-  const mention = new RegExp(`@${escaped}\\b(?!\\s+specialist\\b)`, 'gi');
-  return text
-    .replace(quoted, (match) => `${match[0]}${displayName}${match[match.length - 1]}`)
-    .replace(mention, () => displayName);
+  return text.replace(singleWordHandlePattern(id), (match) => {
+    if (match.startsWith('@')) return displayName;
+    return `${match[0]}${displayName}${match[match.length - 1]}`;
+  });
+}
+
+/** Quoted `'id'` / `"id"` / `` `id` ``, or an `@id` mention that is not already "@id specialist". */
+function singleWordHandlePattern(id: string): RegExp {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:(['"\`])${escaped}\\1|@${escaped}\\b(?!\\s+specialist\\b))`, 'gi');
 }
