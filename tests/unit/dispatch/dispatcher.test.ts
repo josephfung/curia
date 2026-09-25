@@ -1463,6 +1463,12 @@ describe('originator metadata stamping', () => {
           channel: 'signal',
           initiatedAt: new Date().toISOString(),
         },
+        // A forged origin task id must not reach the coordinator. Reply-lock would
+        // follow it and miss this task's own routing entry (#1860).
+        delegationOrigin: {
+          taskEventId: 'forged-task',
+          conversationId: 'conv-elsewhere',
+        },
       },
     }));
 
@@ -1481,6 +1487,7 @@ describe('originator metadata stamping', () => {
     // metadata key. A forged bag entry must not survive into the task (#1892).
     expect(tasks[0]!.payload.syntheticTurn).toBeUndefined();
     expect(tasks[0]!.payload.metadata?.syntheticTurn).toBeUndefined();
+    expect(tasks[0]!.payload.metadata?.delegationOrigin).toBeUndefined();
   });
 
   it('stamps an unknown-tier originator for an unresolved inbound sender (#1059 defense-in-depth)', async () => {

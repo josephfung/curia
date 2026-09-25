@@ -72,8 +72,10 @@ The dispatcher translates every `agent.response` with a routing entry into `outb
 
 1. **Reply-lock** (`outbound.suppressed_duplicate`) — a human-facing reply skill
    (`email-reply`, `email-send`, `signal-send`, `sms-send`, `slack-send`) already
-   reached this person on this task. `routingTaskId` selects that task.
-   `originConversationId` ties a specialist send to the principal conversation.
+   reached this person on this task. `routingTaskId` selects that task: the
+   coordinator task for a specialist, the task's own id for a direct send.
+   A channel-supplied `delegationOrigin` is stripped, so it cannot select a
+   different id. `originConversationId` ties a specialist send to the principal conversation.
    The recipient may be the inbound sender or another verified identity of that
    contact. The withheld narration is filed on a closed bullpen thread (#847, #1860).
 2. **Explicit no-reply** (`outbound.no_reply`) — the agent's entire response is the sentinel

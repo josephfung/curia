@@ -199,7 +199,9 @@ suppresses it if a human-facing reply (`email-reply`, `email-send`, `signal-send
 or `slack-send`) has already shipped to the same person on this task. `tool.result.routingTaskId`
 is that task, so a second pending task in the same conversation still relays. A delegated
 specialist's send counts: `originConversationId` is the principal conversation, and
-`routingTaskId` is the coordinator task that delegated. The recipient matches the inbound
+`routingTaskId` is the coordinator task that delegated. A direct task uses its own
+id. Inbound metadata cannot supply `delegationOrigin`, so a forged task id cannot
+skip the lock. The recipient matches the inbound
 sender or another verified active identity of that contact, so a Signal send can lock an
 email task for the same person. A send to someone else does not lock. The suppression emits
 `outbound.suppressed_duplicate` with reason `'human_reply_already_sent'`. The withheld text is

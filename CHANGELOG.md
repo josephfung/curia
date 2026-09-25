@@ -71,6 +71,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Delegation-failure replies** — the model writes them about the failed request; fallbacks use display names. (#1860)
 - **Reply-lock** — Signal, SMS, and Slack sends count, and the extra narration stays on the bullpen. (#1860)
 - **Reply-lock** — a send locks only its task, including the contact's other verified channels. (#1860)
+- **Reply-lock** — inbound metadata cannot redirect a direct send onto another task. (#1860)
 - **`delegation.late_resolved`** — a wake that outlives its claim lease emits the outcome once. (#1861)
 - **Late-delegation lease** — renewal stops after 30 minutes so a hung wake stays recoverable. (#1861)
 - **Unknown `agent.task`** — logs an error when no registered agent owns the id. (#1898)

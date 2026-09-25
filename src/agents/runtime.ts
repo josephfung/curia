@@ -1978,8 +1978,17 @@ export class AgentRuntime {
           // Published by agent layer on behalf of the execution layer —
           // the execution layer doesn't have bus access in Phase 3.
           // TODO: When execution layer gets bus access, move this publish there.
-          const originConversationId = delegationOriginConversationId(taskEvent.payload.metadata);
-          const originTaskEventId = delegationOriginTaskEventId(taskEvent.payload.metadata);
+          // delegationOrigin is set only by the delegate skill. The dispatcher strips a
+          // channel-supplied copy, and this read still ignores it unless that marker is
+          // present — a direct task must lock taskEvent.id, not a smuggled task id.
+          const taskMetadata = taskEvent.payload.metadata;
+          const delegated = isDelegatedSpecialistTask(taskMetadata);
+          const originConversationId = delegated
+            ? delegationOriginConversationId(taskMetadata)
+            : undefined;
+          const originTaskEventId = delegated
+            ? delegationOriginTaskEventId(taskMetadata)
+            : undefined;
           // A specialist send locks the coordinator task that delegated.
           // A direct send locks the task that invoked the skill.
           const routingTaskId = originTaskEventId ?? taskEvent.id;
