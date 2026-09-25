@@ -44,6 +44,17 @@ const usage = { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, ca
 const provenance = { requestedModel: 'fake', actualModel: 'fake', providerRequestId: 'req_1' };
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+/** Poll until TTS has published a frame. A fixed sleep flakes when the runner is slow. */
+async function waitForPublishedFrame(
+  transport: { publishedFrames: unknown[] },
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (transport.publishedFrames.length === 0 && Date.now() < deadline) {
+    await delay(10);
+  }
+}
+
 const replyScript = (text: string): LLMStreamEvent[] => [
   { type: 'text_delta', text: `${text} ` },
   { type: 'message_end', content: text, usage, provenance },
@@ -271,8 +282,9 @@ describe('VoiceRuntime', () => {
 
     stt.emit({ text: 'tell me a long story', isFinal: true, speechFinal: true });
 
-    // Let the assistant start speaking.
-    await delay(40);
+    // Let the assistant start speaking. Poll: a fixed 40ms sleep misses the first
+    // frame when the runner is busy, and the barge-in assertion then fails closed.
+    await waitForPublishedFrame(transport);
     const framesBeforeBarge = transport.publishedFrames.length;
     expect(framesBeforeBarge).toBeGreaterThan(0);
 
@@ -312,7 +324,7 @@ describe('VoiceRuntime', () => {
       openingGreeting: false,
     });
     stt.emit({ text: 'say something', isFinal: true, speechFinal: true });
-    await delay(40);
+    await waitForPublishedFrame(transport);
     expect(transport.publishedFrames.length).toBeGreaterThan(0);
 
     // Tiny + low-confidence interims must NOT cancel the assistant.
