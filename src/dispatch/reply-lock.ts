@@ -39,6 +39,27 @@ export function replyLockEmailRecipients(toolName: string, recipients: readonly 
 }
 
 /**
+ * True when a send reached the inbound party.
+ *
+ * `senderId` covers the same channel. `verifiedIdentifiers` covers the
+ * contact's other verified channels, so a Signal send can lock an email task
+ * for the same person. An identifier that is neither does not lock.
+ */
+export function replyLockRecipientMatches(
+  senderId: string,
+  recipients: readonly string[],
+  verifiedIdentifiers: readonly string[] = [],
+): boolean {
+  const sender = senderId.trim().toLowerCase();
+  if (sender.length > 0 && recipients.includes(sender)) return true;
+  if (verifiedIdentifiers.length === 0) return false;
+  const verified = new Set(
+    verifiedIdentifiers.map((id) => id.trim().toLowerCase()).filter((id) => id.length > 0),
+  );
+  return recipients.some((recipient) => verified.has(recipient));
+}
+
+/**
  * A send locks the routing entry for the conversation it happened in, and for
  * the originating principal conversation when a specialist sent it.
  */

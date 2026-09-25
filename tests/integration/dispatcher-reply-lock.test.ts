@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import type { TaskOriginator } from '../../src/contacts/types.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
@@ -495,5 +496,127 @@ describe('Dispatcher reply-lock — delegated Signal send (#1860)', () => {
 
     expect(publishedEvents.filter(isOutboundMessage)).toHaveLength(1);
     expect(publishedEvents.filter(isOutboundSuppressedDuplicate)).toHaveLength(0);
+  });
+
+  it('locks only the task that sent, not another task in the same conversation', async () => {
+    const { dispatcher, subscribeHandlers, publishedEvents } = makeStubs();
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-a', { conversationId: 'signal:+15551212', senderId: '+15551212' });
+    seedRouting(dispatcher, 'task-b', { conversationId: 'signal:+15551212', senderId: '+15551212' });
+
+    const toolHandler = subscribeHandlers.get('tool.result');
+    if (!toolHandler) throw new Error('No tool.result handler registered');
+    await toolHandler(createToolResult({
+      agentId: 'social-media',
+      conversationId: 'delegate-abc',
+      originConversationId: 'signal:+15551212',
+      routingTaskId: 'task-a',
+      toolName: 'signal-send',
+      result: { success: true, data: { delivered_to: '+15551212', channel: 'signal' } },
+      durationMs: 10,
+      parentEventId: 'invoke-a',
+    }));
+
+    await fireAgentResponse(subscribeHandlers, {
+      taskEventId: 'task-a',
+      conversationId: 'signal:+15551212',
+    });
+    await fireAgentResponse(subscribeHandlers, {
+      taskEventId: 'task-b',
+      conversationId: 'signal:+15551212',
+    });
+
+    expect(publishedEvents.filter(isOutboundSuppressedDuplicate)).toHaveLength(1);
+    expect(publishedEvents.filter(isOutboundMessage)).toHaveLength(1);
+  });
+
+  it('locks an email task when Signal reaches another verified identity of that contact', async () => {
+    const publishedEvents: BusEvent[] = [];
+    const subscribeHandlers = new Map<string, (event: BusEvent) => void | Promise<void>>();
+    const bus = {
+      subscribe: vi.fn((eventType: string, _layer: string, handler: (e: BusEvent) => void | Promise<void>) => {
+        subscribeHandlers.set(eventType, handler);
+      }),
+      publish: vi.fn(async (_layer: string, event: BusEvent) => {
+        publishedEvents.push(event);
+      }),
+    } as unknown as EventBus;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
+    const contactService = {
+      getIdentitiesForContact: vi.fn(async () => [
+        { verified: true, status: 'active', channelIdentifier: '+15551212' },
+        { verified: false, status: 'active', channelIdentifier: '+15559999' },
+      ]),
+    };
+    const dispatcher = new Dispatcher({
+      bus,
+      logger,
+      contactService: contactService as unknown as ConstructorParameters<typeof Dispatcher>[0]['contactService'],
+    });
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-email', {
+      conversationId: 'email:thread-1',
+      senderId: 'ceo@example.com',
+    });
+    (dispatcher as unknown as {
+      taskRouting: Map<string, { originator?: TaskOriginator }>;
+    }).taskRouting.get('task-email')!.originator = {
+      contactId: 'ceo',
+      systemRole: 'principal',
+      channel: 'email',
+      initiatedAt: 't',
+      // Principal tier lets Gate C allow the relay. Without it the missing-tier
+      // fail-closed path withholds outbound.message before reply-lock is observable.
+      tier: 'principal',
+    };
+
+    const toolHandler = subscribeHandlers.get('tool.result');
+    if (!toolHandler) throw new Error('No tool.result handler registered');
+    await toolHandler(createToolResult({
+      agentId: 'social-media',
+      conversationId: 'delegate-cross',
+      originConversationId: 'email:thread-1',
+      routingTaskId: 'task-email',
+      toolName: 'signal-send',
+      result: { success: true, data: { delivered_to: '+15551212', channel: 'signal' } },
+      durationMs: 10,
+      parentEventId: 'invoke-cross',
+    }));
+    await fireAgentResponse(subscribeHandlers, {
+      taskEventId: 'task-email',
+      conversationId: 'email:thread-1',
+    });
+    expect(publishedEvents.filter(isOutboundSuppressedDuplicate)).toHaveLength(1);
+    expect(publishedEvents.filter(isOutboundMessage)).toHaveLength(0);
+
+    seedRouting(dispatcher, 'task-email-other', {
+      conversationId: 'email:thread-1',
+      senderId: 'ceo@example.com',
+    });
+    (dispatcher as unknown as {
+      taskRouting: Map<string, { originator?: TaskOriginator }>;
+    }).taskRouting.get('task-email-other')!.originator = {
+      contactId: 'ceo',
+      systemRole: 'principal',
+      channel: 'email',
+      initiatedAt: 't',
+      tier: 'principal',
+    };
+    await toolHandler(createToolResult({
+      agentId: 'social-media',
+      conversationId: 'delegate-unverified',
+      originConversationId: 'email:thread-1',
+      routingTaskId: 'task-email-other',
+      toolName: 'signal-send',
+      result: { success: true, data: { delivered_to: '+15559999', channel: 'signal' } },
+      durationMs: 10,
+      parentEventId: 'invoke-unverified',
+    }));
+    await fireAgentResponse(subscribeHandlers, {
+      taskEventId: 'task-email-other',
+      conversationId: 'email:thread-1',
+    });
+    expect(publishedEvents.filter(isOutboundSuppressedDuplicate)).toHaveLength(1);
+    expect(publishedEvents.filter(isOutboundMessage)).toHaveLength(1);
   });
 });

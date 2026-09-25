@@ -196,9 +196,12 @@ loop becomes visible to operators. See [spec 04 — Channels](04-channels.md).
 
 When an agent's `agent.response` would translate into an outbound message, the dispatcher
 suppresses it if a human-facing reply (`email-reply`, `email-send`, `signal-send`, `sms-send`,
-or `slack-send`) has already shipped to the same sender. A delegated specialist's send counts:
-`tool.result.originConversationId` is the principal conversation, so it locks the coordinator's
-routing entry even though the specialist ran under `delegate-…`. The suppression emits
+or `slack-send`) has already shipped to the same person on this task. `tool.result.routingTaskId`
+is that task, so a second pending task in the same conversation still relays. A delegated
+specialist's send counts: `originConversationId` is the principal conversation, and
+`routingTaskId` is the coordinator task that delegated. The recipient matches the inbound
+sender or another verified active identity of that contact, so a Signal send can lock an
+email task for the same person. A send to someone else does not lock. The suppression emits
 `outbound.suppressed_duplicate` with reason `'human_reply_already_sent'`. The withheld text is
 filed on a closed bullpen thread instead of the principal's channel — the agent that did not
 own the send keeps its note internal. (#847, #1860)

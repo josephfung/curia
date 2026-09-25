@@ -89,10 +89,28 @@ export function isDelegatedSpecialistTask(
 export function delegationOriginConversationId(
   metadata: Record<string, unknown> | undefined,
 ): string | undefined {
+  return delegationOriginString(metadata, 'conversationId');
+}
+
+/**
+ * Coordinator `agent.task` id that spawned this specialist (#1860).
+ * Reply-lock uses it so a specialist send marks only that task, not every
+ * pending task in the same principal conversation.
+ */
+export function delegationOriginTaskEventId(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  return delegationOriginString(metadata, 'taskEventId');
+}
+
+function delegationOriginString(
+  metadata: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
   const origin = metadata?.['delegationOrigin'];
   if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) return undefined;
-  const id = (origin as Record<string, unknown>)['conversationId'];
-  return typeof id === 'string' && id.length > 0 ? id : undefined;
+  const value = (origin as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /**

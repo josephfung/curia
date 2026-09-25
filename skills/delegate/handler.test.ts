@@ -92,6 +92,16 @@ describe('DelegateHandler relay-context forwarding (#995)', () => {
     });
   });
 
+  it('forwards the coordinator task id on delegationOrigin (#1860)', async () => {
+    const { bus, published } = makeBus();
+    const result = await new DelegateHandler().execute(makeCtx(bus, { taskEventId: 'task-coord-1' }));
+    expect(result.success).toBe(true);
+    const task = published.find(e => e.type === 'agent.task');
+    expect((task as AgentTaskEvent).payload.metadata).toMatchObject({
+      delegationOrigin: { taskEventId: 'task-coord-1', conversationId: 'user-conv' },
+    });
+  });
+
   it('forwards delegationOrigin without originator when no originator is in ctx', async () => {
     const { bus, published } = makeBus();
     const result = await new DelegateHandler().execute(
