@@ -38,6 +38,13 @@ import {
 } from './relay-gate-c.js';
 import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
+import type { BullpenService } from '../memory/bullpen.js';
+import {
+  REPLY_LOCK_SKILLS,
+  replyLockConversationMatch,
+  replyLockEmailRecipients,
+  replyLockRecipients,
+} from './reply-lock.js';
 
 /** Redact a channel identifier (email address or phone number) for safe log output. */
 function redactSenderId(value: string): string {
@@ -126,6 +133,12 @@ export interface DispatcherConfig {
    * When absent/disabled, the ambiguous cell fails closed (escalate).
    */
   escalationJudge?: EscalationJudge;
+  /**
+   * When a reply-lock suppresses the coordinator's relay (#1860), the text is
+   * filed here instead of on the principal's channel. Absent in tests that
+   * only assert suppression.
+   */
+  bullpenService?: BullpenService;
 }
 
 /**
@@ -162,8 +175,8 @@ export class Dispatcher {
       conversationId: string;
       senderId: string;
       accountId?: string;
-      /** Set to true when a human-facing reply skill (email-reply, email-send) succeeds
-       *  during this task. handleAgentResponse suppresses outbound.message when true. */
+      /** Set to true when a human-facing reply skill succeeds during this task.
+       *  handleAgentResponse suppresses outbound.message when true (#847, #1860). */
       humanReplySent: boolean;
       /**
        * Set when a reply skill on this turn was blocked by Gate C (#1733). The relay
@@ -207,6 +220,7 @@ export class Dispatcher {
   private ceoEmail?: string | PrincipalEmailRef;
   private approvalTrigger?: ApprovalTriggerService;
   private escalationJudge?: EscalationJudge;
+  private bullpenService?: BullpenService;
 
   constructor(config: DispatcherConfig) {
     this.bus = config.bus;
@@ -226,6 +240,7 @@ export class Dispatcher {
     this.ceoEmail = config.ceoEmail;
     this.approvalTrigger = config.approvalTrigger;
     this.escalationJudge = config.escalationJudge;
+    this.bullpenService = config.bullpenService;
   }
 
   /**
@@ -288,8 +303,9 @@ export class Dispatcher {
       await this.handleAgentError(event as AgentErrorEvent);
     });
 
-    // tool.result → reply-lock: detect successful email-reply / email-send calls so
-    // handleAgentResponse can suppress the duplicate outbound.message. See #847.
+    // tool.result → reply-lock: detect a successful human-facing send (email, Signal,
+    // SMS, Slack) so handleAgentResponse can suppress the duplicate outbound.message.
+    // See #847, #1860.
     // Also detects Gate C blocks on reply skills so the relay cannot deliver (#1733).
     this.bus.subscribe('tool.result', 'dispatch', async (event) => {
       await this.handleToolResult(event as ToolResultEvent);
@@ -991,14 +1007,46 @@ export class Dispatcher {
   }
 
   /**
+   * File a relay the reply-lock withheld (#1860). The specialist (or the
+   * coordinator's own send skill) already delivered the principal message;
+   * this confirmation stays on a closed bullpen thread so it does not wake
+   * anyone and does not go out on the principal's channel.
+   */
+  private async fileSuppressedRelay(agentId: string, content: string, responseEventId: string): Promise<void> {
+    const bullpen = this.bullpenService;
+    const note = content.trim();
+    if (!bullpen || note.length === 0) return;
+    try {
+      const opened = await bullpen.openThread(
+        'Outbound already delivered',
+        agentId,
+        [],
+        `Principal already received this turn's message. Confirmation kept off their channel:\n\n${note}`,
+        [],
+        undefined,
+        `relay-suppressed:${responseEventId}`,
+      );
+      if (!opened.deduplicated) {
+        await bullpen.closeThread(opened.thread.id, agentId);
+      }
+    } catch (err) {
+      this.logger.error(
+        { err, agentId, responseEventId },
+        'Failed to file suppressed relay on the bullpen — principal channel was still not sent',
+      );
+    }
+  }
+
+  /**
    * Reply-lock: detect when a human-facing reply skill fires successfully during a task
    * and mark the routing entry so handleAgentResponse can suppress the duplicate outbound.
    *
    * The tool.result event carries conversationId but not the agent.task ID directly,
-   * so we scan the routing map for an entry with a matching conversationId and senderId.
-   * This works for both the direct-coordinator case (coordinator calls email-reply) and
-   * the delegated-specialist case (T2125 calls email-reply; coordinator's routing entry
-   * shares the same conversationId). See #847.
+   * so we scan the routing map for an entry with a matching conversation and senderId.
+   * Direct calls match conversationId. A delegated specialist runs under `delegate-…`
+   * and stamps `originConversationId` with the principal conversation (#1860). Email,
+   * Signal, SMS, and Slack all lock; a send to someone other than the inbound sender
+   * does not. See #847.
    *
    * NOTE: This relies on single-process in-order event delivery — tool.result must be
    * delivered to all subscribers (including this handler) before agent.response is
@@ -1006,33 +1054,24 @@ export class Dispatcher {
    * event loop; multi-process deployments would require a persistent lock instead.
    */
   private async handleToolResult(event: ToolResultEvent): Promise<void> {
-    const { toolName, conversationId, result } = event.payload;
+    const { toolName, conversationId, result, originConversationId } = event.payload;
 
     // Gate C escalate on reply skills is tracked via authorization.decision
     // (conversationId + taskEventId) — not via tool.result error prose (#1733 review).
     if (!result.success) return;
 
-    // Success path: reply-lock (#847). Only email-reply / email-send return { to }
-    // today; other reply skills in REPLY_SKILLS_GATE_C are Gate C–tracked only.
-    if (toolName !== 'email-reply' && toolName !== 'email-send') return;
-
-    // Extract outbound recipients from result.data.
-    // email-reply returns { to: string } (single address).
-    // email-send returns { to: string } where the value may be comma-joined for multiple recipients.
-    const data = result.data as unknown as Record<string, unknown>;
-    const toRaw = typeof data?.to === 'string' ? data.to : undefined;
-    if (!toRaw) {
-      // The skill contract (to: string) was not met — log a warning so duplicate sends are
+    // Success path: reply-lock (#847, #1860). Skills outside the set do not lock.
+    if (!REPLY_LOCK_SKILLS.has(toolName)) return;
+    const recipients = replyLockRecipients(toolName, result.data);
+    if (recipients === null || recipients.length === 0) {
+      // The skill contract was not met — log a warning so duplicate sends are
       // observable. The lock fails open: outbound.message will still be published.
       this.logger.warn(
         { toolName, conversationId },
-        'Dispatcher reply-lock: skill result missing expected { to: string } field — reply-lock NOT set, duplicate send may occur',
+        'Dispatcher reply-lock: skill result missing recipient — reply-lock NOT set, duplicate send may occur',
       );
       return;
     }
-
-    // Parse comma-separated recipients and normalise to lowercase for case-insensitive matching.
-    const recipients = toRaw.split(',').map((addr) => addr.trim().toLowerCase());
 
     // Find every routing entry for this conversation where the reply target includes the
     // original inbound sender. Multiple entries for the same conversationId are possible
@@ -1040,13 +1079,13 @@ export class Dispatcher {
     let matched = false;
     for (const [taskId, routing] of this.taskRouting.entries()) {
       if (
-        routing.conversationId === conversationId &&
+        replyLockConversationMatch(routing.conversationId, conversationId, originConversationId) &&
         recipients.includes(routing.senderId.toLowerCase())
       ) {
         routing.humanReplySent = true;
         matched = true;
         this.logger.debug(
-          { taskId, conversationId, toolName },
+          { taskId, conversationId, originConversationId, toolName },
           'Dispatcher reply-lock: human-facing reply detected — outbound.message will be suppressed',
         );
       }
@@ -1063,10 +1102,11 @@ export class Dispatcher {
     // Path 1: Correspondence elevation — attempt to elevate each outbound recipient
     // from unknown → known. Fires for all recipients regardless of reply-lock match.
     // elevateTierToKnown() is a no-op when the contact is already elevated.
-    if (this.contactResolver && this.contactService) {
+    const emailRecipients = replyLockEmailRecipients(toolName, recipients);
+    if (this.contactResolver && this.contactService && emailRecipients.length > 0) {
       const cr = this.contactResolver;
       const cs = this.contactService;
-      for (const address of recipients) {
+      for (const address of emailRecipients) {
         void (async () => {
           try {
             const ctx = await cr.resolve('email', address);
@@ -1146,9 +1186,9 @@ export class Dispatcher {
 
     this.taskRouting.delete(event.parentEventId!);
 
-    // Reply-lock: if a human-facing reply skill (email-reply, email-send) already fired
-    // successfully during this task, suppress the outbound.message to prevent a duplicate
-    // send. Emit outbound.suppressed_duplicate for the audit trail. See #847.
+    // Reply-lock: a human-facing send already reached this sender (#847, #1860).
+    // Suppress the relay and file the confirmation on the bullpen — the
+    // non-owning agent's note stays internal.
     if (routing.humanReplySent) {
       this.logger.info(
         { agentId: event.payload.agentId, conversationId: routing.conversationId, routingTaskId: event.parentEventId },
@@ -1162,6 +1202,7 @@ export class Dispatcher {
         parentEventId: event.id,
       });
       await this.bus.publish('dispatch', suppressed);
+      await this.fileSuppressedRelay(event.payload.agentId, event.payload.content, event.id);
       this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
       return;
     }

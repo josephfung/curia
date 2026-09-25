@@ -17,6 +17,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
+import { BullpenService } from '../../src/memory/bullpen.js';
 import {
   createAgentResponse,
   createToolResult,
@@ -408,5 +409,91 @@ describe('Dispatcher reply-lock — integration', () => {
       expect(publishedEvents.filter(isOutboundMessage)).toHaveLength(1);
       expect(publishedEvents.filter(isOutboundSuppressedDuplicate)).toHaveLength(0);
     });
+  });
+});
+
+describe('Dispatcher reply-lock — delegated Signal send (#1860)', () => {
+  it('keeps the coordinator narration off Signal and files it on the bullpen', async () => {
+    const publishedEvents: BusEvent[] = [];
+    const subscribeHandlers = new Map<string, (event: BusEvent) => void | Promise<void>>();
+    const bus = {
+      subscribe: vi.fn((eventType: string, _layer: string, handler: (e: BusEvent) => void | Promise<void>) => {
+        subscribeHandlers.set(eventType, handler);
+      }),
+      publish: vi.fn(async (_layer: string, event: BusEvent) => {
+        publishedEvents.push(event);
+      }),
+    } as unknown as EventBus;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
+    const bullpen = BullpenService.createInMemory();
+    const openThread = vi.spyOn(bullpen, 'openThread');
+    const dispatcher = new Dispatcher({ bus, logger, bullpenService: bullpen });
+    dispatcher.register();
+
+    seedRouting(dispatcher, 'task-signal', {
+      conversationId: 'signal:+15551212',
+      senderId: '+15551212',
+    });
+
+    const toolHandler = subscribeHandlers.get('tool.result');
+    if (!toolHandler) throw new Error('No tool.result handler registered');
+    await toolHandler(createToolResult({
+      agentId: 'social-media',
+      conversationId: 'delegate-abc',
+      originConversationId: 'signal:+15551212',
+      toolName: 'signal-send',
+      result: { success: true, data: { delivered_to: '+15551212', channel: 'signal' } },
+      durationMs: 20,
+      parentEventId: 'invoke-signal',
+    }));
+
+    const narration = 'Sent, boss. Trimmed k8m5 is on Signal for your call.';
+    const responseHandler = subscribeHandlers.get('agent.response');
+    if (!responseHandler) throw new Error('No agent.response handler registered');
+    const response = createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'signal:+15551212',
+      content: narration,
+      parentEventId: 'task-signal',
+    });
+    await responseHandler(response);
+
+    expect(publishedEvents.filter(isOutboundMessage)).toHaveLength(0);
+    expect(publishedEvents.filter(isOutboundSuppressedDuplicate)).toHaveLength(1);
+    expect(openThread).toHaveBeenCalledTimes(1);
+    const opened = await openThread.mock.results[0]!.value as { thread: { id: string; status: string } };
+    const stored = await bullpen.getThread(opened.thread.id);
+    expect(stored?.thread.status).toBe('closed');
+    expect(stored?.messages[0]?.content).toContain(narration);
+    expect(stored?.thread.participants).toEqual(['coordinator']);
+  });
+
+  it('does not lock when the specialist texted someone else', async () => {
+    const { dispatcher, subscribeHandlers, publishedEvents } = makeStubs();
+    dispatcher.register();
+    seedRouting(dispatcher, 'task-signal-other', {
+      conversationId: 'signal:+15551212',
+      senderId: '+15551212',
+    });
+
+    const toolHandler = subscribeHandlers.get('tool.result');
+    if (!toolHandler) throw new Error('No tool.result handler registered');
+    await toolHandler(createToolResult({
+      agentId: 'social-media',
+      conversationId: 'delegate-xyz',
+      originConversationId: 'signal:+15551212',
+      toolName: 'signal-send',
+      result: { success: true, data: { delivered_to: '+19998888', channel: 'signal' } },
+      durationMs: 20,
+      parentEventId: 'invoke-other',
+    }));
+
+    await fireAgentResponse(subscribeHandlers, {
+      taskEventId: 'task-signal-other',
+      conversationId: 'signal:+15551212',
+    });
+
+    expect(publishedEvents.filter(isOutboundMessage)).toHaveLength(1);
+    expect(publishedEvents.filter(isOutboundSuppressedDuplicate)).toHaveLength(0);
   });
 });

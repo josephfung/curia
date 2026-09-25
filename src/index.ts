@@ -2370,6 +2370,7 @@ async function main(): Promise<void> {
       agentRegistry.register(agentConfig.name, {
         role: agentConfig.role ?? 'specialist',
         description: agentConfig.description ?? agentConfig.name,
+        displayName: agentConfig.display_name,
         expectedDurationSeconds: agentConfig.expected_duration_seconds,
       });
     }
@@ -2971,6 +2972,7 @@ async function main(): Promise<void> {
     ceoEmail: principalEmail,
     approvalTrigger,
     escalationJudge,
+    bullpenService,
   });
   dispatcher.register();
   // Deferred delegations wake in the originating conversation (#1893). The

@@ -22,6 +22,7 @@ describe('shared prompt guardrails (#1595 / ADR-038)', () => {
     expect(ROUTING_DECISION_GUARDRAIL).toContain('Borrow-then-answer');
     expect(ROUTING_DECISION_GUARDRAIL).toContain('Transfer-ownership');
     expect(ROUTING_DECISION_GUARDRAIL).toContain('ACTIVE OUTBOUND CONTEXT');
+    expect(ROUTING_DECISION_GUARDRAIL).toContain('do not narrate that send');
   });
 
   it('voice async off-ramp offers deferral without inventing results', () => {

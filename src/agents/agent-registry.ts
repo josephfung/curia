@@ -10,6 +10,11 @@ export interface AgentRegistryEntry {
   name: string;
   role: string;
   description: string;
+  /**
+   * Principal-facing name from agent YAML `display_name` (#1860).
+   * Absent when the file does not set one — callers derive a label from `name`.
+   */
+  displayName?: string;
   /** Expected wall-clock duration for delegate calls targeting this agent, in seconds.
    *  When set, the runtime injects timeout_ms into delegate calls, overriding anything the
    *  model emitted (#1797). Used only when the scheduler supplied no expectedDurationSeconds.
@@ -20,7 +25,7 @@ export interface AgentRegistryEntry {
 export class AgentRegistry {
   private agents = new Map<string, AgentRegistryEntry>();
 
-  register(name: string, info: { role: string; description: string; expectedDurationSeconds?: number }): void {
+  register(name: string, info: { role: string; description: string; displayName?: string; expectedDurationSeconds?: number }): void {
     if (this.agents.has(name)) {
       throw new Error(`Agent '${name}' is already registered`);
     }

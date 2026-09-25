@@ -98,6 +98,7 @@ import {
   type DelegationFailureInfo,
 } from './delegation-guard.js';
 import {
+  delegationOriginConversationId,
   harnessRequesterIdentity,
   isDelegatedSpecialistTask,
   parseTaskOriginator,
@@ -105,6 +106,13 @@ import {
   renderRequesterIdentity,
 } from './delegated-task-context.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
+import { principalAgentLabel } from './agent-display-name.js';
+import {
+  delegationFailureNarrationPrompt,
+  redactAgentIdInTranscript,
+  requestAnchor,
+  selectDelegationFailureReply,
+} from './delegation-failure-reply.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
 import {
   DEFAULT_DEFERRED_WAKE_MS,
@@ -1592,7 +1600,7 @@ export class AgentRuntime {
             );
             return 'continue';
           },
-          afterTools: async () => {
+          afterTools: async ({ messages: workingMessages }) => {
             // Identity mismatch is a hard fail (#1854): do not let the model
             // continue and invent a "clear day" from a wrong-identity empty read.
             if (pendingIdentityMismatch) {
@@ -1654,33 +1662,19 @@ export class AgentRuntime {
 
             if (pendingDelegationEscalation) {
               const esc = pendingDelegationEscalation;
-              const agentLabel = esc.agent || 'specialist';
               if (!esc.agent) {
                 logger.warn(
                   { agentId, conversationId },
                   'pendingDelegationEscalation has empty agent name — humanized message using fallback label',
                 );
               }
-              const parts: string[] = [];
-              if (esc.reason === 'timeout') {
-                parts.push(`I wasn't able to get a response from the ${agentLabel} in time.`);
-                if (esc.possiblySucceeded) parts.push('The request may still be completing in the background.');
-              } else if (esc.reason === 'blocked') {
-                parts.push(`The ${agentLabel} was blocked and couldn't complete the task.`);
-              } else if (esc.reason === SPECIALIST_DECLINE_REASON || esc.declined === true) {
-                const detail = sanitizeOutput(esc.message).trim().slice(0, 500);
-                parts.push(detail.length > 0
-                  ? `The ${agentLabel} declined the task. ${detail}`
-                  : `The ${agentLabel} declined the task.`);
-              } else {
-                logger.info(
-                  { agentId, conversationId, targetAgent: esc.agent, reason: esc.reason },
-                  'Humanizing delegation failure with generic message',
-                );
-                parts.push(`The ${agentLabel} wasn't able to complete the task.`);
-              }
-              if (esc.escalated) parts.push("I've logged a follow-up task to review the outcome.");
-              const escalationContent = parts.join(' ');
+              const escalationContent = await this.composeDelegationFailureReply(
+                workingMessages,
+                esc,
+                taskEvent.payload.content,
+                provider,
+                budget,
+              );
 
               if (memory) {
                 await memory.addTurn(conversationId, agentId, { role: 'assistant', content: escalationContent }, {
@@ -1983,6 +1977,7 @@ export class AgentRuntime {
           // Published by agent layer on behalf of the execution layer —
           // the execution layer doesn't have bus access in Phase 3.
           // TODO: When execution layer gets bus access, move this publish there.
+          const originConversationId = delegationOriginConversationId(taskEvent.payload.metadata);
           const resultEvent = createToolResult({
             agentId,
             conversationId,
@@ -1990,6 +1985,7 @@ export class AgentRuntime {
             result,
             durationMs,
             parentEventId: invokeEvent.id,
+            ...(originConversationId !== undefined && { originConversationId }),
           });
           await bus.publish('agent', resultEvent);
 
@@ -2680,6 +2676,90 @@ export class AgentRuntime {
       // failing entirely. The existing message (if any) is preserved.
       logger.error({ err, agentId }, 'Bullpen context refresh failed — proceeding with stale thread context');
     }
+  }
+
+  /**
+   * Principal-facing reply after a non-retryable delegation failure (#1860).
+   *
+   * One narration call, with the failed request in context and the registry id
+   * redacted out of tool results. The model's text is used only when it names
+   * that request and does not leak the id. Otherwise a display-name fallback
+   * quotes the request, so two different asks are not the same sentence.
+   * The call is direct (not chatWithRetry): a provider failure must not also
+   * publish a generic error response beside the fallback.
+   */
+  private async composeDelegationFailureReply(
+    workingMessages: Message[],
+    esc: DelegationFailureInfo & { task: string; escalated: boolean },
+    userRequest: string,
+    provider: LLMProvider,
+    budget: ErrorBudget,
+  ): Promise<string> {
+    const { agentId, logger } = this.config;
+    const explicit = esc.agent ? this.config.agentRegistry?.get(esc.agent)?.displayName : undefined;
+    const displayName = principalAgentLabel(esc.agent, explicit);
+    const anchor = requestAnchor(esc.task || userRequest);
+    const declined = esc.declined === true || esc.reason === SPECIALIST_DECLINE_REASON;
+    const detail = declined ? sanitizeOutput(esc.message).trim().slice(0, 500) : undefined;
+    const replyInput = {
+      displayName,
+      agentId: esc.agent,
+      reason: esc.reason,
+      declined: esc.declined,
+      possiblySucceeded: esc.possiblySucceeded,
+      escalated: esc.escalated,
+      delegateTask: esc.task || userRequest,
+      ...(detail !== undefined && detail.length > 0 ? { detail } : {}),
+    };
+
+    let modelText: string | undefined;
+    // Leave one turn of headroom unused rather than spending the last turn on
+    // narration and then tripping the budget error path with no reply.
+    if (budget.turnsUsed + 1 < budget.maxTurns) {
+      budget.turnsUsed++;
+      try {
+        const transcript = redactAgentIdInTranscript(workingMessages, esc.agent, displayName);
+        const messages: Message[] = [
+          ...transcript,
+          {
+            role: 'system',
+            content: delegationFailureNarrationPrompt({
+              displayName,
+              anchor,
+              reason: esc.reason,
+              possiblySucceeded: esc.possiblySucceeded,
+              escalated: esc.escalated,
+              declined: esc.declined,
+            }),
+          },
+        ];
+        const modelForCall = this.config.resolvedModel ?? this.config.modelName;
+        const response = await provider.chat({
+          messages,
+          ...(modelForCall !== undefined ? { model: modelForCall } : {}),
+        });
+        if (response.type === 'text') modelText = response.content;
+      } catch (err) {
+        logger.warn(
+          { err, agentId, targetAgent: esc.agent, reason: esc.reason },
+          'Delegation-failure narration call failed — using display-name fallback',
+        );
+      }
+    } else {
+      logger.warn(
+        { agentId, targetAgent: esc.agent, turnsUsed: budget.turnsUsed, maxTurns: budget.maxTurns },
+        'Skipping delegation-failure narration — turn budget has no room; using display-name fallback',
+      );
+    }
+
+    const selected = selectDelegationFailureReply({ ...replyInput, ...(modelText !== undefined ? { modelText } : {}) });
+    logger.info(
+      { agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via },
+      selected.via === 'model'
+        ? 'Delegation failure reply written by the model'
+        : 'Delegation failure reply used the display-name fallback',
+    );
+    return selected.content;
   }
 
   /**

@@ -13,6 +13,11 @@ export interface AgentYamlConfig {
   version?: string;
   role?: string;
   description?: string;
+  /**
+   * Principal-facing name (#1860). Registry ids stay internal; delegation-failure
+   * replies use this string. When omitted, the runtime derives one from `name`.
+   */
+  display_name?: string;
   persona?: {
     display_name?: string;
     tone?: string;

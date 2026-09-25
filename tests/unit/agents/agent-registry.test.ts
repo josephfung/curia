@@ -48,6 +48,15 @@ describe('AgentRegistry', () => {
     expect(registry.has('nonexistent')).toBe(false);
   });
 
+  it('stores an optional principal-facing display name (#1860)', () => {
+    registry.register('social-media', {
+      role: 'specialist',
+      description: 'Drafts posts',
+      displayName: 'social team',
+    });
+    expect(registry.get('social-media')?.displayName).toBe('social team');
+  });
+
   it('generates a specialist summary for LLM context', () => {
     registry.register('coordinator', { role: 'coordinator', description: 'Main coordinator' });
     registry.register('research-analyst', { role: 'specialist', description: 'Conducts web research and summarizes findings' });

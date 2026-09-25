@@ -10,6 +10,7 @@ import { LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../../../src
 import { BullpenService } from '../../../src/memory/bullpen.js';
 import type { AgentError } from '../../../src/errors/types.js';
 import { delegationKey } from '../../../src/agents/delegation-guard.js';
+import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 
 // Minimal provenance block for mock LLM responses — satisfies the required field
@@ -5692,14 +5693,17 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(delegateInvokeCount.n).toBe(1);
     expect(taskCreateCount.n).toBe(1);
-    expect(provider.chat).toHaveBeenCalledTimes(1);
+    // Tool round, then one narration call that falls back when the mock returns tool_use.
+    expect(provider.chat).toHaveBeenCalledTimes(2);
 
     expect(agentResponses).toHaveLength(1);
     const response = agentResponses[0]!;
     // Must be human-readable — no protocol JSON leaking to the principal (#1329)
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
-    expect(response.payload.content).toContain('social-media');
+    expect(response.payload.content).not.toContain('social-media');
+    expect(response.payload.content).toContain('social media specialist');
+    expect(response.payload.content).toContain('Post to Bluesky');
     expect(response.payload.content).toMatch(/follow.?up|logged/i);
   });
 
@@ -5781,9 +5785,10 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(delegateInvokeCount.n).toBe(1);
     expect(delegatedTasks).toEqual(['Brief me on the CEO calendar for today']);
     expect(taskCreateCount.n).toBe(1);
-    expect(provider.chat).toHaveBeenCalledTimes(1);
+    expect(provider.chat).toHaveBeenCalledTimes(2);
     expect(agentResponses).toHaveLength(1);
-    expect(agentResponses[0]!.payload.content).toContain('declined the task');
+    expect(agentResponses[0]!.payload.content).toContain('declined');
+    expect(agentResponses[0]!.payload.content).toContain('Brief me on the CEO calendar for today');
     expect(agentResponses[0]!.payload.content).toContain('No contact record for this requester.');
     expect(agentResponses[0]!.payload.content).not.toContain('specialist_decline');
   });
@@ -5886,14 +5891,17 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(delegateInvokeCount.n).toBe(2);
     expect(taskCreateCount.n).toBe(1);
-    expect(provider.chat).toHaveBeenCalledTimes(2);
+    // Two tool rounds, then the narration call.
+    expect(provider.chat).toHaveBeenCalledTimes(3);
 
     expect(agentResponses).toHaveLength(1);
     const response = agentResponses[0]!;
     // Must be human-readable — no protocol JSON leaking to the principal (#1329)
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
-    expect(response.payload.content).toContain('social-media');
+    expect(response.payload.content).not.toContain('social-media');
+    expect(response.payload.content).toContain('social media specialist');
+    expect(response.payload.content).toContain('Post to Bluesky');
     expect(response.payload.content).toMatch(/follow.?up|logged/i);
   });
 
@@ -5996,14 +6004,16 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(delegateInvokeCount.n).toBe(1);
     expect(taskCreateCount.n).toBe(1);
-    expect(provider.chat).toHaveBeenCalledTimes(1);
+    expect(provider.chat).toHaveBeenCalledTimes(2);
 
     expect(agentResponses).toHaveLength(1);
     const response = agentResponses[0]!;
     // Must be human-readable — no protocol JSON leaking to the principal (#1329)
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
-    expect(response.payload.content).toContain('T2125-expense-tracker');
+    expect(response.payload.content).not.toContain('T2125-expense-tracker');
+    expect(response.payload.content).toContain('T2125 expense tracker specialist');
+    expect(response.payload.content).toContain('Run June reconciliation');
     expect(response.payload.content).toMatch(/background|completing|still/i);
     expect(response.payload.content).toMatch(/follow.?up|logged/i);
   });
@@ -6596,8 +6606,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
 
-    // Must convey the timeout nuance in plain language
-    expect(response.payload.content).toMatch(/calendar/i);
+    // Display name, not the bare registry id, and the request that failed (#1860).
+    expect(response.payload.content).toContain('calendar specialist');
+    expect(response.payload.content).toContain('"Check my afternoon"');
     expect(response.payload.content).toMatch(/background|completing|still/i);
 
     // Must convey escalation in plain language
@@ -6675,8 +6686,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const response = agentResponses[0]!;
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
-    expect(response.payload.content).toMatch(/calendar/i);
-    expect(response.payload.content).toMatch(/blocked|couldn't|couldn't/i);
+    expect(response.payload.content).toContain('calendar specialist');
+    expect(response.payload.content).toContain('"Check my afternoon"');
+    expect(response.payload.content).toMatch(/blocked|couldn't/i);
   });
 
   it('humanizes delegation failure with generic reason (tool_error) — plain language, no protocol JSON', async () => {
@@ -6750,9 +6762,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const response = agentResponses[0]!;
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
-    expect(response.payload.content).toMatch(/calendar/i);
-    // Generic fallback path — "wasn't able to complete"
-    expect(response.payload.content).toMatch(/wasn't able|wasn't able|complete/i);
+    expect(response.payload.content).toContain('calendar specialist');
+    expect(response.payload.content).toContain('"Check my afternoon"');
+    expect(response.payload.content).toMatch(/wasn't able/i);
   });
 
   it('humanizes delegation failure with empty agent name — uses fallback label without double article', async () => {
@@ -6828,8 +6840,290 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).not.toContain('delegation_failure');
     // Fallback label must not produce "the a specialist" double-article grammar
     expect(response.payload.content).not.toMatch(/the a specialist/i);
-    // Should still be a readable sentence
-    expect(response.payload.content).toMatch(/specialist/i);
+    expect(response.payload.content).toContain('the specialist');
+    expect(response.payload.content).toContain('"Check my afternoon"');
+  });
+
+  it('delegation-failure replies name the request and hide registry ids (#1860)', async () => {
+    const logger = createLogger('error');
+    const reasons = ['timeout', 'blocked', 'tool_error'] as const;
+    const replies: string[] = [];
+
+    for (const reason of reasons) {
+      const bus = new EventBus(logger);
+      const ask = reason === 'timeout'
+        ? 'Trim the k8m5 draft'
+        : reason === 'blocked'
+          ? 'Schedule the Thursday hold'
+          : 'Pull the Q3 mentions';
+      const agentResponses: AgentResponseEvent[] = [];
+      bus.subscribe('agent.response', 'dispatch', (event) => {
+        agentResponses.push(event as AgentResponseEvent);
+      });
+
+      const mockExecution = {
+        invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+          if (toolName === 'task-create') return { success: true, data: { task_id: `esc-${reason}` } };
+          if (toolName === 'delegate') {
+            const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+            const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+            const guard = options?.delegationGuard;
+            if (guard) guard.recordInvocation(delegationKey(delegateAgent, delegateTask));
+            return {
+              success: true,
+              data: {
+                agent: delegateAgent,
+                failed: true,
+                reason,
+                retryable: false,
+                possibly_succeeded: reason === 'timeout',
+                message: `Specialist 'social-media' failed: ${reason}`,
+              },
+            };
+          }
+          return { success: true, data: {} };
+        }),
+        getToolDefinitions: vi.fn(() => [delegateToolDef]),
+      } as unknown as ExecutionLayer;
+
+      // Narration call is unavailable — the fallback must still name the ask.
+      let calls = 0;
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) {
+            return {
+              type: 'tool_use' as const,
+              toolCalls: [
+                { id: `call-${reason}`, name: 'delegate', input: { agent: 'social-media', task: ask } },
+              ],
+              usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+              provenance: MOCK_PROVENANCE,
+            };
+          }
+          throw new Error('narration model unavailable');
+        }),
+      };
+
+      const registry = new AgentRegistry();
+      registry.register('social-media', {
+        role: 'specialist',
+        description: 'Drafts posts',
+        displayName: 'social team',
+      });
+
+      const agent = new AgentRuntime({
+        agentId: 'coordinator',
+        systemPrompt: 'You are an assistant.',
+        provider,
+        resolvedModel: 'mock-model',
+        bus,
+        logger,
+        executionLayer: mockExecution,
+        pinnedTools: ['delegate'],
+        skillToolDefs: [delegateToolDef],
+        agentRegistry: registry,
+      });
+      agent.register();
+
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-1860-thread',
+        channelId: 'signal',
+        senderId: '+15551212',
+        content: ask,
+        parentEventId: `inbound-1860-${reason}`,
+      }));
+
+      expect(agentResponses).toHaveLength(1);
+      replies.push(agentResponses[0]!.payload.content);
+    }
+
+    for (const reply of replies) {
+      expect(reply).not.toContain('social-media');
+      expect(reply).not.toContain('_curia_protocol');
+      expect(reply).toContain('social team');
+    }
+    expect(replies[0]).toContain('Trim the k8m5 draft');
+    expect(replies[1]).toContain('Schedule the Thursday hold');
+    expect(replies[2]).toContain('Pull the Q3 mentions');
+    expect(new Set(replies).size).toBe(3);
+  });
+
+  it('uses the model draft when it names the failed request without a registry id (#1860)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'esc-model' } };
+        if (toolName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(delegationKey(delegateAgent, delegateTask));
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'timeout',
+              retryable: false,
+              possibly_succeeded: true,
+              message: "Specialist 'social-media' did not respond",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    const modelReply = 'I could not get "Trim the k8m5 draft" back from the social team in time. It may still be finishing, and I logged a follow-up.';
+    let calls = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [
+              { id: 'call-model', name: 'delegate', input: { agent: 'social-media', task: 'Trim the k8m5 draft' } },
+            ],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: modelReply,
+          usage: { inputTokens: 20, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const registry = new AgentRegistry();
+    registry.register('social-media', { role: 'specialist', description: 'Drafts posts', displayName: 'social team' });
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+      agentRegistry: registry,
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1860-model',
+      channelId: 'signal',
+      senderId: '+15551212',
+      content: 'Trim the k8m5 draft',
+      parentEventId: 'inbound-1860-model',
+    }));
+
+    expect(agentResponses).toHaveLength(1);
+    expect(agentResponses[0]!.payload.content).toBe(modelReply);
+    expect(agentResponses[0]!.payload.content).not.toContain('social-media');
+    expect(provider.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a model draft that leaks the registry id and quotes the request instead (#1860)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'esc-leak' } };
+        if (toolName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(delegationKey(delegateAgent, delegateTask));
+          return {
+            success: true,
+            data: {
+              agent: delegateAgent,
+              failed: true,
+              reason: 'timeout',
+              retryable: false,
+              message: "Specialist 'social-media' did not respond",
+            },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let calls = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [
+              { id: 'call-leak', name: 'delegate', input: { agent: 'social-media', task: 'Trim the k8m5 draft' } },
+            ],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'I wasn\'t able to get a response from the social-media in time on "Trim the k8m5 draft".',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1860-leak',
+      channelId: 'signal',
+      senderId: '+15551212',
+      content: 'Trim the k8m5 draft',
+      parentEventId: 'inbound-1860-leak',
+    }));
+
+    expect(agentResponses).toHaveLength(1);
+    const content = agentResponses[0]!.payload.content;
+    expect(content).not.toContain('social-media');
+    expect(content).toContain('social media specialist');
+    expect(content).toContain('Trim the k8m5 draft');
   });
 
   it('does not escalate or block when delegate returns paused (#1174)', async () => {

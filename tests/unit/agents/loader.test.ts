@@ -14,6 +14,7 @@ describe('loadAgentConfig', () => {
     expect(config.model.tier).toBe('standard');
     // System prompt is meaningful and reflects the routing-decision spine.
     expect(config.system_prompt).toContain('Transfer-ownership');
+    expect(config.system_prompt).toContain('**Channel ownership.**');
   });
 
   it('coordinator.yaml carries no ${...} runtime placeholders', () => {

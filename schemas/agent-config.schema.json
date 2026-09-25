@@ -8,6 +8,11 @@
     "name": { "type": "string", "minLength": 1 },
     "version": { "type": "string" },
     "description": { "type": "string", "minLength": 1 },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Principal-facing name. Registry ids stay internal (#1860)."
+    },
     "role": { "type": "string" },
     "persona": {
       "type": "object",
