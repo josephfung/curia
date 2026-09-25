@@ -413,6 +413,40 @@ describeIf('BullpenService integration (Postgres)', () => {
     expect(ids).not.toContain(oldestId);
     expect(ids).toHaveLength(5);
   });
+
+  it('keeps five slots when every thread older than the four newest was already shown (#1901)', async () => {
+    const agentId = `agent-${runId}-age7`;
+    const creator = `creator-${runId}-age7`;
+    const idsByAge = new Map<number, string>();
+    // Hours, not days: a thread exactly seven days old is outside the window.
+    for (const ageHours of [10, 20, 30, 40, 50, 60, 70]) {
+      const { thread } = await service.openThread(
+        `${runId} — filled-age ${ageHours}h`,
+        creator,
+        [creator, agentId],
+        `message ${ageHours}`,
+        [agentId],
+      );
+      await backdateThread(thread.id, `${ageHours} hours`);
+      idsByAge.set(ageHours, thread.id);
+    }
+    const injected = await Promise.all([50, 60, 70].map(async ageHours => {
+      const threadId = idsByAge.get(ageHours)!;
+      const shown = (await service.getThread(threadId))!.thread.lastMessageAt!;
+      return { threadId, shownThrough: shown };
+    }));
+    await service.recordUnhandledInjection(agentId, injected);
+
+    const ids = (await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES)).map(p => p.threadId);
+    expect(ids).toContain(idsByAge.get(70));
+    expect(ids).toContain(idsByAge.get(10));
+    expect(ids).toContain(idsByAge.get(20));
+    expect(ids).toContain(idsByAge.get(30));
+    expect(ids).toContain(idsByAge.get(40));
+    expect(ids).not.toContain(idsByAge.get(50));
+    expect(ids).not.toContain(idsByAge.get(60));
+    expect(ids).toHaveLength(5);
+  });
 });
 
 const MOCK_PROVENANCE = {

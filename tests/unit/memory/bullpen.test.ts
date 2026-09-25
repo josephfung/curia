@@ -215,6 +215,40 @@ describe('BullpenService (in-memory)', () => {
     }
   });
 
+  it('keeps five slots when every thread older than the four newest was already shown (#1901)', async () => {
+    vi.useFakeTimers();
+    const queryAt = new Date('2026-09-24T12:00:00Z');
+    try {
+      const opened = new Map<number, { id: string; shownThrough: Date }>();
+      // Hours, not days: a thread exactly seven days old is outside the window.
+      for (let ageHours = 70; ageHours >= 10; ageHours -= 10) {
+        vi.setSystemTime(new Date(queryAt.getTime() - ageHours * 60 * 60 * 1000));
+        const { thread } = await service.openThread(
+          `age-${ageHours}`,
+          'coordinator',
+          ['coordinator', 'agent-b'],
+          `message ${ageHours}`,
+          ['agent-b'],
+        );
+        opened.set(ageHours, { id: thread.id, shownThrough: thread.lastMessageAt! });
+      }
+      await service.recordUnhandledInjection('agent-b', [50, 60, 70].map(ageHours => {
+        const openedThread = opened.get(ageHours)!;
+        return { threadId: openedThread.id, shownThrough: openedThread.shownThrough };
+      }));
+      vi.setSystemTime(queryAt);
+      const topics = (await service.getPendingThreadsForAgent('agent-b', BULLPEN_PENDING_WINDOW_MINUTES)).map(t => t.topic);
+      // No unseen thread sits outside the four newest, so the oldest already-shown
+      // thread fills the fifth slot and can receive its second look.
+      expect(topics).toEqual(expect.arrayContaining(['age-70', 'age-10', 'age-20', 'age-30', 'age-40']));
+      expect(topics).not.toContain('age-50');
+      expect(topics).not.toContain('age-60');
+      expect(topics).toHaveLength(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('getPendingThreadsForAgent excludes threads where agent posted last', async () => {
     const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', []);
     await service.postMessage(thread.id, 'agent-b', 'Replied', []);

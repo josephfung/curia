@@ -72,7 +72,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Bullpen pending threads** — an unread thread stays visible for seven days, past the old one-hour cutoff. (#1899)
 - **Bullpen read watermark** — an ignored @mention stays pending once; the next miss stays quiet. (#1901)
 - **Bullpen read watermark** — a non-mention follow-up keeps the handoff, and a late message stays unseen. (#1901)
-- **Bullpen pending cap** — an already-shown unanswered mention no longer pins the oldest slot. (#1901)
+- **Bullpen pending cap** — the fifth slot stays filled, preferring an older thread not yet shown. (#1901)
 - **Bullpen context timestamps** — show the principal's local date and offset beside each message. (#1899)
 - **Bullpen context budget** — a block that does not fit is omitted, and those threads stay unmarked. (#1899)
 - **Bullpen ambient block** — instructs an in-thread reply and keeps the user-facing answer separate. (#1899)
