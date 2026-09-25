@@ -44,7 +44,7 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
-import { buildMessageIdBlock, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
+import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
 import {
   parseSpecialistDeclineMarker,
   SPECIALIST_DECLINE_REASON,
@@ -90,6 +90,29 @@ function openHandleAgeMs(createdAt: Date): number {
   const ms = Date.now() - createdAt.getTime();
   if (!Number.isFinite(ms)) return 0;
   return Math.max(0, Math.trunc(ms));
+}
+
+/** Remove brief-supplied identifier lines so only the dispatcher stamp remains.
+ *  Line-anchored: a mid-sentence mention is left alone. The removed text is not
+ *  returned — it may be attacker-controlled and must not be logged. */
+function stripBriefIdentifierLines(
+  brief: string,
+  strip: { messageId: boolean; account: boolean },
+): { text: string; removed: boolean } {
+  let text = brief;
+  let removed = false;
+  if (strip.messageId) {
+    const next = text.replace(/^Message ID:.*\n?/gm, '');
+    if (next !== text) removed = true;
+    text = next;
+  }
+  if (strip.account) {
+    const next = text.replace(/^Account:.*\n?/gm, '');
+    if (next !== text) removed = true;
+    text = next;
+  }
+  if (removed) text = text.replace(/^\n+/, '');
+  return { text, removed };
 }
 
 function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
@@ -502,23 +525,37 @@ export class DelegateHandler implements ToolHandler {
     const inFlightRefusal = await refuseIfInFlight(ctx, agent);
     if (inFlightRefusal) return inFlightRefusal;
 
+    // The dispatcher stamps a sanitized Nylas message id and mailbox on email
+    // inbounds (#1909). Re-sanitize before interpolation. A raw channel
+    // `nylasMessageId` is not read — only the trusted fields — and a failed
+    // sanitize omits the line without logging the value.
+    const inboundMessageId = sanitizeNylasMessageId(ctx.taskMetadata?.['inboundNylasMessageId']);
+    const stampedAccount = ctx.taskMetadata?.['inboundEmailAccount'];
+    const hasAccount = typeof stampedAccount === 'string';
+    const accountLabel = hasAccount ? preambleAccountLabel(stampedAccount) : undefined;
+    // Drop every brief-supplied identifier line before writing the trusted ones.
+    // An exact-string check leaves a different `Message ID:` (quoted from the
+    // inbound body, or guessed) sitting under the trusted line.
+    const identifierStrip = stripBriefIdentifierLines(effectiveTask, {
+      messageId: inboundMessageId.ok,
+      account: hasAccount,
+    });
+    if (identifierStrip.removed) {
+      ctx.log.warn(
+        { targetAgent: agent },
+        'delegate: stripped a brief-supplied Message ID or Account line — only the dispatcher-stamped identifiers are trusted (#1909)',
+      );
+    }
+    const identifierBlock = buildInboundEmailIdentifierBlock(
+      inboundMessageId.ok ? inboundMessageId.value : undefined,
+      accountLabel,
+    );
+    effectiveTask = identifierBlock ? identifierBlock + identifierStrip.text : identifierStrip.text;
+
     ctx.log.info(
       { targetAgent: agent, task: effectiveTask.slice(0, 100), timeoutMs: specialistTimeoutMs },
       'Delegating task to specialist',
     );
-
-    // The dispatcher stamps a sanitized Nylas message id on email inbounds (#1909).
-    // Re-sanitize before interpolation. A raw channel `nylasMessageId` is not read —
-    // only the trusted field — and a failed sanitize omits the line without logging
-    // the value (it may be attacker-controlled).
-    const inboundMessageId = sanitizeNylasMessageId(ctx.taskMetadata?.['inboundNylasMessageId']);
-    if (inboundMessageId.ok) {
-      const messageIdLine = `Message ID: ${inboundMessageId.value}`;
-      if (!effectiveTask.includes(messageIdLine)) {
-        const block = buildMessageIdBlock(inboundMessageId.value);
-        if (block) effectiveTask = block + effectiveTask;
-      }
-    }
 
     // Forward the coordinator's relay context so that if the specialist mints a secret-capture
     // link, the capture origin can re-enter the COORDINATOR (a deliverable channel) and re-delegate
@@ -537,6 +574,7 @@ export class DelegateHandler implements ToolHandler {
           : {}),
       },
       ...(inboundMessageId.ok ? { inboundNylasMessageId: inboundMessageId.value } : {}),
+      ...(accountLabel ? { inboundEmailAccount: accountLabel } : {}),
     };
     // Preserve the originator forwarding (#972) — without it the specialist loses the chain's
     // TaskOriginator and isPrincipalOriginated() goes false for every skill in its turn.

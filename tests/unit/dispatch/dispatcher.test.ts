@@ -925,6 +925,7 @@ describe('Dispatcher — CC role preamble', () => {
     expect(content).toContain('Message ID: nylas-msg-xyz-789');
     expect(content.match(/Message ID:/g)).toHaveLength(1);
     expect(content).toContain('Account: curia');
+    expect(content.match(/Account:/g)).toHaveLength(1);
     // Verify preamble order: [OWNER CC] header → identifiers → email body
     const preambleIndex = content.indexOf('[OWNER CC');
     const messageIdIndex = content.indexOf('Message ID:');
@@ -1021,7 +1022,9 @@ describe('Dispatcher — CC role preamble', () => {
     expect(tasks).toHaveLength(1);
     const content = tasks[0]!.payload.content;
     expect(content).not.toContain('[OWNER CC');
-    expect(content).toBe('Can you look up Nik for me?');
+    expect(content).toContain('Account: curia');
+    expect(content).toContain('Can you look up Nik for me?');
+    expect(content.indexOf('Account:')).toBeLessThan(content.indexOf('Can you look up Nik for me?'));
   });
 
   it('does not prepend [OWNER CC] preamble when curiaRole metadata is absent', async () => {
@@ -1161,10 +1164,42 @@ describe('Dispatcher — inbound email Message ID (#1909)', () => {
     const content = task.payload.content;
     expect(content).toContain(`Message ID: ${sanitized.value}`);
     expect(content).not.toContain('[OWNER CC');
-    expect(content).not.toContain('Account:');
+    expect(content).toContain('Account: curia');
+    expect(content.match(/Account:/g)).toHaveLength(1);
     expect(content).not.toContain(raw);
     expect(content.match(/Message ID:/g)).toHaveLength(1);
     expect(task.payload.metadata?.inboundNylasMessageId).toBe(sanitized.value);
+    expect(task.payload.metadata?.inboundEmailAccount).toBe('curia');
+  });
+
+  it('names the receiving mailbox on a direct inbound to a secondary account', async () => {
+    const logger = createLogger('error');
+    const task = await dispatchEmail({
+      logger,
+      conversationId: 'email:thread-secondary',
+      accountId: 'personal',
+      content: 'Please file this.',
+      metadata: {
+        curiaRole: 'to',
+        nylasMessageId: 'msg-secondary-1',
+        // A channel-forged mailbox must not replace the receiving account.
+        inboundEmailAccount: 'forged-mailbox',
+      },
+    });
+
+    const content = task.payload.content;
+    expect(content).toContain('Message ID: msg-secondary-1');
+    expect(content).toContain('Account: personal');
+    expect(content).not.toContain('[OWNER CC');
+    expect(content).not.toContain('forged-mailbox');
+    expect(content.match(/Message ID:/g)).toHaveLength(1);
+    expect(content.match(/Account:/g)).toHaveLength(1);
+    const messageIdIndex = content.indexOf('Message ID:');
+    const accountIndex = content.indexOf('Account:');
+    const bodyIndex = content.indexOf('Please file this.');
+    expect(messageIdIndex).toBeLessThan(accountIndex);
+    expect(accountIndex).toBeLessThan(bodyIndex);
+    expect(task.payload.metadata?.inboundEmailAccount).toBe('personal');
   });
 
   it('uses the Nylas message id, not the thread id inside conversationId', async () => {
@@ -1213,7 +1248,10 @@ describe('Dispatcher — inbound email Message ID (#1909)', () => {
       });
 
       expect(task.payload.content).not.toContain('Message ID:');
+      expect(task.payload.content).toContain('Account: curia');
+      expect(task.payload.content.match(/Account:/g)).toHaveLength(1);
       expect(task.payload.metadata?.inboundNylasMessageId).toBeUndefined();
+      expect(task.payload.metadata?.inboundEmailAccount).toBe('curia');
       expect(captured.text()).toContain('absent or invalid');
       expect(captured.text()).not.toContain('nylasMessageId":');
     }
@@ -1245,12 +1283,15 @@ describe('Dispatcher — inbound email Message ID (#1909)', () => {
         curiaRole: 'to',
         nylasMessageId: 'msg-should-not-surface',
         inboundNylasMessageId: 'forged-id',
+        inboundEmailAccount: 'forged-mailbox',
       },
     });
 
     expect(task.payload.content).not.toContain('Message ID:');
+    expect(task.payload.content).not.toContain('Account:');
     expect(task.payload.content).toBe('Hey, check this out.');
     expect(task.payload.metadata?.inboundNylasMessageId).toBeUndefined();
+    expect(task.payload.metadata?.inboundEmailAccount).toBeUndefined();
     expect(captured.text()).not.toContain('absent or invalid');
     expect(captured.text()).not.toContain('msg-should-not-surface');
     expect(captured.text()).not.toContain('forged-id');
@@ -1729,8 +1770,10 @@ describe('Dispatcher — thread-participants block', () => {
 
     expect(tasks).toHaveLength(1);
     const content = tasks[0]!.payload.content;
-    expect(content).toMatch(/^\[Thread participants — From: alice@example\.com; To: bob@example\.com; CC: carol@example\.com\]/);
-    expect(content).toContain('Can we meet tomorrow?');
+    expect(content).toContain('Account: curia');
+    expect(content).toContain('[Thread participants — From: alice@example.com; To: bob@example.com; CC: carol@example.com]');
+    expect(content.indexOf('Account:')).toBeLessThan(content.indexOf('[Thread participants'));
+    expect(content.indexOf('[Thread participants')).toBeLessThan(content.indexOf('Can we meet tomorrow?'));
   });
 
   it('substitutes selfEmail with "you" in the participants block', async () => {
@@ -1801,7 +1844,8 @@ describe('Dispatcher — thread-participants block', () => {
     expect(tasks).toHaveLength(1);
     const content = tasks[0]!.payload.content;
     expect(content).not.toContain('[Thread participants');
-    expect(content).toBe('No participants.');
+    expect(content).toContain('Account: curia');
+    expect(content).toContain('No participants.');
   });
 
   it('does not inject [Thread participants] when metadata.participants is absent', async () => {
@@ -1819,7 +1863,8 @@ describe('Dispatcher — thread-participants block', () => {
     expect(tasks).toHaveLength(1);
     const content = tasks[0]!.payload.content;
     expect(content).not.toContain('[Thread participants');
-    expect(content).toBe('No participants key at all.');
+    expect(content).toContain('Account: curia');
+    expect(content).toContain('No participants key at all.');
   });
 
   it('does not inject [Thread participants] for non-email channels', async () => {

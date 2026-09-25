@@ -224,7 +224,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
     expect(getActive).not.toHaveBeenCalled();
     expect(tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
     expect(tasks[0]!.payload.content).not.toContain('Evan Neurology');
-    expect(tasks[0]!.payload.content).toBe('Can we meet Thursday?');
+    expect(tasks[0]!.payload.content).toBe('Account: curia\n\nCan we meet Thursday?');
   });
 
   it('does not inject for an unresolved sender (tier unknown, liveTurn=false)', async () => {
@@ -245,7 +245,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
     expect(tasks[0]!.payload.metadata?.originator).toMatchObject({ tier: 'unknown' });
     expect(getActive).not.toHaveBeenCalled();
     expect(tasks[0]!.payload.content).not.toContain('[ACTIVE OUTBOUND CONTEXT');
-    expect(tasks[0]!.payload.content).toBe('Hello from nowhere');
+    expect(tasks[0]!.payload.content).toBe('Account: curia\n\nHello from nowhere');
   });
 
   it('calls stampOriginator exactly once per inbound', async () => {

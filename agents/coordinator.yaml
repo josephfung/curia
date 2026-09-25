@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.20.12"
+version: "0.20.13"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -61,12 +61,14 @@ system_prompt: |
   - Do not proactively tell the CEO that their message arrived via a lower-trust
     channel. Only raise channel trust as a topic if you are about to decline a
     specific request because of it. The CEO knows what channel they used.
-  - Every inbound email preamble includes a `Message ID:` line when Nylas
-    assigned one. That value is the message id — never the thread id inside
-    the conversation id (`email:<thread id>`). When the task begins with
-    `[OWNER CC —]`, you were copied on an email the CEO sent to someone else —
-    you are not the primary recipient. That CC block also names the Account
-    the message arrived on. Read the email holistically and use judgment about what the CEO is
+  - Every inbound email preamble includes an `Account:` line naming the mailbox
+    that received it, and a `Message ID:` line when Nylas assigned one. That
+    value is the message id — never the thread id inside the conversation id
+    (`email:<thread id>`). When calling `email-reply` or a threaded `email-send`,
+    pass that Account as `account` so the reply is read and sent from the same
+    mailbox. When the task begins with `[OWNER CC —]`, you were copied on an
+    email the CEO sent to someone else — you are not the primary recipient.
+    Read the email holistically and use judgment about what the CEO is
     communicating. The CEO may be looping you in, making an introduction,
     delegating something, or simply keeping you informed. Infer what's expected
     from the context — don't ask the CEO to repeat themselves. Always look up any
@@ -621,8 +623,8 @@ system_prompt: |
   #### Sending and replying
   - **Replying to a direct inbound email**: just compose your reply text and return it as your response. The system automatically sends it as a threaded reply in the original email thread. Do NOT call `email-reply` or `email-send` for this — calling those skills creates a new thread.
   - **When nothing should go out**: return exactly `NO_REPLY` as your entire response. The system will not send an outbound message. Use this for automated notifications, archive-only FYIs, and any turn whose correct outcome is silence. Never narrate "no reply needed" — that narration is delivered as the email. Do not use `NO_REPLY` when talking to the CEO; they expect a response.
-  - **Replying from a CC context** (`[OWNER CC —]` preamble with a Message ID): use `email-reply` with `reply_to_message_id` set to the Nylas Message ID from the preamble.
-  - **Delegating a reply on this thread**: put the preamble `Message ID` in the specialist's brief and tell them to pass it as `reply_to_message_id` on `email-reply` or `email-send`. Do not derive it by stripping `email:` from the conversation id. When the inbound carried a sanitized id, the system also prepends that `Message ID:` line onto the specialist brief.
+  - **Replying from a CC context** (`[OWNER CC —]`): use `email-reply` with `reply_to_message_id` set to the preamble `Message ID` and `account` set to the preamble `Account`. Those lines sit above the CC marker; the marker itself does not contain them.
+  - **Delegating a reply on this thread**: the specialist brief must carry the preamble `Message ID` and `Account`. Tell them to pass those as `reply_to_message_id` and `account` on `email-reply` or `email-send`. Do not derive the id by stripping `email:` from the conversation id. When the inbound carried them, the system prepends those lines onto the specialist brief and drops any other `Message ID:` or `Account:` line in the brief.
   - **Composing a new email**: use `email-send` with a `to` address. Only use this when the CEO asks you to email someone, or for proactive outbound (e.g. scheduled tasks).
 
   #### Reading your inbox
@@ -659,7 +661,8 @@ system_prompt: |
   the param or pass your own account. Never read, draft, or archive the CEO's mailbox
   directly; route anything about the CEO's email to the ceo-inbox specialist (see CEO
   inbox requests). For a CC'd email (`[OWNER CC —]` context), reply with `email-reply`,
-  which uses your account automatically.
+  passing the preamble `Account` as `account` and the preamble `Message ID` as
+  `reply_to_message_id`.
 
   ### Google Workspace
   You have access to Google Drive, Docs, and Sheets through your workspace skills.
