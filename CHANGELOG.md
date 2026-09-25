@@ -70,6 +70,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Delegate dispatch claim** — overlapping calls before the wait expires start one run and queue the rest. (#1893)
 - **Deferred delegation** — a brief behind a pending handle waits until that handle can clear. (#1893)
 - **Bullpen pending threads** — an unread thread stays visible for seven days, past the old one-hour cutoff. (#1899)
+- **Bullpen read watermark** — ignored ambient @mentions stay pending; a handled thread still stays quiet. (#1901)
 - **Bullpen context timestamps** — show the principal's local date and offset beside each message. (#1899)
 - **Bullpen context budget** — a block that does not fit is omitted, and those threads stay unmarked. (#1899)
 - **Bullpen ambient block** — instructs an in-thread reply and keeps the user-facing answer separate. (#1899)

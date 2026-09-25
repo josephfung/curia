@@ -73,7 +73,16 @@ import {
   activeSkillNameSetsEqual,
 } from '../db/active-skills-progress.js';
 import { readResumableBlock, type ResumableProgressBlock } from '../db/resumable-progress.js';
-import { BULLPEN_PENDING_WINDOW_MINUTES, formatBullpenContext, type BullpenService } from '../memory/bullpen.js';
+import {
+  BULLPEN_PENDING_WINDOW_MINUTES,
+  formatBullpenContext,
+  pendingThreadWatermarkSnapshot,
+  selectThreadsToWatermark,
+  toBullpenToolTouch,
+  type BullpenService,
+  type BullpenToolTouch,
+  type BullpenWatermarkThread,
+} from '../memory/bullpen.js';
 import { parseSchedulerRunJobId } from '../scheduler/conversation-id.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -1107,23 +1116,19 @@ export class AgentRuntime {
       }
     }
 
-    // Bullpen read-watermark (#1065). Accumulate every thread injected into this agent's
-    // context across the task's refreshBullpenContext calls. At successful completion we
-    // stamp a per-agent "seen through" watermark on these threads so they are not
-    // re-surfaced (and re-actioned) on a later wake until genuinely new activity arrives.
-    // Action-agnostic: it fixes the duplicate out-of-band action regardless of which skill
-    // performed it.
-    const injectedBullpenThreadIds = new Set<string>();
-    // If the task itself originated from a Bullpen thread (BullpenDispatcher sets
-    // taskOrigin='bullpen' + threadId), stamp the woke thread too, even if it fell outside
-    // the top-N injected ambient set.
+    // Bullpen read-watermark (#1065, #1901). Ambient threads actually shown this task,
+    // plus every successful tool call, so completion can stamp only the threads the
+    // agent handled. An @mention injected beside unrelated work stays pending when the
+    // agent does not reply, close, or otherwise act on it — otherwise a lost handoff
+    // is recovered at most once. The thread this task was woken for is always stamped,
+    // including a deliberate non-reply.
+    const ambientBullpenThreads = new Map<string, BullpenWatermarkThread>();
+    const bullpenToolTouches: BullpenToolTouch[] = [];
     const taskMetadataRecord = taskEvent.payload.metadata as Record<string, unknown> | undefined;
-    if (
-      taskMetadataRecord?.['taskOrigin'] === 'bullpen' &&
-      typeof taskMetadataRecord['threadId'] === 'string'
-    ) {
-      injectedBullpenThreadIds.add(taskMetadataRecord['threadId'] as string);
-    }
+    const wokeBullpenThreadId = taskMetadataRecord?.['taskOrigin'] === 'bullpen'
+      && typeof taskMetadataRecord['threadId'] === 'string'
+      ? taskMetadataRecord['threadId']
+      : undefined;
 
     // Ambient Bullpen threads are surfaced so an agent is aware of active
     // inter-agent discussions — but NOT inside autonomous scheduler runs (#1609).
@@ -1146,14 +1151,13 @@ export class AgentRuntime {
       );
     }
 
-    const watermarkBeforeAmbient = new Set(injectedBullpenThreadIds);
     // Inject pending Bullpen threads as a system message so the agent is aware
     // of active inter-agent discussions. Inserted after sender context (if any),
     // before conversation history — matching spec context budget priority order.
     // Refreshed before every chatWithRetry call so the model sees current thread
     // state, not a stale snapshot from the start of the task (#213).
     if (!suppressAmbientBullpen) {
-      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, injectedBullpenThreadIds);
+      await this.refreshBullpenContext(messages, bullpenInsertAt, agentId, ambientBullpenThreads);
     }
 
     // Record bullpen context in the budget for observability. Match by the
@@ -1171,9 +1175,9 @@ export class AgentRuntime {
         m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith('[Bullpen'),
       );
       if (idx !== -1) messages.splice(idx, 1);
-      for (const id of [...injectedBullpenThreadIds]) {
-        if (!watermarkBeforeAmbient.has(id)) injectedBullpenThreadIds.delete(id);
-      }
+      // The block never reached the model. Leave those threads unmarked so a later
+      // wake can try again. The woke thread is not in this map; it is still stamped.
+      ambientBullpenThreads.clear();
       ambientBullpenDropped = true;
       logger.warn(
         { agentId, conversationId },
@@ -1551,7 +1555,7 @@ export class AgentRuntime {
                 workingMessages,
                 bullpenInsertAt,
                 agentId,
-                injectedBullpenThreadIds,
+                ambientBullpenThreads,
               );
             }
             maybeAppendCheckpointBudgetNudge(workingMessages);
@@ -1957,6 +1961,7 @@ export class AgentRuntime {
             result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
           }
           const durationMs = Date.now() - startTime;
+          bullpenToolTouches.push(toBullpenToolTouch(toolCall.name, skillInput, result));
 
           // Publish tool.result for audit trail
           // Published by agent layer on behalf of the execution layer —
@@ -2542,29 +2547,24 @@ export class AgentRuntime {
     });
     await bus.publish('agent', responseEvent);
 
-    // Bullpen read-watermark (#1065): on a successful completion, mark every thread this
-    // agent had in context as seen up to its current latest message — whether or not it
-    // acted on each one. The invariant is "the agent has been shown this thread state and
-    // had its turn", not "the agent fulfilled it": ambient injection is awareness, and the
-    // authoritative "please act" trigger is the per-message task BullpenDispatcher creates,
-    // which surfaces the thread's content directly before any ambient suppression. So a
-    // thread the agent consciously left alone stops nagging, and re-surfaces only when
-    // genuinely new activity arrives.
-    //
-    // Skipped on the fallback/error path (and all early returns above: clarification,
-    // budget exhaustion) so unfinished work gets another turn. The deliberate trade-off:
-    // if the agent performed an out-of-band action on an earlier turn and only then hit
-    // the error budget, that thread is left un-watermarked and could be re-actioned next
-    // wake. Erring toward re-surfacing on a failed task is the safer default vs. dropping
-    // genuinely-unfinished work.
-    //
-    // Best-effort: a watermark write failure must not turn a completed task into a failure.
-    if (!isResponseError && this.config.bullpenService && injectedBullpenThreadIds.size > 0) {
+    // Bullpen read-watermark (#1065, #1901). Stamp the woke thread always, ambient
+    // threads the agent did not @mention, and ambient @mentions this turn actually
+    // handled (in-thread reply/close, or an out-of-band call that carries the thread).
+    // An ignored ambient @mention stays pending so a lost handoff can be recovered
+    // again. Skipped on the fallback/error path (and all early returns above) so
+    // unfinished work gets another turn. Best-effort: a watermark write failure must
+    // not turn a completed task into a failure.
+    const threadsToWatermark = selectThreadsToWatermark({
+      wokeThreadId: wokeBullpenThreadId,
+      ambient: [...ambientBullpenThreads.values()],
+      toolTouches: bullpenToolTouches,
+    });
+    if (!isResponseError && this.config.bullpenService && threadsToWatermark.length > 0) {
       try {
-        await this.config.bullpenService.markThreadsSeen(agentId, [...injectedBullpenThreadIds]);
+        await this.config.bullpenService.markThreadsSeen(agentId, threadsToWatermark);
       } catch (err) {
         logger.error(
-          { err, agentId, threadCount: injectedBullpenThreadIds.size },
+          { err, agentId, threadCount: threadsToWatermark.length },
           'Failed to mark Bullpen threads seen — they may be re-surfaced on the next wake',
         );
       }
@@ -2587,9 +2587,9 @@ export class AgentRuntime {
     messages: Message[],
     bullpenInsertAt: number,
     agentId: string,
-    // Accumulates the thread ids injected into context across the task's refresh calls,
-    // so the caller can stamp the read watermark on them at completion (#1065).
-    seenCollector?: Set<string>,
+    // Threads actually inserted into context. Completion decides which of these to
+    // watermark (#1901); a budget drop clears the map so an unseen block is not stamped.
+    ambient?: Map<string, BullpenWatermarkThread>,
   ): Promise<void> {
     if (!this.config.bullpenService) return;
 
@@ -2606,17 +2606,20 @@ export class AgentRuntime {
         this.config.bullpenWindowMinutes ?? BULLPEN_PENDING_WINDOW_MINUTES,
       );
 
-      // Record every injected thread so it can be watermarked at task completion.
-      if (seenCollector) {
-        for (const t of pendingThreads) seenCollector.add(t.threadId);
-      }
-
       // Build the replacement message BEFORE mutating the array, so that a
       // formatBullpenContext failure preserves the stale message rather than
       // leaving the array with the old message removed and no replacement.
       const newBlock = pendingThreads.length > 0
         ? formatBullpenContext(pendingThreads, this.config.timezone)
         : null;
+
+      // Record only after the block is built. A format failure must not mark threads
+      // that never made it into the messages array.
+      if (ambient && newBlock) {
+        for (const t of pendingThreads) {
+          ambient.set(t.threadId, pendingThreadWatermarkSnapshot(agentId, t));
+        }
+      }
 
       // Now atomically swap: remove stale, insert fresh.
       if (existingIdx !== -1) {

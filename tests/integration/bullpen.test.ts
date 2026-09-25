@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { BULLPEN_PENDING_WINDOW_MINUTES, BullpenService } from '../../src/memory/bullpen.js';
 import { createLogger } from '../../src/logger.js';
+import { AgentRuntime } from '../../src/agents/runtime.js';
+import { EventBus } from '../../src/bus/bus.js';
+import { createAgentTask } from '../../src/bus/events.js';
+import type { LLMProvider } from '../../src/agents/llm/provider.js';
+import type { ExecutionLayer } from '../../src/skills/execution.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -238,4 +243,177 @@ describeIf('BullpenService integration (Postgres)', () => {
     // A different participant who never saw it still has it pending.
     expect((await service.getPendingThreadsForAgent('agent-c', 60)).map(p => p.threadId)).toContain(thread.id);
   });
+
+  // #1901: an ignored ambient @mention stays pending; an out-of-band handle is
+  // watermarked until a newer message; the thread a bullpen wake was for is
+  // watermarked even when the agent does not reply. Real Postgres, mock LLM.
+  it('keeps an ignored @mention pending and watermarks a handled out-of-band thread (#1901)', async () => {
+    const agentId = `agent-${runId}-wm`;
+    const creator = `creator-${runId}-wm`;
+    const ignoredText = 'qqqq ignored-alpha-1901-token qqqq keep this mention pending qqqq';
+    const handledText = 'zzzz handled-beta-1901-token zzzz relay this mention out of band zzzz';
+    const originText = 'yyyy origin-gamma-1901-token yyyy this wake belongs to the thread yyyy';
+
+    const { thread: ignored } = await service.openThread(
+      `${runId} — ignored mention`,
+      creator,
+      [creator, agentId],
+      ignoredText,
+      [agentId],
+    );
+    const { thread: handled } = await service.openThread(
+      `${runId} — handled mention`,
+      creator,
+      [creator, agentId],
+      handledText,
+      [agentId],
+    );
+    const { thread: origin } = await service.openThread(
+      `${runId} — origin mention`,
+      creator,
+      [creator, agentId],
+      originText,
+      [agentId],
+    );
+
+    const pendingIds = async (): Promise<string[]> => (
+      await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES)
+    ).map(p => p.threadId);
+
+    await runBullpenWake({
+      agentId,
+      service,
+      provider: textProvider('busy with the user'),
+      content: 'what is on today',
+      conversationId: `conv-${runId}-1`,
+      channelId: 'signal',
+    });
+    let ids = await pendingIds();
+    expect(ids).toContain(ignored.id);
+    expect(ids).toContain(handled.id);
+    expect(ids).toContain(origin.id);
+
+    await runBullpenWake({
+      agentId,
+      service,
+      provider: toolThenTextProvider('signal-send', { to: '+15551212', message: handledText }),
+      executionLayer: {
+        invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }),
+      } as unknown as ExecutionLayer,
+      content: 'anything waiting?',
+      conversationId: `conv-${runId}-2`,
+      channelId: 'signal',
+    });
+    ids = await pendingIds();
+    expect(ids).toContain(ignored.id);
+    expect(ids).not.toContain(handled.id);
+    expect(ids).toContain(origin.id);
+    expect((await service.getThread(handled.id))!.thread.status).toBe('open');
+
+    await service.postMessage(
+      handled.id,
+      creator,
+      'wwww newest-delta-1901-token wwww a newer message brings the thread back wwww',
+      [agentId],
+    );
+    ids = await pendingIds();
+    expect(ids).toContain(handled.id);
+
+    await runBullpenWake({
+      agentId,
+      service,
+      provider: textProvider('nothing to add'),
+      content: 'You were mentioned. No reply required.',
+      conversationId: origin.id,
+      channelId: 'bullpen',
+      metadata: { taskOrigin: 'bullpen', threadId: origin.id },
+    });
+    ids = await pendingIds();
+    expect(ids).not.toContain(origin.id);
+    expect(ids).toContain(ignored.id);
+    expect(ids).toContain(handled.id);
+  });
 });
+
+const MOCK_PROVENANCE = {
+  requestedModel: 'mock-model',
+  actualModel: 'mock-model',
+  providerRequestId: 'msg_mock_000',
+} as const;
+
+function textProvider(content: string): LLMProvider {
+  return {
+    id: 'mock',
+    chat: vi.fn().mockResolvedValue({
+      type: 'text' as const,
+      content,
+      usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      provenance: MOCK_PROVENANCE,
+    }),
+  };
+}
+
+function toolThenTextProvider(name: string, input: Record<string, unknown>): LLMProvider {
+  let calls = 0;
+  return {
+    id: 'mock',
+    chat: vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          type: 'tool_use' as const,
+          toolCalls: [{ id: 'call-1', name, input }],
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }
+      return {
+        type: 'text' as const,
+        content: 'done',
+        usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      };
+    }),
+  };
+}
+
+async function runBullpenWake(args: {
+  agentId: string;
+  service: BullpenService;
+  provider: LLMProvider;
+  executionLayer?: ExecutionLayer;
+  content: string;
+  conversationId: string;
+  channelId: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const logger = createLogger('error');
+  const bus = new EventBus(logger);
+  bus.subscribe('agent.response', 'dispatch', () => {});
+  const agent = new AgentRuntime({
+    agentId: args.agentId,
+    systemPrompt: 'You are the coordinator.',
+    provider: args.provider,
+    resolvedModel: 'mock-model',
+    bus,
+    logger,
+    ...(args.executionLayer ? { executionLayer: args.executionLayer } : {}),
+    bullpenService: args.service,
+    pinnedTools: ['signal-send'],
+    skillToolDefs: [{
+      name: 'signal-send',
+      description: 'Send a Signal message',
+      input_schema: { type: 'object' as const, properties: {}, required: [] },
+    }],
+  });
+  agent.register();
+  await bus.publish('dispatch', createAgentTask({
+    agentId: args.agentId,
+    conversationId: args.conversationId,
+    channelId: args.channelId,
+    senderId: 'user',
+    content: args.content,
+    parentEventId: randomUUID(),
+    ...(args.metadata ? { metadata: args.metadata } : {}),
+  }));
+}
