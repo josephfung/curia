@@ -14,12 +14,33 @@ export const DELEGATE_SKILL_OUTER_TIMEOUT_MS = 900_000;
 /** Margin below the outer skill timeout so the inner wait resolves first under load. */
 export const DELEGATE_SKILL_OUTER_TIMEOUT_MARGIN_MS = 5_000;
 
+/**
+ * Shipped `delegate.defaultTimeoutMs`.
+ *
+ * Pooled p99 of 1,550 delegate runs before 2026-09-20 was 444s — the clean
+ * baseline #1873 confirmed, not the degraded 2026-09-20→22 window. Rounded up
+ * to 450s. A `local.yaml` override below this reintroduces healthy-specialist
+ * timeouts for every agent with no `expected_duration_seconds`. (#1857)
+ */
+export const DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS = 450_000;
+
+/**
+ * True when the configured fallback wait is shorter than the pooled-p99 floor.
+ * An unset value counts: the handler then falls back to a 90s constant.
+ */
+export function isDelegateDefaultBelowFloor(defaultTimeoutMs: number | undefined): boolean {
+  return defaultTimeoutMs === undefined || defaultTimeoutMs < DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS;
+}
+
 /** Maximum extra wait beyond expected_duration_seconds. */
 const DELEGATE_TIMEOUT_HEADROOM_CAP_SECONDS = 180;
 
 /**
  * Clamp a delegate wait timeout so the handler's structured timeout fires before the
  * execution layer's outer skill timeout.
+ *
+ * The ceiling stays at outer − margin (895s). Runs past it are late-delivery-only
+ * by design — see ADR-044. (#1857)
  */
 export function clampDelegateWaitTimeoutMs(
   timeoutMs: number,

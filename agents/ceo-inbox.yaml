@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.16.1"
+version: "0.16.2"
 role: specialist
 description: >
   Manages the CEO's personal email inbox. Handles standing-rule management,
@@ -14,6 +14,10 @@ description: >
 
 model:
   tier: standard
+
+# Delegate-wait hint (#1857). Clean-baseline p99 before 2026-09-20 was 280s
+# (n=140). 240s plus 25% headroom is 300s, under the 895s clamp (ADR-044).
+expected_duration_seconds: 240
 
 inject_specialists: true
 

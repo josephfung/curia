@@ -273,9 +273,9 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
   it('bumps calendar agent version for scheduling-rules capability', async () => {
     const config = loadAgentConfig(path.join(agentsDir, 'calendar.yaml'));
     // Exact-version tripwire: bump this alongside `agents/calendar.yaml`'s version on any
-    // meaningful prompt/capability change. 0.8.1 = RSVP sender-gating scoped to formal
-    // invite consults so a day brief is not declined as an unknown sender (#1871).
-    expect(config.version).toBe('0.8.1');
+    // meaningful prompt/capability change. 0.8.2 = delegate-wait hint sized to the
+    // pre-2026-09-20 p99 (#1857).
+    expect(config.version).toBe('0.8.2');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {

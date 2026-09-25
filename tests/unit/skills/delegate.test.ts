@@ -4,6 +4,7 @@ import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { DelegationGuard, delegationKey } from '../../../src/agents/delegation-guard.js';
+import { computeDelegateTimeoutMs } from '../../../src/agents/delegate-timeout.js';
 import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
@@ -79,6 +80,127 @@ describe('DelegateHandler', () => {
       expect(data.retryable).toBe(false);
       expect(data.possibly_succeeded).toBe(true);
       expect(data.message).toContain('did not respond');
+    }
+  });
+
+  it('returns a p99-length specialist response when the wait covers it (#1857)', async () => {
+    vi.useFakeTimers();
+    try {
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+      agentRegistry.register('writing-scout', { role: 'specialist', description: 'Writing' });
+      const bus = new EventBus(logger);
+      // writing-scout hint 480s → 600s wait. Clean-baseline p99 is 576s.
+      const waitMs = computeDelegateTimeoutMs(480);
+      const p99Ms = 576_000;
+
+      bus.subscribe('agent.task', 'agent', async (event) => {
+        if (event.type === 'agent.task' && event.payload.agentId === 'writing-scout') {
+          await new Promise((resolve) => setTimeout(resolve, p99Ms));
+          const { createAgentResponse } = await import('../../../src/bus/events.js');
+          await bus.publish('agent', createAgentResponse({
+            agentId: 'writing-scout',
+            conversationId: event.payload.conversationId,
+            content: 'Draft ready',
+            parentEventId: event.id,
+          }));
+        }
+      });
+
+      const executePromise = handler.execute(makeCtx(
+        { agent: 'writing-scout', task: 'Draft the essay', timeout_ms: waitMs },
+        { bus, agentRegistry },
+      ));
+      await vi.advanceTimersByTimeAsync(p99Ms);
+      const result = await executePromise;
+
+      expect(waitMs).toBeGreaterThanOrEqual(p99Ms);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { response?: string; reason?: string };
+        expect(data.reason).toBeUndefined();
+        expect(data.response).toBe('Draft ready');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out a p99-length writing-scout run against the old 240s wait (#1857)', async () => {
+    vi.useFakeTimers();
+    try {
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+      agentRegistry.register('writing-scout', { role: 'specialist', description: 'Writing' });
+      const bus = new EventBus(logger);
+
+      bus.subscribe('agent.task', 'agent', async (event) => {
+        if (event.type === 'agent.task' && event.payload.agentId === 'writing-scout') {
+          await new Promise((resolve) => setTimeout(resolve, 576_000));
+          const { createAgentResponse } = await import('../../../src/bus/events.js');
+          await bus.publish('agent', createAgentResponse({
+            agentId: 'writing-scout',
+            conversationId: event.payload.conversationId,
+            content: 'Draft ready',
+            parentEventId: event.id,
+          }));
+        }
+      });
+
+      const executePromise = handler.execute(makeCtx(
+        { agent: 'writing-scout', task: 'Draft the essay', timeout_ms: 240_000 },
+        { bus, agentRegistry },
+      ));
+      await vi.advanceTimersByTimeAsync(240_000);
+      const result = await executePromise;
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { reason?: string };
+        expect(data.reason).toBe('timeout');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns a social-media p99 response under the 450s floor (#1857)', async () => {
+    vi.useFakeTimers();
+    try {
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+      agentRegistry.register('social-media', { role: 'specialist', description: 'Social' });
+      const bus = new EventBus(logger);
+      const p99Ms = 396_000;
+
+      bus.subscribe('agent.task', 'agent', async (event) => {
+        if (event.type === 'agent.task' && event.payload.agentId === 'social-media') {
+          await new Promise((resolve) => setTimeout(resolve, p99Ms));
+          const { createAgentResponse } = await import('../../../src/bus/events.js');
+          await bus.publish('agent', createAgentResponse({
+            agentId: 'social-media',
+            conversationId: event.payload.conversationId,
+            content: 'Posted',
+            parentEventId: event.id,
+          }));
+        }
+      });
+
+      const executePromise = handler.execute(makeCtx(
+        { agent: 'social-media', task: 'Draft the thread' },
+        { bus, agentRegistry, defaultDelegateTimeoutMs: 450_000 },
+      ));
+      await vi.advanceTimersByTimeAsync(p99Ms);
+      const result = await executePromise;
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as { response?: string; reason?: string };
+        expect(data.reason).toBeUndefined();
+        expect(data.response).toBe('Posted');
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 

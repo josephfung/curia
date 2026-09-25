@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.3.0"
+version: "0.3.1"
 role: specialist
 description: >
   Proactively debriefs the CEO after external meetings. Three times a day it
@@ -10,6 +10,10 @@ description: >
 
 model:
   tier: standard  # judgment calls for meeting classification and follow-up extraction
+
+# Delegate-wait hint (#1857). Clean-baseline p99 before 2026-09-20 was 258s
+# (n=35). 210s plus 25% headroom is 263s, under the 895s clamp (ADR-044).
+expected_duration_seconds: 210
 
 inject_specialists: true  # see research-analyst for cross-specialist research tasks
 

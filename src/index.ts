@@ -46,7 +46,11 @@ import type { LLMProvider } from './agents/llm/provider.js';
 import { LLMProviderRouter } from './agents/llm/provider-router.js';
 import { TelemetryLlmProvider } from './agents/llm/telemetry-provider.js';
 import { InfraLlmService } from './skills/infra-llm.js';
-import { AgentRegistry } from './agents/agent-registry.js';
+import { AgentRegistry, missingDurationHintWarning } from './agents/agent-registry.js';
+import {
+  DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS,
+  isDelegateDefaultBelowFloor,
+} from './agents/delegate-timeout.js';
 import { WorkingMemory } from './memory/working-memory.js';
 import { EmbeddingService } from './memory/embedding.js';
 import { KnowledgeGraphStore } from './memory/knowledge-graph.js';
@@ -2377,6 +2381,28 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.fatal({ err }, 'Failed during agent registration');
     process.exit(1);
+  }
+
+  // A specialist with no expected_duration_seconds inherits delegate.defaultTimeoutMs.
+  // Name them at startup so a new agent does not silently pick up the floor. (#1857)
+  const missingDurationHint = agentRegistry.specialistsWithoutDurationHint();
+  if (missingDurationHint.length > 0) {
+    logger.warn(
+      { agents: missingDurationHint },
+      missingDurationHintWarning(missingDurationHint),
+    );
+  }
+  // curia-deploy pins 240000 in local.yaml, which shadows the shipped 450s floor.
+  // Say so at boot — otherwise that override keeps timing out healthy specialists.
+  if (isDelegateDefaultBelowFloor(yamlConfig.delegate?.defaultTimeoutMs)) {
+    const configured = yamlConfig.delegate?.defaultTimeoutMs;
+    logger.warn(
+      {
+        defaultTimeoutMs: configured ?? null,
+        floorMs: DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS,
+      },
+      `delegate.defaultTimeoutMs (${configured === undefined ? 'unset' : String(configured)}) is below the pooled-p99 floor (${DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS}ms) — specialists without expected_duration_seconds will time out healthy runs`,
+    );
   }
 
   // After pass-1 registration and before scheduler.start(). The registry holds
