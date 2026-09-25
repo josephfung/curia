@@ -65,6 +65,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`delegation.late_resolved`** — a wake that outlives its claim lease emits the outcome once. (#1861)
 - **Unknown `agent.task`** — logs an error when no registered agent owns the id. (#1898)
 - **Bullpen, scheduler, `delegate`** — unknown agent ids fail instead of counting as delivered. (#1898)
 - **Startup checks** — unparseable agent configs fail allowed-callers and stay visible to pin-gap. (#1898)

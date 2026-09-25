@@ -514,6 +514,53 @@ export async function releasePendingDelegationClaim(
   );
 }
 
+/**
+ * Push a live lease forward without minting a new token.
+ *
+ * The wake's `publish()` awaits the woken turn, which outlives the lease (#1861). Refreshing
+ * `claimed_at` under the same token keeps that turn's holder the owner, so the sweep does not
+ * re-claim the row and record the outcome a second time. Returns false when this token no longer
+ * owns the row — a stale holder must not extend a lease someone else now holds.
+ */
+export async function renewPendingDelegationClaim(
+  pool: Pool,
+  delegateEventId: string,
+  claimToken: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE pending_delegations
+        SET claimed_at = now()
+      WHERE delegate_event_id = $1
+        AND status = 'claimed'
+        AND claim_token = $2
+      RETURNING delegate_event_id`,
+    [delegateEventId, claimToken],
+  );
+  return (result.rowCount ?? result.rows.length) > 0;
+}
+
+/**
+ * Whether this handle's outcome is already in the audit log.
+ *
+ * `target_type` is part of the predicate so the lookup uses `idx_audit_target`. A re-claim after
+ * the event landed — the holder crashed between the publish and finalize — must close the lease
+ * without annotating the review task or emitting the event again (#1861).
+ */
+export async function hasDelegationLateResolvedAudit(
+  pool: Pool,
+  delegateEventId: string,
+): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM audit_log
+      WHERE event_type = 'delegation.late_resolved'
+        AND target_type = 'delegation'
+        AND target_id = $1
+      LIMIT 1`,
+    [delegateEventId],
+  );
+  return rows.length > 0;
+}
+
 /** Record the wake event id on an already-claimed handle (Phase 2 publishes after claiming). */
 export async function setPendingDelegationWakeEventId(
   pool: Pool,

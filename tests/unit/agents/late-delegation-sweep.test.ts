@@ -102,6 +102,11 @@ function fakePool(opts: FakePoolOptions): FakePoolResult {
       return { rows: opts.open };
     }
     if (sql.includes('FROM audit_log')) {
+      // A re-claim asks whether delegation.late_resolved already landed. That is a different
+      // lookup from the specialist response; answering it with the response would skip bookkeeping.
+      if (sql.includes("event_type = 'delegation.late_resolved'")) {
+        return { rows: [] };
+      }
       const id = params[0] as string;
       if (opts.auditThrows?.has(id)) throw new Error('audit_log unavailable');
       const hit = opts.auditHits?.[id];
@@ -132,6 +137,10 @@ function fakePool(opts: FakePoolOptions): FakePoolResult {
       if (opts.wakeIdPersistFails) throw new Error('connection terminated unexpectedly');
       wakeIdsRecorded.push({ id: params[0] as string, wakeTaskEventId: params[1] as string });
       return { rows: [] };
+    }
+    if (sql.includes('UPDATE pending_delegations') && sql.includes('SET claimed_at = now()')) {
+      // The holder still owns the token this fake minted, so the refresh lands.
+      return { rows: [{ delegate_event_id: params[0] }], rowCount: 1 };
     }
     throw new Error(`unexpected query: ${sql.slice(0, 80)}`);
   });
