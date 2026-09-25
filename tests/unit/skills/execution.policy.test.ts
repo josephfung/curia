@@ -21,7 +21,7 @@ import type { AutonomyService, AutonomyConfig } from '../../../src/autonomy/auto
 import type { SecretsService } from '../../../src/secrets/secrets-service.js';
 import type { ApprovalTriggerService, ApprovalRequestResult } from '../../../src/autonomy/approval-trigger.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
-import type { ChannelIdentity, ContactTier } from '../../../src/contacts/types.js';
+import type { ChannelIdentity, ContactTier, TaskOriginator } from '../../../src/contacts/types.js';
 import { isDelegatedSpecialistTask } from '../../../src/agents/delegated-task-context.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
 import { SensitivityClassifier } from '../../../src/memory/sensitivity.js';
@@ -2517,6 +2517,10 @@ describe('autonomy gates', () => {
   // task, identical skill, originator lineage the only variable.
   // ---------------------------------------------------------------------------
   describe('delegated specialist task — principal-lineage discriminator (#1859)', () => {
+    // Both fixtures are `satisfies TaskOriginator` so a field rename upstream breaks
+    // the build here, rather than silently leaving these tests asserting on a shape
+    // the runtime no longer produces.
+
     /** Originator as `delegate` forwards it (#972): the parent chain's, unchanged. */
     function externalOriginator(tier: ContactTier) {
       return {
@@ -2527,16 +2531,16 @@ describe('autonomy gates', () => {
         channel: 'email',
         initiatedAt: '2026-09-24T12:00:00.000Z',
         tier,
-      };
+      } satisfies TaskOriginator;
     }
 
     const principalOriginator = {
       contactId: 'principal-1',
-      systemRole: 'principal' as const,
+      systemRole: 'principal',
       channel: 'email',
       initiatedAt: '2026-09-24T12:00:00.000Z',
-      tier: 'principal' as const,
-    };
+      tier: 'principal',
+    } satisfies TaskOriginator;
 
     /**
      * InvokeOptions for a skill call inside a delegated specialist's turn, mirroring
@@ -2548,8 +2552,13 @@ describe('autonomy gates', () => {
      * same predicate the runtime keys the delegated addendum on, so if that shape
      * drifts these tests fail loudly instead of quietly degrading into the generic
      * task case the existing gate tests already cover.
+     *
+     * One field is deliberately not modelled: `delegate` also forwards `liveTurn`
+     * across a synchronous delegation (#1126), but every manifest below is
+     * sensitivity 'normal', and `liveTurn` is read only by the elevated gate. The
+     * elevated gate on a delegated task is a separate question from this one.
      */
-    function delegatedInvokeOptions(originator?: Record<string, unknown>) {
+    function delegatedInvokeOptions(originator?: TaskOriginator) {
       const taskMetadata: Record<string, unknown> = {
         delegationOrigin: {
           conversationId: 'coordinator-conv',
@@ -2570,14 +2579,15 @@ describe('autonomy gates', () => {
       };
     }
 
-    it('pins the fixture to the delegated path and not a generic internal task', () => {
-      const options = delegatedInvokeOptions(externalOriginator('known'));
-      expect(options.channelId).toBe('internal');
-      expect(options.senderId).toBe('coordinator');
-      // The discriminator is delegationOrigin, not the channel: an internal-channel
-      // task carrying only an originator is the voice off-ramp's coordinator task,
-      // which still adjudicates senders itself and is NOT what these tests cover.
-      expect(isDelegatedSpecialistTask({ originator: externalOriginator('known') })).toBe(false);
+    it('keys these fixtures on delegationOrigin and not on the internal channel', () => {
+      // Strip the marker off the real fixture rather than hand-building a second one:
+      // channelId stays 'internal' and the originator stays put, and the predicate must
+      // still say no. That internal-channel-with-an-originator shape is the voice
+      // off-ramp's coordinator task, which adjudicates senders itself — not this path.
+      const { taskMetadata } = delegatedInvokeOptions(externalOriginator('known'));
+      const withoutMarker = { ...taskMetadata };
+      delete withoutMarker['delegationOrigin'];
+      expect(isDelegatedSpecialistTask(withoutMarker)).toBe(false);
     });
 
     // -- Negative: a non-principal-originated delegation is still gated ---------
@@ -2585,42 +2595,16 @@ describe('autonomy gates', () => {
     it('enforces Gate A on a delegated task whose requester is known but not principal', async () => {
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
-      registry.register(makeRiskyManifest('memory-store', 'low'), handler);
+      // action_risk 'high' deliberately, NOT 'low': minScoreForActionRisk('low') is 60,
+      // the same number Gate A uses, so a 'low' skill at score 55 produces a
+      // byte-identical error and event from either gate — and the test would then pass
+      // with Gate A deleted. 'high' has a Gate B floor of 80, so asserting requiredScore
+      // 60 pins the block to Gate A specifically.
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
       const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(55), // restricted mode: < 60 blocks all non-read skills
         bus: mockBus,
-      });
-
-      const result = await layer.invoke(
-        'memory-store',
-        { fact: 'vendor prefers afternoons' },
-        undefined,
-        delegatedInvokeOptions(externalOriginator('known')),
-      );
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('55');
-        expect(result.error).toContain('set-autonomy');
-      }
-      expect(handler.execute).not.toHaveBeenCalled();
-      // The block is attributed to the specialist that ran, not the coordinator.
-      expect(mockBus.publish).toHaveBeenCalledWith(
-        'execution',
-        expect.objectContaining({
-          type: 'autonomy.tool_blocked',
-          payload: expect.objectContaining({ toolName: 'memory-store', agentId: 'calendar' }),
-        }),
-      );
-    });
-
-    it('enforces Gate B on a delegated task whose requester is known but not principal', async () => {
-      const registry = new ToolRegistry();
-      const handler = makeHandler('should not run');
-      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // requires 80
-      const layer = new ExecutionLayer(registry, logger, {
-        autonomyService: makeAutonomyService(74),
       });
 
       const result = await layer.invoke(
@@ -2632,21 +2616,88 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('autonomy');
-        expect(result.error).toContain('80');
+        expect(result.error).toContain('autonomy score is 55');
+        expect(result.error).toContain('requires 60');
       }
       expect(handler.execute).not.toHaveBeenCalled();
+      // Thresholds are asserted on the event too: the block is Gate A's, and it is
+      // attributed to the specialist that ran rather than the relaying coordinator.
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'autonomy.tool_blocked',
+          payload: expect.objectContaining({
+            toolName: 'calendar-create-event',
+            agentId: 'calendar',
+            taskEventId: 'task-event-1',
+            currentScore: 55,
+            requiredScore: 60,
+          }),
+        }),
+      );
+    });
+
+    it('enforces Gate B on a delegated task whose requester is known but not principal', async () => {
+      const registry = new ToolRegistry();
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler); // requires 80
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const layer = new ExecutionLayer(registry, logger, {
+        // 74 clears Gate A (>= 60) so the block below can only be Gate B's.
+        autonomyService: makeAutonomyService(74),
+        bus: mockBus,
+      });
+
+      const result = await layer.invoke(
+        'calendar-create-event',
+        { title: 'Vendor sync' },
+        undefined,
+        delegatedInvokeOptions(externalOriginator('known')),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        // 'requires 80' is the action_risk threshold, not Gate A's 60. A bare
+        // 'autonomy' match would hold for any message either gate produces.
+        expect(result.error).toContain('autonomy score is 74');
+        expect(result.error).toContain('requires 80');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'autonomy.tool_blocked',
+          payload: expect.objectContaining({
+            toolName: 'calendar-create-event',
+            agentId: 'calendar',
+            taskEventId: 'task-event-1',
+            currentScore: 74,
+            requiredScore: 80,
+          }),
+        }),
+      );
     });
 
     it('enforces Gate B on a delegated task with no originator at all (a missing identity is not a clearance)', async () => {
       // `delegate` forwards an originator only when the parent task has one, so a
-      // delegated turn can legitimately arrive with no identity. The addendum tells
-      // the specialist that is not a further clearance; this is what makes that true.
+      // delegated turn can legitimately arrive with no identity at all — the case the
+      // addendum's "a missing identity ... is not a further clearance" line names.
+      //
+      // Gates A and B are the whole of that constraint, and they are SCORE gates. With
+      // no originator, Gate C is skipped rather than failed closed: getInitiatingTier
+      // returns null and isExternalOriginatorMissingTier is false for an absent
+      // originator (deliberately — that is the checkpoint-processor shape, see #1059).
+      // So at a high enough score this same task would run a critical skill with no
+      // tier check at all. That is the existing design, not something this test asserts
+      // away; what it does pin is that the delegated addendum grants nothing on its own.
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler); // requires 70
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
       const layer = new ExecutionLayer(registry, logger, {
+        // 65 clears Gate A, so the block below is Gate B's threshold and nothing else.
         autonomyService: makeAutonomyService(65),
+        bus: mockBus,
       });
 
       const result = await layer.invoke(
@@ -2658,20 +2709,27 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('70');
+        expect(result.error).toContain('autonomy score is 65');
+        expect(result.error).toContain('requires 70');
       }
       expect(handler.execute).not.toHaveBeenCalled();
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'autonomy.tool_blocked',
+          payload: expect.objectContaining({
+            toolName: 'email-send',
+            agentId: 'calendar',
+            taskEventId: 'task-event-1',
+            currentScore: 65,
+            requiredScore: 70,
+          }),
+        }),
+      );
     });
 
     it('enforces Gate C on a delegated task whose requester is unknown-tier, and audits the decision', async () => {
       // Score 100 clears gates A and B, so Gate C is the only thing left.
-      const classifyAction = vi.fn().mockResolvedValue({
-        decision: 'allow', actionClass: 'reversible-external', isThirdPartyFacing: false, reason: 'stub',
-      });
-      const judge = {
-        classifyAction,
-        isEnabled: vi.fn().mockReturnValue(true),
-      } as unknown as EscalationJudge;
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
@@ -2679,7 +2737,6 @@ describe('autonomy gates', () => {
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(100),
         bus: mockBus,
-        escalationJudge: judge,
       });
 
       const result = await layer.invoke(
@@ -2691,13 +2748,19 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('unknown');
+        // Quoted, as buildTierGateError renders it: a bare 'unknown' would also match
+        // half the other tier names' error text.
+        expect(result.error).toContain("('unknown')");
       }
       expect(handler.execute).not.toHaveBeenCalled();
-      // Unknown escalates on either axis — tier-determined, no LLM round trip.
-      expect(classifyAction).not.toHaveBeenCalled();
+      // No escalation-judge stub is wired on purpose. Unknown tier escalates on both
+      // policy axes, so resolveTierGateDecision returns on its deterministic fast path
+      // and the judge is structurally unreachable — an assertion that it went unasked
+      // would hold whether or not a judge existed, so it would prove nothing.
+      //
       // The audit names the forwarded requester and their tier, not the relaying
-      // coordinator, so a past delegated decision can be read back from the trail.
+      // coordinator, and carries the task event id, so a past delegated decision can be
+      // reconstructed from the trail rather than by replaying the prompt.
       expect(mockBus.publish).toHaveBeenCalledWith(
         'execution',
         expect.objectContaining({
@@ -2709,6 +2772,7 @@ describe('autonomy gates', () => {
             tier: 'unknown',
             action: 'email-send',
             agentId: 'calendar',
+            taskEventId: 'task-event-1',
           }),
         }),
       );
@@ -2720,8 +2784,10 @@ describe('autonomy gates', () => {
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('vendor-payment', 'critical'), handler);
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(100),
+        bus: mockBus,
       });
 
       const result = await layer.invoke(
@@ -2733,14 +2799,81 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('known');
+        // Quoted and parenthesised so this cannot pass on 'unknown' containing 'known'.
+        expect(result.error).toContain("('known')");
       }
       expect(handler.execute).not.toHaveBeenCalled();
+      // Asserted here too, so a tier misattribution on the irreversible path is caught
+      // and not only on the unknown-tier one.
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            gate: 'gate_c',
+            decision: 'escalate',
+            contactId: 'contact-abc',
+            tier: 'known',
+            action: 'vendor-payment',
+          }),
+        }),
+      );
+    });
+
+    // -- The allow direction: being delegated must not restrict, either --------
+
+    it('lets a delegated task from a trusted-tier requester through Gate C, and audits the allow', async () => {
+      // The failure #1872 actually fixed was over-refusal: a specialist declining work
+      // it was authorized to do. Every other case in this block expects a block, so
+      // without this one a delegation-keyed OVER-restriction — "escalate anything
+      // carrying delegationOrigin" — would pass the entire file. The tier does the
+      // work here, not the delegation: trusted clears reversible-external.
+      const registry = new ToolRegistry();
+      const handler = makeHandler('event created');
+      registry.register(makeRiskyManifest('calendar-create-event', 'high'), handler);
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(100),
+        bus: mockBus,
+      });
+
+      const result = await layer.invoke(
+        'calendar-create-event',
+        { title: 'Vendor sync' },
+        undefined,
+        delegatedInvokeOptions(externalOriginator('trusted')),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      // Gate C ran and allowed — distinct from never having run at all (the principal
+      // bypass), which publishes nothing.
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            gate: 'gate_c',
+            decision: 'allow',
+            contactId: 'contact-abc',
+            tier: 'trusted',
+            action: 'calendar-create-event',
+            agentId: 'calendar',
+          }),
+        }),
+      );
     });
 
     // -- Positive: the same delegated shape with principal lineage does bypass --
     // Without these, the negatives above would also pass if the bypass were broken
     // outright. The pair is what asserts the discriminator.
+    //
+    // Each positive runs a non-principal CONTROL invoke through the same layer. On its
+    // own, "the principal's call succeeded" is also true when the gates did not run at
+    // all — which is a reachable state, not a hypothetical: the whole gate block is
+    // skipped when the autonomy service is unwired or getConfig() returns null. The
+    // control makes that indistinguishable state fail: if the gates were globally off,
+    // it would succeed too.
 
     it('bypasses gates A and B on a delegated task whose requester is the principal', async () => {
       const registry = new ToolRegistry();
@@ -2760,23 +2893,37 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(true);
       expect(handler.execute).toHaveBeenCalledOnce();
+
+      // Control: same layer, same skill, same score — lineage is the only difference.
+      const control = await layer.invoke(
+        'calendar-create-event',
+        { title: 'Vendor sync' },
+        undefined,
+        delegatedInvokeOptions(externalOriginator('known')),
+      );
+
+      expect(control.success).toBe(false);
+      expect(handler.execute).toHaveBeenCalledOnce(); // still once — the control did not run
+      // The control's REASON matters, not just that it was blocked. Gate C would also
+      // stop this call (known tier + reversible-external with no judge fails closed), so
+      // a bare success:false control would still be satisfied with gates A and B both
+      // deleted. Asserting Gate A's score message is what makes it witness A/B
+      // specifically rather than "some gate somewhere is live".
+      if (!control.success) {
+        expect(control.error).toContain('autonomy score is 50');
+        expect(control.error).toContain('requires 60');
+      }
     });
 
     it('bypasses Gate C on a delegated irreversible action requested by the principal', async () => {
-      const classifyAction = vi.fn().mockResolvedValue({
-        decision: 'escalate', actionClass: 'irreversible', isThirdPartyFacing: true, reason: 'stub',
-      });
-      const judge = {
-        classifyAction,
-        isEnabled: vi.fn().mockReturnValue(true),
-      } as unknown as EscalationJudge;
       const registry = new ToolRegistry();
       const handler = makeHandler('ok');
       // Same manifest the known-tier case above blocks.
       registry.register(makeRiskyManifest('vendor-payment', 'critical'), handler);
+      const mockBus = { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus;
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(100),
-        escalationJudge: judge,
+        bus: mockBus,
       });
 
       const result = await layer.invoke(
@@ -2788,8 +2935,44 @@ describe('autonomy gates', () => {
 
       expect(result.success).toBe(true);
       expect(handler.execute).toHaveBeenCalledOnce();
-      // The bypass is structural: Gate C never ran, so the judge was never asked.
-      expect(classifyAction).not.toHaveBeenCalled();
+      // The absence of a gate_c audit event is what separates the bypass from Gate C
+      // running and allowing: applyActionPolicy would also allow tier 'principal', but
+      // that path publishes decision 'allow' (execution.ts publishGateCDecision) on its
+      // way through. Silence means the gate never ran. Asserting on the escalation judge
+      // instead would prove nothing — both axes agree for the principal either way, so
+      // the judge is unasked whichever path executed.
+      expect(mockBus.publish).not.toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({ gate: 'gate_c' }),
+        }),
+      );
+
+      // Control, as above: silence about gate_c is also what a disabled gate block looks
+      // like, so prove the gate is live by sending the same call through as a known-tier
+      // requester and watching Gate C stop it.
+      const control = await layer.invoke(
+        'vendor-payment',
+        { amount: 50000 },
+        undefined,
+        delegatedInvokeOptions(externalOriginator('known')),
+      );
+
+      expect(control.success).toBe(false);
+      expect(handler.execute).toHaveBeenCalledOnce(); // still once — the control did not run
+      expect(mockBus.publish).toHaveBeenCalledWith(
+        'execution',
+        expect.objectContaining({
+          type: 'authorization.decision',
+          payload: expect.objectContaining({
+            gate: 'gate_c',
+            decision: 'escalate',
+            contactId: 'contact-abc',
+            tier: 'known',
+          }),
+        }),
+      );
     });
   });
 });
