@@ -86,19 +86,20 @@ function capPendingThreads<T>(
 ): T[] {
   const newestFirst = [...threads].sort((a, b) => lastMessageAt(b) - lastMessageAt(a));
   if (newestFirst.length <= PENDING_THREAD_CAP) return newestFirst;
-  // Age slot: oldest thread not yet shown for this message state. A handoff that
-  // was already injected and left untouched must not pin the slot for the rest
-  // of the window (#1901). If every thread was already shown, use the oldest.
+  // Age slot is chosen only from threads outside the four newest, so the cap
+  // always returns five. Prefer the oldest not-yet-shown thread in that group.
+  // If every one of them was already shown, use the oldest, so a retry still
+  // gets the second look that watermarks it (#1901).
+  const recencySlots = PENDING_THREAD_CAP - 1;
   let oldest = newestFirst[newestFirst.length - 1]!;
-  for (let i = newestFirst.length - 1; i >= 0; i--) {
+  for (let i = newestFirst.length - 1; i >= recencySlots; i--) {
     const candidate = newestFirst[i]!;
     if (!alreadyShown(candidate)) {
       oldest = candidate;
       break;
     }
   }
-  const recency = newestFirst.slice(0, PENDING_THREAD_CAP - 1);
-  if (recency.includes(oldest)) return recency;
+  const recency = newestFirst.slice(0, recencySlots);
   return [...recency, oldest];
 }
 
@@ -464,12 +465,13 @@ class PostgresBullpenBackend implements BullpenBackend {
       // last_message_at advances past seen_through, so a handled out-of-band request is
       // not re-actioned on a later wake. seen_through is null on an injection-only row
       // (the handoff was shown once and left untouched, #1901).
-      // age_rank = 1 keeps the oldest not-yet-shown eligible thread inside
-      // PENDING_THREAD_CAP so newer traffic cannot crowd a missed handoff out of the
-      // widened window (#1899). A thread already shown and left untouched sorts after
-      // those, so a retry cannot pin the slot (#1901). $3 is the newest-slot count
-      // (cap - 1); $4 is the cap itself. Both are bound parameters so the SQL cannot
-      // drift from the in-memory cap.
+      // The fifth slot is the oldest not-yet-shown thread outside the four newest,
+      // so newer traffic cannot crowd a missed handoff out of the widened window
+      // (#1899). Age rank is computed only in that outside group. If every thread
+      // there was already shown, the oldest of them still fills the slot, so a
+      // retry gets the second look that watermarks it (#1901). $3 is the newest-slot
+      // count (cap - 1); $4 is the cap itself. Both are bound parameters so the SQL
+      // cannot drift from the in-memory cap.
       `WITH eligible AS (
          SELECT t.id, t.topic, t.message_count, t.last_message_at,
            (r.injected_through IS NOT NULL AND t.last_message_at <= r.injected_through) AS already_injected
@@ -486,14 +488,19 @@ class PostgresBullpenBackend implements BullpenBackend {
        ),
        ranked AS (
          SELECT id, topic, message_count, last_message_at, already_injected,
-           ROW_NUMBER() OVER (
-             ORDER BY already_injected ASC, last_message_at ASC, id ASC
-           ) AS age_rank,
            ROW_NUMBER() OVER (ORDER BY last_message_at DESC, id DESC) AS recency_rank
          FROM eligible
+       ),
+       aged AS (
+         SELECT *,
+           ROW_NUMBER() OVER (
+             PARTITION BY (recency_rank <= $3)
+             ORDER BY already_injected ASC, last_message_at ASC, id ASC
+           ) AS age_rank
+         FROM ranked
        )
        SELECT id, topic, message_count, last_message_at, already_injected
-       FROM ranked
+       FROM aged
        WHERE age_rank = 1 OR recency_rank <= $3
        ORDER BY last_message_at DESC, id DESC
        LIMIT $4`,

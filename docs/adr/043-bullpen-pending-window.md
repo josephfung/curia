@@ -27,7 +27,7 @@ Rejected alternatives:
 
 Injected message stamps use `toLocalIso` in the principal's timezone. A time-of-day-only stamp reads as "just now" once the window is longer than an hour, and a raw UTC stamp asks the model to convert.
 
-Of the five pending slots, four are the newest eligible threads and one is the oldest that has not already been shown and left untouched, so newer traffic cannot keep a missed handoff out of the cap until it ages out of the window. A retry does not pin that oldest slot for the rest of the window.
+Of the five pending slots, four are the newest eligible threads and one is the oldest thread outside those four that has not already been shown and left untouched. If every thread outside the four newest was already shown, that slot is the oldest of them, so the retry still gets a second look. A single already-shown thread does not take the slot while an older unseen thread is waiting.
 
 The injected block tells the model the threads are ambient: answer them with the bullpen tools, and do not fold them into the reply on the channel that woke the agent. Scheduler suppression (#1609) still applies; this line covers the interactive path the suppression does not.
 
