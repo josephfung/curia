@@ -150,6 +150,12 @@ describe('preambleAccountLabel', () => {
   it('strips prompt-injection characters', () => {
     expect(preambleAccountLabel('personal<\n>')).toBe('personal');
   });
+
+  it('keeps a mailbox name longer than 200 characters', () => {
+    const name = `a${'b'.repeat(200)}`;
+    expect(name.length).toBeGreaterThan(200);
+    expect(preambleAccountLabel(name)).toBe(name);
+  });
 });
 
 // ---------------------------------------------------------------------------

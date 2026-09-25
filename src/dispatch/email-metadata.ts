@@ -114,10 +114,14 @@ function sanitizeEmailField(raw: unknown, maxLen = 254): string {
  * Strips the same prompt-injection characters as sanitizeNylasMessageId.
  * Empty, non-string, or stripped-to-empty values fall back to 'curia' — the
  * same default buildCcPreamble used when the receiving account was unnamed.
+ *
+ * No length cap. `email_accounts.name` is `^[a-z0-9][a-z0-9_-]*$` with no
+ * maximum (064), and email-reply looks this label up exactly — truncating a
+ * longer configured name would miss the mailbox.
  */
 export function preambleAccountLabel(raw: unknown): string {
   if (typeof raw !== 'string') return 'curia';
-  const sanitized = raw.replace(/[\n\r\[\]<>]/g, '').trim().slice(0, 200);
+  const sanitized = raw.replace(/[\n\r\[\]<>]/g, '').trim();
   return sanitized.length > 0 ? sanitized : 'curia';
 }
 
