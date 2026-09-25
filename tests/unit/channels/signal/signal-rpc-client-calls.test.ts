@@ -19,6 +19,13 @@ const ACCOUNT = '+12264448150';
 function listen(socketPath: string, onLine: (line: string, sock: net.Socket) => void): Promise<net.Server> {
   return new Promise(resolve => {
     const server = net.createServer(sock => {
+      // Client teardown destroys its end of the unix socket. The peer read
+      // then emits ECONNRESET; with no listener Node raises that as an
+      // uncaught exception after the assertion has already passed.
+      sock.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'ECONNRESET' || err.code === 'EPIPE') return;
+        throw err;
+      });
       let buf = '';
       sock.on('data', chunk => {
         buf += chunk.toString('utf8');

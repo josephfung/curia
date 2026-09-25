@@ -31,6 +31,12 @@ function createMockServer(socketPath: string) {
 
   server.on('connection', (socket) => {
     clientSocket = socket;
+    // Client teardown destroys its end. The peer read emits ECONNRESET, and
+    // an unhandled 'error' on this socket fails the suite after the tests pass.
+    socket.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ECONNRESET' || err.code === 'EPIPE') return;
+      throw err;
+    });
     let buf = '';
     socket.on('data', (chunk) => {
       buf += chunk.toString('utf8');
