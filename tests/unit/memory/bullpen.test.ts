@@ -186,6 +186,35 @@ describe('BullpenService (in-memory)', () => {
     }
   });
 
+  it('does not give the oldest slot to a handoff already shown and left untouched (#1901)', async () => {
+    vi.useFakeTimers();
+    const queryAt = new Date('2026-09-24T12:00:00Z');
+    try {
+      const opened = new Map<number, { id: string; shownThrough: Date }>();
+      for (let ageDays = 6; ageDays >= 1; ageDays--) {
+        vi.setSystemTime(new Date(queryAt.getTime() - ageDays * 24 * 60 * 60 * 1000));
+        const { thread } = await service.openThread(
+          `age-${ageDays}`,
+          'coordinator',
+          ['coordinator', 'agent-b'],
+          `message ${ageDays}`,
+          ['agent-b'],
+        );
+        opened.set(ageDays, { id: thread.id, shownThrough: thread.lastMessageAt! });
+      }
+      const oldest = opened.get(6)!;
+      await service.recordUnhandledInjection('agent-b', [{ threadId: oldest.id, shownThrough: oldest.shownThrough }]);
+      vi.setSystemTime(queryAt);
+      const topics = (await service.getPendingThreadsForAgent('agent-b', BULLPEN_PENDING_WINDOW_MINUTES)).map(t => t.topic);
+      // age-6 was already shown, so the age slot moves to age-5. The four newest stay.
+      expect(topics).toEqual(expect.arrayContaining(['age-5', 'age-1', 'age-2', 'age-3', 'age-4']));
+      expect(topics).not.toContain('age-6');
+      expect(topics).toHaveLength(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('getPendingThreadsForAgent excludes threads where agent posted last', async () => {
     const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', []);
     await service.postMessage(thread.id, 'agent-b', 'Replied', []);
@@ -282,6 +311,30 @@ describe('BullpenService (in-memory)', () => {
 
   it('markThreadsSeen ignores unknown thread ids without throwing', async () => {
     await expect(service.markThreadsSeen('agent-b', ['00000000-0000-0000-0000-000000000000'])).resolves.toBeUndefined();
+  });
+
+  it('markThreadsSeen stops at the message the agent was shown (#1901)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-21T10:00:00Z'));
+    try {
+      const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', ['agent-b']);
+      const shown = thread.lastMessageAt!;
+      vi.setSystemTime(new Date('2026-06-21T10:05:00Z'));
+      await service.postMessage(thread.id, 'coordinator', 'please handle this too', ['agent-b']);
+      await service.markThreadsSeen('agent-b', [thread.id], new Map([[thread.id, shown]]));
+      const pending = await service.getPendingThreadsForAgent('agent-b', 60);
+      expect(pending.map(t => t.threadId)).toContain(thread.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('recordUnhandledInjection leaves the thread pending and marks it already shown (#1901)', async () => {
+    const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', ['agent-b']);
+    await service.recordUnhandledInjection('agent-b', [{ threadId: thread.id, shownThrough: thread.lastMessageAt! }]);
+    const pending = await service.getPendingThreadsForAgent('agent-b', 60);
+    expect(pending.map(t => t.threadId)).toContain(thread.id);
+    expect(pending[0]?.alreadyInjected).toBe(true);
   });
 
   it('a watermarked multi-turn thread re-surfaces with the original request still in the recent window', async () => {
@@ -383,70 +436,122 @@ describe('formatBullpenContext', () => {
 });
 
 describe('selectThreadsToWatermark (#1901)', () => {
+  const shownAt = new Date('2026-09-25T12:00:00Z');
   const mention = 'zzzz handled-beta-1901-token zzzz relay this mention out of band zzzz';
   const other = 'qqqq ignored-alpha-1901-token qqqq keep this mention pending qqqq';
 
   const handled = {
     threadId: 'handled',
     mentionsAgent: true,
-    messageContents: [mention],
+    handoffText: mention,
+    shownThrough: shownAt,
+    alreadyInjected: false,
   };
   const ignored = {
     threadId: 'ignored',
     mentionsAgent: true,
-    messageContents: [other],
+    handoffText: other,
+    shownThrough: shownAt,
+    alreadyInjected: false,
   };
   const fyi = {
     threadId: 'fyi',
     mentionsAgent: false,
-    messageContents: ['Status only, nobody was mentioned in this note at all.'],
+    shownThrough: shownAt,
+    alreadyInjected: false,
   };
 
+  function watermarkIds(decision: ReturnType<typeof selectThreadsToWatermark>): string[] {
+    return decision.watermark.map(stamp => stamp.threadId);
+  }
+  function deferIds(decision: ReturnType<typeof selectThreadsToWatermark>): string[] {
+    return decision.defer.map(stamp => stamp.threadId);
+  }
+
   it('keeps an untouched ambient @mention and stamps a non-mention plus the woke thread', () => {
-    expect(selectThreadsToWatermark({
+    const decision = selectThreadsToWatermark({
       wokeThreadId: 'woke',
+      wokeShownThrough: shownAt,
       ambient: [handled, ignored, fyi],
       toolTouches: [],
-    })).toEqual(['woke', 'fyi']);
+    });
+    expect(watermarkIds(decision)).toEqual(['woke', 'fyi']);
+    expect(deferIds(decision)).toEqual(['handled', 'ignored']);
+    expect(decision.watermark[0]?.shownThrough).toEqual(shownAt);
   });
 
   it('stamps only the ambient @mention whose text an out-of-band call carried', () => {
-    expect(selectThreadsToWatermark({
+    const decision = selectThreadsToWatermark({
       ambient: [handled, ignored],
       toolTouches: [{ name: 'signal-send', input: { message: mention }, success: true }],
-    })).toEqual(['handled']);
+    });
+    expect(watermarkIds(decision)).toEqual(['handled']);
+    expect(deferIds(decision)).toEqual(['ignored']);
+  });
+
+  it('does not let a shared template prefix stamp the other handoff', () => {
+    const prefix = 'message to send: your meeting with ';
+    const lisa = `${prefix}Lisa at three about the board pack and the decision log`;
+    const bob = `${prefix}Bob at four about the budget review and the hiring plan`;
+    const lisaThread = { ...handled, threadId: 'lisa', handoffText: lisa };
+    const bobThread = { ...ignored, threadId: 'bob', handoffText: bob };
+    const decision = selectThreadsToWatermark({
+      ambient: [lisaThread, bobThread],
+      toolTouches: [{ name: 'signal-send', input: { message: lisa }, success: true }],
+    });
+    expect(watermarkIds(decision)).toEqual(['lisa']);
+    expect(deferIds(decision)).toEqual(['bob']);
   });
 
   it('stamps a bullpen reply or close and ignores a read of the same thread', () => {
-    expect(selectThreadsToWatermark({
+    expect(watermarkIds(selectThreadsToWatermark({
       ambient: [handled],
       toolTouches: [{ name: 'bullpen', input: { action: 'reply', thread_id: 'handled', content: 'done' }, success: true }],
-    })).toEqual(['handled']);
-    expect(selectThreadsToWatermark({
+    }))).toEqual(['handled']);
+    expect(watermarkIds(selectThreadsToWatermark({
       ambient: [handled],
       toolTouches: [{ name: 'bullpen', input: { action: 'close', thread_id: 'handled' }, success: true }],
-    })).toEqual(['handled']);
-    expect(selectThreadsToWatermark({
+    }))).toEqual(['handled']);
+    const read = selectThreadsToWatermark({
       ambient: [handled],
       toolTouches: [{ name: 'bullpen', input: { action: 'get_thread', thread_id: 'handled' }, success: true }],
-    })).toEqual([]);
-    expect(selectThreadsToWatermark({
+    });
+    expect(watermarkIds(read)).toEqual([]);
+    expect(deferIds(read)).toEqual(['handled']);
+    const otherThread = selectThreadsToWatermark({
       ambient: [handled],
       toolTouches: [{ name: 'bullpen', input: { action: 'reply', thread_id: 'someone-else' }, success: true }],
-    })).toEqual([]);
+    });
+    expect(watermarkIds(otherThread)).toEqual([]);
+    expect(deferIds(otherThread)).toEqual(['handled']);
   });
 
   it('does not treat a failed or soft-failed call as handling', () => {
     const touch = toBullpenToolTouch('signal-send', { message: mention }, { success: false });
     expect(touch.success).toBe(false);
-    expect(selectThreadsToWatermark({ ambient: [handled], toolTouches: [touch] })).toEqual([]);
+    const failed = selectThreadsToWatermark({ ambient: [handled], toolTouches: [touch] });
+    expect(watermarkIds(failed)).toEqual([]);
+    expect(deferIds(failed)).toEqual(['handled']);
 
     const soft = toBullpenToolTouch('delegate', { task: mention }, { success: true, data: { failed: true } });
     expect(soft.success).toBe(false);
-    expect(selectThreadsToWatermark({ ambient: [handled], toolTouches: [soft] })).toEqual([]);
+    const softFailed = selectThreadsToWatermark({ ambient: [handled], toolTouches: [soft] });
+    expect(watermarkIds(softFailed)).toEqual([]);
+    expect(deferIds(softFailed)).toEqual(['handled']);
   });
 
-  it('reads the mention off the latest message only', () => {
+  it('stamps an untouched @mention the second time the same messages are shown', () => {
+    const decision = selectThreadsToWatermark({
+      ambient: [{ ...ignored, alreadyInjected: true }],
+      toolTouches: [],
+    });
+    expect(watermarkIds(decision)).toEqual(['ignored']);
+    expect(deferIds(decision)).toEqual([]);
+  });
+
+  it('keeps a handoff open when a later message drops the @mention', () => {
+    const earlier = new Date('2026-09-25T11:00:00Z');
+    const later = new Date('2026-09-25T12:00:00Z');
     const snapshot = pendingThreadWatermarkSnapshot('coordinator', {
       threadId: 't1',
       topic: 'topic',
@@ -456,17 +561,78 @@ describe('selectThreadsToWatermark (#1901)', () => {
           senderAgentId: 'meeting-debrief',
           content: mention,
           mentionedAgentIds: ['coordinator'],
-          createdAt: new Date(),
+          createdAt: earlier,
         },
         {
           senderAgentId: 'meeting-debrief',
-          content: 'following up with no mention',
+          content: 'adding the attendee list',
           mentionedAgentIds: [],
-          createdAt: new Date(),
+          createdAt: later,
+        },
+      ],
+    });
+    expect(snapshot.mentionsAgent).toBe(true);
+    expect(snapshot.handoffText).toBe(mention);
+    expect(snapshot.shownThrough).toEqual(later);
+  });
+
+  it('does not treat the agent echoing its own earlier note as handling the mention', () => {
+    const ownNote = 'weekly status paragraph the coordinator already posted in this thread last week';
+    const snapshot = pendingThreadWatermarkSnapshot('coordinator', {
+      threadId: 't1',
+      topic: 'topic',
+      totalMessages: 2,
+      recentMessages: [
+        {
+          senderAgentId: 'coordinator',
+          content: ownNote,
+          mentionedAgentIds: [],
+          createdAt: new Date('2026-09-25T10:00:00Z'),
+        },
+        {
+          senderAgentId: 'meeting-debrief',
+          content: mention,
+          mentionedAgentIds: ['coordinator'],
+          createdAt: shownAt,
+        },
+      ],
+    });
+    expect(snapshot.handoffText).toBe(mention);
+    const decision = selectThreadsToWatermark({
+      ambient: [snapshot],
+      toolTouches: [{ name: 'signal-send', input: { message: ownNote }, success: true }],
+    });
+    expect(watermarkIds(decision)).toEqual([]);
+    expect(deferIds(decision)).toEqual(['t1']);
+  });
+
+  it('treats messages after the agent last posted as the open span', () => {
+    const snapshot = pendingThreadWatermarkSnapshot('coordinator', {
+      threadId: 't1',
+      topic: 'topic',
+      totalMessages: 3,
+      recentMessages: [
+        {
+          senderAgentId: 'meeting-debrief',
+          content: mention,
+          mentionedAgentIds: ['coordinator'],
+          createdAt: new Date('2026-09-25T10:00:00Z'),
+        },
+        {
+          senderAgentId: 'coordinator',
+          content: 'relayed',
+          mentionedAgentIds: [],
+          createdAt: new Date('2026-09-25T11:00:00Z'),
+        },
+        {
+          senderAgentId: 'meeting-debrief',
+          content: 'adding the attendee list',
+          mentionedAgentIds: [],
+          createdAt: shownAt,
         },
       ],
     });
     expect(snapshot.mentionsAgent).toBe(false);
-    expect(snapshot.messageContents).toEqual([mention, 'following up with no mention']);
+    expect(snapshot.handoffText).toBeUndefined();
   });
 });

@@ -280,19 +280,9 @@ describeIf('BullpenService integration (Postgres)', () => {
       await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES)
     ).map(p => p.threadId);
 
-    await runBullpenWake({
-      agentId,
-      service,
-      provider: textProvider('busy with the user'),
-      content: 'what is on today',
-      conversationId: `conv-${runId}-1`,
-      channelId: 'signal',
-    });
-    let ids = await pendingIds();
-    expect(ids).toContain(ignored.id);
-    expect(ids).toContain(handled.id);
-    expect(ids).toContain(origin.id);
-
+    // One wake does both jobs: the handled thread is quoted out of band, and the
+    // other two mentions are left untouched. A second wake of those same messages
+    // would be the bounded retry and would watermark them (#1901).
     await runBullpenWake({
       agentId,
       service,
@@ -301,14 +291,16 @@ describeIf('BullpenService integration (Postgres)', () => {
         invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }),
       } as unknown as ExecutionLayer,
       content: 'anything waiting?',
-      conversationId: `conv-${runId}-2`,
+      conversationId: `conv-${runId}-1`,
       channelId: 'signal',
     });
-    ids = await pendingIds();
+    let ids = await pendingIds();
     expect(ids).toContain(ignored.id);
     expect(ids).not.toContain(handled.id);
     expect(ids).toContain(origin.id);
     expect((await service.getThread(handled.id))!.thread.status).toBe('open');
+    expect((await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES))
+      .find(p => p.threadId === ignored.id)?.alreadyInjected).toBe(true);
 
     await service.postMessage(
       handled.id,
@@ -330,8 +322,96 @@ describeIf('BullpenService integration (Postgres)', () => {
     });
     ids = await pendingIds();
     expect(ids).not.toContain(origin.id);
-    expect(ids).toContain(ignored.id);
+    // This wake is the second look at the ignored mention, so the bounded retry
+    // marks it seen. The handled thread's newer message is a new state and stays.
+    expect(ids).not.toContain(ignored.id);
     expect(ids).toContain(handled.id);
+  });
+
+  it('watermarks an ignored @mention the second time the same messages are shown (#1901)', async () => {
+    const agentId = `agent-${runId}-retry`;
+    const creator = `creator-${runId}-retry`;
+    const { thread } = await service.openThread(
+      `${runId} — retry mention`,
+      creator,
+      [creator, agentId],
+      'qqqq retry-once-1901-token qqqq please relay this mention qqqq',
+      [agentId],
+    );
+
+    await runBullpenWake({
+      agentId,
+      service,
+      provider: textProvider('busy'),
+      content: 'unrelated',
+      conversationId: `conv-${runId}-retry-1`,
+      channelId: 'signal',
+    });
+    const afterFirst = await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES);
+    expect(afterFirst.map(p => p.threadId)).toContain(thread.id);
+    expect(afterFirst.find(p => p.threadId === thread.id)?.alreadyInjected).toBe(true);
+
+    await runBullpenWake({
+      agentId,
+      service,
+      provider: textProvider('still busy'),
+      content: 'still unrelated',
+      conversationId: `conv-${runId}-retry-2`,
+      channelId: 'signal',
+    });
+    const afterSecond = await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES);
+    expect(afterSecond.map(p => p.threadId)).not.toContain(thread.id);
+  });
+
+  it('markThreadsSeen stops at the message the agent was shown (#1901)', async () => {
+    const agentId = `agent-${runId}-shown`;
+    const creator = `creator-${runId}-shown`;
+    const { thread } = await service.openThread(
+      `${runId} — shown bound`,
+      creator,
+      [creator, agentId],
+      'status only',
+      [],
+    );
+    const shown = (await service.getThread(thread.id))!.messages[0]!.createdAt;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(shown.getTime() + 5_000));
+    try {
+      await service.postMessage(thread.id, creator, 'please handle this new mention', [agentId]);
+      await service.markThreadsSeen(agentId, [thread.id], new Map([[thread.id, shown]]));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await service.getPendingThreadsForAgent(agentId, 60)).map(p => p.threadId)).toContain(thread.id);
+  });
+
+  it('does not give the oldest slot to a handoff already shown and left untouched (#1901)', async () => {
+    const agentId = `agent-${runId}-age`;
+    const creator = `creator-${runId}-age`;
+    const idsByAge = new Map<number, string>();
+    for (let ageDays = 1; ageDays <= 6; ageDays++) {
+      const { thread } = await service.openThread(
+        `${runId} — shown-age ${ageDays}d`,
+        creator,
+        [creator, agentId],
+        `message ${ageDays}`,
+        [agentId],
+      );
+      await backdateThread(thread.id, `${ageDays} days`);
+      idsByAge.set(ageDays, thread.id);
+    }
+    const oldestId = idsByAge.get(6)!;
+    const shown = (await service.getThread(oldestId))!.thread.lastMessageAt!;
+    await service.recordUnhandledInjection(agentId, [{ threadId: oldestId, shownThrough: shown }]);
+
+    const ids = (await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES)).map(p => p.threadId);
+    expect(ids).toContain(idsByAge.get(5));
+    expect(ids).toContain(idsByAge.get(1));
+    expect(ids).toContain(idsByAge.get(2));
+    expect(ids).toContain(idsByAge.get(3));
+    expect(ids).toContain(idsByAge.get(4));
+    expect(ids).not.toContain(oldestId);
+    expect(ids).toHaveLength(5);
   });
 });
 

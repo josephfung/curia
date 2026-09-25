@@ -5191,6 +5191,132 @@ describe('AgentRuntime bullpen read-watermark (#1065, #1901)', () => {
 
     const afterPending = await bullpenService.getPendingThreadsForAgent('coordinator', 60);
     expect(afterPending.map(t => t.threadId)).toContain(threadId);
+    expect(afterPending[0]?.alreadyInjected).toBe(true);
+  });
+
+  it('watermarks an ignored ambient @mention the second time the same messages are shown (#1901)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+    const provider = createMockProvider('handled the unrelated thing');
+    const agent = makeCoordinator(bus, logger, bullpenService, provider);
+    agent.register();
+
+    const task = {
+      agentId: 'coordinator',
+      conversationId: 'conv-unrelated',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'do something unrelated',
+      parentEventId: 'inbound-1',
+    };
+    await bus.publish('dispatch', createAgentTask(task));
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).toContain(threadId);
+
+    await bus.publish('dispatch', createAgentTask({ ...task, parentEventId: 'inbound-2', conversationId: 'conv-unrelated-2' }));
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).not.toContain(threadId);
+  });
+
+  it('keeps the handoff pending when a later message drops the @mention (#1901)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
+    await bullpenService.postMessage(threadId, 'meeting-debrief', 'adding the attendee list', []);
+
+    const provider = createMockProvider('noted');
+    const agent = makeCoordinator(bus, logger, bullpenService, provider);
+    agent.register();
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-follow-up',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'unrelated',
+      parentEventId: 'inbound-1',
+    }));
+
+    const pending = await bullpenService.getPendingThreadsForAgent('coordinator', 60);
+    expect(pending.map(t => t.threadId)).toContain(threadId);
+    expect(pending[0]?.alreadyInjected).toBe(true);
+  });
+
+  it('does not watermark a mention that arrives after the snapshot (#1901)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-25T12:00:00.000Z'));
+    try {
+      const logger = createLogger('error');
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.response', 'dispatch', () => {});
+      const { bullpenService, threadId } = await makeBullpenWithOpenRequest('meeting-debrief', { mentions: [] });
+
+      const provider: LLMProvider = {
+        id: 'mock',
+        chat: vi.fn(async () => {
+          vi.setSystemTime(new Date('2026-09-25T12:00:05.000Z'));
+          await bullpenService.postMessage(
+            threadId,
+            'meeting-debrief',
+            'zzzz please handle this mention that landed mid-turn zzzz',
+            ['coordinator'],
+          );
+          return {
+            type: 'text' as const,
+            content: 'noted the status',
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }),
+      };
+      const agent = makeCoordinator(bus, logger, bullpenService, provider);
+      agent.register();
+      await bus.publish('dispatch', createAgentTask({
+        agentId: 'coordinator',
+        conversationId: 'conv-late',
+        channelId: 'signal',
+        senderId: 'user',
+        content: 'unrelated',
+        parentEventId: 'inbound-1',
+      }));
+
+      expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).toContain(threadId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not watermark the other handoff when the send shares only a template prefix (#1901)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const prefix = 'message to send: your meeting with ';
+    const lisa = `${prefix}Lisa at three about the board pack and the decision log`;
+    const bob = `${prefix}Bob at four about the budget review and the hiring plan`;
+    const bullpenService = BullpenService.createInMemory();
+    const { thread: lisaThread } = await bullpenService.openThread(
+      'Lisa', 'meeting-debrief', ['coordinator'], lisa, ['coordinator'],
+    );
+    const { thread: bobThread } = await bullpenService.openThread(
+      'Bob', 'meeting-debrief', ['coordinator'], bob, ['coordinator'],
+    );
+    const provider = createToolUseProvider('signal-send', { to: '+1555', message: lisa });
+    const agent = makeCoordinator(bus, logger, bullpenService, provider, {
+      invoke: vi.fn().mockResolvedValue({ success: true, data: 'sent' }),
+    } as unknown as ExecutionLayer);
+    agent.register();
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-prefix',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'anything waiting?',
+      parentEventId: 'inbound-1',
+    }));
+
+    const pending = (await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId);
+    expect(pending).not.toContain(lisaThread.id);
+    expect(pending).toContain(bobThread.id);
   });
 
   it('does not watermark an ambient @mention when the tool call is for the waking task (#1901)', async () => {
