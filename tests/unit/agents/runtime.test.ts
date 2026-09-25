@@ -5190,6 +5190,70 @@ describe('AgentRuntime bullpen read-watermark (#1065)', () => {
     expect(afterPending.map(t => t.threadId)).not.toContain(threadId);
   });
 
+  it('omits a bullpen block that exceeds the context budget and leaves the thread unmarked (#1899)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const budgetEvents: ContextBudgetEvent[] = [];
+    bus.subscribe('context.budget', 'system', (event) => {
+      budgetEvents.push(event as ContextBudgetEvent);
+    });
+
+    const bullpenService = BullpenService.createInMemory();
+    const { thread } = await bullpenService.openThread(
+      'Huge brief',
+      'meeting-debrief',
+      ['coordinator'],
+      'x'.repeat(20_000),
+      ['coordinator'],
+    );
+
+    const captured: string[] = [];
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async ({ messages }: { messages: Array<{ content: unknown }> }) => {
+        captured.push(messages.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n'));
+        return {
+          type: 'text' as const,
+          content: 'ok',
+          usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are the coordinator.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      bullpenService,
+      modelRegistry: {
+        getContextWindow: () => 12_000,
+        isKnownModel: () => true,
+      } as unknown as import('../../../src/agents/llm/model-registry.js').ModelRegistry,
+      contextBudget: { responseReserve: 8_192 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-budget-bullpen',
+      channelId: 'signal',
+      senderId: 'user',
+      content: 'what is on today',
+      parentEventId: 'inbound-budget',
+    }));
+
+    expect(captured.some(text => text.includes('[Bullpen'))).toBe(false);
+    const bullpenTier = budgetEvents[0]?.payload.tiers.find(t => t.name === 'bullpen');
+    expect(bullpenTier?.included).toBe(false);
+    expect(bullpenTier?.droppedReason).toBe('budget_exceeded');
+    expect((await bullpenService.getPendingThreadsForAgent('coordinator', 60)).map(t => t.threadId)).toContain(thread.id);
+  });
+
   it('re-surfaces the thread when genuinely new activity arrives after it was handled', async () => {
     // The watermark only suppresses already-seen state. A new message must bring the
     // thread back so the agent can act on the new content.

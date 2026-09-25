@@ -147,6 +147,32 @@ describeIf('BullpenService integration (Postgres)', () => {
     expect(ids).not.toContain(selfLast.id);
   });
 
+  it('reserves one of the five slots for the oldest eligible thread (#1899)', async () => {
+    const agentId = `agent-${runId}-cap`;
+    const creator = `creator-${runId}-cap`;
+    const idsByAge = new Map<number, string>();
+    for (let ageDays = 1; ageDays <= 6; ageDays++) {
+      const { thread } = await service.openThread(
+        `${runId} — age ${ageDays}d`,
+        creator,
+        [creator, agentId],
+        `message ${ageDays}`,
+        [agentId],
+      );
+      await backdateThread(thread.id, `${ageDays} days`);
+      idsByAge.set(ageDays, thread.id);
+    }
+
+    const ids = (await service.getPendingThreadsForAgent(agentId, BULLPEN_PENDING_WINDOW_MINUTES)).map(p => p.threadId);
+    expect(ids).toContain(idsByAge.get(6));
+    expect(ids).toContain(idsByAge.get(1));
+    expect(ids).toContain(idsByAge.get(2));
+    expect(ids).toContain(idsByAge.get(3));
+    expect(ids).toContain(idsByAge.get(4));
+    expect(ids).not.toContain(idsByAge.get(5));
+    expect(ids).toHaveLength(5);
+  });
+
   it('closeThread prevents further posts', async () => {
     const { thread } = await service.openThread(`${runId} — Close test`, 'coordinator', ['coordinator'], 'Hi', []);
     await service.closeThread(thread.id, 'coordinator');

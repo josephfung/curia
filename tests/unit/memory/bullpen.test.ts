@@ -154,6 +154,31 @@ describe('BullpenService (in-memory)', () => {
     expect(pending[0]?.topic).toBe('Pending test');
   });
 
+  it('keeps the oldest eligible thread when more than five are pending (#1899)', async () => {
+    vi.useFakeTimers();
+    const queryAt = new Date('2026-09-24T12:00:00Z');
+    try {
+      for (let ageDays = 6; ageDays >= 1; ageDays--) {
+        vi.setSystemTime(new Date(queryAt.getTime() - ageDays * 24 * 60 * 60 * 1000));
+        await service.openThread(
+          `age-${ageDays}`,
+          'coordinator',
+          ['coordinator', 'agent-b'],
+          `message ${ageDays}`,
+          [],
+        );
+      }
+      vi.setSystemTime(queryAt);
+      const topics = (await service.getPendingThreadsForAgent('agent-b', BULLPEN_PENDING_WINDOW_MINUTES)).map(t => t.topic);
+      // 6 days is the oldest; 1–4 days are the four newest. 5 days is the one crowded out.
+      expect(topics).toEqual(expect.arrayContaining(['age-6', 'age-1', 'age-2', 'age-3', 'age-4']));
+      expect(topics).not.toContain('age-5');
+      expect(topics).toHaveLength(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('getPendingThreadsForAgent excludes threads where agent posted last', async () => {
     const { thread } = await service.openThread('Test', 'coordinator', ['coordinator', 'agent-b'], 'Hi', []);
     await service.postMessage(thread.id, 'agent-b', 'Replied', []);
@@ -313,8 +338,17 @@ describe('formatBullpenContext', () => {
     expect(out).toContain('close_after');
   });
 
-  it('stamps each message with a UTC date (#1899)', () => {
-    expect(formatBullpenContext([makePending()])).toContain('1970-01-01 00:00Z');
+  it('stamps each message in the principal timezone (#1899)', () => {
+    const pending = makePending();
+    pending.recentMessages[0]!.createdAt = new Date('2026-09-24T23:40:00Z');
+    const out = formatBullpenContext([pending], 'America/Toronto');
+    expect(out).toContain('2026-09-24T19:40:00.000-04:00');
+  });
+
+  it('tells the model ambient threads are answered in-thread (#1899)', () => {
+    const out = formatBullpenContext([makePending()]);
+    expect(out).toContain('ambient internal threads');
+    expect(out).toContain('bullpen tools');
   });
 
   it('shows "first + last N" header and middle-omitted hint when thread is truncated (#1090)', () => {
