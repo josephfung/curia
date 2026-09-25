@@ -112,6 +112,7 @@ import {
   redactAgentIdInTranscript,
   requestAnchor,
   selectDelegationFailureReply,
+  transcriptForNarration,
 } from './delegation-failure-reply.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
 import {
@@ -2718,7 +2719,9 @@ export class AgentRuntime {
     if (budget.turnsUsed + 1 < budget.maxTurns) {
       budget.turnsUsed++;
       try {
-        const transcript = redactAgentIdInTranscript(workingMessages, esc.agent, displayName);
+        const transcript = transcriptForNarration(
+          redactAgentIdInTranscript(workingMessages, esc.agent, displayName),
+        );
         const messages: Message[] = [
           ...transcript,
           {
@@ -2734,11 +2737,22 @@ export class AgentRuntime {
           },
         ];
         const modelForCall = this.config.resolvedModel ?? this.config.modelName;
+        // No tools. The transcript has had its tool blocks removed, so this
+        // stays a plain completion. Passing the turn's tool list would make
+        // the model eligible to delegate again instead of writing the reply.
         const response = await provider.chat({
           messages,
           ...(modelForCall !== undefined ? { model: modelForCall } : {}),
         });
-        if (response.type === 'text') modelText = response.content;
+        if (response.type === 'text') {
+          modelText = response.content;
+        } else if (response.type === 'error') {
+          // chat() reports API failures as type:'error' and does not throw.
+          logger.warn(
+            { err: response.error, agentId, targetAgent: esc.agent, reason: esc.reason },
+            'Delegation-failure narration call failed — using display-name fallback',
+          );
+        }
       } catch (err) {
         logger.warn(
           { err, agentId, targetAgent: esc.agent, reason: esc.reason },

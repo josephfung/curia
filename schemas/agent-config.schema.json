@@ -11,7 +11,7 @@
     "display_name": {
       "type": "string",
       "minLength": 1,
-      "description": "Principal-facing name. Registry ids stay internal (#1860)."
+      "description": "Principal-facing label for replies (#1860). Not persona.display_name, which is prompt text only."
     },
     "role": { "type": "string" },
     "persona": {
