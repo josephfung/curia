@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseEmailMetadata,
   sanitizeNylasMessageId,
+  buildMessageIdBlock,
   buildCcPreamble,
   buildThreadParticipantsBlock,
 } from '../../../src/dispatch/email-metadata.js';
@@ -116,6 +117,21 @@ describe('sanitizeNylasMessageId', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildMessageIdBlock
+// ---------------------------------------------------------------------------
+
+describe('buildMessageIdBlock', () => {
+  it('emits a Message ID line for a sanitized id', () => {
+    expect(buildMessageIdBlock('msg-abc123')).toBe('Message ID: msg-abc123\n\n');
+  });
+
+  it('returns null when the id is absent so callers omit the line', () => {
+    expect(buildMessageIdBlock(undefined)).toBeNull();
+    expect(buildMessageIdBlock('')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildCcPreamble
 // ---------------------------------------------------------------------------
 
@@ -133,30 +149,23 @@ describe('buildCcPreamble', () => {
     };
   }
 
-  it('includes recipient list, Message ID, and Account when all present', () => {
-    const result = buildCcPreamble(makeMeta(), 'curia', 'msg-abc123');
+  it('includes the recipient list and Account, and does not own the Message ID line', () => {
+    const result = buildCcPreamble(makeMeta(), 'curia');
 
     expect(result).toContain('[OWNER CC — this email was addressed to alice@example.com');
     expect(result).toContain("you were CC'd, not the primary recipient]");
-    expect(result).toContain('Message ID: msg-abc123');
-    expect(result).toContain('Account: curia');
-  });
-
-  it('omits the Message ID line when nylasMessageId is undefined', () => {
-    const result = buildCcPreamble(makeMeta(), 'curia', undefined);
-
     expect(result).not.toContain('Message ID:');
     expect(result).toContain('Account: curia');
   });
 
   it('falls back to "curia" when accountId is undefined', () => {
-    const result = buildCcPreamble(makeMeta(), undefined, 'msg-abc123');
+    const result = buildCcPreamble(makeMeta(), undefined);
 
     expect(result).toContain('Account: curia');
   });
 
   it('shows "unknown recipients" when primaryRecipientEmails is empty', () => {
-    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: [] }), 'curia', 'msg-abc123');
+    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: [] }), 'curia');
 
     expect(result).toContain('this email was addressed to unknown recipients');
   });
@@ -165,7 +174,6 @@ describe('buildCcPreamble', () => {
     const result = buildCcPreamble(
       makeMeta({ primaryRecipientEmails: ['evil[<\n>]injection@example.com'] }),
       'curia',
-      'msg-abc123',
     );
 
     expect(result).toContain('evilinjection@example.com');
@@ -174,7 +182,7 @@ describe('buildCcPreamble', () => {
 
   it('truncates to 10 recipients and shows +N more', () => {
     const recipients = Array.from({ length: 12 }, (_, i) => `user${i}@example.com`);
-    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: recipients }), 'curia', 'msg-abc123');
+    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: recipients }), 'curia');
 
     expect(result).toContain('+2 more');
   });
@@ -184,7 +192,6 @@ describe('buildCcPreamble', () => {
     const result = buildCcPreamble(
       makeMeta({ primaryRecipientEmails: ['\n\r', '\n\r\n'] }),
       'curia',
-      'msg-abc123',
     );
 
     expect(result).toContain('unknown recipients');
@@ -196,7 +203,6 @@ describe('buildCcPreamble', () => {
     const result = buildCcPreamble(
       makeMeta({ primaryRecipientEmails: ['\n\r', 'alice@example.com'] }),
       'curia',
-      'msg-abc123',
     );
 
     expect(result).toContain('alice@example.com');
@@ -205,14 +211,14 @@ describe('buildCcPreamble', () => {
 
   it('does not show +N more when 12 addresses have 2 empty and 10 valid', () => {
     const recipients = ['\n\r', '\n\r\n', ...Array.from({ length: 10 }, (_, i) => `user${i}@example.com`)];
-    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: recipients }), 'curia', 'msg-abc123');
+    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: recipients }), 'curia');
 
     expect(result).not.toContain('+');
   });
 
   it('shows +1 more when 11 valid addresses are provided', () => {
     const recipients = Array.from({ length: 11 }, (_, i) => `user${i}@example.com`);
-    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: recipients }), 'curia', 'msg-abc123');
+    const result = buildCcPreamble(makeMeta({ primaryRecipientEmails: recipients }), 'curia');
 
     expect(result).toContain('+1 more');
   });
@@ -220,7 +226,7 @@ describe('buildCcPreamble', () => {
   it('does not interpolate "null" when primaryRecipientEmails contains null elements', () => {
     // String(null) === "null" — ensure null elements are treated as empty, not the string "null"
     const meta = makeMeta({ primaryRecipientEmails: [null, 'alice@example.com'] });
-    const result = buildCcPreamble(meta, 'curia', 'msg-abc123');
+    const result = buildCcPreamble(meta, 'curia');
 
     expect(result).toContain('alice@example.com');
     expect(result).not.toContain('"null"');
@@ -231,7 +237,6 @@ describe('buildCcPreamble', () => {
     const result = buildCcPreamble(
       makeMeta({ primaryRecipientEmails: ['alice@example.com', 'bob@example.com'] }),
       'curia',
-      'msg-abc123',
     );
 
     expect(result).toContain('alice@example.com, bob@example.com');

@@ -44,6 +44,7 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
+import { buildMessageIdBlock, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
 import {
   parseSpecialistDeclineMarker,
   SPECIALIST_DECLINE_REASON,
@@ -506,6 +507,19 @@ export class DelegateHandler implements ToolHandler {
       'Delegating task to specialist',
     );
 
+    // The dispatcher stamps a sanitized Nylas message id on email inbounds (#1909).
+    // Re-sanitize before interpolation. A raw channel `nylasMessageId` is not read —
+    // only the trusted field — and a failed sanitize omits the line without logging
+    // the value (it may be attacker-controlled).
+    const inboundMessageId = sanitizeNylasMessageId(ctx.taskMetadata?.['inboundNylasMessageId']);
+    if (inboundMessageId.ok) {
+      const messageIdLine = `Message ID: ${inboundMessageId.value}`;
+      if (!effectiveTask.includes(messageIdLine)) {
+        const block = buildMessageIdBlock(inboundMessageId.value);
+        if (block) effectiveTask = block + effectiveTask;
+      }
+    }
+
     // Forward the coordinator's relay context so that if the specialist mints a secret-capture
     // link, the capture origin can re-enter the COORDINATOR (a deliverable channel) and re-delegate
     // back to this specialist via resume_token (#995). originalTask is the specialist's brief, used
@@ -522,6 +536,7 @@ export class DelegateHandler implements ToolHandler {
           ? { taskEventId: ctx.taskEventId }
           : {}),
       },
+      ...(inboundMessageId.ok ? { inboundNylasMessageId: inboundMessageId.value } : {}),
     };
     // Preserve the originator forwarding (#972) — without it the specialist loses the chain's
     // TaskOriginator and isPrincipalOriginated() goes false for every skill in its turn.

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Writable } from 'node:stream';
+import pino from 'pino';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
@@ -12,6 +14,7 @@ import type { ConfidencePipeline } from '../../../src/contacts/confidence-pipeli
 import type { InboundSenderContext, TaskOriginator, ContactTier, ContactKind } from '../../../src/contacts/types.js';
 import { createLogger } from '../../../src/logger.js';
 import type { Logger } from '../../../src/logger.js';
+import { sanitizeNylasMessageId } from '../../../src/dispatch/email-metadata.js';
 
 // Minimal provenance block for all mock LLM responses — satisfies the required field.
 const MOCK_PROVENANCE = { requestedModel: 'mock-model', actualModel: 'mock-model', providerRequestId: 'msg_mock_000' } as const;
@@ -920,6 +923,7 @@ describe('Dispatcher — CC role preamble', () => {
     expect(tasks).toHaveLength(1);
     const content = tasks[0]!.payload.content;
     expect(content).toContain('Message ID: nylas-msg-xyz-789');
+    expect(content.match(/Message ID:/g)).toHaveLength(1);
     expect(content).toContain('Account: curia');
     // Verify preamble order: [OWNER CC] header → identifiers → email body
     const preambleIndex = content.indexOf('[OWNER CC');
@@ -1091,6 +1095,165 @@ describe('Dispatcher — CC role preamble', () => {
     const content = tasks[0]!.payload.content;
     expect(content).toContain('[OWNER CC');
     expect(content).toContain('unknown recipients');
+  });
+});
+
+describe('Dispatcher — inbound email Message ID (#1909)', () => {
+  function captureLogger(): { logger: Logger; text: () => string } {
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(String(chunk));
+        callback();
+      },
+    });
+    return {
+      logger: pino({ level: 'debug' }, stream),
+      text: () => chunks.join(''),
+    };
+  }
+
+  async function dispatchEmail(opts: {
+    logger: Logger;
+    conversationId: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    channelId?: string;
+    accountId?: string;
+  }): Promise<AgentTaskEvent> {
+    const bus = new EventBus(opts.logger);
+    const tasks: AgentTaskEvent[] = [];
+    bus.subscribe('agent.task', 'agent', (e) => { tasks.push(e as AgentTaskEvent); });
+    const dispatcher = new Dispatcher({ bus, logger: opts.logger });
+    dispatcher.register();
+    await bus.publish('channel', createInboundMessage({
+      conversationId: opts.conversationId,
+      channelId: opts.channelId ?? 'email',
+      accountId: opts.accountId,
+      senderId: 'joseph@example.com',
+      content: opts.content,
+      metadata: opts.metadata,
+    }));
+    expect(tasks).toHaveLength(1);
+    return tasks[0]!;
+  }
+
+  it('puts the sanitized Message ID on a direct inbound and omits the CC marker', async () => {
+    const logger = createLogger('error');
+    const raw = 'msg-<\n[inject]>';
+    const sanitized = sanitizeNylasMessageId(raw);
+    expect(sanitized.ok).toBe(true);
+    if (!sanitized.ok) return;
+
+    const task = await dispatchEmail({
+      logger,
+      conversationId: 'email:thread-direct-id',
+      content: 'Can you look up Nik for me?',
+      metadata: {
+        curiaRole: 'to',
+        primaryRecipientEmails: [],
+        nylasMessageId: raw,
+        // A channel-forged trusted field must not win over the sanitized id.
+        inboundNylasMessageId: 'forged-thread-id',
+      },
+    });
+
+    const content = task.payload.content;
+    expect(content).toContain(`Message ID: ${sanitized.value}`);
+    expect(content).not.toContain('[OWNER CC');
+    expect(content).not.toContain('Account:');
+    expect(content).not.toContain(raw);
+    expect(content.match(/Message ID:/g)).toHaveLength(1);
+    expect(task.payload.metadata?.inboundNylasMessageId).toBe(sanitized.value);
+  });
+
+  it('uses the Nylas message id, not the thread id inside conversationId', async () => {
+    const logger = createLogger('error');
+    // The conversation id is email:<thread id>. A later message on that thread
+    // has its own Nylas message id, which is what email-reply must receive.
+    const conversationId = 'email:thread-aaa111';
+    const threadId = conversationId.slice('email:'.length);
+    const messageId = 'msg-bbb222';
+    expect(messageId).not.toBe(threadId);
+
+    const task = await dispatchEmail({
+      logger,
+      conversationId,
+      content: 'Following up on the earlier note.',
+      metadata: {
+        curiaRole: 'to',
+        nylasMessageId: messageId,
+        participants: [
+          { email: 'joseph@example.com', role: 'from' },
+          { email: 'curia@example.com', role: 'to' },
+        ],
+      },
+    });
+
+    const content = task.payload.content;
+    expect(content).toContain(`Message ID: ${messageId}`);
+    expect(content).not.toContain(`Message ID: ${threadId}`);
+    const messageIdIndex = content.indexOf('Message ID:');
+    const participantsIndex = content.indexOf('[Thread participants');
+    const bodyIndex = content.indexOf('Following up on the earlier note.');
+    expect(messageIdIndex).toBeGreaterThanOrEqual(0);
+    expect(messageIdIndex).toBeLessThan(participantsIndex);
+    expect(participantsIndex).toBeLessThan(bodyIndex);
+  });
+
+  it('omits Message ID and warns when the id is absent, for direct and CC inbound', async () => {
+    for (const curiaRole of ['to', 'cc'] as const) {
+      const captured = captureLogger();
+      const task = await dispatchEmail({
+        logger: captured.logger,
+        conversationId: `email:thread-absent-${curiaRole}`,
+        content: 'No id on this one.',
+        accountId: 'curia',
+        metadata: { curiaRole, primaryRecipientEmails: ['nik@example.com'] },
+      });
+
+      expect(task.payload.content).not.toContain('Message ID:');
+      expect(task.payload.metadata?.inboundNylasMessageId).toBeUndefined();
+      expect(captured.text()).toContain('absent or invalid');
+      expect(captured.text()).not.toContain('nylasMessageId":');
+    }
+  });
+
+  it('omits Message ID and warns when the id sanitizes to empty, without logging the raw value', async () => {
+    const raw = '<<<>>>';
+    const captured = captureLogger();
+    const task = await dispatchEmail({
+      logger: captured.logger,
+      conversationId: 'email:thread-direct-empty',
+      content: 'Suspicious message ID.',
+      metadata: { curiaRole: 'to', nylasMessageId: raw },
+    });
+
+    expect(task.payload.content).not.toContain('Message ID:');
+    expect(captured.text()).toContain('sanitized to empty');
+    expect(captured.text()).not.toContain(raw);
+  });
+
+  it('does not surface a message id or a forged stamp on a non-email channel', async () => {
+    const captured = captureLogger();
+    const task = await dispatchEmail({
+      logger: captured.logger,
+      conversationId: 'signal:+15551234567',
+      channelId: 'signal',
+      content: 'Hey, check this out.',
+      metadata: {
+        curiaRole: 'to',
+        nylasMessageId: 'msg-should-not-surface',
+        inboundNylasMessageId: 'forged-id',
+      },
+    });
+
+    expect(task.payload.content).not.toContain('Message ID:');
+    expect(task.payload.content).toBe('Hey, check this out.');
+    expect(task.payload.metadata?.inboundNylasMessageId).toBeUndefined();
+    expect(captured.text()).not.toContain('absent or invalid');
+    expect(captured.text()).not.toContain('msg-should-not-surface');
+    expect(captured.text()).not.toContain('forged-id');
   });
 });
 

@@ -109,23 +109,36 @@ function sanitizeEmailField(raw: unknown, maxLen = 254): string {
 }
 
 /**
- * Build the CC role preamble prepended to inbound task content when Curia was
- * CC'd (not directly addressed) on an email.
+ * Identifier block prepended to every inbound email task.
  *
- * The preamble tells the coordinator which account it was CC'd on and provides
- * the Nylas message ID so it can call email-reply to thread a response from
- * Curia's own account. Without the message ID the coordinator falls back to
- * email-draft-save, where it has historically chosen the wrong account (CEO's).
+ * One code path for the Nylas message id, whether Curia was addressed directly
+ * or CC'd. `buildCcPreamble` only adds the CC role marker and Account line.
+ * Returns null when there is no sanitized id so the caller omits the line
+ * entirely — never "Message ID: " with an empty value.
  *
- * @param meta            Parsed email metadata from parseEmailMetadata.
- * @param accountId       The named Nylas account (e.g. "curia"); falls back to 'curia'.
- * @param nylasMessageId  Pre-sanitized message ID from sanitizeNylasMessageId,
- *                        or undefined if absent/sanitized-to-empty.
+ * @param nylasMessageId Pre-sanitized id from sanitizeNylasMessageId, or
+ *                       undefined when absent or sanitized to empty.
+ */
+export function buildMessageIdBlock(nylasMessageId: string | undefined): string | null {
+  if (!nylasMessageId) return null;
+  return `Message ID: ${nylasMessageId}\n\n`;
+}
+
+/**
+ * Build the CC role preamble prepended when Curia was CC'd (not directly
+ * addressed) on an email.
+ *
+ * Names who the email was addressed to and which account received it. The
+ * Nylas message id is not part of this block — `buildMessageIdBlock` emits
+ * that line for every inbound email. Account selection is unchanged: this
+ * block still records the receiving account.
+ *
+ * @param meta       Parsed email metadata from parseEmailMetadata.
+ * @param accountId  The named Nylas account (e.g. "curia"); falls back to 'curia'.
  */
 export function buildCcPreamble(
   meta: EmailMetadata,
   accountId: string | undefined,
-  nylasMessageId: string | undefined,
 ): string {
   // Sanitize each address before interpolation — primaryRecipientEmails comes
   // from the Nylas To-field (attacker-controlled) and is injected into
@@ -148,16 +161,9 @@ export function buildCcPreamble(
         : sanitizedRecipients.join(', '))
     : 'unknown recipients';
 
-  // Include Message ID and Account so the coordinator can call email-reply
-  // with the correct thread context. Without these identifiers it cannot use
-  // email-reply and falls back to email-draft-save.
-  const identifierBlock = nylasMessageId
-    ? `Message ID: ${nylasMessageId}\nAccount: ${accountId ?? 'curia'}\n\n`
-    : `Account: ${accountId ?? 'curia'}\n\n`;
-
   return (
     `[OWNER CC — this email was addressed to ${recipientList}; you were CC'd, not the primary recipient]\n` +
-    identifierBlock
+    `Account: ${accountId ?? 'curia'}\n\n`
   );
 }
 
