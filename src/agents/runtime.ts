@@ -1424,9 +1424,10 @@ export class AgentRuntime {
     const turnDateResolveTracker = new TurnDateResolveTracker();
     let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
     // Floor for a brief that did not dispatch (#1893). The handler uses this
-    // same configured wait when no duration hint is injected. A specialist that
-    // did get a timeout keeps its own wait — one number for the turn would let
-    // a short specialist pull a longer one's retry forward.
+    // same number when no duration hint is injected, including the unset
+    // fallback (DEFAULT_DEFERRED_WAKE_MS, the handler's floor). A specialist
+    // that did get a timeout keeps its own wait — one number for the turn
+    // would let a short specialist pull a longer one's retry forward.
     const configuredWait = this.config.defaultDelegateTimeoutMs;
     const deferredWakeFloor = typeof configuredWait === 'number'
       && Number.isInteger(configuredWait)

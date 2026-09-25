@@ -11,6 +11,7 @@ import { createLogger } from '../../../src/logger.js';
 import type { TaskOriginator } from '../../../src/contacts/types.js';
 import type { ToolResult } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
+import { DEFAULT_DEFERRED_WAKE_MS } from '../../../src/agents/deferred-delegation.js';
 
 const PROVENANCE = {
   requestedModel: 'mock-model',
@@ -201,6 +202,18 @@ describe('runtime deferred delegation (#1893)', () => {
     });
 
     expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it('uses the handler floor when no delegate wait is configured (#1857)', async () => {
+    const before = Date.now();
+    const { createTask } = await runTurn({
+      toolCalls: [{ id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Book Tuesday' } }],
+      invoke: async () => inFlightData('calendar'),
+    });
+
+    const params = createTask.mock.calls[0]![0] as { wakeAt: Date };
+    expect(params.wakeAt.getTime()).toBeGreaterThanOrEqual(before + DEFAULT_DEFERRED_WAKE_MS);
+    expect(params.wakeAt.getTime()).toBeLessThan(before + DEFAULT_DEFERRED_WAKE_MS + 5_000);
   });
 
   it('does not wake earlier than the configured delegate wait', async () => {

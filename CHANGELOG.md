@@ -72,6 +72,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Inbound email Account** — named on every inbound email, and specialist briefs keep only that stamp. (#1909)
 - **Inbound email Account** — mailbox names over 200 characters stay intact for exact lookup. (#1909)
 - **Delegate wait** — 450s floor plus core-specialist hints; startup warns when `local.yaml` sets it lower. (#1857)
+- **Deferred delegation** — unset wait fallback matches the 450s handler floor. (#1857)
 - **Delegation-failure replies** — the model writes them about the failed request; fallbacks use display names. (#1860)
 - **Reply-lock** — Signal, SMS, and Slack sends count, and the extra narration stays on the bullpen. (#1860)
 - **Reply-lock** — a send locks only its task, including the contact's other verified channels. (#1860)
