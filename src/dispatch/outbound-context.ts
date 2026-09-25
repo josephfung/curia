@@ -438,7 +438,7 @@ export class OutboundContextService {
 
     return [
       '[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]',
-      'Each entry_id below is an outbound_context UUID for context-bridge-release only. Do not pass it as email-reply reply_to_message_id — that field needs a Nylas Message ID from the inbound email (e.g. the OWNER CC / Message ID preamble).',
+      'Each entry_id below is an outbound_context UUID for context-bridge-release only. Do not pass it as email-reply reply_to_message_id — that field needs a Nylas Message ID from the inbound email preamble (Message ID: …).',
       ...blocks,
       '',
       originalContent,

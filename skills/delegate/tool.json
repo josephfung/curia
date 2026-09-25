@@ -1,7 +1,7 @@
 {
   "name": "delegate",
   "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description. How long to wait for the specialist is set by the runtime — do not pass a timeout. If the result reason is already_in_flight, that specialist is still working in this conversation: tell the user the request is queued, and do not call delegate for them again.",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

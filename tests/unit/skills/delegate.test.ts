@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { Writable } from 'node:stream';
 import { DelegateHandler } from '../../../skills/delegate/handler.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
@@ -702,6 +703,150 @@ describe('DelegateHandler', () => {
 
     expect(result.success).toBe(true);
     expect(capturedMetadata?.originator).toEqual(originator);
+  });
+
+  it('prepends the trusted Nylas message id onto a specialist brief (#1909)', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    let capturedContent = '';
+    let capturedMetadata: Record<string, unknown> | undefined;
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        capturedContent = event.payload.content;
+        capturedMetadata = event.payload.metadata as Record<string, unknown> | undefined;
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: 'Done',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const result = await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Reply on this thread and file the receipt' },
+      {
+        bus,
+        agentRegistry,
+        // The raw channel id is the thread id. Only the trusted field may be copied.
+        taskMetadata: {
+          nylasMessageId: 'thread-aaa111',
+          inboundNylasMessageId: 'msg-bbb222',
+        },
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    expect(capturedContent.startsWith('Message ID: msg-bbb222\n\n')).toBe(true);
+    expect(capturedContent).toContain('Reply on this thread and file the receipt');
+    expect(capturedContent).not.toContain('Message ID: thread-aaa111');
+    expect(capturedContent.match(/Message ID:/g)).toHaveLength(1);
+    expect(capturedMetadata?.inboundNylasMessageId).toBe('msg-bbb222');
+    const origin = capturedMetadata?.delegationOrigin as { originalTask?: string } | undefined;
+    expect(origin?.originalTask).toContain('Message ID: msg-bbb222');
+  });
+
+  it('does not copy a raw channel nylasMessageId when the trusted field is absent (#1909)', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    let capturedContent = '';
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        capturedContent = event.payload.content;
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: 'Done',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Reply on this thread' },
+      { bus, agentRegistry, taskMetadata: { nylasMessageId: 'thread-aaa111' } },
+    ));
+
+    expect(capturedContent).toBe('Reply on this thread');
+    expect(capturedContent).not.toContain('Message ID:');
+  });
+
+  it('re-sanitizes the trusted message id and does not log the raw value (#1909)', async () => {
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(String(chunk));
+        callback();
+      },
+    });
+    const log = pino({ level: 'debug' }, stream);
+    const raw = 'msg-<\n[inject]>';
+
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(log);
+
+    let capturedContent = '';
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        capturedContent = event.payload.content;
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: 'Done',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    await handler.execute(makeCtx(
+      { agent: 'research-analyst', task: 'Reply on this thread' },
+      { bus, agentRegistry, log, taskMetadata: { inboundNylasMessageId: raw } },
+    ));
+
+    expect(capturedContent.startsWith('Message ID: msg-inject\n\n')).toBe(true);
+    expect(capturedContent).not.toContain(raw);
+    expect(chunks.join('')).not.toContain(raw);
+  });
+
+  it('does not duplicate a Message ID line the brief already carries (#1909)', async () => {
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+    agentRegistry.register('research-analyst', { role: 'specialist', description: 'Research' });
+    const bus = new EventBus(logger);
+
+    let capturedContent = '';
+    bus.subscribe('agent.task', 'agent', async (event) => {
+      if (event.type === 'agent.task' && event.payload.agentId === 'research-analyst') {
+        capturedContent = event.payload.content;
+        const { createAgentResponse } = await import('../../../src/bus/events.js');
+        await bus.publish('agent', createAgentResponse({
+          agentId: 'research-analyst',
+          conversationId: event.payload.conversationId,
+          content: 'Done',
+          parentEventId: event.id,
+        }));
+      }
+    });
+
+    const task = 'Message ID: msg-bbb222\n\nReply on this thread';
+    await handler.execute(makeCtx(
+      { agent: 'research-analyst', task },
+      { bus, agentRegistry, taskMetadata: { inboundNylasMessageId: 'msg-bbb222' } },
+    ));
+
+    expect(capturedContent.match(/Message ID:/g)).toHaveLength(1);
+    expect(capturedContent).toBe(task);
   });
 
   it('includes delegationOrigin but no originator when parent task has no originator (#995)', async () => {
