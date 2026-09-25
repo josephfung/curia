@@ -80,10 +80,13 @@ The lifecycle now:
 
 Waking is idempotent by construction, not by lock. `EventBus.publish()` awaits its subscribers, and
 one of those is the woken agent's entire turn — minutes of LLM rounds, easily longer than the 120s
-claim lease. While that turn is in flight the holder refreshes `claimed_at`, so a sweep does not
-re-claim a resolution that is still running (#1861). The wake's event id is *derived* from the
-delegate event id, so a retry after the holder crashed carries the same id and the audit logger's
-write-ahead insert rejects it on `audit_log`'s primary key before a single subscriber sees it. After
+claim lease. While that turn is in flight the holder refreshes `claimed_at` for up to 30
+minutes, so a sweep does not re-claim a resolution that is still running (#1861). Past that
+budget the refresh stops and the lease lapses, so a turn that never settles is recoverable
+again. The wake's event id is *derived* from the delegate event id, so a retry after the holder
+crashed — or a sweep that claims once the budget has lapsed — carries the same id and the audit
+logger's write-ahead insert rejects it on `audit_log`'s primary key before a single subscriber
+sees it. After
 the wake returns, only the actor that still holds the lease annotates the review task and publishes
 `delegation.late_resolved`. A re-claim that finds that event already in `audit_log` finalizes the
 row and does not emit a second one. A wake that failed to publish still releases the lease, so a

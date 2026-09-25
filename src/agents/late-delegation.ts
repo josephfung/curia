@@ -129,8 +129,9 @@ const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
  * actor's work is picked up on the next sweep tick rather than hours later.
  *
  * A woken turn runs inside that publish and routinely outlives this window (#1861). The holder
- * refreshes the lease on CLAIM_LEASE_RENEW_INTERVAL_MS while the turn is in flight, so the
- * window stays the crash bound rather than the turn bound.
+ * refreshes the lease on CLAIM_LEASE_RENEW_INTERVAL_MS while the turn is in flight, up to
+ * CLAIM_LEASE_RENEW_BUDGET_MS. Past that budget the lease lapses, so a turn that never settles
+ * is recoverable by the sweep instead of held until process restart.
  */
 export const CLAIM_LEASE_SECONDS = 120;
 
@@ -139,6 +140,17 @@ export const CLAIM_LEASE_SECONDS = 120;
  * so one delayed tick cannot expire it.
  */
 export const CLAIM_LEASE_RENEW_INTERVAL_MS = Math.floor((CLAIM_LEASE_SECONDS * 1000) / 3);
+
+/**
+ * How long a holder may keep refreshing a lease while `publish()` awaits the woken turn.
+ *
+ * The incident behind #1861 was an ~8 minute turn. 30 minutes covers that follow-up — the
+ * default turn budget is 20 rounds, with no wall-clock cap — and still returns a hung
+ * LLM or MCP call to the sweep once this budget plus one lease has elapsed. Stopping the
+ * refresh does not start a second wake: the derived event id fences it, and the holder
+ * that lost the lease leaves bookkeeping to whoever claims next.
+ */
+export const CLAIM_LEASE_RENEW_BUDGET_MS = 30 * 60_000;
 
 /** Namespace for the derived wake event id — changing it would un-fence every existing handle. */
 const WAKE_EVENT_ID_NAMESPACE = 'curia:late-delegation-wake';
@@ -636,10 +648,11 @@ export interface ResolveLateDelegationResult {
 }
 
 /**
- * Refresh the lease until `stop` is called. A tick that loses the token stops itself; a tick
- * that fails to reach the database is logged and retried, because aborting the in-flight wake
- * over a refresh blip would drop a result that is already being delivered. If every tick fails,
- * the lease expires and the sweep recovers it — the same path as a crash.
+ * Refresh the lease until `stop` is called, or until CLAIM_LEASE_RENEW_BUDGET_MS has elapsed.
+ * A tick that loses the token stops itself; a tick that fails to reach the database is logged
+ * and retried, because aborting the in-flight wake over a refresh blip would drop a result
+ * that is already being delivered. If every tick fails, or the budget runs out while the
+ * turn is still inside `publish()`, the lease expires and the sweep recovers it.
  */
 function startClaimLeaseRenewal(opts: {
   pool: Pool;
@@ -648,8 +661,18 @@ function startClaimLeaseRenewal(opts: {
   logger: Logger;
 }): () => void {
   let stopped = false;
+  const startedAt = Date.now();
   const timer = setInterval(() => {
     if (stopped) return;
+    if (Date.now() - startedAt >= CLAIM_LEASE_RENEW_BUDGET_MS) {
+      stopped = true;
+      clearInterval(timer);
+      opts.logger.warn(
+        { delegateEventId: opts.delegateEventId, budgetMs: CLAIM_LEASE_RENEW_BUDGET_MS },
+        'Late delegation: stopped refreshing the lease — a hung wake can lapse for the sweep',
+      );
+      return;
+    }
     void renewPendingDelegationClaim(opts.pool, opts.delegateEventId, opts.claimToken)
       .then((stillOurs) => {
         if (stopped || stillOurs) return;
@@ -776,12 +799,22 @@ export async function resolveLateDelegation(
       // The turn may have outlived every refresh. Extending the lease here is the gate: if this
       // token no longer owns the row, the actor that took it over records the outcome. Doing it
       // ourselves would be the second annotation and the second delegation.late_resolved.
+      // A failed refresh is not proof the token was lost — the query did not answer — so
+      // bookkeeping continues rather than throwing after a wake that already went out.
       if (claimed.claimToken) {
-        const stillOurs = await renewPendingDelegationClaim(
-          pool,
-          claimed.delegateEventId,
-          claimed.claimToken,
-        );
+        let stillOurs = true;
+        try {
+          stillOurs = await renewPendingDelegationClaim(
+            pool,
+            claimed.delegateEventId,
+            claimed.claimToken,
+          );
+        } catch (err) {
+          logger.warn(
+            { err, delegateEventId: claimed.delegateEventId, wakeTaskEventId },
+            'Late delegation: could not refresh the lease after the wake — recording the outcome anyway',
+          );
+        }
         if (!stillOurs) {
           logger.warn(
             { delegateEventId: claimed.delegateEventId, wakeTaskEventId },
@@ -792,7 +825,18 @@ export async function resolveLateDelegation(
       }
     }
 
-    if (await hasDelegationLateResolvedAudit(pool, claimed.delegateEventId)) {
+    // A lookup failure is treated as "not yet audited", which is what this path did before the
+    // check existed. Throwing here would skip the review-task note after the originator was woken.
+    let alreadyAudited = false;
+    try {
+      alreadyAudited = await hasDelegationLateResolvedAudit(pool, claimed.delegateEventId);
+    } catch (err) {
+      logger.warn(
+        { err, delegateEventId: claimed.delegateEventId },
+        'Late delegation: could not check for an existing late_resolved — recording the outcome anyway',
+      );
+    }
+    if (alreadyAudited) {
       logger.info(
         { delegateEventId: claimed.delegateEventId, wakeTaskEventId },
         'Late delegation: outcome already audited — closing the lease without a second resolution',

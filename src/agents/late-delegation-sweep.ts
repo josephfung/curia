@@ -12,8 +12,9 @@
 //      that will never come.
 //   3. Abandoned leases — an actor that crashed (or failed transiently) between claiming a
 //      handle and finishing its side effects. listOpenPendingDelegations returns those once the
-//      lease expires, and the retry re-does whatever has not already landed. A holder still
-//      inside the woken turn refreshes the lease, so that row is not listed (#1861).
+//      lease expires, and the retry re-does whatever has not already landed. A holder
+//      inside the woken turn refreshes the lease until the renewal budget, so a live turn
+//      is not listed and a hang still lapses for this sweep (#1861).
 //
 // Shaped like BacklogHeartbeat: an interval with an in-flight guard, and a tick() that is safe
 // to call directly from tests.
