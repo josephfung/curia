@@ -411,11 +411,11 @@ export interface SchedulerConfig {
    *  Sourced from config.scheduler.maxInFlight. */
   maxInFlight?: number;
   /**
-   * When set, a due job whose agentId is not owned by a loaded runtime is
-   * failed (next_run_at cleared) instead of published. Absent in unit tests
-   * that don't model the registry. Production passes agentRegistry.has. (#1898)
+   * True when the agent registry contains this id. Production passes
+   * agentRegistry.has. Tests that do not model a registry pass () => true.
+   * A due job that fails the check is failed with next_run_at cleared. (#1898)
    */
-  ownsAgent?: (agentId: string) => boolean;
+  ownsAgent: (agentId: string) => boolean;
 }
 
 type FireOutcome = 'dispatched' | 'skipped' | 'saturated';
@@ -430,7 +430,7 @@ export class Scheduler {
   private outboundContextService?: OutboundContextService;
   private defaultExpectedDurationSeconds: number;
   private principalContactId?: string;
-  private ownsAgent?: (agentId: string) => boolean;
+  private ownsAgent: (agentId: string) => boolean;
   private readonly maxInFlight: number;
   /** Seeds dispatcher routing for a delegation-retry wake in the original conversation. */
   private externalRoutingRegistrar?: (
@@ -821,7 +821,7 @@ export class Scheduler {
     // Never claim a job nobody will run. Entering 'running' and then waiting
     // for the slot timeout is what let stuck-job recovery pause a healthy job
     // for the wrong reason (#1898).
-    if (this.ownsAgent && !this.ownsAgent(job.agentId)) {
+    if (!this.ownsAgent(job.agentId)) {
       await this.failUnownedAgent(job);
       return 'skipped';
     }
@@ -1212,15 +1212,27 @@ export class Scheduler {
   }
 
   /**
-   * Mark a job failed without claiming it, and clear next_run_at so the poll
-   * (status IN pending/failed AND next_run_at <= now()) does not re-select it
-   * every tick. Does not log 'Job fired'.
+   * Fail a job aimed at an agent that is not in the registry, without claiming it.
+   *
+   * Terminal on purpose, same shape as an invalid cron expression: status failed
+   * and next_run_at NULL, so the poll (pending/failed AND next_run_at <= now())
+   * does not re-select it. The registry holds enabled agents only and has no
+   * unregister, so the answer is fixed until process restart — and a restart does
+   * not revive an ad-hoc row whose next_run_at was cleared. Restoring one is a
+   * manual status and next_run_at fix. Declarative rows are cancelled by
+   * stale-job cleanup when their declaring agent is gone, so they do not land here.
+   *
+   * The WHERE guards on status only. The invalid-cron UPDATE also matches
+   * cron_expr and timezone so a concurrent updateJob() that repaired the
+   * expression is left alone. Here the agent id is what is wrong; a schedule
+   * edit does not make an unregistered target runnable, so that extra predicate
+   * would only keep the row in the poll set.
    */
   private async failUnownedAgent(job: JobRow): Promise<void> {
-    const message = `Agent '${job.agentId}' is not loaded — no runtime owns this id`;
+    const message = `Agent '${job.agentId}' is not a registered agent`;
     this.logger.error(
       { jobId: job.id, agentId: job.agentId },
-      'Job not fired — agent id no loaded runtime owns',
+      'Job not fired — no registered agent owns this id',
     );
     const result = await this.pool.query(
       `UPDATE scheduled_jobs

@@ -4,6 +4,7 @@ import { BullpenService } from '../../../src/memory/bullpen.js';
 import { createLogger } from '../../../src/logger.js';
 import { createAgentDiscuss } from '../../../src/bus/events.js';
 import type { EventBus } from '../../../src/bus/bus.js';
+import type { AgentRegistry } from '../../../src/agents/agent-registry.js';
 
 // Regression for #1256: calendar closes a scheduling consult with close_after;
 // ceo-inbox must be woken so Branch A can draft (not wait for consult-timeout).
@@ -38,7 +39,8 @@ describe('bullpen close_after scheduling consult regression (#1256)', () => {
   beforeEach(() => {
     bus = makeBus();
     bullpenService = BullpenService.createInMemory();
-    const dispatcher = new BullpenDispatcher(bus as unknown as EventBus, createLogger('error'), bullpenService);
+    const allowAllAgents = { has: () => true } as unknown as AgentRegistry;
+    const dispatcher = new BullpenDispatcher(bus as unknown as EventBus, createLogger('error'), bullpenService, allowAllAgents);
     dispatcher.register();
   });
 

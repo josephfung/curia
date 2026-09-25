@@ -157,7 +157,7 @@ describe('EventBus', () => {
     await expect(bus.publish('channel', event)).resolves.toBeUndefined();
   });
 
-  it('rejects an agent.task no loaded runtime owns and leaves it unacknowledged (#1898)', async () => {
+  it('rejects a repeated unowned agent.task before the audit write (#1898)', async () => {
     const errors: Array<{ obj: Record<string, unknown>; msg: string }> = [];
     const logger = {
       debug: () => {},
@@ -165,7 +165,12 @@ describe('EventBus', () => {
       warn: () => {},
       error: (obj: Record<string, unknown>, msg: string) => { errors.push({ obj, msg }); },
     };
-    const onEvent = vi.fn();
+    // If publish wrote the row first, the second call would surface this
+    // unique violation instead of UnownedAgentTaskError. publishLateWake
+    // treats that violation as "already delivered".
+    const onEvent = vi.fn(async () => {
+      throw Object.assign(new Error('duplicate key'), { code: '23505' });
+    });
     const onDelivered = vi.fn();
     const handler = vi.fn();
     bus = new EventBus(logger as unknown as ConstructorParameters<typeof EventBus>[0], onEvent, onDelivered);
@@ -181,21 +186,21 @@ describe('EventBus', () => {
       parentEventId: 'fired-1',
     });
 
+    const expected = {
+      msg: 'agent.task published for an agent no registered agent owns',
+      obj: {
+        agentId: 'ghost-agent',
+        layer: 'system',
+        eventId: event.id,
+        originatingEventId: 'fired-1',
+      },
+    };
+    await expect(bus.publish('system', event)).rejects.toBeInstanceOf(UnownedAgentTaskError);
     await expect(bus.publish('system', event)).rejects.toBeInstanceOf(UnownedAgentTaskError);
     expect(handler).not.toHaveBeenCalled();
-    expect(onEvent).toHaveBeenCalledWith(event);
+    expect(onEvent).not.toHaveBeenCalled();
     expect(onDelivered).not.toHaveBeenCalled();
-    expect(errors).toEqual([
-      {
-        msg: 'agent.task published for an agent no loaded runtime owns',
-        obj: {
-          agentId: 'ghost-agent',
-          layer: 'system',
-          eventId: event.id,
-          originatingEventId: 'fired-1',
-        },
-      },
-    ]);
+    expect(errors).toEqual([expected, expected]);
   });
 
   it('still acknowledges an agent.task a loaded runtime owns', async () => {

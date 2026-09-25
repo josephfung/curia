@@ -10,8 +10,8 @@ export class BullpenDispatcher {
     private bus: EventBus,
     private logger: Logger,
     private bullpenService: BullpenService,
-    /** When set, a participant that is not a loaded agent is not dispatched. (#1898) */
-    private agentRegistry?: AgentRegistry,
+    /** Participants absent from this registry are not dispatched. (#1898) */
+    private agentRegistry: AgentRegistry,
   ) {}
 
   register(): void {
@@ -70,13 +70,15 @@ export class BullpenDispatcher {
     const otherParticipants = participants.filter((id) => id !== senderAgentId);
 
     let dispatched = 0;
+    let skippedUnregistered = 0;
     for (const agentId of otherParticipants) {
-      // A name that no loaded runtime owns must not count as a successful
+      // A name the registry does not contain must not count as a successful
       // dispatch. The other participants of the same thread still get tasks.
-      if (this.agentRegistry && !this.agentRegistry.has(agentId)) {
+      if (!this.agentRegistry.has(agentId)) {
+        skippedUnregistered++;
         this.logger.error(
           { threadId, agentId },
-          'BullpenDispatcher: participant is not a loaded agent — skipping task',
+          'BullpenDispatcher: participant is not a registered agent — skipping task',
         );
         continue;
       }
@@ -129,8 +131,9 @@ export class BullpenDispatcher {
       }
     }
 
-    // If every dispatch failed, log an aggregated error — the thread will go unanswered.
-    if (dispatched === 0 && otherParticipants.length > 0) {
+    // Publish failures only. An all-unregistered thread already logged one error
+    // per participant; a second "all failed" line would double-count that miss.
+    if (dispatched === 0 && otherParticipants.length > skippedUnregistered) {
       this.logger.error(
         { threadId, expected: otherParticipants.length },
         'BullpenDispatcher: all participant task dispatches failed — thread will receive no replies',

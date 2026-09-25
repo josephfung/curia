@@ -124,6 +124,7 @@ describe('Scheduler', () => {
       logger: logger as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       schedulerService: schedulerService as any,
+      ownsAgent: () => true,
     });
   });
 
@@ -585,7 +586,7 @@ describe('Scheduler', () => {
       expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Job fired');
       expect(logger.error).toHaveBeenCalledWith(
         expect.objectContaining({ jobId: 'job-1', agentId: 'ghost-agent' }),
-        'Job not fired — agent id no loaded runtime owns',
+        'Job not fired — no registered agent owns this id',
       );
       const [sql, params] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(sql).toContain("status = 'failed'");
@@ -1779,6 +1780,7 @@ describe('Scheduler', () => {
         schedulerService: driftSchedulerService as any,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         driftDetector: driftDetector as any,
+        ownsAgent: () => true,
       });
     });
 
@@ -3034,6 +3036,7 @@ describe('Scheduler', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         schedulerService: schedulerService as any,
         maxInFlight: 2,
+        ownsAgent: () => true,
       });
       const rows = [1, 2, 3, 4].map((n) => fakeDbRow({ id: `job-${n}` }));
       const releases: Array<() => void> = [];
@@ -3269,6 +3272,7 @@ describe('Scheduler', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         schedulerService: schedulerService as any,
         maxInFlight: 0,
+        ownsAgent: () => true,
       })).toThrow(/maxInFlight must be a positive integer/);
     });
   });

@@ -194,6 +194,7 @@ describeIf('Resumable continuation scheduling (#1175)', () => {
       bus,
       logger: logger as never,
       schedulerService,
+      ownsAgent: () => true,
     });
     scheduler.start();
     try {

@@ -42,7 +42,7 @@ describeIf('Scheduler cron claim idempotency (#1159)', () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     bus = new EventBus(logger as never);
     schedulerService = new SchedulerService(pool, bus, logger as never, 'UTC');
-    scheduler = new Scheduler({ pool, bus, logger: logger as never, schedulerService });
+    scheduler = new Scheduler({ pool, bus, logger: logger as never, schedulerService, ownsAgent: () => true });
   });
   afterAll(async () => { await cleanup(pool); await pool.end(); });
   beforeEach(async () => { await cleanup(pool); });
@@ -172,6 +172,7 @@ describeIf('Scheduler cron claim idempotency (#1159)', () => {
       bus: rejectingBus,
       logger: logger as never,
       schedulerService,
+      ownsAgent: () => true,
     });
 
     await local.pollDueJobs();

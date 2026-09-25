@@ -28,6 +28,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`EventBus.publish` (public API)** — rejects with `UnownedAgentTaskError` when no registered agent owns the id. (#1898)
 - **`ToolContext` (public API)** — `delegate` receives `senderId` so the dispatch claim records who asked. (#1893)
 - **`agent.task` (public API)** — optional `syntheticTurn` marks a brief Curia wrote to itself. (#1892)
 - **Scheduler** — polls hand due jobs to a capped runner and free hung slots at recovery timeout. (#1160)
@@ -63,7 +64,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Unknown `agent.task`** — error log and unacknowledged audit when no runtime owns the id. (#1898)
+- **Unknown `agent.task`** — logs an error when no registered agent owns the id. (#1898)
 - **Bullpen, scheduler, `delegate`** — unknown agent ids fail instead of counting as delivered. (#1898)
 - **Startup checks** — unparseable agent configs fail allowed-callers and stay visible to pin-gap. (#1898)
 - **Delegate dispatch claim** — overlapping calls before the wait expires start one run and queue the rest. (#1893)

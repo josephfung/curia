@@ -8,6 +8,7 @@ describe('Scheduler.lastTickAt', () => {
       bus: { subscribe: vi.fn(), publish: vi.fn() } as never,
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as never,
       schedulerService: {} as never,
+      ownsAgent: () => true,
     });
     expect(scheduler.lastTickAt).toBeNull();
   });

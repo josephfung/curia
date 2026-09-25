@@ -3,9 +3,10 @@ import { canPublish, canSubscribe } from './permissions.js';
 import type { Logger } from '../logger.js';
 
 /**
- * An `agent.task` whose target id is not owned by any loaded runtime.
- * The audit row is written and left unacknowledged so the startup scan
- * reports it; subscribers are not invoked. (#1898)
+ * An `agent.task` whose target id is not in the agent registry.
+ * Thrown before the write-ahead audit hook, so a retry of the same event id
+ * stays this error instead of becoming an audit primary-key collision.
+ * Subscribers are not invoked. (#1898)
  */
 export class UnownedAgentTaskError extends Error {
   readonly agentId: string;
@@ -19,7 +20,7 @@ export class UnownedAgentTaskError extends Error {
     eventId: string,
     originatingEventId: string | undefined,
   ) {
-    super(`agent.task targets '${agentId}' which no loaded runtime owns`);
+    super(`agent.task targets '${agentId}' which no registered agent owns`);
     this.name = 'UnownedAgentTaskError';
     this.agentId = agentId;
     this.layer = layer;
@@ -91,9 +92,11 @@ export class EventBus {
 
     const unowned = this.unownedAgentTask(layer, event);
     if (unowned) {
-      // Write the audit row, then leave it unacknowledged. Delivery was not
-      // handled — acknowledging it is what made this class invisible to the
-      // startup scan. Subscribers are not invoked; they would all no-op.
+      // Throw before onEvent. publishLateWake treats a primary-key collision
+      // on audit_log as proof this event id was already delivered and closes
+      // the handle. Writing the row and then throwing would make the retry
+      // look already-published. The error log is the signal; subscribers are
+      // not invoked. (#1898)
       this.logger.error(
         {
           agentId: unowned.agentId,
@@ -101,11 +104,8 @@ export class EventBus {
           eventId: unowned.eventId,
           originatingEventId: unowned.originatingEventId,
         },
-        'agent.task published for an agent no loaded runtime owns',
+        'agent.task published for an agent no registered agent owns',
       );
-      if (this.onEvent) {
-        await this.onEvent(event);
-      }
       throw unowned;
     }
 
