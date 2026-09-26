@@ -66,6 +66,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [042](042-email-sender-attribution-from-the-audit-log.md) | Recover email sender attribution from the audit log rather than accepting the pre-090 recall gap (#1887) | Accepted |
 | [043](043-bullpen-pending-window.md) | Bullpen pending-thread injection looks back seven days, in minutes end to end (#1899) | Accepted |
 | [044](044-delegate-wait-clamp-ceiling.md) | Delegate wait clamp stays at 895s; runs past it are late-delivery-only (#1857) | Accepted |
+| [045](045-delegated-specialist-trust.md) | Delegated specialist trust is decided upstream; requester identity is not a permission input (#1859) | Accepted |
 
 ## Adding new ADRs
 
