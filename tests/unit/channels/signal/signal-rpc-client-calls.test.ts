@@ -16,9 +16,14 @@ import { createSilentLogger } from '../../../../src/logger.js';
 
 const ACCOUNT = '+12264448150';
 
-function listen(socketPath: string, onLine: (line: string, sock: net.Socket) => void): Promise<net.Server> {
+function listen(
+  socketPath: string,
+  onLine: (line: string, sock: net.Socket) => void,
+  accepted: net.Socket[],
+): Promise<net.Server> {
   return new Promise(resolve => {
     const server = net.createServer(sock => {
+      accepted.push(sock);
       // Client teardown destroys its end of the unix socket. The peer read
       // then emits ECONNRESET; with no listener Node raises that as an
       // uncaught exception after the assertion has already passed.
@@ -44,16 +49,22 @@ describe('SignalRpcClient call support', () => {
   let server: net.Server;
   let client: SignalRpcClient;
   const received: string[] = [];
+  const accepted: net.Socket[] = [];
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'sigrpc-'));
     socketPath = join(dir, 'socket');
     received.length = 0;
+    accepted.length = 0;
   });
 
   afterEach(async () => {
     await client.disconnect();
-    server.close();
+    for (const sock of accepted) sock.destroy();
+    accepted.length = 0;
+    await new Promise<void>((resolve, reject) => {
+      server.close(err => (err ? reject(err) : resolve()));
+    });
   });
 
   it('sends subscribeCallEvents on connect when enabled, and resubscribes after reconnect', async () => {
@@ -63,7 +74,7 @@ describe('SignalRpcClient call support', () => {
       if (!sockets.includes(sock)) sockets.push(sock);
       const req = JSON.parse(line) as { id: string; method: string };
       sock.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: 7 }) + '\n');
-    });
+    }, accepted);
     client = new SignalRpcClient({ socketPath, accountNumber: ACCOUNT, logger: createSilentLogger() });
     client.setCallEventsSubscription(true);
     client.connect();
@@ -89,7 +100,7 @@ describe('SignalRpcClient call support', () => {
         + '{"callId":-7828393543136742976,"state":"RINGING_INCOMING","number":"+15196161377",'
         + '"isOutgoing":false,"inputDeviceName":"signal_input_x","outputDeviceName":"signal_output_x"}}}\n',
       );
-    });
+    }, accepted);
     client = new SignalRpcClient({ socketPath, accountNumber: ACCOUNT, logger: createSilentLogger() });
     client.setCallEventsSubscription(true);
     client.connect();
@@ -104,7 +115,7 @@ describe('SignalRpcClient call support', () => {
       received.push(line);
       const req = JSON.parse(line) as { id: string };
       sock.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: {} }) + '\n');
-    });
+    }, accepted);
     client = new SignalRpcClient({ socketPath, accountNumber: ACCOUNT, logger: createSilentLogger() });
     client.connect();
     await new Promise<void>(r => client.once('connected', () => r()));
@@ -121,7 +132,7 @@ describe('SignalRpcClient call support', () => {
       sock.write(
         JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { data: Buffer.from('ogg-bytes').toString('base64') } }) + '\n',
       );
-    });
+    }, accepted);
     client = new SignalRpcClient({ socketPath, accountNumber: ACCOUNT, logger: createSilentLogger() });
     client.connect();
     await new Promise<void>(r => client.once('connected', () => r()));
