@@ -66,10 +66,12 @@ async function publishLiveNoReply(
     channelId?: string;
     suppressDelivery?: boolean;
     conversationId?: string;
+    liveTurn?: boolean;
   },
 ): Promise<void> {
   const channelId = opts.channelId ?? 'email';
   const conversationId = opts.conversationId ?? `${channelId}:ceo-thread`;
+  const liveTurn = opts.liveTurn !== false;
   const task = createAgentTask({
     agentId: 'coordinator',
     conversationId,
@@ -82,7 +84,7 @@ async function publishLiveNoReply(
     channelId,
     conversationId,
     senderId: 'ceo@example.com',
-    liveTurn: true,
+    ...(liveTurn ? { liveTurn: true } : {}),
     originator: principalOriginator(),
   });
   await harness.bus.publish('system', createAgentResponse({
@@ -238,6 +240,23 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
     );
   });
 
+  it('does not notify on live-turn agent_declined via suppressDelivery blank (#1908)', async () => {
+    // Production shape: prepareAgentResponseContent blanks an exact sentinel and
+    // sets suppressDelivery before publish (see #1908 timeline at 11:10:31).
+    const logger = mockLogger();
+    const harness = buildHarness({ logger });
+    await publishLiveNoReply(harness, { content: '', suppressDelivery: true });
+
+    expect(harness.outboundMessages).toHaveLength(0);
+    expect(harness.noReplyEvents).toHaveLength(1);
+    expect(harness.noReplyEvents[0]!.payload.reason).toBe('agent_declined');
+    expect(harness.notifications).toHaveLength(0);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'agent_declined', liveTurn: true }),
+      'Dispatcher no-reply: skipping outbound delivery',
+    );
+  });
+
   it.each(['voice', 'cli', 'http'] as const)(
     'warns when a live %s turn ends in silence (#1908)',
     async (channelId) => {
@@ -246,7 +265,6 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       await publishLiveNoReply(harness, {
         content: NO_REPLY_SENTINEL,
         channelId,
-        conversationId: `${channelId}:ceo-thread`,
       });
 
       expect(harness.noReplyEvents).toHaveLength(1);
@@ -258,6 +276,24 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       );
     },
   );
+
+  it('does not warn on a non-live conversational channel silence (#1908)', async () => {
+    const logger = mockLogger();
+    const harness = buildHarness({ logger });
+    await publishLiveNoReply(harness, {
+      content: NO_REPLY_SENTINEL,
+      channelId: 'voice',
+      liveTurn: false,
+    });
+
+    expect(harness.noReplyEvents).toHaveLength(1);
+    expect(harness.noReplyEvents[0]!.payload.reason).toBe('agent_declined');
+    expect(harness.notifications).toHaveLength(0);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'Dispatcher no-reply: principal turn ended in silence on a conversational channel',
+    );
+  });
 
   it('salvages a near-miss sentinel as a draft instead of sending it', async () => {
     const { bus, dispatcher, outboundMessages, noReplyEvents } = buildHarness();
