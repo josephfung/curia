@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`outbound.judge` audit event** — Stage-2 pass/block/skip/failed_open|closed is queryable without `llm.call`. (#1911)
 - **Autonomy gate tests** — delegated specialist tasks assert gates A, B and C hold for non-principal requesters. (#1859)
 - **`backfill:email-senders`** — one-off script recovering pre-090 email sender attribution from the audit log. (#1887)
 - **Contact recent history** — 1:1 voice and email recall that contact's other turns. (#1599)

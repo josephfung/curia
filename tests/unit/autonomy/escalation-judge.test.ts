@@ -620,3 +620,22 @@ describe('EscalationJudge.classifyAction', () => {
     expect(result.decision).toBe('escalate');
   });
 });
+
+describe('EscalationJudgeConfig has no failMode (#1911)', () => {
+  it('config type rejects failMode — enforced by tsc, not vitest', () => {
+    // EscalationJudge is hard-coded fail-closed; unlike filter.llmJudge there is no
+    // failMode on EscalationJudgeConfig. A local.yaml key is deep-merged but ignored.
+    // Enforcement is the AssertNoFailMode alias below: tsconfig.tests.json is in
+    // `pnpm run typecheck`, so adding failMode to the interface resolves the alias
+    // to `never` and fails CI. Do not replace this with a runtime `'failMode' in config`
+    // check — that is tautological on a fresh object literal and survives the regression.
+    const config: EscalationJudgeConfig = {
+      enabled: true,
+      model: 'claude-haiku-4-5',
+      timeoutMs: 5000,
+    };
+    type AssertNoFailMode<T> = 'failMode' extends keyof T ? never : T;
+    const _check: AssertNoFailMode<EscalationJudgeConfig> = config;
+    expect(_check.timeoutMs).toBe(5000);
+  });
+});

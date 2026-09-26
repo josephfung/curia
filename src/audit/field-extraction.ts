@@ -161,6 +161,32 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: str(p, 'channel', fail),
   }),
 
+  // Stage-2 LLM judge decision (#1911). Fine-grained outcome stays in
+  // payload->>'outcome'; structured `outcome` maps into spec 10's enum.
+  // failed_open / failed_closed → error so a closed-mode outage is visible via
+  // `WHERE action = 'judge' AND outcome = 'error'` (not conflated with denied).
+  'outbound.judge': (p, fail) => ({
+    action: 'judge',
+    outcome: (() => {
+      switch (p.outcome) {
+        case 'judged_pass':
+        case 'skipped_principal_sole':
+          return 'success';
+        case 'judged_block':
+          return 'denied';
+        case 'failed_open':
+        case 'failed_closed':
+          return 'error';
+        default:
+          return fail('outcome');
+      }
+    })(),
+    target_type: 'conversation',
+    target_id: str(p, 'conversationId', fail),
+    initiator_type: INITIATOR_TYPE_SYSTEM,
+    initiator_id: INITIATOR_ID_DISPATCH,
+  }),
+
   'tool.invoke': extractToolInvoke,
   'skill.invoke': extractToolInvoke,
 

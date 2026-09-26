@@ -176,7 +176,17 @@ value — so the secret does not re-leak into the `outbound.blocked` audit event
 - **Failure handling** (`filter.llmJudge.failMode`, default `split`): a judge that is
   unreachable (timeout / API error) fails open (message delivered, Stage-1-only); a live
   model that returns an unparseable verdict fails closed (blocked). `open`/`closed` force
-  uniform behavior.
+  uniform behavior. Every Stage-2 decision publishes an `outbound.judge` audit event with
+  outcome `judged_pass` | `judged_block` | `skipped_principal_sole` | `failed_open` |
+  `failed_closed`, plus a `reasonCode` (`audience_leak` | `unreachable` | `unparseable`)
+  so a fail-open/closed outage is distinguishable from a real leak verdict without
+  correlating `llm.call` rows (#1911). Alarm surface is the audit row + existing
+  `logger.warn` — not HealthService tier heartbeats (the judge model is usually not a tier).
+- **Disabled / not wired.** When `filter.llmJudge.enabled: false` (or the judge is left
+  undefined at bootstrap), Stage 2 emits no `outbound.judge` rows. Detect that gap with
+  `count(outbound.message)` vs `count(outbound.judge)` over the same window — a sustained
+  imbalance with mixed-audience traffic means Stage 2 is off, not that every send was
+  principal-sole.
 
 Tone alignment and persona consistency are deferred to a follow-up; the judge prompt can be
 extended to cover them without further plumbing changes.
