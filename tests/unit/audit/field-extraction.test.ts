@@ -59,6 +59,43 @@ describe('extractStructuredFields', () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  it('maps delegation.requester_context onto the delegation target (#1859)', () => {
+    expect(extractStructuredFields(
+      'delegation.requester_context',
+      {
+        delegateEventId: 'task-1',
+        taskId: 'task-1',
+        agentId: 'calendar',
+        conversationId: 'conv-1',
+        contactId: 'ceo-contact-id',
+        channel: 'signal',
+        systemRole: 'principal',
+        tier: 'principal',
+        tierPresent: true,
+        delegatedAddendumApplied: true,
+      },
+      'evt-req',
+      logger,
+    )).toEqual({
+      action: 'record',
+      outcome: 'success',
+      target_type: 'delegation',
+      target_id: 'task-1',
+      initiator_type: 'agent',
+      initiator_id: 'calendar',
+    });
+    expect(extractStructuredFields(
+      'delegation.requester_context',
+      {
+        delegateEventId: 'task-2',
+        agentId: 'calendar',
+        delegatedAddendumApplied: false,
+      },
+      'evt-req-drop',
+      logger,
+    ).outcome).toBe('failure');
+  });
+
   it('leaves structured columns NULL for unmapped event types', () => {
     const debug = vi.spyOn(logger, 'debug');
     expect(extractStructuredFields('llm.call', { agentId: 'a' }, 'evt-4', logger)).toEqual({

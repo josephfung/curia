@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ErrorType } from '../errors/types.js';
-import type { ContactTier, DedupConfidence, TrustLevel } from '../contacts/types.js';
+import type { ContactTier, DedupConfidence, SystemRole, TrustLevel } from '../contacts/types.js';
 import type { Sensitivity, NodeType } from '../memory/types.js';
 import type { ActionRisk } from '../skills/types.js';
 
@@ -1366,6 +1366,38 @@ export interface DelegationLateResolvedEvent extends BaseEvent {
   payload: DelegationLateResolvedPayload;
 }
 
+// DelegationRequesterContextPayload — published by the agent runtime when a delegated
+// specialist task renders (or drops) the harness identity block (#1859, ADR-045).
+// Records the evidence the prompt was given so a past relay can be reconstructed
+// from audit_log without replaying the prompt. parentEventId is the specialist
+// agent.task id, which is also delegateEventId and taskId.
+interface DelegationRequesterContextPayload {
+  /** Specialist agent.task id — the delegation this evidence belongs to. */
+  delegateEventId: string;
+  /** Same id, so audit_log.task_id is populated. */
+  taskId: string;
+  agentId: string;
+  conversationId: string;
+  contactId: string | null;
+  channel: string | null;
+  systemRole: SystemRole | null;
+  /** Null when no named tier was rendered. See tierPresent. */
+  tier: ContactTier | null;
+  /** True when the identity block included a tier line. */
+  tierPresent: boolean;
+  /**
+   * True when the delegated-specialist addendum was inserted into the prompt.
+   * False when the context budget dropped it.
+   */
+  delegatedAddendumApplied: boolean;
+}
+
+export interface DelegationRequesterContextEvent extends BaseEvent {
+  type: 'delegation.requester_context';
+  sourceLayer: 'agent';
+  payload: DelegationRequesterContextPayload;
+}
+
 // SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
 // one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
 // self-authorizes via the token and writes to the vault, like the scheduler emitting its
@@ -1604,6 +1636,7 @@ export type BusEvent =
   | SecretCapturedEvent      // #972: one-time capture link redeemed (name/routing only, never value)
   | DelegationTimedOutEvent     // #1799: delegate wait timed out, specialist possibly still running
   | DelegationLateResolvedEvent // #1799: a late specialist response was delivered, recorded, or lost
+  | DelegationRequesterContextEvent // #1859: identity evidence rendered into a delegated specialist prompt
   | AutonomyToolBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
@@ -2256,6 +2289,21 @@ export function createDelegationLateResolved(
     type: 'delegation.late_resolved',
     sourceLayer: 'system',
     payload,
+    parentEventId,
+  };
+}
+
+export function createDelegationRequesterContext(
+  // parentEventId is the specialist agent.task — the delegation being attested.
+  payload: DelegationRequesterContextPayload & { parentEventId: string },
+): DelegationRequesterContextEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'delegation.requester_context',
+    sourceLayer: 'agent',
+    payload: rest,
     parentEventId,
   };
 }

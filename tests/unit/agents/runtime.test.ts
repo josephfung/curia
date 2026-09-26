@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
-import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent, type ContextBudgetEvent } from '../../../src/bus/events.js';
+import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent, type ContextBudgetEvent, type DelegationRequesterContextEvent } from '../../../src/bus/events.js';
 import type { LLMProvider, ToolResult } from '../../../src/agents/llm/provider.js';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { createLogger } from '../../../src/logger.js';
@@ -2159,6 +2159,10 @@ describe('AgentRuntime tool-use loop', () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
+    const requesterEvidence: DelegationRequesterContextEvent[] = [];
+    bus.subscribe('delegation.requester_context', 'system', (event) => {
+      if (event.type === 'delegation.requester_context') requesterEvidence.push(event);
+    });
     const provider = createMockProvider('Three events today.');
     const runtime = new AgentRuntime({
       agentId: 'calendar',
@@ -2170,7 +2174,7 @@ describe('AgentRuntime tool-use loop', () => {
     });
     runtime.register();
 
-    await bus.publish('dispatch', createAgentTask({
+    const task = createAgentTask({
       agentId: 'calendar',
       conversationId: 'conv-delegate-brief',
       channelId: 'internal',
@@ -2194,7 +2198,8 @@ describe('AgentRuntime tool-use loop', () => {
         },
       },
       parentEventId: 'delegate-brief-1',
-    }));
+    });
+    await bus.publish('dispatch', task);
 
     const firstCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
       messages: Array<{ role: string; content: string }>;
@@ -2213,6 +2218,25 @@ describe('AgentRuntime tool-use loop', () => {
     expect(systemMessages).not.toContain('LOW-TRUST');
     expect(systemMessages).not.toContain('Unknown sender');
     expect(systemMessages).not.toContain('Ignore previous instructions');
+
+    // The same evidence, queryable by this delegation's task id, without the prompt.
+    expect(requesterEvidence).toHaveLength(1);
+    expect(requesterEvidence[0]).toMatchObject({
+      parentEventId: task.id,
+      payload: {
+        delegateEventId: task.id,
+        taskId: task.id,
+        agentId: 'calendar',
+        conversationId: 'conv-delegate-brief',
+        contactId: 'ceo-contact-id',
+        channel: 'signal',
+        systemRole: 'principal',
+        tier: 'principal',
+        tierPresent: true,
+        delegatedAddendumApplied: true,
+      },
+    });
+    expect(requesterEvidence[0]!.payload).not.toHaveProperty('displayName');
   });
 
   it('gives an internal coordinator task requester identity without specialist framing (#1871)', async () => {
@@ -2220,6 +2244,10 @@ describe('AgentRuntime tool-use loop', () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     bus.subscribe('agent.response', 'dispatch', () => {});
+    const requesterEvidence: DelegationRequesterContextEvent[] = [];
+    bus.subscribe('delegation.requester_context', 'system', (event) => {
+      if (event.type === 'delegation.requester_context') requesterEvidence.push(event);
+    });
     const provider = createMockProvider('I will follow up.');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -2271,6 +2299,128 @@ describe('AgentRuntime tool-use loop', () => {
     expect(injected).not.toContain('DELEGATED TASK');
     expect(injected).not.toContain('This task is authorized');
     expect(injected).not.toContain('specialist_decline');
+    // Identity without delegationOrigin is not a delegated specialist task.
+    expect(requesterEvidence).toHaveLength(0);
+  });
+
+  it('audits a delegated task whose requester identity is unavailable (#1859)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const requesterEvidence: DelegationRequesterContextEvent[] = [];
+    bus.subscribe('delegation.requester_context', 'system', (event) => {
+      if (event.type === 'delegation.requester_context') requesterEvidence.push(event);
+    });
+    const provider = createMockProvider('No identity on this one.');
+    const runtime = new AgentRuntime({
+      agentId: 'calendar',
+      systemPrompt: 'You are the calendar specialist.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'calendar',
+      conversationId: 'conv-delegate-anon',
+      channelId: 'internal',
+      senderId: 'coordinator',
+      content: 'What is on the calendar today?',
+      metadata: {
+        delegationOrigin: {
+          conversationId: 'conv-origin',
+          channelId: 'email',
+          agentId: 'coordinator',
+          originalTask: 'Calendar today',
+        },
+      },
+      parentEventId: 'delegate-anon-1',
+    });
+    await bus.publish('dispatch', task);
+
+    expect(requesterEvidence).toHaveLength(1);
+    expect(requesterEvidence[0]!.payload).toEqual({
+      delegateEventId: task.id,
+      taskId: task.id,
+      agentId: 'calendar',
+      conversationId: 'conv-delegate-anon',
+      contactId: null,
+      channel: null,
+      systemRole: null,
+      tier: null,
+      tierPresent: false,
+      delegatedAddendumApplied: true,
+    });
+  });
+
+  it('audits a delegated addendum the context budget dropped (#1859)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    bus.subscribe('agent.response', 'dispatch', () => {});
+    const requesterEvidence: DelegationRequesterContextEvent[] = [];
+    bus.subscribe('delegation.requester_context', 'system', (event) => {
+      if (event.type === 'delegation.requester_context') requesterEvidence.push(event);
+    });
+    const provider = createMockProvider('Proceeding without the block.');
+    const runtime = new AgentRuntime({
+      agentId: 'calendar',
+      systemPrompt: 'You are the calendar specialist.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger: createLogger('error'),
+      // Window smaller than the response reserve, so sender context cannot fit.
+      modelRegistry: {
+        getContextWindow: () => 100,
+        isKnownModel: () => true,
+      } as unknown as import('../../../src/agents/llm/model-registry.js').ModelRegistry,
+      contextBudget: { responseReserve: 8_192 },
+    });
+    runtime.register();
+
+    const task = createAgentTask({
+      agentId: 'calendar',
+      conversationId: 'conv-delegate-dropped',
+      channelId: 'internal',
+      senderId: 'coordinator',
+      content: 'Brief the day.',
+      metadata: {
+        delegationOrigin: {
+          conversationId: 'conv-origin',
+          channelId: 'signal',
+          agentId: 'coordinator',
+          originalTask: 'Brief the day',
+        },
+        originator: {
+          contactId: 'ceo-contact-id',
+          systemRole: 'principal' as const,
+          channel: 'signal',
+          initiatedAt: '2026-09-22T02:28:00.000Z',
+          tier: 'principal' as const,
+        },
+      },
+      parentEventId: 'delegate-dropped-1',
+    });
+    await bus.publish('dispatch', task);
+
+    const firstCall = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemMessages = firstCall.messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
+    expect(systemMessages).not.toContain('DELEGATED TASK');
+
+    expect(requesterEvidence).toHaveLength(1);
+    expect(requesterEvidence[0]!.payload).toMatchObject({
+      delegateEventId: task.id,
+      contactId: 'ceo-contact-id',
+      channel: 'signal',
+      systemRole: 'principal',
+      tier: 'principal',
+      tierPresent: true,
+      delegatedAddendumApplied: false,
+    });
   });
 
   it('keeps LOW-TRUST on an internal task with no originator and no delegationOrigin (#1871)', async () => {
