@@ -200,6 +200,16 @@ describe('Bus Permissions', () => {
     expect(canSubscribe('channel', 'outbound.judge')).toBe(false);
   });
 
+  it('allows the agent layer to publish delegation.requester_context (#1859)', () => {
+    expect(canPublish('agent', 'delegation.requester_context')).toBe(true);
+    expect(canPublish('system', 'delegation.requester_context')).toBe(true);
+    expect(canSubscribe('system', 'delegation.requester_context')).toBe(true);
+    expect(canPublish('dispatch', 'delegation.requester_context')).toBe(false);
+    expect(canPublish('execution', 'delegation.requester_context')).toBe(false);
+    expect(canPublish('channel', 'delegation.requester_context')).toBe(false);
+    expect(canSubscribe('agent', 'delegation.requester_context')).toBe(false);
+  });
+
   it('allows system layer to publish and subscribe to system.restart', () => {
     expect(canPublish('system', 'system.restart')).toBe(true);
     expect(canSubscribe('system', 'system.restart')).toBe(true);

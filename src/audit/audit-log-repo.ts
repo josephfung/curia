@@ -323,6 +323,38 @@ export class AuditLogRepo {
   }
 
   /**
+   * Requester-identity evidence rendered into one delegated specialist task (#1859).
+   * `delegateEventId` is that task's `agent.task` id. Matches the structured
+   * `target_id` and, if extraction failed, `payload.delegateEventId`.
+   * Oldest first. A single run writes one row; a replay of the same task writes another.
+   */
+  async findDelegationRequesterContext(
+    delegateEventId: string,
+    options: { limit?: number } = {},
+  ): Promise<AuditLogRow[]> {
+    if (delegateEventId.length === 0) return [];
+    const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+    const result = await this.pool.query(
+      `SELECT ${SELECT_COLUMNS}
+       FROM audit_log
+       WHERE event_type = 'delegation.requester_context'
+         AND (
+           (target_type = 'delegation' AND target_id = $1)
+           OR payload->>'delegateEventId' = $1
+         )
+       ORDER BY timestamp ASC, id ASC
+       LIMIT $2`,
+      [delegateEventId, limit],
+    );
+    const rows = result.rows.map(mapRow);
+    this.logger.debug(
+      { count: rows.length, delegateEventId },
+      'audit-log-repo: findDelegationRequesterContext',
+    );
+    return rows;
+  }
+
+  /**
    * Return audit rows whose payload carries the given `blockId` (e.g. an
    * `outbound.blocked` event and anything that references it). Optional [from, to)
    * window narrows the scan. Backed by idx_audit_log_payload_block_id (migration 072).

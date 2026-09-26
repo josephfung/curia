@@ -5,6 +5,7 @@ import {
   parseTaskOriginator,
   renderDelegatedTaskContext,
   renderRequesterIdentity,
+  requesterContextEvidence,
 } from '../../../src/agents/delegated-task-context.js';
 import { parseSpecialistDeclineMarker } from '../../../src/agents/specialist-decline.js';
 
@@ -147,5 +148,59 @@ describe('parseSpecialistDeclineMarker', () => {
     expect(parseSpecialistDeclineMarker(
       'Example: <specialist_decline reason="quoted">quoted refusal</specialist_decline> and more text.',
     )).toBeNull();
+  });
+});
+
+describe('requesterContextEvidence (#1859)', () => {
+  const identity = harnessRequesterIdentity(PRINCIPAL_ORIGINATOR);
+
+  it('projects the identity the addendum rendered', () => {
+    expect(requesterContextEvidence(identity, true)).toEqual({
+      contactId: 'ceo-contact-id',
+      channel: 'signal',
+      systemRole: 'principal',
+      tier: 'principal',
+      tierPresent: true,
+      delegatedAddendumApplied: true,
+    });
+  });
+
+  it('keeps an explicit null tier distinct from an omitted tier', () => {
+    const explicitNone = harnessRequesterIdentity({
+      ...PRINCIPAL_ORIGINATOR,
+      tier: null,
+    });
+    const omitted = harnessRequesterIdentity({
+      contactId: 'ceo-contact-id',
+      systemRole: 'principal',
+      channel: 'signal',
+      initiatedAt: '2026-09-22T02:28:00.000Z',
+    });
+    expect(requesterContextEvidence(explicitNone, true)).toMatchObject({
+      tier: null,
+      tierPresent: true,
+      contactId: 'ceo-contact-id',
+    });
+    expect(requesterContextEvidence(omitted, true)).toMatchObject({
+      tier: null,
+      tierPresent: false,
+      contactId: 'ceo-contact-id',
+    });
+  });
+
+  it('records a missing identity without treating that as clearance', () => {
+    expect(requesterContextEvidence(undefined, true)).toEqual({
+      contactId: null,
+      channel: null,
+      systemRole: null,
+      tier: null,
+      tierPresent: false,
+      delegatedAddendumApplied: true,
+    });
+  });
+
+  it('keeps the held identity when the addendum was not applied', () => {
+    expect(requesterContextEvidence(identity, false).delegatedAddendumApplied).toBe(false);
+    expect(requesterContextEvidence(identity, false).contactId).toBe('ceo-contact-id');
   });
 });

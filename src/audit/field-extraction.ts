@@ -252,6 +252,22 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: 'late-delegation',
   }),
 
+  // Requester evidence rendered into a delegated specialist prompt (#1859).
+  // outcome is whether the addendum reached the model, not whether the audit
+  // write succeeded. The fine-grained identity stays in the payload.
+  'delegation.requester_context': (p, fail) => ({
+    action: 'record',
+    outcome: p.delegatedAddendumApplied === true
+      ? 'success'
+      : p.delegatedAddendumApplied === false
+        ? 'failure'
+        : fail('delegatedAddendumApplied'),
+    target_type: 'delegation',
+    target_id: str(p, 'delegateEventId', fail),
+    initiator_type: 'agent',
+    initiator_id: str(p, 'agentId', fail),
+  }),
+
   // Spec lists message.held; the event type is reserved but not yet emitted.
   // Keep the mapping ready so structured columns populate the day it ships.
   'message.held': (p, fail) => ({

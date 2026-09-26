@@ -5,7 +5,7 @@ import {
   type StreamingTurnOpenStreamParams,
 } from './llm/streaming-turn.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
@@ -105,6 +105,7 @@ import {
   parseTaskOriginator,
   renderDelegatedTaskContext,
   renderRequesterIdentity,
+  requesterContextEvidence,
 } from './delegated-task-context.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { principalAgentLabel } from './agent-display-name.js';
@@ -1057,13 +1058,38 @@ export class AgentRuntime {
         // Authorization was already decided upstream. Identity is separate: missing
         // or tier unknown is not a further clearance.
         const delegatedBlock = renderDelegatedTaskContext(identity);
-        if (ctxBudget.allocate('sender_context', [{ role: 'system', content: delegatedBlock }])) {
+        const delegatedAddendumApplied = ctxBudget.allocate('sender_context', [{ role: 'system', content: delegatedBlock }]);
+        if (delegatedAddendumApplied) {
           messages.splice(1, 0, { role: 'system', content: delegatedBlock });
           bullpenInsertAt = 2;
         } else {
           logger.error(
             { agentId, conversationId, blockLength: delegatedBlock.length },
             'Delegated-task requester block dropped by context budget — specialist proceeding without harness-set requester identity',
+          );
+        }
+        // Audit the evidence the prompt was given (or that the budget dropped).
+        // A publish failure must not abort the turn: the block is already decided,
+        // and the error log is the gap. (#1859)
+        try {
+          const evidence = requesterContextEvidence(identity, delegatedAddendumApplied);
+          await bus.publish('agent', createDelegationRequesterContext({
+            delegateEventId: taskEvent.id,
+            taskId: taskEvent.id,
+            agentId,
+            conversationId,
+            contactId: evidence.contactId,
+            channel: evidence.channel,
+            systemRole: evidence.systemRole,
+            tier: evidence.tier,
+            tierPresent: evidence.tierPresent,
+            delegatedAddendumApplied: evidence.delegatedAddendumApplied,
+            parentEventId: taskEvent.id,
+          }));
+        } catch (err) {
+          logger.error(
+            { err, agentId, taskEventId: taskEvent.id },
+            'Failed to publish delegation.requester_context — requester-identity evidence not audited',
           );
         }
       } else if (taskEvent.payload.channelId === 'internal' && identity) {

@@ -100,6 +100,7 @@ A controlled vocabulary for the `action` column. Inspired by CADF and FHIR Audit
 | `escalate` | Action escalated to human oversight |
 | `configure` | System configuration changed |
 | `judge` | Stage-2 outbound LLM judge recorded a decision (#1911) |
+| `record` | Harness recorded the requester evidence shown to a delegated specialist (`delegation.requester_context`, #1859) |
 
 New actions can be added as new event types are introduced. The `action` column is a TEXT field, not an enum, to avoid migration churn.
 

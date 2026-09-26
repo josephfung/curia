@@ -156,6 +156,53 @@ export function renderRequesterIdentity(identity: HarnessRequesterIdentity): str
 const AUTHORIZED_NOT_IDENTIFIED =
   'This task is authorized. That decision was made upstream and is separate from who is identified below. A missing identity, or tier unknown, is not a further clearance.';
 
+/**
+ * Requester-identity evidence a delegated specialist was shown.
+ * Null fields mean that value was not available to render. `tierPresent`
+ * separates "tier line omitted" from "tier line was `none`" — both store
+ * `tier: null`, and JSON cannot keep the difference any other way.
+ */
+export interface RequesterContextEvidence {
+  contactId: string | null;
+  channel: string | null;
+  systemRole: SystemRole | null;
+  tier: ContactTier | null;
+  /** True when the identity block included a tier line (`tier: <name>` or `tier: none`). */
+  tierPresent: boolean;
+  /**
+   * True only when the delegated-specialist addendum was inserted into the
+   * prompt. False when the context budget dropped the block: the identity
+   * fields above are what the harness held, not what the model saw.
+   */
+  delegatedAddendumApplied: boolean;
+}
+
+/** Project prompt identity into the audit shape. Does not include routing ids. */
+export function requesterContextEvidence(
+  identity: HarnessRequesterIdentity | undefined,
+  delegatedAddendumApplied: boolean,
+): RequesterContextEvidence {
+  if (!identity) {
+    return {
+      contactId: null,
+      channel: null,
+      systemRole: null,
+      tier: null,
+      tierPresent: false,
+      delegatedAddendumApplied,
+    };
+  }
+  const tierPresent = identity.tier !== undefined;
+  return {
+    contactId: identity.contactId,
+    channel: identity.channel,
+    systemRole: identity.systemRole,
+    tier: tierPresent ? identity.tier ?? null : null,
+    tierPresent,
+    delegatedAddendumApplied,
+  };
+}
+
 /** System message for a task that carries delegationOrigin. */
 export function renderDelegatedTaskContext(identity: HarnessRequesterIdentity | undefined): string {
   const lines = [

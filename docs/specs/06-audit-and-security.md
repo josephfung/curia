@@ -49,6 +49,7 @@ written to the audit log:
 | `channel.poll` | channel | Emitted once per email poll cycle for operator visibility. See [spec 04](04-channels.md). |
 | `channel.stalled` | channel | Watchdog event when no successful poll completes within `5 × pollingIntervalMs` (at most once per adapter lifecycle). See [spec 04](04-channels.md). |
 | `authorization.decision` | dispatch, execution | Records an allow/deny/escalate authorization outcome — at Gate-1/authz (dispatch) and Gate C (execution for skills, **and dispatch for the auto-reply relay** with `action: 'dispatcher-relay'`). Payload may carry `conversationId` so the dispatcher can suppress the relay when a reply skill escalates under a different task id (#1733). See [spec 09](09-contacts-and-identity.md). (#1379) |
+| `delegation.requester_context` | agent | Requester-identity evidence rendered into a delegated specialist prompt: `contactId`, `channel`, `systemRole`, `tier`, `tierPresent`, and `delegatedAddendumApplied`. The specialist `agent.task` id is `delegateEventId` (also `task_id` and `parent_event_id`). `delegatedAddendumApplied: false` means the context budget dropped the block. Query one delegation with `AuditLogRepo.findDelegationRequesterContext`. See [ADR-045](../adr/045-delegated-specialist-trust.md). (#1859) |
 
 ### Redaction
 
