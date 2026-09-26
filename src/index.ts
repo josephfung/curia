@@ -169,6 +169,7 @@ import { LateDelegationSubscriber } from './agents/late-delegation-subscriber.js
 import {
   acquireRunningDelegation,
   findInFlightPendingDelegation,
+  findRunningOriginTurns,
   releaseRunningDelegation,
 } from './db/queries/pending-delegations.js';
 import { LateDelegationSweep } from './agents/late-delegation-sweep.js';
@@ -3102,7 +3103,21 @@ async function main(): Promise<void> {
   checkpointProcessor.register();
 
   // BullpenDispatcher — routes agent.discuss → agent.task for inter-agent Bullpen discussions.
-  const bullpenDispatcher = new BullpenDispatcher(bus, logger, bullpenService, agentRegistry);
+  // The origin-turn lookup shares the late-delivery flag with the running claim
+  // it reads. That claim is not written when late delivery is off, so the lookup
+  // stays unwired too. (#1917)
+  const bullpenDispatcher = new BullpenDispatcher(
+    bus,
+    logger,
+    bullpenService,
+    agentRegistry,
+    lateDeliveryConfig.enabled
+      ? {
+          findRunning: (targetAgent, originAgentIds) =>
+            findRunningOriginTurns(pool, { targetAgent, originAgentIds }),
+        }
+      : undefined,
+  );
   bullpenDispatcher.register();
 
   // HTTP API channel — started BEFORE channel adapters so the health check endpoint

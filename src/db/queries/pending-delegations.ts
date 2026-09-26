@@ -275,6 +275,48 @@ export async function findInFlightPendingDelegation(
 }
 
 /**
+ * Running delegations from any of `originAgentIds` to `targetAgent`.
+ *
+ * `running` is the dispatch claim, so the origin turn is still inside `delegate`
+ * and will answer. A `pending` handle means that wait already ended. Newest row
+ * wins when one agent has two open conversations with the same specialist.
+ * BullpenDispatcher stamps the match so that wake does not send a second
+ * principal confirmation. (#1917)
+ */
+export async function findRunningOriginTurns(
+  pool: Pool,
+  params: { targetAgent: string; originAgentIds: readonly string[] },
+): Promise<Array<{
+  originAgentId: string;
+  delegateEventId: string;
+  originConversationId: string;
+  originChannelId: string;
+}>> {
+  if (params.originAgentIds.length === 0) return [];
+  const { rows } = await pool.query<{
+    origin_agent_id: string;
+    delegate_event_id: string;
+    origin_conversation_id: string;
+    origin_channel_id: string;
+  }>(
+    `SELECT DISTINCT ON (origin_agent_id)
+            origin_agent_id, delegate_event_id, origin_conversation_id, origin_channel_id
+       FROM pending_delegations
+      WHERE target_agent = $1
+        AND status = 'running'
+        AND origin_agent_id = ANY($2::text[])
+      ORDER BY origin_agent_id, created_at DESC`,
+    [params.targetAgent, params.originAgentIds],
+  );
+  return rows.map((row) => ({
+    originAgentId: row.origin_agent_id,
+    delegateEventId: row.delegate_event_id,
+    originConversationId: row.origin_conversation_id,
+    originChannelId: row.origin_channel_id,
+  }));
+}
+
+/**
  * How long a crashed process may keep a dispatch claim after the wait itself.
  * The claim's expires_at is the wait plus this grace, so the sweep does not
  * abandon a row in the gap between the wait ending and the timeout promotion,
