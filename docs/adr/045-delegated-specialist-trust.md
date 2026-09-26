@@ -64,3 +64,4 @@ The evidence is still recorded. It is recorded for an operator, not handed to th
 - The autonomy gate is load-bearing. The prompt-side refusal #1872 removed was an accidental backstop. Gates A and B on a non-principal delegated task are what constrains that widening, and they are tested on the delegated shape.
 - A context-budget drop is visible: `delegatedAddendumApplied: false` means the specialist was not told the task was authorized, and the identity fields are what the harness held rather than what the model saw. `outcome` on the audit row is `failure` in that case.
 - Reconstructing a past relay does not require the prompt. It requires the `delegation.requester_context` row for that task id.
+- A failed publish of that row aborts the specialist turn. The addendum is not left in the prompt with no audit row behind it.

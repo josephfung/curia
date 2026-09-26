@@ -1069,29 +1069,23 @@ export class AgentRuntime {
           );
         }
         // Audit the evidence the prompt was given (or that the budget dropped).
-        // A publish failure must not abort the turn: the block is already decided,
-        // and the error log is the gap. (#1859)
-        try {
-          const evidence = requesterContextEvidence(identity, delegatedAddendumApplied);
-          await bus.publish('agent', createDelegationRequesterContext({
-            delegateEventId: taskEvent.id,
-            taskId: taskEvent.id,
-            agentId,
-            conversationId,
-            contactId: evidence.contactId,
-            channel: evidence.channel,
-            systemRole: evidence.systemRole,
-            tier: evidence.tier,
-            tierPresent: evidence.tierPresent,
-            delegatedAddendumApplied: evidence.delegatedAddendumApplied,
-            parentEventId: taskEvent.id,
-          }));
-        } catch (err) {
-          logger.error(
-            { err, agentId, taskEventId: taskEvent.id },
-            'Failed to publish delegation.requester_context — requester-identity evidence not audited',
-          );
-        }
+        // Publish is not swallowed: the bus write-ahead hook already logs a failed
+        // audit insert, and handleTask turns that into an agent error. Running the
+        // specialist after "this task is authorized" with no row would be the gap. (#1859)
+        const evidence = requesterContextEvidence(identity, delegatedAddendumApplied);
+        await bus.publish('agent', createDelegationRequesterContext({
+          delegateEventId: taskEvent.id,
+          taskId: taskEvent.id,
+          agentId,
+          conversationId,
+          contactId: evidence.contactId,
+          channel: evidence.channel,
+          systemRole: evidence.systemRole,
+          tier: evidence.tier,
+          tierPresent: evidence.tierPresent,
+          delegatedAddendumApplied: evidence.delegatedAddendumApplied,
+          parentEventId: taskEvent.id,
+        }));
       } else if (taskEvent.payload.channelId === 'internal' && identity) {
         const identityBlock = renderRequesterIdentity(identity);
         if (ctxBudget.allocate('sender_context', [{ role: 'system', content: identityBlock }])) {
