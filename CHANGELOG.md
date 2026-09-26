@@ -73,6 +73,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Signal RPC tests** — mock sockets are destroyed and servers await close, so peer resets cannot fail green CI. (#1896)
 - **Bullpen mention wake** — an open delegation keeps the principal reply, so that wake cannot send a second one. (#1917)
 - **Inbound email Message ID** — surfaced on every inbound email and forwarded into specialist briefs. (#1909)
 - **Inbound email Account** — named on every inbound email, and specialist briefs keep only that stamp. (#1909)
