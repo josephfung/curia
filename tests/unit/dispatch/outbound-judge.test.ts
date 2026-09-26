@@ -187,6 +187,140 @@ describe('OutboundLlmJudge', () => {
     const calls = (bus as unknown as { published: Array<{ type: string }> }).published.filter((e) => e.type === 'llm.call');
     expect(calls).toHaveLength(0);
   });
+
+  describe('outbound.judge audit events (#1911)', () => {
+    type Published = {
+      type: string;
+      payload?: {
+        outcome?: string;
+        failMode?: string;
+        reason?: string;
+        reasonCode?: string;
+      };
+    };
+
+    function judgeEvents(bus: { published: unknown[] }): Published[] {
+      return (bus.published as Published[]).filter((e) => e.type === 'outbound.judge');
+    }
+
+    it('emits judged_pass on leak=false', async () => {
+      const { judge, bus } = makeJudge(providerReturning(textResponse('{"leak": false, "reason": ""}')));
+      expect(await judge.review(MIXED_INPUT)).toEqual([]);
+      expect(judgeEvents(bus)).toEqual([
+        expect.objectContaining({
+          type: 'outbound.judge',
+          payload: expect.objectContaining({ outcome: 'judged_pass', failMode: 'split' }),
+        }),
+      ]);
+    });
+
+    it('emits judged_block with reasonCode audience_leak on leak=true', async () => {
+      const { judge, bus } = makeJudge(providerReturning(textResponse('{"leak": true, "reason": "side-channel"}')));
+      await judge.review(MIXED_INPUT);
+      expect(judgeEvents(bus)[0]?.payload).toEqual(
+        expect.objectContaining({ outcome: 'judged_block', reasonCode: 'audience_leak' }),
+      );
+    });
+
+    it('emits skipped_principal_sole without failMode when principal is sole recipient', async () => {
+      const provider = providerReturning(textResponse('{"leak": true, "reason": "x"}'));
+      const { judge, bus } = makeJudge(provider);
+      await judge.review({
+        content: 'internal only',
+        recipients: [principal],
+        principalIncluded: true,
+        principalIsSoleRecipient: true,
+        conversationId: 'c1',
+        channelId: 'signal',
+      });
+      expect(provider.chat).not.toHaveBeenCalled();
+      const ev = judgeEvents(bus)[0];
+      expect(ev?.payload?.outcome).toBe('skipped_principal_sole');
+      expect(ev?.payload?.failMode).toBeUndefined();
+      expect(ev?.payload?.reasonCode).toBeUndefined();
+    });
+
+    it('emits failed_open (not silence) when unreachable under failMode: split, and still delivers', async () => {
+      const errorResponse: LLMResponse = { type: 'error', error: { message: 'boom', type: 'PROVIDER_ERROR' } as never };
+      const { judge, bus } = makeJudge(providerReturning(errorResponse), { failMode: 'split' });
+      expect(await judge.review(MIXED_INPUT)).toEqual([]);
+      expect(judgeEvents(bus)).toEqual([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            outcome: 'failed_open',
+            failMode: 'split',
+            reasonCode: 'unreachable',
+          }),
+        }),
+      ]);
+      // Alarm is outbound.judge — not llm.error (HealthService only tracks tier models).
+      expect((bus.published as Published[]).filter((e) => e.type === 'llm.error')).toHaveLength(0);
+    });
+
+    it('emits failed_open on timeout under failMode: split while still delivering', async () => {
+      const slow = {
+        id: 'slow',
+        chat: vi.fn(() => new Promise<LLMResponse>((resolve) => setTimeout(() => resolve(textResponse('{"leak": true, "reason": "late"}')), 50))),
+      } as unknown as LLMProvider;
+      const { judge, bus } = makeJudge(slow, { failMode: 'split', timeoutMs: 5 });
+      expect(await judge.review(MIXED_INPUT)).toEqual([]);
+      expect(judgeEvents(bus)[0]?.payload?.outcome).toBe('failed_open');
+      expect(judgeEvents(bus)[0]?.payload?.reasonCode).toBe('unreachable');
+    });
+
+    it('emits failed_closed (not judged_block) when unreachable under failMode: closed', async () => {
+      const errorResponse: LLMResponse = { type: 'error', error: { message: 'boom' } as never };
+      const { judge, bus } = makeJudge(providerReturning(errorResponse), { failMode: 'closed' });
+      const findings = await judge.review(MIXED_INPUT);
+      expect(findings[0]?.rule).toBe('llm-judge-unavailable');
+      expect(judgeEvents(bus)[0]?.payload).toEqual(
+        expect.objectContaining({ outcome: 'failed_closed', reasonCode: 'unreachable' }),
+      );
+    });
+
+    it('emits judged_block with reasonCode unparseable on malformed verdict under split', async () => {
+      const { judge, bus } = makeJudge(providerReturning(textResponse('not json at all')), { failMode: 'split' });
+      expect((await judge.review(MIXED_INPUT))[0]?.rule).toBe('llm-judge-parse-error');
+      expect(judgeEvents(bus)[0]?.payload).toEqual(
+        expect.objectContaining({ outcome: 'judged_block', reasonCode: 'unparseable' }),
+      );
+    });
+
+    it('distinguishes failed_open from skipped_principal_sole by outcome alone', async () => {
+      const errorResponse: LLMResponse = { type: 'error', error: { message: 'boom' } as never };
+      const { judge: failJudge, bus: failBus } = makeJudge(providerReturning(errorResponse), { failMode: 'split' });
+      await failJudge.review(MIXED_INPUT);
+
+      const { judge: skipJudge, bus: skipBus } = makeJudge(providerReturning(textResponse('{"leak": true, "reason": "x"}')));
+      await skipJudge.review({
+        ...MIXED_INPUT,
+        recipients: [principal],
+        principalIncluded: true,
+        principalIsSoleRecipient: true,
+      });
+
+      const failOutcome = judgeEvents(failBus)[0]?.payload?.outcome;
+      const skipOutcome = judgeEvents(skipBus)[0]?.payload?.outcome;
+      expect(failOutcome).toBe('failed_open');
+      expect(skipOutcome).toBe('skipped_principal_sole');
+      expect(failOutcome).not.toBe(skipOutcome);
+    });
+
+    it('distinguishes failed_closed from judged_block (audience_leak) by outcome alone', async () => {
+      const errorResponse: LLMResponse = { type: 'error', error: { message: 'boom' } as never };
+      const { judge: outageJudge, bus: outageBus } = makeJudge(providerReturning(errorResponse), { failMode: 'closed' });
+      await outageJudge.review(MIXED_INPUT);
+
+      const { judge: leakJudge, bus: leakBus } = makeJudge(
+        providerReturning(textResponse('{"leak": true, "reason": "side-channel"}')),
+        { failMode: 'closed' },
+      );
+      await leakJudge.review(MIXED_INPUT);
+
+      expect(judgeEvents(outageBus)[0]?.payload?.outcome).toBe('failed_closed');
+      expect(judgeEvents(leakBus)[0]?.payload?.outcome).toBe('judged_block');
+    });
+  });
 });
 
 describe('parseVerdict', () => {

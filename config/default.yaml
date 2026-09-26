@@ -304,7 +304,9 @@ filter:
   identityGate: enforce
 
 # Escalation-line policy judge — classifies outbound disclosures and proposed actions,
-# maps tier × class → allow/escalate. Fail-closed: timeout/error → escalate.
+# maps tier × class → allow/escalate. Fail-closed by construction: timeout/error → escalate.
+# There is no failMode key — local.yaml overrides are deep-merged but not schema-checked,
+# so an operator-added failMode is silently ignored (see EscalationJudgeConfig).
 # Recommended: use a different model family than the coordinator (model diversity).
 escalation:
   judge:

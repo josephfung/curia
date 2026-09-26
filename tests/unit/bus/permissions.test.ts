@@ -191,6 +191,15 @@ describe('Bus Permissions', () => {
     expect(canSubscribe('channel', 'outbound.no_reply')).toBe(false);
   });
 
+  it('allows dispatch to publish outbound.judge and system to subscribe (#1911)', () => {
+    expect(canPublish('dispatch', 'outbound.judge')).toBe(true);
+    expect(canPublish('system', 'outbound.judge')).toBe(true);
+    expect(canSubscribe('system', 'outbound.judge')).toBe(true);
+    expect(canPublish('agent', 'outbound.judge')).toBe(false);
+    expect(canPublish('channel', 'outbound.judge')).toBe(false);
+    expect(canSubscribe('channel', 'outbound.judge')).toBe(false);
+  });
+
   it('allows system layer to publish and subscribe to system.restart', () => {
     expect(canPublish('system', 'system.restart')).toBe(true);
     expect(canSubscribe('system', 'system.restart')).toBe(true);

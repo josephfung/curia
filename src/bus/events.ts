@@ -972,6 +972,48 @@ export interface OutboundBlockedEvent extends BaseEvent {
   payload: OutboundBlockedPayload;
 }
 
+// OutboundJudgePayload — Stage-2 LLM audience-leak judge decision (#1911).
+// Emitted for every outbound that reaches the Stage-2 decision point so a skip,
+// pass, block, and fail-open/fail-closed delivery are distinguishable in audit_log
+// without correlating llm.call rows or container logs.
+export type OutboundJudgeOutcome =
+  | 'judged_pass'
+  | 'judged_block'
+  | 'skipped_principal_sole'
+  | 'failed_open'
+  | 'failed_closed';
+
+/** Machine-readable cause — keeps queries off free-text `reason`. */
+export type OutboundJudgeReasonCode =
+  | 'audience_leak'
+  | 'unreachable'
+  | 'unparseable';
+
+interface OutboundJudgePayload {
+  conversationId: string;
+  channelId: string;
+  /**
+   * Stage-2 decision.
+   * `failed_open` = unreachable/malformed + deliver (split/open).
+   * `failed_closed` = unreachable + block (closed) — not a model verdict.
+   */
+  outcome: OutboundJudgeOutcome;
+  /** Configured failMode at decision time (absent for principal-sole skip). */
+  failMode?: 'split' | 'open' | 'closed';
+  /** Stable discriminator for non-skip outcomes. Absent on principal-sole skip. */
+  reasonCode?: OutboundJudgeReasonCode;
+  /** Short non-sensitive reason (rule name / truncated cause). Never quotes body. */
+  reason?: string;
+}
+
+// OutboundJudgeEvent — published by the dispatch-layer Stage-2 judge after each
+// decision (including explicit skips). System layer gets it via write-ahead audit.
+export interface OutboundJudgeEvent extends BaseEvent {
+  type: 'outbound.judge';
+  sourceLayer: 'dispatch';
+  payload: OutboundJudgePayload;
+}
+
 // OutboundPiiRedactedEvent — published by the dispatch layer when PII is redacted from
 // an outbound message before delivery. The message is still sent (with redacted content).
 // No subscriber initially — event is available for future audit UI and alerting rules.
@@ -1536,6 +1578,7 @@ export type BusEvent =
   | ContactElevatedEvent            // #951: automatic tier elevation from unknown → known
   | MessageRejectedEvent  // Unknown sender policy: message rejected, signals HTTP adapter to return 403
   | OutboundBlockedEvent  // Outbound content filter: message blocked before delivery (#38)
+  | OutboundJudgeEvent    // Stage-2 LLM judge decision (pass/block/skip/failed_open|closed) (#1911)
   | OutboundDeliveredEvent // Outbound delivery: wire-level send succeeded (#729)
   | ExportDeliveredEvent   // MCP bulk export: Drive/Sheets record export succeeded (#201)
   | OutboundPiiRedactedEvent // Outbound PII redaction: PII scrubbed before delivery (#249)
@@ -1695,6 +1738,22 @@ export function createOutboundBlocked(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'outbound.blocked',
+    sourceLayer: 'dispatch',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createOutboundJudge(
+  // parentEventId is optional — skill-invoked sends may lack a dispatch parent;
+  // conversationId + channelId in the payload still correlate the decision.
+  payload: OutboundJudgePayload & { parentEventId?: string },
+): OutboundJudgeEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'outbound.judge',
     sourceLayer: 'dispatch',
     payload: rest,
     parentEventId,

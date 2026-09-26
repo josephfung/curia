@@ -11,16 +11,27 @@
 //
 // Prompt-injection defense: the body + recipients are JSON-encoded inside delimiters
 // by outbound-judge-prompt.ts; the system prompt marks them as opaque data.
+//
+// Observability (#1911): every Stage-2 decision publishes an `outbound.judge` audit
+// event (`judged_pass` | `judged_block` | `skipped_principal_sole` | `failed_open` |
+// `failed_closed`). Fail-open/closed outages are queryable via outcome alone;
+// `reasonCode` separates a real leak verdict from unreachable / unparseable failures.
+// Alarm surface is `outbound.judge` + existing `logger.warn` — not `llm.error`
+// (HealthService only tracks tier models; the judge model is usually not one).
 
 import { createHash } from 'node:crypto';
 import type { LLMProvider, LLMUsage, LLMCallProvenance } from '../agents/llm/provider.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
-import { createLlmCall } from '../bus/events.js';
+import { createLlmCall, createOutboundJudge } from '../bus/events.js';
+import type { OutboundJudgeOutcome, OutboundJudgeReasonCode } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import type { FilterFinding, FilterRecipient } from './outbound-filter.js';
 import { JUDGE_SYSTEM_PROMPT, buildJudgeUserPrompt } from './outbound-judge-prompt.js';
+
+/** Cap free-text `reason` so unbounded provider messages don't bloat audit_log. */
+const REASON_MAX_LEN = 200;
 
 export interface JudgeConfig {
   /** When false, review() returns [] without calling the model. */
@@ -58,6 +69,11 @@ interface Verdict {
   reason: string;
 }
 
+function truncateReason(reason: string): string {
+  if (reason.length <= REASON_MAX_LEN) return reason;
+  return `${reason.slice(0, REASON_MAX_LEN - 1)}…`;
+}
+
 export class OutboundLlmJudge implements OutboundJudge {
   private readonly estimateCost: (actualModel: string, usage: LLMUsage, logger?: Logger) => number;
 
@@ -77,7 +93,10 @@ export class OutboundLlmJudge implements OutboundJudge {
     // Principal alone is a private channel: internal language is permitted.
     // NOTE: only skip when the principal is the SOLE recipient. Principal + third
     // parties on the same message still runs the judge.
-    if (input.principalIsSoleRecipient) return [];
+    if (input.principalIsSoleRecipient) {
+      await this.publishDecision(input, 'skipped_principal_sole');
+      return [];
+    }
 
     // No principalIsSoleRecipient arg: that case is already short-circuited above, so
     // by here at least one recipient is a non-principal. Passing it would always be false.
@@ -118,7 +137,7 @@ export class OutboundLlmJudge implements OutboundJudge {
     } catch (err) {
       // LLMProvider.chat() is contractually non-throwing, but guard anyway.
       this.logger.warn({ err, channelId: input.channelId }, 'outbound-judge: provider threw — treating as unreachable');
-      return this.onUnreachable('provider threw');
+      return this.onUnreachable(input, 'provider threw');
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -126,7 +145,7 @@ export class OutboundLlmJudge implements OutboundJudge {
     if (raced === TIMEOUT) {
       controller.abort(); // cancel the orphaned provider call
       this.logger.warn({ timeoutMs: this.config.timeoutMs, channelId: input.channelId }, 'outbound-judge: timed out');
-      return this.onUnreachable(`timed out after ${this.config.timeoutMs}ms`);
+      return this.onUnreachable(input, `timed out after ${this.config.timeoutMs}ms`);
     }
 
     const response = raced;
@@ -134,7 +153,7 @@ export class OutboundLlmJudge implements OutboundJudge {
 
     if (response.type === 'error') {
       this.logger.warn({ error: response.error.message, channelId: input.channelId }, 'outbound-judge: provider returned error');
-      return this.onUnreachable(`provider error: ${response.error.message ?? 'unknown'}`);
+      return this.onUnreachable(input, `provider error: ${response.error.message ?? 'unknown'}`);
     }
     if (response.type !== 'text') {
       // A tool_use response is unexpected for a judge — treat as malformed.
@@ -143,7 +162,7 @@ export class OutboundLlmJudge implements OutboundJudge {
         { responseType: response.type, channelId: input.channelId },
         'outbound-judge: unexpected non-text response — treating as malformed',
       );
-      return this.onMalformed(`unexpected response type: ${response.type}`);
+      return this.onMalformed(input, `unexpected response type: ${response.type}`);
     }
 
     const verdict = parseVerdict(response.content);
@@ -156,32 +175,69 @@ export class OutboundLlmJudge implements OutboundJudge {
         { responseHash, responseLength: response.content.length, channelId: input.channelId },
         'outbound-judge: unparseable verdict',
       );
-      return this.onMalformed('unparseable JSON verdict');
+      return this.onMalformed(input, 'unparseable JSON verdict');
     }
 
     // Telemetry only on a real, parsed model response.
     await this.publishTelemetry(response.usage, response.provenance, latencyMs, userPrompt, response.content, input);
 
     if (verdict.leak) {
+      await this.publishDecision(input, 'judged_block', 'audience_leak', 'llm-judge-audience-leak');
       return [{ rule: 'llm-judge-audience-leak', detail: verdict.reason || 'judge flagged an audience leak' }];
     }
+    await this.publishDecision(input, 'judged_pass');
     return [];
   }
 
   /** Judge unreachable (timeout / API error). split+open → deliver; closed → block. */
-  private onUnreachable(reason: string): FilterFinding[] {
+  private async onUnreachable(input: JudgeInput, reason: string): Promise<FilterFinding[]> {
     if (this.config.failMode === 'closed') {
+      // Outage under closed is not a model verdict — keep it out of judged_block.
+      await this.publishDecision(input, 'failed_closed', 'unreachable', reason);
       return [{ rule: 'llm-judge-unavailable', detail: reason }];
     }
+    // split / open → deliver with Stage-1-only filtering. This used to be silent;
+    // failed_open makes the availability choice visible in audit_log (#1911).
+    await this.publishDecision(input, 'failed_open', 'unreachable', reason);
     return [];
   }
 
   /** Live model produced an unparseable verdict. split+closed → block; open → deliver. */
-  private onMalformed(raw: string): FilterFinding[] {
+  private async onMalformed(input: JudgeInput, raw: string): Promise<FilterFinding[]> {
     if (this.config.failMode === 'open') {
+      await this.publishDecision(input, 'failed_open', 'unparseable', raw);
       return [];
     }
+    // Live model responded but we couldn't parse — still a block, tagged unparseable
+    // so queries don't conflate it with audience_leak.
+    await this.publishDecision(input, 'judged_block', 'unparseable', raw);
     return [{ rule: 'llm-judge-parse-error', detail: raw }];
+  }
+
+  private async publishDecision(
+    input: JudgeInput,
+    outcome: OutboundJudgeOutcome,
+    reasonCode?: OutboundJudgeReasonCode,
+    reason?: string,
+  ): Promise<void> {
+    try {
+      await this.bus.publish('dispatch', createOutboundJudge({
+        conversationId: input.conversationId || 'system',
+        channelId: input.channelId,
+        outcome,
+        // Skip has no failMode / reasonCode semantics; omit so queries can tell
+        // skip from fail-open and from a real verdict.
+        ...(outcome === 'skipped_principal_sole'
+          ? {}
+          : {
+              failMode: this.config.failMode,
+              ...(reasonCode ? { reasonCode } : {}),
+            }),
+        ...(reason ? { reason: truncateReason(reason) } : {}),
+      }));
+    } catch (err) {
+      this.logger.warn({ err, outcome, channelId: input.channelId }, 'outbound-judge: failed to publish outbound.judge event');
+    }
   }
 
   private async publishTelemetry(

@@ -52,6 +52,7 @@ The audit logger extracts structured fields from each event payload before INSER
 | `outbound.message` | `send` | `success` | `conversation` / conversationId | `system` / `dispatch` |
 | `outbound.no_reply` | `suppress` | `success` | `conversation` / conversationId | `system` / `dispatch` |
 | `outbound.delivered` | `deliver` | `success` | `conversation` / conversationId | `channel` / channelId |
+| `outbound.judge` | `judge` | from payload.outcome (`success`/`denied`/`error`) | `conversation` / conversationId | `system` / `dispatch` |
 | `tool.invoke` | `execute` | `pending` | `skill` / toolName | `agent` / agentId |
 | `tool.result` | `execute` | from `result.success` | `skill` / toolName | `agent` / agentId |
 | `memory.store` | `create` | `success` | `kg_node` / nodeId | `agent` / agentId |
@@ -98,6 +99,7 @@ A controlled vocabulary for the `action` column. Inspired by CADF and FHIR Audit
 | `authenticate` | Authentication attempted |
 | `escalate` | Action escalated to human oversight |
 | `configure` | System configuration changed |
+| `judge` | Stage-2 outbound LLM judge recorded a decision (#1911) |
 
 New actions can be added as new event types are introduced. The `action` column is a TEXT field, not an enum, to avoid migration churn.
 

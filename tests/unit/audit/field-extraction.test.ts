@@ -108,4 +108,38 @@ describe('extractStructuredFields', () => {
       initiator_id: 'dispatch',
     });
   });
+
+  it('maps outbound.judge outcomes into spec 10 enum (#1911)', () => {
+    expect(extractStructuredFields(
+      'outbound.judge',
+      { conversationId: 'c1', channelId: 'email', outcome: 'failed_open', failMode: 'split' },
+      'evt-7',
+      logger,
+    )).toEqual({
+      action: 'judge',
+      outcome: 'error',
+      target_type: 'conversation',
+      target_id: 'c1',
+      initiator_type: 'system',
+      initiator_id: 'dispatch',
+    });
+    expect(extractStructuredFields(
+      'outbound.judge',
+      { conversationId: 'c1', channelId: 'email', outcome: 'failed_closed', failMode: 'closed', reasonCode: 'unreachable' },
+      'evt-7b',
+      logger,
+    ).outcome).toBe('error');
+    expect(extractStructuredFields(
+      'outbound.judge',
+      { conversationId: 'c1', channelId: 'signal', outcome: 'skipped_principal_sole' },
+      'evt-8',
+      logger,
+    ).outcome).toBe('success');
+    expect(extractStructuredFields(
+      'outbound.judge',
+      { conversationId: 'c1', channelId: 'email', outcome: 'judged_block', failMode: 'split', reasonCode: 'audience_leak' },
+      'evt-9',
+      logger,
+    ).outcome).toBe('denied');
+  });
 });
