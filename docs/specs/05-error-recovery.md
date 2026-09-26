@@ -251,10 +251,10 @@ content) and by dispatch (to skip the send). Other `agent.response` subscribers 
 parse `content` for the token.
 
 A live principal turn that declines is still honoured (the CEO saying "thanks" and Curia
-correctly saying nothing is a real case) but dispatch publishes `outbound.notification`
-(`no_reply_principal`) so silence toward the principal is not invisible. Prompt-only
-"do not use NO_REPLY with the CEO" remains as guidance; the notification is the
-code-level guard.
+correctly saying nothing is a real case). Silence is reconstructible from the
+`outbound.no_reply` audit row and the dispatcher log line — there is no inbox
+interrupt for a deliberate decline (#1908). Prompt-only "do not use NO_REPLY with
+the CEO" remains as guidance.
 
 Use `NO_REPLY` when nothing should go out (automated notification, archive-only FYI).
 Do not narrate that decision — narration that does not start with the token is still

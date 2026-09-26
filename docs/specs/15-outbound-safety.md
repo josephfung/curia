@@ -120,8 +120,9 @@ A near-miss sentinel (fenced token plus prose, or the token as a standalone word
 body) is the opposite trade: suppress the send and salvage an email draft, never deliver the
 control token to an external inbox.
 
-A live principal turn that returns `NO_REPLY` is honoured on the original channel and also
-emits `outbound.notification` (`no_reply_principal`) so silence toward the CEO is observable.
+A live principal turn that returns `NO_REPLY` is honoured on the original channel.
+Silence is reconstructible from `outbound.no_reply` and the dispatcher log line —
+there is no inbox interrupt for a deliberate decline (#1908).
 
 Agents document the sentinel in the coordinator prompt (external-audience and Sending and
 replying sections). Narration such as "I'll just archive it" that does **not** start with

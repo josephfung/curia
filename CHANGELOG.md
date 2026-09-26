@@ -64,6 +64,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
+- **`no_reply_principal` email** — a deliberate decline stays in audit and logs, not the inbox. (#1908)
 - **Google Workspace calendar tools** — held back from MCP registration; principal calendar belongs to `@calendar`. (#1853)
 
 ### Fixed

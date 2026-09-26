@@ -1,14 +1,14 @@
 import type { EventBus } from '../bus/bus.js';
 import type { InboundMessageEvent, AgentResponseEvent, AgentErrorEvent, ToolResultEvent, OutboundBlockedEvent, AuthorizationDecisionEvent } from '../bus/events.js';
-import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createOutboundNotification, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
+import { createAgentTask, createOutboundMessage, createOutboundSuppressedDuplicate, createOutboundNoReply, createContactResolved, createContactUnknown, createMessageRejected, createConversationCheckpoint, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { ContactResolver } from '../contacts/contact-resolver.js';
 import {
   summarizeAuthorizationDecision,
   formatAuthorizationSubjectSummary,
 } from '../contacts/authorization.js';
-import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, PrincipalEmailRef, TaskOriginator } from '../contacts/types.js';
-import { isAutomatedKind, resolvePrincipalEmail } from '../contacts/types.js';
+import type { InboundSenderContext, ChannelPolicyConfig, TrustLevel, UnknownSenderPolicy, TaskOriginator } from '../contacts/types.js';
+import { isAutomatedKind } from '../contacts/types.js';
 import { unknownSenderPolicy } from '../contacts/channel-sender-policy.js';
 import { JUDGMENT_ELEVATION_THRESHOLD } from '../contacts/confidence-scorer.js';
 import type { InboundScanner } from './inbound-scanner.js';
@@ -126,12 +126,6 @@ export interface DispatcherConfig {
    *  When absent, all elevation paths are silently skipped. */
   contactService?: import('../contacts/contact-service.js').ContactService;
   /**
-   * Principal email for `no_reply_principal` notifications (#1732). Accepts a
-   * mutable PrincipalEmailRef so post-boot identity binds hot-reload. When
-   * absent/empty, principal no-reply is still honoured but the CEO is not emailed.
-   */
-  ceoEmail?: string | PrincipalEmailRef;
-  /**
    * Approval trigger for Gate C escalations on the dispatcher relay path (#1733).
    * When absent, the relay still blocks on escalate but does not create a
    * pending_approval row (same fail-open-on-wiring as the execution layer).
@@ -227,7 +221,6 @@ export class Dispatcher {
   private _outboundContextService?: import('./outbound-context.js').OutboundContextService;
   /** Contact service for automatic tier elevation (issue #951). */
   private contactService?: import('../contacts/contact-service.js').ContactService;
-  private ceoEmail?: string | PrincipalEmailRef;
   private approvalTrigger?: ApprovalTriggerService;
   private escalationJudge?: EscalationJudge;
   private bullpenService?: BullpenService;
@@ -247,7 +240,6 @@ export class Dispatcher {
     this.selfEmail = config.selfEmail;
     this._outboundContextService = config.outboundContextService;
     this.contactService = config.contactService;
-    this.ceoEmail = config.ceoEmail;
     this.approvalTrigger = config.approvalTrigger;
     this.escalationJudge = config.escalationJudge;
     this.bullpenService = config.bullpenService;
@@ -1697,8 +1689,10 @@ export class Dispatcher {
   }
 
   /**
-   * Honour a no-reply / empty / near-miss response: audit event, optional draft salvage
-   * for ambiguous tokens, optional principal notification. Never publishes a live send.
+   * Honour a no-reply / empty / near-miss response: audit event and optional draft
+   * salvage for ambiguous tokens. Never publishes a live send. Silence on a live
+   * principal turn is reconstructible from `outbound.no_reply` + the log line —
+   * no inbox interrupt (#1908).
    */
   private async publishNoReply(args: {
     event: AgentResponseEvent;
@@ -1764,14 +1758,14 @@ export class Dispatcher {
       }, event.id);
     }
 
-    if (routing.liveTurn) {
-      if (routing.channelId === 'voice' || routing.channelId === 'cli' || routing.channelId === 'http') {
-        this.logger.warn(
-          { channelId: routing.channelId, conversationId: routing.conversationId, reason },
-          'Dispatcher no-reply: principal turn ended in silence on a conversational channel',
-        );
-      }
-      await this.notifyPrincipalNoReply(event, routing, reason);
+    if (
+      routing.liveTurn &&
+      (routing.channelId === 'voice' || routing.channelId === 'cli' || routing.channelId === 'http')
+    ) {
+      this.logger.warn(
+        { channelId: routing.channelId, conversationId: routing.conversationId, reason },
+        'Dispatcher no-reply: principal turn ended in silence on a conversational channel',
+      );
     }
 
     this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
@@ -1793,39 +1787,6 @@ export class Dispatcher {
       return 'content_block_abandoned';
     }
     return 'agent_declined';
-  }
-
-  private async notifyPrincipalNoReply(
-    event: AgentResponseEvent,
-    routing: { channelId: string; conversationId: string; senderId: string },
-    reason: 'agent_declined' | 'content_block_abandoned' | 'empty_response' | 'ambiguous_decline',
-  ): Promise<void> {
-    const ceoEmail = resolvePrincipalEmail(this.ceoEmail);
-    if (!ceoEmail) {
-      this.logger.warn(
-        { conversationId: routing.conversationId, channelId: routing.channelId, reason },
-        'Dispatcher no-reply: principal turn ended in silence but ceoEmail is unset — notification skipped',
-      );
-      return;
-    }
-    await this.bus.publish(
-      'dispatch',
-      createOutboundNotification({
-        notificationType: 'no_reply_principal',
-        ceoEmail,
-        subject: 'FYI — Curia ended a turn without replying',
-        body: [
-          'Curia ended a turn without sending a reply.',
-          'The original channel received nothing; this note is so the silence is visible.',
-          '',
-          `Channel: ${routing.channelId}`,
-          `Reason: ${reason}`,
-        ].join('\n'),
-        originalChannel: routing.channelId,
-        originalRecipientId: routing.senderId,
-        parentEventId: event.id,
-      }),
-    );
   }
 
   /** Publish a salvage outbound.message that the email adapter saves as a draft (#1355). */
