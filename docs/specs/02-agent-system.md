@@ -16,23 +16,18 @@ As of v0.35.0 the Coordinator prompt was re-derived around an explicit three-way
 
 ### Delegated specialist context (#1871)
 
-A delegated specialist does not re-decide whether the requester may ask. The
-dispatcher and the coordinator already did that. `delegate` publishes the
-specialist task with `metadata.delegationOrigin`, the validated
-`metadata.originator`, and no `senderContext`. The runtime renders two
-different blocks:
+The trust decision — who may authorize a relay, what a specialist author may
+assume, and why the specialist does not re-adjudicate requester identity — is
+[ADR-045](../adr/045-delegated-specialist-trust.md). This section is the
+behaviour that follows from it.
 
-- **Requester identity** — who asked, on which channel, with what system role
-  and tier. Any internal-channel task that carries a validated originator gets
-  this, including a coordinator task such as the voice off-ramp (channel
-  `internal`, originator, no `delegationOrigin`). The identity is context for
-  the work. It is not a permission input, and this block does not say
-  authorization was settled.
-- **Delegated-specialist addendum** — only when `delegationOrigin` is set.
-  States that the task is authorized, and that authorization is not
-  identification: a missing identity or tier `unknown` is not a further
-  clearance. Includes the `<specialist_decline>` instructions. The coordinator
-  does not receive this addendum; it still adjudicates senders.
+`delegate` publishes the specialist task with `metadata.delegationOrigin`, the
+validated `metadata.originator`, and no `senderContext`. The runtime renders
+two blocks. Requester identity (contact id, channel, system role, tier) goes on
+any internal-channel task that carries a validated originator, including a
+coordinator task such as the voice off-ramp. The delegated-specialist addendum,
+including the `<specialist_decline>` instructions, is rendered only when
+`delegationOrigin` is set. The coordinator does not receive that addendum.
 
 Detection keys off `delegationOrigin`, not `channelId`. A new internal-channel
 caller does not inherit specialist framing. Channel `internal` with neither a
@@ -41,9 +36,14 @@ low-trust block. Inbound channel metadata cannot supply `delegationOrigin`; the
 dispatcher strips it, the same way it strips a channel-supplied `originator`.
 Only `delegate` stamps the marker, on the specialist task.
 
-Sender judgment that remains in a specialist prompt is task quality scoped to
-that decision. Calendar RSVP policy applies only to a formal-invite CONSULT
-REQUEST. A day brief has no invite sender.
+Each delegated specialist task emits `delegation.requester_context` with the
+identity evidence placed in the prompt: `contactId`, `channel`, `systemRole`,
+`tier`, and whether the addendum was applied. The specialist `agent.task` id
+is the correlation key. `AuditLogRepo.findDelegationRequesterContext` returns
+the rows for that one delegation.
+
+Calendar RSVP policy stays scoped to a formal-invite consult. A day brief has
+no invite sender. The reason that judgment is task-scoped is ADR-045.
 
 A specialist that cannot do the task ends its reply with
 `<specialist_decline>`. A marker quoted earlier in the answer is not a refusal.
