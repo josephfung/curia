@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createLogger } from '../../../src/logger.js';
+import type { Logger } from '../../../src/logger.js';
 import {
   createAgentResponse,
   createAgentTask,
@@ -12,15 +13,34 @@ import {
 } from '../../../src/bus/events.js';
 import { NO_REPLY_SENTINEL } from '../../../src/dispatch/no-reply.js';
 
-function buildHarness(opts: { ceoEmail?: string } = {}) {
-  const logger = createLogger('error');
+function mockLogger(): Logger {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  } as unknown as Logger;
+}
+
+function principalOriginator() {
+  return {
+    contactId: 'principal-1',
+    systemRole: 'principal' as const,
+    channel: 'email' as const,
+    initiatedAt: new Date().toISOString(),
+    tier: 'principal' as const,
+  };
+}
+
+function buildHarness(opts: { logger?: Logger } = {}) {
+  const logger = opts.logger ?? createLogger('error');
   const bus = new EventBus(logger);
   const outboundMessages: OutboundMessageEvent[] = [];
   const noReplyEvents: OutboundNoReplyEvent[] = [];
   const notifications: OutboundNotificationEvent[] = [];
   const suppressed: OutboundSuppressedDuplicateEvent[] = [];
 
-  const dispatcher = new Dispatcher({ bus, logger, ceoEmail: opts.ceoEmail });
+  const dispatcher = new Dispatcher({ bus, logger });
   dispatcher.register();
 
   bus.subscribe('outbound.message', 'channel', (event) => {
@@ -36,7 +56,42 @@ function buildHarness(opts: { ceoEmail?: string } = {}) {
     suppressed.push(event as OutboundSuppressedDuplicateEvent);
   });
 
-  return { bus, dispatcher, outboundMessages, noReplyEvents, notifications, suppressed };
+  return { bus, dispatcher, outboundMessages, noReplyEvents, notifications, suppressed, logger };
+}
+
+async function publishLiveNoReply(
+  harness: ReturnType<typeof buildHarness>,
+  opts: {
+    content: string;
+    channelId?: string;
+    suppressDelivery?: boolean;
+    conversationId?: string;
+  },
+): Promise<void> {
+  const channelId = opts.channelId ?? 'email';
+  const conversationId = opts.conversationId ?? `${channelId}:ceo-thread`;
+  const task = createAgentTask({
+    agentId: 'coordinator',
+    conversationId,
+    channelId,
+    senderId: 'ceo@example.com',
+    content: 'thanks',
+    parentEventId: `inbound-${conversationId}`,
+  });
+  harness.dispatcher.registerExternalTaskRouting(task.id, {
+    channelId,
+    conversationId,
+    senderId: 'ceo@example.com',
+    liveTurn: true,
+    originator: principalOriginator(),
+  });
+  await harness.bus.publish('system', createAgentResponse({
+    agentId: 'coordinator',
+    conversationId,
+    content: opts.content,
+    ...(opts.suppressDelivery ? { suppressDelivery: true } : {}),
+    parentEventId: task.id,
+  }));
 }
 
 describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
@@ -54,13 +109,7 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-abc',
       senderId: 'sender@example.com',
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
+      originator: principalOriginator(),
     });
 
     const response = createAgentResponse({
@@ -96,13 +145,7 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-abc',
       senderId: 'sender@example.com',
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
+      originator: principalOriginator(),
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -132,13 +175,7 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-abc',
       senderId: 'sender@example.com',
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
+      originator: principalOriginator(),
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -151,80 +188,76 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
     expect(noReplyEvents).toHaveLength(0);
   });
 
-  it('notifies the principal when a liveTurn declines, without sending on the original channel', async () => {
-    const { bus, dispatcher, outboundMessages, noReplyEvents, notifications } = buildHarness({
-      ceoEmail: 'ceo@example.com',
-    });
-    const task = createAgentTask({
-      agentId: 'coordinator',
-      conversationId: 'email:ceo-thread',
-      channelId: 'email',
-      senderId: 'ceo@example.com',
-      content: 'thanks',
-      parentEventId: 'inbound-ceo',
-    });
-    dispatcher.registerExternalTaskRouting(task.id, {
-      channelId: 'email',
-      conversationId: 'email:ceo-thread',
-      senderId: 'ceo@example.com',
-      liveTurn: true,
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
-    });
-    await bus.publish('system', createAgentResponse({
-      agentId: 'coordinator',
-      conversationId: 'email:ceo-thread',
-      content: NO_REPLY_SENTINEL,
-      parentEventId: task.id,
-    }));
+  it('honours a live-turn decline without emailing the principal (#1908)', async () => {
+    const logger = mockLogger();
+    const harness = buildHarness({ logger });
+    await publishLiveNoReply(harness, { content: NO_REPLY_SENTINEL });
 
-    expect(outboundMessages).toHaveLength(0);
-    expect(noReplyEvents).toHaveLength(1);
-    expect(noReplyEvents[0]!.payload.reason).toBe('agent_declined');
-    expect(notifications).toHaveLength(1);
-    expect(notifications[0]!.payload.notificationType).toBe('no_reply_principal');
-    expect(notifications[0]!.payload.ceoEmail).toBe('ceo@example.com');
+    expect(harness.outboundMessages).toHaveLength(0);
+    expect(harness.noReplyEvents).toHaveLength(1);
+    expect(harness.noReplyEvents[0]!.payload.reason).toBe('agent_declined');
+    expect(harness.notifications).toHaveLength(0);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'agent_declined', liveTurn: true }),
+      'Dispatcher no-reply: skipping outbound delivery',
+    );
   });
 
-  it('honours principal no-reply without notifying when ceoEmail is unset', async () => {
-    const { bus, dispatcher, outboundMessages, noReplyEvents, notifications } = buildHarness();
-    const task = createAgentTask({
-      agentId: 'coordinator',
-      conversationId: 'email:ceo-thread',
-      channelId: 'email',
-      senderId: 'ceo@example.com',
-      content: 'thanks',
-      parentEventId: 'inbound-ceo-2',
-    });
-    dispatcher.registerExternalTaskRouting(task.id, {
-      channelId: 'email',
-      conversationId: 'email:ceo-thread',
-      senderId: 'ceo@example.com',
-      liveTurn: true,
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
-    });
-    await bus.publish('system', createAgentResponse({
-      agentId: 'coordinator',
-      conversationId: 'email:ceo-thread',
-      content: NO_REPLY_SENTINEL,
-      parentEventId: task.id,
-    }));
+  it('does not notify on live-turn empty_response (#1908)', async () => {
+    const logger = mockLogger();
+    const harness = buildHarness({ logger });
+    await publishLiveNoReply(harness, { content: '   ' });
 
-    expect(outboundMessages).toHaveLength(0);
-    expect(noReplyEvents).toHaveLength(1);
-    expect(notifications).toHaveLength(0);
+    expect(harness.outboundMessages).toHaveLength(0);
+    expect(harness.noReplyEvents).toHaveLength(1);
+    expect(harness.noReplyEvents[0]!.payload.reason).toBe('empty_response');
+    expect(harness.notifications).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'empty_response', liveTurn: true }),
+      'Dispatcher no-reply: skipping outbound delivery',
+    );
   });
+
+  it('does not notify on live-turn ambiguous_decline; still salvages the draft (#1908)', async () => {
+    const logger = mockLogger();
+    const harness = buildHarness({ logger });
+    const nearMiss = 'NO_REPLY — I will archive this.';
+    await publishLiveNoReply(harness, { content: nearMiss });
+
+    expect(harness.noReplyEvents).toHaveLength(1);
+    expect(harness.noReplyEvents[0]!.payload.reason).toBe('ambiguous_decline');
+    expect(harness.noReplyEvents[0]!.payload.abandonedContent).toBe(nearMiss);
+    expect(harness.notifications).toHaveLength(0);
+    const salvage = harness.outboundMessages.filter((m) => m.payload.contentBlockSalvage);
+    expect(salvage).toHaveLength(1);
+    expect(salvage[0]!.payload.content).toBe(nearMiss);
+    expect(harness.outboundMessages.filter((m) => !m.payload.contentBlockSalvage)).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'ambiguous_decline', liveTurn: true }),
+      'Dispatcher no-reply: skipping outbound delivery',
+    );
+  });
+
+  it.each(['voice', 'cli', 'http'] as const)(
+    'warns when a live %s turn ends in silence (#1908)',
+    async (channelId) => {
+      const logger = mockLogger();
+      const harness = buildHarness({ logger });
+      await publishLiveNoReply(harness, {
+        content: NO_REPLY_SENTINEL,
+        channelId,
+        conversationId: `${channelId}:ceo-thread`,
+      });
+
+      expect(harness.noReplyEvents).toHaveLength(1);
+      expect(harness.noReplyEvents[0]!.payload.reason).toBe('agent_declined');
+      expect(harness.notifications).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ channelId, reason: 'agent_declined' }),
+        'Dispatcher no-reply: principal turn ended in silence on a conversational channel',
+      );
+    },
+  );
 
   it('salvages a near-miss sentinel as a draft instead of sending it', async () => {
     const { bus, dispatcher, outboundMessages, noReplyEvents } = buildHarness();
@@ -240,13 +273,7 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-near',
       senderId: 'known@example.com',
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
+      originator: principalOriginator(),
     });
     const nearMiss = 'NO_REPLY — I will archive this.';
     await bus.publish('system', createAgentResponse({
@@ -279,13 +306,7 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-empty',
       senderId: 'known@example.com',
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
+      originator: principalOriginator(),
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -313,13 +334,7 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-flag',
       senderId: 'known@example.com',
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
+      originator: principalOriginator(),
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -348,13 +363,7 @@ describe('Dispatcher no-reply — handleAgentResponse (#1732)', () => {
       channelId: 'email',
       conversationId: 'email:thread-abc',
       senderId: 'sender@example.com',
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
+      originator: principalOriginator(),
     });
     await bus.publish('system', createAgentResponse({
       agentId: 'coordinator',
@@ -405,13 +414,7 @@ describe('Dispatcher reply-lock still wins over NO_REPLY', () => {
       channelId: 'email',
       conversationId: 'email:thread-lock',
       senderId: 'sender@example.com',
-      originator: {
-        contactId: 'principal-1',
-        systemRole: 'principal',
-        channel: 'email',
-        initiatedAt: new Date().toISOString(),
-        tier: 'principal',
-      },
+      originator: principalOriginator(),
     });
     // Reply-lock is set by a successful email-reply skill, not by the public routing seam.
     (dispatcher as unknown as {
