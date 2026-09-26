@@ -37,6 +37,12 @@ import type { ToolRegistry } from './registry.js';
 import type { SkillRegistry } from './skill-registry.js';
 import { unifiedToolSearch, resolveSkillActivation } from './skill-activation.js';
 import { sanitizeOutput, sanitizeObjectOutput } from './sanitize.js';
+import {
+  isHumanReplySkill,
+  ORIGIN_TURN_OWNS_REPLY_ERROR,
+  ORIGIN_TURN_OWNS_REPLY_KEY,
+  parseOriginTurnOwnsReply,
+} from '../dispatch/origin-turn-reply.js';
 import { createSecretAccessed, createAutonomySkillBlocked, createAuthorizationDecision } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
@@ -1137,6 +1143,34 @@ export class ExecutionLayer {
           error: this.wrapSkillError(
             `Tool '${toolName}' is restricted to agents: ${allowedCallers.join(', ')}`,
           ),
+        };
+      }
+    }
+
+    // A bullpen wake stamped originTurnOwnsReply is the delegator being told
+    // about work its own still-open turn will answer. Refuse the human-channel
+    // send here, before autonomy can write an approval for a message that must
+    // not go out. humanApproved is a CEO re-execution and is not this race.
+    // A malformed stamp fails open inside the parser. (#1917)
+    if (!options?.humanApproved && isHumanReplySkill(toolName)) {
+      const owner = parseOriginTurnOwnsReply(
+        options?.taskMetadata?.[ORIGIN_TURN_OWNS_REPLY_KEY],
+      );
+      if (owner) {
+        skillLogger.info(
+          {
+            toolName,
+            agentId: options?.agentId,
+            taskEventId: options?.taskEventId,
+            delegateEventId: owner.delegateEventId,
+            originConversationId: owner.originConversationId,
+            originChannelId: owner.originChannelId,
+          },
+          'outbound suppressed — originating turn still owns the principal reply (#1917)',
+        );
+        return {
+          success: false,
+          error: this.wrapSkillError(ORIGIN_TURN_OWNS_REPLY_ERROR),
         };
       }
     }

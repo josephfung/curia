@@ -73,6 +73,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Bullpen mention wake** — an open delegation keeps the principal reply, so that wake cannot send a second one. (#1917)
 - **Inbound email Message ID** — surfaced on every inbound email and forwarded into specialist briefs. (#1909)
 - **Inbound email Account** — named on every inbound email, and specialist briefs keep only that stamp. (#1909)
 - **Inbound email Account** — mailbox names over 200 characters stay intact for exact lookup. (#1909)
