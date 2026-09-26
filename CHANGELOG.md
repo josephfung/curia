@@ -61,6 +61,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`contextBridge` config** — new `channelDefaultExpiryHours` map sets the auto-registration TTL per channel. (#1816)
 - **`email-reply` / `email-send` inputs (public API)** — optional `account` selects the mailbox; send only when threading. (#1832)
 - **Coordinator** — CC replies pass the preamble Account into `email-reply`. (#1832)
+- **`OutboundNotificationPayload.notificationType` (public API)** — `'no_reply_principal'` removed from the union. (#1908)
 
 ### Removed
 
