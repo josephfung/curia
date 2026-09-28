@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "@tanstack/react-router": "^1.170.36",
+    "@tanstack/react-router": "^1.170.38",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react-oxc": "^0.4.3",
