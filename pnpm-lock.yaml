@@ -91,8 +91,8 @@ importers:
         specifier: ^5.12.4
         version: 5.12.4
       googleapis:
-        specifier: ^180.0.0
-        version: 180.0.0
+        specifier: ^181.0.0
+        version: 181.0.0
       js-yaml:
         specifier: ^5.4.2
         version: 5.4.2
@@ -4021,8 +4021,8 @@ packages:
     resolution: {integrity: sha512-UJBElspYPJb0+fI8q0LxARw1hPnwd9yd5NqhKqEUPxjhnB1jdsRP7rlRTBp69JS5Vo10bCiRE9+ISsIG2A+Ttg==}
     engines: {node: '>=22'}
 
-  googleapis@180.0.0:
-    resolution: {integrity: sha512-vuIkT4W09kDZn+dQbvSh1p2VU4DMZ7B/zLlxxlQgZjb06U0C6rA+5HSbZSlhp3DiSOZYHCOsuXJ+DUWIOQMVhw==}
+  googleapis@181.0.0:
+    resolution: {integrity: sha512-fCzsqaVjA5FrA9DdXn4WlnmnLUvqjWx0JGZzcHbSC9iMfb8PK1lTxsvYpnaRf0j4b6usfKlW+YHSKjHnkgqmjQ==}
     engines: {node: '>=22.0.0'}
 
   gopd@1.2.0:
@@ -10293,7 +10293,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  googleapis@180.0.0:
+  googleapis@181.0.0:
     dependencies:
       google-auth-library: 11.1.0
       googleapis-common: 9.1.0
