@@ -93,7 +93,7 @@ fetchTimeout: 90000
 # seven more floors were found stale in the same audit (#1933).
 #
 # DO NOT AUDIT THIS BY HAND. `pnpm audit:override-floors` does it, and
-# .github/workflows/override-floor-audit.yml runs it weekly and on any PR touching this
+# .github/workflows/override-floor-audit.yml runs it daily and on any PR touching this
 # file. For every entry below it enumerates the published releases the floor admits and
 # tests each one against both GitHub's global advisory DB and the package's own repo
 # advisories, then reports the computed safe floor. It exists because all three traps
