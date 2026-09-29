@@ -19,14 +19,17 @@
 //   8. Loud failure on API error, and on an empty advisory list that was not declared
 //   9. Prereleases are excluded from the admitted set
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import semver from 'semver';
 import {
   parseOverrides,
   parseFloorRange,
   overrideSubject,
   normalizeAdvisoryRange,
+  parseRepositoryUrl,
   toAdvisoryRecords,
+  createLiveSource,
+  DegradedCoverageError,
   auditOverrideFloors,
   formatReport,
   type AdvisoryRecord,
@@ -191,6 +194,13 @@ describe('parseFloorRange', () => {
   it('throws rather than skipping an unparseable specifier', () => {
     expect(() => parseFloorRange('not-a-range')).toThrow(/cannot parse/i);
   });
+
+  it('rejects a multi-branch specifier rather than mis-advising a fix for it', () => {
+    // renderSafeFloor rewrites ONE lower bound, so for `^1.0.0 || ^2.0.0` it produced
+    // `^2.2.0 || ^2.0.0` — still admitting the vulnerable 2.0.0 it was meant to escape.
+    // Nothing in this repo uses `||`; refusing it beats emitting advice that is wrong.
+    expect(() => parseFloorRange('^1.0.0 || ^2.0.0')).toThrow(/\|\|/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -240,6 +250,67 @@ describe('normalizeAdvisoryRange', () => {
     ['<=2.4.0; 3.0.0<= 3.1.0', '<=2.4.0||>=3.0.0 <=3.1.0'],
   ])('normalizes %s', (raw, expected) => {
     expect(normalizeAdvisoryRange(raw)).toBe(expected);
+  });
+
+  it.each([
+    // DESCENDING comma-OR lists. Verbatim from /repos/juliangruber/brace-expansion.
+    // The first grouping rule was "extend while the group stays satisfiable", which holds
+    // only for ascending disjoint alternatives: here `>=2.0.0` is BELOW the open
+    // `>=3.0.0 <5.0.7` window, so it stayed satisfiable, got swallowed, and the entire
+    // 2.x branch of a HIGH advisory was judged clean.
+    [
+      '>= 3.0.0, < 5.0.7, >= 2.0.0, < 2.1.2, < 1.1.16',
+      ['3.0.0', '4.9.0', '5.0.6', '2.0.0', '2.0.2', '2.1.1', '1.1.15'],
+      ['5.0.7', '2.1.2', '1.1.16'],
+    ],
+    [
+      '>=5.0.0 <5.0.5, >=3.0.0 < 3.0.2, >=2.0.0 <2.0.3, >=0.0.0 <1.1.13',
+      ['5.0.0', '5.0.4', '3.0.0', '3.0.1', '2.0.0', '2.0.2', '1.1.12'],
+      ['5.0.5', '3.0.2', '2.0.3', '1.1.13'],
+    ],
+    // Two same-direction bounds must read as OR, not as a narrowing AND.
+    ['< 1.1.20, < 2.1.6', ['1.5.0', '1.9.0', '2.1.5'], ['2.1.6']],
+  ])('groups %s as alternatives, not one narrowed window', (raw, vulnerable, safe) => {
+    const range = normalizeAdvisoryRange(raw);
+    for (const v of vulnerable) {
+      expect(semver.satisfies(v, range), `${v} should be vulnerable`).toBe(true);
+    }
+    for (const v of safe) {
+      expect(semver.satisfies(v, range), `${v} should be clean`).toBe(false);
+    }
+  });
+
+  it('keeps a caret or tilde as a range instead of narrowing it to one version', () => {
+    // tokenizeAtoms accepted `^`/`~` but emitted the bare version, so `^1.2.3` matched
+    // only 1.2.3 and declared 1.3.0-1.9.x clean.
+    const caret = normalizeAdvisoryRange('^1.2.3');
+    expect(semver.satisfies('1.2.3', caret)).toBe(true);
+    expect(semver.satisfies('1.9.0', caret)).toBe(true);
+    expect(semver.satisfies('2.0.0', caret)).toBe(false);
+
+    const tilde = normalizeAdvisoryRange('~1.2.3');
+    expect(semver.satisfies('1.2.9', tilde)).toBe(true);
+    expect(semver.satisfies('1.3.0', tilde)).toBe(false);
+  });
+
+  it('reads an unspaced hyphen range as a range, not as a prerelease tag', () => {
+    // `3.0.0-3.0.3` is one token, and semver reads it as 3.0.0 with prerelease "3.0.3",
+    // which matches nothing once prereleases are filtered out — a silent drop.
+    const range = normalizeAdvisoryRange('3.0.0-3.0.3');
+    expect(semver.satisfies('3.0.0', range)).toBe(true);
+    expect(semver.satisfies('3.0.2', range)).toBe(true);
+    expect(semver.satisfies('3.0.3', range)).toBe(true);
+    expect(semver.satisfies('3.0.4', range)).toBe(false);
+  });
+
+  it('still treats a genuine prerelease tag as an exact version', () => {
+    expect(normalizeAdvisoryRange('1.0.0-beta.1')).toBe('1.0.0-beta.1');
+  });
+
+  it('throws when ANY alternative is unsatisfiable, not only when all are', () => {
+    // The guard was `.some(isSatisfiable)`, so one good group excused a dead one and a
+    // backwards hyphen range contributed nothing without a word.
+    expect(() => normalizeAdvisoryRange('< 1.0.0; 5.0.0 - 4.0.0')).toThrow(/matches no version/i);
   });
 
   it('reads comma as OR when the parts cannot be a single AND group', () => {
@@ -723,6 +794,33 @@ describe('minimumReleaseAge', () => {
     expect(text).toContain('GHSA-pqg4-j6r4-53mv');
   });
 
+  it('fails when a HIGHER clean version is installable even if the lowest is not', async () => {
+    // npm publish order is not monotonic in semver order: a backport patch lands after a
+    // later minor. Judging quarantine on the LOWEST clean version alone claimed the floor
+    // was unraisable when `>=8.10.3` in fact resolves fine today (pnpm skips the
+    // quarantined 8.10.3 and takes 8.11.0), so an actionable finding exited 0.
+    const report = await auditOverrideFloors({
+      workspaceYaml:
+        `packages:\n  - 'apps/*'\n\nminimumReleaseAge: 1440\n\noverrides:\n  undici: '>=8.10.2'\n`,
+      policy: NO_POLICY,
+      now: NOW,
+      source: fakeSource({
+        versions: { undici: ['8.10.2', '8.10.3', '8.11.0'] },
+        global: { undici: [adv('GHSA-3wwx-pv8p-q78v', 'high', ['>= 8.0.0, <= 8.10.2'])] },
+        publishedAt: {
+          undici: {
+            '8.10.3': '2026-09-29T11:00:00.000Z', // an hour old: quarantined
+            '8.11.0': '2026-03-01T00:00:00.000Z', // months old: installable
+          },
+        },
+      }),
+    });
+
+    expect(report.quarantined).toEqual([]);
+    expect(report.stale).toHaveLength(1);
+    expect(report.exitCode).toBe(1);
+  });
+
   it('fails once the safe floor has aged past the quarantine', async () => {
     // Same data, one day later: the excuse has expired and this is a plain stale floor.
     const report = await auditOverrideFloors({
@@ -750,6 +848,64 @@ describe('minimumReleaseAge', () => {
     expect(report.exitCode).toBe(1);
   });
 
+  it('fails rather than excusing a floor whose fix claims a future publish date', async () => {
+    // A publish time in the future is corrupt registry data, and trusting it would put
+    // an actionable HIGH into the non-failing bucket until that date arrives.
+    const report = await auditOverrideFloors({
+      workspaceYaml: shellQuote.workspaceYaml,
+      policy: NO_POLICY,
+      now: NOW,
+      source: fakeSource({
+        versions: { 'shell-quote': ['1.9.0', '1.10.0', '1.11.0'] },
+        global: {
+          'shell-quote': [adv('GHSA-pqg4-j6r4-53mv', 'high', ['>= 1.8.4, < 1.11.0'])],
+        },
+        publishedAt: { 'shell-quote': { '1.11.0': '2099-01-01T00:00:00.000Z' } },
+      }),
+    });
+
+    expect(report.quarantined).toEqual([]);
+    expect(report.stale).toHaveLength(1);
+    expect(report.exitCode).toBe(1);
+  });
+
+  it('rejects an absurd quarantine window rather than excusing everything', async () => {
+    // A stray digit in the value — in the very file a floor-raising PR is already
+    // editing — would otherwise convert every stale floor into a green exit 0 for years.
+    const report = await auditOverrideFloors({
+      workspaceYaml:
+        `packages:\n  - 'apps/*'\n\nminimumReleaseAge: 14400000\n\noverrides:\n  shell-quote: '>=1.9.0'\n`,
+      policy: NO_POLICY,
+      now: NOW,
+      source: shellQuote.source,
+    });
+
+    expect(report.exitCode).toBe(1);
+    expect(report.errors.join('\n')).toMatch(/minimumReleaseAge/);
+  });
+
+  it('keeps the finding when the quarantine lookup itself fails', async () => {
+    // The finding is fully computed before the publish-time lookup. A registry 503 used
+    // to discard it and report only the HTTP error, losing the advisory and safe floor.
+    const report = await auditOverrideFloors({
+      workspaceYaml: shellQuote.workspaceYaml,
+      policy: NO_POLICY,
+      now: NOW,
+      source: {
+        ...shellQuote.source,
+        publishedAt: async () => {
+          throw new Error('GET https://registry.npmjs.org/shell-quote -> HTTP 503');
+        },
+      },
+    });
+
+    expect(report.stale).toHaveLength(1);
+    expect(report.stale[0]!.safeFloor).toBe('>=1.11.0');
+    expect(report.stale[0]!.advisories.map((a) => a.ghsaId)).toEqual(['GHSA-pqg4-j6r4-53mv']);
+    expect(report.exitCode).toBe(1);
+    expect(report.degraded.join('\n')).toMatch(/503/);
+  });
+
   it('fails rather than excusing a floor whose publish date is unknown', async () => {
     // No publish time means we cannot prove the fix is quarantined. Defaulting to
     // "quarantined" would turn an unknown into a free pass on a HIGH.
@@ -769,6 +925,179 @@ describe('minimumReleaseAge', () => {
     expect(report.quarantined).toEqual([]);
     expect(report.stale).toHaveLength(1);
     expect(report.exitCode).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4c. Degraded coverage
+//
+// The review that followed the first draft named the unifying flaw: the script had a
+// vocabulary for "this is broken" (errors, exit 1) and for "this is fine" (checked), but
+// none for "my coverage of this package was reduced". Every such case then rendered as
+// clean. `degraded` is that third vocabulary, and it is printed in the report.
+// ---------------------------------------------------------------------------
+
+describe('parseRepositoryUrl', () => {
+  it.each([
+    // Every shape actually present in the packages this repo pins.
+    ['git+https://github.com/fastify/fast-uri.git', 'fastify/fast-uri'],
+    ['git+ssh://git@github.com/ljharb/shell-quote.git', 'ljharb/shell-quote'],
+    ['git://github.com/form-data/form-data.git', 'form-data/form-data'],
+    ['https://github.com/honojs/node-server', 'honojs/node-server'],
+    // npm shorthands. `github:squirrelchat/smol-toml` is what smol-toml actually
+    // publishes, and returning null for it silently cost us a real MED finding
+    // (GHSA-r4xh-jqrq-34v2, upstream-only, admitted by the >=1.7.1 floor).
+    ['github:squirrelchat/smol-toml', 'squirrelchat/smol-toml'],
+    ['squirrelchat/smol-toml', 'squirrelchat/smol-toml'],
+    // Trailing slash, fragment, and a monorepo subdirectory URL.
+    ['https://github.com/honojs/node-server/', 'honojs/node-server'],
+    ['https://github.com/juliangruber/brace-expansion#readme', 'juliangruber/brace-expansion'],
+    ['https://github.com/nodeca/js-yaml/tree/master', 'nodeca/js-yaml'],
+    [
+      'https://github.com/open-telemetry/opentelemetry-js/tree/main/packages/core',
+      'open-telemetry/opentelemetry-js',
+    ],
+  ])('resolves %s', (raw, expected) => {
+    expect(parseRepositoryUrl(raw)).toBe(expected);
+  });
+
+  it.each([
+    // A lookalike host must not be read as github.com.
+    ['https://evilgithub.com/attacker/repo'],
+    ['https://github.com.attacker.test/a/b'],
+    // Other forges, and junk.
+    ['https://gitlab.com/owner/repo.git'],
+    ['https://bitbucket.org/owner/repo'],
+    [''],
+    ['not a url at all'],
+    // A slug that would inject into the API path.
+    ['https://github.com/foo?x=evil/bar'],
+  ])('rejects %s', (raw) => {
+    expect(parseRepositoryUrl(raw)).toBeNull();
+  });
+});
+
+describe('degraded coverage', () => {
+  const soundYaml = `packages:\n  - 'apps/*'\n\noverrides:\n  left-pad: '>=2.0.0'\n`;
+
+  it('records, rather than hides, a package with no resolvable GitHub repo', async () => {
+    // Previously this was `slug ? fetch : []` with no output: the upstream-repo leg
+    // silently did not run and the report still said every floor was sound.
+    const report = await auditOverrideFloors({
+      workspaceYaml: soundYaml,
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { 'left-pad': ['2.0.0', '2.0.1'] },
+        global: { 'left-pad': [adv('GHSA-aaaa-bbbb-cccc', 'high', ['< 2.0.0'])] },
+        repos: { 'left-pad': null },
+      }),
+    });
+
+    expect(report.stale).toEqual([]);
+    expect(report.degraded.join('\n')).toMatch(/left-pad/);
+    expect(report.degraded.join('\n')).toMatch(/global advisory DB only/i);
+    expect(formatReport(report)).toMatch(/DEGRADED COVERAGE/);
+  });
+
+  it('does not claim every floor is sound while coverage is degraded', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: soundYaml,
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { 'left-pad': ['2.0.0'] },
+        global: { 'left-pad': [adv('GHSA-aaaa-bbbb-cccc', 'high', ['< 2.0.0'])] },
+        repos: { 'left-pad': null },
+      }),
+    });
+
+    expect(report.exitCode).toBe(0);
+    expect(formatReport(report)).not.toMatch(/are sound/);
+  });
+
+  it('fails when a floor admits no published version at all', async () => {
+    // The script argued at length that an empty ADVISORY list means the query broke,
+    // then accepted an empty VERSION list without comment and printed "sound".
+    const report = await auditOverrideFloors({
+      workspaceYaml: `packages:\n  - 'apps/*'\n\noverrides:\n  left-pad: '>=99.0.0'\n`,
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { 'left-pad': ['1.0.0', '2.0.0'] },
+        global: { 'left-pad': [adv('GHSA-aaaa-bbbb-cccc', 'high', ['< 2.0.0'])] },
+      }),
+    });
+
+    expect(report.exitCode).toBe(1);
+    expect(report.errors.join('\n')).toMatch(/no published version/i);
+    expect(report.checked).toEqual([]);
+  });
+
+  it('fails when a floor admits only prereleases', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: `packages:\n  - 'apps/*'\n\noverrides:\n  left-pad: '>=3.0.0'\n`,
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { 'left-pad': ['2.0.0', '3.0.0-rc.1'] },
+        global: { 'left-pad': [adv('GHSA-aaaa-bbbb-cccc', 'high', ['< 2.0.0'])] },
+      }),
+    });
+
+    expect(report.exitCode).toBe(1);
+    expect(report.errors.join('\n')).toMatch(/no published version/i);
+  });
+
+  it('reports a noAdvisoryExpected entry that is no longer needed', async () => {
+    // Same rot detection the allowlist already gets. This entry is the escape hatch
+    // from the "empty advisory list means the query broke" assertion, so a stale one
+    // is exactly as dangerous as a stale allowlist entry.
+    const report = await auditOverrideFloors({
+      workspaceYaml: soundYaml,
+      policy: {
+        allowlist: [],
+        noAdvisoryExpected: [{ override: 'left-pad', reason: 'not advisory-motivated' }],
+      },
+      source: fakeSource({
+        versions: { 'left-pad': ['2.0.0'] },
+        global: { 'left-pad': [adv('GHSA-aaaa-bbbb-cccc', 'high', ['< 2.0.0'])] },
+      }),
+    });
+
+    expect(report.exitCode).toBe(0);
+    expect(report.unusedNoAdvisoryExpected.map((e) => e.override)).toEqual(['left-pad']);
+  });
+});
+
+describe('advisory records that cannot be used', () => {
+  it('fails when an advisory names the package but carries no usable range', async () => {
+    // Distinct from a monorepo advisory naming a DIFFERENT package, which is a correct
+    // skip. Here the advisory is about us and we cannot tell which versions it covers.
+    const report = await auditOverrideFloors({
+      workspaceYaml: `packages:\n  - 'apps/*'\n\noverrides:\n  left-pad: '>=2.0.0'\n`,
+      policy: NO_POLICY,
+      source: fakeSource({
+        versions: { 'left-pad': ['2.0.0'] },
+        global: { 'left-pad': [adv('GHSA-blan-kran-ge01', 'critical', [''])] },
+      }),
+    });
+
+    expect(report.exitCode).toBe(1);
+    expect(report.errors.join('\n')).toMatch(/GHSA-blan-kran-ge01/);
+  });
+
+  it('treats an unknown severity as unknown without corrupting the sort', async () => {
+    // `severity in SEVERITY_ORDER` walked the prototype chain, so 'constructor' passed
+    // and produced a Severity whose sort weight was undefined (NaN comparator).
+    const raw: RawAdvisory[] = [
+      {
+        ghsa_id: 'GHSA-prot-otyp-e001',
+        severity: 'constructor',
+        state: 'published',
+        vulnerabilities: [
+          { package: { ecosystem: 'npm', name: 'left-pad' }, vulnerable_version_range: '< 2.0.0' },
+        ],
+      },
+    ];
+
+    expect(toAdvisoryRecords(raw, 'left-pad', 'global')[0]!.severity).toBe('unknown');
   });
 });
 
@@ -837,6 +1166,162 @@ describe('failure modes', () => {
     expect(report.exitCode).toBe(1);
     expect(report.errors.join('\n')).toMatch(/undici/);
     expect(report.checked).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. The live HTTP source
+//
+// Every swallowed-error path the review found lived here, in the one function with no
+// tests. `fetch` is stubbed; nothing leaves the process.
+// ---------------------------------------------------------------------------
+
+describe('createLiveSource', () => {
+  interface StubResponse {
+    status?: number;
+    statusText?: string;
+    body?: unknown;
+    link?: string;
+  }
+
+  let calls: { url: string; headers: Record<string, string> }[];
+
+  function stubFetch(routes: (url: string) => StubResponse): void {
+    calls = [];
+    vi.stubGlobal('fetch', async (url: string, init?: { headers?: Record<string, string> }) => {
+      calls.push({ url, headers: init?.headers ?? {} });
+      const r = routes(url);
+      const status = r.status ?? 200;
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        statusText: r.statusText ?? 'OK',
+        headers: { get: (h: string) => (h.toLowerCase() === 'link' ? (r.link ?? null) : null) },
+        json: async () => r.body ?? [],
+      };
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const advisoryBody = (ghsa: string, pkg: string) => [
+    {
+      ghsa_id: ghsa,
+      severity: 'high',
+      state: 'published',
+      vulnerabilities: [
+        { package: { ecosystem: 'npm', name: pkg }, vulnerable_version_range: '< 9.9.9' },
+      ],
+    },
+  ];
+
+  it('propagates a rate-limit 403 instead of reporting no advisories', async () => {
+    // This was the worst of the swallows: `/HTTP 40[34]/` matched the rate-limit message
+    // getAllPages had just formatted, so a 403 became "this repo has no advisories" and
+    // the whole upstream-repo leg went quiet on a green run.
+    stubFetch(() => ({ status: 403, statusText: 'Forbidden' }));
+    const source = createLiveSource('t0ken');
+
+    await expect(source.repoAdvisories('nodeca/js-yaml', 'js-yaml')).rejects.toThrow(/403/);
+  });
+
+  it('propagates a 429', async () => {
+    stubFetch(() => ({ status: 429, statusText: 'Too Many Requests' }));
+    const source = createLiveSource('t0ken');
+
+    await expect(source.repoAdvisories('nodeca/js-yaml', 'js-yaml')).rejects.toThrow(/429/);
+  });
+
+  it('degrades on a 404, because that repo genuinely has no advisory list', async () => {
+    // Signalled as DegradedCoverageError, not an empty array: the caller records it in
+    // report.degraded so a green run with reduced coverage is visible as such.
+    stubFetch(() => ({ status: 404, statusText: 'Not Found' }));
+    const source = createLiveSource('t0ken');
+
+    await expect(source.repoAdvisories('gone/away', 'gone')).rejects.toThrow(
+      DegradedCoverageError,
+    );
+  });
+
+  it('follows Link rel=next so a long advisory list is not truncated', async () => {
+    const page2 = 'https://api.github.com/advisories?ecosystem=npm&affects=undici&page=2';
+    stubFetch((url) =>
+      url.includes('page=2')
+        ? { body: advisoryBody('GHSA-pag2-0000-0000', 'undici') }
+        : { body: advisoryBody('GHSA-pag1-0000-0000', 'undici'), link: `<${page2}>; rel="next"` },
+    );
+    const source = createLiveSource('t0ken');
+
+    const records = await source.globalAdvisories('undici');
+    expect(records.map((r) => r.ghsaId)).toEqual([
+      'GHSA-pag1-0000-0000',
+      'GHSA-pag2-0000-0000',
+    ]);
+  });
+
+  it('refuses to follow a Link header pointing off api.github.com', async () => {
+    // Following it would re-attach the Bearer token to a foreign origin. A cross-origin
+    // redirect is stripped by undici; an explicit header follow is not.
+    stubFetch((url) =>
+      url.includes('attacker')
+        ? { body: [] }
+        : {
+            body: advisoryBody('GHSA-pag1-0000-0000', 'undici'),
+            link: '<https://attacker.test/steal>; rel="next"',
+          },
+    );
+    const source = createLiveSource('t0ken');
+
+    await expect(source.globalAdvisories('undici')).rejects.toThrow(/api\.github\.com/);
+    expect(calls.some((c) => c.url.includes('attacker'))).toBe(false);
+  });
+
+  it('never sends the GitHub token to the npm registry', async () => {
+    stubFetch(() => ({ body: { versions: { '1.0.0': {} }, time: { '1.0.0': '2020-01-01T00:00:00Z' } } }));
+    const source = createLiveSource('sup3r-s3cret');
+
+    await source.listVersions('left-pad');
+    await source.publishedAt('left-pad', '1.0.0');
+
+    const registryCalls = calls.filter((c) => c.url.startsWith('https://registry.npmjs.org'));
+    expect(registryCalls.length).toBeGreaterThan(0);
+    for (const call of registryCalls) {
+      expect(JSON.stringify(call.headers)).not.toContain('sup3r-s3cret');
+    }
+  });
+
+  it('percent-encodes a scoped package name in the registry path', async () => {
+    stubFetch(() => ({ body: { versions: { '2.1.3': {} } } }));
+    const source = createLiveSource('t0ken');
+
+    await source.listVersions('@hono/node-server');
+    expect(calls[0]!.url).toBe('https://registry.npmjs.org/@hono%2fnode-server');
+  });
+
+  it('rejects a package name that would escape the registry path', async () => {
+    stubFetch(() => ({ body: { versions: { '1.0.0': {} } } }));
+    const source = createLiveSource('t0ken');
+
+    await expect(source.listVersions('foo?x=1')).rejects.toThrow(/package name/i);
+    await expect(source.listVersions('a/b/c')).rejects.toThrow(/package name/i);
+    expect(calls).toEqual([]);
+  });
+
+  it('rejects a repo slug that would escape the advisories path', async () => {
+    stubFetch(() => ({ body: [] }));
+    const source = createLiveSource('t0ken');
+
+    await expect(source.repoAdvisories('foo?x=evil/bar', 'foo')).rejects.toThrow(/slug/i);
+    expect(calls).toEqual([]);
+  });
+
+  it('fails when the registry reports no versions', async () => {
+    stubFetch(() => ({ body: { versions: {} } }));
+    const source = createLiveSource('t0ken');
+
+    await expect(source.listVersions('left-pad')).rejects.toThrow(/no versions/);
   });
 });
 

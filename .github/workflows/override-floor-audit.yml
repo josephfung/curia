@@ -11,7 +11,13 @@ name: Override Floor Audit
 # The per-PR leg still matters: it catches a newly written floor that is wrong on arrival.
 on:
   schedule:
-    - cron: '20 7 * * 1'  # Monday 07:20 UTC, after the Scorecard run at 06:30
+    # DAILY, not weekly. #1934 specified weekly, but the quarantine state added during
+    # review makes weekly unsafe: a stale floor whose fix is younger than
+    # `minimumReleaseAge` exits 0, so on a weekly cadence a known-stale floor can sit
+    # unreported for seven days even though the fix became installable on day one. Daily
+    # bounds that to ~24h, which is what "this clears itself" has to mean to be true.
+    # The run costs ~50 read-only API calls.
+    - cron: '20 7 * * *'  # 07:20 UTC, after the Monday Scorecard run at 06:30
   pull_request:
     branches: [main]
     paths:
@@ -31,6 +37,9 @@ jobs:
   audit:
     name: Audit override floors
     runs-on: ubuntu-latest
+    # The script parses third-party advisory text; a bound means a pathological input
+    # cannot sit on a runner for the 6-hour default.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -49,6 +58,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Audit override floors
+        id: audit
         run: pnpm run audit:override-floors
         env:
           # The advisory API rate-limits anonymous requests to 60/hour; this audit makes
@@ -64,6 +74,7 @@ jobs:
     needs: audit
     if: always() && needs.audit.result == 'failure' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       issues: write
@@ -106,8 +117,8 @@ jobs:
               'The `fast-uri` case needed both._',
             ].join('\n');
 
-            // Reuse one open issue rather than filing a new one every week — a floor that
-            // stays stale for a month should not produce four threads. Bounded to recent
+            // Reuse one open issue rather than filing a new one every day — a floor that
+            // stays stale for a month should not produce thirty threads. Bounded to recent
             // activity so an abandoned thread does not swallow every future alert.
             const REUSE_WINDOW_DAYS = 30;
             const { data: candidates } = await github.rest.issues.listForRepo({
