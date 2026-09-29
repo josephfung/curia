@@ -1,12 +1,13 @@
 // escape-regexp.ts — the one regex-literal escape for the whole codebase.
 //
-// Before this module the same character class was declared three times: once as
-// a named helper in channels/slack/slack-entities.ts and twice inline in
-// agents/agent-display-name.ts. All three agreed, so nothing was broken — but a
-// fourth caller writing the class from memory is how they stop agreeing, and
-// CodeQL already caught exactly that drift in a test
-// (js/incomplete-sanitization, code-scanning alert 284: an escape covering dots
-// but not backslashes).
+// Before this module the same character class was declared four times: a named
+// helper in channels/slack/slack-entities.ts, two inline copies in
+// agents/agent-display-name.ts, and one in skills/_shared/voice-learn-logic.ts.
+// All four agreed, so nothing was broken — but a fifth caller writing the class
+// from memory is how they stop agreeing, and the failure is silent: a narrowed
+// class mis-escapes rather than throwing. CodeQL already caught exactly that
+// drift in a test (js/incomplete-sanitization, code-scanning alert 284: an
+// escape covering dots but not backslashes).
 //
 // The class below is the full ECMAScript set of characters that are meaningful
 // outside a character class, plus the backslash itself. Order matters only in

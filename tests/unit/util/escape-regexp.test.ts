@@ -11,9 +11,17 @@ import { escapeRegExp } from '../../../src/util/escape-regexp.js';
 
 describe('escapeRegExp', () => {
   it('escapes a backslash — the character an ad-hoc escape forgets', () => {
-    // Unescaped, the `\` would pair with whatever follows it and change meaning.
-    expect(new RegExp(escapeRegExp('a\\b')).test('a\\b')).toBe(true);
-    expect(new RegExp(escapeRegExp('a\\b')).test('ab')).toBe(false);
+    // Assert the output text, not a round-trip through `new RegExp`. A round-trip is
+    // blind to this bug: for input `a\b` an unescaped class yields /a\b/, a word
+    // boundary, which still matches "a\b" and still rejects "ab" — the same verdicts
+    // as the correct escape. A test built that way passes against the exact defect
+    // alert 284 was raised for.
+    expect(escapeRegExp('a\\b')).toBe('a\\\\b');
+
+    // `\d` does discriminate, so keep one behavioural case too: escaped it matches a
+    // literal backslash-then-d; unescaped it compiles to the digit class and matches "5".
+    expect(new RegExp(`^${escapeRegExp('\\d')}$`).test('\\d')).toBe(true);
+    expect(new RegExp(`^${escapeRegExp('\\d')}$`).test('5')).toBe(false);
   });
 
   // Every meta-character, one case each, so a narrowed character class fails loudly
