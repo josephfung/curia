@@ -5,7 +5,7 @@
 // published release the floor admits is free of known advisories. #1934.
 //
 // Run locally:  GITHUB_TOKEN=$(gh auth token) pnpm audit:override-floors
-// Run in CI:    .github/workflows/override-floor-audit.yml (weekly + on workspace edits)
+// Run in CI:    .github/workflows/override-floor-audit.yml (daily + on workspace edits)
 //
 // Exit codes: 0 = no floor is failing, 1 = a stale floor, a parse error, or an API failure.
 // A stale floor whose fix is younger than the workspace's own `minimumReleaseAge` is a
@@ -199,9 +199,17 @@ export interface StaleFloor extends CheckedOverride {
  */
 export interface QuarantinedFloor extends StaleFloor {
   safeFloor: string;
-  /** The version the safe floor would pin to. */
+  /**
+   * The clean admitted version that ages out of the quarantine FIRST — the one whose
+   * maturity makes `safeFloor` resolvable, and the one `installableAt` belongs to.
+   */
   safeVersion: string;
-  /** ISO timestamp at which that version ages past the quarantine. */
+  /**
+   * ISO timestamp at which `safeVersion` ages past the quarantine, i.e. when this finding
+   * becomes an ordinary failure. Paired with `safeVersion` deliberately: reporting one
+   * version's name beside another's window is how the report came to contradict the
+   * verdict.
+   */
   installableAt: string;
 }
 
@@ -848,7 +856,13 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
         : [];
 
       let allQuarantined = cleanVersions.length > 0 && quarantineMinutes !== null;
-      let lastExpiry: Date | null = null;
+      // The EARLIEST expiry, and the version it belongs to. Not the latest: the floor
+      // becomes raisable as soon as ANY clean version ages out, because `>=safeVersion`
+      // then resolves to whichever one is mature. Reporting the latest told the maintainer
+      // to wait longer than necessary while this check started failing at the earliest —
+      // the report and the verdict disagreed.
+      let earliestExpiry: Date | null = null;
+      let earliestVersion: string | null = null;
       if (allQuarantined) {
         for (const candidate of cleanVersions) {
           let expiry: Date | null;
@@ -876,16 +890,21 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
             allQuarantined = false;
             break;
           }
-          if (!lastExpiry || expiry > lastExpiry) lastExpiry = expiry;
+          if (!earliestExpiry || expiry < earliestExpiry) {
+            earliestExpiry = expiry;
+            earliestVersion = candidate;
+          }
         }
       }
 
-      if (allQuarantined && safeVersion && finding.safeFloor && lastExpiry) {
+      if (allQuarantined && finding.safeFloor && earliestExpiry && earliestVersion) {
         quarantined.push({
           ...finding,
           safeFloor: finding.safeFloor,
-          safeVersion,
-          installableAt: lastExpiry.toISOString(),
+          // The version this timestamp actually belongs to, so the report cannot name one
+          // version and quote another's window.
+          safeVersion: earliestVersion,
+          installableAt: earliestExpiry.toISOString(),
         });
         continue;
       }

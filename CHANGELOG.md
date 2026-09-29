@@ -31,10 +31,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ToolContext` (public API)** — `selfEmails` lists every owned mailbox for reply-all exclusion. (#1815)
 - **`pnpm audit:override-floors`** — CI asserts every override floor admits no advisory-bearing release. (#1934)
 
-### Security
-
-- **Override floors** — `smol-toml`, `js-yaml`, `brace-expansion` raised off versions carrying upstream-only advisories. (#1934)
-
 ### Changed
 
 - **`tool.result` (public API)** — optional `originConversationId` ties a specialist send to the principal thread. (#1860)
@@ -176,6 +172,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Dependency floors** — `fast-uri` and `ip-address` raised past ineffective pins, clearing six advisories. (#1933)
 - **Override floor audit** — seven more pins raised off versions that were still vulnerable. (#1933)
+- **Override floors** — `smol-toml`, `js-yaml`, `brace-expansion` raised off versions carrying upstream-only advisories. (#1934)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 

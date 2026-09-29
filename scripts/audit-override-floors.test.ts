@@ -821,6 +821,38 @@ describe('minimumReleaseAge', () => {
     expect(report.exitCode).toBe(1);
   });
 
+  it('reports when the floor becomes raisable, not when the newest fix ages out', async () => {
+    // Two clean versions, both quarantined, ages differing. The floor becomes raisable as
+    // soon as the EARLIEST of them ages out, because `>=1.11.0` then resolves to whichever
+    // is mature. Reporting the latest expiry told the maintainer to wait until 1.12.0's
+    // window closed, while the audit itself started failing an hour earlier — it flips as
+    // soon as any clean version is installable. Every other quarantine test has a single
+    // candidate, which is why none of them caught this.
+    const report = await auditOverrideFloors({
+      workspaceYaml:
+        `packages:\n  - 'apps/*'\n\nminimumReleaseAge: 1440\n\noverrides:\n  shell-quote: '>=1.9.0'\n`,
+      policy: NO_POLICY,
+      now: NOW,
+      source: fakeSource({
+        versions: { 'shell-quote': ['1.9.0', '1.10.0', '1.11.0', '1.12.0'] },
+        global: {
+          'shell-quote': [adv('GHSA-pqg4-j6r4-53mv', 'high', ['>= 1.8.4, < 1.11.0'])],
+        },
+        publishedAt: {
+          'shell-quote': {
+            '1.11.0': '2026-09-29T10:00:00.000Z', // ages out first
+            '1.12.0': '2026-09-29T11:00:00.000Z', // ages out an hour later
+          },
+        },
+      }),
+    });
+
+    expect(report.quarantined).toHaveLength(1);
+    expect(report.quarantined[0]!.installableAt).toBe('2026-09-30T10:00:00.000Z');
+    // And the timestamp must belong to the version the report names.
+    expect(report.quarantined[0]!.safeVersion).toBe('1.11.0');
+  });
+
   it('fails once the safe floor has aged past the quarantine', async () => {
     // Same data, one day later: the excuse has expired and this is a plain stale floor.
     const report = await auditOverrideFloors({

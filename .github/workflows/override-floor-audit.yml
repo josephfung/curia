@@ -5,8 +5,11 @@ name: Override Floor Audit
 #
 # Why a SCHEDULE and not only per-PR: a floor goes stale when UPSTREAM publishes an
 # advisory, which has nothing to do with our commit cadence. Every one of the nine stale
-# floors #1933 found was introduced by a correct-at-the-time pin, and five more had gone
-# stale by the day this check landed. A PR-only check would never have seen any of them.
+# floors #1933 found was introduced by a correct-at-the-time pin, and SIX more had gone
+# stale by the day this check landed — four of them with the vulnerable version actually
+# resolved, and none of the six carrying a Dependabot alert, because every one of those
+# advisories lives only on the project's own repo. A PR-only check would never have seen
+# any of them.
 #
 # The per-PR leg still matters: it catches a newly written floor that is wrong on arrival.
 on:
