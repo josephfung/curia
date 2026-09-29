@@ -7,7 +7,8 @@
 // Run locally:  GITHUB_TOKEN=$(gh auth token) pnpm audit:override-floors
 // Run in CI:    .github/workflows/override-floor-audit.yml (daily + on workspace edits)
 //
-// Exit codes: 0 = no floor is failing, 1 = a stale floor, a parse error, or an API failure.
+// Exit codes: 0 = no floor is failing, 1 = a stale floor, a parse error, an API failure,
+// or reduced advisory coverage (see AuditPolicy.globalDbOnly).
 // A stale floor whose fix is younger than the workspace's own `minimumReleaseAge` is a
 // third state: reported loudly, exit 0, self-clearing. See quarantineExpiry.
 //
@@ -62,8 +63,24 @@ export interface NoAdvisoryExpectedEntry {
   reason: string;
 }
 
+export interface GlobalDbOnlyEntry {
+  /** The advisory SUBJECT package that has no readable GitHub advisory list. */
+  package: string;
+  reason: string;
+}
+
 export interface AuditPolicy {
   allowlist: AllowlistEntry[];
+  /**
+   * Packages for which global-DB-only coverage is accepted, because no GitHub advisory
+   * list is reachable — hosted elsewhere, no `repository` field, or the repo was renamed.
+   *
+   * Reduced coverage otherwise FAILS: the upstream-repo leg is the whole point of trap 3,
+   * and silently doing without it is how `smol-toml`'s only advisory went missing. But a
+   * package genuinely hosted off GitHub has no remedy, and a permanently red check is one
+   * people stop reading — so the exception is declarable, with a reason, per package.
+   */
+  globalDbOnly: GlobalDbOnlyEntry[];
   /**
    * Overrides that exist for a NON-security reason. Every other override is here
    * because of an advisory, so an empty advisory response for one of those means the
@@ -85,6 +102,9 @@ export const DEFAULT_POLICY: AuditPolicy = {
   // If GitHub ever un-withdraws it, this check will fail on `uuid` — which is correct,
   // and the paragraph above is the reasoning to paste back in.
   allowlist: [],
+  // Empty: all 23 pinned packages currently resolve a GitHub repo whose advisory list
+  // reads cleanly. An entry here is only for a package GitHub cannot serve advisories for.
+  globalDbOnly: [],
   noAdvisoryExpected: [
     {
       override: 'gaxios>rimraf',
@@ -684,6 +704,17 @@ function validatePolicy(policy: AuditPolicy): string[] {
     if (!entry.reason?.trim()) errors.push(`${where}: \`reason\` is required`);
   });
 
+  policy.globalDbOnly.forEach((entry, i) => {
+    const where = `globalDbOnly[${i}] (${entry.package || '<no package>'})`;
+    if (!entry.package?.trim()) errors.push(`${where}: \`package\` is required`);
+    if (!entry.reason?.trim()) {
+      errors.push(
+        `${where}: \`reason\` is required — accepting reduced advisory coverage without ` +
+          'saying why is how the smol-toml miss happened',
+      );
+    }
+  });
+
   return errors;
 }
 
@@ -769,8 +800,11 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
         );
       }
 
-      const advisories = await collectAdvisories(source, override.subject, (note) =>
-        degraded.push(note),
+      const advisories = await collectAdvisories(
+        source,
+        override.subject,
+        (note) => degraded.push(note),
+        policy.globalDbOnly.some((e) => e.package === override.subject),
       );
       if (advisories.length === 0) {
         const declared = policy.noAdvisoryExpected.find((e) => e.override === override.key);
@@ -929,7 +963,11 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
     errors,
     unusedAllowlist,
     // `quarantined` is deliberately NOT a failure: see quarantineExpiry.
-    exitCode: errors.length > 0 || stale.length > 0 ? 1 : 0,
+    // `degraded` fails. #1934 requires incomplete advisory data to fail loudly rather
+    // than pass by default, and a warning inside a green job is not a failing audit —
+    // notify-failure never fires, so nobody is told. Declare the exception in
+    // DEFAULT_POLICY.globalDbOnly if a package genuinely cannot be covered.
+    exitCode: errors.length > 0 || stale.length > 0 || degraded.length > 0 ? 1 : 0,
   };
 }
 
@@ -1015,12 +1053,13 @@ async function collectAdvisories(
   source: PackageDataSource,
   pkg: string,
   onDegraded: (note: string) => void,
+  globalDbOnlyDeclared: boolean,
 ): Promise<AdvisoryRecord[]> {
   const global = await source.globalAdvisories(pkg);
 
   // Trap 3: the global DB lags a project's own repo advisories.
   const slug = await source.upstreamRepo(pkg);
-  if (!slug) {
+  if (!slug && !globalDbOnlyDeclared) {
     // Previously `slug ? fetch : []` with no output: the upstream-repo leg silently did
     // not run and the report still claimed every floor was sound. That is how
     // `smol-toml` (repository: "github:squirrelchat/smol-toml") lost its only advisory.
@@ -1038,7 +1077,7 @@ async function collectAdvisories(
       // Only a declared coverage reduction is tolerated here. Anything else — a 403, a
       // rate limit, a network error — propagates and fails the override.
       if (!(err instanceof DegradedCoverageError)) throw err;
-      onDegraded(`\`${pkg}\`: ${err.message}`);
+      if (!globalDbOnlyDeclared) onDegraded(`\`${pkg}\`: ${err.message}`);
     }
   }
 
@@ -1128,7 +1167,15 @@ export function formatReport(report: AuditReport): string {
       `DEGRADED COVERAGE (${report.degraded.length}) — the audit ran, but checked less than ` +
         'it should have:',
     );
-    for (const note of report.degraded) lines.push(`  ! ${note}`);
+    for (const note of report.degraded) lines.push(`  ✗ ${note}`);
+    lines.push('');
+    lines.push(
+      '  This FAILS the run. Reduced advisory coverage is not a clean result: the',
+      '  upstream-repo leg is what catches advisories the global DB has not ingested, and',
+      '  doing without it silently is how smol-toml\'s only advisory went missing. If a',
+      '  package genuinely has no reachable GitHub advisory list, declare it in',
+      '  DEFAULT_POLICY.globalDbOnly with a reason.',
+    );
     lines.push('');
   }
 
@@ -1159,13 +1206,6 @@ export function formatReport(report: AuditReport): string {
         `${report.checked.length} override floors checked; none is failing. ` +
           `${report.quarantined.length} ${report.quarantined.length === 1 ? 'awaits' : 'await'} ` +
           'a quarantined fix (above).',
-      );
-    } else if (report.degraded.length > 0) {
-      // Deliberately NOT "all floors are sound": coverage was reduced, so that claim
-      // would be exactly the false reassurance this script exists to remove.
-      lines.push(
-        `${report.checked.length} override floors checked with no failing floor, but ` +
-          `${report.degraded.length} had reduced coverage (above) — this is not a clean bill.`,
       );
     } else {
       lines.push(

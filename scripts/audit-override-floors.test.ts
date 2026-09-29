@@ -77,7 +77,13 @@ function fakeSource(spec: FakeSourceSpec): PackageDataSource {
     },
     async upstreamRepo(pkg) {
       boom(pkg);
-      return spec.repos?.[pkg] ?? null;
+      // Default to a synthetic slug, because a real npm package almost always declares a
+      // GitHub repo — and missing coverage is now a FAILURE, so a fixture that omitted
+      // `repos` would otherwise be asserting the degraded path by accident. A test that
+      // wants the no-repo case sets `repos: { pkg: null }` explicitly; `in` is used rather
+      // than `??` so an explicit null is honoured.
+      if (spec.repos && pkg in spec.repos) return spec.repos[pkg] ?? null;
+      return `fixture-owner/${pkg.replace('@', '').replace('/', '-')}`;
     },
     async globalAdvisories(pkg) {
       boom(pkg);
@@ -96,7 +102,7 @@ function fakeSource(spec: FakeSourceSpec): PackageDataSource {
   };
 }
 
-const NO_POLICY: AuditPolicy = { allowlist: [], noAdvisoryExpected: [] };
+const NO_POLICY: AuditPolicy = { allowlist: [], noAdvisoryExpected: [], globalDbOnly: [] };
 
 function yamlWith(overrides: string): string {
   return `packages:\n  - 'apps/*'\n\noverrides:\n${overrides}\n`;
@@ -645,6 +651,7 @@ describe('allowlist', () => {
           },
         ],
         noAdvisoryExpected: [],
+        globalDbOnly: [],
       },
       source: uuidSource,
     });
@@ -666,6 +673,7 @@ describe('allowlist', () => {
           },
         ],
         noAdvisoryExpected: [],
+        globalDbOnly: [],
       },
       source: fakeSource({
         versions: { uuid: ['11.1.1', '11.2.0', '11.3.0', '14.0.0'] },
@@ -693,6 +701,7 @@ describe('allowlist', () => {
       policy: {
         allowlist: [{ package: 'uuid', ghsa: 'GHSA-qmq6-f8pr-cx5x', reason: '  ' }],
         noAdvisoryExpected: [],
+        globalDbOnly: [],
       },
       source: uuidSource,
     });
@@ -707,6 +716,7 @@ describe('allowlist', () => {
       policy: {
         allowlist: [{ package: 'uuid', ghsa: 'CVE-2026-1234', reason: 'wrong id kind' }],
         noAdvisoryExpected: [],
+        globalDbOnly: [],
       },
       source: uuidSource,
     });
@@ -727,6 +737,7 @@ describe('allowlist', () => {
           },
         ],
         noAdvisoryExpected: [],
+        globalDbOnly: [],
       },
       source: uuidSource,
     });
@@ -1012,38 +1023,79 @@ describe('parseRepositoryUrl', () => {
 describe('degraded coverage', () => {
   const soundYaml = `packages:\n  - 'apps/*'\n\noverrides:\n  left-pad: '>=2.0.0'\n`;
 
-  it('records, rather than hides, a package with no resolvable GitHub repo', async () => {
-    // Previously this was `slug ? fetch : []` with no output: the upstream-repo leg
-    // silently did not run and the report still said every floor was sound.
+  const noRepoSource = fakeSource({
+    versions: { 'left-pad': ['2.0.0', '2.0.1'] },
+    global: { 'left-pad': [adv('GHSA-aaaa-bbbb-cccc', 'high', ['< 2.0.0'])] },
+    repos: { 'left-pad': null },
+  });
+
+  it('FAILS on a package with no resolvable GitHub repo', async () => {
+    // Previously `slug ? fetch : []` with no output: the upstream-repo leg silently did
+    // not run and the report said every floor was sound. That is how smol-toml's only
+    // advisory was lost. Reporting it without failing would narrate the same blind spot
+    // rather than close it — #1934 requires incomplete advisory data to fail.
     const report = await auditOverrideFloors({
       workspaceYaml: soundYaml,
       policy: NO_POLICY,
-      source: fakeSource({
-        versions: { 'left-pad': ['2.0.0', '2.0.1'] },
-        global: { 'left-pad': [adv('GHSA-aaaa-bbbb-cccc', 'high', ['< 2.0.0'])] },
-        repos: { 'left-pad': null },
-      }),
+      source: noRepoSource,
     });
 
     expect(report.stale).toEqual([]);
+    expect(report.exitCode).toBe(1);
     expect(report.degraded.join('\n')).toMatch(/left-pad/);
     expect(report.degraded.join('\n')).toMatch(/global advisory DB only/i);
     expect(formatReport(report)).toMatch(/DEGRADED COVERAGE/);
+    expect(formatReport(report)).not.toMatch(/are sound/);
   });
 
-  it('does not claim every floor is sound while coverage is degraded', async () => {
+  it('accepts global-DB-only coverage when it is declared with a reason', async () => {
+    // Without this, the first package hosted outside GitHub (or whose repo was renamed)
+    // turns the check permanently red with no available remedy — the routinely-red check
+    // nobody reads. Declared, reviewable, and it still fails for any OTHER package.
     const report = await auditOverrideFloors({
       workspaceYaml: soundYaml,
-      policy: NO_POLICY,
-      source: fakeSource({
-        versions: { 'left-pad': ['2.0.0'] },
-        global: { 'left-pad': [adv('GHSA-aaaa-bbbb-cccc', 'high', ['< 2.0.0'])] },
-        repos: { 'left-pad': null },
-      }),
+      policy: {
+        allowlist: [],
+        noAdvisoryExpected: [],
+        globalDbOnly: [
+          { package: 'left-pad', reason: 'Hosted on GitLab; no GitHub advisory list exists.' },
+        ],
+      },
+      source: noRepoSource,
     });
 
     expect(report.exitCode).toBe(0);
-    expect(formatReport(report)).not.toMatch(/are sound/);
+    expect(report.degraded).toEqual([]);
+  });
+
+  it('still fails for a package the globalDbOnly declaration does not name', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: soundYaml,
+      policy: {
+        allowlist: [],
+        noAdvisoryExpected: [],
+        globalDbOnly: [{ package: 'some-other-pkg', reason: 'unrelated' }],
+      },
+      source: noRepoSource,
+    });
+
+    expect(report.exitCode).toBe(1);
+    expect(report.degraded.join('\n')).toMatch(/left-pad/);
+  });
+
+  it('rejects a globalDbOnly entry with no reason', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: soundYaml,
+      policy: {
+        allowlist: [],
+        noAdvisoryExpected: [],
+        globalDbOnly: [{ package: 'left-pad', reason: '   ' }],
+      },
+      source: noRepoSource,
+    });
+
+    expect(report.exitCode).toBe(1);
+    expect(report.errors.join('\n')).toMatch(/reason/i);
   });
 
   it('fails when a floor admits no published version at all', async () => {
@@ -1085,6 +1137,7 @@ describe('degraded coverage', () => {
       workspaceYaml: soundYaml,
       policy: {
         allowlist: [],
+        globalDbOnly: [],
         noAdvisoryExpected: [{ override: 'left-pad', reason: 'not advisory-motivated' }],
       },
       source: fakeSource({
@@ -1174,6 +1227,7 @@ describe('failure modes', () => {
       workspaceYaml: yamlWith(`  'gaxios>rimraf': '>=6.1.2'`),
       policy: {
         allowlist: [],
+        globalDbOnly: [],
         noAdvisoryExpected: [
           {
             override: 'gaxios>rimraf',
