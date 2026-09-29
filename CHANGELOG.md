@@ -76,6 +76,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`task-update`** — a self-reschedule during a running wake is armed when that run finishes. (#1938)
 - **`resolve-learning-digest`** — undo digest items can be dismissed, and the prompt offers that. (#1936)
 - **Completion digest** — items older than 90 days drop on the next digest write; untimestamped entries stay. (#1936)
 - **Timer-limit config tests** — assert the thrown message as a literal substring, clearing a CodeQL incomplete-escaping alert. (code-scanning 284)

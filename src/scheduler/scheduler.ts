@@ -1315,6 +1315,10 @@ export class Scheduler {
    * omits the generation. Nothing has been handed off, so there is no newer
    * run to protect. The UPDATE still matches only status='running'.
    *
+   * A deferred_wake_at recorded during the run (#1938) is copied onto the
+   * one-shot schedule and cleared, so the retry waits for that time. With the
+   * column null this is the same status-only revert as before.
+   *
    * The map check and the UPDATE are independent. A missing map entry does not
    * skip the UPDATE: completion may have dropped the entry while this
    * generation's row is still running, and the timestamp predicate is what
@@ -1333,7 +1337,10 @@ export class Scheduler {
       }
       await this.pool.query(
         `UPDATE scheduled_jobs
-            SET status = 'pending'
+            SET status = 'pending',
+                run_at = CASE WHEN cron_expr IS NULL THEN COALESCE(deferred_wake_at, run_at) ELSE run_at END,
+                next_run_at = COALESCE(deferred_wake_at, next_run_at),
+                deferred_wake_at = NULL
           WHERE id = $1
             AND status = 'running'
             AND run_started_at = $2::timestamptz`,
@@ -1351,7 +1358,12 @@ export class Scheduler {
       }
     }
     await this.pool.query(
-      `UPDATE scheduled_jobs SET status = 'pending' WHERE id = $1 AND status = 'running'`,
+      `UPDATE scheduled_jobs
+          SET status = 'pending',
+              run_at = CASE WHEN cron_expr IS NULL THEN COALESCE(deferred_wake_at, run_at) ELSE run_at END,
+              next_run_at = COALESCE(deferred_wake_at, next_run_at),
+              deferred_wake_at = NULL
+        WHERE id = $1 AND status = 'running'`,
       [jobId],
     ).catch((revertErr: unknown) => {
       this.logger.error({ revertErr, jobId }, 'Failed to revert job status after fire failure — job may be stuck in running');

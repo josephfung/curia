@@ -519,6 +519,12 @@ export class TaskRepo {
    * next_run_at); otherwise the most recent terminal wake row is revived or a new row is
    * inserted — all in a single CTE for atomicity (#1415, mirrors enqueueTaskWake).
    *
+   * A wake that is `running` (the task rescheduling itself from inside its own wake)
+   * is not updated in place and not inserted beside: completion writes that row back
+   * to `completed`, which would drop an in-place `run_at`, and a second active row
+   * collides with migration 067. The requested time is stored on `deferred_wake_at`
+   * and armed by the run's completion path (#1938).
+   *
    * Returns the updated task row, or null if the task was not found.
    */
   async updateTask(
@@ -592,10 +598,10 @@ export class TaskRepo {
       RETURNING ${TASK_COLUMNS}
     `;
 
-    // Terminal-status transitions (cancelled / done) always cancel pending wake-up jobs,
-    // even when wakeAt is also supplied — terminal wins over reschedule (#1415 review).
-    // Otherwise wakeAt updates the pending row in place (or revive/insert) instead of
-    // cancel+insert.
+    // Terminal-status transitions (cancelled / done) always cancel pending wake-up jobs
+    // and drop any deferred_wake_at, even when wakeAt is also supplied — terminal wins
+    // over reschedule (#1415 review, #1938). Otherwise wakeAt updates the pending row
+    // in place, records a deferral on a running row, or revives/inserts.
     const cancelOnTerminal = updates.status === 'cancelled' || updates.status === 'done';
     const rescheduleWake = updates.wakeAt !== undefined && !cancelOnTerminal;
 
@@ -623,10 +629,26 @@ export class TaskRepo {
                  agent_id = $${wakeAgentIdx}, created_by = $${wakeCreatedByIdx},
                  timezone = $${wakeTzIdx},
                  task_payload = '{"type":"task-wake"}'::jsonb,
-                 originator = $${wakeOriginatorIdx}::jsonb
+                 originator = $${wakeOriginatorIdx}::jsonb,
+                 deferred_wake_at = NULL
            WHERE task_id = $${whereIdx}
              AND task_payload->>'type' = 'task-wake'
              AND status = 'pending'
+             AND EXISTS (SELECT 1 FROM updated_task)
+          RETURNING id
+        ),
+        -- Running rows stay running. Mutating run_at here races the completion
+        -- write, which would mark the row completed and drop the new time; inserting
+        -- a second active row hits scheduled_jobs_one_active_wake_per_task_uq (#1938).
+        -- Do not also NOT EXISTS this table from _insert_wake: that subquery uses the
+        -- statement snapshot, so a completion that commits mid-statement (running →
+        -- completed) would make every arm miss and strand the task with no wake.
+        _defer_running_wake AS (
+          UPDATE scheduled_jobs
+             SET deferred_wake_at = $${wakeRunAtIdx}
+           WHERE task_id = $${whereIdx}
+             AND task_payload->>'type' = 'task-wake'
+             AND status = 'running'
              AND EXISTS (SELECT 1 FROM updated_task)
           RETURNING id
         ),
@@ -639,7 +661,8 @@ export class TaskRepo {
                  last_run_outcome = CASE WHEN status IN ('failed','suspended') THEN last_run_outcome ELSE NULL END,
                  agent_id = $${wakeAgentIdx}, created_by = $${wakeCreatedByIdx},
                  timezone = $${wakeTzIdx}, task_payload = '{"type":"task-wake"}'::jsonb,
-                 originator = $${wakeOriginatorIdx}::jsonb
+                 originator = $${wakeOriginatorIdx}::jsonb,
+                 deferred_wake_at = NULL
            WHERE id = (
              SELECT id FROM scheduled_jobs
               WHERE task_id = $${whereIdx} AND task_payload->>'type' = 'task-wake'
@@ -649,6 +672,7 @@ export class TaskRepo {
            )
              AND status IN ('completed', 'failed', 'suspended', 'cancelled')
              AND NOT EXISTS (SELECT 1 FROM _update_pending_wake)
+             AND NOT EXISTS (SELECT 1 FROM _defer_running_wake)
              AND EXISTS (SELECT 1 FROM updated_task)
           RETURNING id
         ),
@@ -657,6 +681,7 @@ export class TaskRepo {
           SELECT $${wakeAgentIdx}, $${wakeRunAtIdx}, '{"type":"task-wake"}'::jsonb, 'pending',
                  $${wakeRunAtIdx}, $${wakeCreatedByIdx}, $${wakeTzIdx}, $${whereIdx}, $${wakeOriginatorIdx}::jsonb
            WHERE NOT EXISTS (SELECT 1 FROM _update_pending_wake)
+             AND NOT EXISTS (SELECT 1 FROM _defer_running_wake)
              AND NOT EXISTS (SELECT 1 FROM _revive_wake)
              AND EXISTS (SELECT 1 FROM updated_task)
           RETURNING id
@@ -666,9 +691,15 @@ export class TaskRepo {
         WITH updated_task AS (
           ${updateSql}
         ),
+        -- Touch running as well as pending. A deferred wake recorded earlier in this
+        -- run must be dropped (terminal wins), and if completion already flipped that
+        -- running row to pending, READ COMMITTED rechecks the new version and cancels it.
         _cancel_wake AS (
-          UPDATE scheduled_jobs SET status = 'cancelled'
-          WHERE task_id = $${whereIdx} AND status = 'pending'
+          UPDATE scheduled_jobs
+             SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+                 deferred_wake_at = NULL
+           WHERE task_id = $${whereIdx}
+             AND status IN ('pending', 'running')
         )
         SELECT * FROM updated_task
       `;
@@ -806,8 +837,10 @@ export class TaskRepo {
         RETURNING ${TASK_COLUMNS}
       ),
       _cancel_wake AS (
-        UPDATE scheduled_jobs SET status = 'cancelled'
-        WHERE task_id = $2 AND status = 'pending'
+        UPDATE scheduled_jobs
+           SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+               deferred_wake_at = NULL
+         WHERE task_id = $2 AND status IN ('pending', 'running')
       )
       SELECT * FROM done_task
     `
@@ -819,8 +852,10 @@ export class TaskRepo {
         RETURNING ${TASK_COLUMNS}
       ),
       _cancel_wake AS (
-        UPDATE scheduled_jobs SET status = 'cancelled'
-        WHERE task_id = $1 AND status = 'pending'
+        UPDATE scheduled_jobs
+           SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+               deferred_wake_at = NULL
+         WHERE task_id = $1 AND status IN ('pending', 'running')
       )
       SELECT * FROM done_task
     `;
