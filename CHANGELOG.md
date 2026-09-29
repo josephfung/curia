@@ -79,6 +79,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`task-create`** — allowed `source` values are documented so agents stop passing origin ids. (#1939)
 - **`task-update`** — a self-reschedule during a running wake is armed when that run finishes. (#1938)
 - **`task-list`** — a running wake's deferred time is the next wake shown to the agent. (#1938)
 - **`resolve-learning-digest`** — undo digest items can be dismissed, and the prompt offers that. (#1936)

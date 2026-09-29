@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import pino from 'pino';
 import { TaskCreateHandler } from './handler.js';
-import type { ToolContext } from '../../../../src/skills/types.js';
+import { ToolRegistry } from '../../../../src/skills/registry.js';
+import type { ToolContext, ToolManifest } from '../../../../src/skills/types.js';
 import type { TaskRepo } from '../../../../src/db/task-repo.js';
 import type { TaskRow } from '../../../../src/db/queries/tasks.js';
 import type { AgentRegistry } from '../../../../src/agents/agent-registry.js';
@@ -435,5 +437,39 @@ describe('TaskCreateHandler', () => {
 
     expect(result.success).toBe(false);
     expect((result as { success: false; error: string }).error).toMatch(/progress_note/);
+  });
+});
+
+// #1939: agents were filling `source` with an origin identifier (agent name, job id,
+// `agent:...`) because the manifest never listed the four allowed categories or
+// distinguished them from source_agent_id, which the runtime records itself.
+describe('task-create manifest (#1939)', () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL('./tool.json', import.meta.url), 'utf8'),
+  ) as ToolManifest;
+
+  it('documents the four source categories beside owner and priority', () => {
+    expect(manifest.description).toContain('owner (curia/ceo/external)');
+    expect(manifest.description).toContain('priority (0-100)');
+    expect(manifest.description).toContain('source (ceo/agent/scheduler/coordinator)');
+  });
+
+  it('distinguishes source from the automatically recorded caller', () => {
+    expect(manifest.description).toContain('source_agent_id');
+    expect(manifest.description).toContain('not which agent');
+    expect(manifest.inputs['source']).toContain('ceo, agent, scheduler, coordinator');
+    expect(manifest.inputs['source']).toContain('source_agent_id');
+    expect(manifest.inputs['source']).toContain('not which agent');
+  });
+
+  it('surfaces the source categories on the model-facing input schema', () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest, new TaskCreateHandler());
+    const tool = registry.toToolDefinitions(['task-create'])[0]!;
+    const source = tool.input_schema.properties['source'] as { type: string; description?: string };
+    expect(source.type).toBe('string');
+    expect(source.description).toContain('ceo, agent, scheduler, coordinator');
+    expect(source.description).toContain('source_agent_id');
+    expect(tool.input_schema.required ?? []).not.toContain('source');
   });
 });
