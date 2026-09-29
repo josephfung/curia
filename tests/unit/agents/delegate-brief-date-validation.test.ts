@@ -83,6 +83,77 @@ describe('briefContainsResolvedDate', () => {
 
   it('rejects correct month-day with the wrong year', () => {
     expect(briefContainsResolvedDate('Schedule on July 31, 2027 at 2pm.', resolved)).toBe(false);
+    expect(briefContainsResolvedDate('Schedule on July 31 2027 at 2pm.', resolved)).toBe(false);
+    expect(briefContainsResolvedDate('Schedule on July 31st, 2027 at 2pm.', resolved)).toBe(false);
+    expect(briefContainsResolvedDate('Schedule on July 31 of 2027 at 2pm.', resolved)).toBe(false);
+    expect(briefContainsResolvedDate('Schedule on July 31 in 2027 at 2pm.', resolved)).toBe(false);
+  });
+
+  it("does not let a later date's year suppress the resolved month and day", () => {
+    expect(
+      briefContainsResolvedDate('Monday Sep 28 through Sunday Oct 4, 2027', {
+        isoDate: '2026-09-28',
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts a yearless start date when the year sits on a later date', () => {
+    expect(
+      briefContainsResolvedDate('Monday Sep 28 through Sunday Oct 4, 2026', {
+        isoDate: '2026-09-28',
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts the weekly range briefs that production rejected', () => {
+    const cases = [
+      ['Monday Sep 28 through Sunday Oct 4, 2026', '2026-09-28'],
+      ['week of Monday September 21 through Sunday September 27, 2026', '2026-09-21'],
+      ['Monday September 7 through Sunday September 13, 2026', '2026-09-07'],
+      ['week of August 10\u201316, 2026', '2026-08-10'],
+      ['week of August 3-9, 2026 (Monday through Sunday)', '2026-08-03'],
+    ] as const;
+
+    for (const [brief, isoDate] of cases) {
+      expect(briefContainsResolvedDate(brief, { isoDate })).toBe(true);
+    }
+  });
+
+  it('rejects a same-month span tied to a different year', () => {
+    expect(
+      briefContainsResolvedDate('week of August 10\u201316, 2027', { isoDate: '2026-08-10' }),
+    ).toBe(false);
+    expect(
+      briefContainsResolvedDate('week of August 3-9, 2027', { isoDate: '2026-08-03' }),
+    ).toBe(false);
+    expect(
+      briefContainsResolvedDate('week of August 10 to 16, 2027', { isoDate: '2026-08-10' }),
+    ).toBe(false);
+  });
+
+  it('rejects a range that cites a different day', () => {
+    expect(
+      briefContainsResolvedDate('Monday Oct 5 through Sunday Oct 11, 2026', {
+        isoDate: '2026-09-28',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not treat a longer day number as the resolved day', () => {
+    expect(
+      briefContainsResolvedDate('Check September 13, 2026.', { isoDate: '2026-09-01' }),
+    ).toBe(false);
+    expect(
+      briefContainsResolvedDate('Check September 13, 2026.', { isoDate: '2026-09-13' }),
+    ).toBe(true);
+  });
+
+  it('matches short-month comma-less and ordinal forms', () => {
+    const sep28 = { isoDate: '2026-09-28' };
+    expect(briefContainsResolvedDate('Week of Sep 28 2026.', sep28)).toBe(true);
+    expect(briefContainsResolvedDate('Week of Sep 28th, 2026.', sep28)).toBe(true);
+    expect(briefContainsResolvedDate('Week of Sep 28th 2026.', sep28)).toBe(true);
+    expect(briefContainsResolvedDate('Sep 28th through Oct 4, 2026', sep28)).toBe(true);
   });
 });
 
@@ -96,6 +167,26 @@ describe('validateDelegateBriefDates', () => {
       priorDateResolves: [friday],
     });
     expect(result.ok).toBe(true);
+  });
+
+  it('accepts weekly range briefs whose year is on the end date', () => {
+    const cases = [
+      ['Monday Sep 28 through Sunday Oct 4, 2026', '2026-09-28'],
+      ['week of Monday September 21 through Sunday September 27, 2026', '2026-09-21'],
+      ['Monday September 7 through Sunday September 13, 2026', '2026-09-07'],
+      ['week of August 10\u201316, 2026', '2026-08-10'],
+      ['week of August 3-9, 2026 (Monday through Sunday)', '2026-08-03'],
+    ] as const;
+
+    for (const [task, isoDate] of cases) {
+      expect(
+        validateDelegateBriefDates({
+          agent: 'calendar',
+          task,
+          priorDateResolves: [{ isoDate }],
+        }).ok,
+      ).toBe(true);
+    }
   });
 
   it('rejects a brief that contradicts date-resolve output', () => {
