@@ -6,10 +6,10 @@ settings:
 
 overrides:
   hono: '>=4.13.5'
-  fast-uri: '>=4.1.2'
+  fast-uri: '>=4.2.1'
   vite: '>=8.0.5'
   qs: '>=6.16.0'
-  ip-address: '>=10.1.1'
+  ip-address: '>=10.7.2'
   uuid: ^11.1.1
   ws: '>=8.21.0'
   form-data: '>=4.0.6'
@@ -3773,9 +3773,6 @@ packages:
   fast-string-width@3.0.2:
     resolution: {integrity: sha512-gX8LrtNEI5hq8DVUfRQMbr5lpaS4nMIWV+7XEbXk2b8kiQIizgnlr12B4dA3ZEx3308ze0O4Q1R+cHts8kyUJg==}
 
-  fast-uri@4.1.3:
-    resolution: {integrity: sha512-7+72G6vLt7jjNas8SmSATx2qeyRIjxeqO3i4IkmDTxlqYZRKANhOe1bnovcp4WZmvsYrp60WyqPyHqgRiX0yXw==}
-
   fast-uri@4.2.1:
     resolution: {integrity: sha512-TmHQgewjHtMq1E5QKA0tOE0yeYGQs25KZC/ziJpubRtWI15W92e6vPFydWOeZBVROSHBYw/QhD9d5OefdD6LDg==}
 
@@ -4182,10 +4179,6 @@ packages:
         optional: true
       react-devtools-core:
         optional: true
-
-  ip-address@10.5.0:
-    resolution: {integrity: sha512-R5SnVLJmgYYvf2F2ZgwSBnelz5G4q5AxIC277GDfUaNbrZKNANcBC7RHqYYePlszf4kBolVkJauG0ZjHHFh55g==}
-    engines: {node: '>= 12'}
 
   ip-address@10.7.2:
     resolution: {integrity: sha512-7H/2gFSIitxc0hG3nOI1glS8QLo/EHBFFLk8vEUjXY/xu0AdL8jZ9U1IzO2PUm0d2D/ofQcAifb0g6OBkt8U7w==}
@@ -7312,7 +7305,7 @@ snapshots:
     dependencies:
       '@lukeed/ms': 2.0.2
       fastify-plugin: 6.0.0
-      ip-address: 10.5.0
+      ip-address: 10.7.2
       toad-cache: 3.7.4
 
   '@fastify/send@4.1.1':
@@ -9025,7 +9018,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 4.1.3
+      fast-uri: 4.2.1
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -9863,7 +9856,7 @@ snapshots:
     dependencies:
       debug: 4.4.3
       express: 5.2.1
-      ip-address: 10.5.0
+      ip-address: 10.7.2
     transitivePeerDependencies:
       - supports-color
 
@@ -9947,8 +9940,6 @@ snapshots:
   fast-string-width@3.0.2:
     dependencies:
       fast-string-truncated-width: 3.0.3
-
-  fast-uri@4.1.3: {}
 
   fast-uri@4.2.1: {}
 
@@ -10531,8 +10522,6 @@ snapshots:
       - bufferutil
       - utf-8-validate
     optional: true
-
-  ip-address@10.5.0: {}
 
   ip-address@10.7.2: {}
 

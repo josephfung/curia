@@ -164,6 +164,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Dangling `docs/wip/` references** — 26 citations of pruned design docs repointed at their spec or ADR. (#1483)
 - **WIP reference guard** — a test now fails when a durable file cites a `docs/wip/` doc that does not exist. (#1483)
 
+### Security
+
+- **Dependency floors** — `fast-uri` and `ip-address` raised past ineffective pins, clearing six advisories.
+
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 
 > **C-3PO** *(Star Wars, 1977, George Lucas)* — the protocol droid fluent in six million forms of communication, and the one who reports the true odds however unwelcome they are. This release is both halves: a voice you reach by phone, notes it transcribes, sends it holds until a channel returns — and probes, tools, and replies that stop claiming a success they cannot support.
