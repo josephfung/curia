@@ -7,24 +7,24 @@ settings:
 overrides:
   hono: '>=4.13.5'
   fast-uri: '>=4.2.1'
-  vite: '>=8.0.5'
+  vite: '>=8.0.16'
   qs: '>=6.16.0'
   ip-address: '>=10.7.2'
   uuid: ^11.1.1
   ws: '>=8.21.0'
   form-data: '>=4.0.6'
   esbuild: '>=0.28.1'
-  undici: '>=7.28.0'
+  undici: '>=8.10.2'
   '@opentelemetry/core': '>=2.8.0'
-  onnxruntime-web>protobufjs: '>=7.6.3 <8'
-  adm-zip: '>=0.6.0'
-  sharp: '>=0.35.0'
+  onnxruntime-web>protobufjs: '>=7.6.5 <8'
+  adm-zip: '>=0.6.1'
+  sharp: '>=0.35.4'
   find-my-way: '>=9.7.0'
   shell-quote: '>=1.9.0'
   body-parser: '>=2.3.0'
-  '@hono/node-server': '>=2.0.5'
+  '@hono/node-server': '>=2.0.10'
   promptfoo>js-yaml: '>=5.2.2'
-  brace-expansion: '>=5.0.8'
+  brace-expansion: '>=5.0.9'
   gaxios>rimraf: '>=6.1.2'
   fflate: '>=0.8.3'
   smol-toml: '>=1.7.1'
@@ -200,7 +200,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       vite:
-        specifier: '>=8.0.5'
+        specifier: '>=8.0.16'
         version: 8.3.0(@types/node@24.13.6)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
       vitest:
         specifier: ^5.0.1
@@ -234,7 +234,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       vite:
-        specifier: '>=8.0.5'
+        specifier: '>=8.0.16'
         version: 8.3.0(@types/node@26.0.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
 
   apps/console:
@@ -268,7 +268,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       vite:
-        specifier: '>=8.0.5'
+        specifier: '>=8.0.16'
         version: 8.3.0(@types/node@26.0.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
 
   packages/shared-types: {}
@@ -2406,7 +2406,7 @@ packages:
     resolution: {integrity: sha512-7L4adgnJtQvQgo5cfIwqHG1QuR8mdZQ/WdMScNDp6uK644ZqnHDAa4rR+vZYfZFdJ5+obCqZQ66Dad8kcwJ4Jg==}
     engines: {node: '>=20', npm: '>=9.6.4'}
     peerDependencies:
-      undici: '>=7.28.0'
+      undici: '>=8.10.2'
 
   '@slack/types@3.1.0':
     resolution: {integrity: sha512-bTzqrO3lxJ5iWedo1eJKNAs1koyEhaTwKLJUkD3KETnPeQvD978AAE4jvWstUws8Gbbc4JR6iYE6F7XjE8UGmw==}
@@ -2763,13 +2763,13 @@ packages:
     resolution: {integrity: sha512-eJv6hHOIOVXzA4b2lZwccu/7VNmk9372fGOqsx5tNxiJHLtFBokyCTQUhlgjjXxl7guLPauHp0TqGTVyn1HvQA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
-      vite: '>=8.0.5'
+      vite: '>=8.0.16'
 
   '@vitest/mocker@5.0.1':
     resolution: {integrity: sha512-6K1DoBNAPGvuOcSsGA4D6x+5zEEff/KmOOP3uetT2TrGpVfI+HRHRnJJfKi5ib/g1vx8IYHQD8s0pbJz8WQI7Q==}
     peerDependencies:
       msw: ^2.4.9
-      vite: '>=8.0.5'
+      vite: '>=8.0.16'
     peerDependenciesMeta:
       msw:
         optional: true
@@ -4927,7 +4927,7 @@ packages:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
-      undici: '>=7.28.0'
+      undici: '>=8.10.2'
       ws: '>=8.21.0'
       zod: ^3.25 || ^4.0
     peerDependenciesMeta:
@@ -6115,7 +6115,7 @@ packages:
       '@vitest/ui': 5.0.1
       happy-dom: '*'
       jsdom: '*'
-      vite: '>=8.0.5'
+      vite: '>=8.0.16'
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true

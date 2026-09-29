@@ -84,6 +84,19 @@ fetchTimeout: 90000
 # Dependency version overrides. pnpm v10+ reads `overrides` ONLY from this file —
 # a `pnpm.overrides` block in package.json is silently ignored. These pins force
 # transitive deps onto patched versions to clear known CVEs.
+#
+# HOW TO SET A FLOOR. Not at the version that patched the advisory you are looking at —
+# at the lowest version above which EVERY published release is clean. Those differ
+# whenever a later advisory lands on the line, and the difference is silent: the floor
+# still resolves clean by accident of natural resolution, so Dependabot stays quiet.
+# That mistake has now been made four times here (hono, qs, fast-uri, ip-address) and
+# seven more floors were found stale in the same audit (#1933). Two further traps:
+#   - A floor on one major does not constrain another. `undici: >=7.28.0` admitted the
+#     entire 8.x line, which carried five HIGH advisories the floor never spoke to.
+#   - The Dependabot alert list lags upstream. Advisories published on a project's own
+#     repo may not be in GitHub's global DB yet, so a floor can look clean and not be.
+#     Check `gh api /repos/<owner>/<repo>/security-advisories` as well.
+# Until the CI check in #1934 lands, this is a manual audit.
 #   - uuid: nylas@8.1.2 pins uuid@8.3.2 (CVE-2026-41907). uuid@11 is the last major
 #     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
 #     is ESM-only and would break `require('uuid')`.
@@ -111,7 +124,9 @@ overrides:
   # RE-CHECK against `gh api /repos/fastify/fast-uri/security-advisories`, not just the
   # Dependabot alert list, which lags the upstream repo advisories.
   fast-uri: '>=4.2.1'
-  vite: '>=8.0.5'
+  # >=8.0.5 was satisfied by 8.0.5-8.0.15, all of which carry GHSA-fx2h-pf6j-xcff
+  # (HIGH) and GHSA-v6wh-96g9-6wx3 (MED); both fixed in 8.0.16.
+  vite: '>=8.0.16'
   # Two DoS advisories, both fixed in 6.16.0. The prior >=6.15.2 floor was satisfied by
   # 6.15.3, so googleapis-common stayed on the vulnerable version:
   #   - CVE-2026-82417 / GHSA-4mjr-xmp4-gh2g: stringify() DoS via attacker-controlled isBuffer
@@ -130,21 +145,43 @@ overrides:
   ws: '>=8.21.0'         # CVE-2026-48779
   form-data: '>=4.0.6'   # CVE-2026-12143
   esbuild: '>=0.28.1'    # GHSA-gv7w-rqvm-qjhr (dev-server SSRF)
-  undici: '>=7.28.0'     # CVEs 2026-12151/9697/6734 (HIGH), 9678/9679 (MED), 6733/11525 (LOW) via promptfoo; floor 7.28.0 patches all (resolves to 8.x)
+  # Reached via promptfoo. The old >=7.28.0 floor did NOT "patch all": it admitted the
+  # whole 8.x line, and 8.0.0-8.10.1 carry twelve advisories the 7.x floor says nothing
+  # about — GHSA-4cwx-7wf7-3272, GHSA-38rv-x7px-6hhq, GHSA-hm92-r4w5-c3mj,
+  # GHSA-vmh5-mc38-953g, GHSA-vxpw-j846-p89q (HIGH) and seven MED/LOW. The last of them
+  # (GHSA-3wwx-pv8p-q78v, <8.10.2) sets the floor. Constrain the line you resolve into.
+  undici: '>=8.10.2'
   # Scorecard vulnerability pins (GHSA alerts flagged in code-scanning #155):
   '@opentelemetry/core': '>=2.8.0'          # GHSA-8988-4f7v-96qf (unbounded baggage header memory allocation)
-  'onnxruntime-web>protobufjs': '>=7.6.3 <8' # GHSA-f38q-mgvj-vph7 (schema name shadowing DoS); targeted to onnxruntime-web only — protobufjs@8.x is patched at 8.6.0; promptfoo already resolves 8.6.1 which is clean
-  adm-zip: '>=0.6.0'                        # GHSA-xcpc-8h2w-3j85 (crafted ZIP triggers 4GB allocation, HIGH); only consumer is optional onnxruntime-node; 0.6.0 is latest
+  # Targeted to onnxruntime-web only, so the 7.x line is what this constrains. >=7.6.3
+  # was satisfied by 7.6.3/7.6.4, which carry GHSA-j3f2-48v5-ccww (MED, <=7.6.4).
+  # The untargeted 8.x line needs 8.6.6 (not the 8.6.0 this comment used to claim);
+  # promptfoo resolves 8.8.0, which is clean.
+  'onnxruntime-web>protobufjs': '>=7.6.5 <8'
+  # >=0.6.0 was satisfied by 0.6.0, which carries GHSA-7q85-xj36-vmfc (HIGH) as well as
+  # GHSA-xcpc-8h2w-3j85, the advisory this pin was added for. 0.6.1 published 2026-09-11
+  # and also escapes GHSA-vwc7-r8mq-g2x9 (range caps at <=0.6.0), which the block at the
+  # bottom of this file used to list as unfixable. Only consumer is optional onnxruntime-node.
+  adm-zip: '>=0.6.1'
   # HIGH CVEs from Dependabot, 2026-07-24:
-  sharp: '>=0.35.0'                         # GHSA-f88m-g3jw-g9cj (libvips CVEs); allowBuilds stays false (prebuilt binary)
+  # GHSA-f88m-g3jw-g9cj (libvips CVEs) is fixed in 0.35.0, but >=0.35.0 then admitted
+  # 0.35.0-0.35.3, which carry GHSA-rgj7-g3m4-5g8c (HIGH, <0.35.4).
+  # allowBuilds stays false (prebuilt binary).
+  sharp: '>=0.35.4'
   find-my-way: '>=9.7.0'                    # GHSA-c96f-x56v-gq3h (HTTP/2 DoS)
   shell-quote: '>=1.9.0'                    # GHSA-395f-4hp3-45gv (quadratic-complexity DoS)
   # MED/LOW CVEs from Dependabot, 2026-07-24 (#1518):
   body-parser: '>=2.3.0'                    # GHSA-v422-hmwv-36x6 (invalid limit disables size enforcement DoS)
-  '@hono/node-server': '>=2.0.5'            # GHSA-frvp-7c67-39w9 (Windows serve-static path traversal via %5C); consumer is @modelcontextprotocol/sdk (^1.19.9)
+  # GHSA-frvp-7c67-39w9 (Windows serve-static path traversal via %5C) is fixed in 2.0.5,
+  # but >=2.0.5 then admitted 2.0.5-2.0.9, which carry GHSA-9mqv-5hh9-4cgg (MED, <=2.0.9).
+  # Consumer is @modelcontextprotocol/sdk (^1.19.9).
+  '@hono/node-server': '>=2.0.10'
   'promptfoo>js-yaml': '>=5.2.2'            # GHSA-724g-mxrg-4qvm (!!omap) + GHSA-pm4m-ph32-ghv5 (nested flow DoS); targeted — js-yaml@4.x via @apidevtools/json-schema-ref-parser stays on 4.x
   # HIGH/MED CVEs from Scorecard + Dependabot, 2026-07-26:
-  brace-expansion: '>=5.0.8'                # GHSA-mh99-v99m-4gvg (unbounded expansion length OOM DoS); no 2.x patch exists
+  # GHSA-mh99-v99m-4gvg (unbounded expansion length OOM DoS) is fixed in 5.0.8, but
+  # >=5.0.8 then admitted 5.0.8 itself, which carries GHSA-rgw5-rvv9-x895 (HIGH, <5.0.9).
+  # No 2.x patch exists, hence the 5.x floor rather than a same-major bump.
+  brace-expansion: '>=5.0.9'
   # Drop the only brace-expansion@2.x path (promptfoo→gaxios→rimraf@5→glob@10→minimatch@9).
   # rimraf@6 uses glob@11+/minimatch@10 which consume brace-expansion@5; gaxios only needs
   # rimraf for temp cleanup and the v6 API is compatible for that call site.
@@ -154,15 +191,18 @@ overrides:
   # HIGH CVE from Dependabot, 2026-09-09:
   smol-toml: '>=1.7.1'                      # GHSA-7w5x-hrqm-74c2 / CVE-2026-85730 (DoS via malformed TOML); same story as fflate above - only consumer is @openai/codex-security via promptfoo (dev-only), which pins an exact 1.6.1, so nothing but an override moves it
   #
-  # Two Scorecard GHSAs deliberately have NO override because no fixed release exists
-  # (re-check before assuming they were missed):
-  #   - adm-zip GHSA-vwc7-r8mq-g2x9 (extraction follows destination symlinks -> arbitrary
-  #     file overwrite). Affects <=0.6.0, which is the latest publish; the >=0.6.0 pin above
-  #     is for the separate GHSA-xcpc-8h2w-3j85. Reached only via optional onnxruntime-node.
+  # Advisories deliberately left WITHOUT a clearing override (re-check before assuming
+  # they were missed — the adm-zip entry that used to sit here was fixed by 0.6.1):
   #   - extract-zip GHSA-7pqw-9j4j-h8q3 and GHSA-jmr9-qjv8-65gv (symlink archive entries ->
-  #     arbitrary file write). Affect <=2.0.1, the latest publish. Dev-only, via promptfoo.
-  # Both are archive-extraction bugs in dev-only paths that never process untrusted zips at
-  # runtime, so they stay as accepted Scorecard warnings until upstream ships a fix.
+  #     arbitrary file write, both HIGH). Affect <=2.0.1, the latest publish, so there is
+  #     nothing to pin to. Dev-only, reached via promptfoo -> @openai/codex-security, and
+  #     the prod image installs with --prod, so this never ships to production.
+  #   - uuid GHSA-qmq6-f8pr-cx5x (missing buffer bounds check in v3/v5/v6, LOW). Only fix
+  #     is 14.0.0, which the deliberate ^11.1.1 cap above cannot reach: uuid@11 is the last
+  #     major shipping a CommonJS build, which the CJS Nylas SDK requires. Accepted: LOW,
+  #     and nothing in this codebase passes a `buf` argument to v3/v5/v6.
+  # These stay as accepted warnings until upstream ships a fix (extract-zip) or the Nylas
+  # SDK stops needing CJS (uuid).
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
