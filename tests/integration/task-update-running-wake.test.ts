@@ -191,6 +191,25 @@ describeIf('TaskRepo.updateTask running-wake reschedule (#1938)', () => {
     expect(activeWakes(after)).toHaveLength(1);
   });
 
+  it('cancels a suspended deferred wake when the task is marked done', async () => {
+    const { taskId, jobId } = await taskWithRunningWake('done-after-suspend');
+    await pool.query(
+      `UPDATE scheduled_jobs SET consecutive_failures = $2 WHERE id = $1`,
+      [jobId, SUSPEND_THRESHOLD - 1],
+    );
+    await repo.updateTask(taskId, { wakeAt: new Date(Date.now() + 7_200_000) }, 'coordinator');
+    const failed = await scheduler.completeJobRun(jobId, false, 'boom');
+    expect(failed.suspended).toBe(true);
+
+    await repo.updateTask(taskId, { status: 'done' }, 'coordinator');
+
+    const rows = await wakeRowsFor(pool, taskId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('cancelled');
+    expect(rows[0]!.deferred_wake_at).toBeNull();
+    await expect(scheduler.unsuspendJob(jobId)).rejects.toThrow('not suspended');
+  });
+
   it('drops a deferred wake when done and wakeAt are supplied together', async () => {
     const { taskId, jobId } = await taskWithRunningWake('terminal-wins');
     await repo.updateTask(taskId, { wakeAt: new Date(Date.now() + 7_200_000) }, 'coordinator');

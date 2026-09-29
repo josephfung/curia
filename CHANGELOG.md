@@ -29,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Standard-tier model candidates** — four OpenRouter models registered so curia-deploy#226 can repoint the tier. (#1804)
 - **Cache-read pricing** — recorded for every OpenRouter model that publishes one, or the omission explained. (#1804)
 - **`ToolContext` (public API)** — `selfEmails` lists every owned mailbox for reply-all exclusion. (#1815)
+- **`schedule.recovered` (public API)** — optional `rearmed` when stuck recovery keeps a deferred wake. (#1938)
 - **`pnpm audit:override-floors`** — CI asserts every override floor admits no advisory-bearing release. (#1934)
 
 ### Changed
@@ -68,6 +69,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`email-reply` / `email-send` inputs (public API)** — optional `account` selects the mailbox; send only when threading. (#1832)
 - **Coordinator** — CC replies pass the preamble Account into `email-reply`. (#1832)
 - **`OutboundNotificationPayload.notificationType` (public API)** — `'no_reply_principal'` removed from the union. (#1908)
+- **`task-update`** — finishing a task also cancels its suspended or paused wake. (#1938)
 
 ### Removed
 
@@ -77,8 +79,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`task-update`** — a self-reschedule during a running wake is armed when that run finishes. (#1938)
-- **`task-update`** — a failing self-reschedule still counts toward wake suspension. (#1938)
-- **`schedule.recovered` (public API)** — optional `rearmed` when stuck recovery keeps a deferred wake. (#1938)
 - **`task-list`** — a running wake's deferred time is the next wake shown to the agent. (#1938)
 - **`resolve-learning-digest`** — undo digest items can be dismissed, and the prompt offers that. (#1936)
 - **Completion digest** — items older than 90 days drop on the next digest write; untimestamped entries stay. (#1936)
