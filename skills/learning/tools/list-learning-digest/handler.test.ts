@@ -122,7 +122,9 @@ describe('ListLearningDigestHandler', () => {
     const emptyData = (empty as { data: { sections_markdown: string; message?: string } }).data;
     expect(emptyData.sections_markdown).not.toContain('### Task completion from sent mail');
     expect(emptyData.message).toContain('No pending');
-    expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual({});
+    // View-only: the aged item stays in config. This tool does not write.
+    expect(mem.storeFact).not.toHaveBeenCalled();
+    expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual(expiredOnly);
 
     mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
     const mixed = await new ListLearningDigestHandler().execute(ctx);
@@ -131,9 +133,8 @@ describe('ListLearningDigestHandler', () => {
     expect(mixedData.sections_markdown).toContain('### Task completion from sent mail');
     expect(mixedData.sections_markdown).toContain('confirm completion young');
     expect(mixedData.sections_markdown).not.toContain(taskId);
-    const stored = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
-    expect(stored[taskId]).toBeUndefined();
-    expect(stored.young).toBeDefined();
+    expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual(digestMap);
+    expect(mem.storeFact).not.toHaveBeenCalled();
   });
 
   it('does not render the voice section when entityMemory is unavailable', async () => {

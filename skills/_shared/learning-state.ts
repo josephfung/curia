@@ -40,6 +40,17 @@ export type CompletionCandidateMap = Record<string, CompletionCandidate>;
  * 90 days matches the evidence-doc retention window proposed in #1437: an item
  * untouched that long is stale. This is not a substitute for dismiss — dismiss is
  * how a declined undo leaves the map immediately.
+ *
+ * Applied only by callers that are already writing the map (task-completion-from-sent,
+ * resolve-learning-digest). `readCompletionDigest` does not write: a read-only tool
+ * must not gain a config write, and a hygiene write must not be able to fail the read
+ * or clobber a concurrent digest update. `list-learning-digest` hides expired items
+ * in the rendered view only.
+ *
+ * Entries with no `createdAt`, or a `createdAt` that is not a `Date.toISOString()`
+ * instant, are never aged out. Pre-#1936 items are in that set, and task-completion
+ * does not rewrite a task that is already done, so this backstop does not clear that
+ * backlog. `dismiss_completion` does.
  */
 export const COMPLETION_DIGEST_MAX_AGE_DAYS = 90;
 const MS_PER_DAY = 86_400_000;
@@ -53,8 +64,18 @@ export interface CompletionDigestItem {
   taskId: string;
   taskTitle: string;
   note: string;
-  /** ISO-8601 time the item was added. Absent on pre-#1936 entries. */
+  /** `Date.toISOString()` instant the item was added. Absent on pre-#1936 entries. */
   createdAt?: string;
+}
+
+/** `Date.toISOString()` form only. Bare `Date.parse` accepts `"0"` and `"2"` and
+ *  lands them decades in the past, which would age out a junk clock. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** The stored clock when it is a real `Date.toISOString()` instant; otherwise undefined. */
+export function usableCompletionDigestCreatedAt(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !ISO_INSTANT.test(value)) return undefined;
+  return Number.isNaN(Date.parse(value)) ? undefined : value;
 }
 export type CompletionDigestMap = Record<string, CompletionDigestItem>;
 
@@ -108,37 +129,45 @@ function isCompletionCandidate(v: unknown): v is CompletionCandidate {
   );
 }
 
-function isCompletionDigestItem(v: unknown): v is CompletionDigestItem {
-  if (
-    !isPlainObject(v) ||
-    (v.kind !== 'undo' && v.kind !== 'confirm') ||
-    typeof v.taskId !== 'string' ||
-    typeof v.taskTitle !== 'string' ||
-    typeof v.note !== 'string'
-  ) {
-    return false;
-  }
-  // createdAt is optional: entries written before the field existed must stay
-  // readable and must not be dropped here (#1936). A non-string is not a clock —
-  // strip it and keep the entry. Dropping the whole item would discard an undo
-  // affordance, and data loss is worse than over-retention.
-  if ('createdAt' in v && typeof v.createdAt !== 'string') {
-    delete v.createdAt;
-  }
-  return true;
+/** Stored shape before clock normalization. `createdAt` is unchecked here so a
+ *  non-string clock does not fail the predicate and does not get mutated in place. */
+type StoredCompletionDigestItem = Omit<CompletionDigestItem, 'createdAt'> & { createdAt?: unknown };
+
+function isCompletionDigestItem(v: unknown): v is StoredCompletionDigestItem {
+  return (
+    isPlainObject(v) &&
+    (v.kind === 'undo' || v.kind === 'confirm') &&
+    typeof v.taskId === 'string' &&
+    typeof v.taskTitle === 'string' &&
+    typeof v.note === 'string'
+  );
 }
 
-/** True only when `createdAt` parses and is strictly older than the max age.
- *  Missing or unparseable timestamps are not expired: those entries have no clock,
- *  and sweeping them would delete a pending item the CEO may still act on (#1437). */
+/** Copy a validated entry. A present clock that is not a `Date.toISOString()` instant
+ *  is omitted (the item stays, unaged) and reported via `badClock`. */
+function copyCompletionDigestItem(raw: StoredCompletionDigestItem): { item: CompletionDigestItem; badClock: boolean } {
+  const createdAt = usableCompletionDigestCreatedAt(raw.createdAt);
+  const item: CompletionDigestItem = {
+    kind: raw.kind,
+    taskId: raw.taskId,
+    taskTitle: raw.taskTitle,
+    note: raw.note,
+  };
+  if (createdAt !== undefined) item.createdAt = createdAt;
+  return { item, badClock: raw.createdAt !== undefined && createdAt === undefined };
+}
+
+/** True only when `createdAt` is a `Date.toISOString()` instant strictly older than
+ *  the max age. Missing or non-ISO clocks are not expired: those entries have no
+ *  trustworthy clock, and sweeping them would delete a pending item the CEO may
+ *  still act on (#1437). */
 export function isCompletionDigestItemExpired(
   item: CompletionDigestItem,
   nowMs: number = Date.now(),
 ): boolean {
-  if (typeof item.createdAt !== 'string' || item.createdAt.length === 0) return false;
-  const createdMs = Date.parse(item.createdAt);
-  if (Number.isNaN(createdMs)) return false;
-  return nowMs - createdMs > COMPLETION_DIGEST_MAX_AGE_MS;
+  const createdAt = usableCompletionDigestCreatedAt(item.createdAt);
+  if (createdAt === undefined) return false;
+  return nowMs - Date.parse(createdAt) > COMPLETION_DIGEST_MAX_AGE_MS;
 }
 
 /** Drop items past the age backstop. Returns the same map when nothing expired. */
@@ -213,26 +242,24 @@ export async function readCompletionDigest(store: ConfigStore, log?: Logger): Pr
     corruptionLogger(COMPLETION_DIGEST_KEY, raw!, log)();
     return {};
   }
-  const map = filterValidEntries(parsed, COMPLETION_DIGEST_KEY, isCompletionDigestItem, log);
-  const pruned = pruneExpiredCompletionDigest(map);
-  if (pruned === map) return map;
-  // Persist the hygiene drop so an abandoned item does not survive in the config
-  // key after readers have stopped surfacing it. A soft-reject leaves the prior
-  // value in place; the returned map is still pruned, and the next read retries.
-  const removed = Object.keys(map).length - Object.keys(pruned).length;
-  const stored = await writeCompletionDigest(store, pruned);
-  if (!stored) {
+  const validated = filterValidEntries(parsed, COMPLETION_DIGEST_KEY, isCompletionDigestItem, log);
+  // Copy so the predicate stays pure and a bad clock is not deleted from the parsed
+  // object. This read does not write: ageing is the caller's write, and a hygiene
+  // write here would erase malformed siblings and race the durable-undo update.
+  const map: CompletionDigestMap = {};
+  let badClocks = 0;
+  for (const [id, raw] of Object.entries(validated)) {
+    const copied = copyCompletionDigestItem(raw);
+    map[id] = copied.item;
+    if (copied.badClock) badClocks += 1;
+  }
+  if (badClocks > 0) {
     log?.warn(
-      { key: COMPLETION_DIGEST_KEY, pruned: removed },
-      'learning-state: pruned expired completion-digest items but the write soft-rejected — they may reappear until a later read',
-    );
-  } else {
-    log?.info(
-      { key: COMPLETION_DIGEST_KEY, pruned: removed },
-      'learning-state: pruned expired completion-digest items past the 90-day backstop',
+      { key: COMPLETION_DIGEST_KEY, badClocks },
+      'learning-state: completion-digest entries have a createdAt that is not an ISO-8601 instant — leaving them unaged',
     );
   }
-  return pruned;
+  return map;
 }
 export async function writeCompletionDigest(store: ConfigStore, map: CompletionDigestMap): Promise<boolean> {
   return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY, JSON.stringify(map))).stored;

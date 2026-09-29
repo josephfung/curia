@@ -6,16 +6,22 @@ import {
   writeVoiceProposal,
   readCompletionDigest,
   writeCompletionDigest,
+  pruneExpiredCompletionDigest,
   type CompletionDigestMap,
 } from '../../../_shared/learning-state.js';
 
-const ACTIONS = new Set([
+const ACTIONS = [
   'approve_voice',
   'dismiss_voice',
   'undo_completion',
   'confirm_completion',
   'dismiss_completion',
-]);
+] as const;
+type DigestAction = (typeof ACTIONS)[number];
+
+function isDigestAction(action: string): action is DigestAction {
+  return (ACTIONS as readonly string[]).includes(action);
+}
 
 /**
  * Resolve a completion-digest task id. Exact key wins; otherwise a unique
@@ -77,13 +83,14 @@ export class ResolveLearningDigestHandler implements ToolHandler {
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
-    const action = typeof input.action === 'string' ? input.action : '';
-    if (!ACTIONS.has(action)) {
+    const actionRaw = typeof input.action === 'string' ? input.action : '';
+    if (!isDigestAction(actionRaw)) {
       return {
         success: false,
-        error: `action must be one of: ${[...ACTIONS].join(', ')}`,
+        error: `action must be one of: ${ACTIONS.join(', ')}`,
       };
     }
+    const action: DigestAction = actionRaw;
 
     if (action === 'approve_voice' || action === 'dismiss_voice') {
       // Built once — reused for the proposal read/clear below and (on dismiss) the cooldown
@@ -176,14 +183,20 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       }
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
-      const cleared = await writeCompletionDigest(store, rest);
+      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest));
       if (!cleared) {
         return {
           success: false,
           error: `Digest item for task ${taskId} could not be cleared (transient); retry.`,
         };
       }
-      return { success: true, data: { resolved: true, detail: `Dismissed completion ${taskId}` } };
+      // Undo and confirm dismissals are opposite outcomes. The same "Dismissed
+      // completion" string reads as "the task was un-completed" on an undo item.
+      const detail =
+        item.kind === 'undo'
+          ? `Left task ${taskId} marked done; dropped the undo prompt`
+          : `Dismissed the confirm prompt for task ${taskId}; the task was not completed`;
+      return { success: true, data: { resolved: true, kind: item.kind, detail } };
     }
 
     // Require an actionable digest item of the matching kind before mutating a task —
@@ -239,7 +252,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       // clears idempotently.
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
-      const cleared = await writeCompletionDigest(store, rest);
+      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest));
       if (!cleared) {
         return {
           success: false,
@@ -268,7 +281,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       // no-op (the `task.status !== 'done'` guard above skips it).
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
-      const cleared = await writeCompletionDigest(store, rest);
+      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest));
       if (!cleared) {
         return {
           success: false,
@@ -278,9 +291,12 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       return { success: true, data: { resolved: true, detail: `Confirmed completion ${taskId}` } };
     }
 
+    // Unreachable while every DigestAction returns above. A new action that is
+    // added to ACTIONS without a branch fails here at compile time (`never`).
+    const _exhaustive: never = action;
     return {
       success: false,
-      error: `action must be one of: ${[...ACTIONS].join(', ')}`,
+      error: `resolve-learning-digest: unhandled action '${String(_exhaustive)}'`,
     };
   }
 }

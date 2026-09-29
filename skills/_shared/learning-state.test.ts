@@ -21,6 +21,7 @@ import {
   COMPLETION_DIGEST_MAX_AGE_MS,
   isCompletionDigestItemExpired,
   pruneExpiredCompletionDigest,
+  usableCompletionDigestCreatedAt,
   type CompletionCandidateMap,
   type CompletionDigestItem,
   type CompletionDigestMap,
@@ -212,32 +213,47 @@ describe('learning-state config accessors', () => {
     expect(warnCalls[0]![0]).toMatchObject({ key: VOICE_PROPOSAL_KEY });
   });
 
-  it('keeps a digest item written before createdAt existed', async () => {
+  it('keeps a digest item written before createdAt existed, and does not write', async () => {
     const item: CompletionDigestItem = { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'n1' };
-    const { store, values } = fakeStore({
-      [COMPLETION_DIGEST_KEY]: JSON.stringify({ t1: item }),
-    });
+    const raw = JSON.stringify({ t1: item });
+    const { store, values } = fakeStore({ [COMPLETION_DIGEST_KEY]: raw });
+    (store as unknown as { set: () => Promise<never> }).set = async () => {
+      throw new Error('readCompletionDigest must not write');
+    };
     expect(await readCompletionDigest(store)).toEqual({ t1: item });
-    // No clock, so the backstop does not rewrite the stored map.
-    expect(JSON.parse(values.get(COMPLETION_DIGEST_KEY)!)).toEqual({ t1: item });
+    expect(values.get(COMPLETION_DIGEST_KEY)).toBe(raw);
   });
 
-  it('keeps an item whose createdAt is not a string, and does not treat it as expired', async () => {
-    const { store, values } = fakeStore({
-      [COMPLETION_DIGEST_KEY]: JSON.stringify({
-        t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'n1', createdAt: 1 },
-      }),
+  it('keeps a non-ISO clock unaged, logs a count, and does not write or mutate storage', async () => {
+    // Date.parse("0") and Date.parse("2") succeed and land decades ago. They must not expire.
+    const raw = JSON.stringify({
+      numeric: { kind: 'undo', taskId: 'numeric', taskTitle: 'T', note: 'n', createdAt: 1 },
+      zero: { kind: 'undo', taskId: 'zero', taskTitle: 'T', note: 'n', createdAt: '0' },
+      two: { kind: 'confirm', taskId: 'two', taskTitle: 'T', note: 'n', createdAt: '2' },
+      legacy: { kind: 'confirm', taskId: 'legacy', taskTitle: 'T', note: 'n' },
+      malformed: null,
     });
+    const { store, values } = fakeStore({ [COMPLETION_DIGEST_KEY]: raw });
+    (store as unknown as { set: () => Promise<never> }).set = async () => {
+      throw new Error('readCompletionDigest must not write');
+    };
     const { logger, warnCalls } = fakeLogger();
     const result = await readCompletionDigest(store, logger);
-    expect(result.t1).toEqual({ kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'n1' });
-    expect(result.t1!.createdAt).toBeUndefined();
-    expect(warnCalls).toHaveLength(0);
-    // The bad field is stripped in memory only; storage is left for the next real write.
-    expect(JSON.parse(values.get(COMPLETION_DIGEST_KEY)!).t1.createdAt).toBe(1);
+    expect(result.numeric).toEqual({ kind: 'undo', taskId: 'numeric', taskTitle: 'T', note: 'n' });
+    expect(result.zero!.createdAt).toBeUndefined();
+    expect(result.two!.createdAt).toBeUndefined();
+    expect(result.legacy).toEqual({ kind: 'confirm', taskId: 'legacy', taskTitle: 'T', note: 'n' });
+    expect(result.malformed).toBeUndefined();
+    expect(values.get(COMPLETION_DIGEST_KEY)).toBe(raw);
+    expect(isCompletionDigestItemExpired(result.zero!, Date.now())).toBe(false);
+    expect(usableCompletionDigestCreatedAt('0')).toBeUndefined();
+    expect(usableCompletionDigestCreatedAt('2')).toBeUndefined();
+    const clockWarn = warnCalls.find((call) => /ISO-8601/.test(call[1]));
+    expect(clockWarn?.[0]).toEqual({ key: COMPLETION_DIGEST_KEY, badClocks: 3 });
+    expect(JSON.stringify(clockWarn)).not.toContain('"0"');
   });
 
-  it('prunes an item strictly older than 90 days and keeps a younger unresolved one', async () => {
+  it('pruneExpiredCompletionDigest drops only a strictly-older ISO instant and returns the same map otherwise', () => {
     const now = Date.parse('2026-09-29T00:00:00.000Z');
     const old: CompletionDigestItem = {
       kind: 'undo',
@@ -253,19 +269,21 @@ describe('learning-state config accessors', () => {
       note: 'n',
       createdAt: new Date(now - (COMPLETION_DIGEST_MAX_AGE_DAYS - 1) * 86_400_000).toISOString(),
     };
-    const unparseable: CompletionDigestItem = {
+    const junk: CompletionDigestItem = {
       kind: 'undo',
-      taskId: 'bad',
-      taskTitle: 'Bad clock',
+      taskId: 'junk',
+      taskTitle: 'Junk',
       note: 'n',
-      createdAt: 'not-a-date',
+      createdAt: '0',
     };
-    const map: CompletionDigestMap = { old, young, bad: unparseable };
+    const legacy: CompletionDigestItem = { kind: 'undo', taskId: 'legacy', taskTitle: 'Legacy', note: 'n' };
+    const map: CompletionDigestMap = { old, young, junk, legacy };
     const pruned = pruneExpiredCompletionDigest(map, now);
+    expect(pruned).not.toBe(map);
     expect(pruned.old).toBeUndefined();
     expect(pruned.young).toEqual(young);
-    expect(pruned.bad).toEqual(unparseable);
-    // Exactly the max age is not "older than" it.
+    expect(pruned.junk).toEqual(junk);
+    expect(pruned.legacy).toEqual(legacy);
     const boundary: CompletionDigestItem = {
       kind: 'undo',
       taskId: 'edge',
@@ -276,43 +294,12 @@ describe('learning-state config accessors', () => {
     expect(isCompletionDigestItemExpired(boundary, now)).toBe(false);
     expect(isCompletionDigestItemExpired(old, now)).toBe(true);
     expect(isCompletionDigestItemExpired(young, now)).toBe(false);
-
-    const { store, values } = fakeStore({
-      [COMPLETION_DIGEST_KEY]: JSON.stringify(map),
-    });
-    const { logger, warnCalls } = fakeLogger();
-    const infoCalls: Array<[Record<string, unknown>, string]> = [];
-    (logger as unknown as { info: (obj: Record<string, unknown>, msg: string) => void }).info = (
-      obj,
-      msg,
-    ) => {
-      infoCalls.push([obj, msg]);
-    };
-    // The pure-function boundary above uses a fixed `now`. The reader uses Date.now(),
-    // so seed ages relative to the wall clock for the persist assertion.
-    const wallOld: CompletionDigestItem = {
-      ...old,
-      createdAt: new Date(Date.now() - COMPLETION_DIGEST_MAX_AGE_MS - 60_000).toISOString(),
-    };
-    const wallYoung: CompletionDigestItem = {
-      ...young,
-      createdAt: new Date(Date.now() - 86_400_000).toISOString(),
-    };
-    values.set(COMPLETION_DIGEST_KEY, JSON.stringify({ old: wallOld, young: wallYoung, bad: unparseable }));
-    const result = await readCompletionDigest(store, logger);
-    expect(result.old).toBeUndefined();
-    expect(result.young).toEqual(wallYoung);
-    expect(result.bad).toEqual(unparseable);
-    const stored = JSON.parse(values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
-    expect(stored.old).toBeUndefined();
-    expect(stored.young).toEqual(wallYoung);
-    expect(stored.bad).toEqual(unparseable);
-    expect(warnCalls).toHaveLength(0);
-    expect(infoCalls).toHaveLength(1);
-    expect(infoCalls[0]![0]).toEqual({ key: COMPLETION_DIGEST_KEY, pruned: 1 });
+    // Identity is load-bearing for any caller that skips a write when nothing aged out.
+    const fresh: CompletionDigestMap = { young, junk, legacy };
+    expect(pruneExpiredCompletionDigest(fresh, now)).toBe(fresh);
   });
 
-  it('hides an expired item when the prune write soft-rejects, and leaves storage unchanged', async () => {
+  it('still returns an expired item from readCompletionDigest and does not write it away', async () => {
     const old: CompletionDigestItem = {
       kind: 'undo',
       taskId: 'old',
@@ -320,17 +307,15 @@ describe('learning-state config accessors', () => {
       note: 'n',
       createdAt: new Date(Date.now() - COMPLETION_DIGEST_MAX_AGE_MS - 60_000).toISOString(),
     };
-    const { store, values } = fakeStore({
-      [COMPLETION_DIGEST_KEY]: JSON.stringify({ old }),
-    });
-    const original = values.get(COMPLETION_DIGEST_KEY);
-    (store as unknown as { set: () => Promise<{ stored: boolean }> }).set = async () => ({ stored: false });
-    const { logger, warnCalls } = fakeLogger();
-    const result = await readCompletionDigest(store, logger);
-    expect(result.old).toBeUndefined();
-    expect(values.get(COMPLETION_DIGEST_KEY)).toBe(original);
-    expect(warnCalls).toHaveLength(1);
-    expect(warnCalls[0]![1]).toMatch(/soft-rejected/);
+    const raw = JSON.stringify({ old, malformed: { nope: true } });
+    const { store, values } = fakeStore({ [COMPLETION_DIGEST_KEY]: raw });
+    (store as unknown as { set: () => Promise<never> }).set = async () => {
+      throw new Error('readCompletionDigest must not write');
+    };
+    const result = await readCompletionDigest(store);
+    expect(result.old).toEqual(old);
+    expect(result.malformed).toBeUndefined();
+    expect(values.get(COMPLETION_DIGEST_KEY)).toBe(raw);
   });
 
   it('composes undo/confirm note text verbatim to the pre-migration copy', () => {

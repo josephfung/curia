@@ -412,7 +412,9 @@ describe('ResolveLearningDigestHandler', () => {
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
-    expect((result as { data: { detail: string } }).data.detail).toContain('Dismissed');
+    const data = (result as { data: { detail: string; kind: string } }).data;
+    expect(data.kind).toBe('undo');
+    expect(data.detail).toBe('Left task t1 marked done; dropped the undo prompt');
     expect(getTask).not.toHaveBeenCalled();
     expect(completeTask).not.toHaveBeenCalled();
     expect(reopenTask).not.toHaveBeenCalled();
@@ -596,12 +598,53 @@ describe('ResolveLearningDigestHandler', () => {
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
     expect(result.success).toBe(true);
+    const data = (result as { data: { detail: string; kind: string } }).data;
+    expect(data.kind).toBe('confirm');
+    expect(data.detail).toBe('Dismissed the confirm prompt for task t1; the task was not completed');
     expect(getTask).not.toHaveBeenCalled();
     expect(completeTask).not.toHaveBeenCalled();
     expect(reopenTask).not.toHaveBeenCalled();
     // The actioned item is removed from the config map so resolved items don't accumulate.
     const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
     expect(updated.t1).toBeUndefined();
+  });
+
+  it('a dismiss write drops an expired sibling and keeps a younger one', async () => {
+    const mem = makeMem();
+    const young = {
+      kind: 'confirm' as const,
+      taskId: 'young',
+      taskTitle: 'Still open',
+      note: 'n',
+      createdAt: new Date().toISOString(),
+    };
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
+      old: {
+        kind: 'undo',
+        taskId: 'old',
+        taskTitle: 'Stale',
+        note: 'n',
+        createdAt: new Date(Date.now() - 91 * 86_400_000).toISOString(),
+      },
+      young,
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const ctx = {
+      input: { action: 'dismiss_completion', task_id: 't1' },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext;
+
+    const result = await new ResolveLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(updated.t1).toBeUndefined();
+    expect(updated.old).toBeUndefined();
+    expect(updated.young).toEqual(young);
   });
 
   describe('task_id prefix resolution (#1545)', () => {

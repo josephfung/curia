@@ -13,6 +13,8 @@ import {
   writeCompletionCandidates,
   readCompletionDigest,
   writeCompletionDigest,
+  pruneExpiredCompletionDigest,
+  usableCompletionDigestCreatedAt,
   composeUndoNote,
   composeConfirmNote,
   type CompletionCandidateMap,
@@ -199,15 +201,19 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     // candidate-queue state that doesn't match what was actually recorded.
     let digestStored = true;
     if (digestAdds.length > 0) {
-      const digestMap: CompletionDigestMap = await readCompletionDigest(store, ctx.log);
+      // Drop aged siblings as part of the write this run already owns. Do not write
+      // solely to prune — that race belongs to a read that should stay a read.
+      const digestMap: CompletionDigestMap = pruneExpiredCompletionDigest(
+        await readCompletionDigest(store, ctx.log),
+      );
       const nowIso = new Date().toISOString();
       for (const item of digestAdds) {
-        const priorClock = digestMap[item.taskId]?.createdAt;
         // Keep a usable original clock when this task is already on the digest (a retry
-        // overwrites the note identically). A legacy entry with no timestamp, a blank
-        // or unparseable one, or a brand-new item starts its 90-day window here (#1936).
-        const createdAt =
-          typeof priorClock === 'string' && !Number.isNaN(Date.parse(priorClock)) ? priorClock : nowIso;
+        // overwrites the note identically). A missing clock, or one that is not a
+        // Date.toISOString() instant, starts the 90-day window here.
+        // This does not retrofit the pre-#1936 backlog: a task that is already done is
+        // skipped above and never reaches this write. dismiss_completion clears those.
+        const createdAt = usableCompletionDigestCreatedAt(digestMap[item.taskId]?.createdAt) ?? nowIso;
         digestMap[item.taskId] = { ...item, createdAt };
       }
       digestStored = await writeCompletionDigest(store, digestMap);
