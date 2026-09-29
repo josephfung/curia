@@ -105,6 +105,10 @@ fetchTimeout: 90000
 #   - Nothing resolves to the floor, so nothing notices it has stopped protecting you.
 # Deliberate exceptions go in that script's DEFAULT_POLICY, which requires a GHSA id and
 # a reason so an UNEXPECTED advisory on the same package still fails the check.
+# It also reads `minimumReleaseAge` above: when the safe floor is a version younger than
+# that quarantine, pinning to it would make `pnpm install` unsatisfiable, so the audit
+# reports it as blocked with the timestamp it becomes installable and does not fail. That
+# state clears itself — raise the floor once the timestamp has passed.
 #   - uuid: nylas@8.1.2 pins uuid@8.3.2 (CVE-2026-41907). uuid@11 is the last major
 #     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
 #     is ESM-only and would break `require('uuid')`.
@@ -184,12 +188,23 @@ overrides:
   # but >=2.0.5 then admitted 2.0.5-2.0.9, which carry GHSA-9mqv-5hh9-4cgg (MED, <=2.0.9).
   # Consumer is @modelcontextprotocol/sdk (^1.19.9).
   '@hono/node-server': '>=2.0.10'
-  'promptfoo>js-yaml': '>=5.2.2'            # GHSA-724g-mxrg-4qvm (!!omap) + GHSA-pm4m-ph32-ghv5 (nested flow DoS); targeted — js-yaml@4.x via @apidevtools/json-schema-ref-parser stays on 4.x
+  # GHSA-724g-mxrg-4qvm (!!omap) + GHSA-pm4m-ph32-ghv5 (nested flow DoS); targeted —
+  # js-yaml@4.x via @apidevtools/json-schema-ref-parser stays on 4.x. Raised off >=5.2.2
+  # (#1934): that floor admitted 5.2.2-5.4.0, which carry GHSA-r3ph-w7gj-g6xm (MED,
+  # >=5.0.0 <=5.4.0), published only on nodeca/js-yaml and absent from GitHub's global
+  # advisory DB. Resolution already sits at 5.4.2, so the lockfile does not move — this is
+  # a backstop against resolution dropping back onto a vulnerable version.
+  'promptfoo>js-yaml': '>=5.4.1'
   # HIGH/MED CVEs from Scorecard + Dependabot, 2026-07-26:
   # GHSA-mh99-v99m-4gvg (unbounded expansion length OOM DoS) is fixed in 5.0.8, but
   # >=5.0.8 then admitted 5.0.8 itself, which carries GHSA-rgw5-rvv9-x895 (HIGH, <5.0.9).
   # No 2.x patch exists, hence the 5.x floor rather than a same-major bump.
-  brace-expansion: '>=5.0.9'
+  # >=5.0.9 in turn admitted 5.0.9-5.0.11, which carry three more advisories published only
+  # on juliangruber/brace-expansion and absent from the global advisory DB (#1934):
+  # GHSA-6j4f-fj2g-mc7p (HIGH, <5.0.10), GHSA-qhr7-859c-m2p7 (HIGH, <5.0.11) and
+  # GHSA-q2hr-2g5m-vwhr (MED, <5.0.12). Resolution already sits at 5.0.12, so the lockfile
+  # does not move.
+  brace-expansion: '>=5.0.12'
   # Drop the only brace-expansion@2.x path (promptfoo→gaxios→rimraf@5→glob@10→minimatch@9).
   # rimraf@6 uses glob@11+/minimatch@10 which consume brace-expansion@5; gaxios only needs
   # rimraf for temp cleanup and the v6 API is compatible for that call site.

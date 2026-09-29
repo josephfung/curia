@@ -54,6 +54,8 @@ interface FakeSourceSpec {
   global?: Record<string, AdvisoryRecord[]>;
   /** repo slug -> package name -> that package's advisories on that repo. */
   repoAdvisories?: Record<string, Record<string, AdvisoryRecord[]>>;
+  /** package -> version -> ISO publish time, as the npm registry's `time` map reports it. */
+  publishedAt?: Record<string, Record<string, string>>;
   /** Package (or repo slug) name -> error message the call should throw. */
   fail?: Record<string, string>;
 }
@@ -83,6 +85,10 @@ function fakeSource(spec: FakeSourceSpec): PackageDataSource {
       // Keyed by slug AND package, mirroring the live source's contract: a monorepo's
       // advisory list covers many packages and only the requested one may come back.
       return spec.repoAdvisories?.[slug]?.[pkg] ?? [];
+    },
+    async publishedAt(pkg, version) {
+      boom(pkg);
+      return spec.publishedAt?.[pkg]?.[version] ?? null;
     },
   };
 }
@@ -659,6 +665,110 @@ describe('allowlist', () => {
     expect(report.exitCode).toBe(0);
     expect(report.unusedAllowlist.map((e) => e.ghsa)).toEqual(['GHSA-qmq6-f8pr-cx5x']);
     expect(formatReport(report)).toMatch(/GHSA-qmq6-f8pr-cx5x/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. minimumReleaseAge interaction
+//
+// A stale floor whose remedy is younger than the repo's own supply-chain quarantine is a
+// real third state: the fix exists, but pnpm is configured to refuse to install it yet,
+// and pinning to it would make `pnpm install` unsatisfiable. It clears itself when the
+// version ages out, so it reports loudly and exits 0 rather than holding CI red for a day.
+// ---------------------------------------------------------------------------
+
+describe('minimumReleaseAge', () => {
+  const NOW = new Date('2026-09-29T12:00:00Z');
+
+  // shell-quote as it actually stood: >=1.9.0 admits 1.10.0, which carries a HIGH
+  // published only on ljharb/shell-quote, and the 1.11.0 fix was hours old.
+  const shellQuote = {
+    workspaceYaml:
+      `packages:\n  - 'apps/*'\n\nminimumReleaseAge: 1440\n\noverrides:\n  shell-quote: '>=1.9.0'\n`,
+    source: fakeSource({
+      versions: { 'shell-quote': ['1.8.4', '1.9.0', '1.10.0', '1.11.0'] },
+      global: { 'shell-quote': [adv('GHSA-395f-4hp3-45gv', 'high', ['< 1.9.0'])] },
+      repos: { 'shell-quote': 'ljharb/shell-quote' },
+      repoAdvisories: {
+        'ljharb/shell-quote': {
+          'shell-quote': [
+            adv('GHSA-pqg4-j6r4-53mv', 'high', ['>= 1.8.4, < 1.11.0'], 'upstream-repo'),
+          ],
+        },
+      },
+      publishedAt: { 'shell-quote': { '1.11.0': '2026-09-29T02:34:24.391Z' } },
+    }),
+  };
+
+  it('does not fail when the safe floor is younger than the quarantine', async () => {
+    const report = await auditOverrideFloors({ ...shellQuote, policy: NO_POLICY, now: NOW });
+
+    expect(report.errors).toEqual([]);
+    expect(report.stale).toEqual([]);
+    expect(report.quarantined).toHaveLength(1);
+    expect(report.exitCode).toBe(0);
+  });
+
+  it('names the advisory, the safe floor and when it becomes installable', async () => {
+    const report = await auditOverrideFloors({ ...shellQuote, policy: NO_POLICY, now: NOW });
+    const [blocked] = report.quarantined;
+
+    expect(blocked!.safeFloor).toBe('>=1.11.0');
+    expect(blocked!.advisories.map((a) => a.ghsaId)).toEqual(['GHSA-pqg4-j6r4-53mv']);
+    expect(blocked!.installableAt).toBe('2026-09-30T02:34:24.391Z');
+
+    const text = formatReport(report);
+    expect(text).toMatch(/quarantine/i);
+    expect(text).toContain('2026-09-30T02:34:24.391Z');
+    expect(text).toContain('GHSA-pqg4-j6r4-53mv');
+  });
+
+  it('fails once the safe floor has aged past the quarantine', async () => {
+    // Same data, one day later: the excuse has expired and this is a plain stale floor.
+    const report = await auditOverrideFloors({
+      ...shellQuote,
+      policy: NO_POLICY,
+      now: new Date('2026-09-30T12:00:00Z'),
+    });
+
+    expect(report.quarantined).toEqual([]);
+    expect(report.stale).toHaveLength(1);
+    expect(report.stale[0]!.safeFloor).toBe('>=1.11.0');
+    expect(report.exitCode).toBe(1);
+  });
+
+  it('still fails when the workspace sets no quarantine at all', async () => {
+    const report = await auditOverrideFloors({
+      workspaceYaml: `packages:\n  - 'apps/*'\n\noverrides:\n  shell-quote: '>=1.9.0'\n`,
+      policy: NO_POLICY,
+      source: shellQuote.source,
+      now: NOW,
+    });
+
+    expect(report.quarantined).toEqual([]);
+    expect(report.stale).toHaveLength(1);
+    expect(report.exitCode).toBe(1);
+  });
+
+  it('fails rather than excusing a floor whose publish date is unknown', async () => {
+    // No publish time means we cannot prove the fix is quarantined. Defaulting to
+    // "quarantined" would turn an unknown into a free pass on a HIGH.
+    const report = await auditOverrideFloors({
+      workspaceYaml: shellQuote.workspaceYaml,
+      policy: NO_POLICY,
+      now: NOW,
+      source: fakeSource({
+        versions: { 'shell-quote': ['1.9.0', '1.10.0', '1.11.0'] },
+        global: {
+          'shell-quote': [adv('GHSA-pqg4-j6r4-53mv', 'high', ['>= 1.8.4, < 1.11.0'])],
+        },
+        // publishedAt deliberately omitted.
+      }),
+    });
+
+    expect(report.quarantined).toEqual([]);
+    expect(report.stale).toHaveLength(1);
+    expect(report.exitCode).toBe(1);
   });
 });
 
