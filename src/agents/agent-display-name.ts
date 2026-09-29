@@ -4,6 +4,8 @@
 // reads uses `display_name` from the agent YAML, or a phrase derived from the
 // id, so the handle itself never has to stand in as a name.
 
+import { escapeRegExp } from '../util/escape-regexp.js';
+
 /**
  * Label safe to put in a principal-facing sentence.
  *
@@ -62,7 +64,7 @@ export function redactRawAgentId(text: string, agentId: string, displayName: str
   const id = agentId.trim();
   if (id.length === 0 || id.toLowerCase() === displayName.toLowerCase()) return text;
   if (id.includes('-') || id.includes('_')) {
-    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escaped = escapeRegExp(id);
     return text.replace(new RegExp(escaped, 'gi'), () => displayName);
   }
   return text.replace(singleWordHandlePattern(id), (match) => {
@@ -73,6 +75,6 @@ export function redactRawAgentId(text: string, agentId: string, displayName: str
 
 /** Quoted `'id'` / `"id"` / `` `id` ``, or an `@id` mention that is not already "@id specialist". */
 function singleWordHandlePattern(id: string): RegExp {
-  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(id);
   return new RegExp(`(?:(['"\`])${escaped}\\1|@${escaped}\\b(?!\\s+specialist\\b))`, 'gi');
 }
