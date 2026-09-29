@@ -74,6 +74,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Timer-limit config tests** — assert the thrown message as a literal substring, clearing a CodeQL incomplete-escaping alert. (code-scanning 284)
+- **Timer-limit config tests** — accepting cases assert the value round-trips; rejections hold the `got:` tail. (code-scanning 284)
 - **Signal RPC tests** — mock sockets are destroyed and servers await close, so peer resets cannot fail green CI. (#1896)
 - **Bullpen mention wake** — an open delegation keeps the principal reply, so that wake cannot send a second one. (#1917)
 - **Inbound email Message ID** — surfaced on every inbound email and forwarded into specialist briefs. (#1909)

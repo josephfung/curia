@@ -32,6 +32,20 @@ function writeConfig(defaultYaml: string): string {
   return dir;
 }
 
+/**
+ * Read a dotted config path (`delegate.lateDelivery.ttlMinutes`) off a loaded config.
+ *
+ * The accepting cases below assert the value round-tripped rather than merely that
+ * nothing threw. `loadYamlConfig` returns `{}` when the file is missing, so a bare
+ * `not.toThrow()` would still pass if `writeConfig` ever wrote the wrong filename or
+ * the wrong directory — the assertion would be unfalsifiable for the reason it exists.
+ */
+function readPath(config: unknown, dottedKey: string): unknown {
+  return dottedKey
+    .split('.')
+    .reduce<unknown>((node, segment) => (node as Record<string, unknown> | undefined)?.[segment], config);
+}
+
 // Every config key whose value reaches a Node timer, with the ceiling expressed in that
 // key's own unit. The two delegate keys were guarded before #1807 and are covered here so
 // the move onto the shared helper cannot regress them.
@@ -76,8 +90,8 @@ const TIMER_KEYS: Array<{ key: string; max: number; unit: string; yaml: (value: 
 
 describe('loadYamlConfig — Node timer ceilings (#1807)', () => {
   for (const { key, max, unit, yaml } of TIMER_KEYS) {
-    it(`accepts ${key} exactly at the limit`, () => {
-      expect(() => loadYamlConfig(writeConfig(yaml(max)))).not.toThrow();
+    it(`accepts ${key} exactly at the limit and keeps the value`, () => {
+      expect(readPath(loadYamlConfig(writeConfig(yaml(max))), key)).toBe(max);
     });
 
     it(`rejects ${key} one above the limit, naming the key and the ceiling`, () => {
@@ -90,8 +104,11 @@ describe('loadYamlConfig — Node timer ceilings (#1807)', () => {
       // containing `\`, `(`, `+`, `*`, `?` or `$` would have made the generated pattern
       // match the wrong text or throw a SyntaxError. A substring match needs no escaping,
       // so that trap cannot come back.
+      // The `got:` tail is the half an operator acts on — it names what they actually
+      // typed, against the ceiling. Asserting it keeps a future edit from dropping it
+      // or letting it print a stale value.
       expect(() => loadYamlConfig(dir)).toThrow(
-        `${key} exceeds the Node.js timer limit (${max} ${unit})`,
+        `${key} exceeds the Node.js timer limit (${max} ${unit}), got: ${max + 1}`,
       );
     });
   }
@@ -99,17 +116,39 @@ describe('loadYamlConfig — Node timer ceilings (#1807)', () => {
   // Regression guard for the acceptance criterion "no new ceiling on keys that feed date
   // arithmetic rather than timers" — these are compared against elapsed time or interpolated
   // into SQL intervals, so an absurd value is an operator's business, not an overflow.
-  const NON_TIMER_YAML: Array<[string, string]> = [
-    ['tasks.idleThresholdHours', 'tasks:\n  idleThresholdHours: 99999999\n'],
-    ['tasks.staleWaitThresholdHours', 'tasks:\n  staleWaitThresholdHours: 99999999\n'],
-    ['tasks.resumableContinuationSeconds', 'tasks:\n  resumableContinuationSeconds: 99999999999\n'],
-    ['delegate.lateDelivery.ttlMinutes', 'delegate:\n  lateDelivery:\n    ttlMinutes: 99999999999\n'],
-    ['browser.sessionTtlMs', 'browser:\n  sessionTtlMs: 99999999999\n'],
+  const NON_TIMER_KEYS: Array<{ key: string; value: number; yaml: (value: number) => string }> = [
+    {
+      key: 'tasks.idleThresholdHours',
+      value: 99_999_999,
+      yaml: (v) => `tasks:\n  idleThresholdHours: ${v}\n`,
+    },
+    {
+      key: 'tasks.staleWaitThresholdHours',
+      value: 99_999_999,
+      yaml: (v) => `tasks:\n  staleWaitThresholdHours: ${v}\n`,
+    },
+    {
+      key: 'tasks.resumableContinuationSeconds',
+      value: 99_999_999_999,
+      yaml: (v) => `tasks:\n  resumableContinuationSeconds: ${v}\n`,
+    },
+    {
+      key: 'delegate.lateDelivery.ttlMinutes',
+      value: 99_999_999_999,
+      yaml: (v) => `delegate:\n  lateDelivery:\n    ttlMinutes: ${v}\n`,
+    },
+    {
+      key: 'browser.sessionTtlMs',
+      value: 99_999_999_999,
+      yaml: (v) => `browser:\n  sessionTtlMs: ${v}\n`,
+    },
   ];
 
-  for (const [key, yaml] of NON_TIMER_YAML) {
+  for (const { key, value, yaml } of NON_TIMER_KEYS) {
     it(`leaves ${key} unbounded — it feeds date arithmetic, not a timer`, () => {
-      expect(() => loadYamlConfig(writeConfig(yaml))).not.toThrow();
+      // Round-trip, not `not.toThrow()`: see readPath. These five are the weakest
+      // guards in the file otherwise, since no rejection case backs them up.
+      expect(readPath(loadYamlConfig(writeConfig(yaml(value))), key)).toBe(value);
     });
   }
 
