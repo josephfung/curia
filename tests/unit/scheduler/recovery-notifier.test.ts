@@ -115,6 +115,17 @@ describe('RecoveryNotifier', () => {
     expect(call.body).toContain('rescheduled automatically'); // outcome
   });
 
+  it('tells the CEO a deferred wake will not re-fire immediately', async () => {
+    gateway.sendNotification.mockResolvedValue(true);
+
+    await (notifier as never as { handle(e: ScheduleRecoveredEvent): Promise<void> })
+      .handle(makeEvent({ rearmed: true }));
+
+    const call = gateway.sendNotification.mock.calls[0]![0];
+    expect(call.body).toContain('later wake');
+    expect(call.body).not.toContain('rescheduled automatically');
+  });
+
   it('skips sending a notification when the job was suspended (SuspensionNotifier handles it)', async () => {
     // When suspended: true, recoverStuckJobs() also fires schedule.suspended,
     // and SuspensionNotifier sends the CEO email. We must not send a second email.

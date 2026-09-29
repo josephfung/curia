@@ -547,9 +547,9 @@ describe('SchedulerService', () => {
       expect(sql).toContain("THEN 'pending'");
     });
 
-    it('does not report suspended when a failed run is re-armed from deferred_wake_at', async () => {
+    it('arms a deferred wake on failure only while under the suspend threshold', async () => {
       pool.query.mockResolvedValueOnce({
-        rows: [{ id: 'job-defer', cron_expr: null, status: 'running', consecutive_failures: 2, timezone: 'UTC' }],
+        rows: [{ id: 'job-defer', cron_expr: null, status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
       });
       pool.query.mockResolvedValueOnce({ rows: [{ status: 'pending' }], rowCount: 1 });
 
@@ -557,8 +557,20 @@ describe('SchedulerService', () => {
 
       expect(result.suspended).toBe(false);
       const [sql] = pool.query.mock.calls[1] as [string];
-      expect(sql).toContain('deferred_wake_at');
-      expect(sql).toContain('THEN 0 ELSE $1');
+      expect(sql).toContain('consecutive_failures = $1');
+      expect(sql).toContain('deferred_wake_at IS NOT NULL AND $1 < 3');
+      expect(sql).not.toContain('THEN 0');
+    });
+
+    it('reports suspended when a deferred failure returns status suspended', async () => {
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: 'job-defer-suspend', cron_expr: null, status: 'running', consecutive_failures: 2, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [{ status: 'suspended' }], rowCount: 1 });
+
+      const result = await svc.completeJobRun('job-defer-suspend', false, 'boom');
+
+      expect(result.suspended).toBe(true);
     });
 
     it('updates next_run_at for recurring job on success', async () => {
@@ -578,7 +590,7 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({
         rows: [{ id: 'job-fail', cron_expr: '0 9 * * *', status: 'pending', consecutive_failures: 2 }],
       });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rows: [{ status: 'suspended' }], rowCount: 1 });
 
       const result = await svc.completeJobRun('job-fail', false, 'boom');
 
@@ -591,7 +603,7 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({
         rows: [{ id: 'job-f1', cron_expr: '0 9 * * *', status: 'pending', consecutive_failures: 0 }],
       });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rows: [{ status: 'failed' }], rowCount: 1 });
 
       const result = await svc.completeJobRun('job-f1', false, 'oops');
 
@@ -633,7 +645,7 @@ describe('SchedulerService', () => {
         .mockResolvedValueOnce({
           rows: [{ id: 'job-1', cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
         })
-        .mockResolvedValueOnce({ rows: [] }); // UPDATE
+        .mockResolvedValueOnce({ rows: [{ status: 'failed' }], rowCount: 1 });
 
       await svc.completeJobRun('job-1', false, 'some error');
 
@@ -693,7 +705,7 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({
         rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
       });
-      pool.query.mockResolvedValueOnce({ rows: [] });
+      pool.query.mockResolvedValueOnce({ rows: [{ status: 'failed' }], rowCount: 1 });
 
       await svc.completeJobRun(jobId, false, 'something went wrong');
 
@@ -748,7 +760,7 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({
         rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
       });
-      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      pool.query.mockResolvedValueOnce({ rows: [{ status: 'failed' }], rowCount: 1 });
 
       await svc.completeJobRun(jobId, false, 'budget blown');
 
@@ -765,7 +777,7 @@ describe('SchedulerService', () => {
       pool.query.mockResolvedValueOnce({
         rows: [{ id: jobId, cron_expr: '0 9 * * *', status: 'running', consecutive_failures: 0, timezone: 'UTC' }],
       });
-      pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      pool.query.mockResolvedValueOnce({ rows: [{ status: 'failed' }], rowCount: 1 });
 
       const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
       await svc.completeJobRun(jobId, false, 'budget blown', undefined, failedSkills);
@@ -846,7 +858,10 @@ describe('SchedulerService', () => {
             timezone: 'America/Toronto',
           }],
         })
-        .mockResolvedValueOnce({ rows: [] }); // UPDATE
+        .mockResolvedValueOnce({
+          rows: [{ status: 'pending', consecutive_failures: 1, rearmed: false }],
+          rowCount: 1,
+        });
 
       const result = await svc.recoverStuckJob('job-1', 900);
 
@@ -866,6 +881,9 @@ describe('SchedulerService', () => {
       // last_run_context is also untouched (continuity cursors survive timeouts).
       expect(updateSql).not.toContain('last_run_summary');
       expect(updateSql).not.toContain('last_run_context');
+      expect(updateSql).toContain('FOR UPDATE');
+      expect(updateSql).toContain('AS rearmed');
+      expect(result.rearmed).toBe(false);
     });
 
     it('resets a one-shot stuck job to pending with next_run_at = now', async () => {
@@ -879,7 +897,10 @@ describe('SchedulerService', () => {
             timezone: 'UTC',
           }],
         })
-        .mockResolvedValueOnce({ rows: [] });
+        .mockResolvedValueOnce({
+          rows: [{ status: 'pending', consecutive_failures: 1, rearmed: false }],
+          rowCount: 1,
+        });
 
       const result = await svc.recoverStuckJob('job-2', 600);
 
@@ -903,7 +924,10 @@ describe('SchedulerService', () => {
             timezone: 'UTC',
           }],
         })
-        .mockResolvedValueOnce({ rows: [] });
+        .mockResolvedValueOnce({
+          rows: [{ status: 'suspended', consecutive_failures: 3, rearmed: false }],
+          rowCount: 1,
+        });
 
       const result = await svc.recoverStuckJob('job-3', 600);
 
@@ -946,7 +970,10 @@ describe('SchedulerService', () => {
             timezone: 'UTC',
           }],
         })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ status: 'pending', consecutive_failures: 1, rearmed: false }],
+        });
 
       const result = await svc.recoverStuckJob('job-ok', 600);
 
@@ -966,7 +993,10 @@ describe('SchedulerService', () => {
         .mockResolvedValueOnce({
           rows: [{ id: jobId, cron_expr: null, run_at: null, consecutive_failures: 0, timezone: 'UTC' }],
         })
-        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ status: 'pending', consecutive_failures: 1, rearmed: false }],
+        });
 
       await svc.recoverStuckJob(jobId, 600);
 

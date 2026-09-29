@@ -526,6 +526,11 @@ interface ScheduleRecoveredPayload {
   consecutiveFailures: number;
   /** True if the job was suspended rather than reset to pending. */
   suspended: boolean;
+  /**
+   * True when recovery armed a deferred_wake_at instead of re-firing immediately.
+   * Absent on events written before this field existed.
+   */
+  rearmed?: boolean;
 }
 
 interface ScheduleDriftPausedPayload {

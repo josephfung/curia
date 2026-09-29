@@ -38,6 +38,7 @@ import {
 import { prepareResumableBlockWithSpill } from './resumable-accumulator-spill.js';
 import type { WorkingDocsRepo } from './working-docs-repo.js';
 import { type ResumableCircuitState } from '../agents/resumable-circuit-breaker.js';
+import { isPgUniqueViolation } from '../agents/resumable-continuation.js';
 import type { PlanAdaptiveState } from '../agents/plan-adaptive-replan.js';
 import type { TaskEscalation } from '../agents/task-escalation.js';
 
@@ -440,9 +441,15 @@ export class TaskRepo {
         t.waiting_on_contact_id, t.waiting_on_text, t.parent_task_id, t.blocked_by_task_id,
         t.priority, t.due_at, t.source, t.source_agent_id, t.created_by, t.tags, t.originator,
         (
-          SELECT sj.run_at FROM scheduled_jobs sj
-          WHERE sj.task_id = t.id AND sj.status = 'pending'
-          ORDER BY sj.run_at ASC LIMIT 1
+          SELECT COALESCE(sj.deferred_wake_at, sj.run_at)
+            FROM scheduled_jobs sj
+           WHERE sj.task_id = t.id
+             AND (
+               sj.status = 'pending'
+               OR (sj.status = 'running' AND sj.deferred_wake_at IS NOT NULL)
+             )
+           ORDER BY COALESCE(sj.deferred_wake_at, sj.run_at) ASC
+           LIMIT 1
         ) AS next_wake_at
       FROM tasks t
       ${whereClause}
@@ -640,9 +647,12 @@ export class TaskRepo {
         -- Running rows stay running. Mutating run_at here races the completion
         -- write, which would mark the row completed and drop the new time; inserting
         -- a second active row hits scheduled_jobs_one_active_wake_per_task_uq (#1938).
-        -- Do not also NOT EXISTS this table from _insert_wake: that subquery uses the
-        -- statement snapshot, so a completion that commits mid-statement (running →
-        -- completed) would make every arm miss and strand the task with no wake.
+        -- A completion that commits mid-statement is not caught by _revive_wake:
+        -- that arm's snapshot still shows running, so the terminal predicate never
+        -- locks the row and never rechecks. _insert_wake covers running → completed
+        -- (the old row is terminal, so the new pending row does not collide).
+        -- running → pending (completion already armed a deferral) makes _insert_wake
+        -- hit the unique index; updateTask retries the statement once on that 23505.
         _defer_running_wake AS (
           UPDATE scheduled_jobs
              SET deferred_wake_at = $${wakeRunAtIdx}
@@ -747,7 +757,23 @@ export class TaskRepo {
         client.release();
       }
     } else {
-      const row = await executeUpdate(this.pool);
+      let row: DbTaskRow | null;
+      try {
+        row = await executeUpdate(this.pool);
+      } catch (err) {
+        // Completion can arm running → pending after this statement's snapshot,
+        // so _insert_wake collides with the one-active-wake index. One retry sees
+        // the pending row and updates it in place (#1938).
+        const constraint = (err as { constraint?: string } | null)?.constraint;
+        const wakeConflict = constraint === undefined
+          || constraint === 'scheduled_jobs_one_active_wake_per_task_uq';
+        if (!(rescheduleWake && isPgUniqueViolation(err) && wakeConflict)) throw err;
+        this.logger.info(
+          { taskId, constraint },
+          'task-repo: reschedule collided with an in-flight wake arm — retrying once',
+        );
+        row = await executeUpdate(this.pool);
+      }
       if (!row) {
         return await this.resolveEmptyUpdateReturning(taskId);
       }
@@ -1100,7 +1126,10 @@ export class TaskRepo {
    */
   async cancelWakeUpJobs(taskId: string): Promise<void> {
     const result = await this.pool.query(
-      `UPDATE scheduled_jobs SET status = 'cancelled' WHERE task_id = $1 AND status = 'pending'`,
+      `UPDATE scheduled_jobs
+          SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+              deferred_wake_at = NULL
+        WHERE task_id = $1 AND status IN ('pending', 'running')`,
       [taskId],
     );
     this.logger.info({ taskId, rowsAffected: result.rowCount }, 'task-repo: cancelled wake-up jobs');
