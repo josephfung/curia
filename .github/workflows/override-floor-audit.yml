@@ -1,0 +1,156 @@
+name: Override Floor Audit
+
+# Assert that every `overrides:` floor in pnpm-workspace.yaml is still SOUND: that every
+# published release the floor admits is free of known advisories. #1934.
+#
+# Why a SCHEDULE and not only per-PR: a floor goes stale when UPSTREAM publishes an
+# advisory, which has nothing to do with our commit cadence. Every one of the nine stale
+# floors #1933 found was introduced by a correct-at-the-time pin, and five more had gone
+# stale by the day this check landed. A PR-only check would never have seen any of them.
+#
+# The per-PR leg still matters: it catches a newly written floor that is wrong on arrival.
+on:
+  schedule:
+    - cron: '20 7 * * 1'  # Monday 07:20 UTC, after the Scorecard run at 06:30
+  pull_request:
+    branches: [main]
+    paths:
+      - 'pnpm-workspace.yaml'
+      - 'scripts/audit-override-floors.ts'
+      - '.github/workflows/override-floor-audit.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: override-floor-audit-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit override floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
+
+      # --ignore-scripts: this job only needs tsx, js-yaml and semver to run a script that
+      # talks to two HTTP APIs. Nothing is built, so no postinstall is warranted.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Audit override floors
+        run: pnpm run audit:override-floors
+        env:
+          # The advisory API rate-limits anonymous requests to 60/hour; this audit makes
+          # more than that. The script fails loudly if the token is missing rather than
+          # part-way through on a 403.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # A scheduled run has no PR to turn red, so a failure would otherwise sit unseen in the
+  # Actions tab. File (or comment on) a tracking issue so the finding reaches someone.
+  # Deliberately not run for `pull_request`: a red check on the PR is already visible, and
+  # filing an issue per pushed commit would be noise.
+  notify-failure:
+    needs: audit
+    if: always() && needs.audit.result == 'failure' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the stale-floor issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const label = 'stale-override-floor';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const body = [
+              '**The override-floor audit failed.**',
+              '',
+              `Run (the findings are in the job summary): ${runUrl}`,
+              '',
+              'This means one of:',
+              '',
+              '- **A floor has gone stale.** An advisory was published covering a version',
+              '  the floor still admits. The run names the offending versions, the GHSA ids',
+              '  and the computed safe floor — raise the pin in `pnpm-workspace.yaml` to that',
+              '  floor. Note this does **not** mean the resolved tree is vulnerable today;',
+              '  Dependabot answers that. It means the floor would no longer protect you if',
+              '  resolution moved, which is how #1933 happened.',
+              '- **An advisory range could not be parsed.** A project\'s own repo advisories',
+              '  are hand-authored and use several dialects; the script refuses to guess',
+              '  rather than silently drop one. Extend `normalizeAdvisoryRange` and add the',
+              '  new shape to its test table.',
+              '- **The API call failed.** Rate limiting or an outage. Re-run the job; the',
+              '  script deliberately fails rather than passing on an empty advisory list.',
+              '',
+              '_Not a Dependabot duplicate: Dependabot asks "is the tree I resolved',
+              'vulnerable", this asks "would my floors still protect me if resolution moved".',
+              'The `fast-uri` case needed both._',
+            ].join('\n');
+
+            // Reuse one open issue rather than filing a new one every week — a floor that
+            // stays stale for a month should not produce four threads. Bounded to recent
+            // activity so an abandoned thread does not swallow every future alert.
+            const REUSE_WINDOW_DAYS = 30;
+            const { data: candidates } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              sort: 'updated',
+              direction: 'desc',
+              per_page: 20,
+            });
+
+            // listForRepo returns pull requests too; a labelled PR would otherwise
+            // swallow every alert as a comment on a merged PR thread.
+            const cutoff = Date.now() - REUSE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+            const existing = candidates.find(
+              (i) => !i.pull_request && new Date(i.updated_at).getTime() >= cutoff,
+            );
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+              core.notice(`Commented on existing stale-floor issue #${existing.number}`);
+              return;
+            }
+
+            // The label may not exist yet; create it first so the dedupe lookup above
+            // works on the next failure.
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: 'b60205',
+                description: 'An overrides: floor in pnpm-workspace.yaml admits a known advisory',
+              });
+            } catch (err) {
+              if (err.status !== 422) throw err;   // 422 = already exists, fine
+            }
+
+            const { data: created } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Override floor audit failed — a pin may no longer protect anything',
+              labels: [label, 'security', 'dependencies'],
+              body,
+            });
+            core.notice(`Opened stale-floor issue #${created.number}`);

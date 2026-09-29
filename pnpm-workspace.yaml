@@ -90,13 +90,21 @@ fetchTimeout: 90000
 # whenever a later advisory lands on the line, and the difference is silent: the floor
 # still resolves clean by accident of natural resolution, so Dependabot stays quiet.
 # That mistake has now been made four times here (hono, qs, fast-uri, ip-address) and
-# seven more floors were found stale in the same audit (#1933). Two further traps:
+# seven more floors were found stale in the same audit (#1933).
+#
+# DO NOT AUDIT THIS BY HAND. `pnpm audit:override-floors` does it, and
+# .github/workflows/override-floor-audit.yml runs it weekly and on any PR touching this
+# file. For every entry below it enumerates the published releases the floor admits and
+# tests each one against both GitHub's global advisory DB and the package's own repo
+# advisories, then reports the computed safe floor. It exists because all three traps
+# that produced #1933 are invisible to a careful read of this file:
 #   - A floor on one major does not constrain another. `undici: >=7.28.0` admitted the
 #     entire 8.x line, which carried five HIGH advisories the floor never spoke to.
 #   - The Dependabot alert list lags upstream. Advisories published on a project's own
 #     repo may not be in GitHub's global DB yet, so a floor can look clean and not be.
-#     Check `gh api /repos/<owner>/<repo>/security-advisories` as well.
-# Until the CI check in #1934 lands, this is a manual audit.
+#   - Nothing resolves to the floor, so nothing notices it has stopped protecting you.
+# Deliberate exceptions go in that script's DEFAULT_POLICY, which requires a GHSA id and
+# a reason so an UNEXPECTED advisory on the same package still fails the check.
 #   - uuid: nylas@8.1.2 pins uuid@8.3.2 (CVE-2026-41907). uuid@11 is the last major
 #     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
 #     is ESM-only and would break `require('uuid')`.

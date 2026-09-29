@@ -29,6 +29,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Standard-tier model candidates** — four OpenRouter models registered so curia-deploy#226 can repoint the tier. (#1804)
 - **Cache-read pricing** — recorded for every OpenRouter model that publishes one, or the omission explained. (#1804)
 - **`ToolContext` (public API)** — `selfEmails` lists every owned mailbox for reply-all exclusion. (#1815)
+- **`pnpm audit:override-floors`** — CI asserts every override floor admits no advisory-bearing release. (#1934)
 
 ### Changed
 
