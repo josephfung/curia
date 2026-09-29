@@ -701,15 +701,17 @@ export class TaskRepo {
         WITH updated_task AS (
           ${updateSql}
         ),
-        -- Touch running as well as pending. A deferred wake recorded earlier in this
-        -- run must be dropped (terminal wins), and if completion already flipped that
-        -- running row to pending, READ COMMITTED rechecks the new version and cancels it.
+        -- Pending, suspended, and paused wakes are cancelled. A running wake stays
+        -- running so its completion can finish, but its deferral is dropped — terminal
+        -- wins, including a suspended row that was keeping deferred_wake_at for resume.
+        -- If completion already flipped that running row to pending, READ COMMITTED
+        -- rechecks the new version and cancels it.
         _cancel_wake AS (
           UPDATE scheduled_jobs
-             SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+             SET status = CASE WHEN status = 'running' THEN status ELSE 'cancelled' END,
                  deferred_wake_at = NULL
            WHERE task_id = $${whereIdx}
-             AND status IN ('pending', 'running')
+             AND status IN ('pending', 'running', 'suspended', 'paused')
         )
         SELECT * FROM updated_task
       `;
@@ -864,9 +866,9 @@ export class TaskRepo {
       ),
       _cancel_wake AS (
         UPDATE scheduled_jobs
-           SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+           SET status = CASE WHEN status = 'running' THEN status ELSE 'cancelled' END,
                deferred_wake_at = NULL
-         WHERE task_id = $2 AND status IN ('pending', 'running')
+         WHERE task_id = $2 AND status IN ('pending', 'running', 'suspended', 'paused')
       )
       SELECT * FROM done_task
     `
@@ -879,9 +881,9 @@ export class TaskRepo {
       ),
       _cancel_wake AS (
         UPDATE scheduled_jobs
-           SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+           SET status = CASE WHEN status = 'running' THEN status ELSE 'cancelled' END,
                deferred_wake_at = NULL
-         WHERE task_id = $1 AND status IN ('pending', 'running')
+         WHERE task_id = $1 AND status IN ('pending', 'running', 'suspended', 'paused')
       )
       SELECT * FROM done_task
     `;
@@ -1063,9 +1065,10 @@ export class TaskRepo {
           RETURNING id
        ),
        _cancel_wakes AS (
-         UPDATE scheduled_jobs SET status = 'cancelled'
+         UPDATE scheduled_jobs
+            SET status = 'cancelled', deferred_wake_at = NULL
           WHERE task_id IN (SELECT id FROM to_reconcile)
-            AND status IN ('pending', 'running')
+            AND status IN ('pending', 'running', 'suspended', 'paused')
        )
        SELECT c.id, tr.previous_status
          FROM cancelled c
@@ -1127,9 +1130,9 @@ export class TaskRepo {
   async cancelWakeUpJobs(taskId: string): Promise<void> {
     const result = await this.pool.query(
       `UPDATE scheduled_jobs
-          SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE status END,
+          SET status = CASE WHEN status = 'running' THEN status ELSE 'cancelled' END,
               deferred_wake_at = NULL
-        WHERE task_id = $1 AND status IN ('pending', 'running')`,
+        WHERE task_id = $1 AND status IN ('pending', 'running', 'suspended', 'paused')`,
       [taskId],
     );
     this.logger.info({ taskId, rowsAffected: result.rowCount }, 'task-repo: cancelled wake-up jobs');
@@ -1414,8 +1417,9 @@ export class TaskRepo {
             RETURNING ${TASK_COLUMNS}
          ),
          _cancel_wake AS (
-           UPDATE scheduled_jobs SET status = 'cancelled'
-            WHERE task_id = $4 AND status IN ('pending', 'running')
+           UPDATE scheduled_jobs
+              SET status = 'cancelled', deferred_wake_at = NULL
+            WHERE task_id = $4 AND status IN ('pending', 'running', 'suspended', 'paused')
          )
          SELECT * FROM updated_task`,
         [JSON.stringify(options.circuitState), JSON.stringify(notes), mergedTags, taskId],
