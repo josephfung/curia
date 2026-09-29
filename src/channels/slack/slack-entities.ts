@@ -3,6 +3,8 @@
 // Slack delivers user/channel/link mentions as <…> tokens and escapes &, <, >.
 // Strip the leading bot @mention on app_mention so content is clean.
 
+import { escapeRegExp } from '../../util/escape-regexp.js';
+
 /**
  * Decode Slack message text for agent consumption:
  * - Unescape &amp; &lt; &gt;
@@ -45,8 +47,4 @@ export function decodeSlackText(raw: string, options?: { botUserId?: string }): 
     .replace(/&amp;/g, '&');
 
   return text.trim();
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
