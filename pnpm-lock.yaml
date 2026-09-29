@@ -6,25 +6,25 @@ settings:
 
 overrides:
   hono: '>=4.13.5'
-  fast-uri: '>=4.1.2'
-  vite: '>=8.0.5'
+  fast-uri: '>=4.2.1'
+  vite: '>=8.0.16'
   qs: '>=6.16.0'
-  ip-address: '>=10.1.1'
+  ip-address: '>=10.7.2'
   uuid: ^11.1.1
   ws: '>=8.21.0'
   form-data: '>=4.0.6'
   esbuild: '>=0.28.1'
-  undici: '>=7.28.0'
+  undici: '>=8.10.2'
   '@opentelemetry/core': '>=2.8.0'
-  onnxruntime-web>protobufjs: '>=7.6.3 <8'
-  adm-zip: '>=0.6.0'
-  sharp: '>=0.35.0'
+  onnxruntime-web>protobufjs: '>=7.6.5 <8'
+  adm-zip: '>=0.6.1'
+  sharp: '>=0.35.4'
   find-my-way: '>=9.7.0'
   shell-quote: '>=1.9.0'
   body-parser: '>=2.3.0'
-  '@hono/node-server': '>=2.0.5'
+  '@hono/node-server': '>=2.0.10'
   promptfoo>js-yaml: '>=5.2.2'
-  brace-expansion: '>=5.0.8'
+  brace-expansion: '>=5.0.9'
   gaxios>rimraf: '>=6.1.2'
   fflate: '>=0.8.3'
   smol-toml: '>=1.7.1'
@@ -200,7 +200,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       vite:
-        specifier: '>=8.0.5'
+        specifier: '>=8.0.16'
         version: 8.3.0(@types/node@24.13.6)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
       vitest:
         specifier: ^5.0.1
@@ -234,7 +234,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       vite:
-        specifier: '>=8.0.5'
+        specifier: '>=8.0.16'
         version: 8.3.0(@types/node@26.0.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
 
   apps/console:
@@ -268,7 +268,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       vite:
-        specifier: '>=8.0.5'
+        specifier: '>=8.0.16'
         version: 8.3.0(@types/node@26.0.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0)
 
   packages/shared-types: {}
@@ -2406,7 +2406,7 @@ packages:
     resolution: {integrity: sha512-7L4adgnJtQvQgo5cfIwqHG1QuR8mdZQ/WdMScNDp6uK644ZqnHDAa4rR+vZYfZFdJ5+obCqZQ66Dad8kcwJ4Jg==}
     engines: {node: '>=20', npm: '>=9.6.4'}
     peerDependencies:
-      undici: '>=7.28.0'
+      undici: '>=8.10.2'
 
   '@slack/types@3.1.0':
     resolution: {integrity: sha512-bTzqrO3lxJ5iWedo1eJKNAs1koyEhaTwKLJUkD3KETnPeQvD978AAE4jvWstUws8Gbbc4JR6iYE6F7XjE8UGmw==}
@@ -2763,13 +2763,13 @@ packages:
     resolution: {integrity: sha512-eJv6hHOIOVXzA4b2lZwccu/7VNmk9372fGOqsx5tNxiJHLtFBokyCTQUhlgjjXxl7guLPauHp0TqGTVyn1HvQA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
-      vite: '>=8.0.5'
+      vite: '>=8.0.16'
 
   '@vitest/mocker@5.0.1':
     resolution: {integrity: sha512-6K1DoBNAPGvuOcSsGA4D6x+5zEEff/KmOOP3uetT2TrGpVfI+HRHRnJJfKi5ib/g1vx8IYHQD8s0pbJz8WQI7Q==}
     peerDependencies:
       msw: ^2.4.9
-      vite: '>=8.0.5'
+      vite: '>=8.0.16'
     peerDependenciesMeta:
       msw:
         optional: true
@@ -3773,9 +3773,6 @@ packages:
   fast-string-width@3.0.2:
     resolution: {integrity: sha512-gX8LrtNEI5hq8DVUfRQMbr5lpaS4nMIWV+7XEbXk2b8kiQIizgnlr12B4dA3ZEx3308ze0O4Q1R+cHts8kyUJg==}
 
-  fast-uri@4.1.3:
-    resolution: {integrity: sha512-7+72G6vLt7jjNas8SmSATx2qeyRIjxeqO3i4IkmDTxlqYZRKANhOe1bnovcp4WZmvsYrp60WyqPyHqgRiX0yXw==}
-
   fast-uri@4.2.1:
     resolution: {integrity: sha512-TmHQgewjHtMq1E5QKA0tOE0yeYGQs25KZC/ziJpubRtWI15W92e6vPFydWOeZBVROSHBYw/QhD9d5OefdD6LDg==}
 
@@ -4182,10 +4179,6 @@ packages:
         optional: true
       react-devtools-core:
         optional: true
-
-  ip-address@10.5.0:
-    resolution: {integrity: sha512-R5SnVLJmgYYvf2F2ZgwSBnelz5G4q5AxIC277GDfUaNbrZKNANcBC7RHqYYePlszf4kBolVkJauG0ZjHHFh55g==}
-    engines: {node: '>= 12'}
 
   ip-address@10.7.2:
     resolution: {integrity: sha512-7H/2gFSIitxc0hG3nOI1glS8QLo/EHBFFLk8vEUjXY/xu0AdL8jZ9U1IzO2PUm0d2D/ofQcAifb0g6OBkt8U7w==}
@@ -4934,7 +4927,7 @@ packages:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
-      undici: '>=7.28.0'
+      undici: '>=8.10.2'
       ws: '>=8.21.0'
       zod: ^3.25 || ^4.0
     peerDependenciesMeta:
@@ -6122,7 +6115,7 @@ packages:
       '@vitest/ui': 5.0.1
       happy-dom: '*'
       jsdom: '*'
-      vite: '>=8.0.5'
+      vite: '>=8.0.16'
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -7312,7 +7305,7 @@ snapshots:
     dependencies:
       '@lukeed/ms': 2.0.2
       fastify-plugin: 6.0.0
-      ip-address: 10.5.0
+      ip-address: 10.7.2
       toad-cache: 3.7.4
 
   '@fastify/send@4.1.1':
@@ -9025,7 +9018,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 4.1.3
+      fast-uri: 4.2.1
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -9863,7 +9856,7 @@ snapshots:
     dependencies:
       debug: 4.4.3
       express: 5.2.1
-      ip-address: 10.5.0
+      ip-address: 10.7.2
     transitivePeerDependencies:
       - supports-color
 
@@ -9947,8 +9940,6 @@ snapshots:
   fast-string-width@3.0.2:
     dependencies:
       fast-string-truncated-width: 3.0.3
-
-  fast-uri@4.1.3: {}
 
   fast-uri@4.2.1: {}
 
@@ -10531,8 +10522,6 @@ snapshots:
       - bufferutil
       - utf-8-validate
     optional: true
-
-  ip-address@10.5.0: {}
 
   ip-address@10.7.2: {}
 
