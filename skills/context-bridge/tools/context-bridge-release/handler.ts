@@ -8,6 +8,22 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isTaskWakeReplyBinding, recordTaskWakeReply } from '../../../../src/dispatch/task-wake-reply.js';
+import { isUuid } from '../../../../src/util/uuid.js';
+
+/**
+ * A non-UUID `entry_id` is a Postgres 22P02 on the uuid column, and the driver
+ * text is not something the model can act on. Name the block the real id is
+ * copied from. A `dedup:<uuid>:<uuid>` key contains UUIDs and still is not one,
+ * so the message has to say the whole value must be that entry's id (#1940).
+ */
+function invalidEntryIdError(entryId: string): string {
+  return (
+    `Invalid entry_id "${entryId}" — expected the UUID copied verbatim from the ` +
+    `[ACTIVE OUTBOUND CONTEXT] block. If that block is not in this turn, there is ` +
+    `nothing to release; do not call this tool or invent an id (a slug or a key ` +
+    `built from other UUIDs is not an entry_id).`
+  );
+}
 
 export class ContextBridgeReleaseHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -20,6 +36,10 @@ export class ContextBridgeReleaseHandler implements ToolHandler {
 
     if (!entryId) {
       return { success: false, error: 'Missing required input: entry_id (string)' };
+    }
+
+    if (!isUuid(entryId)) {
+      return { success: false, error: invalidEntryIdError(entryId) };
     }
 
     if (!ctx.outboundContext) {

@@ -29,11 +29,57 @@ function makeCtx(input: Record<string, unknown>, overrides: Partial<ToolContext>
 
 describe('ContextBridgeReleaseHandler', () => {
   it('calls releaseEntry with the provided entry_id', async () => {
-    const ctx = makeCtx({ entry_id: 'abc-123' });
+    const ctx = makeCtx({ entry_id: ENTRY_ID });
     const result = await handler.execute(ctx);
 
     expect(result.success).toBe(true);
-    expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith('abc-123');
+    expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+  });
+
+  it('rejects a bare slug before querying and names the context block', async () => {
+    const slug = 'review-possible-duplicate-jim-miller-josephine-miller';
+    const ctx = makeCtx({ entry_id: slug });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain(slug);
+      expect(result.error).toContain('[ACTIVE OUTBOUND CONTEXT]');
+      expect(result.error).toMatch(/nothing to release/);
+      expect(result.error).not.toMatch(/invalid input syntax|22P02|postgres/i);
+    }
+    expect(ctx.outboundContext!.getEntry).not.toHaveBeenCalled();
+    expect(ctx.outboundContext!.releaseEntry).not.toHaveBeenCalled();
+  });
+
+  it('rejects a composite dedup key that merely contains UUIDs', async () => {
+    const composite =
+      'dedup:43b23faa-064b-496a-917a-b250f1f3e0e3:4a682c1d-1111-4222-8333-b250f1f3e0e3';
+    const ctx = makeCtx({ entry_id: composite });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain(composite);
+      expect(result.error).toContain('[ACTIVE OUTBOUND CONTEXT]');
+      expect(result.error).toMatch(/not an entry_id/);
+      expect(result.error).not.toMatch(/invalid input syntax|22P02|postgres/i);
+    }
+    expect(ctx.outboundContext!.getEntry).not.toHaveBeenCalled();
+    expect(ctx.outboundContext!.releaseEntry).not.toHaveBeenCalled();
+  });
+
+  it('returns not-found for a valid UUID with no active entry', async () => {
+    const unknownId = '592797c3-064b-496a-917a-b250f1f3e0e3';
+    const ctx = makeCtx({ entry_id: unknownId, reply: 'July 26 to Aug 22' });
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toBe('outbound context entry not found or already released');
+    }
+    expect(ctx.outboundContext!.getEntry).toHaveBeenCalledWith(unknownId);
+    expect(ctx.outboundContext!.releaseEntry).not.toHaveBeenCalled();
   });
 
   it('returns error when entry_id is missing', async () => {
@@ -47,7 +93,7 @@ describe('ContextBridgeReleaseHandler', () => {
   });
 
   it('returns error when outboundContext capability is missing', async () => {
-    const ctx = makeCtx({ entry_id: 'abc-123' });
+    const ctx = makeCtx({ entry_id: ENTRY_ID });
     (ctx as unknown as Record<string, unknown>).outboundContext = undefined;
 
     const result = await handler.execute(ctx);
@@ -59,7 +105,7 @@ describe('ContextBridgeReleaseHandler', () => {
   });
 
   it('returns error when releaseEntry throws', async () => {
-    const ctx = makeCtx({ entry_id: 'abc-123' });
+    const ctx = makeCtx({ entry_id: ENTRY_ID });
     (ctx.outboundContext!.releaseEntry as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('DB error'),
     );
