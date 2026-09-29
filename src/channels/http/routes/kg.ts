@@ -352,9 +352,10 @@ export async function knowledgeGraphRoutes(
       t.blocked_by_task_id, t.progress, t.error_budget, t.conversation_id,
       t.created_at, t.updated_at,
       c.display_name AS waiting_on_contact_name,
-      (SELECT sj.next_run_at FROM scheduled_jobs sj
-       WHERE sj.task_id = t.id AND sj.status = 'pending'
-       ORDER BY sj.next_run_at ASC LIMIT 1) AS next_wake_at
+      (SELECT COALESCE(sj.deferred_wake_at, sj.next_run_at) FROM scheduled_jobs sj
+       WHERE sj.task_id = t.id
+         AND (sj.status = 'pending' OR (sj.status = 'running' AND sj.deferred_wake_at IS NOT NULL))
+       ORDER BY COALESCE(sj.deferred_wake_at, sj.next_run_at) ASC LIMIT 1) AS next_wake_at
     FROM tasks t
     LEFT JOIN contacts c ON c.id = t.waiting_on_contact_id
     ORDER BY t.updated_at DESC
@@ -747,9 +748,10 @@ export async function knowledgeGraphRoutes(
           t.blocked_by_task_id, t.progress, t.error_budget, t.conversation_id,
           t.created_at, t.updated_at,
           c.display_name AS waiting_on_contact_name,
-          (SELECT sj.next_run_at FROM scheduled_jobs sj
-           WHERE sj.task_id = t.id AND sj.status = 'pending'
-           ORDER BY sj.next_run_at ASC LIMIT 1) AS next_wake_at
+          (SELECT COALESCE(sj.deferred_wake_at, sj.next_run_at) FROM scheduled_jobs sj
+           WHERE sj.task_id = t.id
+             AND (sj.status = 'pending' OR (sj.status = 'running' AND sj.deferred_wake_at IS NOT NULL))
+           ORDER BY COALESCE(sj.deferred_wake_at, sj.next_run_at) ASC LIMIT 1) AS next_wake_at
          FROM tasks t
          LEFT JOIN contacts c ON c.id = t.waiting_on_contact_id
          WHERE t.id = $1`,

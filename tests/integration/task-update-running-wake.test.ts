@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import pg from 'pg';
 import pino from 'pino';
 import { TaskRepo } from '../../src/db/task-repo.js';
-import { SchedulerService } from '../../src/scheduler/scheduler-service.js';
+import { SchedulerService, SUSPEND_THRESHOLD } from '../../src/scheduler/scheduler-service.js';
 import { EventBus } from '../../src/bus/bus.js';
 import type { EventBus as EventBusType } from '../../src/bus/bus.js';
 
@@ -50,6 +50,24 @@ async function wakeRowsFor(pool: pg.Pool, taskId: string): Promise<WakeRow[]> {
 
 function activeWakes(rows: WakeRow[]): WakeRow[] {
   return rows.filter((r) => r.status === 'pending' || r.status === 'running');
+}
+
+async function waitForLockWaiters(pool: pg.Pool, minWaiters: number): Promise<void> {
+  // A session blocked on a row lock waits on the holder's transactionid, so the
+  // ungranted lock has no relation. Count active sessions in a Lock wait.
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const { rows } = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n
+         FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock'
+          AND state = 'active'
+          AND pid <> pg_backend_pid()`,
+    );
+    if (Number(rows[0]!.n) >= minWaiters) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for ${minWaiters} lock waiter(s)`);
 }
 
 describeIf('TaskRepo.updateTask running-wake reschedule (#1938)', () => {
@@ -126,12 +144,8 @@ describeIf('TaskRepo.updateTask running-wake reschedule (#1938)', () => {
     expect(new Date(rows[0]!.deferred_wake_at!).getTime()).toBe(second.getTime());
   });
 
-  it('arms the deferred time when the running wake fails', async () => {
+  it('arms the deferred time when the running wake fails under the suspend threshold', async () => {
     const { taskId, jobId } = await taskWithRunningWake('defer-on-failure');
-    await pool.query(
-      `UPDATE scheduled_jobs SET consecutive_failures = 2 WHERE id = $1`,
-      [jobId],
-    );
     const wakeAt = new Date(Date.now() + 7_200_000);
     await repo.updateTask(taskId, { wakeAt }, 'coordinator');
 
@@ -144,8 +158,37 @@ describeIf('TaskRepo.updateTask running-wake reschedule (#1938)', () => {
     expect(new Date(rows[0]!.run_at).getTime()).toBe(wakeAt.getTime());
     expect(new Date(rows[0]!.next_run_at).getTime()).toBe(wakeAt.getTime());
     expect(rows[0]!.deferred_wake_at).toBeNull();
-    expect(rows[0]!.consecutive_failures).toBe(0);
+    expect(rows[0]!.consecutive_failures).toBe(1);
     expect(activeWakes(rows)).toHaveLength(1);
+  });
+
+  it('suspends a deferred wake at the failure threshold and resumes at that time', async () => {
+    const { taskId, jobId } = await taskWithRunningWake('defer-suspend');
+    await pool.query(
+      `UPDATE scheduled_jobs SET consecutive_failures = $2 WHERE id = $1`,
+      [jobId, SUSPEND_THRESHOLD - 1],
+    );
+    const before = await wakeRowsFor(pool, taskId);
+    const wakeAt = new Date(Date.now() + 7_200_000);
+    await repo.updateTask(taskId, { wakeAt }, 'coordinator');
+
+    const result = await scheduler.completeJobRun(jobId, false, 'boom');
+    expect(result.suspended).toBe(true);
+
+    const mid = await wakeRowsFor(pool, taskId);
+    expect(mid).toHaveLength(1);
+    expect(mid[0]!.status).toBe('suspended');
+    expect(mid[0]!.consecutive_failures).toBe(SUSPEND_THRESHOLD);
+    expect(new Date(mid[0]!.deferred_wake_at!).getTime()).toBe(wakeAt.getTime());
+    expect(new Date(mid[0]!.run_at).getTime()).toBe(new Date(before[0]!.run_at).getTime());
+    expect(activeWakes(mid)).toHaveLength(0);
+
+    await scheduler.unsuspendJob(jobId);
+    const after = await wakeRowsFor(pool, taskId);
+    expect(after[0]!.status).toBe('pending');
+    expect(new Date(after[0]!.run_at).getTime()).toBe(wakeAt.getTime());
+    expect(after[0]!.deferred_wake_at).toBeNull();
+    expect(activeWakes(after)).toHaveLength(1);
   });
 
   it('drops a deferred wake when done and wakeAt are supplied together', async () => {
@@ -177,6 +220,8 @@ describeIf('TaskRepo.updateTask running-wake reschedule (#1938)', () => {
     const result = await scheduler.recoverStuckJob(jobId, 600);
     expect(result.noOp).toBe(false);
     expect(result.suspended).toBe(false);
+    expect(result.rearmed).toBe(true);
+    expect(result.consecutiveFailures).toBe(1);
 
     const rows = await wakeRowsFor(pool, taskId);
     expect(rows).toHaveLength(1);
@@ -203,6 +248,60 @@ describeIf('TaskRepo.updateTask running-wake reschedule (#1938)', () => {
     expect(rows[0]!.deferred_wake_at).toBeNull();
     expect(activeWakes(rows)).toHaveLength(1);
   });
+
+  it('lists a deferred running wake as next_wake_at and omits a running wake with none', async () => {
+    const deferred = await taskWithRunningWake('list-deferred');
+    const plain = await taskWithRunningWake('list-running');
+    const wakeAt = new Date(Date.now() + 7_200_000);
+    await repo.updateTask(deferred.taskId, { wakeAt }, 'coordinator');
+    await pool.query(`UPDATE tasks SET priority = 1000 WHERE id = ANY($1::uuid[])`, [[deferred.taskId, plain.taskId]]);
+
+    const listed = await repo.listTasks({ limit: 1000 });
+    const deferredRow = listed.find((row) => row.id === deferred.taskId);
+    const plainRow = listed.find((row) => row.id === plain.taskId);
+    expect(deferredRow).toBeDefined();
+    expect(new Date(deferredRow!.nextWakeAt!).getTime()).toBe(wakeAt.getTime());
+    expect(plainRow).toBeDefined();
+    expect(plainRow!.nextWakeAt).toBeNull();
+  });
+
+  it('retries when two reschedules race a completion that already armed the wake', async () => {
+    const { taskId, jobId } = await taskWithRunningWake('retry-race');
+    const client = await pool.connect();
+    const wakeA = new Date(Date.now() + 8_000_000);
+    const wakeB = new Date(Date.now() + 9_000_000);
+    let pending: Promise<Array<{ id: string } | null>> = Promise.resolve([]);
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT id FROM scheduled_jobs WHERE id = $1 FOR UPDATE`, [jobId]);
+
+      pending = Promise.all([
+        repo.updateTask(taskId, { wakeAt: wakeA }, 'coordinator'),
+        repo.updateTask(taskId, { wakeAt: wakeB }, 'coordinator'),
+      ]);
+      await waitForLockWaiters(pool, 2);
+
+      await client.query(
+        `UPDATE scheduled_jobs
+            SET status = 'pending', run_at = $2, next_run_at = $2, deferred_wake_at = NULL
+          WHERE id = $1`,
+        [jobId, new Date(Date.now() + 30_000)],
+      );
+      await client.query('COMMIT');
+
+      const updated = await pending;
+      expect(updated.every((row) => row !== null)).toBe(true);
+
+      const active = activeWakes(await wakeRowsFor(pool, taskId));
+      expect(active).toHaveLength(1);
+      expect(active[0]!.status).toBe('pending');
+      expect([wakeA.getTime(), wakeB.getTime()]).toContain(new Date(active[0]!.run_at).getTime());
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined);
+      client.release();
+      await pending.catch(() => undefined);
+    }
+  }, 15_000);
 
   it('concurrent reschedule and completion leave exactly one active wake at the requested time', async () => {
     for (let i = 0; i < 20; i++) {

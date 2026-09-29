@@ -1339,8 +1339,8 @@ export class Scheduler {
         `UPDATE scheduled_jobs
             SET status = 'pending',
                 run_at = CASE WHEN cron_expr IS NULL THEN COALESCE(deferred_wake_at, run_at) ELSE run_at END,
-                next_run_at = COALESCE(deferred_wake_at, next_run_at),
-                deferred_wake_at = NULL
+                next_run_at = CASE WHEN cron_expr IS NULL THEN COALESCE(deferred_wake_at, next_run_at) ELSE next_run_at END,
+                deferred_wake_at = CASE WHEN cron_expr IS NULL THEN NULL ELSE deferred_wake_at END
           WHERE id = $1
             AND status = 'running'
             AND run_started_at = $2::timestamptz`,
@@ -1361,8 +1361,8 @@ export class Scheduler {
       `UPDATE scheduled_jobs
           SET status = 'pending',
               run_at = CASE WHEN cron_expr IS NULL THEN COALESCE(deferred_wake_at, run_at) ELSE run_at END,
-              next_run_at = COALESCE(deferred_wake_at, next_run_at),
-              deferred_wake_at = NULL
+              next_run_at = CASE WHEN cron_expr IS NULL THEN COALESCE(deferred_wake_at, next_run_at) ELSE next_run_at END,
+              deferred_wake_at = CASE WHEN cron_expr IS NULL THEN NULL ELSE deferred_wake_at END
         WHERE id = $1 AND status = 'running'`,
       [jobId],
     ).catch((revertErr: unknown) => {
@@ -1777,6 +1777,7 @@ export class Scheduler {
               timeoutSeconds: row.timeout_seconds,
               consecutiveFailures: result.consecutiveFailures,
               suspended: result.suspended,
+              rearmed: result.rearmed,
             });
             await this.bus.publish('system', recoveredEvent);
 

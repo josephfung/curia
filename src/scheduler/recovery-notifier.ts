@@ -88,6 +88,9 @@ export class RecoveryNotifier {
     );
 
     const subject = `Scheduled job recovered from stuck state: ${agentId}`;
+    const outcome = event.payload.rearmed
+      ? 'The task had already chosen a later wake. The job will run at that time, not immediately.'
+      : 'The job has been rescheduled automatically and will run again on its next trigger.';
     const body = [
       'Scheduled job was stuck and has been auto-recovered (reset to pending).',
       '',
@@ -100,7 +103,7 @@ export class RecoveryNotifier {
       '',
       `View job: ${jobContext.consoleUrl}`,
       '',
-      'The job has been rescheduled automatically and will run again on its next trigger.',
+      outcome,
     ].join('\n');
 
     const ceoEmail = resolvePrincipalEmail(this.config.ceoEmail);
