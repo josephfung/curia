@@ -299,6 +299,55 @@ describe('learning-state config accessors', () => {
     expect(pruneExpiredCompletionDigest(fresh, now)).toBe(fresh);
   });
 
+  it('logs a PII-safe kind breakdown when it drops expired items, and stays quiet otherwise', () => {
+    const now = Date.parse('2026-09-29T00:00:00.000Z');
+    const oldUndo: CompletionDigestItem = {
+      kind: 'undo',
+      taskId: 'old-undo',
+      taskTitle: 'Secret title undo',
+      note: 'n',
+      createdAt: new Date(now - COMPLETION_DIGEST_MAX_AGE_MS - 1).toISOString(),
+    };
+    const oldConfirm: CompletionDigestItem = {
+      kind: 'confirm',
+      taskId: 'old-confirm',
+      taskTitle: 'Secret title confirm',
+      note: 'n',
+      createdAt: new Date(now - COMPLETION_DIGEST_MAX_AGE_MS - 1).toISOString(),
+    };
+    const young: CompletionDigestItem = {
+      kind: 'confirm',
+      taskId: 'young',
+      taskTitle: 'Young',
+      note: 'n',
+      createdAt: new Date(now).toISOString(),
+    };
+    const infoCalls: Array<[Record<string, unknown>, string]> = [];
+    const logger = {
+      warn: () => {},
+      info: (obj: Record<string, unknown>, msg: string) => {
+        infoCalls.push([obj, msg]);
+      },
+      error: () => {},
+      debug: () => {},
+    } as unknown as Parameters<typeof readCompletionDigest>[1];
+
+    const pruned = pruneExpiredCompletionDigest({ oldUndo, oldConfirm, young }, now, logger);
+    expect(pruned.oldUndo).toBeUndefined();
+    expect(pruned.oldConfirm).toBeUndefined();
+    expect(pruned.young).toEqual(young);
+    expect(infoCalls).toHaveLength(1);
+    expect(infoCalls[0]![0]).toEqual({ key: COMPLETION_DIGEST_KEY, pruned: 2, undo: 1, confirm: 1 });
+    expect(infoCalls[0]![1]).toMatch(/90-day/);
+    const serialized = JSON.stringify(infoCalls);
+    expect(serialized).not.toContain('Secret title');
+    expect(serialized).not.toContain('old-undo');
+
+    infoCalls.length = 0;
+    expect(pruneExpiredCompletionDigest({ young }, now, logger)).toEqual({ young });
+    expect(infoCalls).toHaveLength(0);
+  });
+
   it('still returns an expired item from readCompletionDigest and does not write it away', async () => {
     const old: CompletionDigestItem = {
       kind: 'undo',

@@ -630,13 +630,14 @@ describe('ResolveLearningDigestHandler', () => {
       young,
     };
     mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const info = vi.fn();
     const ctx = {
       input: { action: 'dismiss_completion', task_id: 't1' },
       entityMemory: mem,
       executiveProfileService: { get: vi.fn(), update: vi.fn() },
       taskRepo: { reopenTask: vi.fn(), completeTask: vi.fn(), getTask: vi.fn() },
       agentId: 'coordinator',
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      log: { info, warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     } as unknown as ToolContext;
 
     const result = await new ResolveLearningDigestHandler().execute(ctx);
@@ -645,6 +646,10 @@ describe('ResolveLearningDigestHandler', () => {
     expect(updated.t1).toBeUndefined();
     expect(updated.old).toBeUndefined();
     expect(updated.young).toEqual(young);
+    expect(info).toHaveBeenCalledWith(
+      { key: COMPLETION_DIGEST_KEY, pruned: 1, undo: 1, confirm: 0 },
+      expect.stringMatching(/90-day/),
+    );
   });
 
   describe('task_id prefix resolution (#1545)', () => {

@@ -183,7 +183,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       }
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
-      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest));
+      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest, Date.now(), ctx.log));
       if (!cleared) {
         return {
           success: false,
@@ -252,7 +252,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       // clears idempotently.
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
-      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest));
+      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest, Date.now(), ctx.log));
       if (!cleared) {
         return {
           success: false,
@@ -281,7 +281,7 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       // no-op (the `task.status !== 'done'` guard above skips it).
       const { [taskId]: _removed, ...rest } = digestMap;
       void _removed;
-      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest));
+      const cleared = await writeCompletionDigest(store, pruneExpiredCompletionDigest(rest, Date.now(), ctx.log));
       if (!cleared) {
         return {
           success: false,
