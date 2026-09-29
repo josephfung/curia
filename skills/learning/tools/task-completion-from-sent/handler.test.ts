@@ -6,6 +6,8 @@ import { CONFIG_NAMESPACE } from '../../../ceo-inbox/tools/ceo-inbox-sent-observ
 import {
   COMPLETION_CANDIDATES_KEY,
   COMPLETION_DIGEST_KEY,
+  COMPLETION_DIGEST_MAX_AGE_MS,
+  usableCompletionDigestCreatedAt,
   type CompletionCandidateMap,
 } from '../../../_shared/learning-state.js';
 
@@ -228,6 +230,63 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(digest[taskId].kind).toBe('confirm');
     expect(digest[taskId].createdAt).toBe(prior);
     expect(digest[taskId].note).not.toBe('old');
+  });
+
+  it('stamps a clock when the prior entry has none or a non-ISO one, and keeps a real one', async () => {
+    const taskId = '33333333-3333-4333-8333-333333333333';
+    for (const prior of [undefined, '', '0', 'garbage'] as const) {
+      const ctx = makeCtx();
+      ctx.__mem.__values.set(
+        COMPLETION_CANDIDATES_KEY,
+        JSON.stringify({ [taskId]: CANDIDATE_MAP[taskId]! }),
+      );
+      const seeded: Record<string, unknown> = {
+        kind: 'confirm',
+        taskId,
+        taskTitle: 'Maybe related',
+        note: 'old',
+      };
+      if (prior !== undefined) seeded.createdAt = prior;
+      ctx.__mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify({ [taskId]: seeded }));
+      const before = Date.now();
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+      const createdAt = digest[taskId].createdAt as string;
+      expect(usableCompletionDigestCreatedAt(createdAt)).toBe(createdAt);
+      expect(Date.parse(createdAt)).toBeGreaterThanOrEqual(before - 1000);
+      expect(createdAt).not.toBe(prior);
+    }
+  });
+
+  it('drops an expired sibling only when a digest write is already happening', async () => {
+    const oldId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const stale = {
+      kind: 'undo',
+      taskId: oldId,
+      taskTitle: 'Stale',
+      note: 'old',
+      createdAt: new Date(Date.now() - COMPLETION_DIGEST_MAX_AGE_MS - 60_000).toISOString(),
+    };
+
+    const idle = makeCtx();
+    idle.__mem.__values.set(COMPLETION_CANDIDATES_KEY, JSON.stringify({}));
+    idle.__mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify({ [oldId]: stale }));
+    expect((await handler.execute(idle)).success).toBe(true);
+    expect(JSON.parse(idle.__mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual({ [oldId]: stale });
+
+    const ctx = makeCtx();
+    const taskId = '33333333-3333-4333-8333-333333333333';
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({ [taskId]: CANDIDATE_MAP[taskId]! }),
+    );
+    ctx.__mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify({ [oldId]: stale }));
+    expect((await handler.execute(ctx)).success).toBe(true);
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest[oldId]).toBeUndefined();
+    expect(digest[taskId].kind).toBe('confirm');
+    expect(usableCompletionDigestCreatedAt(digest[taskId].createdAt)).toBe(digest[taskId].createdAt);
   });
 
   it('does NOT notify when the run produces no digest items (empty candidate queue)', async () => {

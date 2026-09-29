@@ -1,6 +1,11 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { ConfigStore } from '../../../../src/memory/config-store.js';
-import { readVoiceProposal, readCompletionDigest, digestMapToItems } from '../../../_shared/learning-state.js';
+import {
+  readVoiceProposal,
+  readCompletionDigest,
+  digestMapToItems,
+  pruneExpiredCompletionDigest,
+} from '../../../_shared/learning-state.js';
 import { renderCompletionSection, renderVoiceGuideSection } from '../../../_shared/learning-digest.js';
 
 export class ListLearningDigestHandler implements ToolHandler {
@@ -12,7 +17,11 @@ export class ListLearningDigestHandler implements ToolHandler {
       // skill — without it, neither section renders (same net effect as both being absent).
       const store = ctx.entityMemory ? new ConfigStore(ctx.entityMemory, ctx.log) : null;
       const guide = store ? await readVoiceProposal(store, ctx.log) : null;
-      const completion_items = store ? digestMapToItems(await readCompletionDigest(store, ctx.log)) : [];
+      // Hide aged items in the rendered view only. This tool does not write the digest:
+      // action_risk is "none", and a persist here would be a destructive config write.
+      const completion_items = store
+        ? digestMapToItems(pruneExpiredCompletionDigest(await readCompletionDigest(store, ctx.log)))
+        : [];
       const guideText = guide?.status === 'pending' ? guide.guide : null;
 
       const sections = [

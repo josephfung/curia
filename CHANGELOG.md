@@ -33,6 +33,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`resolve-learning-digest` outputs (public API)** — `kind` distinguishes leaving a task done from declining a confirm. (#1936)
 - **`tool.result` (public API)** — optional `originConversationId` ties a specialist send to the principal thread. (#1860)
 - **`tool.result` (public API)** — optional `routingTaskId` locks only the task that sent. (#1860)
 - **Agent YAML (public API)** — optional `display_name` is the label a principal may see. (#1860)
@@ -76,7 +77,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`resolve-learning-digest`** — undo digest items can be dismissed, and the prompt offers that. (#1936)
-- **Completion digest** — items older than 90 days are pruned; entries without a timestamp stay. (#1936)
+- **Completion digest** — items older than 90 days drop on the next digest write; untimestamped entries stay. (#1936)
 - **Timer-limit config tests** — assert the thrown message as a literal substring, clearing a CodeQL incomplete-escaping alert. (code-scanning 284)
 - **Timer-limit config tests** — accepting cases assert the value round-trips; rejections hold the `got:` tail. (code-scanning 284)
 - **Signal RPC tests** — mock sockets are destroyed and servers await close, so peer resets cannot fail green CI. (#1896)
