@@ -166,7 +166,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
-- **Dependency floors** — `fast-uri` and `ip-address` raised past ineffective pins, clearing six advisories.
+- **Dependency floors** — `fast-uri` and `ip-address` raised past ineffective pins, clearing six advisories. (#1933)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 
