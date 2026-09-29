@@ -539,8 +539,26 @@ describe('SchedulerService', () => {
       const result = await svc.completeJobRun('job-os', true);
 
       expect(result.suspended).toBe(false);
-      const [, params] = pool.query.mock.calls[1] as [string, unknown[]];
+      const [sql, params] = pool.query.mock.calls[1] as [string, unknown[]];
       expect(params).toContain('completed');
+      // #1938: a running self-reschedule is armed from deferred_wake_at instead of
+      // completing the row. The CASE must stay on this write.
+      expect(sql).toContain('deferred_wake_at');
+      expect(sql).toContain("THEN 'pending'");
+    });
+
+    it('does not report suspended when a failed run is re-armed from deferred_wake_at', async () => {
+      pool.query.mockResolvedValueOnce({
+        rows: [{ id: 'job-defer', cron_expr: null, status: 'running', consecutive_failures: 2, timezone: 'UTC' }],
+      });
+      pool.query.mockResolvedValueOnce({ rows: [{ status: 'pending' }], rowCount: 1 });
+
+      const result = await svc.completeJobRun('job-defer', false, 'boom');
+
+      expect(result.suspended).toBe(false);
+      const [sql] = pool.query.mock.calls[1] as [string];
+      expect(sql).toContain('deferred_wake_at');
+      expect(sql).toContain('THEN 0 ELSE $1');
     });
 
     it('updates next_run_at for recurring job on success', async () => {

@@ -190,7 +190,7 @@ bus events for audit and future subscribers.
 |---|---|---|
 | `task-create` | `low` | Auto-fills `source` / `source_agent_id` from caller context. `wake_at` is a convenience arg: when set, the skill creates the task **and** a one-shot `scheduled_jobs` row (with `task_id`) in one transaction. The wake time lives on the schedule row, not the task. |
 | `task-list` | `none` | Default sort `priority DESC, due_at ASC NULLS LAST`. Returns title, status, owner, due_at, age, last progress note, and the next pending wake-up if any. Timestamps via `toLocalIso()`. |
-| `task-update` | `low` | Appends `progress_note` to `progress`. Setting `wake_at` cancels any existing pending wake and creates a fresh one-shot. Status transitions validated (`done → open` rejected). Completing/cancelling auto-cancels pending `scheduled_jobs` rows where `task_id = ?`. |
+| `task-update` | `low` | Appends `progress_note` to `progress`. Setting `wake_at` updates a pending wake in place, revives the latest terminal wake, or — while that wake is `running` — records `deferred_wake_at` for the completion path to arm (#1938). A `done`/`cancelled` transition still cancels the pending wake and drops any deferred time. Status transitions validated (`done → open` rejected). |
 | `task-complete` | `low` | Sets `status='done'`, captures the note in audit + progress, auto-cancels pending wake-ups. A separate skill so the coordinator prompt can reason about completion cleanly and the audit log distinguishes completion from a generic update. |
 
 Cancellation is `status='cancelled'` (no `task-delete`, to preserve the audit trail).

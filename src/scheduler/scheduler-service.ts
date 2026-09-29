@@ -508,12 +508,21 @@ export class SchedulerService {
       nextRunAt = new Date(run_at!);
     }
 
+    // One-shot rows may hold a deferred_wake_at from a reschedule that landed
+    // while the job was running and then paused (#1938). Prefer that column over
+    // the pre-pause run_at, including when it is written after this SELECT.
     await this.pool.query(
       `UPDATE scheduled_jobs
          SET status = 'pending',
              consecutive_failures = 0,
              last_error = NULL,
-             next_run_at = $2
+             run_at = CASE WHEN cron_expr IS NULL THEN COALESCE(deferred_wake_at, run_at) ELSE run_at END,
+             next_run_at = CASE WHEN cron_expr IS NULL THEN COALESCE(deferred_wake_at, $2) ELSE $2 END,
+             task_payload = CASE
+               WHEN cron_expr IS NULL AND deferred_wake_at IS NOT NULL THEN '{"type":"task-wake"}'::jsonb
+               ELSE task_payload
+             END,
+             deferred_wake_at = NULL
        WHERE id = $1`,
       [jobId, nextRunAt],
     );
@@ -1010,6 +1019,9 @@ export class SchedulerService {
       // Merge or clear failedSkills in last_run_context without clobbering agent continuity
       // state. Strip both keys before merge so a prior omitted-count cannot linger when the
       // new run has none. Non-object JSONB falls through without throwing (#1830 review).
+      // One-shot wakes may carry deferred_wake_at (#1938): the task rescheduled itself
+      // while this row was running. Arm that time on the same row instead of completing it.
+      let rearmed = false;
       const hasFailedSkills = failedSkills !== undefined && failedSkills.length > 0;
       const failedSkillsJson = hasFailedSkills
         ? JSON.stringify({
@@ -1058,11 +1070,21 @@ export class SchedulerService {
         const res = await this.pool.query(updateSql, params);
         if (res.rowCount === 0) return this.skippedCompletion(jobId);
       } else {
-        // One-shot job: mark as completed (same pause/cancel fence).
+        // One-shot job: mark as completed (same pause/cancel fence), unless a
+        // self-reschedule stored deferred_wake_at while the row was running.
+        // SET expressions read the pre-update column, so the CASE can both arm
+        // and clear it. RETURNING status is 'pending' only on that arm.
         const updateSql = `
           UPDATE scheduled_jobs
              SET last_run_at = now(),
-                 status = $1,
+                 status = CASE WHEN deferred_wake_at IS NOT NULL THEN 'pending' ELSE $1 END,
+                 run_at = COALESCE(deferred_wake_at, run_at),
+                 next_run_at = COALESCE(deferred_wake_at, next_run_at),
+                 task_payload = CASE
+                   WHEN deferred_wake_at IS NOT NULL THEN '{"type":"task-wake"}'::jsonb
+                   ELSE task_payload
+                 END,
+                 deferred_wake_at = NULL,
                  consecutive_failures = 0,
                  last_error = NULL,
                  run_started_at = NULL,
@@ -1070,14 +1092,16 @@ export class SchedulerService {
                  last_run_summary = COALESCE(last_run_summary, $4)
                  ${contextSetClause(5)}
            WHERE id = $2 AND status NOT IN ('paused', 'cancelled')
+           RETURNING status
         `;
         const params: unknown[] = ['completed', jobId, 'completed', autoSummary ?? null];
         if (failedSkillsJson !== undefined) params.push(failedSkillsJson);
-        const res = await this.pool.query(updateSql, params);
+        const res = await this.pool.query<{ status: string }>(updateSql, params);
         if (res.rowCount === 0) return this.skippedCompletion(jobId);
+        rearmed = res.rows[0]?.status === 'pending';
       }
 
-      this.logger.info({ jobId }, 'Job run completed successfully');
+      this.logger.info({ jobId, rearmed }, 'Job run completed successfully');
       return { suspended: false };
     }
 
@@ -1109,29 +1133,48 @@ export class SchedulerService {
            ELSE last_run_context
          END`;
 
+    // Same deferred_wake_at arm as the one-shot success path (#1938). An explicit
+    // reschedule wins over the failure circuit-breaker: the row goes back to pending
+    // at the requested time with a fresh failure count, instead of failed/suspended.
+    // Mocks that omit RETURNING keep the pre-update suspend decision.
     const updateSql = `
       UPDATE scheduled_jobs
          SET last_run_at = now(),
-             consecutive_failures = $1,
-             last_error = $2,
+             consecutive_failures = CASE WHEN deferred_wake_at IS NOT NULL THEN 0 ELSE $1 END,
+             last_error = CASE WHEN deferred_wake_at IS NOT NULL THEN NULL ELSE $2 END,
              run_started_at = NULL,
-             status = $3,
+             status = CASE WHEN deferred_wake_at IS NOT NULL THEN 'pending' ELSE $3 END,
+             run_at = COALESCE(deferred_wake_at, run_at),
+             next_run_at = COALESCE(deferred_wake_at, next_run_at),
+             task_payload = CASE
+               WHEN deferred_wake_at IS NOT NULL THEN '{"type":"task-wake"}'::jsonb
+               ELSE task_payload
+             END,
+             deferred_wake_at = NULL,
              last_run_outcome = $5
              ${failureContextSql}
        WHERE id = $4 AND status NOT IN ('paused', 'cancelled')
+       RETURNING status
     `;
     const params: unknown[] = [newFailures, error ?? null, newStatus, jobId, 'failed'];
     if (failedSkillsJson !== undefined) params.push(failedSkillsJson);
-    const res = await this.pool.query(updateSql, params);
+    const res = await this.pool.query<{ status: string }>(updateSql, params);
     if (res.rowCount === 0) return this.skippedCompletion(jobId);
 
-    if (shouldSuspend) {
+    const wroteStatus = res.rows[0]?.status;
+    if (wroteStatus === 'pending') {
+      this.logger.info({ jobId }, 'Failed job run re-armed from deferred_wake_at');
+      return { suspended: false };
+    }
+
+    const suspended = wroteStatus === 'suspended' || (wroteStatus === undefined && shouldSuspend);
+    if (suspended) {
       this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Job auto-suspended after consecutive failures');
     } else {
       this.logger.info({ jobId, consecutiveFailures: newFailures, error }, 'Job run failed');
     }
 
-    return { suspended: shouldSuspend };
+    return { suspended };
   }
 
   /**
@@ -1177,16 +1220,28 @@ export class SchedulerService {
     // Guard against a race where the job completed normally between our SELECT above
     // and this UPDATE. The AND status = 'running' check ensures we only overwrite jobs
     // that are still genuinely stuck — if rowCount is 0, the job already finished cleanly.
-    const result = await this.pool.query(
+    // deferred_wake_at (#1938) wins over the immediate re-fire and the suspend
+    // threshold: the agent already chose the next wake. SET reads the pre-update
+    // column, so a reschedule that lands between the SELECT and this UPDATE is
+    // still armed. RETURNING is what the caller trusts; mocks that omit it fall
+    // back to the pre-update decision.
+    const result = await this.pool.query<{ status: string; consecutive_failures: number }>(
       `UPDATE scheduled_jobs
-          SET status = $1,
-              consecutive_failures = $2,
+          SET status = CASE WHEN deferred_wake_at IS NOT NULL THEN 'pending' ELSE $1 END,
+              consecutive_failures = CASE WHEN deferred_wake_at IS NOT NULL THEN consecutive_failures ELSE $2 END,
               last_error = $3,
               run_started_at = NULL,
-              next_run_at = $4,
+              run_at = COALESCE(deferred_wake_at, run_at),
+              next_run_at = COALESCE(deferred_wake_at, $4),
+              task_payload = CASE
+                WHEN deferred_wake_at IS NOT NULL THEN '{"type":"task-wake"}'::jsonb
+                ELSE task_payload
+              END,
+              deferred_wake_at = NULL,
               last_run_outcome = $6
         WHERE id = $5
-          AND status = 'running'`,
+          AND status = 'running'
+        RETURNING status, consecutive_failures`,
       [newStatus, newFailures, lastError, nextRunAt, jobId, 'timed_out'],
     );
 
@@ -1196,13 +1251,26 @@ export class SchedulerService {
       return { noOp: true, suspended: false, consecutiveFailures: 0 };
     }
 
-    if (shouldSuspend) {
-      this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Stuck job suspended after consecutive recovery failures');
-    } else {
-      this.logger.warn({ jobId, consecutiveFailures: newFailures, timeoutMinutes }, 'Stuck job recovered — reset to pending');
+    const wrote = result.rows[0];
+    if (!wrote?.status) {
+      if (shouldSuspend) {
+        this.logger.warn({ jobId, consecutiveFailures: newFailures }, 'Stuck job suspended after consecutive recovery failures');
+      } else {
+        this.logger.warn({ jobId, consecutiveFailures: newFailures, timeoutMinutes }, 'Stuck job recovered — reset to pending');
+      }
+      return { noOp: false, suspended: shouldSuspend, consecutiveFailures: newFailures };
     }
 
-    return { noOp: false, suspended: shouldSuspend, consecutiveFailures: newFailures };
+    const suspended = wrote.status === 'suspended';
+    if (suspended) {
+      this.logger.warn({ jobId, consecutiveFailures: wrote.consecutive_failures }, 'Stuck job suspended after consecutive recovery failures');
+    } else if (wrote.consecutive_failures === job.consecutive_failures) {
+      this.logger.info({ jobId }, 'Stuck job re-armed from deferred_wake_at');
+    } else {
+      this.logger.warn({ jobId, consecutiveFailures: wrote.consecutive_failures, timeoutMinutes }, 'Stuck job recovered — reset to pending');
+    }
+
+    return { noOp: false, suspended, consecutiveFailures: wrote.consecutive_failures };
   }
 
   /** Enqueue a one-shot wake for an EXISTING task. Revives the task's most-recent terminal
