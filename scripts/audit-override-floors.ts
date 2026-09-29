@@ -7,7 +7,9 @@
 // Run locally:  GITHUB_TOKEN=$(gh auth token) pnpm audit:override-floors
 // Run in CI:    .github/workflows/override-floor-audit.yml (weekly + on workspace edits)
 //
-// Exit codes: 0 = every floor sound, 1 = a stale floor, a parse error, or an API failure.
+// Exit codes: 0 = no floor is failing, 1 = a stale floor, a parse error, or an API failure.
+// A stale floor whose fix is younger than the workspace's own `minimumReleaseAge` is a
+// third state: reported loudly, exit 0, self-clearing. See quarantineExpiry.
 //
 // WHY THIS EXISTS
 // ---------------
@@ -29,7 +31,8 @@
 //   3. The global advisory DB lags a project's own repo. GHSA-jvvf-x445-j334 and
 //      GHSA-hrr3-gc8f-f4qj (fast-uri <4.1.5) were published on fastify/fast-uri but not
 //      in GitHub's global DB, so no Dependabot alert existed and `>=4.1.4` looked right.
-//      We therefore query BOTH sources and union them.
+//      We therefore query BOTH sources. Where both carry the same GHSA the global record
+//      wins, because only it has normalized ranges — see collectAdvisories.
 //
 // This is not a replacement for Dependabot. Dependabot answers "is the tree I resolved
 // vulnerable"; this answers "would my floors still protect me if resolution moved".
@@ -125,6 +128,8 @@ export interface PackageDataSource {
    * wrong pin. Taking the package name here makes that filter impossible to forget.
    */
   repoAdvisories(slug: string, pkg: string): Promise<AdvisoryRecord[]>;
+  /** ISO publish time of one version, or null if the registry does not report it. */
+  publishedAt(pkg: string, version: string): Promise<string | null>;
 }
 
 export interface OverrideEntry {
@@ -159,9 +164,24 @@ export interface StaleFloor extends CheckedOverride {
   safeFloor: string | null;
 }
 
+/**
+ * A stale floor whose remedy is younger than the workspace's own `minimumReleaseAge`
+ * quarantine. Reported separately and does NOT fail the run — see the note on
+ * quarantineExpiry for why this is a real third state rather than a suppression.
+ */
+export interface QuarantinedFloor extends StaleFloor {
+  safeFloor: string;
+  /** The version the safe floor would pin to. */
+  safeVersion: string;
+  /** ISO timestamp at which that version ages past the quarantine. */
+  installableAt: string;
+}
+
 export interface AuditReport {
   checked: CheckedOverride[];
   stale: StaleFloor[];
+  /** Stale, but the fix cannot be installed yet. Loud, self-clearing, non-failing. */
+  quarantined: QuarantinedFloor[];
   /** Hard failures: unparseable entries, API errors, undeclared empty advisory sets. */
   errors: string[];
   /** Allowlist entries that no longer suppress anything. Housekeeping, not a failure. */
@@ -173,6 +193,8 @@ export interface AuditOptions {
   workspaceYaml: string;
   policy: AuditPolicy;
   source: PackageDataSource;
+  /** Injected so the quarantine window is testable without freezing the clock. */
+  now?: Date;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +222,20 @@ export function overrideSubject(key: string): string {
 
 interface WorkspaceShape {
   overrides?: unknown;
+  minimumReleaseAge?: unknown;
+}
+
+/**
+ * The workspace's supply-chain quarantine, in minutes, or null if it sets none.
+ *
+ * Read from the same file as the overrides rather than hardcoded, so the audit can never
+ * disagree with the policy pnpm actually enforces.
+ */
+export function parseMinimumReleaseAge(workspaceYaml: string): number | null {
+  const doc = yaml.load(workspaceYaml) as WorkspaceShape | null | undefined;
+  const raw = doc?.minimumReleaseAge;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return null;
+  return raw;
 }
 
 export function parseOverrides(workspaceYaml: string): OverrideEntry[] {
@@ -476,15 +512,20 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
     return {
       checked: [],
       stale: [],
+      quarantined: [],
       errors: policyErrors,
       unusedAllowlist: [],
       exitCode: 1,
     };
   }
 
+  const now = options.now ?? new Date();
+  const quarantineMinutes = parseMinimumReleaseAge(options.workspaceYaml);
+
   const errors: string[] = [];
   const checked: CheckedOverride[] = [];
   const stale: StaleFloor[] = [];
+  const quarantined: QuarantinedFloor[] = [];
   /** Allowlist entries observed to actually suppress a matching advisory. */
   const usedAllowlist = new Set<AllowlistEntry>();
 
@@ -495,6 +536,7 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
     return {
       checked: [],
       stale: [],
+      quarantined: [],
       errors: [messageOf(err)],
       unusedAllowlist: policy.allowlist,
       exitCode: 1,
@@ -575,12 +617,30 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
       // advisory's first_patched_version (trap 1).
       const safeVersion = admitted.find((v) => semver.gt(v, highestVulnerable));
 
-      stale.push({
+      const finding: StaleFloor = {
         ...record,
         vulnerableVersions,
         advisories: implicated.sort(bySeverityThenId),
         safeFloor: safeVersion ? renderSafeFloor(override.specifier, safeVersion) : null,
-      });
+      };
+
+      // Is the remedy something pnpm would actually let us install today?
+      const installableAt =
+        safeVersion && quarantineMinutes !== null
+          ? await quarantineExpiry(source, override.subject, safeVersion, quarantineMinutes)
+          : null;
+
+      if (safeVersion && finding.safeFloor && installableAt && installableAt > now) {
+        quarantined.push({
+          ...finding,
+          safeFloor: finding.safeFloor,
+          safeVersion,
+          installableAt: installableAt.toISOString(),
+        });
+        continue;
+      }
+
+      stale.push(finding);
     } catch (err) {
       errors.push(`override \`${override.key}\`: ${messageOf(err)}`);
     }
@@ -591,10 +651,47 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
   return {
     checked,
     stale,
+    quarantined,
     errors,
     unusedAllowlist,
+    // `quarantined` is deliberately NOT a failure: see quarantineExpiry.
     exitCode: errors.length > 0 || stale.length > 0 ? 1 : 0,
   };
+}
+
+/**
+ * When `version` of `pkg` ages past a `minutes`-long quarantine, or null if unknown.
+ *
+ * WHY THIS EXISTS. pnpm's `minimumReleaseAge` (declared in the same file this script
+ * audits) refuses to resolve any version published less than that long ago, and the value
+ * is verified against the COMMITTED lockfile on every `--frozen-lockfile` install — CI,
+ * local installs, and the production image build. So when an upstream fix is hours old,
+ * raising the floor to it does not merely fail to help: it makes `pnpm install`
+ * unsatisfiable and breaks the build. There is no per-package exemption in pnpm 11.
+ *
+ * That makes "stale floor, remedy quarantined" a genuine third state, and the honest
+ * verdict is neither pass nor fail. It exits 0 because the alternative is holding CI red
+ * for up to a day over a condition nobody can act on, which trains people to ignore a red
+ * run — the same "nobody notices" failure this script exists to fix. It is NOT a
+ * suppression: nothing is declared by hand, the window comes from the registry's own
+ * publish time and the repo's own configured value, and it expires on its own. The moment
+ * the version ages out, the finding becomes an ordinary failure.
+ *
+ * A version whose publish time the registry does not report returns null and is therefore
+ * treated as a plain stale floor. Defaulting an unknown to "quarantined" would convert
+ * missing data into a free pass on a HIGH.
+ */
+async function quarantineExpiry(
+  source: PackageDataSource,
+  pkg: string,
+  version: string,
+  minutes: number,
+): Promise<Date | null> {
+  const published = await source.publishedAt(pkg, version);
+  if (!published) return null;
+  const publishedAt = new Date(published);
+  if (Number.isNaN(publishedAt.getTime())) return null;
+  return new Date(publishedAt.getTime() + minutes * 60_000);
 }
 
 /**
@@ -699,6 +796,30 @@ export function formatReport(report: AuditReport): string {
     lines.push('');
   }
 
+  if (report.quarantined.length > 0) {
+    lines.push(
+      `BLOCKED BY MINIMUM RELEASE AGE (${report.quarantined.length}) — stale, but the fix ` +
+        'is quarantined:',
+    );
+    for (const blocked of report.quarantined) {
+      lines.push('');
+      lines.push(`  ${blocked.key}: '${blocked.currentFloor}' → '${blocked.safeFloor}'`);
+      lines.push(`    admits vulnerable: ${blocked.vulnerableVersions.join(', ')}`);
+      for (const advisory of blocked.advisories) {
+        const via = advisory.source === 'upstream-repo' ? ' [upstream repo only]' : '';
+        lines.push(`    ${advisory.ghsaId} (${advisory.severity})${via}`);
+      }
+      lines.push(`    ${blocked.safeVersion} is installable at ${blocked.installableAt}`);
+    }
+    lines.push('');
+    lines.push(
+      '  Not counted as a failure: pnpm would refuse to resolve these versions today, so',
+      '  pinning to them would break `pnpm install` rather than fix anything. Raise these',
+      '  floors once the timestamps above have passed. This clears itself.',
+    );
+    lines.push('');
+  }
+
   if (report.unusedAllowlist.length > 0) {
     // Not a failure: an unused suppression can only ever under-suppress. It is still
     // rot worth clearing, and worth seeing before someone trusts it as live cover.
@@ -711,8 +832,12 @@ export function formatReport(report: AuditReport): string {
 
   if (report.exitCode === 0) {
     lines.push(
-      `All ${report.checked.length} override floors are sound: every admitted published ` +
-        'release is free of known advisories.',
+      report.quarantined.length > 0
+        ? `${report.checked.length} override floors checked; none is failing. ` +
+            `${report.quarantined.length} ${report.quarantined.length === 1 ? 'awaits' : 'await'} ` +
+            'a quarantined fix (above).'
+        : `All ${report.checked.length} override floors are sound: every admitted published ` +
+            'release is free of known advisories.',
     );
   }
 
@@ -836,6 +961,15 @@ export function createLiveSource(token: string): PackageDataSource {
         throw new Error(`registry returned no versions for \`${pkg}\``);
       }
       return versions;
+    },
+
+    async publishedAt(pkg, version) {
+      // The `time` map is only on the FULL packument, not the abbreviated one, so this is
+      // a second request. It is made at most once per stale override, not per package.
+      const body = (await getJson(`${REGISTRY}/${encodePackage(pkg)}`, {
+        Accept: 'application/json',
+      })) as { time?: Record<string, string> };
+      return body.time?.[version] ?? null;
     },
 
     async upstreamRepo(pkg) {
