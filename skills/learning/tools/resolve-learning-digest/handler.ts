@@ -166,12 +166,38 @@ export class ResolveLearningDigestHandler implements ToolHandler {
     const taskId = resolved.taskId;
     const item = digestMap[taskId];
 
+    // dismiss_completion only drops a map entry — it does not touch the task — so kind
+    // is irrelevant. Undo items are "leave it done" as well as confirm items (#1936).
+    // The kind guard below is unchanged for undo_completion and confirm_completion,
+    // which mutate a task and must not run against an arbitrary id.
+    if (action === 'dismiss_completion') {
+      if (!item) {
+        return { success: false, error: `No completion-digest item for task ${rawTaskId}` };
+      }
+      const { [taskId]: _removed, ...rest } = digestMap;
+      void _removed;
+      const cleared = await writeCompletionDigest(store, rest);
+      if (!cleared) {
+        return {
+          success: false,
+          error: `Digest item for task ${taskId} could not be cleared (transient); retry.`,
+        };
+      }
+      return { success: true, data: { resolved: true, detail: `Dismissed completion ${taskId}` } };
+    }
+
     // Require an actionable digest item of the matching kind before mutating a task —
     // otherwise undo/confirm would reopen/complete ANY task id the caller supplies, and
     // still report success even when the digest held no such item.
     const expectedKind = action === 'undo_completion' ? 'undo' : 'confirm';
     if (!item || item.kind !== expectedKind) {
-      return { success: false, error: `No actionable ${expectedKind} item for task ${rawTaskId}` };
+      // Name the kind actually stored when one is present, so a kind mismatch is not
+      // reported with the same string as a missing item (#1546 misattributed that).
+      const actual = item ? ` (digest has '${item.kind}')` : '';
+      return {
+        success: false,
+        error: `No actionable ${expectedKind} item for task ${rawTaskId}${actual}`,
+      };
     }
 
     if (action === 'undo_completion') {
@@ -252,16 +278,9 @@ export class ResolveLearningDigestHandler implements ToolHandler {
       return { success: true, data: { resolved: true, detail: `Confirmed completion ${taskId}` } };
     }
 
-    // dismiss_completion
-    const { [taskId]: _removed, ...rest } = digestMap;
-    void _removed;
-    const cleared = await writeCompletionDigest(store, rest);
-    if (!cleared) {
-      return {
-        success: false,
-        error: `Digest item for task ${taskId} could not be cleared (transient); retry.`,
-      };
-    }
-    return { success: true, data: { resolved: true, detail: `Dismissed completion ${taskId}` } };
+    return {
+      success: false,
+      error: `action must be one of: ${[...ACTIONS].join(', ')}`,
+    };
   }
 }

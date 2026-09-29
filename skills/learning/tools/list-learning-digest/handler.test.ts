@@ -4,6 +4,7 @@ import type { ToolContext } from '../../../../src/skills/types.js';
 import {
   VOICE_PROPOSAL_KEY,
   COMPLETION_DIGEST_KEY,
+  COMPLETION_DIGEST_MAX_AGE_MS,
   LEARNING_STATE_NAMESPACE,
   type CompletionDigestMap,
 } from '../../../_shared/learning-state.js';
@@ -87,6 +88,52 @@ describe('ListLearningDigestHandler', () => {
     expect(data.sections_markdown).toContain('### Task completion from sent mail');
     // UX unchanged: the CEO still replies with these exact commands to act on the item.
     expect(data.sections_markdown).toContain('undo completion t1');
+    expect(data.sections_markdown).toContain('dismiss completion t1');
+  });
+
+  it('omits the task-completion section once the only item is past the 90-day backstop', async () => {
+    const mem = makeMem();
+    const taskId = '469a6706-36d9-4c31-acdd-76814b615a89';
+    const digestMap: CompletionDigestMap = {
+      [taskId]: {
+        kind: 'undo',
+        taskId,
+        taskTitle: 'Answer fence ownership question',
+        note: 'Marked done. Undo?',
+        createdAt: new Date(Date.now() - COMPLETION_DIGEST_MAX_AGE_MS - 60_000).toISOString(),
+      },
+      young: {
+        kind: 'confirm',
+        taskId: 'young',
+        taskTitle: 'Still pending',
+        note: 'Did emailing complete it?',
+        createdAt: new Date().toISOString(),
+      },
+    };
+    const ctx = {
+      entityMemory: mem,
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext;
+
+    const expiredOnly = { [taskId]: digestMap[taskId]! };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(expiredOnly));
+    const empty = await new ListLearningDigestHandler().execute(ctx);
+    expect(empty.success).toBe(true);
+    const emptyData = (empty as { data: { sections_markdown: string; message?: string } }).data;
+    expect(emptyData.sections_markdown).not.toContain('### Task completion from sent mail');
+    expect(emptyData.message).toContain('No pending');
+    expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual({});
+
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const mixed = await new ListLearningDigestHandler().execute(ctx);
+    expect(mixed.success).toBe(true);
+    const mixedData = (mixed as { data: { sections_markdown: string } }).data;
+    expect(mixedData.sections_markdown).toContain('### Task completion from sent mail');
+    expect(mixedData.sections_markdown).toContain('confirm completion young');
+    expect(mixedData.sections_markdown).not.toContain(taskId);
+    const stored = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(stored[taskId]).toBeUndefined();
+    expect(stored.young).toBeDefined();
   });
 
   it('does not render the voice section when entityMemory is unavailable', async () => {

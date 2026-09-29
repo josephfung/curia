@@ -200,7 +200,16 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     let digestStored = true;
     if (digestAdds.length > 0) {
       const digestMap: CompletionDigestMap = await readCompletionDigest(store, ctx.log);
-      for (const item of digestAdds) digestMap[item.taskId] = item;
+      const nowIso = new Date().toISOString();
+      for (const item of digestAdds) {
+        const priorClock = digestMap[item.taskId]?.createdAt;
+        // Keep a usable original clock when this task is already on the digest (a retry
+        // overwrites the note identically). A legacy entry with no timestamp, a blank
+        // or unparseable one, or a brand-new item starts its 90-day window here (#1936).
+        const createdAt =
+          typeof priorClock === 'string' && !Number.isNaN(Date.parse(priorClock)) ? priorClock : nowIso;
+        digestMap[item.taskId] = { ...item, createdAt };
+      }
       digestStored = await writeCompletionDigest(store, digestMap);
       if (!digestStored) {
         ctx.log.warn(

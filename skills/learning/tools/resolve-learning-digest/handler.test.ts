@@ -365,7 +365,7 @@ describe('ResolveLearningDigestHandler', () => {
     // A task that moved to 'cancelled' (or 'failed', etc.) between auto-complete and undo is neither
     // 'done' (reopenable) nor 'open' (already reopened). The guard must NOT call reopenTask (it would
     // throw), must NOT clear the digest item, and must NOT report a phantom "Reopened". The user can
-    // still drop the stale item via dismiss_completion.
+    // still drop the stale item via dismiss_completion — the next test.
     const mem = makeMem();
     const digestMap: CompletionDigestMap = {
       t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
@@ -388,6 +388,84 @@ describe('ResolveLearningDigestHandler', () => {
     expect(mem.storeFact).not.toHaveBeenCalled(); // digest item NOT cleared
     const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
     expect(updated.t1).toEqual(digestMap.t1);
+  });
+
+  it('dismiss_completion drops a kind:undo item the reopen guard kept, without touching the task', async () => {
+    // Backs the comment on the cancelled-task test: dismiss mutates the digest map only,
+    // so a stale undo item that undo_completion refused to clear can still be dropped (#1936).
+    const mem = makeMem();
+    const digestMap: CompletionDigestMap = {
+      t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
+    };
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(digestMap));
+    const getTask = vi.fn();
+    const completeTask = vi.fn();
+    const reopenTask = vi.fn();
+    const ctx = {
+      input: { action: 'dismiss_completion', task_id: 't1' },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask, completeTask, getTask },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext;
+
+    const result = await new ResolveLearningDigestHandler().execute(ctx);
+    expect(result.success).toBe(true);
+    expect((result as { data: { detail: string } }).data.detail).toContain('Dismissed');
+    expect(getTask).not.toHaveBeenCalled();
+    expect(completeTask).not.toHaveBeenCalled();
+    expect(reopenTask).not.toHaveBeenCalled();
+    const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
+    expect(updated.t1).toBeUndefined();
+  });
+
+  it('undo_completion refuses a confirm item, and confirm_completion refuses an undo item', async () => {
+    // The kind guard stays load-bearing for the two actions that mutate a task (#1936).
+    const mem = makeMem();
+    const confirmMap: CompletionDigestMap = {
+      t1: { kind: 'confirm', taskId: 't1', taskTitle: 'Follow up', note: 'Did it?' },
+    };
+    const undoMap: CompletionDigestMap = {
+      t1: { kind: 'undo', taskId: 't1', taskTitle: 'Follow up', note: 'Undo?' },
+    };
+    const reopenTask = vi.fn();
+    const completeTask = vi.fn();
+    const getTask = vi.fn();
+
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(confirmMap));
+    const undoResult = await new ResolveLearningDigestHandler().execute({
+      input: { action: 'undo_completion', task_id: 't1' },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask, completeTask, getTask },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext);
+    expect(undoResult.success).toBe(false);
+    expect((undoResult as { error: string }).error).toBe(
+      "No actionable undo item for task t1 (digest has 'confirm')",
+    );
+    expect(reopenTask).not.toHaveBeenCalled();
+    expect(getTask).not.toHaveBeenCalled();
+    expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual(confirmMap);
+
+    mem.__values.set(COMPLETION_DIGEST_KEY, JSON.stringify(undoMap));
+    const confirmResult = await new ResolveLearningDigestHandler().execute({
+      input: { action: 'confirm_completion', task_id: 't1' },
+      entityMemory: mem,
+      executiveProfileService: { get: vi.fn(), update: vi.fn() },
+      taskRepo: { reopenTask, completeTask, getTask },
+      agentId: 'coordinator',
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    } as unknown as ToolContext);
+    expect(confirmResult.success).toBe(false);
+    expect((confirmResult as { error: string }).error).toBe(
+      "No actionable confirm item for task t1 (digest has 'undo')",
+    );
+    expect(completeTask).not.toHaveBeenCalled();
+    expect(getTask).not.toHaveBeenCalled();
+    expect(JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!)).toEqual(undoMap);
   });
 
   it('confirms completion via completeTask and removes the digest item', async () => {
@@ -660,7 +738,9 @@ describe('ResolveLearningDigestHandler', () => {
         const result = await new ResolveLearningDigestHandler().execute(ctx);
         expect(result.success).toBe(false);
         expect((result as { error: string }).error).toBe(
-          'No actionable confirm item for task deadbeef',
+          action === 'dismiss_completion'
+            ? 'No completion-digest item for task deadbeef'
+            : 'No actionable confirm item for task deadbeef',
         );
         const updated = JSON.parse(mem.__values.get(COMPLETION_DIGEST_KEY)!) as CompletionDigestMap;
         expect(updated[FULL_A]).toEqual(digestMap[FULL_A]);

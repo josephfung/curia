@@ -32,13 +32,29 @@ export interface CompletionCandidate {
 /** Keyed by taskId — one open task has at most one live candidate, so re-adds are idempotent. */
 export type CompletionCandidateMap = Record<string, CompletionCandidate>;
 
+/**
+ * Hygiene backstop for abandoned completion-digest items (#1936, carrying #1437).
+ *
+ * Must exceed the longest reasonable time a legitimately-pending undo/confirm item
+ * may sit unactioned. A CEO who simply has not gotten to the item must not lose it.
+ * 90 days matches the evidence-doc retention window proposed in #1437: an item
+ * untouched that long is stale. This is not a substitute for dismiss — dismiss is
+ * how a declined undo leaves the map immediately.
+ */
+export const COMPLETION_DIGEST_MAX_AGE_DAYS = 90;
+const MS_PER_DAY = 86_400_000;
+export const COMPLETION_DIGEST_MAX_AGE_MS = COMPLETION_DIGEST_MAX_AGE_DAYS * MS_PER_DAY;
+
 /** An undo/confirm item shown in the learning digest. `taskId` is carried in the value so the
- *  render helpers (which take a flat array) keep emitting the reply-command per item unchanged. */
+ *  render helpers (which take a flat array) keep emitting the reply-command per item unchanged.
+ *  `createdAt` is optional so entries written before the field existed stay readable (#1936). */
 export interface CompletionDigestItem {
   kind: 'undo' | 'confirm';
   taskId: string;
   taskTitle: string;
   note: string;
+  /** ISO-8601 time the item was added. Absent on pre-#1936 entries. */
+  createdAt?: string;
 }
 export type CompletionDigestMap = Record<string, CompletionDigestItem>;
 
@@ -93,13 +109,51 @@ function isCompletionCandidate(v: unknown): v is CompletionCandidate {
 }
 
 function isCompletionDigestItem(v: unknown): v is CompletionDigestItem {
-  return (
-    isPlainObject(v) &&
-    (v.kind === 'undo' || v.kind === 'confirm') &&
-    typeof v.taskId === 'string' &&
-    typeof v.taskTitle === 'string' &&
-    typeof v.note === 'string'
-  );
+  if (
+    !isPlainObject(v) ||
+    (v.kind !== 'undo' && v.kind !== 'confirm') ||
+    typeof v.taskId !== 'string' ||
+    typeof v.taskTitle !== 'string' ||
+    typeof v.note !== 'string'
+  ) {
+    return false;
+  }
+  // createdAt is optional: entries written before the field existed must stay
+  // readable and must not be dropped here (#1936). A non-string is not a clock —
+  // strip it and keep the entry. Dropping the whole item would discard an undo
+  // affordance, and data loss is worse than over-retention.
+  if ('createdAt' in v && typeof v.createdAt !== 'string') {
+    delete v.createdAt;
+  }
+  return true;
+}
+
+/** True only when `createdAt` parses and is strictly older than the max age.
+ *  Missing or unparseable timestamps are not expired: those entries have no clock,
+ *  and sweeping them would delete a pending item the CEO may still act on (#1437). */
+export function isCompletionDigestItemExpired(
+  item: CompletionDigestItem,
+  nowMs: number = Date.now(),
+): boolean {
+  if (typeof item.createdAt !== 'string' || item.createdAt.length === 0) return false;
+  const createdMs = Date.parse(item.createdAt);
+  if (Number.isNaN(createdMs)) return false;
+  return nowMs - createdMs > COMPLETION_DIGEST_MAX_AGE_MS;
+}
+
+/** Drop items past the age backstop. Returns the same map when nothing expired. */
+export function pruneExpiredCompletionDigest(
+  map: CompletionDigestMap,
+  nowMs: number = Date.now(),
+): CompletionDigestMap {
+  const expiredIds: string[] = [];
+  for (const [id, item] of Object.entries(map)) {
+    if (isCompletionDigestItemExpired(item, nowMs)) expiredIds.push(id);
+  }
+  if (expiredIds.length === 0) return map;
+  const out: CompletionDigestMap = { ...map };
+  for (const id of expiredIds) delete out[id];
+  return out;
 }
 
 /** Keep only entries whose value passes `isValid`; drop the rest, logging a PII-safe count (never
@@ -159,7 +213,26 @@ export async function readCompletionDigest(store: ConfigStore, log?: Logger): Pr
     corruptionLogger(COMPLETION_DIGEST_KEY, raw!, log)();
     return {};
   }
-  return filterValidEntries(parsed, COMPLETION_DIGEST_KEY, isCompletionDigestItem, log);
+  const map = filterValidEntries(parsed, COMPLETION_DIGEST_KEY, isCompletionDigestItem, log);
+  const pruned = pruneExpiredCompletionDigest(map);
+  if (pruned === map) return map;
+  // Persist the hygiene drop so an abandoned item does not survive in the config
+  // key after readers have stopped surfacing it. A soft-reject leaves the prior
+  // value in place; the returned map is still pruned, and the next read retries.
+  const removed = Object.keys(map).length - Object.keys(pruned).length;
+  const stored = await writeCompletionDigest(store, pruned);
+  if (!stored) {
+    log?.warn(
+      { key: COMPLETION_DIGEST_KEY, pruned: removed },
+      'learning-state: pruned expired completion-digest items but the write soft-rejected — they may reappear until a later read',
+    );
+  } else {
+    log?.info(
+      { key: COMPLETION_DIGEST_KEY, pruned: removed },
+      'learning-state: pruned expired completion-digest items past the 90-day backstop',
+    );
+  }
+  return pruned;
 }
 export async function writeCompletionDigest(store: ConfigStore, map: CompletionDigestMap): Promise<boolean> {
   return (await store.set(LEARNING_STATE_NAMESPACE, COMPLETION_DIGEST_KEY, JSON.stringify(map))).stored;

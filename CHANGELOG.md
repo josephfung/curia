@@ -75,6 +75,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`resolve-learning-digest`** — undo digest items can be dismissed, and the prompt offers that. (#1936)
+- **Completion digest** — items older than 90 days are pruned; entries without a timestamp stay. (#1936)
 - **Timer-limit config tests** — assert the thrown message as a literal substring, clearing a CodeQL incomplete-escaping alert. (code-scanning 284)
 - **Timer-limit config tests** — accepting cases assert the value round-trips; rejections hold the `got:` tail. (code-scanning 284)
 - **Signal RPC tests** — mock sockets are destroyed and servers await close, so peer resets cannot fail green CI. (#1896)
