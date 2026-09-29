@@ -2,6 +2,8 @@
 // The heuristic scoring engine (thresholds, provenance, auto/propose lanes) was replaced by a
 // weekly LLM pass; see #1423 history for the old design if it needs to be resurrected.
 
+import { escapeRegExp } from '../../src/util/escape-regexp.js';
+
 export interface ParsedDiffPair {
   draftId: string;
   messageId: string;
@@ -52,7 +54,7 @@ function extractSection(
   const s = text.indexOf(start);
   if (s < 0) return '';
   const after = text.slice(s + start.length);
-  const re = new RegExp(`^${end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gm');
+  const re = new RegExp(`^${escapeRegExp(end)}`, 'gm');
   let cut = -1;
   for (let m = re.exec(after); m; m = re.exec(after)) {
     cut = m.index;
