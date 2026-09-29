@@ -170,18 +170,31 @@ export function isCompletionDigestItemExpired(
   return nowMs - Date.parse(createdAt) > COMPLETION_DIGEST_MAX_AGE_MS;
 }
 
-/** Drop items past the age backstop. Returns the same map when nothing expired. */
+/** Drop items past the age backstop. Returns the same map when nothing expired.
+ *  When a caller passes `log` and something is dropped, records a PII-safe count
+ *  by kind — no task ids or titles. View-only callers omit `log`; a hidden item
+ *  has not been deleted. */
 export function pruneExpiredCompletionDigest(
   map: CompletionDigestMap,
   nowMs: number = Date.now(),
+  log?: Logger,
 ): CompletionDigestMap {
   const expiredIds: string[] = [];
+  let undo = 0;
+  let confirm = 0;
   for (const [id, item] of Object.entries(map)) {
-    if (isCompletionDigestItemExpired(item, nowMs)) expiredIds.push(id);
+    if (!isCompletionDigestItemExpired(item, nowMs)) continue;
+    expiredIds.push(id);
+    if (item.kind === 'undo') undo += 1;
+    else confirm += 1;
   }
   if (expiredIds.length === 0) return map;
   const out: CompletionDigestMap = { ...map };
   for (const id of expiredIds) delete out[id];
+  log?.info(
+    { key: COMPLETION_DIGEST_KEY, pruned: expiredIds.length, undo, confirm },
+    'learning-state: pruned expired completion-digest items past the 90-day backstop',
+  );
   return out;
 }
 
@@ -248,8 +261,8 @@ export async function readCompletionDigest(store: ConfigStore, log?: Logger): Pr
   // write here would erase malformed siblings and race the durable-undo update.
   const map: CompletionDigestMap = {};
   let badClocks = 0;
-  for (const [id, raw] of Object.entries(validated)) {
-    const copied = copyCompletionDigestItem(raw);
+  for (const [id, entry] of Object.entries(validated)) {
+    const copied = copyCompletionDigestItem(entry);
     map[id] = copied.item;
     if (copied.badClock) badClocks += 1;
   }

@@ -205,6 +205,8 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
       // solely to prune — that race belongs to a read that should stay a read.
       const digestMap: CompletionDigestMap = pruneExpiredCompletionDigest(
         await readCompletionDigest(store, ctx.log),
+        Date.now(),
+        ctx.log,
       );
       const nowIso = new Date().toISOString();
       for (const item of digestAdds) {
