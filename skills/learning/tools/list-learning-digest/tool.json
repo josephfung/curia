@@ -1,7 +1,7 @@
 {
   "name": "list-learning-digest",
-  "description": "List the pending voice-guide proposal and sent-mail task-completion undo/confirm items for the daily CEO digest. Returns structured items plus pre-rendered markdown sections (always present; an empty string when nothing renders).",
-  "version": "0.2.1",
+  "description": "List the pending voice-guide proposal and sent-mail task-completion undo/confirm items for the daily CEO digest. Undo items offer undo or dismiss; confirm items offer confirm or dismiss. Returns structured items plus pre-rendered markdown sections (always present; an empty string when nothing renders).",
+  "version": "0.2.2",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {},

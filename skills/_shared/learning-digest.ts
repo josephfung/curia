@@ -26,7 +26,8 @@ export function renderCompletionSection(items: CompletionDigestItem[]): string {
     '',
     ...items.map((i, idx) => {
       if (i.kind === 'undo') {
-        return `${idx + 1}. ${i.note} Reply \`undo completion ${i.taskId}\`.`;
+        // Leave-it-done is dismiss, the same escape confirm items already offer (#1936).
+        return `${idx + 1}. ${i.note} Reply \`undo completion ${i.taskId}\` or \`dismiss completion ${i.taskId}\`.`;
       }
       return `${idx + 1}. ${i.note} Reply \`confirm completion ${i.taskId}\` or \`dismiss completion ${i.taskId}\`.`;
     }),

@@ -183,6 +183,8 @@ describe('TaskCompletionFromSentHandler', () => {
 
     const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
     expect(digest['11111111-1111-4111-8111-111111111111'].kind).toBe('undo');
+    expect(typeof digest['11111111-1111-4111-8111-111111111111'].createdAt).toBe('string');
+    expect(Number.isNaN(Date.parse(digest['11111111-1111-4111-8111-111111111111'].createdAt))).toBe(false);
     expect(digest['22222222-2222-4222-8222-222222222222'].kind).toBe('confirm');
     expect(digest['33333333-3333-4333-8333-333333333333'].kind).toBe('confirm');
 
@@ -201,7 +203,31 @@ describe('TaskCompletionFromSentHandler', () => {
     expect(payload.body).toContain('### Task completion from sent mail');
     // Both the undo (auto-completed) and a confirm item's reply commands are inlined.
     expect(payload.body).toContain('undo completion 11111111-1111-4111-8111-111111111111');
+    expect(payload.body).toContain('dismiss completion 11111111-1111-4111-8111-111111111111');
     expect(payload.body).toContain('confirm completion 22222222-2222-4222-8222-222222222222');
+  });
+
+  it('keeps an existing digest createdAt when the same task is written again', async () => {
+    const ctx = makeCtx();
+    const taskId = '33333333-3333-4333-8333-333333333333';
+    ctx.__mem.__values.set(
+      COMPLETION_CANDIDATES_KEY,
+      JSON.stringify({ [taskId]: CANDIDATE_MAP[taskId]! }),
+    );
+    const prior = new Date(Date.now() - 2 * 86_400_000).toISOString();
+    ctx.__mem.__values.set(
+      COMPLETION_DIGEST_KEY,
+      JSON.stringify({
+        [taskId]: { kind: 'confirm', taskId, taskTitle: 'Maybe related', note: 'old', createdAt: prior },
+      }),
+    );
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const digest = JSON.parse(ctx.__mem.__values.get(COMPLETION_DIGEST_KEY)!);
+    expect(digest[taskId].kind).toBe('confirm');
+    expect(digest[taskId].createdAt).toBe(prior);
+    expect(digest[taskId].note).not.toBe('old');
   });
 
   it('does NOT notify when the run produces no digest items (empty candidate queue)', async () => {

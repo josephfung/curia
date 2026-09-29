@@ -33,7 +33,7 @@ describe('learning digest renderers', () => {
     expect(renderCompletionSection(COMPLETION_ITEMS)).toMatchInlineSnapshot(`
       "### Task completion from sent mail
 
-      1. Marked *Follow up with John* done — you emailed john@example.com. Undo? Reply \`undo completion aaa\`.
+      1. Marked *Follow up with John* done — you emailed john@example.com. Undo? Reply \`undo completion aaa\` or \`dismiss completion aaa\`.
       2. Did emailing board@example.com complete *Plan AGM*? Reply \`confirm completion bbb\` or \`dismiss completion bbb\`.
       "
     `);
@@ -56,8 +56,8 @@ describe('event-driven learning notification bodies (#1466)', () => {
     const { subject, body } = buildCompletionDigestNotification(COMPLETION_ITEMS);
     expect(subject).toBe('2 task updates from your sent mail');
     expect(body).toContain('### Task completion from sent mail');
-    // undo item carries its `undo completion <id>` command; confirm item carries confirm/dismiss.
-    expect(body).toContain('Reply `undo completion aaa`.');
+    // Undo items offer leave-it-done as well as undo; confirm items are unchanged (#1936).
+    expect(body).toContain('Reply `undo completion aaa` or `dismiss completion aaa`.');
     expect(body).toContain('Reply `confirm completion bbb` or `dismiss completion bbb`.');
   });
 
