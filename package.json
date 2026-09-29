@@ -39,7 +39,8 @@
     "report:kg-linkage": "tsx --env-file=.env scripts/kg-node-linkage-report.ts",
     "dedup:contacts": "tsx --env-file=.env scripts/dedup-contacts.ts",
     "seed-vault": "tsx --env-file=.env scripts/seed-vault.ts",
-    "audit:verify": "tsx --env-file=.env scripts/audit-verify.ts"
+    "audit:verify": "tsx --env-file=.env scripts/audit-verify.ts",
+    "audit:override-floors": "tsx scripts/audit-override-floors.ts"
   },
   "license": "MIT",
   "dependencies": {
@@ -89,6 +90,7 @@
     "@types/node": "^24.13.6",
     "@types/pg": "^8.23.1",
     "@types/sanitize-html": "^2.16.1",
+    "@types/semver": "^7.8.0",
     "@typescript-eslint/eslint-plugin": "^8.70.0",
     "@typescript-eslint/parser": "^8.70.0",
     "concurrently": "^10.0.5",
@@ -97,6 +99,7 @@
     "happy-dom": "^20.14.5",
     "pino-pretty": "^13.1.3",
     "promptfoo": "^0.123.1",
+    "semver": "^7.8.5",
     "tsup": "^8.5.1",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
