@@ -79,6 +79,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Delegate brief dates** — a year on the range end no longer rejects the cited start date. (#1945)
+- **Delegate brief dates** — short month names now match comma-less and ordinal forms. (#1945)
 - **`context-bridge-release`** — rejects a fabricated entry_id and says to skip the call when the block is absent. (#1940)
 - **`task-create`** — allowed `source` values are documented so agents stop passing origin ids. (#1939)
 - **`task-update`** — a self-reschedule during a running wake is armed when that run finishes. (#1938)

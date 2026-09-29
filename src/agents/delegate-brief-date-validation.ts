@@ -6,6 +6,7 @@
 
 import { DateTime } from 'luxon';
 import type { ToolResult } from '../skills/types.js';
+import { escapeRegExp } from '../util/escape-regexp.js';
 
 /** One resolved date produced by date-resolve earlier in the same agent turn. */
 export interface TurnDateResolveResult {
@@ -42,7 +43,22 @@ const RELATIVE_DATE_IN_BRIEF = new RegExp(
 const DATE_LIKE_IN_BRIEF =
   /\b\d{4}-\d{2}-\d{2}\b|\b(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\.?\s+\d{1,2}(?:st|nd|rd|th)?\b/i;
 
-const YEAR_IN_BRIEF = /\b(?:19|20)\d{2}\b/;
+const DAY_ORDINAL = String.raw`(?:st|nd|rd|th)`;
+
+/**
+ * A same-month span whose year sits on the end day: "10–16", "3-9",
+ * "10 to 16", "10 through 16". A later separate date ("through Sunday Oct 4")
+ * does not match — that year belongs to the other date.
+ */
+const SAME_MONTH_SPAN = String.raw`\s*(?:[\u2013\u2014-]|\b(?:to|through)\b)\s*\d{1,2}${DAY_ORDINAL}?\b`;
+
+/** Comma, "of"/"in", or whitespace immediately before a four-digit year. */
+const YEAR_SEPARATOR = String.raw`,\s*(?:(?:of|in)\s+)?|\s+(?:of|in)\s+|\s+`;
+
+const YEAR_ON_THIS_DATE = new RegExp(
+  `^(?:${SAME_MONTH_SPAN})?(?:${YEAR_SEPARATOR})((?:19|20)\\d{2})\\b`,
+  'i',
+);
 
 export function isCalendarDelegation(agent: string, task: string): boolean {
   const agentLower = agent.toLowerCase();
@@ -95,6 +111,36 @@ function dayWithOrdinal(day: number): string {
   }
 }
 
+/**
+ * True when some "<month> <day>" occurrence is this resolved date.
+ * A year counts against the occurrence only when it is attached to it
+ * ("July 31, 2027", "August 10–16, 2027"). A year on a different date in the
+ * same brief ("Sep 28 through Oct 4, 2026") does not.
+ */
+function monthDayCitedWithoutConflictingYear(
+  brief: string,
+  monthNames: readonly string[],
+  day: number,
+  year: string,
+): boolean {
+  const names = [...new Set(monthNames)].sort((a, b) => b.length - a.length);
+  if (names.length === 0) return false;
+
+  const monthDay = new RegExp(
+    String.raw`\b(?:${names.map(name => escapeRegExp(name)).join('|')})\s+${day}${DAY_ORDINAL}?\b`,
+    'gi',
+  );
+
+  for (const match of brief.matchAll(monthDay)) {
+    const text = match[0];
+    if (!text) continue;
+    const after = brief.slice(match.index + text.length);
+    const attachedYear = YEAR_ON_THIS_DATE.exec(after)?.[1];
+    if (attachedYear === undefined || attachedYear === year) return true;
+  }
+  return false;
+}
+
 /** True when the brief mentions the ISO date or a natural form date-resolve produced. */
 export function briefContainsResolvedDate(
   brief: string,
@@ -111,29 +157,26 @@ export function briefContainsResolvedDate(
   const year = dt.toFormat('yyyy');
   const ordinalDay = dayWithOrdinal(day);
 
-  // Full-date candidates (always safe — year pins the match).
+  // Full-date candidates (year pins the match). Short-month forms mirror long-month
+  // ones: comma, comma-less, and ordinal.
   const candidates = new Set<string>();
   if (resolved.formatted) candidates.add(resolved.formatted);
   candidates.add(`${month} ${day}, ${year}`);
   candidates.add(`${month} ${day} ${year}`);
   candidates.add(`${monthShort} ${day}, ${year}`);
+  candidates.add(`${monthShort} ${day} ${year}`);
   candidates.add(`${day} ${month} ${year}`);
   candidates.add(`${month} ${ordinalDay}, ${year}`);
   candidates.add(`${month} ${ordinalDay} ${year}`);
-
-  // Yearless month/day only when the brief does not already spell out a year —
-  // otherwise "July 31, 2027" would falsely match a 2026-07-31 resolve.
-  if (!YEAR_IN_BRIEF.test(brief)) {
-    candidates.add(`${month} ${day}`);
-    candidates.add(`${month} ${ordinalDay}`);
-    candidates.add(`${monthShort} ${day}`);
-  }
+  candidates.add(`${monthShort} ${ordinalDay}, ${year}`);
+  candidates.add(`${monthShort} ${ordinalDay} ${year}`);
 
   const briefLower = brief.toLowerCase();
   for (const candidate of candidates) {
     if (briefLower.includes(candidate.toLowerCase())) return true;
   }
-  return false;
+
+  return monthDayCitedWithoutConflictingYear(brief, [month, monthShort], day, year);
 }
 
 export function validateDelegateBriefDates(
