@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Peer-request protocol** — any agent can ask another a question over the bullpen and get a structured answer.
 - **`delegation.requester_context` (public API)** — records requester identity rendered into a delegated specialist prompt. (#1859)
 - **ADR-045** — specialists do not re-adjudicate requester identity; authorization stays upstream. (#1859)
 - **`outbound.judge` audit event** — Stage-2 pass/block/skip/failed_open|closed is queryable without `llm.call`. (#1911)
