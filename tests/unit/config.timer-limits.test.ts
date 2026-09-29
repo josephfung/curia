@@ -82,8 +82,16 @@ describe('loadYamlConfig — Node timer ceilings (#1807)', () => {
 
     it(`rejects ${key} one above the limit, naming the key and the ceiling`, () => {
       const dir = writeConfig(yaml(max + 1));
+      // Literal substring, not a regex. The old form hand-escaped the key's dots into a
+      // pattern (`key.replace(/\./g, '\\.')`), which CodeQL flagged as incomplete
+      // escaping (js/incomplete-sanitization, code-scanning alert 284): it escapes dots
+      // but not backslashes. It did match correctly for the keys above, which are plain
+      // dotted paths, so the hazard was latent rather than live — but a TIMER_KEYS entry
+      // containing `\`, `(`, `+`, `*`, `?` or `$` would have made the generated pattern
+      // match the wrong text or throw a SyntaxError. A substring match needs no escaping,
+      // so that trap cannot come back.
       expect(() => loadYamlConfig(dir)).toThrow(
-        new RegExp(`${key.replace(/\./g, '\\.')} exceeds the Node\\.js timer limit \\(${max} ${unit}\\)`),
+        `${key} exceeds the Node.js timer limit (${max} ${unit})`,
       );
     });
   }
