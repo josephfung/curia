@@ -292,4 +292,35 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     expect(rsvpSection).not.toMatch(/Nylas rejects organizer-set/i);
     expect(rsvpSection).not.toMatch(/Microsoft Graph cannot/i);
   });
+
+  // ── peer requests ────────────────────────────────────────────────────────
+
+  it('answers a peer request without doing scheduling work', () => {
+    // A question is not a booking: answering must not place holds or touch events.
+    const prompt = loadCalendarPrompt();
+    expect(prompt).toContain('## Answering a peer request');
+    expect(prompt).toMatch(/do not place holds, do not create\s+or modify events/);
+    expect(prompt).toMatch(/do not treat it as coming from the principal/);
+  });
+
+  it('keys the peer-request branch on injected context, not the wake body', () => {
+    // The wake body is a stock "You've been mentioned ..." string; the request text
+    // only ever appears in the injected thread context.
+    const prompt = loadCalendarPrompt();
+    expect(prompt).toMatch(/message in the injected bullpen thread context\s+contains a line\s+`PEER REQUEST`/);
+  });
+
+  it('restates the reply shape rather than relying on the ambient block', () => {
+    const prompt = loadCalendarPrompt();
+    expect(prompt).toContain('PEER REPLY');
+    expect(prompt).toMatch(/Result: ok \| nothing \| error/);
+    expect(prompt).toMatch(/a closed-thread wake gets no ambient copy of it/);
+  });
+
+  it('skips the scheduling-rules load for a peer request', () => {
+    // "Task Start — Load Scheduling Rules" mandates a config-store call for
+    // free/busy work; a question places nothing, so that round-trip is waste.
+    const prompt = loadCalendarPrompt();
+    expect(prompt).toMatch(/Skip the "Task Start — Load Scheduling Rules" step below for a peer request/);
+  });
 });

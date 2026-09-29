@@ -358,4 +358,47 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     expect(branchA).toContain('Do NOT archive');
     expect(branchA).toContain('pending approval');
   });
+
+  // ── peer requests (Branch A0) ────────────────────────────────────────────
+  //
+  // Before this branch existed, a bullpen body matching neither the closed-thread
+  // gate nor Branch A's `CONSULT REPLY` fell through to "normal resume routing" —
+  // i.e. a full inbox drain — and the asker never got an answer. The ambient
+  // protocol alone is not enough here: this agent's own prompt routes unmatched
+  // wakes into triage, and its own prompt outranks an ambient convention.
+
+  it('answers a peer request instead of falling through to triage', () => {
+    const prompt = loadCeoInboxPrompt();
+    expect(prompt).toContain('Branch A0 — Peer request');
+    expect(prompt).toMatch(/do NOT fall\s+through to Branch B and do NOT start a triage run/);
+  });
+
+  it('restates the reply shape rather than relying on the ambient block', () => {
+    // A closed-thread wake is excluded from pending injection, so on that path the
+    // ambient protocol is absent. Branch A0 is reachable from it, so it has to be
+    // self-sufficient.
+    const prompt = loadCeoInboxPrompt();
+    expect(prompt).toContain('PEER REPLY');
+    expect(prompt).toMatch(/Result:\s*ok \| nothing \| error/);
+    expect(prompt).toMatch(/a closed-thread wake gets no ambient copy of it/);
+  });
+
+  it('keys Branch A0 on injected context, not on the wake body', () => {
+    // The wake body is a stock "You've been mentioned in Bullpen thread ..." string;
+    // the request text only ever appears in the injected thread context.
+    const prompt = loadCeoInboxPrompt();
+    expect(prompt).toMatch(/message in the injected thread context[^.]*contains a line `PEER REQUEST`/);
+  });
+
+  it('treats a peer as carrying no principal authority', () => {
+    const prompt = loadCeoInboxPrompt();
+    expect(prompt).toMatch(/a question,\s+not work from the principal/);
+  });
+
+  it('bumps the ceo-inbox version for the peer-request capability', () => {
+    // Exact-version tripwire, matching calendar-prompt.test.ts's convention.
+    // 0.17.0 = answers a generic PEER REQUEST, a new capability, so minor.
+    const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
+    expect(config.version).toBe('0.17.0');
+  });
 });
