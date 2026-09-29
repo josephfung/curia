@@ -39,6 +39,7 @@
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import * as yaml from 'js-yaml';
 import semver from 'semver';
 
@@ -93,6 +94,33 @@ export const DEFAULT_POLICY: AuditPolicy = {
     },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/** Carries the HTTP status so callers branch on the status, not on message text. */
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
+/**
+ * Coverage was reduced but the audit can continue. Distinct from a plain Error, which
+ * fails the override: this lands in `report.degraded` instead, so "I could not check this
+ * part" is never rendered as either a failure or a clean result.
+ */
+export class DegradedCoverageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DegradedCoverageError';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -184,8 +212,19 @@ export interface AuditReport {
   quarantined: QuarantinedFloor[];
   /** Hard failures: unparseable entries, API errors, undeclared empty advisory sets. */
   errors: string[];
+  /**
+   * Cases where the audit ran but its COVERAGE was reduced — a package with no resolvable
+   * GitHub repo, a repo whose advisory list 404s, a quarantine status that could not be
+   * determined. Review named the unifying flaw in the first draft: the script had words
+   * for "broken" and for "fine" and none for "I checked less than I should have", so every
+   * such case rendered as clean. These do not fail the run, but they are printed, and they
+   * suppress the "all floors are sound" claim, which would otherwise be a lie.
+   */
+  degraded: string[];
   /** Allowlist entries that no longer suppress anything. Housekeeping, not a failure. */
   unusedAllowlist: AllowlistEntry[];
+  /** Same rot detection for the escape hatch from the empty-advisory-list assertion. */
+  unusedNoAdvisoryExpected: NoAdvisoryExpectedEntry[];
   exitCode: 0 | 1;
 }
 
@@ -231,10 +270,23 @@ interface WorkspaceShape {
  * Read from the same file as the overrides rather than hardcoded, so the audit can never
  * disagree with the policy pnpm actually enforces.
  */
+export const MAX_QUARANTINE_MINUTES = 7 * 24 * 60;
+
 export function parseMinimumReleaseAge(workspaceYaml: string): number | null {
   const doc = yaml.load(workspaceYaml) as WorkspaceShape | null | undefined;
   const raw = doc?.minimumReleaseAge;
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return null;
+  // The file under audit controls the audit's own leniency, and the PR that would trip
+  // this check is the PR that can edit this value. A stray digit (1440 -> 14400000, i.e.
+  // 27 years) would otherwise turn every stale floor into a green "awaiting a quarantined
+  // fix" indefinitely. Anything beyond the Dependabot cooldown is a typo, not a policy.
+  if (raw > MAX_QUARANTINE_MINUTES) {
+    throw new Error(
+      `minimumReleaseAge is ${raw} minutes (${Math.round(raw / 1440)} days), above the ` +
+        `${MAX_QUARANTINE_MINUTES}-minute ceiling this audit will honour. A value this ` +
+        'large would excuse every stale floor indefinitely — is it a typo?',
+    );
+  }
   return raw;
 }
 
@@ -273,11 +325,78 @@ export function parseOverrides(workspaceYaml: string): OverrideEntry[] {
  * itself understands is admitted, and the audit below is correct for all of them.
  */
 export function parseFloorRange(specifier: string): string {
+  // A multi-branch specifier has no single lower bound to raise, and renderSafeFloor can
+  // only rewrite one: for `^1.0.0 || ^2.0.0` it produced `^2.2.0 || ^2.0.0`, which still
+  // admits the vulnerable 2.0.0 it was meant to escape. The workflow tells maintainers to
+  // apply the suggested floor, so wrong advice is worse than no support. Nothing here
+  // uses `||`; if that changes, teach renderSafeFloor first.
+  if (specifier.includes('||')) {
+    throw new Error(
+      `version specifier \`${specifier}\` uses \`||\`, which this audit cannot suggest a ` +
+        'safe floor for. Split it into separate overrides, or extend renderSafeFloor.',
+    );
+  }
   const range = semver.validRange(specifier);
   if (range === null) {
     throw new Error(`cannot parse version specifier \`${specifier}\` as a semver range`);
   }
   return range;
+}
+
+/** An npm package name we are willing to interpolate into a registry path. */
+const SAFE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
+/** An owner/repo slug we are willing to interpolate into an api.github.com path. */
+const SAFE_REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+/**
+ * Resolve a package's `repository` field to an `owner/repo` GitHub slug, or null.
+ *
+ * Load-bearing for trap 3: a null slug means the upstream-repo advisory leg never runs and
+ * the audit silently degrades to global-DB-only, which is the blind spot #1933 was about.
+ * The first version matched `/github\.com[/:]([^/]+)\/([^/#?]+?)(?:\.git)?$/`, wrong twice:
+ *
+ *   - Anchoring the repo at `$` rejected every shape that is not exactly two TRAILING path
+ *     segments. `github:squirrelchat/smol-toml` — npm shorthand, and what smol-toml
+ *     actually publishes — returned null, so `smol-toml: '>=1.7.1'` was audited against
+ *     the global DB alone and GHSA-r4xh-jqrq-34v2 (MED, <=1.8.0, upstream-only) was
+ *     missed entirely. A monorepo `/tree/main/packages/x` URL failed the same way.
+ *   - `github\.com` was unanchored, so `https://evilgithub.com/a/b` yielded the slug `a/b`,
+ *     which was then queried against the real api.github.com.
+ *
+ * Both are fixed by parsing the HOST properly and taking the FIRST two path segments.
+ */
+export function parseRepositoryUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+
+  // npm shorthands: "github:owner/repo" and the bare "owner/repo".
+  const shorthand = /^(?:github:)?([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?$/.exec(trimmed);
+  if (shorthand) return `${shorthand[1]!}/${shorthand[2]!}`;
+
+  // Anything else must be a URL whose HOST is github.com, not merely a string containing
+  // it. Normalize the several git transports into something `new URL` accepts.
+  const normalized = trimmed
+    .replace(/^git\+/, '')
+    .replace(/^git@([^:/]+):/, 'https://$1/')
+    .replace(/^(?:git|ssh|https?):\/\/(?:[^@/]*@)?/, 'https://');
+
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    return null;
+  }
+  if (url.hostname !== 'github.com' && !url.hostname.endsWith('.github.com')) return null;
+
+  // First two path segments are owner and repo; a `/tree/...` or `/packages/...` tail is a
+  // location INSIDE the repo, not part of its identity.
+  const segments = url.pathname.split('/').filter((s) => s.length > 0);
+  const owner = segments[0];
+  const repo = segments[1]?.replace(/\.git$/, '');
+  if (!owner || !repo) return null;
+
+  const slug = `${owner}/${repo}`;
+  return SAFE_REPO_SLUG.test(slug) ? slug : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -301,11 +420,28 @@ export function parseFloorRange(specifier: string): string {
 // HIGH advisory would be silently dropped — the precise failure mode this whole script
 // exists to prevent.
 //
-// The resolution is to group by SATISFIABILITY rather than by separator: keep adding
-// comparators to the current AND-group while the group still describes a non-empty set
-// of versions, and start a new OR-group when it would not. That reads both dialects
-// correctly without having to know which one produced the string.
+// The resolution is STRUCTURAL: an AND-group may carry at most one lower bound and at
+// most one upper bound, so an atom whose direction the current group already has starts a
+// new OR-group. Both dialects then read correctly without knowing which produced the
+// string, and the failure direction is over-matching (a false finding a human notices)
+// rather than under-matching (a dropped advisory nobody notices).
+//
+// An earlier draft grouped by SATISFIABILITY instead — extend while the group still
+// describes a non-empty version set. That is subtly wrong and was caught in review. It
+// holds only for ASCENDING, disjoint alternatives. For a descending list, the next
+// alternative's lower bound sits BELOW the current open window, so the group stays
+// satisfiable and the bound is swallowed:
+//
+//   ">= 3.0.0, < 5.0.7, >= 2.0.0, < 2.1.2, < 1.1.16"   (brace-expansion GHSA-3jxr-9vmj-r5cp)
+//     satisfiability:  >=3.0.0 <5.0.7 >=2.0.0 || <2.1.2 <1.1.16   ← 2.x branch LOST
+//     structural:      >=3.0.0 <5.0.7 || >=2.0.0 <2.1.2 || <1.1.16
+//
+// That advisory is HIGH and is live on juliangruber/brace-expansion today, on a package
+// this repo pins. Satisfiability is still used, but only to VALIDATE each finished group.
 // ---------------------------------------------------------------------------
+
+/** Real ranges run to tens of characters; the longest observed is under 100. */
+const MAX_RANGE_LENGTH = 2000;
 
 type AtomKind = 'lower' | 'upper' | 'exact' | 'range';
 
@@ -332,6 +468,17 @@ function tokenizeAtoms(group: string): Atom[] {
       i += 2;
       continue;
     }
+
+    // An UNSPACED hyphen range: "3.0.0-3.0.3". semver would read this as version 3.0.0
+    // with the prerelease tag "3.0.3", which matches nothing once prereleases are
+    // filtered out of the admitted set — a silent drop. Only treat it as a range when
+    // BOTH sides are complete versions, so a real prerelease ("1.0.0-beta.1") is left be.
+    const unspaced = /^(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)$/.exec(token);
+    if (unspaced) {
+      atoms.push({ kind: 'range', text: `${unspaced[1]!} - ${unspaced[2]!}` });
+      continue;
+    }
+
     const operator = /^(>=|<=|>|<|==|=|\^|~)/.exec(token);
     if (!operator) {
       atoms.push({ kind: 'exact', text: token });
@@ -339,12 +486,18 @@ function tokenizeAtoms(group: string): Atom[] {
     }
     const symbol = operator[1]!;
     const rest = token.slice(symbol.length);
+    if (symbol === '^' || symbol === '~') {
+      // Keep the operator: these describe a WINDOW. Emitting the bare version made
+      // `^1.2.3` match only 1.2.3 and declare 1.3.0-1.9.x clean.
+      atoms.push({ kind: 'range', text: `${symbol}${rest}` });
+      continue;
+    }
     const kind: AtomKind = symbol.startsWith('>')
       ? 'lower'
       : symbol.startsWith('<')
         ? 'upper'
         : 'exact';
-    atoms.push({ kind, text: kind === 'exact' ? rest : `${symbol === '==' ? '=' : symbol}${rest}` });
+    atoms.push({ kind, text: kind === 'exact' ? rest : `${symbol}${rest}` });
   }
   return atoms;
 }
@@ -386,6 +539,15 @@ export function normalizeAdvisoryRange(raw: string): string {
   if (cleaned.length === 0) {
     throw new Error(`cannot parse empty vulnerable range \`${raw}\``);
   }
+  // Grouping re-parses the accumulated group per atom, so cost is quadratic in the
+  // comparator count. Real ranges are tens of characters; this is third-party text, and a
+  // bound keeps a pathological one an error rather than a wedged job.
+  if (cleaned.length > MAX_RANGE_LENGTH) {
+    throw new Error(
+      `vulnerable range is ${cleaned.length} characters, above the ${MAX_RANGE_LENGTH} ` +
+        'this audit will parse — refusing to spend the time rather than guessing',
+    );
+  }
 
   // `;` and `||` are unambiguous OR boundaries.
   const hardGroups = cleaned.split(/\s*(?:;|\|\|)\s*/).filter((g) => g.trim().length > 0);
@@ -398,9 +560,13 @@ export function normalizeAdvisoryRange(raw: string): string {
     }
 
     let current: string[] = [];
+    let hasLower = false;
+    let hasUpper = false;
     const flush = (): void => {
       if (current.length > 0) orGroups.push(current);
       current = [];
+      hasLower = false;
+      hasUpper = false;
     };
 
     for (let i = 0; i < atoms.length; i++) {
@@ -412,18 +578,30 @@ export function normalizeAdvisoryRange(raw: string): string {
       const comparator = impliedLower ? `>=${atom.text}` : atom.text;
       const kind: AtomKind = impliedLower ? 'lower' : atom.kind;
 
-      // An exact version or a hyphen range is a complete group on its own.
+      // An exact version, a hyphen range, or a caret/tilde window is a complete group.
       if (kind === 'exact' || kind === 'range') {
         flush();
         orGroups.push([comparator]);
         continue;
       }
 
-      // Otherwise extend the current group only while it stays satisfiable — this is
-      // what disambiguates comma-as-AND from comma-as-OR without guessing.
-      if (current.length > 0 && !isSatisfiable([...current, comparator])) {
+      // Two independent reasons to start a new alternative, and BOTH are needed:
+      //
+      //   - Structural: the group already has a bound in this direction. Catches the
+      //     DESCENDING list, where `>=2.0.0` after an open `>=3.0.0 <5.0.7` window is
+      //     still satisfiable and would otherwise be swallowed.
+      //   - Satisfiability: joining would leave the group describing no version at all.
+      //     Catches the ASCENDING list, where `>=2.0.0` after `<1.1.17` is a direction the
+      //     group does not yet have but produces an empty window.
+      const directionTaken = (kind === 'lower' && hasLower) || (kind === 'upper' && hasUpper);
+      if (
+        current.length > 0 &&
+        (directionTaken || !isSatisfiable([...current, comparator]))
+      ) {
         flush();
       }
+      if (kind === 'lower') hasLower = true;
+      else hasUpper = true;
       current.push(comparator);
     }
     flush();
@@ -437,10 +615,13 @@ export function normalizeAdvisoryRange(raw: string): string {
   if (range === null) {
     throw new Error(`cannot parse vulnerable range \`${raw}\` as semver`);
   }
-  // A range that matches nothing would silently absolve every version.
-  if (!orGroups.some((group) => isSatisfiable(group))) {
+  // EVERY alternative must describe real versions. `.some()` here let one good group
+  // excuse a dead one, so a backwards hyphen range contributed nothing and said nothing.
+  const dead = orGroups.filter((group) => !isSatisfiable(group));
+  if (dead.length > 0) {
     throw new Error(
-      `vulnerable range \`${raw}\` normalized to \`${range}\`, which matches no version`,
+      `vulnerable range \`${raw}\` normalized to \`${range}\`, in which ` +
+        `\`${dead.map((g) => g.join(' ')).join('` and `')}\` matches no version`,
     );
   }
   return range;
@@ -514,20 +695,31 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
       stale: [],
       quarantined: [],
       errors: policyErrors,
+      degraded: [],
       unusedAllowlist: [],
+      unusedNoAdvisoryExpected: [],
       exitCode: 1,
     };
   }
 
   const now = options.now ?? new Date();
-  const quarantineMinutes = parseMinimumReleaseAge(options.workspaceYaml);
 
   const errors: string[] = [];
+  const degraded: string[] = [];
   const checked: CheckedOverride[] = [];
   const stale: StaleFloor[] = [];
   const quarantined: QuarantinedFloor[] = [];
   /** Allowlist entries observed to actually suppress a matching advisory. */
   const usedAllowlist = new Set<AllowlistEntry>();
+  /** noAdvisoryExpected entries whose override genuinely returned no advisories. */
+  const usedNoAdvisory = new Set<NoAdvisoryExpectedEntry>();
+
+  let quarantineMinutes: number | null = null;
+  try {
+    quarantineMinutes = parseMinimumReleaseAge(options.workspaceYaml);
+  } catch (err) {
+    errors.push(messageOf(err));
+  }
 
   let overrides: OverrideEntry[];
   try {
@@ -538,7 +730,9 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
       stale: [],
       quarantined: [],
       errors: [messageOf(err)],
+      degraded: [],
       unusedAllowlist: policy.allowlist,
+      unusedNoAdvisoryExpected: policy.noAdvisoryExpected,
       exitCode: 1,
     };
   }
@@ -555,7 +749,25 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
         .filter((v) => semver.satisfies(v, range))
         .sort(semver.compare);
 
-      const advisories = await collectAdvisories(source, override.subject);
+      if (admitted.length === 0) {
+        // The exact symmetric case to the empty-advisory rule below. Without this the
+        // script "checked" an override against nothing and printed it as sound — the
+        // unaudited-entry defect its own header warns about, via an empty set rather
+        // than a `continue`. A floor admitting nothing also breaks `pnpm install`.
+        throw new Error(
+          `floor \`${override.specifier}\` admits no published version of ` +
+            `\`${override.subject}\` (excluding prereleases), so nothing was verified. ` +
+            'The floor is above every release, or its bounds cross.',
+        );
+      }
+
+      const advisories = await collectAdvisories(source, override.subject, (note) =>
+        degraded.push(note),
+      );
+      if (advisories.length === 0) {
+        const declared = policy.noAdvisoryExpected.find((e) => e.override === override.key);
+        if (declared) usedNoAdvisory.add(declared);
+      }
       if (advisories.length === 0 && !declaredNoAdvisory.has(override.key)) {
         // Every other override is advisory-motivated, so zero advisories means the
         // query returned nothing useful. Passing here is the exact silent-miss this
@@ -625,17 +837,55 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
       };
 
       // Is the remedy something pnpm would actually let us install today?
-      const installableAt =
-        safeVersion && quarantineMinutes !== null
-          ? await quarantineExpiry(source, override.subject, safeVersion, quarantineMinutes)
-          : null;
+      //
+      // Judged over EVERY clean admitted version, not just the lowest. npm publish order
+      // is not monotonic in semver order — a backport patch lands after a later minor — so
+      // a quarantined `safeVersion` does not mean the floor is unraisable: pnpm skips the
+      // quarantined version and resolves a higher one. Checking only `safeVersion` put an
+      // actionable finding in the non-failing bucket whenever that happened.
+      const cleanVersions = safeVersion
+        ? admitted.filter((v) => semver.gt(v, highestVulnerable))
+        : [];
 
-      if (safeVersion && finding.safeFloor && installableAt && installableAt > now) {
+      let allQuarantined = cleanVersions.length > 0 && quarantineMinutes !== null;
+      let lastExpiry: Date | null = null;
+      if (allQuarantined) {
+        for (const candidate of cleanVersions) {
+          let expiry: Date | null;
+          try {
+            expiry = await quarantineExpiry(
+              source,
+              override.subject,
+              candidate,
+              quarantineMinutes!,
+              now,
+            );
+          } catch (err) {
+            // A registry 5xx here must not destroy an already-computed finding: it used to
+            // jump to the catch below and report only the HTTP error, losing the advisory
+            // and the safe floor. Fail towards the actionable verdict.
+            degraded.push(
+              `\`${override.key}\`: could not determine quarantine status for ` +
+                `${candidate} (${messageOf(err)}); reporting it as an ordinary stale floor.`,
+            );
+            allQuarantined = false;
+            break;
+          }
+          if (!expiry || expiry <= now) {
+            // This clean version is installable, so the floor IS raisable today.
+            allQuarantined = false;
+            break;
+          }
+          if (!lastExpiry || expiry > lastExpiry) lastExpiry = expiry;
+        }
+      }
+
+      if (allQuarantined && safeVersion && finding.safeFloor && lastExpiry) {
         quarantined.push({
           ...finding,
           safeFloor: finding.safeFloor,
           safeVersion,
-          installableAt: installableAt.toISOString(),
+          installableAt: lastExpiry.toISOString(),
         });
         continue;
       }
@@ -647,11 +897,16 @@ export async function auditOverrideFloors(options: AuditOptions): Promise<AuditR
   }
 
   const unusedAllowlist = policy.allowlist.filter((e) => !usedAllowlist.has(e));
+  const unusedNoAdvisoryExpected = policy.noAdvisoryExpected.filter(
+    (e) => !usedNoAdvisory.has(e),
+  );
 
   return {
     checked,
     stale,
     quarantined,
+    degraded,
+    unusedNoAdvisoryExpected,
     errors,
     unusedAllowlist,
     // `quarantined` is deliberately NOT a failure: see quarantineExpiry.
@@ -686,11 +941,17 @@ async function quarantineExpiry(
   pkg: string,
   version: string,
   minutes: number,
+  now: Date,
 ): Promise<Date | null> {
   const published = await source.publishedAt(pkg, version);
   if (!published) return null;
   const publishedAt = new Date(published);
   if (Number.isNaN(publishedAt.getTime())) return null;
+  // A publish time in the future is corrupt registry data. The docstring already argues
+  // that a MISSING timestamp must not be excused; an impossible one deserves the same,
+  // and trusting it would park an actionable finding in the non-failing bucket until that
+  // date arrives. `now` is passed in so this shares the audit's clock.
+  if (publishedAt > now) return null;
   return new Date(publishedAt.getTime() + minutes * 60_000);
 }
 
@@ -734,12 +995,33 @@ function bySeverityThenId(a: ImplicatedAdvisory, b: ImplicatedAdvisory): number 
 async function collectAdvisories(
   source: PackageDataSource,
   pkg: string,
+  onDegraded: (note: string) => void,
 ): Promise<AdvisoryRecord[]> {
   const global = await source.globalAdvisories(pkg);
 
   // Trap 3: the global DB lags a project's own repo advisories.
   const slug = await source.upstreamRepo(pkg);
-  const upstream = slug ? await source.repoAdvisories(slug, pkg) : [];
+  if (!slug) {
+    // Previously `slug ? fetch : []` with no output: the upstream-repo leg silently did
+    // not run and the report still claimed every floor was sound. That is how
+    // `smol-toml` (repository: "github:squirrelchat/smol-toml") lost its only advisory.
+    onDegraded(
+      `\`${pkg}\`: no GitHub repo resolved from its \`repository\` field, so it was ` +
+        'checked against the global advisory DB only. Upstream-only advisories for this ' +
+        'package cannot be seen (that is the #1933 blind spot).',
+    );
+  }
+  let upstream: AdvisoryRecord[] = [];
+  if (slug) {
+    try {
+      upstream = await source.repoAdvisories(slug, pkg);
+    } catch (err) {
+      // Only a declared coverage reduction is tolerated here. Anything else — a 403, a
+      // rate limit, a network error — propagates and fails the override.
+      if (!(err instanceof DegradedCoverageError)) throw err;
+      onDegraded(`\`${pkg}\`: ${err.message}`);
+    }
+  }
 
   // Where both sources carry the same GHSA, the GLOBAL record wins outright and the
   // upstream copy is discarded — NOT unioned. The global DB normalizes its ranges;
@@ -820,6 +1102,17 @@ export function formatReport(report: AuditReport): string {
     lines.push('');
   }
 
+  if (report.degraded.length > 0) {
+    // Printed, not merely logged: this text goes into the job summary, so a green run
+    // with reduced coverage is distinguishable from a green run with full coverage.
+    lines.push(
+      `DEGRADED COVERAGE (${report.degraded.length}) — the audit ran, but checked less than ` +
+        'it should have:',
+    );
+    for (const note of report.degraded) lines.push(`  ! ${note}`);
+    lines.push('');
+  }
+
   if (report.unusedAllowlist.length > 0) {
     // Not a failure: an unused suppression can only ever under-suppress. It is still
     // rot worth clearing, and worth seeing before someone trusts it as live cover.
@@ -830,15 +1123,37 @@ export function formatReport(report: AuditReport): string {
     lines.push('');
   }
 
-  if (report.exitCode === 0) {
+  if (report.unusedNoAdvisoryExpected.length > 0) {
     lines.push(
-      report.quarantined.length > 0
-        ? `${report.checked.length} override floors checked; none is failing. ` +
-            `${report.quarantined.length} ${report.quarantined.length === 1 ? 'awaits' : 'await'} ` +
-            'a quarantined fix (above).'
-        : `All ${report.checked.length} override floors are sound: every admitted published ` +
-            'release is free of known advisories.',
+      `UNUSED noAdvisoryExpected ENTRIES (${report.unusedNoAdvisoryExpected.length}) — ` +
+        'these overrides DO have advisories now, so the exemption is dead:',
     );
+    for (const entry of report.unusedNoAdvisoryExpected) {
+      lines.push(`  · ${entry.override}`);
+    }
+    lines.push('');
+  }
+
+  if (report.exitCode === 0) {
+    if (report.quarantined.length > 0) {
+      lines.push(
+        `${report.checked.length} override floors checked; none is failing. ` +
+          `${report.quarantined.length} ${report.quarantined.length === 1 ? 'awaits' : 'await'} ` +
+          'a quarantined fix (above).',
+      );
+    } else if (report.degraded.length > 0) {
+      // Deliberately NOT "all floors are sound": coverage was reduced, so that claim
+      // would be exactly the false reassurance this script exists to remove.
+      lines.push(
+        `${report.checked.length} override floors checked with no failing floor, but ` +
+          `${report.degraded.length} had reduced coverage (above) — this is not a clean bill.`,
+      );
+    } else {
+      lines.push(
+        `All ${report.checked.length} override floors are sound: every admitted published ` +
+          'release is free of known advisories.',
+      );
+    }
   }
 
   return lines.join('\n');
@@ -851,8 +1166,20 @@ export function formatReport(report: AuditReport): string {
 const REGISTRY = 'https://registry.npmjs.org';
 const GITHUB_API = 'https://api.github.com';
 
-/** npm needs the scope separator percent-encoded: @hono/node-server -> @hono%2fnode-server. */
+/**
+ * npm needs the scope separator percent-encoded: @hono/node-server -> @hono%2fnode-server.
+ *
+ * Validated first rather than blindly encoded. The input is a YAML key, not a name any
+ * registry has vouched for, and it lands in a URL path: `foo#bar` silently queried the
+ * wrong package (the fragment was dropped), `foo?x=1` became a query string, and `a/b/c`
+ * only had its first slash encoded.
+ */
 function encodePackage(pkg: string): string {
+  if (!SAFE_PACKAGE_NAME.test(pkg)) {
+    throw new Error(
+      `\`${pkg}\` is not a valid npm package name, so it will not be put into a registry URL`,
+    );
+  }
   return pkg.replace('/', '%2f');
 }
 
@@ -865,12 +1192,33 @@ function githubHeaders(token: string): Record<string, string> {
   };
 }
 
-/** Extract the `rel="next"` URL from a Link header, if any. */
+/**
+ * Extract the `rel="next"` URL from a Link header, if any.
+ *
+ * Throws if it points anywhere but api.github.com. We re-attach the Bearer token on the
+ * next request, and because this is an explicit follow rather than a 3xx redirect, undici's
+ * cross-origin Authorization stripping does not apply — so nothing else would stop the
+ * token being sent to whatever host the header named.
+ */
 function nextLink(header: string | null): string | null {
   if (!header) return null;
   for (const part of header.split(',')) {
     const match = /<([^>]+)>\s*;\s*rel="next"/.exec(part);
-    if (match) return match[1]!;
+    if (!match) continue;
+    const next = match[1]!;
+    let origin: string;
+    try {
+      origin = new URL(next).origin;
+    } catch {
+      throw new Error(`Link header rel="next" is not a URL: \`${next}\``);
+    }
+    if (origin !== GITHUB_API) {
+      throw new Error(
+        `refusing to follow Link header rel="next" to \`${origin}\` — the audit only ` +
+          `paginates within ${GITHUB_API}, since the request carries a bearer token`,
+      );
+    }
+    return next;
   }
   return null;
 }
@@ -901,16 +1249,27 @@ export function toAdvisoryRecords(
     // Ranges are carried through VERBATIM. normalizeAdvisoryRange is applied later, in
     // one place (toSemverRanges), so that a range we cannot read is reported against the
     // override that depends on it rather than throwing during the fetch.
-    const ranges = (advisory.vulnerabilities ?? [])
-      .filter((v) => v.package?.ecosystem?.toLowerCase() === 'npm' && v.package?.name === pkg)
-      .map((v) => (v.vulnerable_version_range ?? '').trim())
-      .filter((r) => r.length > 0);
-    if (ranges.length === 0) continue;
+    //
+    // Two very different "no ranges" cases, which the first draft conflated by filtering
+    // empty strings away here:
+    //   - No `vulnerabilities` entry names `pkg`. A correct skip — this is how a monorepo
+    //     advisory about a sibling package is excluded.
+    //   - An entry DOES name `pkg` but carries a blank/unusable range. That is an advisory
+    //     about us whose scope we cannot read, and dropping it silently is how a CRITICAL
+    //     would vanish. Keep the empty string: normalizeAdvisoryRange rejects it loudly.
+    const mine = (advisory.vulnerabilities ?? []).filter(
+      (v) => v.package?.ecosystem?.toLowerCase() === 'npm' && v.package?.name === pkg,
+    );
+    if (mine.length === 0) continue;
+    const ranges = mine.map((v) => (v.vulnerable_version_range ?? '').trim());
 
     const severity = (advisory.severity ?? 'unknown').toLowerCase();
     records.push({
       ghsaId: advisory.ghsa_id,
-      severity: (severity in SEVERITY_ORDER ? severity : 'unknown') as Severity,
+      // Object.hasOwn, not `in`: `in` walks the prototype chain, so 'constructor' and
+      // 'toString' passed as severities and produced an undefined sort weight (NaN
+      // comparator, implementation-defined order).
+      severity: (Object.hasOwn(SEVERITY_ORDER, severity) ? severity : 'unknown') as Severity,
       ranges,
       source,
     });
@@ -941,7 +1300,10 @@ export function createLiveSource(token: string): PackageDataSource {
           response.status === 403 || response.status === 429
             ? ' (rate limited — is GITHUB_TOKEN set and valid?)'
             : '';
-        throw new Error(`GET ${url} -> HTTP ${response.status} ${response.statusText}${hint}`);
+        throw new HttpError(
+          `GET ${url} -> HTTP ${response.status} ${response.statusText}${hint}`,
+          response.status,
+        );
       }
       const page = (await response.json()) as RawAdvisory[];
       collected.push(...page);
@@ -978,9 +1340,7 @@ export function createLiveSource(token: string): PackageDataSource {
         Accept: 'application/json',
       })) as { repository?: { url?: string } | string };
       const raw = typeof body.repository === 'string' ? body.repository : body.repository?.url;
-      if (!raw) return null;
-      const match = /github\.com[/:]([^/]+)\/([^/#?]+?)(?:\.git)?$/.exec(raw);
-      return match ? `${match[1]}/${match[2]}` : null;
+      return raw ? parseRepositoryUrl(raw) : null;
     },
 
     async globalAdvisories(pkg) {
@@ -989,18 +1349,28 @@ export function createLiveSource(token: string): PackageDataSource {
     },
 
     async repoAdvisories(slug, pkg) {
+      if (!SAFE_REPO_SLUG.test(slug)) {
+        throw new Error(`\`${slug}\` is not a valid owner/repo slug, so it will not be ` +
+          'put into an api.github.com URL');
+      }
       const url = `${GITHUB_API}/repos/${slug}/security-advisories?per_page=100`;
       let raw: RawAdvisory[];
       try {
         raw = await getAllPages(url);
       } catch (err) {
-        // A repo with advisories disabled, renamed, or gone answers 404/403. That is
-        // not an audit failure — the global DB still covers the package — but it must
-        // not be mistaken for "no advisories", so we say so and move on.
-        const message = messageOf(err);
-        if (/HTTP 40[34]/.test(message)) {
-          console.warn(`  note: no readable repo advisories for ${slug} (${message})`);
-          return [];
+        // ONLY a 404 means "this repo has no advisory list". Decided on the HTTP status,
+        // not by regexing the message we just formatted: `/HTTP 40[34]/` also matched the
+        // rate-limit 403, so a throttled run — the likeliest failure for a script making
+        // 3+ GitHub calls per override — returned [] and was indistinguishable from a
+        // clean repo. The global DB still returns advisories, so the empty-list assertion
+        // never fired, and the entire upstream-repo leg went quiet on a GREEN run. That
+        // single 403 would have hidden the js-yaml and brace-expansion findings in this
+        // very PR. 403/429 must propagate.
+        if (err instanceof HttpError && err.status === 404) {
+          throw new DegradedCoverageError(
+            `no advisory list on \`${slug}\` (HTTP 404 — repo renamed, gone, or ` +
+              'advisories disabled), so upstream-only advisories were not checked',
+          );
         }
         throw err;
       }
@@ -1042,22 +1412,45 @@ async function main(): Promise<void> {
   const text = formatReport(report);
   console.log(text);
 
+  // Quarantined and degraded findings exit 0, so nothing else would surface them: the
+  // notify-failure job only fires on a failed run. A workflow annotation puts them on the
+  // run page itself, which is the difference between "reported" and actually reported.
+  if (process.env.GITHUB_ACTIONS) {
+    for (const blocked of report.quarantined) {
+      console.log(
+        `::warning title=Stale floor awaiting a quarantined fix::${blocked.key} ` +
+          `'${blocked.currentFloor}' admits ${blocked.vulnerableVersions.join(', ')} ` +
+          `(${blocked.advisories.map((a) => `${a.ghsaId} ${a.severity}`).join(', ')}). ` +
+          `Raise to '${blocked.safeFloor}' after ${blocked.installableAt}.`,
+      );
+    }
+    for (const note of report.degraded) {
+      console.log(`::warning title=Degraded advisory coverage::${note.replace(/\n/g, ' ')}`);
+    }
+  }
+
   // Put the verdict in the job summary so a red scheduled run is legible from the
   // Actions list without opening the log.
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (summaryPath) {
     const { appendFile } = await import('node:fs/promises');
     const heading =
-      report.exitCode === 0
-        ? '### ✅ Override floors sound'
-        : '### ❌ Override floor audit failed';
-    await appendFile(summaryPath, `${heading}\n\n\`\`\`\n${text}\n\`\`\`\n`);
+      report.exitCode !== 0
+        ? '### ❌ Override floor audit failed'
+        : report.quarantined.length > 0 || report.degraded.length > 0
+          ? '### ⚠️ Override floors: no failure, but read this'
+          : '### ✅ Override floors sound';
+    // Advisory text is third-party and reaches this string; a stray ``` in it would
+    // break out of the fence. A longer fence cannot be closed by one from inside.
+    await appendFile(summaryPath, `${heading}\n\n~~~~\n${text.replace(/~~~~/g, '----')}\n~~~~\n`);
   }
 
   process.exit(report.exitCode);
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+// pathToFileURL, not `file://` concatenation: the naive form encodes some path shapes
+// differently, and a mismatch would skip main() entirely — printing nothing and exiting 0.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err: unknown) => {
     // Never let an unexpected throw look like a pass.
     console.error(`override-floor audit crashed: ${messageOf(err)}`);

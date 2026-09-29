@@ -212,7 +212,15 @@ overrides:
   # MED CVEs from Scorecard, 2026-09-09 (#1752):
   fflate: '>=0.8.3'                         # GHSA-px8p-9vwx-vf98 (unzipSync infinite loop on malformed ZIP64); only consumer is @openai/codex-security via promptfoo (dev-only), which pinned 0.8.2
   # HIGH CVE from Dependabot, 2026-09-09:
-  smol-toml: '>=1.7.1'                      # GHSA-7w5x-hrqm-74c2 / CVE-2026-85730 (DoS via malformed TOML); same story as fflate above - only consumer is @openai/codex-security via promptfoo (dev-only), which pins an exact 1.6.1, so nothing but an override moves it
+  # GHSA-7w5x-hrqm-74c2 / CVE-2026-85730 (DoS via malformed TOML, <=1.7.0); same story as
+  # fflate above - only consumer is @openai/codex-security via promptfoo (dev-only), which
+  # pins an exact 1.6.1, so nothing but an override moves it.
+  # Raised off >=1.7.1 (#1934): that floor admitted 1.7.1/1.7.2/1.8.0 and 1.8.0 was what
+  # resolved, all three covered by GHSA-r4xh-jqrq-34v2 (MED, <=1.8.0) — upstream-only, so
+  # no Dependabot alert. This one was invisible to the new auditor at first too: smol-toml
+  # publishes `repository: "github:squirrelchat/smol-toml"`, the npm shorthand, which the
+  # first repo-URL parser returned null for, silently skipping the upstream-advisory leg.
+  smol-toml: '>=1.9.0'
   #
   # Advisories deliberately left WITHOUT a clearing override (re-check before assuming
   # they were missed — the adm-zip entry that used to sit here was fixed by 0.6.1):
