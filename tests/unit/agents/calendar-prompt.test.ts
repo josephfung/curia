@@ -275,7 +275,8 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     // Exact-version tripwire: bump this alongside `agents/calendar.yaml`'s version on any
     // meaningful prompt/capability change. 0.8.2 = delegate-wait hint sized to the
     // pre-2026-09-20 p99 (#1857).
-    expect(config.version).toBe('0.8.2');
+    // 0.9.0 = answers a generic PEER REQUEST, a new capability, so minor.
+    expect(config.version).toBe('0.9.0');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {
