@@ -1232,6 +1232,11 @@ const GITHUB_API = 'https://api.github.com';
  * registry has vouched for, and it lands in a URL path: `foo#bar` silently queried the
  * wrong package (the fragment was dropped), `foo?x=1` became a query string, and `a/b/c`
  * only had its first slash encoded.
+ *
+ * `replaceAll`, not `replace`, so the encoding does not silently depend on
+ * SAFE_PACKAGE_NAME permitting at most one `/`. Today the guard rejects `a/b/c` before we
+ * get here, but a single-occurrence `replace` would leave a raw path separator in the URL
+ * the moment that regex is loosened, and that failure would be invisible.
  */
 function encodePackage(pkg: string): string {
   if (!SAFE_PACKAGE_NAME.test(pkg)) {
@@ -1239,7 +1244,7 @@ function encodePackage(pkg: string): string {
       `\`${pkg}\` is not a valid npm package name, so it will not be put into a registry URL`,
     );
   }
-  return pkg.replace('/', '%2f');
+  return pkg.replaceAll('/', '%2f');
 }
 
 function githubHeaders(token: string): Record<string, string> {

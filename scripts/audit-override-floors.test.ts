@@ -1360,7 +1360,11 @@ describe('createLiveSource', () => {
     );
     const source = createLiveSource('t0ken');
 
-    await expect(source.globalAdvisories('undici')).rejects.toThrow(/api\.github\.com/);
+    // Matched on the refusal itself rather than on a bare /api\.github\.com/, which pins
+    // the specific guard instead of any message that happens to name the host.
+    await expect(source.globalAdvisories('undici')).rejects.toThrow(
+      /refusing to follow Link header/,
+    );
     expect(calls.some((c) => c.url.includes('attacker'))).toBe(false);
   });
 
@@ -1371,9 +1375,15 @@ describe('createLiveSource', () => {
     await source.listVersions('left-pad');
     await source.publishedAt('left-pad', '1.0.0');
 
-    const registryCalls = calls.filter((c) => c.url.startsWith('https://registry.npmjs.org'));
-    expect(registryCalls.length).toBeGreaterThan(0);
-    for (const call of registryCalls) {
+    // Asserted over EVERY recorded call rather than over the subset whose URL starts with
+    // the registry prefix. A startsWith filter both accepts a lookalike host
+    // (https://registry.npmjs.org.evil.test/) as a registry call and, once tightened to an
+    // exact origin, silently drops that lookalike out of the token check entirely. Neither
+    // method under test goes near api.github.com, so nothing here may carry the token and
+    // nothing here may reach any origin but the registry.
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(new URL(call.url).origin).toBe('https://registry.npmjs.org');
       expect(JSON.stringify(call.headers)).not.toContain('sup3r-s3cret');
     }
   });
