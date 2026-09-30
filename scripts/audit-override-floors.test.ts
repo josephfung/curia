@@ -1272,10 +1272,23 @@ describe('createLiveSource', () => {
 
   let calls: { url: string; headers: Record<string, string> }[];
 
+  /**
+   * Header init is normalized into a plain record instead of being stored as handed over.
+   * `fetch` accepts a `Headers` instance as well as a record, and
+   * `JSON.stringify(new Headers({ Authorization: 'Bearer x' }))` is `"{}"` — a `Headers`
+   * has no enumerable own properties. Storing one as-is would make every header assertion
+   * below pass vacuously, including the one that exists to catch a leaked bearer token.
+   * Normalizing here keeps that assertion honest whichever shape production passes.
+   */
+  function recordedHeaders(init?: { headers?: HeadersInit }): Record<string, string> {
+    if (!init?.headers) return {};
+    return Object.fromEntries(new Headers(init.headers));
+  }
+
   function stubFetch(routes: (url: string) => StubResponse): void {
     calls = [];
-    vi.stubGlobal('fetch', async (url: string, init?: { headers?: Record<string, string> }) => {
-      calls.push({ url, headers: init?.headers ?? {} });
+    vi.stubGlobal('fetch', async (url: string, init?: { headers?: HeadersInit }) => {
+      calls.push({ url, headers: recordedHeaders(init) });
       const r = routes(url);
       const status = r.status ?? 200;
       return {
@@ -1360,12 +1373,22 @@ describe('createLiveSource', () => {
     );
     const source = createLiveSource('t0ken');
 
-    // Matched on the refusal itself rather than on a bare /api\.github\.com/, which pins
-    // the specific guard instead of any message that happens to name the host.
-    await expect(source.globalAdvisories('undici')).rejects.toThrow(
-      /refusing to follow Link header/,
-    );
-    expect(calls.some((c) => c.url.includes('attacker'))).toBe(false);
+    // Matched on the refusal itself rather than on a bare /api\.github\.com/ — an
+    // unanchored host pattern — so this pins THIS guard instead of any error that happens
+    // to name the host.
+    const error = await source.globalAdvisories('undici').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('refusing to follow Link header');
+    // The offending origin is the one field an operator can act on, and the old host
+    // regex asserted it only incidentally. Checked as a literal substring of the MESSAGE
+    // rather than as a pattern matched against a URL, so it does not reintroduce the alert.
+    expect((error as Error).message).toContain('https://attacker.test');
+    // Every request must have stayed on the GitHub origin. An `includes('attacker')`
+    // denylist only catches a host spelled that particular way; comparing parsed origins
+    // catches any off-origin fetch, whatever it is called.
+    for (const call of calls) {
+      expect(new URL(call.url).origin).toBe('https://api.github.com');
+    }
   });
 
   it('never sends the GitHub token to the npm registry', async () => {
@@ -1381,10 +1404,24 @@ describe('createLiveSource', () => {
     // exact origin, silently drops that lookalike out of the token check entirely. Neither
     // method under test goes near api.github.com, so nothing here may carry the token and
     // nothing here may reach any origin but the registry.
-    expect(calls.length).toBeGreaterThan(0);
+    //
+    // One call per leg, named exactly: `> 0` would still pass if `publishedAt` stopped
+    // making its request, leaving that leg's headers unexamined on a green run.
+    expect(calls).toHaveLength(2);
     for (const call of calls) {
+      // The token check runs FIRST and over real header entries. It holds for any URL
+      // string, whereas the origin check below parses and can throw — and a raw
+      // `TypeError: Invalid URL` from the first line of this body would abort the loop
+      // with the leak assertion never evaluated for any call.
+      //
+      // `Accept` is asserted present as a precondition: both registry legs set it, so an
+      // empty record here means headers stopped being recorded rather than that no token
+      // was sent, and the negative check below would be vacuously true.
+      expect(Object.keys(call.headers)).toContain('accept');
+      for (const [name, value] of Object.entries(call.headers)) {
+        expect(`${name}: ${value}`).not.toContain('sup3r-s3cret');
+      }
       expect(new URL(call.url).origin).toBe('https://registry.npmjs.org');
-      expect(JSON.stringify(call.headers)).not.toContain('sup3r-s3cret');
     }
   });
 

@@ -79,9 +79,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Override-floor audit** — the registry path encoder escapes every `/`, not just the first. (code-scanning 285)
-- **Override-floor audit tests** — registry calls are matched by parsed origin, so a lookalike host fails. (code-scanning 286)
-- **Override-floor audit tests** — the off-host Link header case asserts the refusal, not a bare host pattern. (code-scanning 287)
+- **Override-floor audit** — URL handling hardened, and the token-leak test can no longer pass while leaking. (code-scanning 285, 286, 287)
 - **Delegate brief dates** — a year on the range end no longer rejects the cited start date. (#1945)
 - **Delegate brief dates** — short month names now match comma-less and ordinal forms. (#1945)
 - **Delegate brief dates** — an attached year outside 1900–2099 now conflicts like any other. (#1945)
