@@ -1383,6 +1383,11 @@ describe('createLiveSource', () => {
     // regex asserted it only incidentally. Checked as a literal substring of the MESSAGE
     // rather than as a pattern matched against a URL, so it does not reintroduce the alert.
     expect((error as Error).message).toContain('https://attacker.test');
+    // Exactly the page-1 request that carried the Link header: the refusal fires after
+    // that response and before any follow. Pinned because an EMPTY calls array would
+    // satisfy the loop below, so a refusal raised before any fetch at all would read as
+    // "every request stayed on GitHub".
+    expect(calls).toHaveLength(1);
     // Every request must have stayed on the GitHub origin. An `includes('attacker')`
     // denylist only catches a host spelled that particular way; comparing parsed origins
     // catches any off-origin fetch, whatever it is called.
@@ -1392,11 +1397,21 @@ describe('createLiveSource', () => {
   });
 
   it('never sends the GitHub token to the npm registry', async () => {
-    stubFetch(() => ({ body: { versions: { '1.0.0': {} }, time: { '1.0.0': '2020-01-01T00:00:00Z' } } }));
+    stubFetch(() => ({
+      body: {
+        versions: { '1.0.0': {} },
+        time: { '1.0.0': '2020-01-01T00:00:00Z' },
+        repository: { url: 'https://github.com/left-pad/left-pad' },
+      },
+    }));
     const source = createLiveSource('sup3r-s3cret');
 
     await source.listVersions('left-pad');
     await source.publishedAt('left-pad', '1.0.0');
+    // upstreamRepo is the third registry leg. Covered here so that githubHeaders(token)
+    // added to THIS method alone could not slip past — a leak in the shared getJson would
+    // already fail the other two, but a per-method one would not.
+    await source.upstreamRepo('left-pad');
 
     // Asserted over EVERY recorded call rather than over the subset whose URL starts with
     // the registry prefix. A startsWith filter both accepts a lookalike host
@@ -1405,19 +1420,26 @@ describe('createLiveSource', () => {
     // method under test goes near api.github.com, so nothing here may carry the token and
     // nothing here may reach any origin but the registry.
     //
-    // One call per leg, named exactly: `> 0` would still pass if `publishedAt` stopped
-    // making its request, leaving that leg's headers unexamined on a green run.
-    expect(calls).toHaveLength(2);
+    // Each leg named by (url, accept), not counted. listVersions and publishedAt request
+    // the SAME path and are told apart only by Accept, so a length check cannot say which
+    // one went missing — and a dropped leg leaves its headers unexamined on a green run.
+    // This also keeps the check non-vacuous: if headers stopped being recorded at all,
+    // `accept` reads undefined here and this fails rather than the leak check passing
+    // against an empty record.
+    expect(calls.map((c) => `${c.url} ${c.headers.accept}`)).toEqual([
+      'https://registry.npmjs.org/left-pad application/vnd.npm.install-v1+json',
+      'https://registry.npmjs.org/left-pad application/json',
+      'https://registry.npmjs.org/left-pad/latest application/json',
+    ]);
     for (const call of calls) {
-      // The token check runs FIRST and over real header entries. It holds for any URL
-      // string, whereas the origin check below parses and can throw — and a raw
-      // `TypeError: Invalid URL` from the first line of this body would abort the loop
-      // with the leak assertion never evaluated for any call.
+      // The token must appear NOWHERE, and the URL is checked too: a credential in a
+      // query string, in userinfo, or on the path would never show up in call.headers at
+      // all, so a header-only check would stay green through it.
       //
-      // `Accept` is asserted present as a precondition: both registry legs set it, so an
-      // empty record here means headers stopped being recorded rather than that no token
-      // was sent, and the negative check below would be vacuously true.
-      expect(Object.keys(call.headers)).toContain('accept');
+      // Both string checks run BEFORE the origin check, which parses and can throw — a
+      // raw `TypeError: Invalid URL` from the first line of this body would abort the
+      // loop with the leak assertions never evaluated for any call.
+      expect(call.url).not.toContain('sup3r-s3cret');
       for (const [name, value] of Object.entries(call.headers)) {
         expect(`${name}: ${value}`).not.toContain('sup3r-s3cret');
       }
