@@ -56,7 +56,7 @@ const SAME_MONTH_SPAN = String.raw`\s*(?:[\u2013\u2014-]|\b(?:to|through)\b)\s*\
 const YEAR_SEPARATOR = String.raw`,\s*(?:(?:of|in)\s+)?|\s+(?:of|in)\s+|\s+`;
 
 const YEAR_ON_THIS_DATE = new RegExp(
-  `^(?:${SAME_MONTH_SPAN})?(?:${YEAR_SEPARATOR})((?:19|20)\\d{2})\\b`,
+  `^(?:${SAME_MONTH_SPAN})?(?:${YEAR_SEPARATOR})(\\d{4})\\b`,
   'i',
 );
 

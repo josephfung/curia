@@ -87,6 +87,7 @@ describe('briefContainsResolvedDate', () => {
     expect(briefContainsResolvedDate('Schedule on July 31st, 2027 at 2pm.', resolved)).toBe(false);
     expect(briefContainsResolvedDate('Schedule on July 31 of 2027 at 2pm.', resolved)).toBe(false);
     expect(briefContainsResolvedDate('Schedule on July 31 in 2027 at 2pm.', resolved)).toBe(false);
+    expect(briefContainsResolvedDate('Schedule on July 31, 3026.', resolved)).toBe(false);
   });
 
   it("does not let a later date's year suppress the resolved month and day", () => {
