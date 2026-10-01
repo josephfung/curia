@@ -67,10 +67,37 @@ CLI args
 
 ### Harness
 
-`createHarness()` boots the same component graph as `src/index.ts`, skipping only the
-channel adapters that poll for external input (HTTP, CLI, Email polling). The headless harness
+`createHarness()` boots the **test-mode stack** (`src/startup/test-mode-stack.ts`) and adds a
+Dispatcher. The stack builds agents through `src/startup/agent-assembly.ts`, the same builder
+`src/index.ts` uses, so the coordinator receives the production system prompt: identity,
+security, specialist roster, autonomy band, date guardrail, contact details, turn budget and
+every pinned SKILL.md body (#1966). There are no channel adapters. The headless harness
 exposes a single `sendMessage()` method that publishes an `inbound.message` event to the bus
 and resolves when the matching `outbound.message` arrives for that `conversationId`.
+
+`createHarness({ model })` routes every agent to one model id. The provider follows from the
+model registry, so this selects Anthropic or OpenRouter.
+
+**Test mode cannot send.** This is by construction, not by configuration:
+
+- The `OutboundGateway` has no Nylas, Signal, Slack or SMS client and no outbound queue, so
+  every send and draft fails inside the gateway.
+- Skills that call a provider directly with a declared secret (ceo-inbox → Nylas) get a
+  "withheld in test mode" error. Only `TEST_MODE_PASSTHROUGH_SECRETS` (read-only lookups such
+  as web search) resolve.
+- Smoke usually shares the dev database with a real instance. So the ExecutionLayer gets no
+  scheduler, task repo, action log, context-bridge or bullpen service, because a real process
+  would act on what those leave behind. Tools that need them fail with a missing-capability
+  error.
+
+`tests/unit/startup/test-mode-stack.test.ts` and `tests/integration/test-mode-stack.test.ts`
+assert both guarantees.
+
+**Tool stubs (#1956):** `createHarness({ wrapExecutionLayer })` and
+`createTestModeStack({ wrapExecutionLayer })` take a function that wraps the ExecutionLayer before
+any agent receives it. Return a Proxy (or subclass) whose `invoke` answers stubbed tools and
+delegates every other method to the real layer. `tool.invoke` / `tool.result` bus events and
+the runtime's `<task_error>` formatting are unchanged.
 
 **Timeout:** Each `sendMessage()` call has a hard 60-second timeout. A case with multiple turns
 can take several minutes; no overall run timeout exists today (see [What's Not Here Yet](#whats-not-here-yet)).
@@ -81,9 +108,8 @@ Memory, contacts, and knowledge graph accumulate across the run — this is inte
 reflects how the system operates in production (with a persistent knowledge base). Test cases
 should not assume an empty database.
 
-**Email/Calendar:** The NylasClient is initialized if credentials are present in the environment,
-enabling email and calendar skills. Email polling is intentionally skipped during smoke runs —
-the email adapter is not registered — so tests do not trigger on live inbox events.
+**Email/Calendar:** No Nylas or calendar client is constructed, so email and calendar tools
+fail closed. Email polling never runs, so tests do not trigger on live inbox events.
 
 ### Runner
 
@@ -201,11 +227,15 @@ pnpm smoke --case "urgent"
 
 # Filter by tags (comma-separated, OR semantics)
 pnpm smoke --tags email-triage,briefing
+
+# Run every agent on one model (e.g. the production standard tier)
+pnpm smoke --model deepseek/deepseek-v4-pro
 ```
 
 **Required environment variables:**
 - `DATABASE_URL` — PostgreSQL connection (same DB as local dev is fine)
-- `ANTHROPIC_API_KEY` — for the real Coordinator and skill execution
+- `SECRET_ENCRYPTION_KEY` — LLM API keys are read from the vault, as at boot (#911). The
+  selected model's provider key (`anthropic_api_key` / `openrouter_api_key`) must be in it.
 - `OPENAI_API_KEY` — for the GPT-4o judge
 
 **Output:**
