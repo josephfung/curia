@@ -1266,6 +1266,10 @@ export class ContactService {
    * value untouched. If `fields.primaryEmail` is non-null, validates that the
    * email exists in `contact_channel_identities` for this contact (channel = 'email'),
    * case-insensitively. Throws with a descriptive message if not found.
+   *
+   * Callers that pass `client` must call `notePrimaryEmailChanged` after COMMIT
+   * when `fields` includes `primaryEmail`. The pool path (no client) notifies
+   * itself once the write commits.
    */
   async updateContactFields(
     contactId: string,

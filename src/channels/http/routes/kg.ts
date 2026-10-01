@@ -1136,13 +1136,7 @@ export async function knowledgeGraphRoutes(
     }
     // primary_email is committed above. Identity mutations notify on their own;
     // this column does not, and the prompt block reads it (#1950).
-    const rawBody = request.body;
-    if (
-      updated.systemRole === 'principal'
-      && rawBody !== null
-      && typeof rawBody === 'object'
-      && 'primaryEmail' in rawBody
-    ) {
+    if (updated.systemRole === 'principal' && canonicalFields.primaryEmail !== undefined) {
       contactService.notePrimaryEmailChanged(updated.id);
     }
     return reply.send({

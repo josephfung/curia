@@ -453,7 +453,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
     // (constructed by DelegateHandler from the resume_token, not by LLM prompt text)
     expect(specialistReceivedTaskContent).toContain('Original Task');
     expect(specialistReceivedTaskContent).toContain('AI acquisition targets');
-    expect(specialistReceivedTaskContent).toContain("CEO's Direction");
+    expect(specialistReceivedTaskContent).toContain("Principal's Direction");
     expect(specialistReceivedTaskContent).toContain('technology fit');
 
     // Final coordinator response synthesizes the research result

@@ -81,6 +81,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Principal contact block** — states the address list is closed and marks the primary email. (#1950)
+- **Principal contact labels** — address-like labels are omitted from the closed contact list. (#1950)
 - **Override-floor audit** — URL handling hardened, and the token-leak test can no longer pass while leaking. (code-scanning 285, 286, 287)
 - **Delegate brief dates** — a year on the range end no longer rejects the cited start date. (#1945)
 - **Delegate brief dates** — short month names now match comma-less and ordinal forms. (#1945)

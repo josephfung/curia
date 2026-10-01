@@ -55,6 +55,7 @@ function fakeContactService(overrides: Partial<ContactService> = {}): ContactSer
     // Any call to an unimplemented method will throw (undefined is not a function),
     // which causes the test to fail loudly — intentional.
     validatePrimaryEmail: vi.fn().mockResolvedValue(undefined),
+    notePrimaryEmailChanged: vi.fn(),
     ...overrides,
   };
   return base as ContactService;
@@ -176,6 +177,57 @@ describe('PATCH /api/kg/contacts/:id — status field removal', () => {
       body: JSON.stringify({ status: 'confirmed' }),
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  it('notifies after a committed primaryEmail change on the principal only', async () => {
+    const principal = { ...BASE_CONTACT, systemRole: 'principal' as const };
+    const notePrimaryEmailChanged = vi.fn();
+    const svc = fakeContactService({
+      getContact: vi.fn().mockResolvedValue(principal),
+      notePrimaryEmailChanged,
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/kg/contacts/${BASE_CONTACT.id}`,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ primaryEmail: 'Local@Domain.ca' }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(notePrimaryEmailChanged).toHaveBeenCalledTimes(1);
+    expect(notePrimaryEmailChanged).toHaveBeenCalledWith(BASE_CONTACT.id);
+  });
+
+  it('does not notify when a non-principal primaryEmail changes', async () => {
+    const notePrimaryEmailChanged = vi.fn();
+    const svc = fakeContactService({ notePrimaryEmailChanged });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/kg/contacts/${BASE_CONTACT.id}`,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ primaryEmail: 'other@domain.com' }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(notePrimaryEmailChanged).not.toHaveBeenCalled();
+  });
+
+  it('does not notify a principal PATCH that omits primaryEmail', async () => {
+    const principal = { ...BASE_CONTACT, systemRole: 'principal' as const };
+    const notePrimaryEmailChanged = vi.fn();
+    const svc = fakeContactService({
+      getContact: vi.fn().mockResolvedValue(principal),
+      notePrimaryEmailChanged,
+    });
+    app = await build(svc);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/kg/contacts/${BASE_CONTACT.id}`,
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'The Principal' }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(notePrimaryEmailChanged).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the contact does not exist', async () => {

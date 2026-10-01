@@ -1022,7 +1022,7 @@ async function main(): Promise<void> {
     }
     if (principalCalendarGrant) {
       nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger);
-      logger.info('Nylas calendar client initialized (bound to the principal/principal Nylas grant)');
+      logger.info('Nylas calendar client initialized (bound to the principal\'s Nylas grant)');
     } else if (!grantReadFailed) {
       // Genuine absence (the read-failure path logged its own error above).
       logger.warn(

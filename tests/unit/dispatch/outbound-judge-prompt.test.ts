@@ -57,6 +57,16 @@ describe('outbound-judge-prompt', () => {
     expect(prompt).toContain('address');
   });
 
+  it('keeps job-title leak examples beside the principal wording', () => {
+    // Detection examples, not instructions about whom the assistant serves.
+    // A leaked third-party message says "CEO" or the person's name.
+    const prompt = buildJudgeUserPrompt('hi', [armin], false);
+    expect(prompt).toContain('"To the CEO: ..."');
+    expect(prompt).toContain('"To the principal: ..."');
+    expect(prompt).toContain('"I\'ll loop the CEO in"');
+    expect(prompt).toContain('"I\'ll loop [their name] in"');
+  });
+
   it('anchors the audience-leak rule on principal-private content, not subgroup addressing', () => {
     // The harm is principal-private content reaching a non-principal — addressing
     // different third parties in different sections (intro emails, multi-party
