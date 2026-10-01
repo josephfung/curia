@@ -1,44 +1,21 @@
 // tests/smoke/harness.ts
 //
-// Headless bus stack harness for smoke tests. Boots the real Curia bus stack
-// (same components as src/index.ts) but WITHOUT the HTTP and CLI channels.
-// Provides a sendMessage() method that publishes inbound.message events and
-// waits for outbound.message responses.
+// Headless bus stack harness for smoke tests. Boots the production agent stack in
+// test mode (src/startup/test-mode-stack.ts) — the same agent assembly src/index.ts
+// uses, so the coordinator sees the production system prompt — and adds a
+// Dispatcher. No HTTP or CLI channel and no transport clients: nothing leaves the
+// process. sendMessage() publishes inbound.message events and waits for the
+// outbound.message response on the in-process bus.
 
-import * as path from 'node:path';
-import { loadConfig } from '../../src/config.js';
-import { createLogger } from '../../src/logger.js';
-import { createPool } from '../../src/db/connection.js';
-import { EventBus } from '../../src/bus/bus.js';
-import { AuditLogger } from '../../src/audit/logger.js';
-import { AnthropicProvider } from '../../src/agents/llm/anthropic.js';
-import { AgentRuntime } from '../../src/agents/runtime.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
-import { loadAllAgentConfigs, interpolateRuntimeContext } from '../../src/agents/loader.js';
-import { AgentRegistry } from '../../src/agents/agent-registry.js';
-import { WorkingMemory } from '../../src/memory/working-memory.js';
-import { EmbeddingService } from '../../src/memory/embedding.js';
-import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
-import { MemoryValidator } from '../../src/memory/validation.js';
-import { EntityMemory } from '../../src/memory/entity-memory.js';
-import { ToolRegistry } from '../../src/skills/registry.js';
-import { SkillRegistry } from '../../src/skills/skill-registry.js';
-import { ExecutionLayer } from '../../src/skills/execution.js';
-import { discoverToolManifests, loadToolsFromDirectory } from '../../src/skills/loader.js';
-import {
-  discoverSkillManifests,
-  loadSkillsFromDiscovery,
-  registerSyntheticSingletonSkills,
-} from '../../src/skills/skill-loader.js';
-import { resolvePinnedSkills, appendSkillInstructions } from '../../src/skills/pin-resolution.js';
-import { ModelRegistry } from '../../src/agents/llm/model-registry.js';
-import { ContactService } from '../../src/contacts/contact-service.js';
-import { ContactResolver } from '../../src/contacts/contact-resolver.js';
-import { NylasClient } from '../../src/channels/email/nylas-client.js';
-import { OutboundContentFilter } from '../../src/dispatch/outbound-filter.js';
-import { OutboundGateway } from '../../src/skills/outbound-gateway.js';
 import { createInboundMessage, type OutboundMessageEvent } from '../../src/bus/events.js';
+import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
+import {
+  createTestModeStack,
+  type ExecutionLayerWrapper,
+  type TestModeStack,
+} from '../../src/startup/test-mode-stack.js';
 
 // How long each sendMessage() call waits for an outbound.message response.
 // Agentic flows that invoke multiple skills (contact lookup → KG search →
@@ -54,9 +31,21 @@ export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout >
   ? _rawTimeout
   : 120_000;
 
+export interface HarnessOptions {
+  /**
+   * Route every agent to this model id (Anthropic or OpenRouter — the provider
+   * follows from the model registry). Default: the configured model_routing.
+   */
+  model?: string;
+  /** Wrap the ExecutionLayer before agents get it — tool stubs (#1956). */
+  wrapExecutionLayer?: ExecutionLayerWrapper;
+}
+
 export interface CuriaHarness {
   bus: EventBus;
   logger: Logger;
+  /** The underlying test-mode stack (services, assembled agents, prompt render). */
+  stack: TestModeStack;
   /**
    * Send a single user message and wait for the outbound response.
    * Rejects if no response arrives within RESPONSE_TIMEOUT_MS.
@@ -76,161 +65,15 @@ export interface CuriaHarness {
   shutdown(): Promise<void>;
 }
 
-export async function createHarness(): Promise<CuriaHarness> {
-  // 1. Config & logging — suppress non-error output during tests.
-  const config = loadConfig();
-  const logger = createLogger('error');
-
-  // 2. Database — same probe as src/index.ts to catch misconfigured URLs early.
-  const pool = createPool(config.databaseUrl, logger);
-  await pool.query('SELECT 1');
-
-  // 3. Audit logger — must be ready before the bus starts accepting events.
-  const auditLogger = new AuditLogger(pool, logger);
-
-  // 4. Message bus — write-ahead hook ensures every event is durably recorded.
-  const bus = new EventBus(logger, (event) => auditLogger.log(event));
-
-  // 5. LLM provider — smoke tests require a real API key since they exercise
-  //    the full agent stack end-to-end.
-  if (!config.anthropicApiKey) throw new Error('ANTHROPIC_API_KEY required for smoke tests');
-  const modelRegistry = new ModelRegistry(logger);
-  const llmProvider = new AnthropicProvider(config.anthropicApiKey, logger, modelRegistry);
-
-  // Working memory — Postgres-backed, same as production.
-  const memory = WorkingMemory.createWithPostgres(pool, logger);
-
-  // Entity memory — optional, same as src/index.ts. Agents still work without it.
-  let entityMemory: EntityMemory | undefined;
-  if (config.openaiApiKey) {
-    const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger);
-    const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
-    const validator = new MemoryValidator(kgStore, embeddingService);
-    entityMemory = new EntityMemory(kgStore, validator, embeddingService, logger);
-  }
-
-  // Contact system — provides identity resolution and contact management.
-  // Always initialized (contacts work even without entity memory / KG).
-  const contactService = ContactService.createWithPostgres(pool, entityMemory, logger);
-  const contactResolver = new ContactResolver(contactService, entityMemory, undefined, logger);
-
-  // Tool + skill registries — load atoms and bundles from skills/.
-  // Smoke tests enable everything (no registry DB) so every handler is registered.
-  // Mirrors the production bootstrap path in src/index.ts (Phase 2 pin expansion).
-  const toolRegistry = new ToolRegistry();
-  const skillRegistry = new SkillRegistry();
-  const skillsDir = path.resolve(import.meta.dirname, '../../skills');
-  const toolDiscoveries = discoverToolManifests(skillsDir);
-  const allToolNames = new Set(toolDiscoveries.map(d => d.name));
-  await loadToolsFromDirectory(toolDiscoveries, toolRegistry, logger, allToolNames);
-  const skillDiscoveries = discoverSkillManifests(skillsDir, logger);
-  const allSkillNames = new Set(skillDiscoveries.map(d => d.name));
-  loadSkillsFromDiscovery(skillDiscoveries, skillRegistry, logger, allSkillNames);
-  registerSyntheticSingletonSkills(toolRegistry, skillRegistry, logger);
-
-  // Agent registry — tracks all running agents for delegation and listing.
-  const agentRegistry = new AgentRegistry();
-
-  // Nylas clients — optional, same as src/index.ts. EmailAdapter is intentionally
-  // skipped here: smoke tests should not start polling for real emails during runs.
-  // The nylasClientMap is used to construct an OutboundGateway so email skills can
-  // be invoked if a smoke test explicitly exercises email-send or email-reply.
-  // Keyed by account name (not grantId), mirroring how src/index.ts uses
-  // account.name from resolveChannelAccounts. The backward-compat single-account
-  // path in resolveChannelAccounts resolves to the name 'curia'.
-  const nylasClientMap = new Map<string, NylasClient>();
-  if (config.nylasApiKey && config.nylasGrantId) {
-    // Key must match the backward-compat account name from resolveChannelAccounts
-    // (which resolves to 'curia', not the raw grant ID). Skills pass a logical
-    // account name as accountId when targeting a specific account; the primary-client
-    // path (no accountId) uses the first map entry regardless of key.
-    nylasClientMap.set('curia', new NylasClient(config.nylasApiKey, config.nylasGrantId, logger));
-  }
-
-  // Outbound gateway — wraps nylasClients with contact-blocked checks and content
-  // filtering. Constructed here (without Nylas credentials) using an empty content
-  // filter so smoke tests that don't exercise email sending don't crash.
-  // When Nylas credentials ARE present the gateway is fully functional.
-  //
-  // OutboundContentFilter with empty markers is safe for smoke testing:
-  // no real markers → the system-prompt-fragment rule simply never fires.
-  const contentFilter = new OutboundContentFilter({
-    systemPromptMarkers: [],
-    ceoEmail: config.nylasSelfEmail ?? '',
+export async function createHarness(options: HarnessOptions = {}): Promise<CuriaHarness> {
+  // Agents, services and the no-send outbound gateway — the production assembly
+  // path in test mode. Throws with the provider name if the chosen model's API key
+  // is missing.
+  const stack = await createTestModeStack({
+    model: options.model,
+    wrapExecutionLayer: options.wrapExecutionLayer,
   });
-  let outboundGateway: OutboundGateway | undefined;
-  if (nylasClientMap.size > 0 && config.nylasSelfEmail) {
-    outboundGateway = new OutboundGateway({
-      nylasClients: nylasClientMap,
-      contactService,
-      contentFilter,
-      bus,
-      logger,
-    });
-  }
-
-  // Execution layer — with bus, agent registry, and outbound gateway for
-  // infrastructure skills. outboundGateway passed through so email skills
-  // work in tests that exercise them.
-  const executionLayer = new ExecutionLayer(toolRegistry, logger, { bus, agentRegistry, contactService, outboundGateway });
-
-  // Load all agent configs from the agents/ directory.
-  const agentsDir = path.resolve(import.meta.dirname, '../../agents');
-  const agentConfigs = loadAllAgentConfigs(agentsDir);
-
-  // Two-pass agent registration (same as src/index.ts):
-  // Pass 1: Populate registry so specialistSummary() is complete before
-  //         the coordinator's system prompt is interpolated.
-  for (const agentConfig of agentConfigs) {
-    agentRegistry.register(agentConfig.name, {
-      role: agentConfig.role ?? 'specialist',
-      description: agentConfig.description ?? agentConfig.name,
-    });
-  }
-
-  // Pass 2: Create AgentRuntime instances with fully interpolated prompts.
-  // Expand pinned_skills (bundles) → member tools + instruction blocks + flags.
-  for (const agentConfig of agentConfigs) {
-    const agentPinnedSkills = agentConfig.pinned_skills ?? [];
-    const pinResolution = resolvePinnedSkills(
-      agentPinnedSkills,
-      skillRegistry,
-      toolRegistry,
-      logger,
-      agentConfig.name,
-    );
-    const effectivePinnedTools = pinResolution.toolNames;
-    const agentToolDefs = toolRegistry.toToolDefinitions(effectivePinnedTools);
-
-    let systemPrompt = agentConfig.system_prompt;
-    if (agentConfig.role === 'coordinator') {
-      // currentDate and timezone are no longer baked in here — AgentRuntime injects
-      // them fresh on every task turn via the timezone option below, keeping them
-      // current for long-running smoke runs. See src/index.ts pass-2 comment.
-      systemPrompt = interpolateRuntimeContext(systemPrompt, {
-        availableSpecialists: agentRegistry.specialistSummary(),
-      });
-    }
-    systemPrompt = appendSkillInstructions(systemPrompt, pinResolution.instructionBlocks);
-
-    const agent = new AgentRuntime({
-      agentId: agentConfig.name,
-      systemPrompt,
-      provider: llmProvider,
-      bus,
-      logger,
-      memory,
-      entityMemory,
-      executionLayer,
-      pinnedTools: effectivePinnedTools,
-      skillToolDefs: agentToolDefs,
-      // Coordinator gets per-turn date/timezone injection so the agent always
-      // has a current date (replacing the old baked-in currentDate approach).
-      timezone: agentConfig.role === 'coordinator' ? config.timezone : undefined,
-      documentWorkspaceEnabled: pinResolution.documentWorkspaceEnabled,
-    });
-    agent.register();
-  }
+  const { bus, logger, contactResolver } = stack;
 
   // Dispatcher — subscribes to inbound.message + agent.response.
   // Registered after agents so agent.task already has handlers.
@@ -310,7 +153,7 @@ export async function createHarness(): Promise<CuriaHarness> {
 
   async function warmUp(): Promise<void> {
     // Send a throwaway message to absorb cold-start latency: DB connection pool
-    // warm-up, first Anthropic API round-trip, skill registry init, etc.
+    // warm-up, first LLM API round-trip, skill registry init, etc.
     // Failures are swallowed — if the stack is broken, real test cases will
     // surface it with clearer context.
     try {
@@ -324,8 +167,8 @@ export async function createHarness(): Promise<CuriaHarness> {
   }
 
   async function shutdown(): Promise<void> {
-    await pool.end();
+    await stack.shutdown();
   }
 
-  return { bus, logger, sendMessage, warmUp, shutdown };
+  return { bus, logger, stack, sendMessage, warmUp, shutdown };
 }
