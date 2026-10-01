@@ -91,6 +91,14 @@ interface AgentTaskPayload {
    *  to automatically widen the delegate skill timeout for long-running scheduled tasks.
    *  Absent for interactive tasks (direct messages, bullpen, etc.). */
   expectedDurationSeconds?: number;
+  /**
+   * When set, this turn may call only these tools (#1951). A distinct top-level
+   * field, like `syntheticTurn`, so a skill that forwards the metadata bag
+   * cannot set or drop it. The scheduler's task-wake disposition follow-up
+   * sets it to the task tools so that turn cannot repeat the wake's sends.
+   * Absent means the agent's normal tool set.
+   */
+  toolAllowlist?: string[];
 }
 
 /** Coarse failure reason propagated on agent.response when isError is true.

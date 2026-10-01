@@ -153,6 +153,9 @@ export async function selectHeartbeatCandidates(
          (t.source = 'agent' OR t.parent_task_id IS NOT NULL) AS derived
        FROM tasks t
        WHERE t.status IN ('open','in_progress','waiting','blocked')
+         -- A wake that stayed open through its disposition turn is flagged and
+         -- must not be revived. A person closes, cancels, or reschedules it (#1951).
+         AND NOT ('needs-disposition' = ANY(t.tags))
          AND (t.blocked_by_task_id IS NULL OR EXISTS (
                SELECT 1 FROM tasks b
                WHERE b.id = t.blocked_by_task_id AND b.status IN ('done','cancelled')))

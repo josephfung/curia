@@ -3,7 +3,7 @@ name: tasks
 description: >
   Defer, track, and resume multi-step work with task-create/list/update/complete,
   plus plan and checkpoint primitives. Pin this skill to make an agent heartbeat-eligible.
-version: "0.2.1"
+version: "0.2.2"
 heartbeat: true
 tools:
   - task-create
@@ -48,6 +48,12 @@ Stop only at a real blocker — waiting on a person, on the principal's approval
 date, or on a prior task — or when your turn budget runs low. Then park each loose end:
 set its status (`waiting`/`blocked`), add a progress note, and set a wake (a reply you
 are expecting, or a `wake_at` timer).
+
+**Finishing.** When a task's goal is achieved, call `task-complete` with a note.
+When you are woken for a task, end that run in a deliberate state: `task-complete`,
+`task-update` status `cancelled`, or park it (`waiting`/`blocked`, a progress note,
+and `wake_at`). `scheduler-report` records the job run and does not close the task.
+Ending a woken run while the task is still open, with no new note and no wake, is a bug.
 
 **Past-due milestones.** Never `task-complete` a subtask whose milestone `due_at` was
 already in the past when you created it — run its work immediately (the platform will

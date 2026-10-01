@@ -25,6 +25,17 @@ import {
   formatDelegationRetryWakeContent,
   readDelegationRetryWake,
 } from '../agents/deferred-delegation.js';
+import { RESUMABLE_CONTINUATION_CREATED_BY } from '../agents/resumable-continuation.js';
+import type { TaskRepo } from '../db/task-repo.js';
+import {
+  DISPOSITION_TURN_TOOLS,
+  NEEDS_DISPOSITION_TAG,
+  WAKE_DISPOSITION_INSTRUCTION,
+  dispositionReviewNotice,
+  dispositionTurnPrompt,
+  isUndisposedWake,
+  progressNotesSnapshot,
+} from './wake-disposition.js';
 
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
@@ -416,6 +427,33 @@ export interface SchedulerConfig {
    * A due job that fails the check is failed with next_run_at cleared. (#1898)
    */
   ownsAgent: (agentId: string) => boolean;
+  /**
+   * Used to file a CEO review row when a wake and its disposition turn both
+   * leave the task open (#1951). Absent in tests that do not model tasks.
+   */
+  taskRepo?: TaskRepo;
+}
+
+/** Bookkeeping for an in-flight scheduler agent.task, keyed by that event's id. */
+interface PendingRunMeta {
+  conversationId: string;
+  /** True for the single disposition follow-up. Never chains another one. */
+  disposition: boolean;
+  notesAtStart: string;
+  /** Ordinary task wake (not a delegation-retry brief, not a cron job). */
+  taskWake: boolean;
+  /**
+   * Resumable continuation and plan-parent wakes (`created_by` resumable-continuation).
+   * A slice is supposed to leave the task open; the heartbeat backstop still
+   * gets a disposition turn when it wakes the same task later (#1951).
+   */
+  continuationSlice: boolean;
+  taskId: string | null;
+  agentId: string;
+  /** Original wake's completion summary, stashed so the follow-up does not replace it. */
+  autoSummary?: string;
+  failedSkills?: Array<{ name: string; error: string }>;
+  failedSkillsOmitted?: number;
 }
 
 type FireOutcome = 'dispatched' | 'skipped' | 'saturated';
@@ -431,6 +469,7 @@ export class Scheduler {
   private defaultExpectedDurationSeconds: number;
   private principalContactId?: string;
   private ownsAgent: (agentId: string) => boolean;
+  private readonly taskRepo?: TaskRepo;
   private readonly maxInFlight: number;
   /** Seeds dispatcher routing for a delegation-retry wake in the original conversation. */
   private externalRoutingRegistrar?: (
@@ -453,6 +492,10 @@ export class Scheduler {
   // Maps the agent.task event ID back to the job ID so we can match
   // agent.response / agent.error events to the originating scheduled job.
   private pendingJobs = new Map<string, string>();
+
+  // Parallel to pendingJobs. Holds the conversation id and whether this event
+  // is the one disposition follow-up for a task wake (#1951).
+  private pendingRunMeta = new Map<string, PendingRunMeta>();
 
   // agent.error arrives before agent.response(isError) on failure paths. Stash the
   // structured error message here so the response subscriber can complete the job
@@ -481,6 +524,7 @@ export class Scheduler {
     this.defaultExpectedDurationSeconds = config.defaultExpectedDurationSeconds ?? DEFAULT_EXPECTED_DURATION_SECONDS;
     this.principalContactId = config.principalContactId;
     this.ownsAgent = config.ownsAgent;
+    this.taskRepo = config.taskRepo;
     const maxInFlight = config.maxInFlight ?? DEFAULT_MAX_IN_FLIGHT;
     if (!Number.isInteger(maxInFlight) || maxInFlight < 1) {
       throw new Error(`scheduler maxInFlight must be a positive integer, got: ${String(maxInFlight)}`);
@@ -976,6 +1020,9 @@ export class Scheduler {
         ...(job.taskTitle !== null && { title: job.taskTitle }),
         progress: job.progress ?? {},
         task_payload: job.taskPayload,
+        // Ordinary task wakes only. Delegation-retry content replaces this
+        // string below; a non-wake payload has no disposition contract.
+        ...(isTaskWakePayload(job.taskPayload) && { instruction: WAKE_DISPOSITION_INSTRUCTION }),
       });
     } else {
       content = JSON.stringify({ ...job.taskPayload });
@@ -1136,6 +1183,17 @@ export class Scheduler {
     // agent.response before publish() returns. Setting the entry after that
     // would make handleCompletion see an empty map and drop the completion.
     this.pendingJobs.set(taskEvent.id, job.id);
+    this.pendingRunMeta.set(taskEvent.id, {
+      conversationId: taskEvent.payload.conversationId,
+      disposition: false,
+      notesAtStart: progressNotesSnapshot(job.progress),
+      // Delegation-retry rows are closed at fire time. They are not ordinary
+      // wakes and must not get a disposition turn (see closeDelegationRetryTask).
+      taskWake: isTaskWakePayload(job.taskPayload) && !delegationRetry && job.agentTaskId !== null,
+      continuationSlice: job.createdBy === RESUMABLE_CONTINUATION_CREATED_BY,
+      taskId: job.agentTaskId,
+      agentId: job.agentId,
+    });
     this.dispatchPublish(job, firedEvent, taskEvent, runStartedAt);
     return 'dispatched';
   }
@@ -1267,6 +1325,12 @@ export class Scheduler {
    * The retry task's job is to hold the brief until this wake. Once the wake
    * has been published, an open row is what BacklogHeartbeat re-runs — the
    * brief as a generic poke, with no delegationRetry cap. Close it here.
+   *
+   * Stays a fire-time close, not the general disposition turn (#1951). This
+   * row only holds the brief. Leaving it open until an agent decides would
+   * be the window the heartbeat uses to re-run the brief, and that follow-up
+   * could send the brief again. Ordinary task wakes use the disposition turn.
+   *
    * A failure is logged and not rethrown: the wake already went out, and
    * failing publishFire would revert the job and fire it again.
    */
@@ -1333,6 +1397,7 @@ export class Scheduler {
     if (generation) {
       if (this.pendingJobs.get(generation.taskEventId) === jobId) {
         this.pendingJobs.delete(generation.taskEventId);
+        this.pendingRunMeta.delete(generation.taskEventId);
         this.pendingFailureMessages.delete(generation.taskEventId);
       }
       await this.pool.query(
@@ -1353,6 +1418,7 @@ export class Scheduler {
     for (const [eventId, pendingJobId] of this.pendingJobs) {
       if (pendingJobId === jobId) {
         this.pendingJobs.delete(eventId);
+        this.pendingRunMeta.delete(eventId);
         this.pendingFailureMessages.delete(eventId);
         break;
       }
@@ -1388,6 +1454,241 @@ export class Scheduler {
   }
 
   /**
+   * Read the linked task and whether this run scheduled another wake.
+   * A query failure returns null so the caller completes the job as before
+   * rather than leaving it running.
+   */
+  private async loadDispositionState(jobId: string): Promise<{
+    status: string;
+    progress: unknown;
+    title: string | null;
+    deferredWake: boolean;
+    otherActiveWake: boolean;
+  } | null> {
+    try {
+      const res = await this.pool.query(
+        `SELECT t.status,
+                t.progress,
+                t.title,
+                (sj.deferred_wake_at IS NOT NULL) AS deferred_wake,
+                EXISTS (
+                  SELECT 1 FROM scheduled_jobs w
+                   WHERE w.task_id = t.id
+                     AND w.id <> sj.id
+                     AND w.status IN ('pending', 'running')
+                     AND w.task_payload->>'type' = 'task-wake'
+                ) AS other_active_wake
+           FROM scheduled_jobs sj
+           JOIN tasks t ON t.id = sj.task_id
+          WHERE sj.id = $1`,
+        [jobId],
+      );
+      const row = res?.rows?.[0] as {
+        status?: unknown;
+        progress?: unknown;
+        title?: unknown;
+        deferred_wake?: unknown;
+        other_active_wake?: unknown;
+      } | undefined;
+      if (!row || typeof row.status !== 'string') return null;
+      return {
+        status: row.status,
+        progress: row.progress,
+        title: typeof row.title === 'string' ? row.title : null,
+        deferredWake: row.deferred_wake === true,
+        otherActiveWake: row.other_active_wake === true,
+      };
+    } catch (err) {
+      this.logger.warn(
+        { err, jobId },
+        'scheduler: could not read task disposition — completing the wake without a follow-up',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Publish one disposition follow-up and leave the job running.
+   * Returns true when the caller must not complete the job yet.
+   */
+  private async holdForDisposition(
+    jobId: string,
+    meta: PendingRunMeta,
+    parentEventId: string,
+    autoSummary: string | undefined,
+    failedSkills: Array<{ name: string; error: string }> | undefined,
+    failedSkillsOmitted: number | undefined,
+  ): Promise<boolean> {
+    if (!meta.taskId) return false;
+    const state = await this.loadDispositionState(jobId);
+    if (!state) return false;
+    if (!isUndisposedWake({
+      status: state.status,
+      progress: state.progress,
+      notesAtStart: meta.notesAtStart,
+      deferredWake: state.deferredWake,
+      otherActiveWake: state.otherActiveWake,
+    })) {
+      return false;
+    }
+
+    // Idle clock moves even if a later path completes the job before the
+    // follow-up ends. The running row is what excludes the task outright.
+    try {
+      await this.pool.query(
+        `UPDATE tasks SET updated_at = now() WHERE id = $1 AND status IN ('open', 'in_progress')`,
+        [meta.taskId],
+      );
+    } catch (err) {
+      this.logger.warn(
+        { err, jobId, taskId: meta.taskId },
+        'scheduler: failed to touch task updated_at before the disposition turn',
+      );
+    }
+
+    let dispositionEventId: string | undefined;
+    try {
+      const dispositionEvent = createAgentTask({
+        agentId: meta.agentId,
+        conversationId: meta.conversationId,
+        channelId: 'scheduler',
+        senderId: 'scheduler',
+        content: dispositionTurnPrompt(meta.taskId, state.title),
+        syntheticTurn: true,
+        toolAllowlist: [...DISPOSITION_TURN_TOOLS],
+        parentEventId,
+      });
+      dispositionEventId = dispositionEvent.id;
+      // Register before publish: publish awaits handlers, and the response
+      // can arrive before this method returns.
+      this.pendingJobs.set(dispositionEvent.id, jobId);
+      this.pendingRunMeta.set(dispositionEvent.id, {
+        conversationId: meta.conversationId,
+        disposition: true,
+        notesAtStart: progressNotesSnapshot(state.progress),
+        taskWake: true,
+        continuationSlice: false,
+        taskId: meta.taskId,
+        agentId: meta.agentId,
+        autoSummary,
+        failedSkills,
+        failedSkillsOmitted,
+      });
+      await this.bus.publish('system', dispositionEvent);
+      this.logger.info(
+        { jobId, taskId: meta.taskId, dispositionEventId: dispositionEvent.id },
+        'scheduler: task wake left undisposed — asking once for a disposition',
+      );
+      return true;
+    } catch (err) {
+      if (dispositionEventId) {
+        this.pendingJobs.delete(dispositionEventId);
+        this.pendingRunMeta.delete(dispositionEventId);
+      }
+      this.logger.error(
+        { err, jobId, taskId: meta.taskId },
+        'scheduler: failed to publish the disposition turn — flagging the task so the heartbeat will not revive it',
+      );
+      await this.flagNeedsDisposition(meta.taskId, state.title, jobId);
+      return false;
+    }
+  }
+
+  /** After the one follow-up, flag a task that is still undisposed. Never asks again. */
+  private async settleDispositionTurn(jobId: string, meta: PendingRunMeta): Promise<void> {
+    if (!meta.taskId) return;
+    const state = await this.loadDispositionState(jobId);
+    if (!state) {
+      this.logger.warn(
+        { jobId, taskId: meta.taskId },
+        'scheduler: disposition turn ended but the task could not be re-read — flagging it',
+      );
+      await this.flagNeedsDisposition(meta.taskId, null, jobId);
+      return;
+    }
+    if (!isUndisposedWake({
+      status: state.status,
+      progress: state.progress,
+      notesAtStart: meta.notesAtStart,
+      deferredWake: state.deferredWake,
+      otherActiveWake: state.otherActiveWake,
+    })) {
+      return;
+    }
+    await this.flagNeedsDisposition(meta.taskId, state.title, jobId);
+  }
+
+  /**
+   * Tag the task, log, and surface it on the existing review path: a
+   * coordinator notice plus a CEO backlog row the daily digest reads.
+   * A second call matches zero rows and does not file another review.
+   */
+  private async flagNeedsDisposition(taskId: string, title: string | null, jobId: string): Promise<void> {
+    let flagged = false;
+    try {
+      const res = await this.pool.query(
+        `UPDATE tasks
+            SET tags = array_append(tags, $2),
+                updated_at = now()
+          WHERE id = $1
+            AND NOT ($2 = ANY(tags))
+            AND status IN ('open', 'in_progress')
+          RETURNING id`,
+        [taskId, NEEDS_DISPOSITION_TAG],
+      );
+      flagged = (res?.rowCount ?? 0) > 0;
+    } catch (err) {
+      this.logger.error({ err, jobId, taskId }, 'scheduler: failed to tag task needs-disposition');
+      return;
+    }
+    if (!flagged) return;
+
+    this.logger.warn(
+      { jobId, taskId },
+      'scheduler: task still undisposed after its disposition turn — excluded from heartbeat revival',
+    );
+
+    const notice = dispositionReviewNotice(taskId, title);
+    try {
+      const notifyEvent = createAgentTask({
+        agentId: 'coordinator',
+        conversationId: `scheduler-disposition:${taskId}`,
+        channelId: 'scheduler',
+        senderId: 'scheduler',
+        content: notice,
+        syntheticTurn: true,
+        parentEventId: taskId,
+      });
+      await this.bus.publish('system', notifyEvent);
+    } catch (err) {
+      this.logger.error(
+        { err, jobId, taskId },
+        'scheduler: failed to notify the coordinator that a task needs a disposition',
+      );
+    }
+
+    if (!this.taskRepo) return;
+    const shortTitle = title ? title.replace(/[\r\n]/g, ' ').trim().slice(0, 120) : taskId;
+    try {
+      await this.taskRepo.createTask({
+        agentId: 'coordinator',
+        title: `Review: task needs a disposition (${shortTitle})`,
+        description: notice,
+        owner: 'ceo',
+        source: 'scheduler',
+        tags: ['needs-attention', NEEDS_DISPOSITION_TAG],
+        progressNote: `Woken task stayed open after a disposition turn. Close, cancel, or reschedule it. Task ${taskId}.`,
+        createdBy: 'scheduler',
+      });
+    } catch (err) {
+      this.logger.error(
+        { err, jobId, taskId },
+        'scheduler: failed to create the CEO review task for an undisposed wake',
+      );
+    }
+  }
+
+  /**
    * Handle a completion event (agent.response or agent.error) by matching
    * the parentEventId back to a pending job and completing the job run.
    */
@@ -1405,8 +1706,11 @@ export class Scheduler {
       return;
     }
 
+    const runMeta = this.pendingRunMeta.get(parentEventId);
+
     // Clean up the tracking map.
     this.pendingJobs.delete(parentEventId);
+    this.pendingRunMeta.delete(parentEventId);
     this.pendingFailureMessages.delete(parentEventId);
 
     try {
@@ -1532,13 +1836,54 @@ export class Scheduler {
         }
       }
 
+      // A successful ordinary task wake that left its task undisposed gets one
+      // follow-up on the same conversation before the job goes terminal. The
+      // job stays `running`, so BacklogHeartbeat cannot revive it in that
+      // window (#1951). Failed and timed-out runs skip this and complete as before.
+      // Continuation slices stay open on purpose; asking them to close would
+      // abort the resumable or plan-parent run (the integration resume path).
+      let completionSuccess = success;
+      let completionError = error;
+      let completionSummary = autoSummary;
+      let completionFailedSkills = failedSkills;
+      let completionOmitted = failedSkillsOmitted;
+
+      if (
+        completionSuccess
+        && runMeta?.taskWake
+        && !runMeta.disposition
+        && !runMeta.continuationSlice
+        && runMeta.taskId
+      ) {
+        const held = await this.holdForDisposition(
+          jobId,
+          runMeta,
+          parentEventId,
+          completionSummary,
+          completionFailedSkills,
+          completionOmitted,
+        );
+        if (held) return;
+      }
+
+      if (runMeta?.disposition) {
+        await this.settleDispositionTurn(jobId, runMeta);
+        // The wake itself succeeded. A follow-up that errors must not fail the
+        // job and re-fire the original payload.
+        completionSuccess = true;
+        completionError = undefined;
+        completionSummary = runMeta.autoSummary;
+        completionFailedSkills = runMeta.failedSkills;
+        completionOmitted = runMeta.failedSkillsOmitted;
+      }
+
       const result = await this.schedulerService.completeJobRun(
         jobId,
-        success,
-        error,
-        autoSummary,
-        failedSkills,
-        failedSkillsOmitted,
+        completionSuccess,
+        completionError,
+        completionSummary,
+        completionFailedSkills,
+        completionOmitted,
       );
 
       if (result.suspended) {
@@ -1748,6 +2093,7 @@ export class Scheduler {
           for (const [eventId, pendingJobId] of this.pendingJobs) {
             if (pendingJobId === row.id) {
               this.pendingJobs.delete(eventId);
+              this.pendingRunMeta.delete(eventId);
               this.pendingFailureMessages.delete(eventId);
               this.burstCounts.delete(row.id);
               this.logger.debug({ jobId: row.id, eventId }, 'Removed stale pendingJobs entry for recovered job');
