@@ -86,6 +86,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Task wakes** — an undisposed success gets one disposition turn, then a review flag instead of another wake. (#1951)
 - **Heartbeat revive** — a completed wake keeps `last_run_outcome`, so the next run sees prior context. (#1951)
 - **Resumable continuations** — a continuation wake is not asked to close the task. (#1951)
+- **Disposition review** — the coordinator notice traces to the disposition event. (#1951)
 - **Override-floor audit** — URL handling hardened, and the token-leak test can no longer pass while leaking. (code-scanning 285, 286, 287)
 - **Delegate brief dates** — a year on the range end no longer rejects the cited start date. (#1945)
 - **Delegate brief dates** — short month names now match comma-less and ordinal forms. (#1945)

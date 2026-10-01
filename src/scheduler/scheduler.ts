@@ -1589,13 +1589,19 @@ export class Scheduler {
         { err, jobId, taskId: meta.taskId },
         'scheduler: failed to publish the disposition turn — flagging the task so the heartbeat will not revive it',
       );
-      await this.flagNeedsDisposition(meta.taskId, state.title, jobId);
+      // The disposition event may not have been published. Parent the notice
+      // on the wake that just finished — that id is already on the bus.
+      await this.flagNeedsDisposition(meta.taskId, state.title, jobId, parentEventId);
       return false;
     }
   }
 
   /** After the one follow-up, flag a task that is still undisposed. Never asks again. */
-  private async settleDispositionTurn(jobId: string, meta: PendingRunMeta): Promise<void> {
+  private async settleDispositionTurn(
+    jobId: string,
+    meta: PendingRunMeta,
+    parentEventId: string,
+  ): Promise<void> {
     if (!meta.taskId) return;
     const state = await this.loadDispositionState(jobId);
     if (!state) {
@@ -1603,7 +1609,7 @@ export class Scheduler {
         { jobId, taskId: meta.taskId },
         'scheduler: disposition turn ended but the task could not be re-read — flagging it',
       );
-      await this.flagNeedsDisposition(meta.taskId, null, jobId);
+      await this.flagNeedsDisposition(meta.taskId, null, jobId, parentEventId);
       return;
     }
     if (!isUndisposedWake({
@@ -1615,7 +1621,7 @@ export class Scheduler {
     })) {
       return;
     }
-    await this.flagNeedsDisposition(meta.taskId, state.title, jobId);
+    await this.flagNeedsDisposition(meta.taskId, state.title, jobId, parentEventId);
   }
 
   /**
@@ -1623,7 +1629,12 @@ export class Scheduler {
    * coordinator notice plus a CEO backlog row the daily digest reads.
    * A second call matches zero rows and does not file another review.
    */
-  private async flagNeedsDisposition(taskId: string, title: string | null, jobId: string): Promise<void> {
+  private async flagNeedsDisposition(
+    taskId: string,
+    title: string | null,
+    jobId: string,
+    parentEventId: string,
+  ): Promise<void> {
     let flagged = false;
     try {
       const res = await this.pool.query(
@@ -1657,7 +1668,7 @@ export class Scheduler {
         senderId: 'scheduler',
         content: notice,
         syntheticTurn: true,
-        parentEventId: taskId,
+        parentEventId,
       });
       await this.bus.publish('system', notifyEvent);
     } catch (err) {
@@ -1867,7 +1878,7 @@ export class Scheduler {
       }
 
       if (runMeta?.disposition) {
-        await this.settleDispositionTurn(jobId, runMeta);
+        await this.settleDispositionTurn(jobId, runMeta, parentEventId);
         // The wake itself succeeded. A follow-up that errors must not fail the
         // job and re-fire the original payload.
         completionSuccess = true;

@@ -75,6 +75,7 @@ function dispositionRow(overrides: Record<string, unknown> = {}) {
 interface PublishedTask {
   id: string;
   type: string;
+  parentEventId?: string;
   payload: {
     agentId: string;
     conversationId: string;
@@ -358,6 +359,7 @@ describe('Scheduler task-wake disposition (#1951)', () => {
     expect(review?.payload.agentId).toBe('coordinator');
     expect(review?.payload.content).toContain('review notice only');
     expect(review?.payload.toolAllowlist).toBeUndefined();
+    expect(review?.parentEventId).toBe(followUp.id);
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: 'task-abc', jobId: 'job-1' }),
