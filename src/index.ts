@@ -185,12 +185,10 @@ import {
   DeliverableKgPromotionSubscriber,
   resolveKgPromotionConfig,
 } from './agents/deliverable-kg-promotion.js';
-import * as fs from 'node:fs';
-import * as yaml from 'js-yaml';
 import { RegistryRepo } from './registry/registry-repo.js';
 import { RegistryService } from './registry/registry-service.js';
 import { BundleCascadeRepo } from './registry/bundle-cascade-repo.js';
-import { reconcileRegistries, type RegistryDefaults } from './registry/reconcile.js';
+import { loadRegistryDefaults, reconcileRegistries, type RegistryDefaults } from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
 import { channelCredentialStatus } from './channels/credential-resolver.js';
@@ -1089,22 +1087,7 @@ async function main(): Promise<void> {
   // absence as a fatal misconfiguration rather than defaulting to empty.
   let registryDefaults: RegistryDefaults;
   try {
-    const defaultsPath = path.resolve(import.meta.dirname, '../config/registry-defaults.yaml');
-    if (!fs.existsSync(defaultsPath)) {
-      logger.fatal({ path: defaultsPath }, 'config/registry-defaults.yaml not found — cannot enroll core defaults');
-      process.exit(1);
-    }
-    const loaded = yaml.load(fs.readFileSync(defaultsPath, 'utf-8'));
-    if (!loaded) {
-      logger.fatal({ path: defaultsPath }, 'config/registry-defaults.yaml is empty or null');
-      process.exit(1);
-    }
-    const candidate = loaded as RegistryDefaults;
-    if (!Array.isArray(candidate.tools) || !Array.isArray(candidate.agents)) {
-      logger.fatal({ path: defaultsPath, loaded }, 'config/registry-defaults.yaml has wrong shape (expected {tools: [], agents: []})');
-      process.exit(1);
-    }
-    registryDefaults = candidate;
+    registryDefaults = loadRegistryDefaults(path.resolve(import.meta.dirname, '../config/registry-defaults.yaml'));
   } catch (err) {
     logger.fatal({ err }, 'Failed to read config/registry-defaults.yaml');
     process.exit(1);

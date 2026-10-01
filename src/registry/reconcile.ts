@@ -8,6 +8,8 @@
 // The core set lives in a trusted in-repo file — NOT in individual manifests — so an
 // uploaded skill cannot self-enable on upload (spec §3, security rationale).
 
+import * as fs from 'node:fs';
+import * as yaml from 'js-yaml';
 import type { IRegistryRepo } from './types.js';
 import type { Logger } from '../logger.js';
 
@@ -16,6 +18,26 @@ export interface RegistryDefaults {
   agents: string[];
   /** Skill (bundle) names — Phase 2. Optional for older defaults fixtures. */
   skills?: string[];
+}
+
+/**
+ * Read config/registry-defaults.yaml. Throws when the file is missing, empty or the
+ * wrong shape: a missing file would silently leave nothing enrolled on a fresh DB.
+ * Shared by boot and the test-mode stack (#1966).
+ */
+export function loadRegistryDefaults(defaultsPath: string): RegistryDefaults {
+  if (!fs.existsSync(defaultsPath)) {
+    throw new Error(`${defaultsPath} not found — cannot enroll core defaults`);
+  }
+  const loaded: unknown = yaml.load(fs.readFileSync(defaultsPath, 'utf-8'));
+  if (!loaded) {
+    throw new Error(`${defaultsPath} is empty or null`);
+  }
+  const candidate = loaded as RegistryDefaults;
+  if (!Array.isArray(candidate.tools) || !Array.isArray(candidate.agents)) {
+    throw new Error(`${defaultsPath} has wrong shape (expected {tools: [], agents: []})`);
+  }
+  return candidate;
 }
 
 export interface ReconcileDeps {
