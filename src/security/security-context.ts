@@ -19,6 +19,36 @@ export interface SecurityThresholds {
   financial: number;
 }
 
+const THRESHOLD_FIELDS = ['information_query', 'scheduling', 'data_export', 'financial'] as const;
+
+export type SecurityThresholdsResolution =
+  | { ok: true; thresholds: SecurityThresholds }
+  | { ok: false; reason: 'absent' }
+  | { ok: false; reason: 'missing_fields' | 'out_of_range'; fields: Array<keyof SecurityThresholds> };
+
+/**
+ * Validate `security.trust_thresholds` from the merged YAML config.
+ *
+ * Shared by src/index.ts (which turns a failure into a fatal boot error) and the
+ * test-mode stack (which throws). There are deliberately no fallback defaults:
+ * the render script used to default missing values and silently rendered a
+ * security block production never sends (#1729, #1966).
+ */
+export function resolveSecurityThresholds(
+  raw: Partial<SecurityThresholds> | undefined,
+): SecurityThresholdsResolution {
+  if (raw === undefined) return { ok: false, reason: 'absent' };
+  const missing = THRESHOLD_FIELDS.filter(f => raw[f] === undefined);
+  if (missing.length > 0) return { ok: false, reason: 'missing_fields', fields: missing };
+  const outOfRange = THRESHOLD_FIELDS.filter(f => {
+    const v = raw[f] as number;
+    return v < 0 || v > 1;
+  });
+  if (outOfRange.length > 0) return { ok: false, reason: 'out_of_range', fields: outOfRange };
+  // Every field was checked defined above.
+  return { ok: true, thresholds: raw as SecurityThresholds };
+}
+
 /**
  * Compile the security context block from config threshold values.
  *
