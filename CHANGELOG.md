@@ -34,12 +34,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ToolContext` (public API)** — `selfEmails` lists every owned mailbox for reply-all exclusion. (#1815)
 - **`schedule.recovered` (public API)** — optional `rearmed` when stuck recovery keeps a deferred wake. (#1938)
 - **`pnpm audit:override-floors`** — CI asserts every override floor admits no advisory-bearing release. (#1934)
-- **Test-mode stack** — smoke, scenarios and the render script boot production agents and cannot send messages. (#1966)
-- **`pnpm smoke --model`** — runs every agent on one model, Anthropic or OpenRouter. (#1966)
 
 ### Changed
 
-- **Agent assembly** — `src/index.ts` builds agents through a shared builder; runtime prompt assembly is one function. (#1966)
+- **Test-mode stack** — smoke and the prompt render now use production agent assembly and cannot send. (#1966)
 - **Model-facing prose** — calls the person served "the principal" across prompts and tool descriptions. (#1950)
 - **`resolve-learning-digest` outputs (public API)** — `kind` distinguishes leaving a task done from declining a confirm. (#1936)
 - **`tool.result` (public API)** — optional `originConversationId` ties a specialist send to the principal thread. (#1860)
@@ -85,8 +83,6 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`pnpm smoke`** — boots again: LLM keys come from the vault, as at boot. (#1966)
-- **`render-coordinator-prompt`** — renders the prompt production sends, including SKILL.md, autonomy, date and turn-budget blocks. (#1966)
 - **Principal contact block** — states the address list is closed and marks the primary email. (#1950)
 - **Principal contact labels** — address-like labels are omitted from the closed contact list. (#1950)
 - **Task wakes** — an undisposed success gets one disposition turn, then a review flag instead of another wake. (#1951)
