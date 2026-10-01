@@ -1,4 +1,4 @@
-// recap-skills.ts — derive CEO-recap-eligible skill names from manifests.
+// recap-skills.ts — derive principal-recap-eligible skill names from manifests.
 //
 // Skills with action_risk >= low (min score 60) are consequential enough for
 // the end-of-day activity recap. Built once from on-disk manifests so new skills

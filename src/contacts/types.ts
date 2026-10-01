@@ -231,7 +231,7 @@ export interface PermissionDef {
 export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
 
 /** System designation — drives authorization. Separate from the free-text `role` field.
- *  - 'principal' — the human CEO who Curia serves
+ *  - 'principal' — the human principal who Curia serves
  *  - 'agent'     — Curia itself or another autonomous agent
  *  - 'system'    — operator-configured, platform-executed (e.g. declarative YAML jobs)
  *
@@ -258,11 +258,11 @@ export const TRUST_RANK: Record<TrustLevel, number> = {
  * Unified capability axis replacing the old `status` / `trust_level` split.
  * Ordered ascending: blocked < unknown < known < trusted < principal.
  *
- * - 'blocked'   — CEO explicitly rejected this contact; messages are dropped.
+ * - 'blocked'   — principal explicitly rejected this contact; messages are dropped.
  * - 'unknown'   — contact exists but has not been confirmed (was: 'provisional' / trust_level='low').
- * - 'known'     — CEO-confirmed, no special trust grant (was: 'confirmed' + no trust_level).
- * - 'trusted'   — CEO granted elevated trust (was: trust_level='high').
- * - 'principal' — the human CEO Curia serves (was: system_role='principal' / trust_level='ceo').
+ * - 'known'     — principal-confirmed, no special trust grant (was: 'confirmed' + no trust_level).
+ * - 'trusted'   — principal granted elevated trust (was: trust_level='high').
+ * - 'principal' — the human principal Curia serves (was: system_role='principal' / trust_level='ceo').
  *
  * Added in migration 055. See docs/specs/09-contacts-and-identity.md § Data Model → contacts
  * for the authoritative tier table.
@@ -277,7 +277,7 @@ export type ContactTier = 'blocked' | 'unknown' | 'known' | 'trusted' | 'princip
  * - 'person'       — individual human contact (default).
  * - 'organization' — a company or institution (linked KG node type='organization').
  * - 'automated'    — automated sender e.g. mailing list (exempts from unknown-tier gate in dispatcher.ts, #953).
- * - 'principal'    — the human CEO Curia serves.
+ * - 'principal'    — the human principal Curia serves.
  * - 'agent'        — Curia itself or another autonomous agent.
  *
  * Added in migration 055.
@@ -332,7 +332,7 @@ export function isAutomatedKind(kind: ContactKind): boolean {
 export interface AuthorizationResult {
   allowed: string[];
   denied: string[];
-  /** Permissions that require escalation (not in role defaults, needs CEO decision) */
+  /** Permissions that require escalation (not in role defaults, needs principal decision) */
   escalate: string[];
   /** Channel trust level for this message's originating channel */
   channelTrust: TrustLevel;
@@ -461,6 +461,15 @@ export interface PrincipalEmailRef {
   current: string;
 }
 
+/**
+ * Mutable holder for the principal's `contacts.primary_email`.
+ * Distinct from {@link PrincipalEmailRef}, which is the first verified email
+ * and is used as an allow-list, not as the designated primary. (#1950)
+ */
+export interface PrincipalPrimaryEmailRef {
+  current: string | null;
+}
+
 /** Resolve a ceoEmail config that may be a plain string (tests) or a live ref. */
 export function resolvePrincipalEmail(email: string | PrincipalEmailRef | undefined): string {
   if (email === undefined) return '';
@@ -476,7 +485,7 @@ export interface GrantRecommendation {
   contactId: string;
   /** The permission string being recommended (e.g. 'schedule_meetings'). */
   permission: string;
-  /** LLM-authored rationale surfaced to the CEO for context. */
+  /** LLM-authored rationale surfaced to the principal for context. */
   reasoning: string;
   status: GrantRecommendationStatus;
   suggestedAt: Date;

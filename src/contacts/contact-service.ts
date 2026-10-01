@@ -234,7 +234,7 @@ interface ContactServiceBackend {
    * (the two merged contacts excluded against each other) or that would duplicate
    * an exclusion the survivor already holds are dropped.
    *
-   * Returns the counts so the caller can log dropped rulings — a dropped row is a CEO
+   * Returns the counts so the caller can log dropped rulings — a dropped row is a principal
    * decision leaving the ledger, and it must be visible to an operator, not only
    * explained in a comment.
    */
@@ -267,7 +267,7 @@ interface ContactServiceBackend {
 // signal_participant is also auto-verified — Signal's phone-number identity is stronger than
 // email (no header spoofing), so we trust the source number at the same level as email_participant.
 // slack_participant is auto-verified — Slack user ids from the principal's workspace (ADR-033).
-// sms_participant is NOT auto-verified — SMS From is spoofable (ADR-036); CEO must verify.
+// sms_participant is NOT auto-verified — SMS From is spoofable (ADR-036); principal must verify.
 // agent_called is auto-verified — the agent extracted the identifier mechanically from the channel
 // (e.g. an email sender address), not from LLM-generated content. Same trust level as email_participant.
 // Only self_claimed starts unverified and cannot be force-verified.
@@ -345,6 +345,15 @@ export class ContactService {
         : undefined,
       { contactId },
     );
+  }
+
+  /**
+   * Ask identity subscribers to reload after a committed `primary_email` write.
+   * That column is not an identity row, so link/unlink would not otherwise
+   * refresh the principal prompt block. (#1950)
+   */
+  notePrimaryEmailChanged(contactId: string): void {
+    this.notifyIdentitiesChanged(contactId);
   }
 
   /** Create a Postgres-backed instance for production use */
@@ -712,7 +721,7 @@ export class ContactService {
     // Otherwise default to 'known' (the former status='confirmed' default).
     //
     // 'trusted' and 'principal' are capability grants, not creation-time states:
-    // 'trusted' is a deliberate CEO grant (#952) and 'principal' is structural
+    // 'trusted' is a deliberate principal grant (#952) and 'principal' is structural
     // (derived from system_role, set by bootstrap). Enforce that invariant here so a
     // caller cannot mint a high-capability contact in a single createContact() call —
     // a contact must be created at a lower tier and elevated explicitly afterwards.
@@ -1016,9 +1025,9 @@ export class ContactService {
     }
 
     // Prevent force-verifying self-claimed identities — they must go through
-    // the CEO confirmation flow to become verified.
+    // the principal confirmation flow to become verified.
     if (options.source === 'self_claimed' && verified) {
-      throw new Error('Cannot force-verify a self_claimed identity — CEO confirmation required');
+      throw new Error('Cannot force-verify a self_claimed identity — principal confirmation required');
     }
 
     // Normalize email addresses to lowercase for case-insensitive matching.
@@ -1299,7 +1308,13 @@ export class ContactService {
       updatedAt: new Date(),
     };
 
-    return this.updateStoredContact(updated, client);
+    const stored = await this.updateStoredContact(updated, client);
+    // A caller-supplied client has not committed yet; that caller notifies
+    // after COMMIT. The pool path commits inside updateStoredContact.
+    if (!client && 'primaryEmail' in definedFields) {
+      this.notePrimaryEmailChanged(contactId);
+    }
+    return stored;
   }
 
   /**
@@ -1357,7 +1372,7 @@ export class ContactService {
   }
 
   /**
-   * Mark a channel identity as verified (CEO confirmation). This is the console /
+   * Mark a channel identity as verified (principal confirmation). This is the console /
    * agent path for verifying `self_claimed` identities and re-confirming any other
    * identity so it counts toward the structural principal match (#1514).
    */
@@ -1645,11 +1660,11 @@ export class ContactService {
       return { primaryContactId: primaryId, secondaryContactId: secondaryId, goldenRecord, dryRun: true };
     }
 
-    // A recorded exclusion means the CEO ruled these are different people. Merging is
+    // A recorded exclusion means the principal ruled these are different people. Merging is
     // still allowed — every merge path has a human confirming it, and people change
     // their minds — but the ruling is about to be discarded by reattachDedupExclusions,
     // so it must not happen silently (#1625). Best-effort: a lookup failure must not
-    // abort a merge the CEO already confirmed.
+    // abort a merge the principal already confirmed.
     try {
       if (await this.backend.hasDedupExclusion(normalizeExclusionPair(primaryId, secondaryId))) {
         this.logger?.warn(
@@ -1663,7 +1678,7 @@ export class ContactService {
 
     // The whole write sequence runs on one client inside one transaction (#1695).
     // Before that it was five independent pool queries, so a failure part-way could
-    // leave the secondary alive with its identities, auth overrides and CEO dedup
+    // leave the secondary alive with its identities, auth overrides and principal dedup
     // rulings already re-pointed onto the survivor — the next sweep would then see the
     // secondary again with none of its "not the same person" rulings attached.
     //
@@ -1688,7 +1703,7 @@ export class ContactService {
         // Write the golden record fields onto the primary contact. The surviving tier
         // is computed by computeGoldenRecord (blocked-on-either-side wins; else higher
         // TIER_RANK) — the single source of survivorship truth. Rationale: tier
-        // represents a CEO grant (e.g. the CEO explicitly trusted a secondary contact).
+        // represents a principal grant (e.g. the principal explicitly trusted a secondary contact).
         // Merging should never silently downgrade that grant — losing a 'trusted' tier
         // because the primary happened to be 'known' is incorrect, especially since
         // #944's dedup calls mergeContacts. A 'blocked' tier on either side always wins
@@ -1747,7 +1762,7 @@ export class ContactService {
     }
 
     if (exclusions.dropped > 0) {
-      // A dropped row is a CEO ruling leaving the ledger. Both causes are expected and
+      // A dropped row is a principal ruling leaving the ledger. Both causes are expected and
       // benign, but an operator asking "why was this pair re-proposed months later"
       // needs the event in the log, not only in a code comment. Logged after commit so
       // a rolled-back merge never claims rulings were dropped.
@@ -1797,7 +1812,7 @@ export class ContactService {
    * generates the most duplicate proposals (#1623).
    *
    * @param decidedBy Provenance for the decision — an agent memory-write source key,
-   *                  or an operator/CEO identifier for manual excludes. Must be non-blank:
+   *                  or an operator/principal identifier for manual excludes. Must be non-blank:
    *                  it is the row's only audit trail and the row is never revisited.
    * @throws InvalidExclusionPairError when either ID is not a UUID or both are the same contact.
    * @throws ContactValidationError when decidedBy is blank.
@@ -1839,7 +1854,7 @@ export class ContactService {
    * True when the pair has been ruled "not the same person". Order-independent.
    *
    * Errors propagate — a caller that treated a DB failure as "not excluded" would
-   * re-file review tasks for pairs the CEO already ruled on.
+   * re-file review tasks for pairs the principal already ruled on.
    */
   async hasDedupExclusion(contactAId: string, contactBId: string): Promise<boolean> {
     return this.backend.hasDedupExclusion(normalizeExclusionPair(contactAId, contactBId));
@@ -2001,7 +2016,7 @@ export class ContactService {
     // a 'blocked' duplicate into the principal must not lock the principal out. For
     // ordinary contacts, a 'blocked' tier on either side wins (most restrictive, so a
     // merge can never un-block a contact); otherwise the more-capable (higher TIER_RANK)
-    // tier survives, preserving any explicit CEO grant (trusted/principal).
+    // tier survives, preserving any explicit principal grant (trusted/principal).
     const tier: ContactTier = isStructuralContact(primary)
       ? primary.tier
       : primary.tier === 'blocked' || secondary.tier === 'blocked'
@@ -2776,7 +2791,7 @@ class PostgresContactBackend implements ContactServiceBackend {
     );
     // An empty result means ON CONFLICT swallowed the insert — the pair was already
     // excluded. That is a successful no-op, not a failure: re-excluding a pair the
-    // CEO already ruled on must stay idempotent.
+    // principal already ruled on must stay idempotent.
     return result.rows.length > 0;
   }
 

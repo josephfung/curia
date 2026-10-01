@@ -1,12 +1,12 @@
 // handler.ts — memory-confirm skill
 //
-// Records the CEO's decision on a knowledge graph node flagged for re-confirmation.
+// Records the principal's decision on a knowledge graph node flagged for re-confirmation.
 //
-// "confirm" — the CEO says the fact is still accurate. Resets last_confirmed_at = NOW()
+// "confirm" — the principal says the fact is still accurate. Resets last_confirmed_at = NOW()
 // and confidence = 1.0, clears the warned_at flag. The node re-enters the normal
 // decay cycle fresh, as if it was just confirmed today.
 //
-// "dismiss" — the CEO says the fact is no longer relevant. Archives immediately.
+// "dismiss" — the principal says the fact is no longer relevant. Archives immediately.
 //
 // Both operations are idempotent-safe: if the node is already archived or no longer
 // in a warned state, the handler returns success: false rather than throwing.

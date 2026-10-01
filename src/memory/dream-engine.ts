@@ -25,7 +25,7 @@ export interface DecayConfig {
   /** Minimum edge count for the high-connectivity criterion regardless of percentile.
    *  Prevents warnings on trivially-connected nodes in a sparse graph. Default: 5. */
   edgeCountFloor: number;
-  /** Days a warned node is held back from archiving while awaiting CEO re-confirmation.
+  /** Days a warned node is held back from archiving while awaiting principal re-confirmation.
    *  After this window, the node is archived by the next decay pass. Default: 7. */
   warnHoldBackDays: number;
 }
@@ -470,7 +470,7 @@ export class DreamEngine {
     // so a publish failure cannot roll back committed DB state or cause audit/DB divergence.
 
     // Pass 2a: Archive expired warnings — nodes whose hold-back window has closed
-    // without a CEO response. These were warned but never confirmed or dismissed.
+    // without a principal response. These were warned but never confirmed or dismissed.
     // Also excludes contact-anchored nodes: a warning raised before the node was adopted
     // (anchorNode clears warned_at, but a row could still slip through a concurrent pass)
     // must not become the one archival path that survives ADR-040.

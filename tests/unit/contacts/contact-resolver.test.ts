@@ -35,11 +35,11 @@ describe('ContactResolver', () => {
     }
   });
 
-  it('resolves CLI channel as primary user (CEO)', async () => {
+  it('resolves CLI channel as primary user', async () => {
     const result = await resolver.resolve('cli', 'any-id');
     expect(result.resolved).toBe(true);
     if (result.resolved) {
-      expect(result.displayName).toBe('CEO');
+      expect(result.displayName).toBe('Principal');
       expect(result.role).toBe('ceo');
       expect(result.systemRole).toBe('principal');
     }

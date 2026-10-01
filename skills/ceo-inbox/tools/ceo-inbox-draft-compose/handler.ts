@@ -17,7 +17,7 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
       grantId = ctx.secret('ceo_nylas_grant_id');
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-draft-compose: required secret not available');
-      return { success: false, error: 'CEO inbox is not configured (missing credentials)' };
+      return { success: false, error: 'principal inbox is not configured (missing credentials)' };
     }
 
     const client = new CeoNylasClient(apiKey, grantId, ctx.log);
@@ -135,7 +135,7 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
         { err, subject },
         'ceo-inbox-draft-compose: Nylas API call failed',
       );
-      return { success: false, error: 'Failed to create draft in CEO inbox' };
+      return { success: false, error: 'Failed to create draft in principal inbox' };
     }
   }
 }

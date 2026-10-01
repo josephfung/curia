@@ -337,7 +337,7 @@ export class SignalAdapter implements Channel {
       // outboundGateway is available (see index.ts wiring). If this fires, it
       // indicates a wiring bug: the adapter was constructed without a gateway.
       // Logged at error (not warn) because the coordinator's response is silently
-      // lost — the CEO sent a message and got no reply.
+      // lost — the principal sent a message and got no reply.
       // TODO: once the gateway always has a Signal client when this adapter is
       // active, convert this to an explicit assertion.
       this.log.error({ conversationId }, 'Signal adapter: outbound gateway not available — reply dropped. Check index.ts wiring.');

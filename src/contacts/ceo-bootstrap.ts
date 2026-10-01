@@ -2,7 +2,7 @@
 //
 // Principal contact utilities.
 //
-// The env-var-driven CEO bootstrap (`bootstrapCeoContact`, keyed on CEO_PRIMARY_EMAIL)
+// The env-var-driven principal bootstrap (`bootstrapCeoContact`, keyed on CEO_PRIMARY_EMAIL)
 // was removed in #1049: the in-app onboarding wizard (#771) now creates the principal,
 // and `findContactBySystemRole('principal')` is the single startup resolution path
 // (see src/index.ts). What remains here are the shared, channel-agnostic utilities the
@@ -16,7 +16,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 
 /**
- * Repair a principal/CEO contact's capability metadata to the canonical values.
+ * Repair a principal/principal contact's capability metadata to the canonical values.
  *
  * Idempotent — the WHERE guard makes it a no-op when the row is already correct.
  * Called on EVERY path that returns an existing principal row (initial bootstrap,
@@ -42,7 +42,7 @@ export async function repairPrincipalMetadata(contactId: string, pool: DbPool, l
     );
   } catch (err) {
     // Log with context, then propagate. A failure to apply the canonical principal
-    // capability metadata means the CEO's trust gates (e.g. PII-redaction bypass)
+    // capability metadata means the principal's trust gates (e.g. PII-redaction bypass)
     // may not apply, so every caller treats this as fatal rather than silently
     // continuing with a possibly-downgraded principal. Centralizing the log+rethrow
     // here keeps all four call sites (bootstrap main + race winners + ensure-principal)
@@ -56,7 +56,7 @@ export async function repairPrincipalMetadata(contactId: string, pool: DbPool, l
 }
 
 /**
- * Upsert a KG person node for the CEO and return its id.
+ * Upsert a KG person node for the principal and return its id.
  * Uses decay_class='permanent' and confidence=1.0 to match the agent identity pattern —
  * bootstrap nodes are never decayed by the DreamEngine.
  *

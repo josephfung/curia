@@ -4,7 +4,7 @@
 //
 // The typical flow is:
 //   1. calendar-list-calendars surfaces an unregistered calendar
-//   2. The CEO confirms which contact owns it (usually themselves)
+//   2. The principal confirms which contact owns it (usually themselves)
 //   3. This skill persists that mapping so calendar-list-events can auto-resolve it
 //
 // contact_id is required — the coordinator must always specify which contact
@@ -38,7 +38,7 @@ export class CalendarRegisterHandler implements ToolHandler {
 
     // contact_id is required — the coordinator must explicitly specify which
     // contact owns this calendar. This prevents silent mis-assignment when the
-    // caller (e.g. the CEO) is not the calendar's actual owner.
+    // caller (e.g. the principal) is not the calendar's actual owner.
     if (!contact_id || typeof contact_id !== 'string' || contact_id.trim() === '') {
       return { success: false, error: 'Missing required input: contact_id — specify which contact owns this calendar.' };
     }
@@ -75,7 +75,7 @@ export class CalendarRegisterHandler implements ToolHandler {
       };
     } catch (err) {
       // Postgres unique_violation (code 23505): translate raw constraint names into
-      // human-readable messages so the LLM can give the CEO actionable feedback.
+      // human-readable messages so the LLM can give the principal actionable feedback.
       const pgCode = (err as { code?: string }).code;
       if (pgCode === '23505') {
         const constraint = (err as { constraint?: string }).constraint ?? '';

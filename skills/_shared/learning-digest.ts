@@ -40,10 +40,10 @@ export function renderCompletionSection(items: CompletionDigestItem[]): string {
 // Event-driven notification bodies (#1466)
 //
 // After #1464 removed the scheduled daily digest, these standalone builders let a generator
-// surface a learning item the moment it's produced — the only path that now reaches the CEO for
+// surface a learning item the moment it's produced — the only path that now reaches the principal for
 // approve/dismiss/undo/confirm. They wrap the render* helpers above (which already inline both the
-// reviewable content AND the reply commands) with a short preamble, so the CEO can act directly
-// from the notification. The CEO's reply still resolves via resolve-learning-digest, unchanged.
+// reviewable content AND the reply commands) with a short preamble, so the principal can act directly
+// from the notification. The principal's reply still resolves via resolve-learning-digest, unchanged.
 // ---------------------------------------------------------------------------
 
 /** Notification for a freshly-produced writing-voice guide proposal (voice-learn). */

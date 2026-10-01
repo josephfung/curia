@@ -47,7 +47,7 @@ export interface CreateEntityOptions {
 export interface StoreFactResult {
   stored: boolean;
   /** The pipeline outcome — lets callers distinguish create/update from conflict / entity_not_found / rate_limited
-   *  and take action accordingly (e.g. surfacing a conflict to the CEO). */
+   *  and take action accordingly (e.g. surfacing a conflict to the principal). */
   action: 'created' | 'updated' | 'conflict' | 'auto_rejected' | 'auto_resolved' | 'entity_not_found' | 'rate_limited';
   /** The ID of the persisted (or existing) fact node, if stored is true. */
   nodeId?: string;
@@ -60,7 +60,7 @@ export interface StoreFactResult {
   sensitivityFallback?: boolean;
   /** Human-readable contradiction message. Set only for the contradiction outcomes
    *  (`conflict` and `auto_rejected`) — never for operational rejections, so that a caller
-   *  can treat a truthy `conflict` as "there is a contradiction to surface to the CEO".
+   *  can treat a truthy `conflict` as "there is a contradiction to surface to the principal".
    *  See #472: this field used to double as the reason carrier for entity_not_found and
    *  rate_limited, which made that check fire on outcomes that are not contradictions. */
   conflict?: string;
@@ -107,7 +107,7 @@ export const MAX_ALIASES_PER_ENTITY = 10;
 
 /** Cosine similarity threshold for auto-resolving a fuzzy entity match.
  *  At or above this, the match is confident enough to return 'found' without
- *  asking the CEO. Lower than the 0.92 fact dedup threshold because entity
+ *  asking the principal. Lower than the 0.92 fact dedup threshold because entity
  *  labels are shorter phrases with less semantic signal. */
 export const FUZZY_RESOLVE_THRESHOLD = 0.90;
 
@@ -1124,17 +1124,17 @@ export class EntityMemory {
     return merged.slice(0, limit);
   }
 
-  /** List KG nodes flagged for CEO re-confirmation by the decay warning pass. */
+  /** List KG nodes flagged for principal re-confirmation by the decay warning pass. */
   async listDecayWarnings(): Promise<DecayWarningRow[]> {
     return this.store.listDecayWarnings();
   }
 
-  /** Confirm a warned node: reset its decay clock. Called when CEO verifies the fact is still current. */
+  /** Confirm a warned node: reset its decay clock. Called when principal verifies the fact is still current. */
   async confirmDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
     return this.store.confirmDecayWarning(nodeId);
   }
 
-  /** Dismiss a warned node: archive it immediately. Called when CEO says it's no longer relevant. */
+  /** Dismiss a warned node: archive it immediately. Called when principal says it's no longer relevant. */
   async dismissDecayWarning(nodeId: string): Promise<DecayWarningActionResult> {
     return this.store.dismissDecayWarning(nodeId);
   }

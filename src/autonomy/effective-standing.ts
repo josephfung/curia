@@ -8,7 +8,7 @@
 // for those, the live autonomy score can only ever DOWNGRADE lineage standing to `agent`
 // (propose-only) — never upgrade it. This is the safe form of originator-threading: inheriting
 // standing is dangerous only at low trust, and gating it on the live score maps the hazard onto
-// "the CEO has signalled how freely Curia may act autonomously."
+// "the principal has signalled how freely Curia may act autonomously."
 //
 // See docs/specs/14-autonomy-engine.md (Effective standing / bypass ladder).
 

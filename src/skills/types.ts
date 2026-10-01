@@ -9,13 +9,13 @@ import type { Logger } from '../logger.js';
 
 /**
  * The risk level of a skill's actions, expressed as the minimum autonomy score
- * required before the skill may run without explicit CEO approval.
+ * required before the skill may run without explicit principal approval.
  *
  * Named labels map to score thresholds:
  *   none     →  0  — read-only, no side effects (always safe)
  *   low      → 60  — internal state writes (memory, contacts)
  *   medium   → 70  — outbound communications
- *   high     → 80  — calendar writes, commitments on behalf of CEO
+ *   high     → 80  — calendar writes, commitments on behalf of principal
  *   critical → 90  — financial / destructive / irreversible
  *
  * A raw number (0–100) may be used for precision (e.g. 75 for a skill that
@@ -35,7 +35,7 @@ export interface ToolManifest {
   /** "normal" = auto-approvable; "elevated" = requires human approval on first use */
   sensitivity: 'normal' | 'elevated';
   /** Action risk: the minimum autonomy score required to invoke this skill without
-   *  explicit CEO approval. Required on all new manifests — Phase 2 will enforce this
+   *  explicit principal approval. Required on all new manifests — Phase 2 will enforce this
    *  at load time (ToolRegistry.register will reject manifests that omit it).
    *  See ActionRisk for the named label → score mapping. */
   action_risk: ActionRisk;
@@ -187,7 +187,7 @@ export interface ToolContext {
   /** Conversation ID from the originating task event. Used by skills that need to
    *  thread this through to other system events (e.g. outbound delivery audit). */
   conversationId?: string;
-  /** True when re-invoked after CEO approval via approve-action (ADR-018, #201). */
+  /** True when re-invoked after principal approval via approve-action (ADR-018, #201). */
   humanApproved?: boolean;
   /** Channel ID from the originating task event (e.g. "http", "internal", "signal").
    *  Used with agentId and taskEventId to construct the memory write source key. */
@@ -219,7 +219,7 @@ export interface ToolContext {
    *  Manages the global autonomy score (get-autonomy, set-autonomy). */
   autonomyService?: import('../autonomy/autonomy-service.js').AutonomyService;
   /** Executive profile service — available to skills declaring 'executiveProfileService' in capabilities.
-   *  Manages the CEO's writing voice profile. */
+   *  Manages the principal's writing voice profile. */
   executiveProfileService?: import('../executive/service.js').ExecutiveProfileService;
   /** Office identity service — available to skills declaring 'officeIdentityService' in capabilities.
    *  Manages the Curia instance identity including behavioral preferences. */
@@ -277,7 +277,7 @@ export interface ToolContext {
   workingDocs?: import('../db/working-docs-repo.js').WorkingDocsRepo;
   /** Execution layer — available to skills declaring 'executionLayer' in capabilities.
    *  Allows re-invocation of skills with humanApproved bypass. Only approve-action (#428)
-   *  should declare this capability; it is sensitivity: "elevated" (CEO-only). */
+   *  should declare this capability; it is sensitivity: "elevated" (principal-only). */
   executionLayer?: import('./execution.js').ExecutionLayer;
   /** Temp file store — available to skills declaring 'tempFileStore' in capabilities.
    *  Writes binary buffers to a secure tmpfs mount and returns file:// URLs for

@@ -51,21 +51,21 @@ function extractHandleDirectlySection(prompt: string): string {
   return prompt.slice(start, end);
 }
 
-function extractCeoCalendarSection(prompt: string): string {
-  const start = prompt.indexOf('### CEO calendar requests (borrow-then-answer)');
+function extractPrincipalCalendarSection(prompt: string): string {
+  const start = prompt.indexOf('### Principal calendar requests (borrow-then-answer)');
   const end = prompt.indexOf('### Delegation acknowledgment on synchronous channels');
-  if (start === -1) throw new Error('CEO calendar requests section not found');
+  if (start === -1) throw new Error('Principal calendar requests section not found');
   if (end === -1 || end <= start) {
-    throw new Error('Delegation acknowledgment delimiter not found after CEO calendar section');
+    throw new Error('Delegation acknowledgment delimiter not found after Principal calendar section');
   }
   return prompt.slice(start, end);
 }
 
 describe('coordinator principal-calendar routing (#1853)', () => {
-  it('has an explicit CEO calendar → @calendar borrow-then-answer rule', () => {
-    const section = extractCeoCalendarSection(loadCoordinator().system_prompt);
+  it('has an explicit principal calendar → @calendar borrow-then-answer rule', () => {
+    const section = extractPrincipalCalendarSection(loadCoordinator().system_prompt);
     expect(section).toMatch(/delegated to `@calendar`/);
-    expect(section).toMatch(/never\s+read or mutate the CEO's calendar myself/i);
+    expect(section).toMatch(/never\s+read or mutate the principal's calendar myself/i);
     expect(section).toMatch(/never present the brief/i);
     expect(section).toMatch(/could not be read/i);
     expect(section).toMatch(/do not search\s+tool-registry/i);

@@ -79,7 +79,7 @@ export interface EmailAdapterConfig {
    */
   suppressedSenderEmails: string[];
   /**
-   * CEO's email address — used as the recipient for rate-limit notification emails.
+   * principal's email address — used as the recipient for rate-limit notification emails.
    * When absent/empty, rate-limit notifications are logged but not emailed.
    * Accepts a mutable PrincipalEmailRef so post-boot binds hot-reload (#1514).
    */
@@ -240,7 +240,7 @@ export class EmailAdapter implements Channel {
 
       const notification = event as OutboundNotificationEvent;
       try {
-        // isSystemNotification bypasses the autonomy gate so the CEO still receives
+        // isSystemNotification bypasses the autonomy gate so the principal still receives
         // alerts (e.g. approval_requested) even when the score is below the send
         // threshold — the notification must not be silenced by the gate it's reporting.
         // skipNotificationOnBlock prevents infinite recursion if the content filter
@@ -267,7 +267,7 @@ export class EmailAdapter implements Channel {
               originalChannel: notification.payload.originalChannel,
               ceoEmail: notification.payload.ceoEmail,
             },
-            'EmailAdapter: failed to deliver outbound.notification — CEO will NOT receive this alert',
+            'EmailAdapter: failed to deliver outbound.notification — principal will NOT receive this alert',
           );
         }
       } catch (err) {
@@ -803,7 +803,7 @@ export class EmailAdapter implements Channel {
    * Send the reply through the gateway (autonomy gate + blocked-contact +
    * content filter all run inside gateway.send). If the gateway returns
    * gated (autonomy blocked), fall back to creating a draft and linking
-   * the action_log row so the CEO can approve-and-send from the digest.
+   * the action_log row so the principal can approve-and-send from the digest.
    */
   private async sendWithGatedDraftFallback(
     sendRequest: EmailSendRequest,
@@ -812,7 +812,7 @@ export class EmailAdapter implements Channel {
     const { outboundGateway, logger, accountId } = this.config;
 
     // Send through gateway, handle gated fallback.
-    // Pass reExecRecipe so the gateway knows how to re-execute this send on CEO approval:
+    // Pass reExecRecipe so the gateway knows how to re-execute this send on principal approval:
     //   toolName: 'send-draft' — the registered skill approve-action will invoke
     //   partialPayload: { account } — the draft's account; draft_id is filled in by
     //                                 linkGatedAction() after the draft is created below
@@ -943,7 +943,7 @@ export class EmailAdapter implements Channel {
    * Rate limits (#36):
    *   - Per-message: at most contactCreationMaxPerMessage new contacts per email
    *   - Per-hour:    at most contactCreationMaxPerHour new contacts per sliding window
-   * When a limit is hit, remaining participants are skipped and a CEO
+   * When a limit is hit, remaining participants are skipped and a principal
    * notification is sent (deduplicated to one per limit type per hour).
    */
   private async extractParticipants(
@@ -1066,7 +1066,7 @@ export class EmailAdapter implements Channel {
       }
     }
 
-    // Send a deduplicated CEO notification for each rate limit type that was hit.
+    // Send a deduplicated principal notification for each rate limit type that was hit.
     // Both caps can fire simultaneously (e.g. per-hour was already at limit when the email
     // arrived and per-message is also reached), so notify for each independently so that
     // the dedup timestamps are updated correctly.
@@ -1081,7 +1081,7 @@ export class EmailAdapter implements Channel {
   }
 
   /**
-   * Send a deduplicated CEO notification when contact auto-creation rate limits
+   * Send a deduplicated principal notification when contact auto-creation rate limits
    * are hit. At most one notification per limit type per hour to avoid notification
    * spam during a sustained flood.
    */
@@ -1129,7 +1129,7 @@ export class EmailAdapter implements Channel {
         ].join('\n'),
       });
       // Commit the dedup timestamp only after a successful send — if the send fails we
-      // allow a retry on the next limit hit rather than silencing the CEO for an hour.
+      // allow a retry on the next limit hit rather than silencing the principal for an hour.
       if (limitType === 'per_message') {
         this.lastNotifiedPerMessage = now;
       } else {

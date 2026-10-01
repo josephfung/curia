@@ -72,7 +72,7 @@ export function buildPrincipalSenderContext(
       contactConfidence: 1.0, // principal always gets max confidence
       // Principal always gets the highest tier and is always kind='principal'.
       // Set unconditionally — the stored row value is authoritative only for the
-      // warning check above; we never surface a non-principal kind for the CEO.
+      // warning check above; we never surface a non-principal kind for the principal.
       tier: 'principal',
       kind: 'principal',
     };
@@ -83,7 +83,7 @@ export function buildPrincipalSenderContext(
   return {
     resolved: true,
     contactId: 'primary-user',
-    displayName: 'CEO',
+    displayName: 'Principal',
     role: 'ceo',
     systemRole: 'principal',
     verified: true,

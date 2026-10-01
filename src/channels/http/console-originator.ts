@@ -1,7 +1,7 @@
 // console-originator.ts — resolve the principal TaskOriginator to stamp on rows
 // created from the console (dashboard) surface. Issue #1127.
 //
-// The console's bootstrap secret is CEO-only, so any authenticated console request is
+// The console's bootstrap secret is principal-only, so any authenticated console request is
 // unambiguously the principal. Tasks and scheduled_jobs created from console routes must
 // therefore carry principal **lineage** (#1125's TaskOriginator) — otherwise, under the
 // woken-task-authorization model, a missing originator defaults to the conservative agent /

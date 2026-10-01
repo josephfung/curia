@@ -9,7 +9,7 @@
  * consumed by the dispatcher (reply suppress + preamble) and agent prompts.
  *
  * Actionability is NOT decided here. Keyword carve-outs over body text are the
- * wrong instrument at dispatch (bulk mail + "expires" ≠ CEO escalate; phishing
+ * wrong instrument at dispatch (bulk mail + "expires" ≠ principal escalate; phishing
  * vocabulary must not select a privileged path). Dispatch suppresses the reply
  * and lets the coordinator judge escalation; ceo-inbox keeps LLM carve-outs.
  */

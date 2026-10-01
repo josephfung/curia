@@ -37,7 +37,7 @@ export const RELAY_GATE_C_ACTION = 'dispatcher-relay';
 
 /** Terminal HTTP/EventRouter status when Gate C withholds the real reply (#1733). */
 export const RELAY_GATE_C_HTTP_PENDING_MESSAGE =
-  'Approval required — Curia withheld this reply pending CEO approval (contact-tier gate).';
+  'Approval required — Curia withheld this reply pending principal approval (contact-tier gate).';
 
 /** Max body length for a relayed reply — shared by approval creation and dispatcher-relay. */
 export const RELAY_BODY_MAX_LENGTH = 50_000;

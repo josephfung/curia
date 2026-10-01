@@ -297,7 +297,7 @@ describe('CeoInboxUpdateFoldersHandler', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('Failed to update CEO inbox message folders');
+      expect(result.error).toContain('Failed to update principal inbox message folders');
       expect(result.error).toContain('400');
     }
   });

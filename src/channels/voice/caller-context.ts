@@ -73,9 +73,9 @@ function toCallerContext(
 }
 
 /**
- * Console (CEO web) voice transport: resolve the principal explicitly, then stamp
+ * Console (principal web) voice transport: resolve the principal explicitly, then stamp
  * originator/liveTurn via the shared helper. Never falls back to a non-principal
- * identity — the bootstrap secret already proved the caller is the CEO.
+ * identity — the bootstrap secret already proved the caller is the principal.
  */
 export async function resolveConsoleVoiceCaller(opts: {
   contactService: ContactService;

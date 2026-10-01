@@ -106,11 +106,13 @@ Controls the elevated-skill gate in the execution layer:
 | Value | Meaning |
 |---|---|
 | `"normal"` | No elevated gate. Governed by the autonomy engine via `action_risk` (and `allowed_callers` where set). |
-| `"elevated"` | Requires a **live principal turn** — the current turn must have originated from a fresh principal (CEO) inbound. System, agent, scheduled, and woken/inherited principal *lineage* contexts are all rejected. |
+| `"elevated"` | Requires a **live principal turn** — the current turn must have originated from a fresh principal inbound. System, agent, scheduled, and woken/inherited principal *lineage* contexts are all rejected. |
 
-`"elevated"` is the **CEO-authority primitive** gate (redefined in #1126). The signal is a distinct `liveTurn` field on the `agent.task` payload — *not* a metadata-bag key, so it can never be swept onto a persisted/wakeable row. The dispatcher stamps it only on principal inbounds, and the `delegate` skill forwards it across a **synchronous** delegation, so "the CEO is live" spans the whole synchronous call tree (a specialist acting inside the CEO's turn qualifies) but a wake or scheduler fire never does. Enforcement lives solely at the execution-layer gate (`isLivePrincipalTurn`); elevated handlers carry no duplicate origination re-check.
+`"elevated"` is the **principal-authority primitive** gate (redefined in #1126). The signal is a distinct `liveTurn` field on the `agent.task` payload — *not* a metadata-bag key, so it can never be swept onto a persisted/wakeable row. The dispatcher stamps it only on principal inbounds, and the `delegate` skill forwards it across a **synchronous** delegation, so "the principal is live" spans the whole synchronous call tree (a specialist acting inside the principal's turn qualifies) but a wake or scheduler fire never does. Enforcement lives solely at the execution-layer gate (`isLivePrincipalTurn`); elevated handlers carry no duplicate origination re-check.
 
-Reserve `"elevated"` for skills that exercise CEO authority itself: the approval queue and autonomy controls (`approve`/`deny`/`dismiss-action`, `set-autonomy`), the grant-recommendation decisions, the authorization-altering contact skills (`contact-set-tier`/`contact-set-role`/`contact-grant-permission`/`contact-revoke-permission`), and `system-secret-capture-request`. **Do not** use `"elevated"` for consequential *mutations* that aren't authority primitives — sending email, calendar writes, and the like are `"normal"` + an appropriate `action_risk`, governed by the autonomy engine and the ADR-018 surface-and-confirm flow. See [03-tools-and-execution.md](../specs/03-tools-and-execution.md) and ADR-017.
+`description` (and parameter descriptions) ship in `tool_definitions` on every model call. Write them with **the principal**, not a job title. The same rule covers overlay tools. See [Principal vocabulary](adding-an-agent.md#principal-vocabulary).
+
+Reserve `"elevated"` for skills that exercise principal authority itself: the approval queue and autonomy controls (`approve`/`deny`/`dismiss-action`, `set-autonomy`), the grant-recommendation decisions, the authorization-altering contact skills (`contact-set-tier`/`contact-set-role`/`contact-grant-permission`/`contact-revoke-permission`), and `system-secret-capture-request`. **Do not** use `"elevated"` for consequential *mutations* that aren't authority primitives — sending email, calendar writes, and the like are `"normal"` + an appropriate `action_risk`, governed by the autonomy engine and the ADR-018 surface-and-confirm flow. See [03-tools-and-execution.md](../specs/03-tools-and-execution.md) and ADR-017.
 
 #### `action_risk` (required)
 
@@ -121,23 +123,23 @@ Declares the risk level of this skill's primary action. Used by the **autonomy e
 | `"none"` | 0 | Reads, retrieval, summarization — no external effect |
 | `"low"` | 60 | Internal state writes: memory, contacts |
 | `"medium"` | 70 | Outbound communications: email, messaging |
-| `"high"` | 80 | Calendar writes, commitments on behalf of the CEO |
+| `"high"` | 80 | Calendar writes, commitments on behalf of the principal |
 | `"critical"` | 90 | Financial, destructive, or irreversible actions |
 
 A raw integer (0–100) may be used for precision when the named levels are too coarse. Values outside `[0, 100]` produce a validation error at skill load time.
 
 **Status:** `action_risk` is validated at load time and enforced at runtime. Skills whose action_risk exceeds the current autonomy score are blocked with an advisory failure.
 
-**How gating works:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an `autonomy.tool_blocked` audit event is emitted. The autonomy score is CEO-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
+**How gating works:** When an agent calls a skill, the execution layer compares the skill's minimum required autonomy score against the live global score from `autonomy_config`. If the score is too low, the invocation returns an advisory failure (no throw, same `{ success: false, error }` shape as any other failure) and an `autonomy.tool_blocked` audit event is emitted. The autonomy score is principal-controlled via the `set-autonomy` skill. See `docs/specs/14-autonomy-engine.md` for the full spec.
 
 #### Woken and derived tasks: the bypass ladder
 
 A skill can be invoked not only from a live turn but from a **woken** task (a scheduled job, a `wake_at` self-deferral, a heartbeat) or a **derived** child task. These carry a persisted `TaskOriginator` *lineage* — who or what ultimately caused them — but lineage is not the same as live presence:
 
-- The **elevated gate** ignores lineage entirely: only a live principal turn passes it (above). A woken task with CEO lineage can never invoke an elevated skill.
+- The **elevated gate** ignores lineage entirely: only a live principal turn passes it (above). A woken task with principal lineage can never invoke an elevated skill.
 - For `"normal"` + `action_risk` skills, autonomy's **principal-bypass** uses lineage, but only through a score-keyed *bypass ladder* that can downgrade inherited standing, never grant it. A woken/derived task's effective standing is floored to `agent` (propose-only) unless its live autonomy score clears the configured threshold (`autonomy.bypass_ladder`). A task whose score is momentarily unreadable fails **closed** on non-read actions.
 
-Don't design a skill assuming a woken task inherits the CEO's authority. If a skill must act on the CEO's behalf without a live turn, it goes through the normal autonomy + approval path. See [14-autonomy-engine.md](../specs/14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks).
+Don't design a skill assuming a woken task inherits the principal's authority. If a skill must act on the principal's behalf without a live turn, it goes through the normal autonomy + approval path. See [14-autonomy-engine.md](../specs/14-autonomy-engine.md#effective-standing--the-bypass-ladder-wokenderived-tasks).
 
 #### `allowed_callers` (optional)
 
@@ -148,7 +150,7 @@ Restricts which agents may invoke this skill. When set, only the named agents (a
 ```
 
 - Agent names are validated against the loaded agent registry at startup — unknown names cause a hard startup failure.
-- CEO-approved re-executions (`humanApproved: true`) bypass the caller gate.
+- Principal-approved re-executions (`humanApproved: true`) bypass the caller gate.
 - Omit `allowed_callers` entirely (or set to `[]`) to allow any agent to invoke the skill — this is the default behavior.
 - The `toolSearch` closure also respects `allowed_callers`: skills whose caller list excludes the searching agent are filtered from discovery results (defense-in-depth).
 
@@ -180,12 +182,12 @@ Valid capability names and what they grant:
 | `entityMemory` | `EntityMemory` | Reading and writing the knowledge graph |
 | `nylasCalendarClient` | `NylasCalendarClient` | Calendar CRUD operations |
 | `autonomyService` | `AutonomyService` | Reading or setting the autonomy score |
-| `executiveProfileService` | `ExecutiveProfileService` | Managing the CEO's writing voice profile |
+| `executiveProfileService` | `ExecutiveProfileService` | Managing the principal's writing voice profile |
 | `browserService` | `BrowserService` | Controlling a real web browser (Playwright) |
 | `bullpenService` | `BullpenService` | Managing agent conversation threads |
 | `toolSearch` | `toolSearch` closure | Searching the skill registry by keyword |
 | `actionLogRepo` | `ActionLogRepo` | Read/write access to `autonomy_action_log` for approval lifecycle (approve, deny, dismiss, list pending) |
-| `executionLayer` | `ExecutionLayer` | Re-invoking skills with `humanApproved` bypass. Only `approve-action` should declare this — it is `sensitivity: "elevated"` (CEO-only). |
+| `executionLayer` | `ExecutionLayer` | Re-invoking skills with `humanApproved` bypass. Only `approve-action` should declare this — it is `sensitivity: "elevated"` (principal-only). |
 | `confidencePipeline` | `ConfidencePipeline` | Contact confidence scoring. Skills that modify trust-related data (trust level, identity pairings) should declare this and fire scoring signals through it. |
 | `tempFileStore` | `TempFileStore` | Writing binary buffers to a secure tmpfs mount; returns `file://` URLs for MCP tools that accept file paths. Used by email download skills for binary-correct attachment handoff. |
 | `infraLlm` | `InfraLlm` | Constrained LLM access — `classify()` and `extract()` only, no raw `chat()`. Routed through `ModelRouter` with full telemetry. For infrastructure skills that need LLM reasoning without unbounded access. |
@@ -389,7 +391,7 @@ interface ToolContext {
   actionLogRepo?: ActionLogRepo;
 
   /** Execution layer — declare "executionLayer" in capabilities.
-   *  Re-invoke skills with humanApproved bypass. CEO-only (approve-action). */
+   *  Re-invoke skills with humanApproved bypass. Principal-only (approve-action). */
   executionLayer?: ExecutionLayer;
 
   /** Confidence pipeline — declare "confidencePipeline" in capabilities.
@@ -570,7 +572,7 @@ servers:
     transport: sse
     url: https://mcp-github.example.com/sse
     action_risk: low          # required — none | low | medium | high | critical
-    sensitivity: normal        # optional — "normal" (default) or "elevated" (CEO-only)
+    sensitivity: normal        # optional — "normal" (default) or "elevated" (principal-only)
 ```
 
 At startup, Curia connects to each MCP server, discovers its tools via `tools/list`, and registers them in the skill registry alongside local skills. Agents don't know or care whether a tool is local or MCP.
@@ -613,7 +615,7 @@ For **freeform working state that grows** — running notes, a draft, or a resea
 ## Checklist Before Opening a PR
 
 - [ ] `action_risk` is declared in `tool.json`
-- [ ] `sensitivity` is `"elevated"` *only* if the skill is a CEO-authority primitive (requires a live principal turn); consequential mutations use `"normal"` + `action_risk` instead
+- [ ] `sensitivity` is `"elevated"` *only* if the skill is a principal-authority primitive (requires a live principal turn); consequential mutations use `"normal"` + `action_risk` instead
 - [ ] `capabilities` declares only the privileged services actually used — omit if using only universal services
 - [ ] `allowed_callers` is set appropriately: for core skills, only for structural invariants (coordinator-only governance, system-only infrastructure); for custom/deploy skills, default to restricting to the intended agent(s)
 - [ ] All optional inputs are suffixed with `?` in the manifest

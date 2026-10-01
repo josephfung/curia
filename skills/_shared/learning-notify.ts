@@ -3,8 +3,8 @@
 // After #1464 removed the scheduled daily digest, the learning-item generators (voice-learn and
 // task-completion-from-sent) wrote proposals/undo-confirm items to the config store with no reader
 // left to surface them. Rather than re-add a scheduled recap, each generator calls
-// notifyLearningProposal the moment it produces a reviewable item — so the CEO reviews it fresh,
-// in context, and only when there's something to review. The CEO's approve/dismiss/undo/confirm
+// notifyLearningProposal the moment it produces a reviewable item — so the principal reviews it fresh,
+// in context, and only when there's something to review. The principal's approve/dismiss/undo/confirm
 // reply still resolves via resolve-learning-digest; this only adds the outbound surface.
 //
 // Everything here is best-effort and non-fatal: it runs AFTER the durable proposal/digest write,
@@ -18,7 +18,7 @@ import type { ToolContext } from '../../src/skills/types.js';
  *
  * Mirrors approval-expiry-sweep's resolvePrincipalEmail: findContactBySystemRole('principal') is
  * the single source of truth for principal identity, and delivery is restricted to a verified +
- * active email (a defunct/bounced address may be reassigned, so we don't route CEO notifications
+ * active email (a defunct/bounced address may be reassigned, so we don't route principal notifications
  * to it). Never throws — a contacts-layer error on this notification path is treated as "no email".
  */
 export async function resolvePrincipalEmail(ctx: ToolContext): Promise<string | null> {
@@ -44,7 +44,7 @@ export async function resolvePrincipalEmail(ctx: ToolContext): Promise<string | 
 }
 
 /**
- * Fire a `learning_proposal` CEO notification with a pre-built subject + body.
+ * Fire a `learning_proposal` principal notification with a pre-built subject + body.
  *
  * Best-effort and non-fatal: a missing outboundGateway, an unresolvable principal email, or a
  * false send result is logged and swallowed so the generator's primary work (the durable
@@ -76,7 +76,7 @@ export async function notifyLearningProposal(
       body: notification.body,
     });
     if (!sent) {
-      ctx.log.warn('learning-notify: sendNotification returned false — CEO notification not delivered this run');
+      ctx.log.warn('learning-notify: sendNotification returned false — principal notification not delivered this run');
     }
     return sent;
   } catch (err) {

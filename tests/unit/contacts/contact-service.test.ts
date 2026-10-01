@@ -1236,6 +1236,29 @@ describe('ContactService', () => {
       // Normalized to lowercase on write
       expect(updated.primaryEmail).toBe('match@example.com');
     });
+
+    it('notifies identity subscribers when primaryEmail is committed', async () => {
+      const onIdentitiesChanged = vi.fn();
+      const svc = ContactService.createInMemory(entityMemory, { onIdentitiesChanged });
+      const contact = await svc.createContact({
+        displayName: 'Primary Notify',
+        source: 'test',
+      });
+      await svc.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: 'primary-notify@example.com',
+        source: 'ceo_stated',
+      });
+      onIdentitiesChanged.mockClear();
+
+      await svc.updateContactFields(contact.id, { title: 'Director' });
+      expect(onIdentitiesChanged).not.toHaveBeenCalled();
+
+      await svc.updateContactFields(contact.id, { primaryEmail: 'primary-notify@example.com' });
+      expect(onIdentitiesChanged).toHaveBeenCalledTimes(1);
+      expect(onIdentitiesChanged).toHaveBeenCalledWith(contact.id);
+    });
   });
 
   describe('elevateTierToKnown', () => {

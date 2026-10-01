@@ -1,6 +1,6 @@
 // src/contacts/principal.ts
 //
-// Helper functions for principal (CEO) identity checks.
+// Helper functions for principal identity checks.
 // Centralizes all principal-related queries so authorization logic
 // lives in one place without over-abstracting into a service class.
 //
@@ -34,13 +34,13 @@ export function capOriginatorToParent(
 
 /**
  * Check whether a task was originated by the principal (the human Curia serves).
- * Used by CEO-authorized skill handlers and the autonomy gate's principal-bypass.
+ * Used by principal-authorized skill handlers and the autonomy gate's principal-bypass.
  *
  * NOTE: this checks LINEAGE (who started the task chain), which is satisfied by a woken
  * principal-lineage task too. It is the correct notion for the autonomy principal-bypass
- * (acting *within* CEO-authorized work, inheritable at high trust via the ladder), but it is
+ * (acting *within* principal-authorized work, inheritable at high trust via the ladder), but it is
  * NOT sufficient for the `elevated` gate — that requires a LIVE principal turn. Use
- * isLivePrincipalTurn() for "the CEO is exercising authority right now". See ADR-017 and
+ * isLivePrincipalTurn() for "the principal is exercising authority right now". See ADR-017 and
  * docs/specs/03-tools-and-execution.md (elevated = live principal turn).
  *
  * @param metadata  Task metadata (from ctx.taskMetadata or agent.task payload)
@@ -129,7 +129,7 @@ export function makeSystemOriginator(): TaskOriginator {
 /**
  * Create a TaskOriginator representing principal-initiated work from a principal-only
  * surface (the console / dashboard) — issue #1127. The console's bootstrap secret is
- * CEO-only, so any authenticated console request is unambiguously the principal; the
+ * principal-only, so any authenticated console request is unambiguously the principal; the
  * durable `tasks` / `scheduled_jobs` rows it creates must carry principal **lineage** so
  * they don't default to the conservative agent / no-bypass standing when later woken.
  *

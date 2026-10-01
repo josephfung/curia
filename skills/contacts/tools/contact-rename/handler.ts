@@ -34,7 +34,7 @@ export class ContactRenameHandler implements ToolHandler {
     }
 
     // Reject blank or whitespace-only names — a whitespace display name would break
-    // contact lookup and appear as an invisible entry in the CEO's contact list.
+    // contact lookup and appear as an invisible entry in the principal's contact list.
     const trimmedName = display_name.trim();
     if (trimmedName.length === 0) {
       return { success: false, error: 'display_name must not be blank or whitespace-only' };

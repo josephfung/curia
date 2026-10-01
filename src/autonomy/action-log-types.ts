@@ -95,7 +95,7 @@ export interface ScoringFlags {
 
 /**
  * Deterministic scoring table for approval/gate outcomes.
- * These outcomes carry inherent trust signals from the CEO's decision
+ * These outcomes carry inherent trust signals from the principal's decision
  * (or the gate's decision) and do not need LLM interpretation.
  *
  * null means "no signal for this dimension" — the row is excluded from

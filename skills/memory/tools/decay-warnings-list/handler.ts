@@ -1,8 +1,8 @@
 // handler.ts — decay-warnings-list skill
 //
-// Returns KG nodes flagged by DreamEngine for CEO re-confirmation before archival.
+// Returns KG nodes flagged by DreamEngine for principal re-confirmation before archival.
 // A node is warned if it's important (high sensitivity or high connectivity) and
-// its confidence has dropped to the archive threshold. The CEO has 7 days to confirm
+// its confidence has dropped to the archive threshold. The principal has 7 days to confirm
 // or dismiss before the node is auto-archived.
 //
 // daysRemaining is computed from warned_at + 7 days - now(). The coordinator uses

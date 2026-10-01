@@ -71,7 +71,7 @@ export interface OutboundContentFilterConfig {
   // Phrases from the system prompt. If any appear in outbound content, it's
   // a signal the agent accidentally echoed its own instructions.
   systemPromptMarkers: string[];
-  // CEO email — allowed in outbound content (not a third-party leak).
+  // principal email — allowed in outbound content (not a third-party leak).
   // Accepts a mutable PrincipalEmailRef so post-boot identity binds hot-reload (#1514).
   ceoEmail: string | PrincipalEmailRef;
   /** Optional Stage 2 LLM judge. When absent, Stage 2 is a no-op pass. */
@@ -243,7 +243,7 @@ export class OutboundContentFilter {
     // Stage 2.5: escalation judge — tier-sensitive disclosure gate.
     // Classifies the content's disclosure class (public, principal-context, third-party,
     // confidential) and checks it against the tier's allowed set in DISCLOSURE_ALLOWED.
-    // Catches borderline disclosures (e.g. CEO availability shared with an 'unknown'
+    // Catches borderline disclosures (e.g. principal availability shared with an 'unknown'
     // recipient) that the deterministic email-pattern scan in Stage 1 misses.
     // No-op pass when no escalation judge is configured.
     let escalationFindings: FilterFinding[] = [];
@@ -317,8 +317,8 @@ export class OutboundContentFilter {
    *    The structured-context restriction avoids false positives on bare words
    *    like "agent" that have legitimate uses in English.
    *
-   * Principal bypass: echoing internal field names in a CEO email is a bug, but
-   * silently blocking the message hides the problem — the CEO needs the actual
+   * Principal bypass: echoing internal field names in a principal email is a bug, but
+   * silently blocking the message hides the problem — the principal needs the actual
    * content, not a FYI notification. Stage 2/2.5 still run; secret-pattern still
    * blocks credentials regardless of recipient.
    */
@@ -412,7 +412,7 @@ export class OutboundContentFilter {
   /**
    * Rule: contact-data-leak
    *
-   * Finds any email address in the content that is not the recipient or CEO,
+   * Finds any email address in the content that is not the recipient or principal,
    * then decides whether to block based on recipient tier.
    *
    * Block condition:
@@ -422,7 +422,7 @@ export class OutboundContentFilter {
    *   no third-party email OR recipient tier >= 'trusted'
    *
    * 'trusted' and 'principal' tiers may receive third-party contact data
-   * (emails of other people). This covers both "CEO asked for Hamilton's email"
+   * (emails of other people). This covers both "principal asked for Hamilton's email"
    * and "daily briefing lists meeting attendees". Tiers below 'trusted' never
    * receive third-party contact data.
    *
@@ -454,7 +454,7 @@ export class OutboundContentFilter {
     }
 
     // Untrusted recipient: scan for third-party emails and block any that appear.
-    // The allowedEmails set still permits the recipient and CEO email addresses to
+    // The allowedEmails set still permits the recipient and principal email addresses to
     // appear in content without triggering a finding.
     const findings: FilterFinding[] = [];
     const seen = new Set<string>();
@@ -521,7 +521,7 @@ export class OutboundContentFilter {
    * (public / principal-context / third-party / confidential) and applies the
    * DISCLOSURE_ALLOWED policy table to determine if that class is permitted for
    * the recipient's tier. This catches borderline disclosures that the deterministic
-   * Stage 1 rules miss — e.g. the CEO's availability being shared with an 'unknown'
+   * Stage 1 rules miss — e.g. the principal's availability being shared with an 'unknown'
    * external recipient.
    *
    * When no escalation judge is configured, Stage 2.5 is a no-op pass.
@@ -552,7 +552,7 @@ export class OutboundContentFilter {
     if (verdict.decision === 'escalate') {
       // Detail uses only deterministic enum values (class + tier), not verdict.reason.
       // The LLM-generated reason is available in structured logs from the judge's own
-      // logger but must not be forwarded to the CEO notification email — the disclosure
+      // logger but must not be forwarded to the principal notification email — the disclosure
       // judge prompt does not explicitly prohibit quoting from the evaluated content,
       // so verdict.reason could theoretically echo sensitive fragments.
       return [{

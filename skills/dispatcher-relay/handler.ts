@@ -1,6 +1,6 @@
 // handler.ts — dispatcher-relay skill.
 //
-// Re-publishes a Gate C–withheld auto-reply as outbound.message after the CEO
+// Re-publishes a Gate C–withheld auto-reply as outbound.message after the principal
 // approves via approve-action (#1733). Invoked only with humanApproved: true —
 // allowed_callers is ["system"] so agents cannot call it directly.
 //

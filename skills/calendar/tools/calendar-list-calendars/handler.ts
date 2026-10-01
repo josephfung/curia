@@ -2,7 +2,7 @@
 //
 // Lists all calendars visible to the Nylas grant, annotated with
 // registration status from the contact system calendar registry.
-// Unregistered calendars are flagged so the agent can ask the CEO
+// Unregistered calendars are flagged so the agent can ask the principal
 // who they belong to.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';

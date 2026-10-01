@@ -226,7 +226,7 @@ export class ActionLogRepo {
   }
 
   /**
-   * Mark that the CEO notification was successfully delivered.
+   * Mark that the principal notification was successfully delivered.
    * Called after a successful sendNotification(). If notification fails,
    * this is never called — notification_sent_at stays null.
    */
@@ -445,7 +445,7 @@ export class ActionLogRepo {
 
       // Query 2: not found as pending — check if it exists at all (any outcome)
       // to give a more precise error reason (not_found vs already_resolved vs expired).
-      // ORDER BY created_at DESC ensures the most recent row is returned (most relevant to CEO).
+      // ORDER BY created_at DESC ensures the most recent row is returned (most relevant to principal).
       const any = await this.pool.query(
         `SELECT * FROM autonomy_action_log
          WHERE short_ref = $1

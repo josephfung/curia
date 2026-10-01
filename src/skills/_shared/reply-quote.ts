@@ -13,7 +13,7 @@ import { htmlToText } from '../../channels/email/html-to-text.js';
 
 /**
  * Minimal message shape required to build a reply quote block.
- * Both NylasMessageFull (CEO client) and NylasMessage (core client)
+ * Both NylasMessageFull (principal client) and NylasMessage (core client)
  * satisfy this interface structurally — no explicit coupling needed.
  */
 export interface QuoteableMessage {

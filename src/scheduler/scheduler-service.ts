@@ -431,7 +431,7 @@ export class SchedulerService {
    * 0 for jobs without a linked task). The task UPDATE runs in the CTE against the same
    * snapshot, so both see the pre-update status.
    *
-   * The terminal-state guard prevents re-arming a job the CEO already ended: without it,
+   * The terminal-state guard prevents re-arming a job the principal already ended: without it,
    * pausing a 'cancelled'/'completed' job then resuming it (unsuspendJob accepts 'paused')
    * would resurrect it. Drift only ever pauses active jobs, so the guard is a no-op there.
    */
@@ -458,7 +458,7 @@ export class SchedulerService {
   /**
    * Pause a job and its linked task due to intent drift detection.
    * Sets status = 'paused' on both tables.
-   * The CEO must review and resume or cancel the job manually.
+   * The principal must review and resume or cancel the job manually.
    */
   async pauseJobForDrift(jobId: string): Promise<void> {
     const count = await this.setPaused(jobId);
@@ -473,7 +473,7 @@ export class SchedulerService {
 
   /**
    * Pause a job and its linked task at an operator's explicit request
-   * (e.g. the CEO asking Curia to pause a schedule via the scheduler-update skill).
+   * (e.g. the principal asking Curia to pause a schedule via the scheduler-update skill).
    * Neutral counterpart to pauseJobForDrift — same state transition, no drift semantics.
    * Released by unsuspendJob(), which accepts both 'suspended' and 'paused' states.
    * Throws when the job is missing or already terminal so callers don't report a

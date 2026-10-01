@@ -25,7 +25,7 @@ export interface JobRouteOptions {
   webAppBootstrapSecret: string | undefined;
   sessions: SessionStore;
   // Used to resolve the principal contact so console-created jobs carry principal lineage
-  // (#1127). The console is a CEO-only surface; a job created here must be stamped principal-
+  // (#1127). The console is a principal-only surface; a job created here must be stamped principal-
   // originated, consistent with scheduler-create's principal path.
   contactService: ContactService;
   logger: Logger;
@@ -103,7 +103,7 @@ export async function jobRoutes(
       return reply.status(400).send({ error: 'Either cron_expr or run_at must be provided' });
     }
 
-    // Stamp principal lineage (#1127) — the console is a CEO-only surface, so a job created
+    // Stamp principal lineage (#1127) — the console is a principal-only surface, so a job created
     // here is principal-originated, consistent with scheduler-create's principal path. Lineage
     // only: the scheduled_jobs row is a persisted, async-fired artifact, never a live turn.
     const originator = await resolveConsoleOriginator(contactService, logger);

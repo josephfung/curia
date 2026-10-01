@@ -3,7 +3,7 @@
  *
  * Calendar is FIRST-PERSON: Nylas/Google `sendRsvp` records the response of the
  * attendee whose identity matches the authenticated grant. So the calendar client
- * must bind to the CEO's OWN grant (`ceo_nylas_grant_id`) — the same identity the
+ * must bind to the principal's OWN grant (`ceo_nylas_grant_id`) — the same identity the
  * ceo-inbox skills use — not to Curia's mailbox grant. Binding to Curia's mailbox
  * made Curia a third-party delegate, and Google rejected RSVPs with
  * `omittedAttendeesSpecified` (#1217).

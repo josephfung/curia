@@ -2,16 +2,16 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { ContactTier, TaskOriginator } from '../../../../src/contacts/types.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 
-// 'principal' is a structural tier assigned only to the CEO contact. It cannot
+// 'principal' is a structural tier assigned only to the principal contact. It cannot
 // be granted via chat or UI — it is set at bootstrap and protected by API guards.
 const SETTABLE_TIERS: ContactTier[] = ['blocked', 'unknown', 'known', 'trusted'];
 
 // SECURITY: setting a contact's tier alters authorization itself (tier drives the Gate C check),
-// so #1126 keeps this `elevated` — a CEO-authority primitive requiring a LIVE principal turn,
+// so #1126 keeps this `elevated` — a principal-authority primitive requiring a LIVE principal turn,
 // never performed autonomously (even at max trust). The handler does not re-check origination;
 // the execution-layer live-principal gate is the sole enforcement point. The skill is pinned to
 // the delegated contacts specialist, which works because the live-principal signal is forwarded
-// across a SYNCHRONOUS delegation (#1126): "treat Dana as trusted" from the CEO reaches the
+// across a SYNCHRONOUS delegation (#1126): "treat Dana as trusted" from the principal reaches the
 // specialist as a live turn, while an autonomous/woken contacts task carries no live signal and
 // is correctly blocked. (action_risk:'high' is inert while elevated — elevated skills are
 // autonomy-gate-exempt — but documents the consequence class.)

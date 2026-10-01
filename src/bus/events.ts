@@ -64,7 +64,7 @@ interface AgentTaskPayload {
    *  `metadata` — so it can never be swept into a persisted row by a skill that forwards the
    *  metadata bag (jobs/tasks/bullpen copy `originator` by name; they don't see this field).
    *  Stamped `true` ONLY by the dispatcher on a fresh principal inbound, and forwarded by the
-   *  `delegate` skill across a SYNCHRONOUS delegation (so a specialist acting inside the CEO's
+   *  `delegate` skill across a SYNCHRONOUS delegation (so a specialist acting inside the principal's
    *  live turn inherits it). Structurally absent from every wake, scheduler fire, and persisted
    *  task — those construct their own agent.task without it. The elevated-skill gate requires it. */
   liveTurn?: boolean;
@@ -295,21 +295,21 @@ interface OutboundNoReplyPayload {
 }
 
 // OutboundNotificationPayload — published by the dispatch layer (via OutboundGateway.sendNotification)
-// when a system-level CEO alert needs to be sent. Routing through the bus ensures the notification
+// when a system-level principal alert needs to be sent. Routing through the bus ensures the notification
 // goes through the same safety pipeline as regular outbound messages, closing the prior direct
 // dispatchEmail() bypass. See #206.
 //
 // notificationType discriminates between alert categories:
-//   - 'blocked_content': CEO alert that an outbound message was blocked by the content filter
-//   - 'contact_rate_limited': CEO alert that contact auto-creation was throttled due to rate limits
-//   - 'approval_requested':   CEO alert that an autonomy gate blocked a skill and approval is needed
-//   - 'approval_expired':     CEO alert that pending approvals expired without response (approval-expiry-sweep)
-//   - 'schedule_suspended': CEO alert that a scheduled job was auto-suspended after consecutive failures (#538)
-//   - 'schedule_recovered': CEO alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
-//   - 'learning_proposal':  CEO alert surfacing a learning-digest item (voice-guide proposal or sent-mail
+//   - 'blocked_content': principal alert that an outbound message was blocked by the content filter
+//   - 'contact_rate_limited': principal alert that contact auto-creation was throttled due to rate limits
+//   - 'approval_requested':   principal alert that an autonomy gate blocked a skill and approval is needed
+//   - 'approval_expired':     principal alert that pending approvals expired without response (approval-expiry-sweep)
+//   - 'schedule_suspended': principal alert that a scheduled job was auto-suspended after consecutive failures (#538)
+//   - 'schedule_recovered': principal alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
+//   - 'learning_proposal':  principal alert surfacing a learning-digest item (voice-guide proposal or sent-mail
 //                           task-completion undo/confirm) event-driven when produced, after #1464 removed
 //                           the scheduled digest that used to surface them (#1466)
-//   - 'database_unavailable': CEO alert that Postgres has been unreachable for >5 minutes (#1381)
+//   - 'database_unavailable': principal alert that Postgres has been unreachable for >5 minutes (#1381)
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'
@@ -320,7 +320,7 @@ export interface OutboundNotificationPayload {
     | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
     | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
     | 'database_unavailable'; // Postgres unreachable beyond escalation threshold (#1381)
-  /** Recipient email for this notification (always the CEO email today). */
+  /** Recipient email for this notification (always the principal email today). */
   ceoEmail: string;
   subject: string;
   body: string;
@@ -721,7 +721,7 @@ export type LateDelegationReviewOutcome =
 
 // DelegationTimedOutPayload — published by the agent layer (runtime) when a delegate wait
 // times out with the specialist possibly still running, right after the failure is escalated
-// to the CEO backlog. The LateDelegationSubscriber turns this into a durable handle.
+// to the principal backlog. The LateDelegationSubscriber turns this into a durable handle.
 interface DelegationTimedOutPayload {
   /** The delegate agent.task event id — the specialist stamps it as parentEventId on its
    *  eventual agent.response, so it is the correlation key for the whole mechanism. */
@@ -745,7 +745,7 @@ interface DelegationTimedOutPayload {
   /** TaskOriginator of the originating turn, forwarded opaquely so a later resume can
    *  restore lineage rather than fabricate one. */
   originator?: Record<string, unknown>;
-  /** CEO review task created by the escalation. Absent when task-create failed. */
+  /** principal review task created by the escalation. Absent when task-create failed. */
   reviewTaskId?: string;
   /** The delegate wait that elapsed, in ms — sets the handle's TTL floor. */
   waitTimeoutMs?: number;
@@ -820,7 +820,7 @@ interface AuthorizationDecisionPayload {
 // AutonomySkillBlockedPayload — published by the execution layer when a skill
 // invocation is blocked because the live autonomy score is below the skill's
 // action_risk threshold. Advisory-only — the agent receives a { success: false }
-// result and can escalate to the CEO.
+// result and can escalate to the principal.
 interface AutonomySkillBlockedPayload {
   toolName: string;
   actionRisk: ActionRisk;
@@ -1047,7 +1047,7 @@ export interface OutboundNoReplyEvent extends BaseEvent {
   payload: OutboundNoReplyPayload;
 }
 
-// OutboundNotificationEvent — published by the dispatch layer when a system-level CEO
+// OutboundNotificationEvent — published by the dispatch layer when a system-level principal
 // notification needs to be sent (blocked-content alert, group-held alert, etc.).
 // Channel adapters subscribe to route it through the outbound safety pipeline.
 // System layer subscribes for audit logging and security monitoring.
@@ -1141,7 +1141,7 @@ export interface MemoryQueryEvent extends BaseEvent {
 }
 
 // memory.decay_warning — emitted by DreamEngine (system layer) when an important
-// KG node is flagged for CEO re-confirmation before archival (#280).
+// KG node is flagged for principal re-confirmation before archival (#280).
 // "important" = high sensitivity (confidential/restricted) OR high edge-count (top p95, floor 5).
 export interface MemoryDecayWarningPayload {
   nodeId: string;
@@ -1607,7 +1607,7 @@ export type BusEvent =
   | AgentDiscussEvent        // Bullpen: inter-agent discussion message
   | MemoryStoreEvent      // Phase 6: knowledge graph write audit
   | MemoryQueryEvent      // Phase 6: knowledge graph read audit
-  | MemoryDecayWarningEvent  // #280: DreamEngine flags important node for CEO re-confirmation
+  | MemoryDecayWarningEvent  // #280: DreamEngine flags important node for principal re-confirmation
   | ContactResolvedEvent  // Contacts Phase A: sender matched to a known contact
   | ContactUnknownEvent   // Contacts Phase A: sender has no contact record
   | ContactDuplicateDetectedEvent   // Dedup: new contact matches an existing one

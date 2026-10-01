@@ -416,7 +416,7 @@ export class KnowledgeGraphStore {
     });
   }
 
-  /** List all warned (warned_at IS NOT NULL), non-archived nodes for the CEO re-confirmation flow. */
+  /** List all warned (warned_at IS NOT NULL), non-archived nodes for the principal re-confirmation flow. */
   async listDecayWarnings(): Promise<DecayWarningRow[]> {
     return this.backend.listDecayWarnings();
   }

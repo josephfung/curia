@@ -3,7 +3,7 @@
 // Sits between the agent response and the channel adapter. For each outbound
 // message it:
 //   1. Checks whether the kill switch is active (enabled: false → pass through)
-//   2. Checks CEO contact ID — principal bypass via immutable UUID (silent)
+//   2. Checks principal contact ID — principal bypass via immutable UUID (silent)
 //   3. Detects PII using the shared detectPii() core from src/pii/scrubber.ts
 //   4. Filters matches to those not in the channel's allow list
 //   5. Replaces them end-to-start with labelled tokens (e.g. [REDACTED: CREDIT_CARD])
@@ -63,7 +63,7 @@ export interface PiiRedactorOptions {
   /**
    * The principal's contact UUID, resolved at startup via findContactBySystemRole('principal') (#1049).
    * When set, any message destined for this exact contact ID bypasses PII redaction entirely,
-   * regardless of trust_level. This is the primary CEO identification mechanism — more stable
+   * regardless of trust_level. This is the primary principal identification mechanism — more stable
    * than trust_level because it is an immutable UUID resolved once at startup, not a DB field
    * that could be accidentally updated by contact-management code paths.
    */
@@ -106,7 +106,7 @@ export class PiiRedactor {
    * Returns the (possibly modified) content and a list of applied redactions.
    * Returns the original content unchanged if:
    *   - redaction is disabled (kill switch)
-   *   - the recipient is the principal (CEO contact UUID match — structural bypass)
+   *   - the recipient is the principal (principal contact UUID match — structural bypass)
    *   - no PII is detected
    *   - all detected PII is in the channel's allow list
    *
@@ -124,7 +124,7 @@ export class PiiRedactor {
       return { content, redactions: [] };
     }
 
-    // Step 2: CEO contact ID bypass — structural principal bypass.
+    // Step 2: principal contact ID bypass — structural principal bypass.
     // The principal contact UUID is resolved once via findContactBySystemRole('principal')
     // at startup and stored here (#1049).
     // A UUID match is tamper-proof: it cannot be accidentally elevated via contact management

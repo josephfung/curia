@@ -35,6 +35,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Model-facing prose** — calls the person served "the principal" across prompts and tool descriptions. (#1950)
 - **`resolve-learning-digest` outputs (public API)** — `kind` distinguishes leaving a task done from declining a confirm. (#1936)
 - **`tool.result` (public API)** — optional `originConversationId` ties a specialist send to the principal thread. (#1860)
 - **`tool.result` (public API)** — optional `routingTaskId` locks only the task that sent. (#1860)
@@ -79,6 +80,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Principal contact block** — states the address list is closed and marks the primary email. (#1950)
 - **Override-floor audit** — URL handling hardened, and the token-leak test can no longer pass while leaking. (code-scanning 285, 286, 287)
 - **Delegate brief dates** — a year on the range end no longer rejects the cited start date. (#1945)
 - **Delegate brief dates** — short month names now match comma-less and ordinal forms. (#1945)

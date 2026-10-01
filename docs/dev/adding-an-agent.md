@@ -49,7 +49,7 @@ model:
 # ------------------------------------------------------------------
 
 system_prompt: |
-  You are an expense tracking assistant for a CEO.
+  You are an expense tracking assistant for the principal.
   Extract amounts, vendors, categories, and dates from receipts.
   Return structured data — never guess at missing fields.
 
@@ -74,7 +74,7 @@ allow_discovery: true          # if true, agent can search tools at runtime
 
 schedule:
   - cron: "0 9 * * 1"         # standard cron expression (UTC unless agent sets timezone)
-    task: "Generate weekly expense summary and email to CEO"
+    task: "Generate weekly expense summary and email to the principal"
 
 # ------------------------------------------------------------------
 # Error Budget (optional)
@@ -83,7 +83,7 @@ schedule:
 error_budget:
   max_turns: 20               # max LLM round-trips per task execution
   max_cost_usd: 1.00          # max LLM spend per task (across all turns)
-                              # exceeded tasks are halted and the CEO is notified
+                              # exceeded tasks are halted and the principal is notified
 
 # ------------------------------------------------------------------
 # Custom Handler (optional — escape hatch for complex logic)
@@ -132,7 +132,18 @@ The LLM instructions for this agent. Written in plain text. Key points:
 
 - The runtime injects additional context automatically (current date/time, autonomy band, memory context) — you do not need to add boilerplate for these
 - The Coordinator's system prompt uses `${office_identity_block}` to receive the compiled identity (name, tone, constraints, etc.) from `OfficeIdentityService`. Specialist agents do not need this — identity is a Coordinator concern.
-- Write for a single-turn task frame. For deferred or multi-step work, use the task system (pin `tasks` + usually `documents`, see below and [spec 19](../specs/19-tasks-and-backlog.md)) — `task-create` for CEO-visible work, `scheduler-create` for operational sweeps. When a task wakes the agent, its `intent_anchor`, title, and progress are supplied as context so the agent resumes where it left off.
+- Write for a single-turn task frame. For deferred or multi-step work, use the task system (pin `tasks` + usually `documents`, see below and [spec 19](../specs/19-tasks-and-backlog.md)) — `task-create` for principal-visible work, `scheduler-create` for operational sweeps. When a task wakes the agent, its `intent_anchor`, title, and progress are supplied as context so the agent resumes where it left off.
+- Call the person Curia serves **the principal**. Do not hardcode a job title such as CEO. See [Principal vocabulary](#principal-vocabulary) below.
+
+### Principal vocabulary
+
+Agent prompts, schedule `task` text, skill `SKILL.md` bodies, and `tool.json` descriptions are all shown to the model. Core uses **the principal** for the person the deployment serves. A president, chair, founder, or executive director is still the principal.
+
+Write overlay agents and tools the same way. A prompt that says "email the CEO" while the injected Principal Contact Details block says "the principal" is how a model invents an address that was never on file. Ask for the principal, then use an address from that block. The list is complete: an identifier that is not listed is not the principal's. When the block marks an email `[primary]`, that address is `contacts.primary_email`.
+
+Do not rename identifiers to match the prose. Agent names (`ceo-inbox`), secret names, and schema values such as task `owner: "ceo"` stay as they are.
+
+When a human-facing sentence genuinely needs the principal's job title, read `contacts.title` on the principal contact. Do not hardcode one.
 
 ### `pinned_skills` (optional)
 
@@ -170,7 +181,7 @@ This table is hand-maintained — run `ls skills/` for the authoritative current
 #### Using `config-store` for persistent agent config
 
 If your agent needs to store configuration values that persist across runs — URLs, account
-numbers, preferences, or any other settings the CEO provides once via chat — pin
+numbers, preferences, or any other settings the principal provides once via chat — pin
 `config-store` and use it directly. Do not write a new `knowledge-*` skill.
 
 ```yaml
@@ -181,7 +192,7 @@ pinned_skills:
 **Namespace:** pick a short, stable string owned by your agent (e.g. `travel` for a travel
 coordinator, `writing_config` for an essay editor). Bake it into your system prompt.
 
-**Store** (coordinator does this when CEO provides a value via chat):
+**Store** (coordinator does this when the principal provides a value via chat):
 ```
 config-store { action: "store", namespace: "writing_config", key: "writing_guide_url", value: "https://..." }
 ```
@@ -271,7 +282,7 @@ Uses standard UNIX cron syntax (5 fields). Times are in UTC unless a timezone is
 
 #### Targeting the coordinator from a schedule
 
-If your specialist runs on a schedule and its output should be communicated to the CEO,
+If your specialist runs on a schedule and its output should be communicated to the principal,
 declare `agent_id: coordinator` in the schedule entry. The coordinator receives the
 task, delegates to your specialist for the actual work, and handles sending in its own
 voice with its persona guardrails intact.
@@ -283,7 +294,7 @@ schedule:
     agent_id: coordinator
     task: >
       The writing scout has run on schedule. Delegate to @writing-scout to research
-      and score 2 high-signal essay ideas for the CEO. Email findings to the CEO.
+      and score 2 high-signal essay ideas for the principal. Email findings to the principal.
 ```
 
 The `agent_id` field defaults to the agent's own name when omitted — existing schedules
@@ -304,7 +315,7 @@ error_budget:
   max_errors: 3        # skill invocation failures before the task is aborted
 ```
 
-All three limits are enforced at task runtime. When any limit is hit, the task is marked as failed, the CEO is notified on the originating channel, and the agent returns to idle.
+All three limits are enforced at task runtime. When any limit is hit, the task is marked as failed, the principal is notified on the originating channel, and the agent returns to idle.
 
 
 ---

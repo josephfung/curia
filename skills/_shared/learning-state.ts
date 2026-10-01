@@ -36,7 +36,7 @@ export type CompletionCandidateMap = Record<string, CompletionCandidate>;
  * Hygiene backstop for abandoned completion-digest items (#1936, carrying #1437).
  *
  * Must exceed the longest reasonable time a legitimately-pending undo/confirm item
- * may sit unactioned. A CEO who simply has not gotten to the item must not lose it.
+ * may sit unactioned. A principal who simply has not gotten to the item must not lose it.
  * 90 days matches the evidence-doc retention window proposed in #1437: an item
  * untouched that long is stale. This is not a substitute for dismiss — dismiss is
  * how a declined undo leaves the map immediately.
@@ -159,7 +159,7 @@ function copyCompletionDigestItem(raw: StoredCompletionDigestItem): { item: Comp
 
 /** True only when `createdAt` is a `Date.toISOString()` instant strictly older than
  *  the max age. Missing or non-ISO clocks are not expired: those entries have no
- *  trustworthy clock, and sweeping them would delete a pending item the CEO may
+ *  trustworthy clock, and sweeping them would delete a pending item the principal may
  *  still act on (#1437). */
 export function isCompletionDigestItemExpired(
   item: CompletionDigestItem,

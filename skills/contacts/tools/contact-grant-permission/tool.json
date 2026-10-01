@@ -1,7 +1,7 @@
 {
   "name": "contact-grant-permission",
-  "description": "Grant or deny a specific permission for a contact, overriding their role defaults. Use when the CEO says 'Let X do Y' or 'Don't let X do Y'.",
-  "version": "1.1.0",
+  "description": "Grant or deny a specific permission for a contact, overriding their role defaults. Use when the principal says 'Let X do Y' or 'Don't let X do Y'.",
+  "version": "1.1.1",
   "sensitivity": "elevated",
   "action_risk": "critical",
   "inputs": {

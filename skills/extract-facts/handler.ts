@@ -117,7 +117,7 @@ Rules:
 - Only extract facts about a SINGLE entity (person, organization, etc.)
 - Do NOT extract relationships between two entities — those are handled elsewhere
 - attribute should be a short snake_case key (e.g. "home_city", "job_title", "dietary_preference")
-- value should be a concise string (e.g. "Toronto", "CEO", "vegetarian")
+- value should be a concise string (e.g. "Toronto", "Director", "vegetarian")
 - Set confidence between 0.0 and 1.0 based on how explicitly the fact is stated
 - Return ONLY valid JSON, no explanation or markdown fences
 

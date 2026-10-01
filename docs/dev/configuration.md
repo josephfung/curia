@@ -309,7 +309,9 @@ Current defaults: CLI, Signal, and Voice are `high`; HTTP, Slack, and SMS are `m
 `config/local.yaml` is an optional file that, when present, is deep-merged on
 top of `default.yaml` at startup. It exists so deployment-specific config can
 live in a deployment repo (e.g. `curia-deploy`) rather than in the `curia`
-repo itself.
+repo itself. Overlay agent prompts and tool descriptions in that repo should
+say "the principal", not a job title — see
+[Principal vocabulary](adding-an-agent.md#principal-vocabulary).
 
 **`config/local.yaml` is gitignored** — it is never committed to the `curia`
 repo. Your deployment tooling writes it to the server at deploy time.

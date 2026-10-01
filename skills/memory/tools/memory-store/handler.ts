@@ -9,7 +9,7 @@
 // Possible outcomes:
 //   created               — new fact node created and linked to the entity
 //   updated               — near-duplicate found; existing node merged in place
-//   conflict              — contradicts an existing attribute fact; agent should surface to CEO
+//   conflict              — contradicts an existing attribute fact; agent should surface to principal
 //   entity_not_found      — UUID entity no longer exists, or entity gone between resolution and write
 //   rate_limited          — write limit (50 per task) exceeded
 //   redirected_to_contact — attribute is canonical; write went to ContactService instead of KG
@@ -193,7 +193,7 @@ export class MemoryStoreHandler implements ToolHandler {
         // alias_for = original variant (e.g. "the Darlise place"); entity = confirmed
         // canonical name (e.g. "Darlise Restaurant"). resolveOrCreate's auto-resolve
         // path already adds options.label as an alias, but alias_for is a different
-        // string — the variant the CEO actually said — so it needs explicit learning here.
+        // string — the variant the principal actually said — so it needs explicit learning here.
         if (alias_for && typeof alias_for === 'string' && resolved.kind === 'found') {
           // Best-effort by contract: EntityMemory.addAlias swallows its own failures
           // (see its "Non-throwing contract" comment) and logs them under its own

@@ -1448,7 +1448,7 @@ export class Scheduler {
               );
 
               if (this.driftDetector.shouldPause(verdict)) {
-                // Hard pause: set status to paused, publish the drift event, notify CEO.
+                // Hard pause: set status to paused, publish the drift event, notify principal.
                 // Wrapped in its own try/catch so a failure here falls back to normal
                 // completion — preventing the job from being left in 'running' state.
                 let pauseSucceeded = false;
@@ -1467,7 +1467,7 @@ export class Scheduler {
                   });
                   await this.bus.publish('system', driftEvent);
 
-                  // Notify the CEO via the coordinator (same pattern as schedule.suspended).
+                  // Notify the principal via the coordinator (same pattern as schedule.suspended).
                   // IMPORTANT: this is a review-only notice — it must NOT embed the original
                   // intent or the raw payload. Previously it echoed `Original intent: …` /
                   // `Current task: …` verbatim, which the coordinator re-interpreted as an
@@ -1782,7 +1782,7 @@ export class Scheduler {
             await this.bus.publish('system', recoveredEvent);
 
             // When watchdog recovery leads to suspension, also fire schedule.suspended
-            // so SuspensionNotifier can email the CEO through the same path as normal
+            // so SuspensionNotifier can email the principal through the same path as normal
             // completion-failure suspensions. Uses recoveredEvent as parent to preserve
             // the causal chain in the audit log.
             if (result.suspended) {

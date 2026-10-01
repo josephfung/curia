@@ -101,7 +101,7 @@ export class CeoInboxLabelHandler implements ToolHandler {
     } catch (err) {
       ctx.log.error({ err, messageId, labels }, 'ceo-inbox-label: failed to apply labels');
       const detail = err instanceof Error ? err.message : String(err);
-      return { success: false, error: `Failed to apply labels to CEO inbox message: ${detail}` };
+      return { success: false, error: `Failed to apply labels to principal inbox message: ${detail}` };
     }
   }
 }

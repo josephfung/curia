@@ -61,11 +61,11 @@ export function buildShadowJudgePrompt(pairs: ShadowJudgePair[]): string {
         `### Pair ${i + 1} (source_message_id: ${p.sourceMessageId})\n` +
         `Subject: ${p.subject}\n\n` +
         `SHADOW (what the assistant would have sent):\n${p.shadowBody.trim() || '(empty)'}\n\n` +
-        `ACTUAL (what the CEO actually sent):\n${p.sentBody.trim() || '(empty)'}`,
+        `ACTUAL (what the principal actually sent):\n${p.sentBody.trim() || '(empty)'}`,
     )
     .join('\n\n---\n\n');
   return [
-    'You are auditing an AI assistant against a CEO. For each pair, decide whether the',
+    'You are auditing an AI assistant against a principal. For each pair, decide whether the',
     'SHADOW email reaches the SAME substantive decision / recommendation / outcome as the',
     'ACTUAL email — e.g. proposes the same meeting time, gives the same answer to a policy',
     'question, makes the same ask, reports the same status. Judge the decision, NOT wording,',

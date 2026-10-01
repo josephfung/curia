@@ -45,7 +45,7 @@ describe('scheduled-task prompts name scheduler-report (#1831)', () => {
     expect(task).toMatch(/context set to/);
     expect(task).toMatch(/scanned, expired, failed, and calendarErrors/);
     expect(task).toMatch(/do NOT post to the bullpen/);
-    expect(task).toMatch(/do NOT message the CEO/);
+    expect(task).toMatch(/do NOT message the principal/);
     expect(task).toMatch(/silent maintenance run/);
     expect(expectedDurationSeconds).toBe(120);
   });
@@ -81,7 +81,7 @@ describe('scheduled-task prompts name scheduler-report (#1831)', () => {
     expect(task).toMatch(/scanned, scheduled, and skipped/);
     expect(task).toMatch(/Whether or not any debriefs were scheduled, always call/);
     expect(task).toMatch(/do NOT post to the bullpen/);
-    expect(task).toMatch(/do NOT prompt or message the CEO/);
+    expect(task).toMatch(/do NOT prompt or message the principal/);
     expect(task).toMatch(/silent maintenance run/);
     expect(expectedDurationSeconds).toBe(120);
 

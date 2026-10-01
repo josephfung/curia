@@ -46,12 +46,12 @@ export interface KnowledgeGraphRouteOptions {
 }
 
 // Channel identifier used when the KG web app dispatches messages to the agent layer.
-// The 'web' channel is special-cased in contact-resolver.ts to auto-resolve to the CEO —
-// the bootstrap secret is CEO-only, so any authenticated web request is implicitly the CEO.
+// The 'web' channel is special-cased in contact-resolver.ts to auto-resolve to the principal —
+// the bootstrap secret is principal-only, so any authenticated web request is implicitly the principal.
 // See config/channel-trust.yaml for the channel policy.
 const WEB_CHANNEL_ID = 'web';
 // Sentinel sender ID for the web channel. The value is cosmetic — contact-resolver.ts
-// short-circuits to the CEO contact for this channel regardless of the sender string.
+// short-circuits to the principal contact for this channel regardless of the sender string.
 const WEB_SENDER_ID = 'ceo-web-user';
 
 interface KgNodeRow {
@@ -437,7 +437,7 @@ export async function knowledgeGraphRoutes(
     // Resolve with defaults first, then validate — avoids dual-layer guard maintenance trap.
     const owner = typeof body.owner === 'string' ? body.owner : 'curia';
     // Default source to 'ceo', not 'agent' (#1127). The console is a principal surface, so a task
-    // created here with no explicit source is the original unit of CEO-authorized work — NOT an
+    // created here with no explicit source is the original unit of principal-authorized work — NOT an
     // agent-spawned side-effect. selectHeartbeatCandidates derives `derived = source='agent' OR
     // parent_task_id IS NOT NULL`; a default of 'agent' would mark the task derived and the bypass
     // ladder would downgrade its principal lineage at posture B (70-89), stranding it propose-only
@@ -1134,6 +1134,17 @@ export async function knowledgeGraphRoutes(
     if (!updated) {
       return reply.status(404).send({ error: 'Contact not found after update.' });
     }
+    // primary_email is committed above. Identity mutations notify on their own;
+    // this column does not, and the prompt block reads it (#1950).
+    const rawBody = request.body;
+    if (
+      updated.systemRole === 'principal'
+      && rawBody !== null
+      && typeof rawBody === 'object'
+      && 'primaryEmail' in rawBody
+    ) {
+      contactService.notePrimaryEmailChanged(updated.id);
+    }
     return reply.send({
       contact: serializeContact(updated),
     });
@@ -1190,7 +1201,7 @@ export async function knowledgeGraphRoutes(
   // Channels the console may bind — single allowlist shared with contact-link-identity (#1514).
   const IDENTITY_STATUSES = new Set<IdentityStatus>(['active', 'defunct', 'bounced']);
 
-  // POST /api/kg/contacts/:id/identities — link a channel identity (CEO-stated → verified).
+  // POST /api/kg/contacts/:id/identities — link a channel identity (principal-stated → verified).
   // Binding a Slack/Signal/SMS identity to the principal is the durable fix for the
   // outbound-filter principal-detection gap (#1514). Principal cache refresh is handled
   // by ContactService.onIdentitiesChanged (no route-level duplicate).
@@ -1428,7 +1439,7 @@ export async function knowledgeGraphRoutes(
   // The chat endpoints let the KG web app send messages to the agent layer
   // and stream responses back. They mirror the pattern of src/channels/http/routes/messages.ts
   // (POST /api/messages + GET /api/messages/stream) but use the 'web' channel so
-  // contact-resolver auto-attributes the sender to the CEO (the bootstrap secret is CEO-only).
+  // contact-resolver auto-attributes the sender to the principal (the bootstrap secret is principal-only).
   //
   // Auth: both routes enforce the same assertSecret guard as the KG read APIs — they accept
   // either a valid curia_session cookie (browser flow) or x-web-bootstrap-secret header

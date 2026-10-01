@@ -1,12 +1,12 @@
 // handler.ts — list-pending-actions skill implementation.
 //
-// Returns all non-expired pending approval requests so the CEO can see what's
+// Returns all non-expired pending approval requests so the principal can see what's
 // waiting for their decision. Read-only — no state changes.
 //
 // SECURITY: this is a sensitive *read* of the approval queue. #1126 reclassified it from
 // `elevated` to `normal` + action_risk:'none' + allowed_callers:['coordinator']. The right
 // control here is WHO MAY CALL it, not who originated the task: the 8am digest is a scheduled
-// task that runs *as the coordinator*, and the CEO's "what's pending?" turn also runs through the
+// task that runs *as the coordinator*, and the principal's "what's pending?" turn also runs through the
 // coordinator. The execution-layer allowed_callers gate enforces this; there is no handler-level
 // origination re-check (the old principal-or-system check was exactly the over-broad `system`
 // allowance — commit 3bd3d224 — that the live-principal redefinition removes). This move is what

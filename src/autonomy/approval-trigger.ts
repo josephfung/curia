@@ -2,7 +2,7 @@
 //
 // Owns the approval request flow when the autonomy gate blocks a skill:
 // dedup check, row insertion, short_ref generation, description building,
-// and CEO notification. See ADR-018 and issue #427.
+// and principal notification. See ADR-018 and issue #427.
 
 import { randomBytes } from 'node:crypto';
 import type { ActionLogRepo } from './action-log-repo.js';
@@ -68,7 +68,7 @@ const VERB_RULES: Array<{ test: (name: string) => boolean; verb: string }> = [
 
 /**
  * Build a human-readable one-liner from skill name and input fields.
- * Used in CEO notifications, the pending-actions digest, and the
+ * Used in principal notifications, the pending-actions digest, and the
  * coordinator's advisory failure message.
  */
 export function buildDescription(
@@ -127,7 +127,7 @@ export class ApprovalTriggerService {
    *   1. Dedup — check for existing pending_approval row with same skill + payload in same task
    *   2. Generate short_ref and description
    *   3. Insert autonomy_action_log row
-   *   4. Notify CEO (best-effort — failure does not prevent row creation)
+   *   4. Notify principal (best-effort — failure does not prevent row creation)
    *
    * Returns the result so the execution layer can enrich the advisory error message.
    */
@@ -139,7 +139,7 @@ export class ApprovalTriggerService {
     input: Record<string, unknown>;
     currentScore: number;
     requiredScore: number;
-    /** Optional override for the CEO notification body. When absent, the default
+    /** Optional override for the principal notification body. When absent, the default
      *  score-based message is used. Provide this for non-score gate blocks (e.g. tier gate). */
     reason?: string;
     /**
@@ -250,7 +250,7 @@ export class ApprovalTriggerService {
       'approval-trigger: pending_approval row created',
     );
 
-    // Step 4: Notify CEO (best-effort).
+    // Step 4: Notify principal (best-effort).
     // sendNotification() catches publish errors internally and returns false rather than
     // throwing, so we check the return value to know whether to stamp notification_sent_at.
     let notificationSent = false;
@@ -285,11 +285,11 @@ export class ApprovalTriggerService {
       if (sent) {
         await this.actionLogRepo.setNotificationSentAt(rowId);
         notificationSent = true;
-        this.logger.info({ rowId, shortRef }, 'approval-trigger: CEO notification sent');
+        this.logger.info({ rowId, shortRef }, 'approval-trigger: principal notification sent');
       } else {
         this.logger.warn(
           { rowId, shortRef },
-          'approval-trigger: CEO notification failed — row exists, CEO will see it in digest',
+          'approval-trigger: principal notification failed — row exists, principal will see it in digest',
         );
       }
     } else if (!ceoEmail) {

@@ -1,4 +1,4 @@
-// job-notification-context.ts — lightweight DB-backed context for scheduler CEO emails.
+// job-notification-context.ts — lightweight DB-backed context for scheduler principal emails.
 //
 // RecoveryNotifier and SuspensionNotifier bypass the LLM pipeline; this module supplies
 // human-readable job objective, recurrence, and console deep-link fields from scheduled_jobs.
@@ -118,8 +118,8 @@ export function buildJobNotificationContext(
 }
 
 /**
- * Load job context for CEO notification emails. Fail-open: a lookup error must not
- * block the underlying recovery/suspension notification from reaching the CEO.
+ * Load job context for principal notification emails. Fail-open: a lookup error must not
+ * block the underlying recovery/suspension notification from reaching the principal.
  */
 export async function loadJobNotificationContext(
   schedulerService: Pick<SchedulerService, 'getJob'>,

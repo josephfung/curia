@@ -65,7 +65,7 @@ import type { ToolDiscovery } from './skills/loader.js';
 import { loadMcpServers, loadSkillsConfig, registerMcpProjectedSkills, type McpServerLoadStatus } from './skills/mcp-loader.js';
 import type { McpSession } from './skills/mcp-client.js';
 import { ContactService } from './contacts/contact-service.js';
-import type { ChannelIdentity, Contact, PrincipalEmailRef } from './contacts/types.js';
+import type { ChannelIdentity, Contact, PrincipalEmailRef, PrincipalPrimaryEmailRef } from './contacts/types.js';
 import { ConfidencePipeline } from './contacts/confidence-pipeline.js';
 import { DedupService } from './contacts/dedup-service.js';
 import { ContactResolver } from './contacts/contact-resolver.js';
@@ -438,7 +438,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 4c. Executive profile — System-layer service that owns the executive (CEO)
+  // 4c. Executive profile — System-layer service that owns the executive (principal)
   // writing voice and style preferences. Separate from office identity (which is
   // the assistant's persona). The executive's identity (name, title) lives in the
   // contact system — this is purely about how the system represents them.
@@ -454,7 +454,7 @@ async function main(): Promise<void> {
     await executiveProfileService.initialize();
     logger.info('Executive profile initialized');
   } catch (err) {
-    logger.error({ err }, 'Failed to initialize executive profile service — CEO voice guidance unavailable; drafts will use generic voice');
+    logger.error({ err }, 'Failed to initialize executive profile service — principal voice guidance unavailable; drafts will use generic voice');
     executiveProfileService = undefined;
   }
 
@@ -740,7 +740,7 @@ async function main(): Promise<void> {
   // this block only *resolves* it once at startup and derives the runtime identity values
   // used downstream:
   //   - principalContact.id  → PiiRedactor bypass (structural UUID match, tamper-proof)
-  //   - principalEmail        → outbound content filter allow-list, CEO notifiers,
+  //   - principalEmail        → outbound content filter allow-list, principal notifiers,
   //                             email adapter, approval notifications
   //   - principalIdentities   → runtime prompt injection + outbound recipient check
   //
@@ -762,6 +762,9 @@ async function main(): Promise<void> {
   // Downstream consumers already treat '' as "absent" — the same contract the old unset
   // CEO_PRIMARY_EMAIL had.
   const principalEmail: PrincipalEmailRef = { current: '' };
+  // Designated primary (contacts.primary_email), not the first verified email.
+  // Same mutable-holder pattern so the prompt block sees a post-boot update (#1950).
+  const principalPrimaryEmail: PrincipalPrimaryEmailRef = { current: null };
 
   // Monotonic guard against overlapping refreshes (#1514). onIdentitiesChanged is
   // fire-and-forget, so two mutations in quick succession (e.g. add + verify, or a
@@ -774,6 +777,7 @@ async function main(): Promise<void> {
     if (!principalContact) {
       principalIdentities.length = 0;
       principalEmail.current = '';
+      principalPrimaryEmail.current = null;
       return;
     }
     const myGeneration = ++refreshGeneration;
@@ -787,6 +791,7 @@ async function main(): Promise<void> {
     principalIdentities.push(...next);
     principalEmail.current =
       principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
+    principalPrimaryEmail.current = withIdentities?.contact.primaryEmail ?? null;
     logger.info(
       {
         contactId: principalContact.id,
@@ -978,14 +983,14 @@ async function main(): Promise<void> {
     logger.warn('Voice credentials not fully configured — voice channel disabled. Set the LiveKit, Deepgram, and Cartesia values (including the Cartesia voice ID) in the console (Settings → Channels → Voice); credentials are vault-only (no env fallback).');
   }
 
-  // Calendar client — operates as the PRINCIPAL (the CEO), not as Curia's mailbox.
+  // Calendar client — operates as the principal, not as Curia's mailbox.
   // RSVP is first-person: Nylas/Google records the response of the attendee whose
   // identity matches the authenticated grant. So the calendar client binds to the
-  // CEO's OWN grant (ceo_nylas_grant_id) — the same identity ceo-inbox uses. Binding
+  // principal's OWN grant (ceo_nylas_grant_id) — the same identity ceo-inbox uses. Binding
   // to Curia's mailbox grant made Curia a third-party delegate, and Google rejected
   // RSVPs with `omittedAttendeesSpecified` (#1217).
   //
-  // Fail closed: with no CEO grant configured there is no principal to act as, so the
+  // Fail closed: with no principal grant configured there is no principal to act as, so the
   // client is left undefined and calendar skills return a clean "not configured"
   // result via their existing `if (!ctx.nylasCalendarClient)` guard. We deliberately
   // do NOT fall back to the email account grant — that is the delegate-identity bug
@@ -999,7 +1004,7 @@ async function main(): Promise<void> {
     // non-silent without duplicating that warning for the common "no Nylas at all" case.
     logger.debug('Calendar disabled — no Nylas API key configured');
   } else {
-    // Read the CEO grant. Absence -> undefined (calendar simply not set up). A DB or decrypt
+    // Read the principal grant. Absence -> undefined (calendar simply not set up). A DB or decrypt
     // failure THROWS (SecretsService lets those propagate); catch it here so a single
     // channel's secret read can't crash boot, but log at `error` with the real cause — a
     // wrong SECRET_ENCRYPTION_KEY breaks every secret, and must not be mistaken for "the
@@ -1017,11 +1022,11 @@ async function main(): Promise<void> {
     }
     if (principalCalendarGrant) {
       nylasCalendarClient = new NylasCalendarClient(config.nylasApiKey, principalCalendarGrant, logger);
-      logger.info('Nylas calendar client initialized (bound to the CEO/principal Nylas grant)');
+      logger.info('Nylas calendar client initialized (bound to the principal/principal Nylas grant)');
     } else if (!grantReadFailed) {
       // Genuine absence (the read-failure path logged its own error above).
       logger.warn(
-        'Calendar disabled — ceo_nylas_grant_id is not configured. Set the CEO Nylas grant to enable calendar (RSVP/holds/events run as the CEO).',
+        'Calendar disabled — ceo_nylas_grant_id is not configured. Set the principal Nylas grant to enable calendar (RSVP/holds/events run as the principal).',
       );
     }
   }
@@ -1357,8 +1362,8 @@ async function main(): Promise<void> {
     // The principal's email — used to allow their address in outbound content without
     // triggering the contact-data-leak rule. Resolved from the principal contact (#1049),
     // not from config. Must NOT be Curia's own Nylas address (nylasSelfEmail): using
-    // Curia's address here was a bug that (a) treated the CEO's email as a third-party
-    // leak and (b) routed blocked-content notifications to Curia's inbox instead of the CEO's.
+    // Curia's address here was a bug that (a) treated the principal's email as a third-party
+    // leak and (b) routed blocked-content notifications to Curia's inbox instead of the principal's.
     // Pass the mutable PrincipalEmailRef so post-boot identity binds update the allow-list (#1514).
     if (!principalEmail.current) {
       logger.warn('Outbound content filter initialized without principal email (no verified principal email on file) — contact-data-leak rule may produce false positives');
@@ -2158,7 +2163,7 @@ async function main(): Promise<void> {
     ownsAgent: (agentId) => agentRegistry.has(agentId),
   });
 
-  // SuspensionNotifier — emails the CEO when a scheduled job is auto-suspended.
+  // SuspensionNotifier — emails the principal when a scheduled job is auto-suspended.
   // Bypasses the LLM pipeline: notifies even when Anthropic is the thing that's down.
   // Always registered when the gateway exists; ceoEmail is a live ref so a post-boot
   // email bind enables notifications without restart (#1514). Sends no-op/skip when
@@ -2182,11 +2187,11 @@ async function main(): Promise<void> {
   } else {
     logger.warn(
       { hasGateway: false, hasCeoEmail: !!principalEmail.current },
-      'SuspensionNotifier not registered — outboundGateway absent; suspended jobs will not trigger CEO email alerts',
+      'SuspensionNotifier not registered — outboundGateway absent; suspended jobs will not trigger principal email alerts',
     );
   }
 
-  // RecoveryNotifier — emails the CEO when the watchdog auto-recovers a stuck job.
+  // RecoveryNotifier — emails the principal when the watchdog auto-recovers a stuck job.
   // Bypasses the LLM pipeline for the same reason as SuspensionNotifier: the LLM
   // may be the reason the job is stuck in the first place.
   // Same live-ref pattern as SuspensionNotifier (#1514).
@@ -2209,11 +2214,11 @@ async function main(): Promise<void> {
   } else {
     logger.warn(
       { hasGateway: false, hasCeoEmail: !!principalEmail.current },
-      'RecoveryNotifier not registered — outboundGateway absent; recovered stuck jobs will not trigger CEO email alerts',
+      'RecoveryNotifier not registered — outboundGateway absent; recovered stuck jobs will not trigger principal email alerts',
     );
   }
 
-  // DbAvailabilityMonitor — probes Postgres and emails the CEO after >5 min of
+  // DbAvailabilityMonitor — probes Postgres and emails the principal after >5 min of
   // continuous unavailability (#1381 / spec 05). LLM-free; retries notification
   // until the bus/audit path can deliver (typically on recovery).
   const dbAvailabilityMonitor = new DbAvailabilityMonitor({
@@ -2225,7 +2230,7 @@ async function main(): Promise<void> {
   dbAvailabilityMonitor.start();
   if (!outboundGateway) {
     logger.warn(
-      'DbAvailabilityMonitor started without outbound gateway — will log outages but cannot email CEO',
+      'DbAvailabilityMonitor started without outbound gateway — will log outages but cannot email principal',
     );
   } else if (!principalEmail.current) {
     logger.warn(
@@ -2290,11 +2295,11 @@ async function main(): Promise<void> {
   });
   await healthService.start();
 
-  // Approval trigger — creates pending_approval rows and notifies CEO
+  // Approval trigger — creates pending_approval rows and notifies principal
   // when autonomy gates block a skill. See ADR-018 and issue #427.
   // Constructed unconditionally — row creation does not depend on the outbound stack.
   // outboundGateway and ceoEmail are optional: if absent, the row is created but
-  // notification is skipped (CEO will see it in the next digest, #429).
+  // notification is skipped (principal will see it in the next digest, #429).
   const approvalTrigger = new ApprovalTriggerService(
     actionLogRepo,
     outboundGateway,
@@ -2700,10 +2705,11 @@ async function main(): Promise<void> {
       // so a BCC (Curia absent from To/CC) cannot look like a 1:1 (#1599).
       selfEmails: resolvedEmailAccounts.map(a => a.selfEmail),
       // Principal's verified channel identities — injected per-task into ALL agents so
-      // every agent knows where to reach the CEO without inferring addresses. Sourced from
-      // the startup-cached principalIdentities array (already filtered to verified + active).
-      // Mirrors the channelAccounts pattern (#387). Fixes #786.
+      // every agent knows where to reach the principal without inferring addresses.
+      // Sourced from the startup-cached principalIdentities array (already filtered
+      // to verified + active). Mirrors the channelAccounts pattern (#387). Fixes #786, #1950.
       principalIdentities,
+      principalPrimaryEmail,
       // Specialist roster — appended as "## Available Specialists" for the coordinator.
       // Specialists that opt in via inject_specialists keep the bootstrap ${available_specialists}
       // placeholder (resolved in interpolateRuntimeContext); this runtime path is coordinator-only.

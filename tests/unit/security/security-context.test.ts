@@ -33,10 +33,11 @@ describe('compileSecurityContextBlock', () => {
     expect(block).not.toContain('| 0.50 |');
   });
 
-  it('includes the CEO/CLI trust exemption', () => {
+  it('includes the principal/CLI trust exemption', () => {
     const block = compileSecurityContextBlock(DEFAULT_THRESHOLDS);
-    expect(block).toContain('role: "ceo"');
-    expect(block).toContain('channel: "cli"');
+    expect(block).toContain('system role "principal"');
+    expect(block).toContain('channel "cli"');
+    expect(block).not.toContain('CEO');
   });
 
   it('default thresholds produce the correct table values', () => {

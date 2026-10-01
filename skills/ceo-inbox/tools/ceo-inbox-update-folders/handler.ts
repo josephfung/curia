@@ -146,7 +146,7 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
       // so the agent can adapt instead of seeing an opaque message — mirrors
       // ceo-inbox-label's error surfacing.
       const detail = err instanceof Error ? err.message : String(err);
-      return { success: false, error: `Failed to update CEO inbox message folders: ${detail}` };
+      return { success: false, error: `Failed to update principal inbox message folders: ${detail}` };
     }
   }
 }

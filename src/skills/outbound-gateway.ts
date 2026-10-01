@@ -307,7 +307,7 @@ function redactId(value: string): string {
 
 /**
  * Build a principal-safe summary of WHY an outbound message was blocked, for the
- * CEO notification body. The summary gives the CEO something actionable without
+ * principal notification body. The summary gives the principal something actionable without
  * re-leaking the offending content into their mailbox (and through the email
  * provider that carries the notification).
  *
@@ -380,7 +380,7 @@ export class OutboundGateway {
   private readonly nylasClients: Map<string, NylasClient>;
   /**
    * The primary NylasClient — first entry in nylasClients, used for system
-   * notifications (blocked-content CEO alerts) when no accountId is specified.
+   * notifications (blocked-content principal alerts) when no accountId is specified.
    */
   private readonly primaryNylasClient: NylasClient | undefined;
   private readonly signalClient?: SignalRpcClient;
@@ -462,18 +462,18 @@ export class OutboundGateway {
    *   2. Content filter (fail-closed)
    *   3. Channel dispatch (email → Nylas, signal → signal-cli RPC)
    *
-   * @param options.skipNotificationOnBlock  When true, suppress the CEO notification
+   * @param options.skipNotificationOnBlock  When true, suppress the principal notification
    *   if the content filter blocks this message. Used by the EmailAdapter's
    *   outbound.notification subscriber to break the recursion cycle: without this
    *   guard, a broken content filter (crash → fail-closed) would trigger
    *   send → block → sendNotification → EmailAdapter → send → block → ... infinitely.
    * @param options.humanApproved  When true, skip Step 0 (autonomy gate) only.
-   *   The CEO is explicitly in the loop. All other safety checks (blocked-contact,
+   *   The principal is explicitly in the loop. All other safety checks (blocked-contact,
    *   content filter) run normally. See ADR-017.
    * @param options.isSystemNotification  When true, skip Step 0 (autonomy gate) only.
-   *   Used for infrastructure alerts sent TO the CEO (e.g. approval_requested,
+   *   Used for infrastructure alerts sent TO the principal (e.g. approval_requested,
    *   blocked_content). These must never be silenced by the same gate they report on —
-   *   if the score is too low to send autonomously, the CEO still needs to know about it.
+   *   if the score is too low to send autonomously, the principal still needs to know about it.
    *   All other safety checks (blocked-contact, content filter) run normally.
    */
   async send(
@@ -495,7 +495,7 @@ export class OutboundGateway {
        * Channel adapters opt in to the two-step draft-fallback pattern by providing
        * this object. When present and the send is gated, the gateway writes a
        * pending_approval row using these values so approve-action can invoke the
-       * correct skill with the correct payload on CEO approval.
+       * correct skill with the correct payload on principal approval.
        *
        * When absent, no pending_approval row is written and the send returns
        * { gated: true } without an actionRef. Adapters without a re-execution
@@ -512,7 +512,7 @@ export class OutboundGateway {
         partialPayload?: Record<string, unknown>;
         /**
          * Human-readable description of the blocked action. Used in the action_log
-         * row (visible via list-pending-actions) and the CEO notification body.
+         * row (visible via list-pending-actions) and the principal notification body.
          */
         description: string;
       };
@@ -532,19 +532,19 @@ export class OutboundGateway {
     // when the score is too low. Fail-open if the service is not wired
     // or the config table is missing.
     if (this.autonomyService && options?.humanApproved) {
-      // CEO is explicitly in the loop — autonomy gate does not apply. Log the bypass
+      // principal is explicitly in the loop — autonomy gate does not apply. Log the bypass
       // so operators can trace every humanApproved send in the log stream. See ADR-017.
       this.log.info(
         { channel: request.channel },
-        'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized action, see ADR-017)',
+        'outbound-gateway: autonomy gate skipped — humanApproved flag set (principal-authorized action, see ADR-017)',
       );
     } else if (this.autonomyService && options?.isSystemNotification) {
-      // Infrastructure alert to the CEO — gate must not silence its own alarm bell.
-      // A notification about a blocked action still needs to reach the CEO regardless
+      // Infrastructure alert to the principal — gate must not silence its own alarm bell.
+      // A notification about a blocked action still needs to reach the principal regardless
       // of the score that caused the block. All other safety checks still run below.
       this.log.info(
         { channel: request.channel },
-        'outbound-gateway: autonomy gate skipped — isSystemNotification flag set (infrastructure alert to CEO)',
+        'outbound-gateway: autonomy gate skipped — isSystemNotification flag set (infrastructure alert to principal)',
       );
     } else if (this.autonomyService && this.isPrincipalRecipient(request)) {
       // Agent-to-principal communication — the autonomy gate must not silence
@@ -590,7 +590,7 @@ export class OutboundGateway {
 
         // Two-step draft-fallback: channel adapters opt in by passing reExecRecipe.
         // When present, write a pending_approval row so approve-action can invoke the
-        // correct skill on CEO approval. DB failure must NOT cause fail-open — the send
+        // correct skill on principal approval. DB failure must NOT cause fail-open — the send
         // stays blocked even if the row can't be written (actionRef will be absent).
         let actionRef: string | undefined;
         const actionLogRepo = this.actionLogRepo;
@@ -629,7 +629,7 @@ export class OutboundGateway {
             // actionRef remains undefined — send is still blocked below
           }
 
-          // Notify CEO (best-effort) — mirrors ApprovalTriggerService.request() pattern.
+          // Notify principal (best-effort) — mirrors ApprovalTriggerService.request() pattern.
           // sendNotification() has its own try-catch and returns false on failure, so it
           // never throws. Only stamp notification_sent_at if the publish succeeded.
           // setNotificationSentAt is wrapped separately so a DB failure there does not
@@ -677,7 +677,7 @@ export class OutboundGateway {
                   await actionLogRepo.setNotificationSentAt(rowId);
                 } catch (err) {
                   // Non-fatal: the pending_approval row exists and gating is correct.
-                  // Only notification_sent_at is missing — the CEO still received the alert.
+                  // Only notification_sent_at is missing — the principal still received the alert.
                   this.log.warn(
                     { err, rowId, taskEventId: options.taskEventId },
                     'outbound-gateway: setNotificationSentAt failed after successful notification — notification_sent_at will be null',
@@ -729,7 +729,7 @@ export class OutboundGateway {
           gated: true,
           blockedReason:
             `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
-            `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
+            `Use createEmailDraft() for drafts, or ask the principal to raise the score with set-autonomy.`,
         };
       }
     }
@@ -762,7 +762,7 @@ export class OutboundGateway {
     // below) rather than returning a rewrite-and-retry reason to the agent — which
     // would only invite futile retries against an immutable recipient. We still record
     // an outbound.blocked audit event so the suppression is visible, but we deliberately
-    // do NOT send the CEO an FYI (these automated notifications are routine; a per-drop
+    // do NOT send the principal an FYI (these automated notifications are routine; a per-drop
     // alert would be noise — the audit log is the record).
     //
     // Predicate: block only when EVERY recipient classifies as automated (no deliverable
@@ -810,7 +810,7 @@ export class OutboundGateway {
     // Step 1: Contact blocked check + trust level capture
     // ------------------------------------------------------------------
     // Resolve the recipient to a known contact. If they are explicitly blocked
-    // by the CEO, reject immediately without touching the transport layer or filter.
+    // by the principal, reject immediately without touching the transport layer or filter.
     // We also capture the contact's trust level here for the content filter's
     // contact-data-leak rule — no extra DB call needed.
     //
@@ -830,7 +830,7 @@ export class OutboundGateway {
           return { success: false, blockedReason: 'Recipient is blocked' };
         }
         // Capture tier for the content filter, and contact UUID for the PII redactor's
-        // CEO bypass check. Both are used downstream: tier by the content filter's disclosure
+        // principal bypass check. Both are used downstream: tier by the content filter's disclosure
         // gate, and contact UUID by PiiRedactor.redact() for the principal bypass.
         recipientTier = contact.tier;
         recipientContactId = contact.contactId;
@@ -896,7 +896,7 @@ export class OutboundGateway {
         if (outcome.action === 'approval_required') {
           this.log.info(
             { channel: request.channel, code: outcome.code, itemCount: items.length },
-            'outbound-gateway: export requires CEO approval',
+            'outbound-gateway: export requires principal approval',
           );
           const itemSummary = ExportControlServiceClass.formatItemSummary(items);
           let actionRef: string | undefined;
@@ -1089,7 +1089,7 @@ export class OutboundGateway {
       // Full reason string (with detail) goes into the bus event for forensics/audit,
       // NOT into any user-facing or notification surface.
       const fullReason = filterFindings.map((f) => `${f.rule}: ${f.detail}`).join('; ');
-      // Principal-safe reason for the CEO notification: surfaces the judge's abstract
+      // Principal-safe reason for the principal notification: surfaces the judge's abstract
       // reason but never a Stage-1 finding's (potentially sensitive) detail. See
       // buildBlockReasonSummary for the per-rule policy.
       const reasonSummary = buildBlockReasonSummary(filterFindings);
@@ -1116,7 +1116,7 @@ export class OutboundGateway {
         );
       }
 
-      // Publish an outbound.notification event so the CEO alert routes through the
+      // Publish an outbound.notification event so the principal alert routes through the
       // standard safety pipeline via EmailAdapter, rather than bypassing the content
       // filter with a direct dispatchEmail() call (#206).
       //
@@ -1167,10 +1167,10 @@ export class OutboundGateway {
       } else if (options?.skipNotificationOnBlock) {
         // This branch fires when a notification delivery itself gets blocked by the
         // content filter (e.g. the filter is in a broken state). The recursion guard
-        // prevents an infinite loop. The CEO will not receive this alert.
+        // prevents an infinite loop. The principal will not receive this alert.
         this.log.error(
           { blockId, channel: request.channel },
-          'outbound-gateway: notification delivery was blocked by content filter — recursion guard active, CEO will NOT receive this alert',
+          'outbound-gateway: notification delivery was blocked by content filter — recursion guard active, principal will NOT receive this alert',
         );
       } else if (!options?.skipNotificationOnBlock) {
         this.log.error(
@@ -1180,7 +1180,7 @@ export class OutboundGateway {
       }
       // Surface the principal-safe reason summary and the rule name(s) to the
       // caller (#1051). reasonSummary (computed above via buildBlockReasonSummary)
-      // obeys the same per-rule safety contract as the CEO notification — it only
+      // obeys the same per-rule safety contract as the principal notification — it only
       // includes an LLM-judge finding's abstract detail, never a Stage-1 rule's
       // matched fragment. Surfacing it here gives the agent's tool-use loop enough
       // signal to rewrite the message and retry organically; blockedRules carries
@@ -1196,7 +1196,7 @@ export class OutboundGateway {
     // Step 3: Channel dispatch + contact promotion
     // ------------------------------------------------------------------
     // After a successful send, promote the recipient contact from provisional →
-    // confirmed (or create one if none exists). The act of sending is the CEO's
+    // confirmed (or create one if none exists). The act of sending is the principal's
     // implicit trust confirmation — replies from this person should never be held.
     //
     // IMPORTANT: pass redactedBody here, not request.body / request.message.
@@ -1464,7 +1464,7 @@ export class OutboundGateway {
    *
    * This replaces the former direct dispatchEmail() calls that bypassed the content
    * filter. The notification body is always a hardcoded template (no LLM-generated
-   * content) addressed to the CEO email (which is in the content filter allowlist),
+   * content) addressed to the principal email (which is in the content filter allowlist),
    * so the filter will always pass.
    *
    * Callers: the blocked-content path in send().
@@ -1805,11 +1805,11 @@ export class OutboundGateway {
     if (contact === null) {
       // No contact record yet — create one so replies from this person are not held.
       // displayName defaults to the identifier (e.g. email address) as a placeholder
-      // until the contact is enriched or the CEO assigns a proper name.
+      // until the contact is enriched or the principal assigns a proper name.
       let created;
       try {
-        // Explicit tier: the outbound recipient (someone the CEO is emailing) is
-        // CEO-trusted — equivalent to the former status='confirmed'→tier='known' path.
+        // Explicit tier: the outbound recipient (someone the principal is emailing) is
+        // principal-trusted — equivalent to the former status='confirmed'→tier='known' path.
         // Set tier='known' explicitly so this intent survives Task 5, which removes
         // createContact's internal status default (#955).
         created = await this.contactService.createContact({
@@ -1878,7 +1878,7 @@ export class OutboundGateway {
 
     if (contact.tier === 'unknown') {
       // tier='unknown' == old status='provisional'. The outbound send implicitly confirms
-      // this contact — we know the CEO's system is reaching out to them, so they're trusted
+      // this contact — we know the principal's system is reaching out to them, so they're trusted
       // enough to receive replies. Promote unknown → known via elevateTierToKnown, which
       // is a no-op for already-higher tiers (so a trusted contact is never downgraded) and
       // is non-throwing (returns false on error). Uses tier for the gate check (issue #945).
@@ -2009,7 +2009,7 @@ export class OutboundGateway {
    * mailbox until explicitly sent). The reply goes through the full pipeline when the
    * draft is eventually approved and sent.
    *
-   * Drafts are created silently — no notification is sent. The CEO discovers them
+   * Drafts are created silently — no notification is sent. The principal discovers them
    * through the end-of-day Signal digest (see the scheduled digest job) or by checking
    * their Drafts folder directly.
    */
@@ -2051,7 +2051,7 @@ export class OutboundGateway {
    * CC, BCC recipients) and removing the draft from DRAFTS after delivery.
    *
    * Safety pipeline:
-   *   0. Autonomy gate — skipped when options.humanApproved is true (CEO in the loop)
+   *   0. Autonomy gate — skipped when options.humanApproved is true (principal in the loop)
    *   1. Blocked-contact check on the primary To recipient
    *   2. Content filter on the draft body
    *   3. Nylas drafts.send() dispatch — sends the actual draft, not a reconstructed copy
@@ -2059,12 +2059,12 @@ export class OutboundGateway {
    *
    * Note: PII redaction is not applied here. The draft was created by Curia
    * (content passed through our pipeline at creation time) or authored directly
-   * by the CEO. Sending the stored draft as-is is intentional.
+   * by the principal. Sending the stored draft as-is is intentional.
    *
    * @param draftId        Nylas draft ID to send
    * @param accountId      Which named account to use. Defaults to the primary account.
    * @param draftMeta      Draft content for safety checks — caller must pre-fetch the draft.
-   * @param options        humanApproved: true skips Step 0 only (CEO in the loop).
+   * @param options        humanApproved: true skips Step 0 only (principal in the loop).
    */
   async sendEmailDraft(
     draftId: string,
@@ -2078,7 +2078,7 @@ export class OutboundGateway {
     if (this.autonomyService && options?.humanApproved) {
       this.log.info(
         { draftId },
-        'outbound-gateway: autonomy gate skipped — humanApproved flag set (CEO-authorized draft send, see ADR-017)',
+        'outbound-gateway: autonomy gate skipped — humanApproved flag set (principal-authorized draft send, see ADR-017)',
       );
     } else if (this.autonomyService && this.isPrincipalOnChannel('email', draftMeta.recipientEmail)) {
       // Agent-to-principal: principal-bound draft sends bypass the autonomy gate.
@@ -2110,7 +2110,7 @@ export class OutboundGateway {
             success: false,
             blockedReason:
               `Autonomy score is ${autonomyConfig.score} — direct sends require a score of at least ${sendThreshold}. ` +
-              `Use createEmailDraft() for drafts, or ask the CEO to raise the score with set-autonomy.`,
+              `Use createEmailDraft() for drafts, or ask the principal to raise the score with set-autonomy.`,
           };
         }
       } catch (err) {
@@ -2144,7 +2144,7 @@ export class OutboundGateway {
       }
     } catch (err) {
       // Fail-open on DB errors — log at warn so anomalies are visible, but don't
-      // silently block a CEO-authorized send due to a transient infrastructure error.
+      // silently block a principal-authorized send due to a transient infrastructure error.
       this.log.warn(
         { err, draftId, recipientId: redactId(recipientEmail) },
         'outbound-gateway: contact resolution failed, proceeding without blocked check',

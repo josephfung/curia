@@ -102,13 +102,13 @@ export class AutonomyScoringPass {
       return result;
     }
 
-    // Step 3: Guard — CEO cooldown. If the CEO manually set the score recently,
+    // Step 3: Guard — principal cooldown. If the principal manually set the score recently,
     // don't override their intent with an automated adjustment yet.
     const history = await this.autonomyService.getHistory(1);
     if (history.length > 0 && history[0]!.changedBy !== 'system') {
       const daysSinceCeoSet = (Date.now() - history[0]!.changedAt.getTime()) / 86_400_000;
       if (daysSinceCeoSet < this.config.ceoCooldownDays) {
-        result.reason = `CEO cooldown active (${Math.round(daysSinceCeoSet)}d / ${this.config.ceoCooldownDays}d)`;
+        result.reason = `principal cooldown active (${Math.round(daysSinceCeoSet)}d / ${this.config.ceoCooldownDays}d)`;
         this.logger.info({ daysSinceCeoSet, cooldown: this.config.ceoCooldownDays }, 'AutonomyScoringPass: ' + result.reason);
         return result;
       }
@@ -176,7 +176,7 @@ export class AutonomyScoringPass {
   }
 
   private async scoreRow(row: ActionLogRow, result: ScoringPassResult): Promise<boolean> {
-    // Deterministic scoring for outcomes where the CEO's or gate's decision
+    // Deterministic scoring for outcomes where the principal's or gate's decision
     // already tells us the quality signal — no LLM interpretation needed.
     const deterministicFlags = DETERMINISTIC_SCORES[row.outcome];
     if (deterministicFlags) {
@@ -286,7 +286,7 @@ Respond with ONLY a JSON object: {"competence_flag": 0|1, "commitment_flag": 0|1
       let weight = Math.pow(0.5, daysSince / this.config.halfLifeDays);
 
       // Expired rows where compatibility=0 indicate Curia took an action that
-      // the CEO ultimately let lapse rather than approving. These weak signals
+      // the principal ultimately let lapse rather than approving. These weak signals
       // get reduced weight so they don't drag down the score unfairly.
       if (row.outcome === 'expired' && row.compatibility === 0) {
         weight *= this.config.weakExpiredWeight;
