@@ -15,7 +15,7 @@ This is a **deliberate red team tool**, not a CI gate. Real Anthropic API calls 
 ## Prerequisites
 
 - `ANTHROPIC_API_KEY` in environment (promptfoo uses it directly)
-- `DATABASE_URL` pointing at a bootstrapped Curia instance (for rendering the system prompt)
+- `DATABASE_URL` pointing at a migrated Curia instance (for rendering the system prompt)
 - promptfoo installed: `pnpm install` (it's a devDependency)
 
 ## How to run
@@ -26,7 +26,7 @@ This is a **deliberate red team tool**, not a CI gate. Real Anthropic API calls 
 pnpm render-coordinator-prompt > tests/redteam/coordinator-system-prompt.txt
 ```
 
-This connects to the DB, resolves all runtime injection blocks (identity, security context, writing voice, specialists), and writes the full effective system prompt to a file. The file is gitignored.
+This builds the coordinator through the production assembly path (the same builder `src/index.ts` uses, in test mode with offline LLM providers) and writes the exact system string the runtime sends on a principal chat turn: identity, security, pinned SKILL.md bodies, specialists, autonomy, date guardrail, contact details and turn budget. The file is gitignored. No LLM key is needed; with `SECRET_ENCRYPTION_KEY` set, vault-held contact details (the Signal number, email grants) are included too.
 
 Re-run this step whenever any of the inputs change (see `scripts/render-coordinator-prompt.ts` header for the full list).
 

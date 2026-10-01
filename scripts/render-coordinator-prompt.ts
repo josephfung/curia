@@ -1,7 +1,8 @@
 // scripts/render-coordinator-prompt.ts
-// Renders the Coordinator system prompt to stdout by resolving all runtime
-// injection blocks against a live database. Output is a plain text file
-// suitable for use as promptfoo's system prompt target.
+// Renders the Coordinator system prompt to stdout: the exact system string
+// AgentRuntime sends for an ordinary principal chat turn, built against a live
+// database. Output is a plain text file suitable for promptfoo's system prompt
+// target.
 //
 // Usage:
 //   pnpm render-coordinator-prompt > tests/redteam/coordinator-system-prompt.txt
@@ -10,227 +11,40 @@
 // The output file is gitignored — it may contain production identity details,
 // security directives, and internal routing instructions.
 //
-// Re-run when any of the following change:
-//   - agents/coordinator.yaml system_prompt
-//   - Office identity (wizard / PUT /api/identity)
-//   - security.trust_thresholds in config/default.yaml
-//   - Specialist agents (agents/*.yaml)
+// The prompt comes from the production assembly path (src/startup/agent-assembly.ts
+// + src/agents/system-prompt.ts, via the test-mode stack), so it includes every
+// block the runtime adds — pinned SKILL.md bodies, autonomy band, date guardrail,
+// turn budget — in runtime order. Nothing here assembles blocks itself (#1966).
 //
-// Requires: DATABASE_URL in .env pointing at a bootstrapped Curia instance.
+// Re-run when any of the following change:
+//   - agents/coordinator.yaml, or any SKILL.md the coordinator pins
+//   - Office identity (wizard / PUT /api/identity) or the autonomy score
+//   - security.trust_thresholds in config/default.yaml
+//   - Specialist agents (agents/*.yaml) or their registry enablement
+//
+// Requires: DATABASE_URL in .env pointing at a migrated Curia instance. No LLM API
+// key is needed — providers are offline. Writes only the idempotent bootstrap rows
+// a normal boot writes (office identity, agent contact).
 
-import { resolve } from 'node:path';
-import pg from 'pg';
-import { loadConfig, loadYamlConfig } from '../src/config.js';
-import { loadAllAgentConfigs, interpolateRuntimeContext } from '../src/agents/loader.js';
-import { AgentRegistry } from '../src/agents/agent-registry.js';
-import { OfficeIdentityService } from '../src/identity/service.js';
-import { compileSecurityContextBlock } from '../src/security/security-context.js';
-import { formatTimeContextBlock } from '../src/time/time-context.js';
-import {
-  formatPrincipalContactDetailsBlock,
-  OWN_CONTACT_DETAILS_INTRO,
-} from '../src/agents/principal-contact-block.js';
-import { EventBus } from '../src/bus/bus.js';
+import { createTestModeStack } from '../src/startup/test-mode-stack.js';
 import { createSilentLogger } from '../src/logger.js';
 
-const REPO_ROOT = resolve(import.meta.dirname, '..');
-const AGENTS_DIR = resolve(REPO_ROOT, 'agents');
-const CONFIG_DIR = resolve(REPO_ROOT, 'config');
-
 async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL is required. Add it to .env or set it in the environment.');
-  }
-
-  const logger = createSilentLogger();
-  // No-op bus — this script only reads; services only use the bus for write paths.
-  const bus = new EventBus(logger);
-  const config = loadConfig();
-  // Trust thresholds live in the YAML config (config/default.yaml), not in the
-  // env-derived Config that loadConfig() returns. This script read the wrong one and
-  // silently fell back to the hardcoded defaults below (#1729).
-  const yamlConfig = loadYamlConfig(CONFIG_DIR);
-  const pool = new pg.Pool({ connectionString: databaseUrl });
-
-  let identityService: OfficeIdentityService | null = null;
-
+  const stack = await createTestModeStack({ llm: 'offline', logger: createSilentLogger() });
   try {
-    // ── Identity block ─────────────────────────────────────────────────────────
-    identityService = new OfficeIdentityService(pool, logger, bus);
-    await identityService.initialize();
-
-    // No ExecutiveProfileService here: the ${executive_voice_block} injection it fed was
-    // removed in #957, so loading the profile (and starting its file watcher) would render
-    // a prompt block the runtime never emits. The principal's *contact* details below still
-    // come from the DB, which is what the runtime actually injects.
-
-    // ── Agent contact ID + channel identities ─────────────────────────────────
-    const agentResult = await pool.query<{ id: string }>(
-      `SELECT id FROM contacts WHERE system_role = 'agent' ORDER BY id ASC LIMIT 1`,
-    );
-    const agentContactId = agentResult.rows[0]?.id ?? '';
-    if (!agentContactId) {
-      // Hard failure: a prompt without the agent contact ID is not representative
-      // of a live instance and would produce misleading red-team results.
-      throw new Error(
-        'No agent contact found (system_role=agent). ' +
-        'Has Curia been started at least once? ' +
-        'Run the server at least once to seed the agent contact, then re-run this script.',
-      );
-    }
-
-    // Fetch the agent's channel identities to mirror the runtime "Your Contact Details" block.
-    const agentIdentityResult = await pool.query<{ channel: string; channel_identifier: string }>(
-      `SELECT channel, channel_identifier
-       FROM contact_channel_identities
-       WHERE contact_id = $1 AND verified = true AND status = 'active'
-       ORDER BY channel ASC`,
-      [agentContactId],
-    );
-
-    // ── Principal contact ID + verified identities ────────────────────────────
-    const principalResult = await pool.query<{ id: string; primary_email: string | null }>(
-      `SELECT id, primary_email FROM contacts WHERE system_role = 'principal' ORDER BY id ASC LIMIT 1`,
-    );
-    const principalContactId = principalResult.rows[0]?.id ?? '';
-    const principalPrimaryEmail = principalResult.rows[0]?.primary_email ?? null;
-    if (!principalContactId) {
+    if (!stack.principalContactId) {
       process.stderr.write(
         'render-coordinator-prompt: warning: no principal contact found (system_role=principal).\n' +
-        '  principal_contact_id will be empty in the rendered prompt.\n',
+        '  The Principal Contact Details block is absent, as it would be in production.\n',
       );
     }
-
-    // Fetch the principal's verified, active identities — same filter as index.ts startup.
-    const principalIdentityResult = await pool.query<{
-      channel: string;
-      channel_identifier: string;
-      label: string | null;
-    }>(
-      `SELECT channel, channel_identifier, label
-       FROM contact_channel_identities
-       WHERE contact_id = $1 AND verified = true AND status = 'active'
-       ORDER BY channel ASC`,
-      [principalContactId],
-    );
-
-    // ── Available specialists ──────────────────────────────────────────────────
-    // Mirror the two-pass registration in index.ts.
-    // Key off `name` (not `role`) — index.ts comment: "name: coordinator is the canonical
-    // identifier; role is optional and may differ (e.g., 'chief-of-staff')."
-    const agentConfigs = loadAllAgentConfigs(AGENTS_DIR);
-    const registry = new AgentRegistry();
-    for (const cfg of agentConfigs) {
-      if (cfg.name !== 'coordinator') {
-        registry.register(cfg.name, {
-          role: cfg.role ?? 'specialist',
-          description: cfg.description ?? cfg.name,
-        });
-      }
-    }
-
-    // ── Security context block ─────────────────────────────────────────────────
-    const rawThresholds = yamlConfig.security?.trust_thresholds;
-    const thresholds = {
-      information_query: rawThresholds?.information_query ?? 0.30,
-      scheduling:        rawThresholds?.scheduling        ?? 0.50,
-      data_export:       rawThresholds?.data_export       ?? 0.60,
-      financial:         rawThresholds?.financial         ?? 0.70,
-    };
-    const securityContextBlock = compileSecurityContextBlock(thresholds);
-
-    // ── Resolve the coordinator system prompt template ─────────────────────────
-    // Key off `name` — see comment above on specialist registration.
-    const coordinatorConfig = agentConfigs.find(cfg => cfg.name === 'coordinator');
-    if (!coordinatorConfig) {
-      throw new Error('No coordinator agent found in agents/ directory.');
-    }
-
-    // interpolateRuntimeContext handles: ${office_identity_block},
-    // ${available_specialists}, ${agent_contact_id}, ${principal_contact_id}.
-    // The security_context_block is compiled separately.
-    //
-    // ${executive_voice_block} is deliberately absent: the injection path was removed
-    // in #957 and the placeholder is gone from coordinator.yaml, so passing a voice
-    // block here would render a prompt the runtime never actually produces.
-    let systemPrompt = interpolateRuntimeContext(coordinatorConfig.system_prompt, {
-      officeIdentityBlock:   identityService.compileSystemPromptBlock(),
-      availableSpecialists:  registry.specialistSummary(),
-      agentContactId,
-      principalContactId,
-    });
-
-    // ${security_context_block} is not handled by interpolateRuntimeContext.
-    // Mirror AgentRuntime: replace the placeholder when present; append when absent
-    // (so the rendered prompt always includes the security policy regardless of
-    // whether coordinator.yaml uses the placeholder).
-    const afterReplace = systemPrompt.replace(/\$\{security_context_block\}/g, securityContextBlock);
-    if (afterReplace === systemPrompt) {
-      // Placeholder was absent — append, matching runtime fallback behavior.
-      process.stderr.write(
-        'render-coordinator-prompt: warning: ${security_context_block} placeholder not found ' +
-        'in coordinator.yaml. Appending security context block at end (mirrors runtime fallback).\n',
-      );
-      systemPrompt = systemPrompt + '\n\n' + securityContextBlock;
-    } else {
-      systemPrompt = afterReplace;
-    }
-
-    // ── Prepend representative per-turn injected blocks ────────────────────────
-    // These blocks are injected fresh on every message turn by the runtime.
-    // Including representative values here ensures the red team probes the full
-    // effective prompt surface, including the identity and contact detail sections
-    // that an adversary would see on a live instance.
-    //
-    // Use the same formatTimeContextBlock() as the runtime so date/timezone/DST
-    // handling is identical (Luxon-based, respects TIMEZONE env var).
-    const timeBlock = formatTimeContextBlock(config.timezone, new Date());
-
-    // Mirror AgentRuntime "Your Contact Details" block (runtime.ts ~line 316):
-    // uses channel_accounts email + SIGNAL_PHONE_NUMBER. Here we use the agent
-    // contact's verified identities from the DB as the canonical source.
-    const agentIdentityLines: string[] = [];
-    for (const row of agentIdentityResult.rows) {
-      agentIdentityLines.push(`- ${row.channel}: ${row.channel_identifier}`);
-    }
-    // Also include the agent's contact ID (used by skills as "acting as").
-    agentIdentityLines.push(`- Contact ID: ${agentContactId}`);
-    // Fall back to SIGNAL_PHONE_NUMBER from env if the agent has no phone identity in DB.
-    if (config.signalPhoneNumber && !agentIdentityResult.rows.some(r => r.channel === 'signal')) {
-      agentIdentityLines.push(`- signal: ${config.signalPhoneNumber}`);
-    }
-
-    const yourContactBlock = [
-      '## Your Contact Details',
-      ...OWN_CONTACT_DETAILS_INTRO,
-      '',
-      ...agentIdentityLines,
-    ].join('\n');
-
-    // Same formatter as AgentRuntime so a red-team render cannot drift (#1950).
-    // Omitted when the principal has no verified identities — the runtime omits it too.
-    const principalContactBlock = formatPrincipalContactDetailsBlock(
-      principalIdentityResult.rows.map((row) => ({
-        channel: row.channel,
-        channelIdentifier: row.channel_identifier,
-        label: row.label,
-      })),
-      principalPrimaryEmail,
-    );
-
-    const perTurnSection = [timeBlock, principalContactBlock, yourContactBlock]
-      .filter((part): part is string => typeof part === 'string' && part.length > 0)
-      .join('\n\n');
-
-    process.stdout.write(perTurnSection + '\n\n' + systemPrompt + '\n');
+    process.stdout.write(await stack.renderSystemPrompt('coordinator') + '\n');
   } finally {
-    await identityService?.stop();
     try {
-      await pool.end();
+      await stack.shutdown();
     } catch (err: unknown) {
-      // Don't let pool teardown shadow a real error — the prompt may already be written.
-      process.stderr.write(`render-coordinator-prompt: warning: pool.end() failed: ${String(err)}\n`);
+      // Don't let teardown shadow a real error — the prompt may already be written.
+      process.stderr.write(`render-coordinator-prompt: warning: shutdown failed: ${String(err)}\n`);
     }
   }
 }
