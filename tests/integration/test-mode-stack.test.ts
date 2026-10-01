@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OfficeIdentity } from '../../src/identity/types.js';
 import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../src/agents/prompts/date-resolve-guardrail.js';
+import { formatPrincipalContactDetailsBlock } from '../../src/agents/principal-contact-block.js';
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../../src/security/security-context.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 
@@ -63,11 +64,18 @@ describeIf('test-mode stack', () => {
       expect(rendered).toContain('## Turn budget');
     });
 
-    it('carries the principal contact details when a principal exists', () => {
-      // Other suites create and delete the principal in this shared DB, so the
-      // block's presence follows whatever the stack saw at boot.
-      if (stack.principalContactId) {
-        expect(rendered).toContain('## Principal Contact Details');
+    it('carries the principal contact details the runtime would render', () => {
+      // Other suites create and delete the principal in this shared DB, and some
+      // seed one with no verified identities — which production renders as no
+      // block at all. So derive the expectation from what the stack loaded at boot,
+      // through the same formatter, rather than from whether a principal exists.
+      const rc = stack.agent('coordinator').runtimeConfig;
+      const expected = formatPrincipalContactDetailsBlock(
+        rc.principalIdentities ?? [],
+        rc.principalPrimaryEmail?.current ?? null,
+      );
+      if (expected) {
+        expect(rendered).toContain(expected);
       } else {
         expect(rendered).not.toContain('## Principal Contact Details');
       }
