@@ -231,7 +231,7 @@ export interface PermissionDef {
 export type TrustLevel = 'ceo' | 'high' | 'medium' | 'low';
 
 /** System designation — drives authorization. Separate from the free-text `role` field.
- *  - 'principal' — the human principal who Curia serves
+ *  - 'principal' — the person Curia serves
  *  - 'agent'     — Curia itself or another autonomous agent
  *  - 'system'    — operator-configured, platform-executed (e.g. declarative YAML jobs)
  *
@@ -262,7 +262,7 @@ export const TRUST_RANK: Record<TrustLevel, number> = {
  * - 'unknown'   — contact exists but has not been confirmed (was: 'provisional' / trust_level='low').
  * - 'known'     — principal-confirmed, no special trust grant (was: 'confirmed' + no trust_level).
  * - 'trusted'   — principal granted elevated trust (was: trust_level='high').
- * - 'principal' — the human principal Curia serves (was: system_role='principal' / trust_level='ceo').
+ * - 'principal' — the person Curia serves (was: system_role='principal' / trust_level='ceo').
  *
  * Added in migration 055. See docs/specs/09-contacts-and-identity.md § Data Model → contacts
  * for the authoritative tier table.
@@ -277,7 +277,7 @@ export type ContactTier = 'blocked' | 'unknown' | 'known' | 'trusted' | 'princip
  * - 'person'       — individual human contact (default).
  * - 'organization' — a company or institution (linked KG node type='organization').
  * - 'automated'    — automated sender e.g. mailing list (exempts from unknown-tier gate in dispatcher.ts, #953).
- * - 'principal'    — the human principal Curia serves.
+ * - 'principal'    — the person Curia serves.
  * - 'agent'        — Curia itself or another autonomous agent.
  *
  * Added in migration 055.

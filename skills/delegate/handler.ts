@@ -509,7 +509,7 @@ export class DelegateHandler implements ToolHandler {
         '## Your Progress So Far',
         payload.context,
         '',
-        '## principal\'s Direction',
+        '## Principal\'s Direction',
         task,
         '',
         'Continue from where you left off.',

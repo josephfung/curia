@@ -16,7 +16,7 @@ import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
 
 /**
- * Repair a principal/principal contact's capability metadata to the canonical values.
+ * Repair a principal contact's capability metadata to the canonical values.
  *
  * Idempotent — the WHERE guard makes it a no-op when the row is already correct.
  * Called on EVERY path that returns an existing principal row (initial bootstrap,

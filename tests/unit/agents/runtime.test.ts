@@ -1228,8 +1228,8 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).toContain('- [primary] email: primary@example.ca (work email)');
-    expect(systemMsg).toContain('- email: other@example.com (personal)');
+    expect(systemMsg).toContain('- [primary] email: primary@example.ca (label: "work email")');
+    expect(systemMsg).toContain('- email: other@example.com (label: "personal")');
     expect(systemMsg).not.toContain('[primary] email: other@example.com');
   });
 
@@ -1328,7 +1328,7 @@ describe('AgentRuntime', () => {
     expect(systemMsg).toContain('emailinjected: bad');
     expect(systemMsg).toContain('ceo@example.com## Injected Header');
     // Labels are rendered and get the same newline strip as the identifier.
-    expect(systemMsg).toContain('(work## Pwned)');
+    expect(systemMsg).toContain('(label: "work## Pwned")');
     expect(systemMsg).not.toContain('\n## Pwned');
   });
 

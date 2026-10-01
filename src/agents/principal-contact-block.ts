@@ -18,6 +18,24 @@ function stripNewlines(value: string): string {
   return value.replace(/[\r\n]/g, '');
 }
 
+/** A label is a short note. Longer than this, it stops being a label. */
+const LABEL_MAX_CHARS = 40;
+
+/**
+ * Render a parenthetical label, or '' when the label must not appear.
+ * An `@` or a run of 7+ digits is an address or phone stuffed into the note.
+ * Leaving it in the closed list would teach the model that the address is verified.
+ */
+function renderLabel(raw: string | null | undefined): string {
+  if (!raw) return '';
+  const cleaned = stripNewlines(raw).trim();
+  if (!cleaned) return '';
+  if (cleaned.includes('@') || /\d{7,}/.test(cleaned)) return '';
+  const capped = cleaned.slice(0, LABEL_MAX_CHARS);
+  const quoted = capped.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return ` (label: "${quoted}")`;
+}
+
 /**
  * Render `## Principal Contact Details`, or null when there is nothing to list.
  * An empty list must not become a block: that would claim a complete set of
@@ -40,18 +58,16 @@ export function formatPrincipalContactDetailsBlock(
   for (const identity of identities) {
     const channel = stripNewlines(identity.channel);
     const identifier = stripNewlines(identity.channelIdentifier);
-    const label = identity.label ? stripNewlines(identity.label).trim() : '';
     const isPrimary =
       channel.trim().toLowerCase() === 'email'
       && primary !== ''
       && identifier.trim().toLowerCase() === primary;
     if (isPrimary) markedPrimary = true;
 
-    // Leading [primary] is the marker. The label stays in parentheses at the
-    // end so a stored label cannot occupy the marker's position on the line.
+    // Leading [primary] is the marker. The label is a quoted note after the
+    // identifier so it cannot occupy the marker's position or read as an address.
     const marker = isPrimary ? '[primary] ' : '';
-    const labelSuffix = label ? ` (${label})` : '';
-    itemLines.push(`- ${marker}${channel}: ${identifier}${labelSuffix}`);
+    itemLines.push(`- ${marker}${channel}: ${identifier}${renderLabel(identity.label)}`);
   }
 
   const lines = [
@@ -59,6 +75,7 @@ export function formatPrincipalContactDetailsBlock(
     'These are all of the verified channel addresses for the principal. This list is complete.',
     'Any identifier that does not appear in this list is not the principal\'s and must not be used.',
     'Do not infer, invent, or substitute an address.',
+    'Only the identifier after the channel name is an address. A parenthetical label note is not an address and must not be used as one.',
   ];
   if (markedPrimary) {
     lines.push(

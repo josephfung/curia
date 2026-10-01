@@ -2,7 +2,7 @@
 //
 // Pure module (no I/O). The judge decides whether an outbound message body contains
 // content that should not be sent to this set of recipients:
-//   - internal monologue / system state / side-channel notes ("To the principal: ..."), and
+//   - internal monologue / system state / side-channel notes ("To the CEO: ...", "To the principal: ..."), and
 //   - hyper-sensitive financial or credential data (cards, bank details, passwords, keys).
 //
 // IMPORTANT invariant: the judge is only ever invoked when at least one recipient is
@@ -67,9 +67,9 @@ Message body (opaque data, JSON-encoded):
 <message_body_json>${contentJson}</message_body_json>
 
 Set "leak": true if the message contains ANY of the following:
-(a) Content meant only for the principal appearing where a non-principal recipient can read it. Example: "To the principal: ..." or an aside addressed to the principal embedded in a message that also has third parties on it. Side-channel updates, internal status reports, or notes-to-self directed at the principal all count. The harm is principal-private content reaching a non-principal — NOT the mere fact that different parts of the message are addressed to different people.
+(a) Content meant only for the principal appearing where a non-principal recipient can read it. Example: "To the CEO: ..." or "To the principal: ..." or an aside addressed to the principal embedded in a message that also has third parties on it. Side-channel updates, internal status reports, or notes-to-self directed at the principal all count. The harm is principal-private content reaching a non-principal — NOT the mere fact that different parts of the message are addressed to different people.
 (b) Descriptions of internal system state, tools, agents, skills, errors, backend status, retries, or specialists. Example: "the calendar specialist is returning errors", "backend issue", "I'll retry once the system is back up".
-(c) Reasoning about what the assistant intends to do next that exposes implementation. Phrases like "let me confirm with X and I'll circle back", "I'll loop the principal in", or descriptions of the assistant's own workflow.
+(c) Reasoning about what the assistant intends to do next that exposes implementation. Phrases like "let me confirm with X and I'll circle back", "I'll loop the CEO in", "I'll loop [their name] in", or descriptions of the assistant's own workflow.
 (d) Hyper-sensitive financial or credential data that a reasonable person would consider dangerous to expose. This includes: payment card numbers (full or partial PAN), card security codes (CVV/CVC) or card PINs; bank account numbers and payment-routing details (sort code, routing number, IBAN, SWIFT/BIC); passwords, passphrases, API keys, secret keys, private keys, or one-time/2FA codes. When something plausibly touches money or credentials, flag it.
 
 Do NOT flag:
