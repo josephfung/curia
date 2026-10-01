@@ -57,7 +57,13 @@ async function main(): Promise<void> {
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     process.stderr.write(`\nFailed to boot Curia stack: ${detail}\n`);
-    process.stderr.write('Check that DATABASE_URL is set, the database is reachable, and the API key for the selected model\'s provider (ANTHROPIC_API_KEY or OPENROUTER_API_KEY) is set.\n');
+    // LLM keys are read from the vault only (#911) — exporting ANTHROPIC_API_KEY or
+    // OPENROUTER_API_KEY does nothing, so don't send the operator there.
+    process.stderr.write(
+      'Check that DATABASE_URL is set and the database is reachable, that SECRET_ENCRYPTION_KEY is set, ' +
+      'and that the vault holds the selected model\'s provider key (anthropic_api_key or openrouter_api_key). ' +
+      'Env vars are not read for LLM keys (#911).\n',
+    );
     process.exit(1);
   }
   process.stdout.write('   Stack ready.\n');
