@@ -386,6 +386,85 @@ export class ExecutionLayer {
   }
 
   /**
+   * Capability name → wired service (undefined when absent). One map shared by invoke()
+   * and unavailableCapabilities() so the two cannot disagree about what is configured.
+   */
+  private capabilityServiceMap(outboundGateway: OutboundGateway | undefined): Record<string, unknown> {
+    // Explicit lookup map — enumerates every capability-gated service by name.
+    // Using a map rather than `(this as Record<string, unknown>)[cap]` keeps TypeScript
+    // aware that each field is read, satisfying noUnusedLocals.
+    // Field names here MUST match the VALID_CAPABILITIES set in loader.ts.
+    return {
+      bus: this.bus,
+      agentRegistry: this.agentRegistry,
+      outboundGateway,
+      schedulerService: this.schedulerService,
+      entityMemory: this.entityMemory,
+      nylasCalendarClient: this.nylasCalendarClient,
+      autonomyService: this.autonomyService,
+      browserService: this.browserService,
+      bullpenService: this.bullpenService,
+      executiveProfileService: this.executiveProfileService,
+      officeIdentityService: this.officeIdentityService,
+      actionLogRepo: this.actionLogRepo,
+      auditLogRepo: this.auditLogRepo,
+      diagnosticsRepo: this.diagnosticsRepo,
+      taskRepo: this.taskRepo,
+      workingDocs: this.workingDocsRepo,
+      confidencePipeline: this.confidencePipeline,
+      // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
+      // Listed here so the missing-cap guard knows it's configured when this.tempFileStore is set.
+      tempFileStore: this.tempFileStore,
+      // executionLayer injects `this` so approve-action can re-invoke blocked skills
+      // with humanApproved: true (see ADR-018). Only approve-action should declare this.
+      executionLayer: this,
+      // infraLlm is a constrained LLM service (classify/extract only, no raw chat)
+      // with full telemetry (llm.call bus events). The narrow API surface IS the
+      // security policy — any skill can declare this capability. See #637.
+      // Listed here so the missing-cap guard knows it's configured when infraLlmService is set.
+      infraLlm: this.infraLlmService,
+      // outboundContext bridges outbound message context into skills. The ScopedOutboundContext
+      // instance is created per-invocation (pre-scoped with conversationId) in the injection loop.
+      // Listed here so the missing-cap guard knows it's configured when outboundContextService is set.
+      outboundContext: this.outboundContextService,
+      // secretCapture is the mint-only minter for agent-initiated secret capture (#971).
+      // Injected as a plain field (default branch in the loop). Listed here so the
+      // missing-cap guard fails closed if a skill declares it before it's wired.
+      secretCapture: this.secretCaptureService,
+      // secretResolver injects the by-reference resolver closure (#973), built in the
+      // loop below. Backed by secretsService — listed here so the missing-cap guard fails
+      // closed when a skill declares the capability but no vault is wired.
+      secretResolver: this.secretsService,
+      // userSecretIndex injects the names-only `user.*` listing closure (#1497). Backed
+      // by secretsService.listUserNames() — listed here so the missing-cap guard fails
+      // closed. The actual injection is a scoped closure; this map entry is presence only.
+      userSecretIndex: this.secretsService,
+      // sensitivityClassifier (#1419) — plain field injection, no special-casing needed.
+      // Classifies free text against config sensitivity_rules; shared with EntityMemory.
+      sensitivityClassifier: this.sensitivityClassifier,
+    };
+  }
+
+  /** Declared capabilities this layer cannot satisfy — the same check invoke() fails closed on. */
+  private missingCapabilities(caps: readonly string[], services: Record<string, unknown>): string[] {
+    return caps.filter(cap => {
+      if (cap === 'toolSearch') return false; // toolSearch is synthesized, not a field on `this`
+      if (cap === 'skillRegistry') return this.skillRegistry === undefined;
+      return services[cap] === undefined;
+    });
+  }
+
+  /**
+   * Capabilities `toolName` declares that this layer has no service for. A non-empty
+   * result means invoke() will refuse the tool. Lets a caller that deliberately leaves
+   * services unwired (the test-mode stack, #1966) report which tools are disabled.
+   */
+  unavailableCapabilities(toolName: string): string[] {
+    const caps = this.registry.get(toolName)?.manifest.capabilities ?? [];
+    return this.missingCapabilities(caps, this.capabilityServiceMap(this.outboundGateway));
+  }
+
+  /**
    * Inject the secret-capture minter after construction.
    * Called from index.ts once registryService (which the system-name allowlist depends on)
    * is available. Mirrors setAgentContactId's post-bootstrap injection pattern (#971).
@@ -1753,59 +1832,7 @@ export class ExecutionLayer {
     // We inject only the declared services — skills cannot escalate privilege.
     const caps = manifest.capabilities ?? [];
 
-    // Explicit lookup map — enumerates every capability-gated service by name.
-    // Using a map rather than `(this as Record<string, unknown>)[cap]` keeps TypeScript
-    // aware that each field is read, satisfying noUnusedLocals.
-    // Field names here MUST match the VALID_CAPABILITIES set in loader.ts.
-    const capabilityServices: Record<string, unknown> = {
-      bus: this.bus,
-      agentRegistry: this.agentRegistry,
-      outboundGateway: outboundGatewayForCtx,
-      schedulerService: this.schedulerService,
-      entityMemory: this.entityMemory,
-      nylasCalendarClient: this.nylasCalendarClient,
-      autonomyService: this.autonomyService,
-      browserService: this.browserService,
-      bullpenService: this.bullpenService,
-      executiveProfileService: this.executiveProfileService,
-      officeIdentityService: this.officeIdentityService,
-      actionLogRepo: this.actionLogRepo,
-      auditLogRepo: this.auditLogRepo,
-      diagnosticsRepo: this.diagnosticsRepo,
-      taskRepo: this.taskRepo,
-      workingDocs: this.workingDocsRepo,
-      confidencePipeline: this.confidencePipeline,
-      // tempFileStore is handled as a special case in the injection loop (writeTempFile closure).
-      // Listed here so the missing-cap guard knows it's configured when this.tempFileStore is set.
-      tempFileStore: this.tempFileStore,
-      // executionLayer injects `this` so approve-action can re-invoke blocked skills
-      // with humanApproved: true (see ADR-018). Only approve-action should declare this.
-      executionLayer: this,
-      // infraLlm is a constrained LLM service (classify/extract only, no raw chat)
-      // with full telemetry (llm.call bus events). The narrow API surface IS the
-      // security policy — any skill can declare this capability. See #637.
-      // Listed here so the missing-cap guard knows it's configured when infraLlmService is set.
-      infraLlm: this.infraLlmService,
-      // outboundContext bridges outbound message context into skills. The ScopedOutboundContext
-      // instance is created per-invocation (pre-scoped with conversationId) in the injection loop.
-      // Listed here so the missing-cap guard knows it's configured when outboundContextService is set.
-      outboundContext: this.outboundContextService,
-      // secretCapture is the mint-only minter for agent-initiated secret capture (#971).
-      // Injected as a plain field (default branch in the loop). Listed here so the
-      // missing-cap guard fails closed if a skill declares it before it's wired.
-      secretCapture: this.secretCaptureService,
-      // secretResolver injects the by-reference resolver closure (#973), built in the
-      // loop below. Backed by secretsService — listed here so the missing-cap guard fails
-      // closed when a skill declares the capability but no vault is wired.
-      secretResolver: this.secretsService,
-      // userSecretIndex injects the names-only `user.*` listing closure (#1497). Backed
-      // by secretsService.listUserNames() — listed here so the missing-cap guard fails
-      // closed. The actual injection is a scoped closure; this map entry is presence only.
-      userSecretIndex: this.secretsService,
-      // sensitivityClassifier (#1419) — plain field injection, no special-casing needed.
-      // Classifies free text against config sensitivity_rules; shared with EntityMemory.
-      sensitivityClassifier: this.sensitivityClassifier,
-    };
+    const capabilityServices = this.capabilityServiceMap(outboundGatewayForCtx);
 
     // Hard-restrict executionLayer to approve-action only.
     // executionLayer grants invoke() with humanApproved: true, which bypasses autonomy
@@ -1864,11 +1891,7 @@ export class ExecutionLayer {
 
     // Fail-closed: if a declared capability is not available on this ExecutionLayer,
     // refuse to run the skill. This catches configuration errors at invocation time.
-    const missingCaps = caps.filter(cap => {
-      if (cap === 'toolSearch') return false; // toolSearch is synthesized, not a field on `this`
-      if (cap === 'skillRegistry') return this.skillRegistry === undefined;
-      return capabilityServices[cap] === undefined;
-    });
+    const missingCaps = this.missingCapabilities(caps, capabilityServices);
     if (missingCaps.length > 0) {
       skillLogger.error(
         { toolName, missingCapabilities: missingCaps },
