@@ -17,6 +17,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`agent.task` (public API)** — optional `toolAllowlist` limits one turn to the named tools. (#1951)
 - **`report-agent-context`** — read-only report of an agent's per-call context and tool usage. (#1955)
+- **Coordinator context baseline** — production capture of per-call payload and tool usage, before #1954 changes. (#1955)
 - **Peer-request protocol** — any agent can ask another a question over the bullpen and get a structured answer.
 - **`delegation.requester_context` (public API)** — records requester identity rendered into a delegated specialist prompt. (#1859)
 - **ADR-045** — specialists do not re-adjudicate requester identity; authorization stays upstream. (#1859)
