@@ -287,6 +287,9 @@ describe('runAgentContextReport', () => {
         { tool_name: 'email-get', calls: '3' },
         { tool_name: 'search_drive_files', calls: '1' },
         { tool_name: 'web-search', calls: '2' },
+        // Not on disk and not in the archive: a renamed local tool, or a
+        // skill.invoke target_id. Must not be reported as a pinned MCP tool.
+        { tool_name: 'email-get-legacy', calls: '4' },
       ],
     });
 
@@ -312,6 +315,15 @@ describe('runAgentContextReport', () => {
       source: 'local',
       calls: 2,
     });
+    expect(report.invocations.find(row => row.toolName === 'search_drive_files')).toMatchObject({
+      pinned: true,
+      source: 'mcp:google-workspace',
+    });
+    expect(report.invocations.find(row => row.toolName === 'email-get-legacy')).toMatchObject({
+      pinned: false,
+      source: 'unattributed',
+    });
+    expect(report.mcpToolsObserved).toBe(2);
     expect(report.pinnedZeroCalls).toEqual([
       { toolName: 'delegate', source: 'local' },
       { toolName: 'list_drive_items', source: 'mcp:google-workspace' },

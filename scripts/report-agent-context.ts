@@ -966,11 +966,17 @@ export function buildReport(input: BuildInput): AgentContextReport {
   const pinnedLocal = new Set(input.catalog.localPinnedTools);
   const invocations: ToolUsage[] = input.invocations
     .map(row => {
-      const source = row.toolName === '(unnamed)'
+      // classifyToolSource labels every non-local name as the pinned MCP server
+      // when exactly one is configured. That is right for a name the archive
+      // offered, and wrong for a renamed local tool or a skill.invoke target_id
+      // that was never a tool definition. Archive membership is the evidence,
+      // same as pinnedZeroCalls.
+      const offeredMcp = offered.has(row.toolName) && !localNames.has(row.toolName);
+      const source = row.toolName === '(unnamed)' || (!localNames.has(row.toolName) && !offeredMcp)
         ? 'unattributed'
         : classifyToolSource(row.toolName, localNames, input.catalog.mcpServers);
       const pinned = pinnedLocal.has(row.toolName)
-        || (source.startsWith('mcp:') && (offered.has(row.toolName) || input.catalog.mcpServers.length === 1));
+        || (source.startsWith('mcp:') && offered.has(row.toolName));
       return { toolName: row.toolName, calls: row.calls, pinned, source };
     })
     .sort((a, b) => b.calls - a.calls || a.toolName.localeCompare(b.toolName));
