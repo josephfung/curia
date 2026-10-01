@@ -74,15 +74,22 @@ export function resolveMaxTurns(errorBudget: AgentConfig['errorBudget']): number
  *   ## Principal Contact Details → turn budget
  *
  * Every block is rebuilt per call, so identity, autonomy and principal-identity
- * changes take effect on the next turn without a restart. A failure loading one
- * block is logged and the block is omitted — it never aborts the turn.
+ * changes take effect on the next turn without a restart. By default a failure
+ * loading one block is logged and the block omitted — it never aborts a live turn.
+ * `onBlockError: 'throw'` makes it fatal instead, for renders (red-team, tests) where
+ * a prompt missing a block would silently test less than production sends.
  */
 export async function buildBaseSystemPrompt(
   sources: SystemPromptSources,
-  opts: { now: Date; logger: Logger },
+  opts: { now: Date; logger: Logger; onBlockError?: 'omit' | 'throw' },
 ): Promise<string> {
   const { agentId, officeIdentityService, autonomyService } = sources;
   const { now, logger } = opts;
+  const failBlock = (block: string, err: unknown): void => {
+    if (opts.onBlockError === 'throw') {
+      throw new Error(`System prompt block '${block}' failed for agent '${agentId}'`, { cause: err });
+    }
+  };
 
   // Build the fixed preamble — constraints first, most salient. Identity then
   // security are PREPENDED to the body (not substituted in-place), so the YAML
@@ -97,6 +104,7 @@ export async function buildBaseSystemPrompt(
       // A compile failure must not abort the task. Log at error (operator signal)
       // and proceed without the identity block rather than emitting a literal
       // placeholder or a structurally broken block.
+      failBlock('identity', err);
       logger.error({ err, agentId }, 'Failed to compile identity block — identity preamble omitted this turn');
     }
   }
@@ -131,6 +139,7 @@ export async function buildBaseSystemPrompt(
     } catch (err) {
       // An unexpected DB error loading the autonomy config should not abort the task.
       // Log at error level (operator signal) and proceed without the block.
+      failBlock('autonomy', err);
       logger.error({ err, agentId }, 'Failed to load autonomy config — proceeding with base system prompt');
     }
   }
@@ -153,6 +162,7 @@ export async function buildBaseSystemPrompt(
     } catch (err) {
       // An invalid timezone produces "Invalid DateTime" strings, which is worse than
       // omitting the block because it corrupts the agent's date reasoning.
+      failBlock('time', err);
       logger.error({ err, agentId, timezone }, 'formatTimeContextBlock failed — time context not injected; check TIMEZONE config');
     }
   }
