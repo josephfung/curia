@@ -78,6 +78,15 @@ describe('resolveSecurityThresholds', () => {
     });
   });
 
+  it('rejects values that are not finite numbers', () => {
+    const raw = { ...DEFAULT_THRESHOLDS, scheduling: null, data_export: Number.NaN, financial: '0.7' };
+    expect(resolveSecurityThresholds(raw as unknown as Partial<SecurityThresholds>)).toEqual({
+      ok: false,
+      reason: 'out_of_range',
+      fields: ['scheduling', 'data_export', 'financial'],
+    });
+  });
+
   it('names the out-of-range fields', () => {
     expect(resolveSecurityThresholds({ ...DEFAULT_THRESHOLDS, scheduling: 1.5, financial: -0.1 })).toEqual({
       ok: false,

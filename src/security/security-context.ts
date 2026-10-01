@@ -40,9 +40,11 @@ export function resolveSecurityThresholds(
   if (raw === undefined) return { ok: false, reason: 'absent' };
   const missing = THRESHOLD_FIELDS.filter(f => raw[f] === undefined);
   if (missing.length > 0) return { ok: false, reason: 'missing_fields', fields: missing };
+  // Not just a range check: null, NaN and "0.7" all compare false against 0 and 1
+  // and would otherwise slip through. YAML is untyped at runtime.
   const outOfRange = THRESHOLD_FIELDS.filter(f => {
-    const v = raw[f] as number;
-    return v < 0 || v > 1;
+    const v: unknown = raw[f];
+    return typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1;
   });
   if (outOfRange.length > 0) return { ok: false, reason: 'out_of_range', fields: outOfRange };
   // Every field was checked defined above.
