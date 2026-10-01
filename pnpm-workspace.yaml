@@ -197,8 +197,13 @@ overrides:
   # HIGH CVEs from Dependabot, 2026-07-24:
   # GHSA-f88m-g3jw-g9cj (libvips CVEs) is fixed in 0.35.0, but >=0.35.0 then admitted
   # 0.35.0-0.35.3, which carry GHSA-rgj7-g3m4-5g8c (HIGH, <0.35.4).
+  # Raised off >=0.35.4 (#1949): that floor admitted 0.35.4, which carries
+  # GHSA-wq5f-xc86-pv6w (HIGH, <0.35.5), a librsvg CVE in the bundled libvips. It exists
+  # only on lovell/sharp and 404s on GitHub's global advisory DB, so Dependabot raised no
+  # alert. Not a backstop: resolution was 0.35.4, so the exposure was live (dev-only and
+  # optional: promptfoo, directly and via @huggingface/transformers).
   # allowBuilds stays false (prebuilt binary).
-  sharp: '>=0.35.4'
+  sharp: '>=0.35.5'
   find-my-way: '>=9.7.0'                    # GHSA-c96f-x56v-gq3h (HTTP/2 DoS)
   # Raised off >=1.9.0, which sat INSIDE the vulnerable range of a HIGH published only on
   # ljharb/shell-quote and absent from GitHub's global advisory DB: GHSA-pqg4-j6r4-53mv
