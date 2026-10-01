@@ -66,7 +66,7 @@ name: expense-tracker
 description: Tracks and categorizes expenses from receipts and emails
 
 system_prompt: |
-  You are an expense tracking assistant for a CEO.
+  You are an expense tracking assistant for the principal.
   Extract amounts, vendors, categories, and dates from receipts.
 
 pinned_skills:

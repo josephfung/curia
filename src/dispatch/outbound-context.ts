@@ -450,13 +450,13 @@ export class OutboundContextService {
 
 /**
  * Strip the [ACTIVE OUTBOUND CONTEXT] preamble from a stored user message,
- * returning only the CEO's original text.
+ * returning only the principal's original text.
  *
  * The preamble produced by formatInjectionBlock always ends with a '---' line
  * on its own line followed by a blank line before the original content, giving
  * the separator '\n---\n\n'. Using the full newline-anchored pattern reduces
  * (though does not eliminate) the chance of a false match against user text
- * that contains triple-dashes — in practice, a CEO's chat message rarely
+ * that contains triple-dashes — in practice, a principal's chat message rarely
  * contains '\n---\n\n'. Returns content unchanged if no preamble is detected.
  */
 export function stripOutboundContextPreamble(content: string): string {

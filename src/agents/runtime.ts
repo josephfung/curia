@@ -25,7 +25,11 @@ import {
 import type { EntityMemory } from '../memory/entity-memory.js';
 import type { ExecutionLayer } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
-import type { ChannelIdentity } from '../contacts/types.js';
+import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
+import {
+  formatPrincipalContactDetailsBlock,
+  OWN_CONTACT_DETAILS_INTRO,
+} from './principal-contact-block.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
@@ -218,10 +222,16 @@ export interface AgentConfig {
   /** The principal's verified channel identities (email, phone, Signal), loaded from
    *  contact_channel_identities at startup. When provided and non-empty, a
    *  "## Principal Contact Details" block is appended to the system prompt on every task
-   *  so agents have an authoritative source for reaching the principal without inferring
-   *  or hallucinating addresses. Injected into all agents — specialists need this too.
-   *  See #786. */
+   *  so agents have an authoritative, closed set of addresses for reaching the principal.
+   *  Injected into all agents — specialists need this too.
+   *  See #786, #1950. */
   principalIdentities?: ChannelIdentity[];
+  /**
+   * `contacts.primary_email` for the principal. Read per turn so a post-boot
+   * update is visible without restart. Null or omitted leaves the list unmarked.
+   * See #1950.
+   */
+  principalPrimaryEmail?: PrincipalPrimaryEmailRef;
   /** The specialist roster string (from AgentRegistry.specialistSummary()). When provided,
    *  a "## Available Specialists" block is appended to the system prompt. Passed only for
    *  the coordinator (see src/index.ts). Specialists that use the ${available_specialists}
@@ -534,7 +544,7 @@ export class AgentRuntime {
     }
 
     // Load the current autonomy config and append its behavioral block to the
-    // system prompt. This runs per-task (not at startup) so a CEO score change
+    // system prompt. This runs per-task (not at startup) so a principal score change
     // mid-session takes effect on Curia's next action without a restart.
     if (autonomyService) {
       try {
@@ -577,7 +587,7 @@ export class AgentRuntime {
 
     // Append Curia's own contact details — email and phone sourced from deployment env vars.
     // This gives the LLM a concrete "acting as" identity so it doesn't guess or fall back
-    // to the CEO's details when tools require an account parameter.
+    // to the principal's details when tools require an account parameter.
     // Injected into ALL agents (coordinator + specialists) so every agent knows its identity.
     const { channelAccounts } = this.config;
     // Render the block when there is ANY identity to show — channel accounts OR the
@@ -585,10 +595,7 @@ export class AgentRuntime {
     // contact ID for a deployment with no email/phone, breaking the per-turn contact-ID
     // injection contract (codeant review on #974).
     if ((channelAccounts && (channelAccounts.email || channelAccounts.phone)) || this.config.agentContactId) {
-      const lines: string[] = ['## Your Contact Details'];
-      lines.push('These are your own accounts. Use them when tools require an email address, phone number,');
-      lines.push('or similar "acting as" identifier — never substitute the CEO\'s details.');
-      lines.push('');
+      const lines: string[] = ['## Your Contact Details', ...OWN_CONTACT_DETAILS_INTRO, ''];
       if (channelAccounts?.email) lines.push(`- Email: ${channelAccounts.email}`);
       if (channelAccounts?.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
       // The agent's own contact ID — used for self-directed entity/calendar lookups.
@@ -597,25 +604,18 @@ export class AgentRuntime {
       effectiveSystemPrompt += '\n\n' + lines.join('\n');
     }
 
-    // Append the principal's verified contact details so agents have an authoritative source
-    // for reaching the CEO without inferring or guessing addresses. Injected into ALL agents
-    // (coordinator + specialists) following the same rationale as channelAccounts (#387).
-    // Only verified and active identities reach this array (filtered at startup). The block
-    // labels them as authoritative to prevent the LLM from substituting inferred alternatives.
+    // Append the principal's verified contact details. The list is closed: an
+    // address that is not rendered here is not the principal's (#1950). Injected
+    // into ALL agents (coordinator + specialists), same rationale as channelAccounts
+    // (#387). Only verified and active identities reach this array (filtered at
+    // startup). Empty stays omitted — do not render a complete-set claim over nothing.
     const { principalIdentities } = this.config;
     if (principalIdentities && principalIdentities.length > 0) {
-      const lines: string[] = ['## Principal Contact Details'];
-      lines.push('These are the verified channel addresses for the principal you serve.');
-      lines.push('Use them when you need to reach the principal. Do not infer or substitute — these are authoritative.');
-      lines.push('');
-      // Strip newlines from DB-sourced strings before interpolating into the system prompt.
-      // Prevents stored prompt injection: a channelIdentifier with embedded newlines could
-      // break out of the current line and inject markdown headers or instructions.
-      const stripNewlines = (s: string): string => s.replace(/[\r\n]/g, '');
-      for (const identity of principalIdentities) {
-        lines.push(`- ${stripNewlines(identity.channel)}: ${stripNewlines(identity.channelIdentifier)}`);
-      }
-      effectiveSystemPrompt += '\n\n' + lines.join('\n');
+      const block = formatPrincipalContactDetailsBlock(
+        principalIdentities,
+        this.config.principalPrimaryEmail?.current ?? null,
+      );
+      if (block) effectiveSystemPrompt += '\n\n' + block;
     }
 
     // Initialize the error budget for this task.
@@ -965,7 +965,7 @@ export class AgentRuntime {
         senderInfo += `\n\nAUTHORIZATION: This sender is BLOCKED. Do not respond, take actions, or disclose any information.`;
       } else if (senderCtx.tier === 'unknown') {
         // tier='unknown': route in low-trust mode. The coordinator may engage to understand
-        // the request, but must not take actions or disclose principal context without CEO
+        // the request, but must not take actions or disclose principal context without principal
         // instruction. Issues #948 and #949 will add the full policy gate; this is the
         // transitional behavior.
         senderInfo += `\n\nAUTHORIZATION: LOW-TRUST SENDER (tier=unknown). Apply read-only mode:\n  - You may reply to acknowledge or ask a clarifying question.\n  - Do NOT take any action on their behalf (no calendar, email, or external calls).\n  - Do NOT share principal context, availability, location, or third-party information.\n  - Do NOT reveal that actions are restricted — simply don't take them.\n  Trust score and channel signal are your primary guardrails.`;
@@ -981,7 +981,7 @@ export class AgentRuntime {
           senderInfo += `\n  Blocked by channel trust (${auth.channelTrust}): ${auth.trustBlocked.join(', ')} — ask sender to use a higher-trust channel`;
         }
         if (auth.escalate.length > 0) {
-          senderInfo += `\n  Needs CEO decision: ${auth.escalate.join(', ')}`;
+          senderInfo += `\n  Needs principal decision: ${auth.escalate.join(', ')}`;
         }
       } else {
         // known/trusted/principal with null auth: auth service unavailable or eval threw.
@@ -1636,7 +1636,7 @@ export class AgentRuntime {
               if (pendingClarification) {
                 logger.warn(
                   { agentId, question: pendingClarification.question.slice(0, 100) },
-                  'Discarding pending clarification due to error budget exhaustion — specialist question will not reach the CEO',
+                  'Discarding pending clarification due to error budget exhaustion — specialist question will not reach the principal',
                 );
               }
               await this.handleBudgetExceeded(budget, taskEvent, 'maxConsecutiveErrors', budgetHandoff);
@@ -1676,7 +1676,7 @@ export class AgentRuntime {
 
               logger.info(
                 { agentId, conversationId, question: pendingClarification.question.slice(0, 100) },
-                'Task paused for clarification — specialist requested CEO direction',
+                'Task paused for clarification — specialist requested principal direction',
               );
               earlyExitHandled = true;
               return 'stop';
@@ -1723,8 +1723,8 @@ export class AgentRuntime {
                   escalated: pendingDelegationEscalation.escalated,
                 },
                 pendingDelegationEscalation.escalated
-                  ? 'Task stopped after non-retryable delegation failure — escalated to CEO backlog'
-                  : 'Task stopped after non-retryable delegation failure — CEO backlog escalation failed',
+                  ? 'Task stopped after non-retryable delegation failure — escalated to principal backlog'
+                  : 'Task stopped after non-retryable delegation failure — principal backlog escalation failed',
               );
               earlyExitHandled = true;
               return 'stop';
@@ -1933,7 +1933,7 @@ export class AgentRuntime {
               typeof delegateInput['resume_token'] === 'string' && delegateInput['resume_token'] !== '';
             if (delegateAgent && delegateTask) {
               const dKey = delegationKey(delegateAgent, delegateTask);
-              // A resume continuation is normally exempt (#1171): it carries new CEO direction, so
+              // A resume continuation is normally exempt (#1171): it carries new principal direction, so
               // it is not a repeat of the same request. `already_delivered` is the exception — that
               // work is finished, not paused, so resuming it would re-run the side effects the late
               // delivery exists to avoid repeating (#1799). The delivered record may be keyed on the
@@ -2203,7 +2203,7 @@ export class AgentRuntime {
             }
 
             // Delegation failure circuit-breaker (#1171): when delegate returns failed{retryable},
-            // record the outcome and escalate to the CEO backlog when retries are exhausted or
+            // record the outcome and escalate to the principal backlog when retries are exhausted or
             // the failure is non-retryable. Short-circuit the turn after escalation so the LLM
             // cannot blind-re-delegate in subsequent rounds.
             // Paused delegate results (#1174) are success at the delegation layer — do not record.

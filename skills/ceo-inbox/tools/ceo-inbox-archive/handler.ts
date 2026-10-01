@@ -39,7 +39,7 @@ export class CeoInboxArchiveHandler implements ToolHandler {
       return { success: true, data: { message_id: messageId } };
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-archive: failed to archive');
-      return { success: false, error: 'Failed to archive CEO inbox message' };
+      return { success: false, error: 'Failed to archive principal inbox message' };
     }
   }
 }

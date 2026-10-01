@@ -46,7 +46,7 @@ export class SchedulerUpdateHandler implements ToolHandler {
         case 'resume':
           // unsuspendJob accepts both 'suspended' and 'paused' — one call covers
           // failure-suspended and drift-paused jobs. No extra notification here:
-          // the CEO was already notified when a drift pause fired.
+          // the principal was already notified when a drift pause fired.
           await ctx.schedulerService.unsuspendJob(job_id);
           break;
         case 'pause':

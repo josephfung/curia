@@ -1,6 +1,6 @@
 // service.ts — ExecutiveProfileService
 //
-// System-layer service that owns the executive (CEO) profile — writing voice,
+// System-layer service that owns the executive (principal) profile — writing voice,
 // style preferences, and (in future versions) communication preferences.
 //
 // This is separate from OfficeIdentityService, which owns the assistant's persona.

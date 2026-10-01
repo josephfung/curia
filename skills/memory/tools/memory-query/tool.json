@@ -1,7 +1,7 @@
 {
   "name": "memory-query",
   "description": "Freeform semantic search across the knowledge graph. Embeds the query and returns the most similar nodes by cosine similarity. Use this when you need to find everything known about a topic without knowing which specific entity to target — e.g. 'find everything related to investor relations'. Optionally filter by node type or sensitivity ceiling.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

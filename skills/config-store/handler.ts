@@ -94,7 +94,7 @@ export class ConfigStoreHandler implements ToolHandler {
         label: key,
         properties: { key, value, namespace },
         confidence: 1.0,
-        // Config values are permanent — stable URLs / IDs the CEO provides once
+        // Config values are permanent — stable URLs / IDs the principal provides once
         decayClass: 'permanent',
         source: writeSource,
       });

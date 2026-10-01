@@ -86,7 +86,7 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     for (const candidate of candidates) {
       const task = await ctx.taskRepo.getTask(candidate.taskId);
       // Re-validate eligibility: the candidate may be stale (task reassigned, completed,
-      // cancelled, or failed since observation). Only active CEO-owned tasks may be
+      // cancelled, or failed since observation). Only active principal-owned tasks may be
       // completed — this enforces the documented owner='ceo', still-active boundary.
       const eligible =
         !!task &&
@@ -230,8 +230,8 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
     // Second pass: only now that every pending auto-complete's undo note is confirmed durable is
     // it safe to actually complete the tasks.
     // Track which auto-completes actually landed this run so the notification below only tells the
-    // CEO to "undo" tasks that were really marked done — a completeTask that threw leaves the task
-    // active, and an "undo completion <id>" line for it would be a lie (the CEO reply path would
+    // principal to "undo" tasks that were really marked done — a completeTask that threw leaves the task
+    // active, and an "undo completion <id>" line for it would be a lie (the principal reply path would
     // then find a non-done task and either fail loud or falsely report "already reopened").
     const completedTaskIds = new Set<string>();
     if (digestStored) {
@@ -259,9 +259,9 @@ export class TaskCompletionFromSentHandler implements ToolHandler {
       await writeCompletionCandidates(store, remaining);
     }
 
-    // Surface this run's newly produced items to the CEO the moment they're durably written (#1466).
+    // Surface this run's newly produced items to the principal the moment they're durably written (#1466).
     // After #1464 removed the scheduled digest, this event-driven notification is the only proactive
-    // path that reaches the CEO for undo/confirm/dismiss. Include every confirm item (they don't
+    // path that reaches the principal for undo/confirm/dismiss. Include every confirm item (they don't
     // depend on completeTask) but only the undo items whose auto-complete actually succeeded this
     // run — an undo whose completeTask threw is still in `digestAdds`/the durable digest (which
     // self-heals next run), but must NOT be announced as done. Gated on digestStored (the durable

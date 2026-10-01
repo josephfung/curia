@@ -1,6 +1,6 @@
 // skills/activity-log/handler.ts
 //
-// Read-only query of audit_log tool.result rows for CEO-facing activity recap.
+// Read-only query of audit_log tool.result rows for principal-facing activity recap.
 // Summarizes consequential autonomous actions without returning raw payloads.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';

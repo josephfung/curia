@@ -177,10 +177,10 @@ describe('buildVoiceGuidePrompt', () => {
     const prompt = buildVoiceGuidePrompt('Existing guide: writes short.', pairs);
     expect(prompt).toContain('Existing guide: writes short.');
     expect(prompt).toContain('Best regards'); // from a draft body
-    expect(prompt).toMatch(/how the (ceo|executive) writes/i);
+    expect(prompt).toMatch(/how a specific principal writes/i);
   });
 
   it('handles an empty current guide', () => {
-    expect(buildVoiceGuidePrompt('', parsePendingDiffs(SAMPLE_DIFFS))).toMatch(/how the (ceo|executive) writes/i);
+    expect(buildVoiceGuidePrompt('', parsePendingDiffs(SAMPLE_DIFFS))).toMatch(/how a specific principal writes/i);
   });
 });

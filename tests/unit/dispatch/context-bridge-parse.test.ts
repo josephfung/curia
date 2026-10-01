@@ -64,7 +64,7 @@ describe('registerOutboundContext', () => {
     expect(cap.register).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: 'test-agent',
-        expectedReply: expect.stringContaining("CEO's reply to:"),
+        expectedReply: expect.stringContaining("principal's reply to:"),
         metadata: {
           bind_reply: true,
           task_id: 'f9e9a0d9-0000-4000-8000-000000000001',

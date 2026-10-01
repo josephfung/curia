@@ -4,7 +4,7 @@ import type { Layer, EventType } from './events.js';
 // Phase 6: agent layer can publish memory.store and memory.query for the KG audit trail;
 //          system layer gets full access so audit logger and monitoring can observe these events.
 // #280 (decay warning): system layer publishes memory.decay_warning when DreamEngine
-//          flags an important node for CEO re-confirmation before archival.
+//          flags an important node for principal re-confirmation before archival.
 // Contacts Phase A: dispatch layer publishes contact.resolved and contact.unknown after resolution;
 //                   system layer gets full access for audit logging.
 // Error Recovery: agent layer can publish agent.error; dispatch layer subscribes to notify users;

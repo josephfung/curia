@@ -1,4 +1,4 @@
-// voice-learning-capture.ts — best-effort OKF snapshot of Curia-authored CEO drafts (#1421).
+// voice-learning-capture.ts — best-effort OKF snapshot of Curia-authored principal drafts (#1421).
 //
 // Capture failure must never block draft creation. Callers invoke this after a
 // successful Nylas draft create/update and ignore the boolean result.

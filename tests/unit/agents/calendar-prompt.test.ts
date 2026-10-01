@@ -213,7 +213,7 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     const memoryStep = consultSection.slice(memoryStepStart, proposedStepStart);
     expect(memoryStep).toContain('memory-query');
     expect(memoryStep).toContain('per-contact');
-    expect(memoryStep).toContain('Do not use `memory-query` for standing CEO-wide rules');
+    expect(memoryStep).toContain('Do not use `memory-query` for standing principal-wide rules');
   });
 
   it('honours loaded rules when finding free time and picking slots', () => {
@@ -267,7 +267,7 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     const hierarchySection = prompt.slice(hierarchyStart, conflictStart);
     expect(hierarchySection).toContain('Capturing new preferences');
     expect(hierarchySection).toContain('config-store');
-    expect(hierarchySection).toContain('Do not store standing CEO-wide prefs via `memory-store`');
+    expect(hierarchySection).toContain('Do not store standing principal-wide prefs via `memory-store`');
   });
 
   it('bumps calendar agent version for scheduling-rules capability', async () => {
@@ -276,7 +276,8 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     // meaningful prompt/capability change. 0.8.2 = delegate-wait hint sized to the
     // pre-2026-09-20 p99 (#1857).
     // 0.9.0 = answers a generic PEER REQUEST, a new capability, so minor.
-    expect(config.version).toBe('0.9.0');
+    // 0.9.1 = principal vocabulary in the prompt (#1950).
+    expect(config.version).toBe('0.9.1');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {

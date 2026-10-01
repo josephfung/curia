@@ -80,7 +80,7 @@ export class BullpenDispatcher {
     // Prefer the originator from the discuss event (fast path — already in memory).
     // Fall back to the originator stored on the thread at creation time: this covers
     // the poll-fallback path where the original agent.discuss publish failed, so the
-    // reply event has no originator but the thread row still holds the CEO's identity.
+    // reply event has no originator but the thread row still holds the principal's identity.
     const effectiveOriginator = event.payload.originator ?? threadRecord.thread.originator ?? undefined;
 
     // Create one agent.task per participant, excluding the sender.

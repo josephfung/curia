@@ -25,7 +25,7 @@ export const RECENCY_HALF_LIFE_DAYS = 90;
 /** Confidence boost when the contact is at trusted or principal tier. */
 export const GRANT_BOOST = 0.25;
 
-/** Confidence boost when the contact was manually created by the CEO (ceo_stated identity). */
+/** Confidence boost when the contact was manually created by the principal (ceo_stated identity). */
 export const MANUAL_BOOST = 0.10;
 
 /** Max confidence boost from verified identity pairings. Capped at 3 identities. */
@@ -79,9 +79,9 @@ export function computeConfidence(input: ConfidenceInput): number {
     recencyScore = Math.exp(-daysSinceLastSeen / RECENCY_HALF_LIFE_DAYS) * W_RECENCY;
   }
 
-  // Verification score: discrete boosts from CEO actions and identity pairings.
+  // Verification score: discrete boosts from principal actions and identity pairings.
   // Only trusted/principal tier earns the grant boost — those contacts have an
-  // explicit CEO trust grant. known/unknown/blocked are neutral or restrictive.
+  // explicit principal trust grant. known/unknown/blocked are neutral or restrictive.
   const grantBoost = meetsMinimumTier(tier, 'trusted') ? GRANT_BOOST : 0;
   const manualBoost = hasCeoStatedIdentity ? MANUAL_BOOST : 0;
   const pairingBoost =

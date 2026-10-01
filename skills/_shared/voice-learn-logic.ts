@@ -99,13 +99,13 @@ export function buildVoiceGuidePrompt(currentGuide: string, pairs: ParsedDiffPai
   const diffs = pairs
     .map(
       (p, i) =>
-        `### Edit ${i + 1}\nDRAFT (assistant wrote):\n${p.draftBody.trim()}\n\nSENT (CEO actually sent):\n${p.sentBody.trim()}`,
+        `### Edit ${i + 1}\nDRAFT (assistant wrote):\n${p.draftBody.trim()}\n\nSENT (principal actually sent):\n${p.sentBody.trim()}`,
     )
     .join('\n\n---\n\n');
   return [
-    'You maintain a short guide describing how a specific CEO writes email, used to steer an',
+    'You maintain a short guide describing how a specific principal writes email, used to steer an',
     'assistant that drafts on their behalf. Below are recent cases where the assistant drafted',
-    'and the CEO edited before sending. Infer how the CEO writes — tone, directness, humour,',
+    'and the principal edited before sending. Infer how the principal writes — tone, directness, humour,',
     'greetings/sign-off, formatting, structure, length, phrasing they add or cut.',
     '',
     'Current guide (may be empty):',

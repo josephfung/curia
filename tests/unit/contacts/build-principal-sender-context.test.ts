@@ -97,7 +97,7 @@ describe('buildPrincipalSenderContext', () => {
     expect(ctx).toEqual({
       resolved: true,
       contactId: 'primary-user',
-      displayName: 'CEO',
+      displayName: 'Principal',
       role: 'ceo',
       systemRole: 'principal',
       verified: true,

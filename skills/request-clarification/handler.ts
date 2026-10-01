@@ -1,7 +1,7 @@
 // handler.ts — request-clarification skill.
 //
 // Allows any specialist to pause mid-task and request clarification from
-// the CEO. The handler is deliberately thin: it validates inputs and returns
+// the principal. The handler is deliberately thin: it validates inputs and returns
 // a structured protocol marker. The runtime detects this marker in the tool
 // result, short-circuits the tool-use loop, constructs a resume_token from
 // the task context, and emits a deterministic JSON response that the
@@ -37,7 +37,7 @@ export class RequestClarificationHandler implements ToolHandler {
       return { success: false, error: 'context must not be empty' };
     }
 
-    ctx.log.info('request-clarification: specialist requesting CEO clarification');
+    ctx.log.info('request-clarification: specialist requesting principal clarification');
 
     return {
       success: true,

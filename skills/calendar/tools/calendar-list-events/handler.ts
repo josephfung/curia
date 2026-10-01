@@ -56,7 +56,7 @@ export class CalendarListEventsHandler implements ToolHandler {
       } else if (contactId && typeof contactId === 'string') {
         // Explicit contactId provided — used by scheduled agents that don't have a
         // real caller contact (they pass the principal's contact ID from their prompt
-        // to look up the CEO's calendars).
+        // to look up the principal's calendars).
         //
         // Checked before the override gate below: a literal `${...}` token is not an
         // attempt to read someone else's calendar, it's a prompt that never got
@@ -69,7 +69,7 @@ export class CalendarListEventsHandler implements ToolHandler {
         //
         // Only allow this override in two cases:
         //   1. System/scheduled context (caller contactId is not a UUID — it's 'system' etc.)
-        //   2. Principal caller (role === 'ceo') — the CEO can look up any contact's calendars
+        //   2. Principal caller (role === 'ceo') — the principal can look up any contact's calendars
         // This prevents LLM-driven non-principal agents from reading other contacts' calendars
         // by constructing a contactId value.
         // Use trusted originator metadata, not caller shape, to avoid misclassifying

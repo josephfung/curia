@@ -20,7 +20,7 @@ import { isConfidentialOrAbove, isRestricted, maxSensitivity, sensitivityRank } 
 // ---------------------------------------------------------------------------
 
 export interface ExportControlsConfig {
-  /** Max confidential+ items per invocation before CEO approval. Default: 10. */
+  /** Max confidential+ items per invocation before principal approval. Default: 10. */
   confidentialThreshold: number;
   /** Allowlisted non-contact export sinks (Drive folders, URLs, file paths). */
   allowedDestinations: {
@@ -528,7 +528,7 @@ export class ExportControlService {
     return { outcome, items };
   }
 
-  /** Build a CEO-readable summary of export items for approval notifications. */
+  /** Build a principal-readable summary of export items for approval notifications. */
   static formatItemSummary(items: ExportItem[]): string {
     const lines = items.map((item) => {
       const tag = item.sensitivity;

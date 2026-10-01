@@ -2,7 +2,7 @@
 //
 // Background sweep skill: finds all pending_approval rows whose expires_at has
 // passed, batch-transitions them to 'expired', and sends a single batched email
-// notification to the CEO for any high/critical-risk expirations.
+// notification to the principal for any high/critical-risk expirations.
 //
 // This skill is designed to be called by the system scheduler on a regular
 // interval (e.g. every 15 minutes). It is idempotent — calling it multiple
@@ -25,7 +25,7 @@ import type { ActionLogRow } from '../../src/autonomy/action-log-types.js';
  * principal, no verified + active email, or the lookup itself fails.
  *
  * Restricted to verified + ACTIVE email (a defunct/bounced address may be reassigned, so we
- * don't route CEO notifications to it — mirrors the startup derivation in src/index.ts).
+ * don't route principal notifications to it — mirrors the startup derivation in src/index.ts).
  *
  * Never throws: this runs on the notification path AFTER expiry has already committed, so a
  * transient contacts-layer error must not fail the sweep (which would falsely signal failure
@@ -54,9 +54,9 @@ async function resolvePrincipalEmail(ctx: ToolContext): Promise<string | null> {
   }
 }
 
-// Tiers that warrant a CEO notification on expiry.
+// Tiers that warrant a principal notification on expiry.
 // 'none' and 'low' expirations are recorded in the log but not surfaced as alerts —
-// they represent low-stakes actions the CEO didn't need to weigh in on urgently.
+// they represent low-stakes actions the principal didn't need to weigh in on urgently.
 const NOTIFIABLE_TIERS = new Set(['high', 'critical']);
 
 export class ApprovalExpirySweepHandler implements ToolHandler {
@@ -128,7 +128,7 @@ export class ApprovalExpirySweepHandler implements ToolHandler {
           } else {
             const subject = `Approval expired — ${notifiable.length} request(s) expired without response`;
 
-            // Bullet list: one line per expired request so the CEO can quickly scan.
+            // Bullet list: one line per expired request so the principal can quickly scan.
             // shortRef and description are nullable — fall back to readable placeholders.
             const body = notifiable
               .map((r) => `• ${r.shortRef ?? '(no ref)'}: ${r.description ?? '(no description)'} [${r.toolName}]`)
@@ -145,11 +145,11 @@ export class ApprovalExpirySweepHandler implements ToolHandler {
               notifiedCount = notifiable.length;
             } else {
               // Non-fatal — the expiry rows are already transitioned. A failure here means
-              // the CEO won't receive the alert for this sweep cycle, but the audit log
+              // the principal won't receive the alert for this sweep cycle, but the audit log
               // (via individual row logs above) still has the full record.
               ctx.log.warn(
                 { notifiableCount: notifiable.length },
-                'approval-expiry-sweep: sendNotification returned false — CEO notification not delivered (expiry committed)',
+                'approval-expiry-sweep: sendNotification returned false — principal notification not delivered (expiry committed)',
               );
             }
           }

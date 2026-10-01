@@ -184,7 +184,7 @@ export function matchDraftToSent(
 }
 
 /**
- * Match a sent message to open CEO tasks.
+ * Match a sent message to open principal tasks.
  * High confidence: recipient email appears in title/description AND subject/body token overlap ≥ 0.25.
  * Low confidence: subject/body token overlap ≥ 0.35 alone, or recipient mentioned without strong tokens.
  */

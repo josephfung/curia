@@ -58,7 +58,7 @@ export class CeoInboxListHandler implements ToolHandler {
         };
       } catch (err) {
         ctx.log.error({ err }, 'ceo-inbox-list: failed to list drafts');
-        return { success: false, error: 'Failed to list CEO inbox drafts' };
+        return { success: false, error: 'Failed to list principal inbox drafts' };
       }
     }
 
@@ -82,7 +82,7 @@ export class CeoInboxListHandler implements ToolHandler {
 
       // Drop messages sent by Curia itself — the agent should never triage,
       // archive, or draft replies to its own outbound emails arriving in the
-      // CEO's inbox.
+      // principal's inbox.
       const filtered = curiaEmail
         ? raw.filter(
             (msg) => !msg.from.some((p) => p.email.toLowerCase() === curiaEmail),
@@ -104,7 +104,7 @@ export class CeoInboxListHandler implements ToolHandler {
       // more. (Pathological edge: a batch that is ENTIRELY Curia-self returns
       // count 0 with has_more true — the caller's "count 0 → finish/exit" rule
       // terminates cleanly there, since this read-only skill never marks the
-      // Curia-self messages read. Acceptable: Curia does not bulk-email the CEO.)
+      // Curia-self messages read. Acceptable: Curia does not bulk-email the principal.)
       const hasMore = raw.length > limit;
       const messages = filtered.slice(0, limit);
 
@@ -114,7 +114,7 @@ export class CeoInboxListHandler implements ToolHandler {
       };
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-list: failed to list messages');
-      return { success: false, error: 'Failed to list CEO inbox messages' };
+      return { success: false, error: 'Failed to list principal inbox messages' };
     }
   }
 }

@@ -290,8 +290,8 @@ export class ReactionApprovalMapper {
           subjectEventId: row.taskId,
           subjectSummary:
             decision === 'approve'
-              ? `CEO approved: ${row.description ?? row.toolName}`
-              : `CEO denied: ${row.description ?? row.toolName}`,
+              ? `principal approved: ${row.description ?? row.toolName}`
+              : `principal denied: ${row.description ?? row.toolName}`,
           contextShown: ['reaction', 'short_ref', 'description', 'skill_name'],
           presentedAt: row.createdAt,
           decidedAt: new Date(),

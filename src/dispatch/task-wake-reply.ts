@@ -1,4 +1,4 @@
-// task-wake-reply.ts — bind CEO replies back to originating tasks (#1299).
+// task-wake-reply.ts — bind principal replies back to originating tasks (#1299).
 //
 // Task-wake questions are sent from a scheduler conversation but replies arrive on
 // Signal/email. Auto-registration on send attaches durable task binding metadata;
@@ -16,7 +16,7 @@ export const TASK_WAKE_BIND_REPLY_KEY = 'bind_reply';
 export const TASK_WAKE_TASK_ID_KEY = 'task_id';
 
 /** TTL for task-wake reply bindings — longer than any channel's auto-registration
- *  default, because the CEO answers a task-wake question on their own schedule. */
+ *  default, because the principal answers a task-wake question on their own schedule. */
 export const TASK_WAKE_REPLY_TTL_HOURS = 168;
 
 export function isTaskWakeReplyBinding(
@@ -38,8 +38,8 @@ export function buildTaskWakeAutoBridge(opts: {
   return {
     agent_id: opts.agentId,
     expected_reply: preview.length > 0
-      ? `CEO's reply to: ${preview}`
-      : "CEO's reply to the task question",
+      ? `principal's reply to: ${preview}`
+      : "principal's reply to the task question",
     metadata: {
       [TASK_WAKE_BIND_REPLY_KEY]: true,
       [TASK_WAKE_TASK_ID_KEY]: opts.taskId,
@@ -58,7 +58,7 @@ export interface TaskWakeReplyPersistResult {
 type OutboundContextRelease = Pick<OutboundContextCapability, 'releaseEntry'>;
 
 /**
- * Persist a CEO reply on the task bound in entry metadata, then release the entry.
+ * Persist a principal reply on the task bound in entry metadata, then release the entry.
  * task_id is read from metadata — not from the coordinator. Called by
  * context-bridge-release when reply is provided for a task-wake binding.
  */
@@ -89,7 +89,7 @@ export async function recordTaskWakeReply(options: {
       return { persisted: false, error: `task not found: ${taskId}` };
     }
 
-    const progressNote = `CEO replied: ${reply.slice(0, 1500)}`;
+    const progressNote = `principal replied: ${reply.slice(0, 1500)}`;
     const updates: Parameters<TaskRepo['updateTask']>[1] = { progressNote };
 
     if (task.owner === 'ceo') {

@@ -1,6 +1,6 @@
 // src/scheduler/recovery-notifier.ts
 //
-// RecoveryNotifier — system-layer bus subscriber that emails the CEO whenever
+// RecoveryNotifier — system-layer bus subscriber that emails the principal whenever
 // the watchdog auto-recovers a stuck job (resets it from 'running' → 'pending'
 // after exceeding the computed timeout threshold). See #207.
 //
@@ -13,7 +13,7 @@
 //
 // Scope: recovery-without-suspension only. When recoverStuckJobs() suspends a
 // job (consecutive_failures >= 3), it also fires schedule.suspended, so
-// SuspensionNotifier handles that CEO email. This class handles only the
+// SuspensionNotifier handles that principal email. This class handles only the
 // reset-to-pending case to avoid sending two emails for one watchdog event.
 
 import type { EventBus } from '../bus/bus.js';
@@ -69,7 +69,7 @@ export class RecoveryNotifier {
     const { jobId, agentId, runStartedAt, timeoutSeconds, consecutiveFailures, suspended } = event.payload;
 
     // When recovery leads to suspension, schedule.suspended is also fired and
-    // SuspensionNotifier sends the CEO email. Skip here to avoid a duplicate.
+    // SuspensionNotifier sends the principal email. Skip here to avoid a duplicate.
     if (suspended) return;
 
     // Compute how long the job was stuck. runStartedAt is null for pre-migration

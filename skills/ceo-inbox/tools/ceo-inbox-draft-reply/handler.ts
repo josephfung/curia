@@ -17,10 +17,10 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
       selfEmail = ctx.secret('ceo_self_email').toLowerCase();
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-draft-reply: required secret not available');
-      return { success: false, error: 'CEO inbox is not configured (missing credentials)' };
+      return { success: false, error: 'principal inbox is not configured (missing credentials)' };
     }
 
-    // Guard: selfEmail must be set — without it we cannot filter the CEO's own address
+    // Guard: selfEmail must be set — without it we cannot filter the principal's own address
     // from reply recipients, which would cause self-addressed drafts.
     if (!selfEmail) {
       ctx.log.error({}, 'ceo-inbox-draft-reply: ceo_self_email secret is empty — self-filter disabled');
@@ -82,7 +82,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
       // To: the original sender
       const to: NylasParticipant[] = original.from;
 
-      // CC: everyone from original to + cc, minus the CEO's own address
+      // CC: everyone from original to + cc, minus the principal's own address
       // and minus the original sender (already in "to")
       const senderEmails = new Set(original.from.map((p) => p.email.toLowerCase()));
       const ccCandidates = [...original.to, ...original.cc].filter((p) => {
@@ -172,7 +172,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         { err, replyToMessageId },
         'ceo-inbox-draft-reply: failed to create draft',
       );
-      return { success: false, error: 'Failed to create draft reply in CEO inbox' };
+      return { success: false, error: 'Failed to create draft reply in principal inbox' };
     }
   }
 }

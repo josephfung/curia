@@ -79,7 +79,7 @@ export class SetupDeferHandler implements ToolHandler {
 
       // ConfigStore.set can soft-reject (stored:false) without throwing on a storeFact dedup
       // conflict (#1438). If that happens here the deferrals array did NOT persist, so setup-status
-      // would keep reading the prior value and the CEO's defer/resume is silently lost. Report a
+      // would keep reading the prior value and the principal's defer/resume is silently lost. Report a
       // retryable failure rather than claiming success on a write that never landed.
       const { stored: didStore } = await configStore.set(NAMESPACE, KEY, JSON.stringify(deferred));
       if (!didStore) {

@@ -37,8 +37,8 @@ export interface Config {
   nylasGrantId: string | undefined;
   nylasPollingIntervalMs: number;
   nylasSelfEmail: string;
-  // CEO's Signal phone number in E.164 format (e.g. "+14155551234").
-  // Used by OutboundGateway to exempt CEO-bound Signal messages from the autonomy gate.
+  // principal's Signal phone number in E.164 format (e.g. "+14155551234").
+  // Used by OutboundGateway to exempt principal-bound Signal messages from the autonomy gate.
   ceoSignalNumber: string | undefined;
   // Signal channel config. Both must be set to enable the Signal adapter.
   // signalSocketPath: path to the signal-cli daemon Unix socket (e.g. /run/signal-cli/socket).

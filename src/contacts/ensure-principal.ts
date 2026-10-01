@@ -7,7 +7,7 @@
 // channel identity is bound. Channel identities (email, Signal) are added later via
 // per-channel verification flows — see docs/specs/09-contacts-and-identity.md
 // § Principal Contact Resolution.
-// Since #1049 this is the *only* principal-creation path (the env-var-driven CEO bootstrap
+// Since #1049 this is the *only* principal-creation path (the env-var-driven principal bootstrap
 // was removed); startup resolution is read-only via findContactBySystemRole('principal').
 //
 // Behavior:

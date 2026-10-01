@@ -36,7 +36,7 @@ export class CeoInboxReadHandler implements ToolHandler {
         draft = await client.getDraft(draftId);
       } catch (err) {
         ctx.log.error({ err, draftId }, 'ceo-inbox-read: failed to fetch draft');
-        return { success: false, error: 'Failed to read CEO inbox draft' };
+        return { success: false, error: 'Failed to read principal inbox draft' };
       }
       return {
         success: true,
@@ -65,7 +65,7 @@ export class CeoInboxReadHandler implements ToolHandler {
       msg = await client.getMessage(messageId);
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-read: failed to fetch message');
-      return { success: false, error: 'Failed to read CEO inbox message' };
+      return { success: false, error: 'Failed to read principal inbox message' };
     }
 
     // All formatting below is pure computation — no async I/O, no realistic throw path.

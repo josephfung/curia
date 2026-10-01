@@ -206,7 +206,7 @@ export class BullpenHandler implements ToolHandler {
             content,
             // Forward the parent task's originator so BullpenDispatcher can stamp it
             // on the reply tasks it creates for each participant. This ensures
-            // isPrincipalOriginated() returns correctly for CEO-authorized bullpen work.
+            // isPrincipalOriginated() returns correctly for principal-authorized bullpen work.
             originator,
             parentEventId: ctx.taskEventId,
           })).catch((publishErr: unknown) => {

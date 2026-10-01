@@ -1,7 +1,7 @@
 {
   "name": "scheduler-update",
   "description": "Modify an existing scheduled job by its ID. action=resume brings a suspended (failed) or paused (drift) job back to active; action=pause holds an active job; action=edit changes its cron_expr, run_at, or task_payload. Get the job_id from scheduler-list.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

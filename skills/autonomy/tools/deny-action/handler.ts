@@ -64,7 +64,7 @@ export class DenyActionHandler implements ToolHandler {
               deciderId: senderId,
               deciderChannel: channelId,
               subjectEventId: row.taskId,
-              subjectSummary: `CEO denied: ${row.description ?? row.toolName}`,
+              subjectSummary: `principal denied: ${row.description ?? row.toolName}`,
               contextShown: ['short_ref', 'description', 'skill_name'],
               presentedAt: row.createdAt,
               decidedAt: new Date(),

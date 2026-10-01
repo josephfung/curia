@@ -1,6 +1,6 @@
 // handler.ts — send-draft skill implementation.
 //
-// Sends a Nylas draft email on explicit CEO authorization.
+// Sends a Nylas draft email on explicit principal authorization.
 //
 // SECURITY: The task-origin check (isPrincipalOriginated(ctx.taskMetadata)) is the
 // primary gate. That flag is stamped by the dispatch layer in TypeScript code before
@@ -146,7 +146,7 @@ export class SendDraftHandler implements ToolHandler {
     // Step 5: Transition action_log row from pending_approval → approved
     // ------------------------------------------------------------------
     // Best-effort — the email is already sent. Any failure here must not
-    // surface to the CEO as a skill error. The draft_id key (snake_case) is used
+    // surface to the principal as a skill error. The draft_id key (snake_case) is used
     // because linkGatedAction stores it as { draft_id } via the reExecRecipe pattern.
     // Rows created outside the autonomy gate will not match and are silently skipped.
     if (ctx.actionLogRepo) {
@@ -156,7 +156,7 @@ export class SendDraftHandler implements ToolHandler {
           const updated = await ctx.actionLogRepo.resolveById(row.id, 'approved', 'ceo');
           if (!updated) {
             // Row was present during find but couldn't be resolved — likely a concurrent
-            // approval (e.g. two CEO messages sent in quick succession). Log at warn so
+            // approval (e.g. two principal messages sent in quick succession). Log at warn so
             // the gap is visible, but don't fail the send (draft was already sent above).
             ctx.log.warn(
               { draftId, rowId: row.id },
@@ -207,9 +207,9 @@ export class SendDraftHandler implements ToolHandler {
             decision: 'approve',
             deciderId: senderId,
             deciderChannel: channelId,
-            // subjectEventId: the task event that drove the CEO's "send it" instruction.
+            // subjectEventId: the task event that drove the principal's "send it" instruction.
             subjectEventId: ctx.taskEventId,
-            subjectSummary: `CEO authorized send of draft '${draft.subject}' to ${recipient}`,
+            subjectSummary: `principal authorized send of draft '${draft.subject}' to ${recipient}`,
             contextShown: ['draft_id', 'draft_subject', 'draft_recipient'],
             // presentedAt: draft creation time as proxy for when the decision was presented.
             presentedAt: new Date(draft.date * 1000),
@@ -284,7 +284,7 @@ export class SendDraftHandler implements ToolHandler {
     }
 
     // When every account had a fetch error, the draft was never actually searched —
-    // return a distinct message so the CEO knows it's a transient API issue, not a
+    // return a distinct message so the principal knows it's a transient API issue, not a
     // missing draft. Without this, a complete Nylas outage reads as "Draft not found."
     if (failedAccounts.length === accountIds.length) {
       ctx.log.error(

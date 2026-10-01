@@ -1,4 +1,4 @@
-// approval-notification.ts — shared body construction for CEO approval alerts.
+// approval-notification.ts — shared body construction for principal approval alerts.
 //
 // Used by ApprovalTriggerService and OutboundGateway so the two notification
 // paths cannot drift. Detail rendering is gated on the notification recipient
@@ -250,7 +250,7 @@ function formatFieldValue(value: unknown, fieldKey?: string): string | null {
       .filter((part): part is string => Boolean(part));
     return parts.length ? parts.join(', ') : null;
   }
-  // Skip plain objects — avoid leaking internal JSON shape into CEO notifications.
+  // Skip plain objects — avoid leaking internal JSON shape into principal notifications.
   return null;
 }
 
@@ -340,7 +340,7 @@ function logDetailOmission(
 }
 
 /**
- * Build the full CEO approval notification body. Detail is included only when
+ * Build the full principal approval notification body. Detail is included only when
  * the recipient meets principal tier — defense-in-depth if the channel is repointed.
  */
 export function buildApprovalNotificationBody(opts: BuildApprovalNotificationBodyOpts): string {

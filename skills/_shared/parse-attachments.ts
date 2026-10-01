@@ -1,6 +1,6 @@
 // parse-attachments.ts — validates and normalises the raw `attachments` input
 // from an LLM skill call into the OutboundAttachmentInput shape expected by
-// the outbound gateway and CEO inbox handlers.
+// the outbound gateway and principal inbox handlers.
 //
 // Returns an error string on validation failure (caller returns { success: false, error }).
 // Returns an empty array when attachments is undefined/null (not an error).

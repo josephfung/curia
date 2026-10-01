@@ -50,7 +50,7 @@ export interface AuthEvaluateInput {
  *
  * Evaluates what a contact is allowed to do based on:
  * 1. Contact tier (below 'known' — i.e. unknown or blocked → zero permissions)
- * 2. Per-contact overrides (explicit grants/denials from the CEO)
+ * 2. Per-contact overrides (explicit grants/denials from the principal)
  * 3. Role defaults (from config/role-defaults.yaml, case-insensitive lookup)
  *    Falls back to tier_defaults when no role match exists.
  * 4. Effective trust (max of channel trust and contact tier rank) used for
@@ -85,7 +85,7 @@ export class AuthorizationService {
 
     // Effective trust: the higher of the channel's inherent trust and the contact's
     // tier rank. A contact with tier='trusted' on email (low) should not have their
-    // CEO-granted tier overridden by the channel floor.
+    // principal-granted tier overridden by the channel floor.
     const channelTrustRank = TRUST_RANK[channelTrust] ?? 0;
     // Contact capability is expressed as tier; map to a rank comparable to TRUST_RANK
     // for sensitivity gating. Throws if tier is an unrecognized value (TIER_TO_TRUST_RANK
@@ -128,7 +128,7 @@ export class AuthorizationService {
     for (const [permName, permDef] of Object.entries(this.config.permissions)) {
       // Resolve sensitivity rank once per permission. If undefined (e.g. a future
       // 'critical' sensitivity added to permissions.yaml before TRUST_RANK is updated),
-      // escalate so the CEO makes the call rather than silently denying or allowing.
+      // escalate so the principal makes the call rather than silently denying or allowing.
       const sensitivityRank = TRUST_RANK[permDef.sensitivity as TrustLevel];
 
       // Layer 1: Check overrides first (highest precedence)
@@ -166,7 +166,7 @@ export class AuthorizationService {
         continue;
       }
 
-      // Not in defaults or deny list — needs CEO decision
+      // Not in defaults or deny list — needs principal decision
       escalate.push(permName);
     }
 
@@ -199,7 +199,7 @@ export class AuthorizationService {
  * Collapse an AuthorizationResult into the primary audit decision for
  * `authorization.decision` events (#1379).
  *
- * Precedence: Gate-1 / deny-all → deny; any permission needing CEO input →
+ * Precedence: Gate-1 / deny-all → deny; any permission needing principal input →
  * escalate; otherwise allow (individual denials and trust-blocks remain in the
  * payload lists for detail).
  */

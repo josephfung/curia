@@ -1,6 +1,6 @@
 // src/scheduler/suspension-notifier.ts
 //
-// SuspensionNotifier — system-layer bus subscriber that emails the CEO whenever
+// SuspensionNotifier — system-layer bus subscriber that emails the principal whenever
 // a scheduled job is auto-suspended after 3 consecutive failures.
 //
 // Design constraint: this path MUST NOT touch the LLM pipeline. The most

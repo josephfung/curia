@@ -111,7 +111,7 @@ export class ContactFindDuplicatesHandler implements ToolHandler {
         }
       }
       // Load every exclusion once instead of one lookup per pair. The table holds one
-      // row per pair the CEO has ruled on — small by construction, and a failure here
+      // row per pair the principal has ruled on — small by construction, and a failure here
       // aborts the scan (below) rather than silently re-filing excluded pairs.
       excludedPairKeys = await contactService.listDedupExclusionPairKeys();
       ctx.log.info({ exclusions: excludedPairKeys.size }, 'contact-find-duplicates: loaded dedup exclusions');

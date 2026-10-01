@@ -121,7 +121,7 @@ function isoToUnixSeconds(iso: string): number | null {
 /** Strip a leading Re:/Fwd: and normalize whitespace/case for loose subject comparison. */
 
 /**
- * Pick the send that corresponds to a shadow draft (#1426). The CEO's reply to a punted message
+ * Pick the send that corresponds to a shadow draft (#1426). The principal's reply to a punted message
  * near-always shares its thread, and an unmatched shadow is simply retried on later runs (then
  * TTL-swept after 7 idle days), so a simple two-rule match is enough:
  *   (a) exact `id === sourceMessageId` fast path;
@@ -238,7 +238,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       grantId = ctx.secret('ceo_nylas_grant_id');
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-sent-observe: required secret not available');
-      return { success: false, error: 'CEO inbox is not configured (missing credentials)' };
+      return { success: false, error: 'principal inbox is not configured (missing credentials)' };
     }
 
     if (!ctx.entityMemory || !ctx.workingDocs || !ctx.taskRepo) {
@@ -340,7 +340,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // Seed the asked-guard from config (replaces the doc-derived extractAskedTaskIds scan).
     const alreadyAskedTaskIds = await readIdSet(store, ASKED_TASK_IDS_KEY, ctx.log);
 
-    // Consider every open/in-progress CEO task for completion matching. listAllTasks walks
+    // Consider every open/in-progress principal task for completion matching. listAllTasks walks
     // keyset pages so we no longer silently truncate at the old 100-task cap (#1433). If its
     // safety ceiling is hit, `truncated` is true — surface it here (and in the result) so a
     // partial task set is visible rather than mistaken for full coverage.
@@ -351,7 +351,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     if (openTasksTruncated) {
       ctx.log.warn(
         { openTasksConsidered: openTasks.length },
-        'ceo-inbox-sent-observe: open CEO task set hit the pagination safety ceiling — ' +
+        'ceo-inbox-sent-observe: open principal task set hit the pagination safety ceiling — ' +
           'completion matching ran against a partial set; lowest-priority tasks past the ceiling were not considered',
       );
     }
@@ -385,7 +385,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
     // single batched LLM call after the loop instead of one call per pair.
     // Idempotency across runs is the shadow doc's reconciled_at marker (parseShadowDoc returns
     // null once set); within a run each shadow doc is yielded once by listByPrefix, so no in-run
-    // claim set is needed — two distinct shadows answered by one CEO send are both scored.
+    // claim set is needed — two distinct shadows answered by one principal send are both scored.
     const judgePairs: ShadowJudgePair[] = [];
 
     // Full sent bodies fetched during the message loop (for draft diffs), keyed by

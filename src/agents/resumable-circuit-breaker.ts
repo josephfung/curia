@@ -243,7 +243,7 @@ export interface EscalateCircuitBreachOptions {
 }
 
 /**
- * Fail the resumable task, cancel continuations, surface to coordinator + CEO backlog.
+ * Fail the resumable task, cancel continuations, surface to coordinator + principal backlog.
  * Mirrors the delegation-failure escalation path (#1171).
  */
 export async function escalateCircuitBreach(opts: EscalateCircuitBreachOptions): Promise<void> {
@@ -252,7 +252,7 @@ export async function escalateCircuitBreach(opts: EscalateCircuitBreachOptions):
   // Skip re-escalation of an already-terminal task (#1267). A redelivered pause/wake can
   // re-enter here after the task was failed; `failResumableTask` is idempotent and returns the
   // existing row, so without this guard the truthy-`updated` check below would fall through and
-  // publish a duplicate coordinator poke + create a duplicate CEO backlog row. Mirrors the guard
+  // publish a duplicate coordinator poke + create a duplicate principal backlog row. Mirrors the guard
   // in handlePlanFrontierWakeForCircuitBreaker / plan-adaptive-replan.
   if (task.status === 'failed' || task.status === 'done' || task.status === 'cancelled') {
     logger.debug({ taskId: task.id, status: task.status }, 'Circuit breach escalation: task already terminal — skipping');
@@ -263,7 +263,7 @@ export async function escalateCircuitBreach(opts: EscalateCircuitBreachOptions):
   // leaf vs planned parent and attaches throughput/ETA or the X-of-Y rollup accordingly.
   const escalation = buildCircuitBreachEscalation(task, breach);
   const rendered = renderEscalation(escalation);
-  // Traceability footer for the CEO task view — the failed task id + which specialist owned it.
+  // Traceability footer for the principal task view — the failed task id + which specialist owned it.
   const description = [
     rendered.description,
     '',
@@ -297,7 +297,7 @@ export async function escalateCircuitBreach(opts: EscalateCircuitBreachOptions):
     logger.error({ err, taskId: task.id }, 'Failed to notify coordinator of circuit breach');
   }
 
-  // The CEO row carries the rendered summary as its first progress note (so the digest's
+  // The principal row carries the rendered summary as its first progress note (so the digest's
   // last_progress_note has real content) plus the structured escalation block (#1267).
   const kind = escalation.source === 'planned_parent' ? 'plan' : 'task';
   const modeLabel = escalation.failureMode === 'stalled' ? 'stalled' : 'hit a limit';
@@ -317,20 +317,20 @@ export async function escalateCircuitBreach(opts: EscalateCircuitBreachOptions):
     backlogSucceeded = true;
     logger.info(
       { taskId: task.id, reason: breach.reason, failureMode: escalation.failureMode, source: escalation.source },
-      'Escalated resumable circuit breach to CEO backlog',
+      'Escalated resumable circuit breach to principal backlog',
     );
   } catch (err) {
-    logger.error({ err, taskId: task.id }, 'Failed to create CEO backlog task for circuit breach');
+    logger.error({ err, taskId: task.id }, 'Failed to create principal backlog task for circuit breach');
   }
 
-  // The CEO backlog row is the digest carrier and the coordinator poke is the live surface; the
+  // The principal backlog row is the digest carrier and the coordinator poke is the live surface; the
   // failed task itself is owned by the specialist, not the principal, so it never surfaces. If a
   // correlated infra outage takes out BOTH, the task is terminally failed with no path to the
   // principal — log loudly so it is alertable rather than silently lost (#1267).
   if (!notifySucceeded && !backlogSucceeded) {
     logger.error(
       { taskId: task.id, reason: breach.reason },
-      'Circuit breach escalation reached NEITHER the coordinator nor the CEO backlog — principal will not see this failure',
+      'Circuit breach escalation reached NEITHER the coordinator nor the principal backlog — principal will not see this failure',
     );
   }
 }

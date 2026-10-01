@@ -1,10 +1,10 @@
-// availability-monitor.ts — probe Postgres and escalate to the CEO after a
+// availability-monitor.ts — probe Postgres and escalate to the principal after a
 // sustained outage (#1381 / spec 05).
 //
 // Design:
 // - In-memory `downSince` tracker — no DB required to observe the outage.
 // - Periodic SELECT 1 probe (default 30s).
-// - After continuous unavailability ≥ 5 minutes, attempt CEO notification
+// - After continuous unavailability ≥ 5 minutes, attempt principal notification
 //   via OutboundGateway.sendNotification (LLM-free, same pattern as
 //   SuspensionNotifier). While the bus audit write still needs Postgres,
 //   retries continue each probe until the send succeeds (typically on
@@ -33,7 +33,7 @@ export interface DbAvailabilityMonitorConfig {
   ceoEmail?: string | PrincipalEmailRef;
   /** Probe interval. Default 30s. */
   probeIntervalMs?: number;
-  /** Continuous-down threshold before CEO escalation. Default 5 min. */
+  /** Continuous-down threshold before principal escalation. Default 5 min. */
   escalationAfterMs?: number;
   /** Override setInterval/clearInterval for tests. */
   setIntervalFn?: typeof setInterval;
@@ -48,7 +48,7 @@ export interface DbAvailabilitySnapshot {
   downSince: number | null;
   /** True once the escalation threshold was crossed for this outage episode. */
   escalationDue: boolean;
-  /** True after a CEO notification was successfully published for this episode. */
+  /** True after a principal notification was successfully published for this episode. */
   escalated: boolean;
 }
 
@@ -194,14 +194,14 @@ export class DbAvailabilityMonitor {
     const minutes = Math.round(downForMs / 60_000);
     this.log.error(
       { downForMs, minutes },
-      'Database unavailable beyond escalation threshold — attempting CEO notification',
+      'Database unavailable beyond escalation threshold — attempting principal notification',
     );
 
     const gateway = this.config.outboundGateway;
     if (!gateway) {
       this.log.error(
         { downForMs },
-        'DbAvailabilityMonitor: no outbound gateway — cannot email CEO; reliance on health endpoint / logs',
+        'DbAvailabilityMonitor: no outbound gateway — cannot email principal; reliance on health endpoint / logs',
       );
       return;
     }
@@ -239,7 +239,7 @@ export class DbAvailabilityMonitor {
 
     if (sent) {
       this.escalated = true;
-      this.log.info({ downForMs, minutes }, 'DbAvailabilityMonitor: CEO notification published');
+      this.log.info({ downForMs, minutes }, 'DbAvailabilityMonitor: principal notification published');
     } else {
       this.log.error(
         { downForMs, minutes },

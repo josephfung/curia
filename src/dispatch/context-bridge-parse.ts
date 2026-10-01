@@ -89,7 +89,7 @@ export async function registerOutboundContext(
     content: string;
     agentId: string;
     log: Logger;
-    /** When present (task-wake turns), auto-bind CEO replies to this task (#1299). */
+    /** When present (task-wake turns), auto-bind principal replies to this task (#1299). */
     boundTask?: BoundTaskContext | null;
   },
 ): Promise<void> {

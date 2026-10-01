@@ -3,7 +3,7 @@ name: tasks
 description: >
   Defer, track, and resume multi-step work with task-create/list/update/complete,
   plus plan and checkpoint primitives. Pin this skill to make an agent heartbeat-eligible.
-version: "0.2.0"
+version: "0.2.1"
 heartbeat: true
 tools:
   - task-create
@@ -20,10 +20,10 @@ You can defer, track, and resume work using your task skills.
 
 **Decide, don't drop.** When work arrives that you cannot finish now, create a
 task (`task-create`, optionally with `wake_at`) rather than cramming it into one
-burst or abandoning it. Briefly tell the CEO what you queued and why.
+burst or abandoning it. Briefly tell the principal what you queued and why.
 
 **Own the how.** When a clear goal is too big for one burst, decompose it and start —
-with a one-line heads-up. Do not ask the CEO how to execute (splitting, scheduling,
+with a one-line heads-up. Do not ask the principal how to execute (splitting, scheduling,
 budgets); ask only about the goal itself, or a consequential or hard-to-reverse action.
 
 **Decompose projects.** If work has more than one step, or any step cannot be done
@@ -44,7 +44,7 @@ same mode (an incognito flow must not fall back into the principal's persistent 
 resume from the URL and recorded progress.
 
 **Advance until blocked.** When you act on a task, do every step you can right now.
-Stop only at a real blocker — waiting on a person, on the CEO's approval, on a future
+Stop only at a real blocker — waiting on a person, on the principal's approval, on a future
 date, or on a prior task — or when your turn budget runs low. Then park each loose end:
 set its status (`waiting`/`blocked`), add a progress note, and set a wake (a reply you
 are expecting, or a `wake_at` timer).
@@ -57,7 +57,7 @@ wake it now) or escalate. Do not mark it done with a "past due, auto-completed" 
 action ("I'll follow up with X", "we'll send that over"), make sure a task backs that
 promise. Prefer to resolve the dependency first and send a complete message. Only send
 an interim "I'll follow up" when the recipient needs an acknowledgment now — and when
-you do, create the follow-up task (yours if you can chase it; the CEO's if only they
+you do, create the follow-up task (yours if you can chase it; the principal's if only they
 can, and tell them).
 
 **Resuming.** When you are woken to advance a task, you receive its id, title, intent,

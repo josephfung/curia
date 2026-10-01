@@ -116,7 +116,7 @@ export class ApproveActionHandler implements ToolHandler {
               deciderId: senderId,
               deciderChannel: channelId,
               subjectEventId: row.taskId,
-              subjectSummary: `CEO approved: ${row.description ?? row.toolName}`,
+              subjectSummary: `principal approved: ${row.description ?? row.toolName}`,
               contextShown: ['short_ref', 'description', 'skill_name', 'payload'],
               presentedAt: row.createdAt,
               decidedAt: new Date(),

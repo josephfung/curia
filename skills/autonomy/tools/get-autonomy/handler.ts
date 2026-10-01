@@ -1,7 +1,7 @@
 // handler.ts — get-autonomy skill.
 //
-// Reports the current global autonomy score and band to the CEO.
-// Includes the last 3 history entries so the CEO can see recent changes.
+// Reports the current global autonomy score and band to the principal.
+// Includes the last 3 history entries so the principal can see recent changes.
 //
 // Phase 3 additions:
 //   - lastSetBy: who most recently changed the score (history[0].changedBy or config.updatedBy)
@@ -40,7 +40,7 @@ export class GetAutonomyHandler implements ToolHandler {
 
       // --- Phase 3: trend ---
       // Filter to system-generated adjustments only, then compare the two most recent.
-      // A CEO manual override is intentional and doesn't reflect the automated trend.
+      // A principal manual override is intentional and doesn't reflect the automated trend.
       const systemEntries = history.filter(e => e.changedBy === 'system');
       let trend: 'improving' | 'declining' | 'stable' | null = null;
       if (systemEntries.length >= 2) {

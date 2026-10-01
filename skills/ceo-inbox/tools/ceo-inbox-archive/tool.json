@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-archive",
-  "description": "Archive a message in the CEO's personal email inbox by removing it from the INBOX folder. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
-  "version": "0.1.0",
+  "description": "Archive a message in the principal's personal email inbox by removing it from the INBOX folder. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
+  "version": "0.1.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

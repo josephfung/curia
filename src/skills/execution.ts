@@ -464,12 +464,12 @@ export class ExecutionLayer {
           );
         }
         if (result.notificationSent) {
-          return baseMsg + `An approval request has been sent to the CEO (ref: ${result.shortRef}).`;
+          return baseMsg + `An approval request has been sent to the principal (ref: ${result.shortRef}).`;
         }
         return (
           baseMsg +
           `An approval request was created (ref: ${result.shortRef}) but ` +
-          `notification could not be delivered — the CEO will see it in the next digest.`
+          `notification could not be delivered — the principal will see it in the next digest.`
         );
       } catch (err) {
         // Approval trigger failure should not change the gate behavior.
@@ -482,7 +482,7 @@ export class ExecutionLayer {
     }
 
     // Fallback: no trigger, no taskEventId, or trigger failed
-    return baseMsg + `The CEO can raise the score with the set-autonomy skill.`;
+    return baseMsg + `The principal can raise the score with the set-autonomy skill.`;
   }
 
   /**
@@ -523,12 +523,12 @@ export class ExecutionLayer {
           );
         }
         if (result.notificationSent) {
-          return baseMsg + `An approval request has been sent to the CEO (ref: ${result.shortRef}).`;
+          return baseMsg + `An approval request has been sent to the principal (ref: ${result.shortRef}).`;
         }
         return (
           baseMsg +
           `An approval request was created (ref: ${result.shortRef}) but ` +
-          `notification could not be delivered — the CEO will see it in the next digest.`
+          `notification could not be delivered — the principal will see it in the next digest.`
         );
       } catch (err) {
         skillLogger.warn(
@@ -538,7 +538,7 @@ export class ExecutionLayer {
       }
     }
 
-    return baseMsg + `No approval request was created — the CEO must authorize this action manually.`;
+    return baseMsg + `No approval request was created — the principal must authorize this action manually.`;
   }
 
   /**
@@ -646,12 +646,12 @@ export class ExecutionLayer {
           );
         }
         if (result.notificationSent) {
-          return baseMsg + `An approval request has been sent to the CEO (ref: ${result.shortRef}).`;
+          return baseMsg + `An approval request has been sent to the principal (ref: ${result.shortRef}).`;
         }
         return (
           baseMsg +
           `An approval request was created (ref: ${result.shortRef}) but ` +
-          `notification could not be delivered — the CEO will see it in the next digest.`
+          `notification could not be delivered — the principal will see it in the next digest.`
         );
       } catch (err) {
         skillLogger.warn({ err, toolName }, 'export gate approval trigger failed');
@@ -1090,7 +1090,7 @@ export class ExecutionLayer {
     //    self-approval hole with zero per-skill exceptions (a heartbeat-woken task can never approve
     //    its own pending action). It can still inherit the principal-bypass of the *autonomy* gate
     //    below via the ladder — a different, intentional notion of "principal" (acting within
-    //    CEO-authorized work vs. exercising authority now). See the autonomy gate's comment + ADR-017.
+    //    principal-authorized work vs. exercising authority now). See the autonomy gate's comment + ADR-017.
     //
     // The signal is `options.liveTurn` (a DISTINCT field off the metadata bag, so it can never be
     // persisted); isLivePrincipalTurn also requires principal originator on the effective metadata
@@ -1115,7 +1115,7 @@ export class ExecutionLayer {
         );
         return {
           success: false,
-          error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal (the CEO), not by a system job, an agent, or a woken/scheduled task`),
+          error: this.wrapSkillError(`Tool '${toolName}' requires a live principal turn — it can only be invoked directly by the principal, not by a system job, an agent, or a woken/scheduled task`),
         };
       }
     }
@@ -1126,9 +1126,9 @@ export class ExecutionLayer {
     // 'system' is the fallback for system-layer invocations (checkpoint processor,
     // scheduler) where no agentId is present in InvokeOptions.
     //
-    // Skipped when humanApproved is set: the CEO explicitly approved this action
+    // Skipped when humanApproved is set: the principal explicitly approved this action
     // via approve-action, which re-invokes with humanApproved: true but no agentId.
-    // The CEO is the ultimate authority — blocking a CEO-approved re-execution on
+    // The principal is the ultimate authority — blocking a principal-approved re-execution on
     // caller identity would be counterproductive.
     const allowedCallers = manifest.allowed_callers;
     if (allowedCallers && allowedCallers.length > 0 && !options?.humanApproved) {
@@ -1150,7 +1150,7 @@ export class ExecutionLayer {
     // A bullpen wake stamped originTurnOwnsReply is the delegator being told
     // about work its own still-open turn will answer. Refuse the human-channel
     // send here, before autonomy can write an approval for a message that must
-    // not go out. humanApproved is a CEO re-execution and is not this race.
+    // not go out. humanApproved is a principal re-execution and is not this race.
     // A malformed stamp fails open inside the parser. (#1917)
     if (!options?.humanApproved && isHumanReplySkill(toolName)) {
       const owner = parseOriginTurnOwnsReply(
@@ -1182,7 +1182,7 @@ export class ExecutionLayer {
     if (options?.humanApproved) {
       // agentId is intentionally absent on the approve-action re-execution path.
       // Log taskEventId (correlates to the original action log entry) and
-      // originator (the CEO who triggered the task chain) for forensic attribution.
+      // originator (the principal who triggered the task chain) for forensic attribution.
       skillLogger.info(
         {
           toolName,
@@ -1191,7 +1191,7 @@ export class ExecutionLayer {
           originator: options.taskMetadata?.['originator'],
           allowedCallers: manifest.allowed_callers,
         },
-        'caller gate and autonomy gates skipped — humanApproved flag set (CEO-authorized re-execution, see ADR-018)',
+        'caller gate and autonomy gates skipped — humanApproved flag set (principal-authorized re-execution, see ADR-018)',
       );
     }
 
@@ -1202,7 +1202,7 @@ export class ExecutionLayer {
     // but is the only way to raise the score.
     // autonomyConfig was read once above (hoisted for the effective-standing ladder). Fail-open
     // when the service is not wired or the config table doesn't exist yet (getConfig → null).
-    // humanApproved bypasses gates A and B — the skill runs as CEO-authorized.
+    // humanApproved bypasses gates A and B — the skill runs as principal-authorized.
     //
     // The outer condition is NOT gated on `this.autonomyService`: the no-score branch below must
     // be reachable even when the service is absent, so a woken task fails closed regardless of WHY
@@ -1213,10 +1213,10 @@ export class ExecutionLayer {
         const currentScore = autonomyConfig.score;
 
         // Principal bypass — if the task's EFFECTIVE standing is principal, skip gates A and B.
-        // For a live CEO turn this is the raw principal lineage; for a heartbeat wake it is the
+        // For a live principal turn this is the raw principal lineage; for a heartbeat wake it is the
         // post-ladder standing, so a woken task only bypasses when the live score clears the
         // posture threshold (#1125). The autonomy gate governs *autonomous* behavior; a direct
-        // CEO instruction overrides it by intent. Log at info so bypasses are visible in prod.
+        // principal instruction overrides it by intent. Log at info so bypasses are visible in prod.
         if (isPrincipalOriginated(effectiveTaskMetadata)) {
           skillLogger.info(
             { toolName, currentScore, agentId: options?.agentId, taskEventId: options?.taskEventId },
@@ -1564,7 +1564,7 @@ export class ExecutionLayer {
         if (outcome.action === 'approval_required') {
           skillLogger.info(
             { toolName, code: outcome.code, itemCount: items.length },
-            'export gate: export requires CEO approval',
+            'export gate: export requires principal approval',
           );
           const gateError = await this.buildExportGateError(
             toolName,
@@ -1718,7 +1718,7 @@ export class ExecutionLayer {
       // read the raw lineage directly from options.taskMetadata, not from here.
       taskMetadata: effectiveTaskMetadata,
       // Live-principal-turn signal (#1126), forwarded so the `delegate` skill can propagate it to
-      // a synchronously-delegated specialist (a specialist acting inside the CEO's live turn).
+      // a synchronously-delegated specialist (a specialist acting inside the principal's live turn).
       // Distinct from taskMetadata so no persistence skill can sweep it into a wakeable row.
       liveTurn: options?.liveTurn,
       delegationGuard: options?.delegationGuard,
@@ -1811,7 +1811,7 @@ export class ExecutionLayer {
     // executionLayer grants invoke() with humanApproved: true, which bypasses autonomy
     // gates A and B. This capability MUST NOT be available to any other skill — a
     // compromised or misconfigured tool with executionLayer could execute arbitrary
-    // actions as if the CEO approved them. The manifest comment is advisory; this
+    // actions as if the principal approved them. The manifest comment is advisory; this
     // guard is the enforcement boundary.
     if (caps.includes('executionLayer') && manifest.name !== 'approve-action') {
       skillLogger.error(

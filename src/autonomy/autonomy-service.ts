@@ -4,7 +4,7 @@
 // It maps to one of five bands, each with a behavioral description that is
 // injected into the coordinator's system prompt on every task.
 //
-// Phase 1: CEO-controlled via get-autonomy / set-autonomy skills.
+// Phase 1: principal-controlled via get-autonomy / set-autonomy skills.
 // Phase 2: Hard gates in the execution layer driven by action_risk vs. live score (future).
 // Phase 3: Automatic adjustment based on action log data (future).
 
@@ -45,19 +45,19 @@ const BAND_DESCRIPTIONS: Record<AutonomyBand, string> = {
     'checking outweighs the cost of the pause.',
   'spot-check':
     'Proceed on routine tasks. For consequential actions — sending external communications, ' +
-    'creating commitments, or acting on behalf of the CEO — note what you are doing in your ' +
-    'response so the CEO maintains visibility. No need to stop and ask.',
+    'creating commitments, or acting on behalf of the principal — note what you are doing in your ' +
+    'response so the principal maintains visibility. No need to stop and ask.',
   'approval-required':
     'For any consequential action, present your plan and explicitly ask for confirmation ' +
     'before proceeding. Routine reporting, summarization, and information retrieval can ' +
     'proceed without approval. When in doubt, draft and ask.',
   'draft-only':
     'Prepare drafts, plans, and analysis, but do not send, publish, schedule, or act on ' +
-    'behalf of the CEO without an explicit instruction to do so. Surface your work for review; ' +
+    'behalf of the principal without an explicit instruction to do so. Surface your work for review; ' +
     'execution requires a direct go-ahead.',
   'restricted':
     'Present options and analysis only. Take no independent action. All outputs are advisory. ' +
-    'Every step that would have an external effect requires explicit CEO instruction.',
+    'Every step that would have an external effect requires explicit principal instruction.',
 };
 
 // Human-readable band labels for display.
@@ -77,7 +77,7 @@ export class AutonomyService {
 
   /**
    * Resolve an action_risk label (or raw number) to the minimum autonomy score
-   * required before that skill may run without explicit CEO approval.
+   * required before that skill may run without explicit principal approval.
    *
    * Used by Phase 2 gate wiring in the execution layer to enforce autonomy-aware
    * skill access. Callers should validate numeric values are in [0, 100] at

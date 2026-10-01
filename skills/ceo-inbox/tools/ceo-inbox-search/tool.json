@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-search",
-  "description": "Search the CEO's personal email inbox using Gmail-native query syntax. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Intended for use by the ceo-inbox agent — accesses the CEO's personal email, do not call from other agents.",
-  "version": "0.2.0",
+  "description": "Search the principal's personal email inbox using Gmail-native query syntax. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

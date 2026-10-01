@@ -26,6 +26,10 @@ import { AgentRegistry } from '../src/agents/agent-registry.js';
 import { OfficeIdentityService } from '../src/identity/service.js';
 import { compileSecurityContextBlock } from '../src/security/security-context.js';
 import { formatTimeContextBlock } from '../src/time/time-context.js';
+import {
+  formatPrincipalContactDetailsBlock,
+  OWN_CONTACT_DETAILS_INTRO,
+} from '../src/agents/principal-contact-block.js';
 import { EventBus } from '../src/bus/bus.js';
 import { createSilentLogger } from '../src/logger.js';
 
@@ -86,10 +90,11 @@ async function main(): Promise<void> {
     );
 
     // ── Principal contact ID + verified identities ────────────────────────────
-    const principalResult = await pool.query<{ id: string }>(
-      `SELECT id FROM contacts WHERE system_role = 'principal' ORDER BY id ASC LIMIT 1`,
+    const principalResult = await pool.query<{ id: string; primary_email: string | null }>(
+      `SELECT id, primary_email FROM contacts WHERE system_role = 'principal' ORDER BY id ASC LIMIT 1`,
     );
     const principalContactId = principalResult.rows[0]?.id ?? '';
+    const principalPrimaryEmail = principalResult.rows[0]?.primary_email ?? null;
     if (!principalContactId) {
       process.stderr.write(
         'render-coordinator-prompt: warning: no principal contact found (system_role=principal).\n' +
@@ -98,8 +103,12 @@ async function main(): Promise<void> {
     }
 
     // Fetch the principal's verified, active identities — same filter as index.ts startup.
-    const principalIdentityResult = await pool.query<{ channel: string; channel_identifier: string }>(
-      `SELECT channel, channel_identifier
+    const principalIdentityResult = await pool.query<{
+      channel: string;
+      channel_identifier: string;
+      label: string | null;
+    }>(
+      `SELECT channel, channel_identifier, label
        FROM contact_channel_identities
        WHERE contact_id = $1 AND verified = true AND status = 'active'
        ORDER BY channel ASC`,
@@ -194,28 +203,25 @@ async function main(): Promise<void> {
 
     const yourContactBlock = [
       '## Your Contact Details',
-      'These are your own accounts. Use them when tools require an email address, phone number,',
-      "or similar \"acting as\" identifier — never substitute the CEO's details.",
+      ...OWN_CONTACT_DETAILS_INTRO,
       '',
       ...agentIdentityLines,
     ].join('\n');
 
-    // Mirror AgentRuntime "Principal Contact Details" block (runtime.ts ~line 332):
-    // uses principalIdentities (verified + active) from the DB.
-    const principalLines: string[] = [];
-    for (const row of principalIdentityResult.rows) {
-      principalLines.push(`- ${row.channel}: ${row.channel_identifier}`);
-    }
+    // Same formatter as AgentRuntime so a red-team render cannot drift (#1950).
+    // Omitted when the principal has no verified identities — the runtime omits it too.
+    const principalContactBlock = formatPrincipalContactDetailsBlock(
+      principalIdentityResult.rows.map((row) => ({
+        channel: row.channel,
+        channelIdentifier: row.channel_identifier,
+        label: row.label,
+      })),
+      principalPrimaryEmail,
+    );
 
-    const principalContactBlock = [
-      '## Principal Contact Details',
-      'These are the verified channel addresses for the principal you serve.',
-      'Use them when you need to reach the principal. Do not infer or substitute — these are authoritative.',
-      '',
-      ...principalLines,
-    ].join('\n');
-
-    const perTurnSection = [timeBlock, principalContactBlock, yourContactBlock].join('\n\n');
+    const perTurnSection = [timeBlock, principalContactBlock, yourContactBlock]
+      .filter((part): part is string => typeof part === 'string' && part.length > 0)
+      .join('\n\n');
 
     process.stdout.write(perTurnSection + '\n\n' + systemPrompt + '\n');
   } finally {

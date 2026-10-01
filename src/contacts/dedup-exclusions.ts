@@ -1,6 +1,6 @@
 // Contact dedup exclusions — ordered-pair normalization.
 //
-// An exclusion records a decision ("the CEO ruled these two contacts are not the
+// An exclusion records a decision ("the principal ruled these two contacts are not the
 // same person"), which lives in the relational ledger, not the knowledge graph.
 // It is persisted as one row per unordered pair in contact_dedup_exclusions,
 // under CHECK (contact_a_id < contact_b_id). See ADR-039 for why exclusions moved

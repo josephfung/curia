@@ -1,7 +1,7 @@
 // handler.ts — dismiss-action skill implementation.
 //
 // Dismisses a pending approval request: transitions to outcome = 'resolved_externally'.
-// Used when the CEO handled the action outside Curia.
+// Used when the principal handled the action outside Curia.
 //
 // SECURITY: sensitivity: "elevated" — authorization is enforced solely by the execution-layer
 // live-principal gate (#1126). No handler-level re-check.
@@ -63,7 +63,7 @@ export class DismissActionHandler implements ToolHandler {
               deciderId: senderId,
               deciderChannel: channelId,
               subjectEventId: row.taskId,
-              subjectSummary: `CEO dismissed (handled externally): ${row.description ?? row.toolName}`,
+              subjectSummary: `principal dismissed (handled externally): ${row.description ?? row.toolName}`,
               contextShown: ['short_ref', 'description', 'skill_name'],
               presentedAt: row.createdAt,
               decidedAt: new Date(),

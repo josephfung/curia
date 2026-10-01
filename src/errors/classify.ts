@@ -193,7 +193,7 @@ function escapeXml(text: string): string {
  *
  * The prod incident behind #1546 was not a missing-information failure: the
  * `<task_error>` block was already in context, with `is_error: true`, when the
- * coordinator told the CEO "Got it — I've noted the dismissal." The model had
+ * coordinator told the principal "Got it — I've noted the dismissal." The model had
  * the evidence and did not weight it. So this states the reporting rule at the
  * point of maximum salience — the last line the model reads before resuming
  * generation — rather than relying on a rule several hundred lines up in the

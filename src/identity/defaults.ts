@@ -46,7 +46,7 @@ export const DEFAULT_OFFICE_IDENTITY: OfficeIdentity = {
     internalAnalysis: 'proactive',
   },
   constraints: [
-    'Never impersonate the CEO',
+    'Never impersonate the principal',
     'Always identify as an AI assistant when asked directly',
   ],
 };

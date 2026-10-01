@@ -38,7 +38,7 @@ function parseEmailField(raw: unknown): { emails: string[] } | { error: string }
 }
 
 /**
- * Update an existing draft in the CEO's mailbox (issue #1000). Lets the agent
+ * Update an existing draft in the principal's mailbox (issue #1000). Lets the agent
  * fix a wrong recipient, subject, or body on a draft that was already created —
  * the capability that was missing, which left bad drafts uneditable.
  */
@@ -51,7 +51,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
       grantId = ctx.secret('ceo_nylas_grant_id');
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-draft-edit: required secret not available');
-      return { success: false, error: 'CEO inbox is not configured (missing credentials)' };
+      return { success: false, error: 'principal inbox is not configured (missing credentials)' };
     }
 
     const client = new CeoNylasClient(apiKey, grantId, ctx.log);
@@ -185,7 +185,7 @@ export class CeoInboxDraftEditHandler implements ToolHandler {
       };
     } catch (err) {
       ctx.log.error({ err, draftId }, 'ceo-inbox-draft-edit: Nylas API call failed');
-      return { success: false, error: 'Failed to update draft in CEO inbox' };
+      return { success: false, error: 'Failed to update draft in principal inbox' };
     }
   }
 }

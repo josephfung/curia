@@ -197,7 +197,7 @@ export function guardMcpCalendarIdentity(params: {
  * on a principal-scoped task: fail only when the calendar is registered to the
  * *agent's own* contact (Curia's identity) — the AC for #1854.
  *
- * Third-party registered calendars (e.g. Sarah's) remain readable under the CEO
+ * Third-party registered calendars (e.g. Sarah's) remain readable under the principal
  * grant via explicit calendarId or contactId; rejecting those was an accidental
  * over-block. Org-wide / unregistered IDs also pass.
  */

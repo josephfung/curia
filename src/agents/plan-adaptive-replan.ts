@@ -346,7 +346,7 @@ export interface EscalatePlanAdaptiveBreachOptions {
 }
 
 /**
- * Fail the planned task and surface a richer escalation to coordinator + CEO backlog.
+ * Fail the planned task and surface a richer escalation to coordinator + principal backlog.
  * Idempotent when the task was already failed after a prior breach escalation.
  */
 export async function escalatePlanAdaptiveBreach(opts: EscalatePlanAdaptiveBreachOptions): Promise<void> {
@@ -389,7 +389,7 @@ export async function escalatePlanAdaptiveBreach(opts: EscalatePlanAdaptiveBreac
   }
 
   if (!bus) {
-    logger.warn({ taskId: task.id }, 'Plan adaptive breach: bus unavailable — CEO backlog only via fail path');
+    logger.warn({ taskId: task.id }, 'Plan adaptive breach: bus unavailable — principal backlog only via fail path');
     return;
   }
 
@@ -442,8 +442,8 @@ export async function escalatePlanAdaptiveBreach(opts: EscalatePlanAdaptiveBreac
       tags: ['needs-attention', 'plan-adaptive-breach', breach.reason],
       parentTaskId: task.parentTaskId ?? undefined,
     });
-    logger.info({ taskId: task.id, reason: breach.reason }, 'Escalated plan adaptive breach to CEO backlog');
+    logger.info({ taskId: task.id, reason: breach.reason }, 'Escalated plan adaptive breach to principal backlog');
   } catch (err) {
-    logger.error({ err, taskId: task.id }, 'Failed to create CEO backlog task for plan adaptive breach');
+    logger.error({ err, taskId: task.id }, 'Failed to create principal backlog task for plan adaptive breach');
   }
 }

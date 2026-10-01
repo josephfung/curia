@@ -19,7 +19,7 @@ export const MAX_RETRYABLE_IDENTICAL_DELEGATIONS = 2;
  * and its result is in the woken turn's task content.
  *
  * It is the one reason a `resume_token` cannot talk its way past. The resume exemption (#1171)
- * exists because a continuation carries new CEO direction, so it is not a repeat of the same
+ * exists because a continuation carries new principal direction, so it is not a repeat of the same
  * request — but "already delivered" is not a failure to continue from, it is finished work, and
  * resuming it would redo the side effects the delivery exists to avoid repeating.
  */
@@ -143,7 +143,7 @@ export class DelegationGuard {
  * The guard key carrying an `already_delivered` record for this delegate call, or undefined.
  *
  * Checking only `delegationKey(agent, task)` is not enough for a resume. A resume call's `task` is
- * the CEO's new DIRECTION — the original brief lives inside the token — so its key differs from the
+ * the principal's new DIRECTION — the original brief lives inside the token — so its key differs from the
  * one the late-delivery wake seeded, and the block would silently not apply to the shape a resume
  * normally takes. That is the whole bypass: different key, same work, specialist runs again.
  *
@@ -334,7 +334,7 @@ function parseCreatedTaskId(data: unknown, logger: Logger): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
-/** Surface a non-retryable delegation failure on the CEO backlog via task-create (#1171, #1267). */
+/** Surface a non-retryable delegation failure on the principal backlog via task-create (#1171, #1267). */
 export async function escalateDelegationFailure(
   executionLayer: ExecutionLayer,
   caller: CallerContext | undefined,
@@ -343,7 +343,7 @@ export async function escalateDelegationFailure(
   logger: Logger,
 ): Promise<DelegationEscalationResult> {
   // Structured, principal-facing payload (#1267): reason 'blocked' → blocked_on_human,
-  // anything else → agent_incomplete. Rendered into the CEO task's progress note (the digest's
+  // anything else → agent_incomplete. Rendered into the principal task's progress note (the digest's
   // data source) + description, and stored as the structured progress.escalation block.
   const escalation = buildDelegationEscalation({
     agent: failure.agent,
@@ -382,20 +382,20 @@ export async function escalateDelegationFailure(
     if (!result.success) {
       logger.error(
         { agent: failure.agent, reason: failure.reason, error: result.error },
-        'Failed to escalate delegation failure to CEO backlog via task-create',
+        'Failed to escalate delegation failure to principal backlog via task-create',
       );
       return { escalated: false };
     }
     const reviewTaskId = parseCreatedTaskId(result.data, logger);
     logger.info(
       { agent: failure.agent, reason: failure.reason, reviewTaskId },
-      'Escalated delegation failure to CEO backlog via task-create',
+      'Escalated delegation failure to principal backlog via task-create',
     );
     return { escalated: true, ...(reviewTaskId !== undefined && { reviewTaskId }) };
   } catch (err) {
     logger.error(
       { err, agent: failure.agent, reason: failure.reason },
-      'Unexpected error escalating delegation failure to CEO backlog',
+      'Unexpected error escalating delegation failure to principal backlog',
     );
     return { escalated: false };
   }

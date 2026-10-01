@@ -73,7 +73,7 @@ export const KG_WRITE_TOOLS = new Set([
  *   unknown   — public/logistics only. Availability is principal-context and escalates.
  *   known     — + principal availability and light context. No third-party, no confidential.
  *   trusted   — all classes, including confidential. Third-party PII stops escalating here.
- *   principal — all classes (the CEO sees everything).
+ *   principal — all classes (the principal sees everything).
  */
 const DISCLOSURE_ALLOWED: Record<ContactTier, ReadonlySet<DisclosureClass>> = {
   blocked:   new Set<DisclosureClass>(),
@@ -117,7 +117,7 @@ export function applyDisclosurePolicy(
  *                             to the sender is false.
  * @param isPrincipalSoleRecipient - When true, the action's recipient set is exclusively
  *                                   the structurally-verified principal. Heads-up comms to
- *                                   the CEO are not third-party-facing (#1301). Irreversible
+ *                                   the principal are not third-party-facing (#1301). Irreversible
  *                                   actions still escalate.
  *
  * Policy (issue #948 resolved section):
@@ -202,7 +202,7 @@ export function applyActionPolicy(
 
   if (initiatingTier === 'blocked') return 'escalate';
 
-  // Principal bypasses all action gates — the CEO can request anything.
+  // Principal bypasses all action gates — the principal can request anything.
   if (meetsMinimumTier(initiatingTier, 'principal')) return 'allow';
 
   switch (actionClass) {

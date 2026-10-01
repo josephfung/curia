@@ -4,7 +4,7 @@
 // which runs the blocked-contact check and converts markdown to HTML.
 //
 // Use this for the NEEDS DRAFT triage category: coordinator writes the draft,
-// the CEO reviews and sends it from their email client.
+// the principal reviews and sends it from their email client.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
@@ -44,13 +44,13 @@ export class EmailDraftSaveHandler implements ToolHandler {
       : undefined;
 
     // Warn when a draft omits the account param — the draft will silently land in
-    // the primary (Curia) account, which is almost never what the CEO intended.
+    // the primary (Curia) account, which is almost never what the principal intended.
     if (!accountId) {
       ctx.log.warn(
         { to, subject },
         'email-draft-save: no account specified — '
         + 'draft will land in the primary (agent) account. '
-        + 'Did the coordinator mean to pass the CEO account name?',
+        + 'Did the coordinator mean to pass the principal account name?',
       );
     }
 

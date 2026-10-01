@@ -3,7 +3,7 @@
 // for that outbound message. Coordinator-only in practice (pinned on the coordinator).
 //
 // When `reply` is provided and the entry is a task-wake binding (bind_reply +
-// task_id in metadata), persists the CEO answer on the bound task first, then
+// task_id in metadata), persists the principal answer on the bound task first, then
 // releases — atomically (#1299).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';

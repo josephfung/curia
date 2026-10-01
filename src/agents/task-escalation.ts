@@ -1,16 +1,16 @@
 // task-escalation.ts — structured, principal-facing escalation payloads (#1267).
 //
 // A stalled / ceiling-breached / blocked resumable, planned, or delegated task escalates
-// today as a near-bare `needs-attention` CEO backlog row: the detail lives in the task
+// today as a near-bare `needs-attention` principal backlog row: the detail lives in the task
 // `description`, but the daily digest reads `last_progress_note`, so the principal sees
 // only the title + tags. This module produces a structured `TaskEscalation` payload (stored
 // at progress.escalation for audit / a future interactive surface) and a pure renderer that
-// turns it into the CEO task's progress note — the field the digest actually reads — plus the
+// turns it into the principal task's progress note — the field the digest actually reads — plus the
 // coordinator poke and the task description.
 //
 // Pure functions only — no I/O. The two escalation entry points
 // (escalateCircuitBreach, escalateDelegationFailure) build a payload, render it, and seed it
-// onto the created CEO task. Failure modes map to what the platform actually produces; see
+// onto the created principal task. Failure modes map to what the platform actually produces; see
 // the mapping table below. `needs_decision` is reserved but unwired — nothing emits it yet.
 
 import type { CircuitBreach, CircuitBreachReason } from './resumable-circuit-breaker.js';
@@ -47,7 +47,7 @@ export interface EscalationProgress {
   total: number;
 }
 
-/** Structured escalation payload, stored at tasks.progress.escalation on the CEO row. */
+/** Structured escalation payload, stored at tasks.progress.escalation on the principal row. */
 export interface TaskEscalation {
   failureMode: EscalationFailureMode;
   /** The specific producer sub-reason: 'stall_limit' | 'max_cost' | 'maxTurns' | 'blocked' | … */
@@ -69,11 +69,11 @@ export interface TaskEscalation {
 
 /** The three human-readable renderings derived from a payload. */
 export interface RenderedEscalation {
-  /** → the CEO task's last progress note: the field the daily digest reads. */
+  /** → the principal task's last progress note: the field the daily digest reads. */
   progressNote: string;
   /** → the coordinator `agent.task` poke. */
   notifyContent: string;
-  /** → the CEO task description (fuller detail for the task view). */
+  /** → the principal task description (fuller detail for the task view). */
   description: string;
 }
 

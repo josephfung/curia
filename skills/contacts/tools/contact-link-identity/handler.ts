@@ -2,7 +2,7 @@
 //
 // Adds a channel identity (email, phone, Signal, Telegram, Slack) to an existing
 // contact. Uses source 'ceo_stated' since the coordinator acts on behalf
-// of the CEO, which means the identity is auto-verified.
+// of the principal, which means the identity is auto-verified.
 //
 // This skill uses contactService, which is a universal service.
 

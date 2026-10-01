@@ -1,6 +1,6 @@
 // handler.ts — ceo-inbox-download-attachment skill.
 //
-// Downloads an attachment from the CEO's personal email inbox and returns the
+// Downloads an attachment from the principal's personal email inbox and returns the
 // file content as a base64 string ready for file-parse.
 //
 // Workflow:

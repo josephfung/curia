@@ -1,7 +1,7 @@
 // handler.ts — contact-merge skill
 //
 // Merges two contacts into one. Use dry_run: true to preview the golden record
-// before committing. The Coordinator MUST present the preview to the CEO and
+// before committing. The Coordinator MUST present the preview to the principal and
 // get confirmation before calling with dry_run: false.
 //
 // SECURITY / AUTONOMY: #1126 reclassified contact-merge from `elevated` to `normal` +
@@ -48,7 +48,7 @@ export class ContactMergeHandler implements ToolHandler {
       return { success: false, error: 'contact-merge: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
     }
 
-    // Default dry_run: true — safe default, prevents accidental merges without CEO confirmation
+    // Default dry_run: true — safe default, prevents accidental merges without principal confirmation
     const dryRun = dry_run !== false;
 
     ctx.log.info(

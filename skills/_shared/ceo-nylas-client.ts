@@ -1,6 +1,6 @@
-// Thin Nylas v3 REST API wrapper for CEO inbox skills.
+// Thin Nylas v3 REST API wrapper for principal inbox skills.
 // Uses fetch() directly — no dependency on the core NylasClient or Nylas SDK.
-// This is intentional: the CEO's email is a separate data source accessed via
+// This is intentional: the principal's email is a separate data source accessed via
 // dedicated secrets, not through the core's channel account infrastructure.
 
 const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
@@ -320,7 +320,7 @@ export class CeoNylasClient {
 
   // Create a brand-new draft (cold compose, no reply thread).
   // Unlike createDraftReply, this omits reply_to_message_id so the draft
-  // lands in the CEO's Drafts folder as a fresh outbound email.
+  // lands in the principal's Drafts folder as a fresh outbound email.
   async createDraft(options: {
     subject: string;
     body: string;
@@ -407,7 +407,7 @@ export class CeoNylasClient {
 
   // Update an existing draft (PUT /drafts/{id}). Only the provided fields are
   // sent; omitted fields are preserved server-side. This is the capability that
-  // lets the CEO fix a wrong-recipient or wrong-body draft without recreating it.
+  // lets the principal fix a wrong-recipient or wrong-body draft without recreating it.
   async updateDraft(draftId: string, updates: UpdateDraftOptions): Promise<NylasDraftFull> {
     const url = `${this.baseUrl}/drafts/${encodeURIComponent(draftId)}`;
     const payload: Record<string, unknown> = {};

@@ -1,7 +1,7 @@
 // handler.ts — set-autonomy skill.
 //
-// Updates the global autonomy score. Elevated sensitivity — requires CEO CallerContext.
-// Validated and rejected by the execution layer if the caller is not CEO.
+// Updates the global autonomy score. Elevated sensitivity — requires principal CallerContext.
+// Validated and rejected by the execution layer if the caller is not principal.
 // Upserts autonomy_config and appends to autonomy_history.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';

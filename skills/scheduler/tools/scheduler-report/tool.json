@@ -1,7 +1,7 @@
 {
   "name": "scheduler-report",
-  "description": "Report the outcome of a scheduled job run. Writes a summary and optional structured context to the job's run record so the CEO and agents can review what happened on the last execution. When called from a scheduled run, job_id is optional — the runtime derives it from the conversation. Outside a scheduled run, pass job_id explicitly.",
-  "version": "1.2.0",
+  "description": "Report the outcome of a scheduled job run. Writes a summary and optional structured context to the job's run record so the principal and agents can review what happened on the last execution. When called from a scheduled run, job_id is optional — the runtime derives it from the conversation. Outside a scheduled run, pass job_id explicitly.",
+  "version": "1.2.1",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {

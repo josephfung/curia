@@ -2,7 +2,7 @@
 //
 // Replaces the old heuristic scoring/threshold/provenance machinery with a single
 // batched LLM pass: read the accumulated diffs, ask the model for an updated
-// free-form guide, and queue it as a "Guide Proposal" for the CEO to approve via
+// free-form guide, and queue it as a "Guide Proposal" for the principal to approve via
 // the digest. This handler never writes the profile directly — human-in-the-loop.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
@@ -219,8 +219,8 @@ export class VoiceLearnHandler implements ToolHandler {
       }
     }
 
-    // Surface the proposal to the CEO the moment it's durably written (#1466). After #1464 removed
-    // the scheduled digest, this event-driven notification is the only path that reaches the CEO
+    // Surface the proposal to the principal the moment it's durably written (#1466). After #1464 removed
+    // the scheduled digest, this event-driven notification is the only path that reaches the principal
     // for approve/dismiss. Best-effort: notifyLearningProposal never throws and never fails the run
     // (the proposal is already persisted above). `guide` is guaranteed non-empty here — the
     // empty-guide case returned earlier.

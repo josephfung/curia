@@ -1,7 +1,7 @@
 // handler.ts — executive-profile-update skill.
 //
 // Updates the executive's writing voice profile. Elevated sensitivity —
-// requires CEO CallerContext. Accepts partial updates: only the fields
+// requires principal CallerContext. Accepts partial updates: only the fields
 // provided are merged onto the current profile. Unchanged fields keep
 // their existing values.
 

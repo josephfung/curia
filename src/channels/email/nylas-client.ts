@@ -348,7 +348,7 @@ export class NylasClient {
    * Draft and Message share the same BaseMessage shape in the Nylas SDK, so the
    * response can be normalised with the same helper as a sent message.
    *
-   * Drafts are created silently — no per-draft notification is sent. The CEO discovers
+   * Drafts are created silently — no per-draft notification is sent. The principal discovers
    * pending drafts via the end-of-day Signal digest and reviews them in Gmail (#403, #278).
    */
   async createDraft(options: SendEmailOptions): Promise<NylasMessage> {
@@ -394,7 +394,7 @@ export class NylasClient {
    *   2. Removes the draft from the DRAFTS folder
    *   3. Honours any `replyToMessageId` embedded in the draft for correct threading
    *
-   * Used by the send-draft skill when the CEO authorizes sending an existing draft.
+   * Used by the send-draft skill when the principal authorizes sending an existing draft.
    */
   async sendDraft(draftId: string): Promise<NylasMessage> {
     this.log.debug({ draftId }, 'sending draft');

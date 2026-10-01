@@ -62,7 +62,7 @@ export class ContactDedupExcludeHandler implements ToolHandler {
           // Echo the normalized (lowercase) ids so tool output matches the stored row.
           contact_a_id: pair.contactAId,
           contact_b_id: pair.contactBId,
-          // false means the pair was already excluded. Still a success — the CEO's
+          // false means the pair was already excluded. Still a success — the principal's
           // decision is persisted either way, and the agent should close the task.
           created,
         },

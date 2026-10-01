@@ -4,7 +4,7 @@ import { CeoNylasClient, type NylasDraftSummary } from '../../../_shared/ceo-nyl
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 10;
 
-// Folder names that mean "search the CEO's unsent drafts" (issue #1000).
+// Folder names that mean "search the principal's unsent drafts" (issue #1000).
 const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
 
 // Drafts have no native server-side search in Nylas v3, so we list-then-filter
@@ -95,7 +95,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
         };
       } catch (err) {
         ctx.log.error({ err }, 'ceo-inbox-search: draft search failed');
-        return { success: false, error: 'Failed to search CEO inbox drafts' };
+        return { success: false, error: 'Failed to search principal inbox drafts' };
       }
     }
 
@@ -119,7 +119,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
       };
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-search: search failed');
-      return { success: false, error: 'Failed to search CEO inbox' };
+      return { success: false, error: 'Failed to search principal inbox' };
     }
   }
 }

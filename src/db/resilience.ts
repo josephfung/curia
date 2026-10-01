@@ -14,7 +14,7 @@ export const DEFAULT_CONNECTION_TIMEOUT_MS = 5_000;
 /** Default probe interval for the availability monitor. */
 export const DEFAULT_DB_PROBE_INTERVAL_MS = 30_000;
 
-/** Escalate to the CEO after this continuous unavailability window. */
+/** Escalate to the principal after this continuous unavailability window. */
 export const DEFAULT_DB_ESCALATION_MS = 5 * 60_000;
 
 /** Bounded backoff for non-critical DB retries. */

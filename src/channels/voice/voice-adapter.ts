@@ -82,7 +82,7 @@ export class VoiceAdapter implements Channel {
     const roomName = `voice-${sessionId}`;
     const { caller } = req;
     // LiveKit participant identity is the resolved contact id (not the literal
-    // 'principal') so a future non-principal transport cannot inherit CEO standing
+    // 'principal') so a future non-principal transport cannot inherit principal standing
     // at the media layer (#1598).
     const token = await mintVoiceParticipantToken(
       {
@@ -147,7 +147,7 @@ export class VoiceAdapter implements Channel {
         caller,
         // Console POST /api/voice/sessions is always principal-initiated inbound.
         // A future Curia-initiated outbound path must pass openingGreeting: false
-        // so Curia does not talk over the CEO answering (#1596).
+        // so Curia does not talk over the principal answering (#1596).
         openingGreeting: true,
       })
       .catch(async err => {

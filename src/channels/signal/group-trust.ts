@@ -7,7 +7,7 @@
 //
 // A group is trusted iff every member's phone number resolves to a verified
 // (non-provisional, non-blocked) contact. A single unknown or blocked member renders
-// the entire group untrusted. This is intentionally conservative: a CEO assistant
+// the entire group untrusted. This is intentionally conservative: a principal assistant
 // participating in a group with unknown parties risks leaking context or being
 // manipulated by social engineering.
 //

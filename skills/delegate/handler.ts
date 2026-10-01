@@ -12,11 +12,11 @@
 // the runtime short-circuits and emits a JSON response with
 // _curia_protocol: "clarification_request". This handler detects that
 // protocol marker and returns a typed result with needs_clarification: true,
-// so the coordinator can route the question to the CEO.
+// so the coordinator can route the question to the principal.
 //
 // Resume: when the coordinator re-delegates with a resume_token, this handler
 // decodes the token, constructs a full task brief from the original context +
-// CEO's direction, and delegates to the specialist. The specialist sees a
+// principal's direction, and delegates to the specialist. The specialist sees a
 // well-formed task — no special resume detection needed in its prompt.
 
 import { randomUUID } from 'node:crypto';
@@ -119,7 +119,7 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
       in_flight: true,
       blocked: true,
       // Not `failed`: a failure is escalated and the turn stops, which hides the status
-      // the coordinator needs to give the CEO. This is a refusal to start a second run.
+      // the coordinator needs to give the principal. This is a refusal to start a second run.
       reason: ALREADY_IN_FLIGHT_REASON,
       retryable: false,
       delegate_event_id: hit.delegateEventId,
@@ -141,7 +141,7 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
  * conversation (#1858). Returns null when the call may proceed.
  *
  * A resume_token continues a specialist that has already stopped (it paused to ask
- * the CEO). Blocking that resume because some other delegation to the same agent
+ * the principal). Blocking that resume because some other delegation to the same agent
  * timed out is a deliberate fail-closed trade-off: the match is agent × conversation
  * and cannot tell the parked task from the one still running. Starting the resume
  * would be a second concurrent run beside the timed-out specialist. Call this only
@@ -169,7 +169,7 @@ async function refuseIfInFlight(ctx: ToolContext, agent: string): Promise<ToolRe
     inFlight = await ctx.openDelegationLookup.findInFlight(agent, originConversationId);
   } catch (err) {
     // Fail closed. Starting the run when we could not prove the specialist is idle is
-    // how the duplicate CEO message happens. A database outage is tracked apart from
+    // how the duplicate principal message happens. A database outage is tracked apart from
     // the consecutive-error budget.
     ctx.log.error(
       { err, targetAgent: agent, originConversationId },
@@ -398,7 +398,7 @@ export class DelegateHandler implements ToolHandler {
     }
 
     // Identical-delegation guard (#1171): resume continuations are exempt — they carry new
-    // CEO direction and a different effective brief. Without a resume_token, block when the
+    // principal direction and a different effective brief. Without a resume_token, block when the
     // runtime has already recorded a non-retryable failure for this agent+task pair.
     //
     // One reason overrides that exemption: `already_delivered` (#1799). The runtime seeds it when
@@ -408,7 +408,7 @@ export class DelegateHandler implements ToolHandler {
     // to live here too, not only in the runtime.
     const dKey = delegationKey(agent, task);
     if (ctx.delegationGuard) {
-      // The delivered record is keyed on the ORIGINAL task. A resume's `task` is the CEO's new
+      // The delivered record is keyed on the ORIGINAL task. A resume's `task` is the principal's new
       // direction, so the key has to be resolved from the token too — otherwise the block misses
       // exactly the shape a resume normally takes and this handler publishes the work again.
       const deliveredKey = findAlreadyDeliveredKey(
@@ -441,7 +441,7 @@ export class DelegateHandler implements ToolHandler {
     }
 
     // Resume flow: when resume_token is provided, decode it and construct a
-    // full task brief from the original context + the CEO's direction (the
+    // full task brief from the original context + the principal's direction (the
     // `task` parameter). The specialist receives a self-contained task —
     // no special resume detection logic needed in its prompt.
     let effectiveTask = task;
@@ -457,7 +457,7 @@ export class DelegateHandler implements ToolHandler {
         ctx.log.error({ targetAgent: agent }, 'Failed to decode resume_token');
         return {
           success: false,
-          error: 'resume_token could not be decoded. The token may be corrupted — ask the CEO to repeat their request.',
+          error: 'resume_token could not be decoded. The token may be corrupted — ask the principal to repeat their request.',
         };
       }
 
@@ -478,7 +478,7 @@ export class DelegateHandler implements ToolHandler {
           : '';
         return {
           success: false,
-          error: `resume_token is missing required fields (original_task, context).${versionNote} The token may be corrupted — ask the CEO to repeat their request.`,
+          error: `resume_token is missing required fields (original_task, context).${versionNote} The token may be corrupted — ask the principal to repeat their request.`,
         };
       }
 
@@ -495,13 +495,13 @@ export class DelegateHandler implements ToolHandler {
         return {
           success: false,
           error: payload.agent
-            ? `resume_token was generated for agent '${payload.agent}' but is being used to delegate to '${agent}'. Re-delegate to the correct specialist or ask the CEO to repeat their request.`
-            : `resume_token has an empty agent field and cannot be validated. The token may be corrupted — ask the CEO to repeat their request.`,
+            ? `resume_token was generated for agent '${payload.agent}' but is being used to delegate to '${agent}'. Re-delegate to the correct specialist or ask the principal to repeat their request.`
+            : `resume_token has an empty agent field and cannot be validated. The token may be corrupted — ask the principal to repeat their request.`,
         };
       }
 
       effectiveTask = [
-        'You are continuing a task that was paused to get the CEO\'s direction.',
+        'You are continuing a task that was paused to get the principal\'s direction.',
         '',
         '## Original Task',
         payload.original_task,
@@ -509,7 +509,7 @@ export class DelegateHandler implements ToolHandler {
         '## Your Progress So Far',
         payload.context,
         '',
-        '## CEO\'s Direction',
+        '## principal\'s Direction',
         task,
         '',
         'Continue from where you left off.',
@@ -517,7 +517,7 @@ export class DelegateHandler implements ToolHandler {
 
       ctx.log.info(
         { targetAgent: agent, originalAgent: payload.agent },
-        'Resuming task with resume_token — constructed task brief from original context + CEO direction',
+        'Resuming task with resume_token — constructed task brief from original context + principal direction',
       );
     }
 
@@ -596,7 +596,7 @@ export class DelegateHandler implements ToolHandler {
       content: effectiveTask,
       metadata: delegationMetadata,
       // Forward the live-principal-turn signal (#1126) across this SYNCHRONOUS delegation: a
-      // specialist acting inside the CEO's live turn (e.g. the contacts specialist running
+      // specialist acting inside the principal's live turn (e.g. the contacts specialist running
       // contact-set-tier, or the setup-wizard minting a secret-capture link) inherits live-ness
       // and can satisfy the elevated gate. This is safe precisely because delegation is
       // ephemeral request/response — the sub-task is a bus event, never a persisted/wakeable row,

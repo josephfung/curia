@@ -83,7 +83,7 @@ export class MemoryQueryHandler implements ToolHandler {
         decay_class: node.temporal.decayClass,
         // sensitivity tells the agent whether results can be shared or exported;
         // confidential/restricted facts must not be included in outbound messages
-        // without explicit CEO approval.
+        // without explicit principal approval.
         sensitivity: node.sensitivity,
         last_confirmed_at: node.temporal.lastConfirmedAt.toISOString(),
         score,

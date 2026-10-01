@@ -398,7 +398,8 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
   it('bumps the ceo-inbox version for the peer-request capability', () => {
     // Exact-version tripwire, matching calendar-prompt.test.ts's convention.
     // 0.17.0 = answers a generic PEER REQUEST, a new capability, so minor.
+    // 0.17.1 = principal vocabulary in the prompt (#1950).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.17.0');
+    expect(config.version).toBe('0.17.1');
   });
 });
