@@ -2161,6 +2161,7 @@ async function main(): Promise<void> {
     principalContactId: principalContact?.id,
     // Read at fire time, after pass-1 registration below fills the registry.
     ownsAgent: (agentId) => agentRegistry.has(agentId),
+    taskRepo,
   });
 
   // SuspensionNotifier — emails the principal when a scheduled job is auto-suspended.

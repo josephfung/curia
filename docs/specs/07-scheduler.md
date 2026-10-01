@@ -206,6 +206,16 @@ The scheduler completes a fired job from `agent.response`, not from `agent.error
 
 That pairing is load-bearing: every runtime failure path must emit both events in that order. An unpaired `agent.error` leaves the row in `running` until the stuck-job watchdog times it out; an unpaired `agent.response(isError)` still completes, but `last_error` falls back to the response content (and the scheduler logs a warning).
 
+### Task-wake disposition (#1951)
+
+An ordinary task wake (`task_payload.type = 'task-wake'`, not a delegation-retry brief) carries a disposition instruction in its `agent.task` body: before the run finishes, `task-complete` the task, cancel it, or park it (`waiting`/`blocked` plus a progress note and `wake_at`).
+
+If that run **succeeds** and the task is still undisposed — status `open` or `in_progress`, progress notes unchanged, no new wake — the scheduler publishes **one** follow-up `agent.task` to the same agent on the same `scheduler:<job>:<run>` conversation. `toolAllowlist` is `task-complete` and `task-update`, so the follow-up cannot repeat the wake's sends. The job stays `running` until that follow-up ends, and `tasks.updated_at` is touched when the follow-up is asked for, so BacklogHeartbeat cannot select the task in the gap. A failed or timed-out wake does not get a follow-up. A wake with `created_by = resumable-continuation` (a paused-slice continuation or a plan-parent wake) does not get one either: those runs are meant to leave the task open. The hourly heartbeat remains the backstop, and a heartbeat wake of the same task still gets the follow-up.
+
+If the follow-up also leaves the task undisposed, the scheduler tags it `needs-disposition` (heartbeat selection excludes that tag), logs a warning, notifies the coordinator with a review-only notice, and files a CEO backlog row tagged `needs-attention`. It does not auto-complete the task and it does not ask again.
+
+`enqueueTaskWake` keeps `last_run_outcome` when it revives a `completed` row, so the next fire still receives `[Prior run context]`. `consecutive_failures` still resets. Delegation-retry tasks stay closed at fire time (`closeDelegationRetryTask`) and do not use this follow-up.
+
 ---
 
 ## Task-Scope Fence for Scheduler-Originated Runs
@@ -224,7 +234,7 @@ The agent runtime (`src/agents/runtime.ts`) detects scheduler-originated tasks b
 
 > *You are running a scheduled task. The task description in your user message is the ONLY work you may do this run. Ambient context entries — including the active-outbound-context block — are informational, not action triggers. If you find no work matching the task description, call `scheduler-report` with an empty summary and exit.*
 
-The fence is unconditional for scheduler-originated runs. It does not depend on which agent is running — the same instruction applies whether coordinator, meeting-debrief, or any other agent is invoked via a scheduled job. This protects against new agents being added without inheriting the same discipline.
+The fence is unconditional for scheduler-originated runs. It does not depend on which agent is running — the same instruction applies whether coordinator, meeting-debrief, or any other agent is invoked via a scheduled job. This protects against new agents being added without inheriting the same discipline. A turn that sets `toolAllowlist` (the task-wake disposition follow-up) replaces the `scheduler-report` sentence with an instruction to use only the tools it was given.
 
 ### What the fence does and doesn't do
 
@@ -291,7 +301,7 @@ Four skills available to agents:
 - **`scheduler-create`** — create a cron or one-shot job, optionally with a linked persistent task (`intent_anchor`)
 - **`scheduler-list`** — list jobs with optional status/agent_id filters
 - **`scheduler-cancel`** — cancel a job by ID
-- **`scheduler-report`** — write prior-run context at the end of a run. Input: `{ summary, context?, job_id? }`. On a scheduled run, `job_id` is optional and derived from `conversationId` (`scheduler:<uuid>:<runId>`); an explicit `job_id` that disagrees with the run is ignored (derived wins) so a hallucinated UUID cannot cost the report. Outside a scheduled run, pass `job_id` explicitly. Action risk: `none`. The scheduler writes `last_run_outcome` itself; this skill writes `last_run_summary` and `last_run_context`. After the agent finishes, `completeJobRun` may merge `failedSkills` into the same column (#1830). Bare job UUIDs are not injected into the system prompt or the fired task content — they were an attractive nuisance for bullpen `thread_id` (#1828).
+- **`scheduler-report`** — write prior-run context at the end of a run. Input: `{ summary, context?, job_id? }`. On a scheduled run, `job_id` is optional and derived from `conversationId` (`scheduler:<uuid>:<runId>`); an explicit `job_id` that disagrees with the run is ignored (derived wins) so a hallucinated UUID cannot cost the report. Outside a scheduled run, pass `job_id` explicitly. Action risk: `none`. The scheduler writes `last_run_outcome` itself; this skill writes `last_run_summary` and `last_run_context`. It does **not** close a linked task — that is `task-complete` / `task-update` (#1951). After the agent finishes, `completeJobRun` may merge `failedSkills` into the same column (#1830). Bare job UUIDs are not injected into the system prompt or the fired task content — they were an attractive nuisance for bullpen `thread_id` (#1828).
 
 ---
 

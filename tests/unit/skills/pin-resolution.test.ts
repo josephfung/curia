@@ -76,6 +76,8 @@ describe('on-disk skills/tasks + skills/documents', () => {
     expect(parsed.document_workspace).toBeUndefined();
     expect(parsed.tools).toEqual([...TASK_TOOLS]);
     expect(parsed.instructions).toContain('## Task Management');
+    expect(parsed.instructions).toContain('task-complete');
+    expect(parsed.instructions).toContain('does not close the task');
   });
 
   it('documents SKILL.md declares document_workspace and doc tools', () => {

@@ -109,4 +109,23 @@ describe('SchedulerService.enqueueTaskWake', () => {
     );
     expect(JSON.parse(payload!)).toMatchObject({ standing: { derived: false } });
   });
+
+  it('keeps last_run_outcome when reviving a completed row (#1951)', async () => {
+    const pool = { query: vi.fn().mockResolvedValue({ rows: [{ id: 'job-9' }] }) };
+    const bus = { publish: vi.fn(), subscribe: vi.fn() };
+    const svc = new SchedulerService(
+      pool as unknown as import('pg').Pool,
+      bus as never,
+      mockLogger() as never,
+      'America/Toronto',
+    );
+
+    await svc.enqueueTaskWake({ taskId: 'task-7', agentId: 'ceo-inbox', runAt: new Date('2026-06-04T12:00:00Z') });
+
+    const [sql] = pool.query.mock.calls[0] as [string];
+    expect(sql).toContain("status IN ('failed','suspended','completed')");
+    // A cancelled revive still drops the outcome. consecutive_failures still resets
+    // for anything that is not failed/suspended — that clause is unchanged.
+    expect(sql).toContain("consecutive_failures = CASE WHEN status IN ('failed','suspended') THEN consecutive_failures ELSE 0 END");
+  });
 });
