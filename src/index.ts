@@ -37,7 +37,7 @@ import { OpenRouterProvider } from './agents/llm/openrouter.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
-import { discoverAgentManifests, interpolateRuntimeContext } from './agents/loader.js';
+import { discoverAgentManifests } from './agents/loader.js';
 import type { AgentYamlConfig, AgentDiscovery } from './agents/loader.js';
 import { ModelRouter } from './agents/llm/model-router.js';
 import { ModelRegistry } from './agents/llm/model-registry.js';
@@ -94,7 +94,6 @@ import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
-import { DEFAULT_ERROR_BUDGET } from './errors/types.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { extractPromptExfiltrationMarkers } from './dispatch/prompt-exfiltration-markers.js';
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
@@ -147,13 +146,13 @@ import { backfillDirectChannelSenders } from './memory/direct-sender-backfill.js
 import type { DecayConfig } from './memory/dream-engine.js';
 import type { AgentPersona } from './skills/types.js';
 import type { ConfigChangeEvent } from './bus/events.js';
-import { BULLPEN_PENDING_WINDOW_MINUTES, BullpenService } from './memory/bullpen.js';
+import { BullpenService } from './memory/bullpen.js';
 import { BullpenDispatcher } from './dispatch/bullpen-dispatcher.js';
 import { TempFileStore } from './skills/temp-file-store.js';
 import { ConversationCheckpointProcessor } from './checkpoint/processor.js';
 import { runStartupValidation } from './startup/validator.js';
 import { runReadinessChecks } from './startup/readiness.js';
-import { compileSecurityContextBlock } from './security/security-context.js';
+import { compileSecurityContextBlock, resolveSecurityThresholds } from './security/security-context.js';
 import { OutboundContextService } from './dispatch/outbound-context.js';
 import { DEFAULT_SCRATCH_DOC_TTL_DAYS } from './agents/document-workspace.js';
 import { SkillRegistry } from './skills/skill-registry.js';
@@ -162,7 +161,15 @@ import {
   loadSkillsFromDiscovery,
   registerSyntheticSingletonSkills,
 } from './skills/skill-loader.js';
-import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps, collectPinnedByBundle } from './skills/pin-resolution.js';
+import { collectPinnedByBundle } from './skills/pin-resolution.js';
+import {
+  AgentAssemblyError,
+  assembleAgent,
+  readPrincipalIdentitySnapshot,
+  registerAgentRoster,
+  type AgentAssemblyContext,
+  type AssembledAgent,
+} from './startup/agent-assembly.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { LateDelegationSubscriber } from './agents/late-delegation-subscriber.js';
@@ -243,43 +250,30 @@ async function main(): Promise<void> {
   // root (extra_injection_patterns et al. are also optional), and this block runs *before*
   // schema validation, so guard explicitly here rather than relying on a non-null assertion
   // that would crash unhelpfully.
-  const rawThresholds = yamlConfig.security?.trust_thresholds;
-  // Explicit undefined check first so TypeScript narrows rawThresholds below.
-  if (rawThresholds === undefined) {
-    logger.fatal(
-      'Missing required config: security.trust_thresholds is absent from config/default.yaml — startup aborted',
-    );
+  // Validation is shared with the test-mode stack (resolveSecurityThresholds) so the
+  // two cannot disagree about what a valid config is (#1966).
+  const thresholdResolution = resolveSecurityThresholds(yamlConfig.security?.trust_thresholds);
+  if (!thresholdResolution.ok) {
+    if (thresholdResolution.reason === 'absent') {
+      logger.fatal(
+        'Missing required config: security.trust_thresholds is absent from config/default.yaml — startup aborted',
+      );
+    } else if (thresholdResolution.reason === 'missing_fields') {
+      logger.fatal(
+        { missingFields: thresholdResolution.fields },
+        'Missing required config fields in security.trust_thresholds in config/default.yaml — startup aborted',
+      );
+    } else {
+      // Schema validation (below) also checks ranges, but runs after this block.
+      // Catching out-of-range values here gives a clearer error.
+      logger.fatal(
+        { outOfRangeFields: thresholdResolution.fields },
+        'Invalid security.trust_thresholds values — all must be numbers in [0.0, 1.0]',
+      );
+    }
     process.exit(1);
   }
-  const missingFields = (['information_query', 'scheduling', 'data_export', 'financial'] as const)
-    .filter(f => rawThresholds[f] === undefined);
-  if (missingFields.length > 0) {
-    logger.fatal(
-      { missingFields },
-      'Missing required config fields in security.trust_thresholds in config/default.yaml — startup aborted',
-    );
-    process.exit(1);
-  }
-  // Validate ranges — schema validation (below) also checks this, but runs
-  // after this block. Catching out-of-range values here gives a clearer error.
-  const outOfRangeFields = (['information_query', 'scheduling', 'data_export', 'financial'] as const)
-    .filter(f => {
-      const v = rawThresholds[f];
-      return v < 0 || v > 1;
-    });
-  if (outOfRangeFields.length > 0) {
-    logger.fatal(
-      { outOfRangeFields },
-      'Invalid security.trust_thresholds values — all must be numbers in [0.0, 1.0]',
-    );
-    process.exit(1);
-  }
-  const securityContextBlock = compileSecurityContextBlock({
-    information_query: rawThresholds.information_query,
-    scheduling:        rawThresholds.scheduling,
-    data_export:       rawThresholds.data_export,
-    financial:         rawThresholds.financial,
-  });
+  const securityContextBlock = compileSecurityContextBlock(thresholdResolution.thresholds);
 
   // 1b. Startup validation — fail fast before any I/O if configs are malformed.
   // Only validates config/default.yaml and config/skills.yaml here. Agent and skill
@@ -781,17 +775,16 @@ async function main(): Promise<void> {
       return;
     }
     const myGeneration = ++refreshGeneration;
-    const withIdentities = await contactService.getContactWithIdentities(principalContact.id);
+    // Same verified + active filter the test-mode stack uses (#1966).
+    const snapshot = await readPrincipalIdentitySnapshot(contactService, principalContact.id);
     // A newer refresh started while this one awaited the DB — its result is fresher,
     // so drop ours rather than overwrite the shared array/holder with a stale snapshot.
     if (myGeneration !== refreshGeneration) return;
-    const allIdentities = withIdentities?.identities ?? [];
-    const next = allIdentities.filter((id) => id.verified && id.status === 'active');
     principalIdentities.length = 0;
-    principalIdentities.push(...next);
+    principalIdentities.push(...snapshot.identities);
     principalEmail.current =
       principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
-    principalPrimaryEmail.current = withIdentities?.contact.primaryEmail ?? null;
+    principalPrimaryEmail.current = snapshot.primaryEmail;
     logger.info(
       {
         contactId: principalContact.id,
@@ -2368,23 +2361,13 @@ async function main(): Promise<void> {
     releaseRunning: (delegateEventId: string) => releaseRunningDelegation(pool, delegateEventId),
   } } : {}) });
 
-  // Two-pass agent registration:
+  // Two-pass agent registration (src/startup/agent-assembly.ts, shared with the
+  // test-mode stack and the render script — #1966):
   // Pass 1: Register all agents in the registry so specialistSummary() is complete
   //         before the Coordinator's system prompt is interpolated.
-  // Pass 2: Create AgentRuntime instances with fully interpolated prompts.
-  // Without this split, the coordinator (alphabetically first) would be interpolated
-  // before any specialists are registered, resulting in an empty specialist list.
-
-  // Pass 1: Populate registry with all agent names, roles, and descriptions
+  // Pass 2: Assemble and start an AgentRuntime per agent (below).
   try {
-    for (const agentConfig of agentConfigs) {
-      agentRegistry.register(agentConfig.name, {
-        role: agentConfig.role ?? 'specialist',
-        description: agentConfig.description ?? agentConfig.name,
-        displayName: agentConfig.display_name,
-        expectedDurationSeconds: agentConfig.expected_duration_seconds,
-      });
-    }
+    registerAgentRoster(agentRegistry, agentConfigs);
   } catch (err) {
     logger.fatal({ err }, 'Failed during agent registration');
     process.exit(1);
@@ -2515,239 +2498,66 @@ async function main(): Promise<void> {
   // know which source_agent_ids it may wake (and as the fallback target list).
   const taskManagementAgents = new Set<string>();
 
-  // Pass 2: Create AgentRuntime for each config (now all specialists are known)
+  // Pass 2: assemble each agent (pins, SKILL.md, interpolation, model binding,
+  // coordinator-only blocks) and start its runtime. All of that lives in
+  // assembleAgent() so smoke, scenarios and the render script get the same agents.
+  const assemblyContext: AgentAssemblyContext = {
+    logger,
+    bus,
+    toolRegistry,
+    skillRegistry,
+    agentRegistry,
+    models: { modelRouter, modelRegistry, providerRegistry },
+    executionLayer,
+    memory,
+    entityMemory,
+    estimateCostUsd,
+    autonomyService,
+    officeIdentityService,
+    securityContextBlock,
+    timezone: config.timezone,
+    // Email: the first account's address for agent context injection.
+    channelAccounts: {
+      email: resolvedEmailAccounts[0]?.selfEmail,
+      phone: config.signalPhoneNumber,
+    },
+    selfEmails: resolvedEmailAccounts.map(a => a.selfEmail),
+    // Shared hot-reload array/holder (#1514) — passed by reference.
+    principalIdentities,
+    principalPrimaryEmail,
+    agentContactId: agentIdentityContactId,
+    principalContactId: principalContact?.id,
+    defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
+    lateDelivery: {
+      ttlMinutes: lateDeliveryConfig.ttlMinutes,
+      sweepIntervalMinutes: lateDeliveryConfig.sweepIntervalMinutes,
+    },
+    bullpenService,
+    conversationEntities,
+    workingDocsRepo,
+    taskRepo,
+  };
+  const assembledAgents: AssembledAgent[] = [];
   for (const agentConfig of agentConfigs) {
-    // Expand pinned_skills (bundles) → member tools + instruction blocks + flags.
-    const agentPinnedSkills = agentConfig.pinned_skills ?? [];
-    const pinResolution = resolvePinnedSkills(
-      agentPinnedSkills,
-      skillRegistry,
-      toolRegistry,
-      logger,
-      agentConfig.name,
-    );
-    // Scheduled agents with unresolved pins still boot and keep their cron jobs
-    // (#1501) — error-level log only, so monitoring can catch reduced toolsets.
-    reportScheduledPinGaps(
-      agentConfig.name,
-      pinResolution,
-      (agentConfig.schedule?.length ?? 0) > 0,
-      logger,
-    );
-    // For the coordinator, interpolate runtime context (just the principal contact ID).
-    // The specialist roster and the coordinator's own contact ID are no longer resolved
-    // here — they are injected per-turn by AgentRuntime (## Available Specialists block
-    // and the Contact ID line in ## Your Contact Details). Date and timezone are likewise
-    // appended fresh every task turn via formatTimeContextBlock() so they never go stale.
-    // This runs in pass 2 so all specialists are already in the registry.
-    let systemPrompt = agentConfig.system_prompt;
-    if (agentConfig.role === 'coordinator') {
-      // Do NOT pass officeIdentityBlock here. The coordinator YAML contains no
-      // identity placeholder; the identity block is prepended per-turn as a preamble
-      // in AgentRuntime.processTask() by the officeIdentityService passed below,
-      // enabling hot-reload without a restart.
-      systemPrompt = interpolateRuntimeContext(systemPrompt, {
-        principalContactId: principalContact?.id,
-      });
-    } else if (agentConfig.inject_specialists) {
-      // Specialists that need to know about available agents
-      // opt in via inject_specialists: true in their YAML.
-      // Pass agentContactId AND principalContactId so specialists can reference
-      // their own identity (${agent_contact_id}) and the principal's contact ID
-      // (${principal_contact_id}) without calling contact-lookup-by-role.
-      try {
-        systemPrompt = interpolateRuntimeContext(systemPrompt, {
-          availableSpecialists: agentRegistry.specialistSummary(),
-          agentContactId: agentIdentityContactId,
-          principalContactId: principalContact?.id,
-        });
-      } catch (err) {
-        logger.error({ err, agentName: agentConfig.name }, 'Failed to interpolate specialists into agent system prompt');
-        throw err;
-      }
-    } else {
-      // All other specialists: resolve ${agent_contact_id} (the agent's own
-      // identity, e.g. calendar.yaml's "Your contact ID is ${agent_contact_id}")
-      // and ${principal_contact_id} so both placeholders work without each
-      // specialist needing inject_specialists. interpolateRuntimeContext runs
-      // its full replace chain unconditionally — values not passed here would
-      // be blanked to empty string by the UUID-format check, so we MUST pass
-      // every contact ID the prompt could reference. Specialists list is
-      // omitted because non-inject_specialists agents don't route work.
-      systemPrompt = interpolateRuntimeContext(systemPrompt, {
-        agentContactId: agentIdentityContactId,
-        principalContactId: principalContact?.id,
-      });
+    let assembled: AssembledAgent;
+    try {
+      assembled = assembleAgent(agentConfig, assemblyContext);
+    } catch (err) {
+      logger.fatal(
+        { err, agent: agentConfig.name, ...(err instanceof AgentAssemblyError ? err.details : {}) },
+        'Agent assembly failed',
+      );
+      process.exit(1);
     }
-
-    // Inject pinned skill instruction blocks (e.g. tasks / documents discipline).
-    systemPrompt = appendSkillInstructions(systemPrompt, pinResolution.instructionBlocks);
-    const effectivePinnedTools = pinResolution.toolNames;
-    if (pinResolution.heartbeatEligible) {
+    assembledAgents.push(assembled);
+    if (assembled.pinResolution.heartbeatEligible) {
       taskManagementAgents.add(agentConfig.name);
     }
 
-    const agentToolDefs = toolRegistry.toToolDefinitions(effectivePinnedTools);
+    new AgentRuntime(assembled.runtimeConfig).register();
 
-    // allow_discovery: true → inject tool-registry + skill-activate into the agent's
-    // tool list. Skipped if already pinned to avoid duplicate tool definitions.
-    // tool-registry discovers tools/skills; skill-activate loads a skill's tools +
-    // SKILL.md instructions into the turn (Phase 3a / #1495).
-    if (agentConfig.allow_discovery) {
-      for (const discoveryTool of ['tool-registry', 'skill-activate'] as const) {
-        if (effectivePinnedTools.includes(discoveryTool)) continue;
-        const discoveryToolDefs = toolRegistry.toToolDefinitions([discoveryTool]);
-        if (discoveryToolDefs.length === 0) {
-          logger.error(
-            { agent: agentConfig.name, tool: discoveryTool },
-            `allow_discovery is true but ${discoveryTool} is not registered — discovery/activation unavailable; check startup logs for skill load errors`,
-          );
-        } else {
-          agentToolDefs.push(...discoveryToolDefs);
-        }
-      }
-    }
-
-    // Resolve this agent's capability tier to a concrete model, then look up
-    // the provider from the model registry. This decouples tier→model from
-    // model→provider: the registry is the single source of truth for which
-    // provider serves each model.
-    const resolved = modelRouter.resolve(agentConfig.model.tier, agentConfig.model.needs);
-    const resolvedProvider = modelRegistry.getProvider(resolved.model);
-    if (!resolvedProvider) {
-      logger.fatal({ model: resolved.model, agent: agentConfig.name, tier: resolved.tier },
-        'Model not found in registry — cannot resolve provider');
-      process.exit(1);
-    }
-    const agentProvider = providerRegistry.get(resolvedProvider);
-    if (!agentProvider) {
-      logger.fatal({ provider: resolvedProvider, agent: agentConfig.name, tier: resolved.tier },
-        `No provider registered for model's provider`);
-      process.exit(1);
-    }
-
-    // Pre-resolve the fallback tier model and provider (#813).
-    // The fallback tier rules are fixed: fast→standard, standard→powerful, powerful→standard.
-    // All three tiers are already validated above, so these lookups always succeed.
-    const fallbackTier = modelRouter.getFallbackTier(resolved.tier);
-    const fallbackResolved = modelRouter.resolve(fallbackTier);
-    const fallbackProviderName = modelRegistry.getProvider(fallbackResolved.model);
-    if (!fallbackProviderName) {
-      // All tier models are validated at construction, so a missing provider name here
-      // means the model-registry is inconsistent with the provider-registry — fail fast.
-      logger.error(
-        { agentId: agentConfig.name, fallbackModel: fallbackResolved.model },
-        'Fallback model has no registered provider — check model-registry.ts',
-      );
-      process.exit(1);
-    }
-    const agentFallbackProvider = providerRegistry.get(fallbackProviderName);
-    if (!agentFallbackProvider) {
-      logger.error(
-        { agentId: agentConfig.name, fallbackModel: fallbackResolved.model, fallbackProviderName },
-        'Fallback provider not found in provider registry — check provider setup',
-      );
-      process.exit(1);
-    }
-
-    const agent = new AgentRuntime({
-      agentId: agentConfig.name,
-      systemPrompt,
-      provider: agentProvider,
-      resolvedModel: resolved.model,
-      tier: resolved.tier,
-      fallbackModel: fallbackResolved.model,
-      fallbackProvider: agentFallbackProvider,
-      bus,
-      logger,
-      memory,
-      entityMemory,
-      executionLayer,
-      pinnedTools: effectivePinnedTools,
-      skillToolDefs: agentToolDefs,
-      pinnedSkillNames: pinResolution.resolvedSkills,
-      skillRegistry,
-      // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
-      modelRegistry,
-      estimateCostUsd,
-      // Coordinator + ceo-inbox receive autonomyService for per-task band injection
-      // (spec 14 checklist / ADR-029). ceo-inbox's draft-vs-punt aggressiveness
-      // tracks the live band; it must never write the global score itself.
-      autonomyService: AutonomyService.receivesInjection(agentConfig)
-        ? autonomyService
-        : undefined,
-      // All agents receive per-turn time block injection so the current date/time
-      // and timezone are always accurate. Specialists need this too — scheduled
-      // agents in particular make time-sensitive decisions (backoff gates, date
-      // comparisons) that require a reliable "now".
-      timezone: config.timezone,
-      // The coordinator gets per-turn identity block injection via officeIdentityService.
-      // This prepends the identity block to the system prompt as a preamble on
-      // every task, so identity hot-reloads (file watcher or API PUT) take effect on the
-      // next turn without a restart.
-      officeIdentityService: agentConfig.role === 'coordinator' ? officeIdentityService : undefined,
-      // The coordinator gets per-turn security context block injection. The block is
-      // prepended to the system prompt (immediately after the identity block) on every task.
-      // Specialists do not receive this — they operate in a trust-elevated context (tasks
-      // arrive from the coordinator after the security layer has already evaluated the sender).
-      // The runtime states that contract on delegated tasks (#1871). Withholding this
-      // block is not itself the signal.
-      securityContextBlock: agentConfig.role === 'coordinator' ? securityContextBlock : undefined,
-      // Curia's own contact details — injected per-task so agents know which accounts to
-      // use when MCP tools ask for an email address or phone number. Injected into ALL
-      // agents (#387) — specialists like essay-editor need this to avoid hallucinating
-      // account identifiers.
-      // Email: use the first account's address for agent context injection.
-      channelAccounts: {
-        email: resolvedEmailAccounts[0]?.selfEmail || undefined,
-        phone: config.signalPhoneNumber || undefined,
-      },
-      // Every owned mailbox. Email recall requires one of these on the thread
-      // so a BCC (Curia absent from To/CC) cannot look like a 1:1 (#1599).
-      selfEmails: resolvedEmailAccounts.map(a => a.selfEmail),
-      // Principal's verified channel identities — injected per-task into ALL agents so
-      // every agent knows where to reach the principal without inferring addresses.
-      // Sourced from the startup-cached principalIdentities array (already filtered
-      // to verified + active). Mirrors the channelAccounts pattern (#387). Fixes #786, #1950.
-      principalIdentities,
-      principalPrimaryEmail,
-      // Specialist roster — appended as "## Available Specialists" for the coordinator.
-      // Specialists that opt in via inject_specialists keep the bootstrap ${available_specialists}
-      // placeholder (resolved in interpolateRuntimeContext); this runtime path is coordinator-only.
-      availableSpecialists: agentConfig.role === 'coordinator' ? agentRegistry.specialistSummary() : undefined,
-      // The coordinator's own contact ID — surfaced in "## Your Contact Details".
-      // Specialists keep the ${agent_contact_id} bootstrap placeholder.
-      agentContactId: agentConfig.role === 'coordinator' ? agentIdentityContactId : undefined,
-      // Agent registry — allows the runtime to look up the target agent's
-      // expected_duration_seconds when injecting delegate timeouts (#387).
-      agentRegistry,
-      defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
-      lateDeliveryTtlMinutes: lateDeliveryConfig.ttlMinutes,
-      lateDeliverySweepIntervalMinutes: lateDeliveryConfig.sweepIntervalMinutes,
-      // Map YAML snake_case fields to AgentConfig camelCase, falling back to
-      // DEFAULT_ERROR_BUDGET values for any omitted fields.
-      errorBudget: agentConfig.error_budget ? {
-        maxTurns: agentConfig.error_budget.max_turns ?? DEFAULT_ERROR_BUDGET.maxTurns,
-        maxConsecutiveErrors: agentConfig.error_budget.max_errors ?? DEFAULT_ERROR_BUDGET.maxConsecutiveErrors,
-      } : undefined,
-      bullpenService,
-      bullpenWindowMinutes: BULLPEN_PENDING_WINDOW_MINUTES,
-      // Coordinator only (#1818). A specialist's delegate conversation has no
-      // stored identities, and begin() on an empty set would fail closed on
-      // any person-shaped send from that specialist.
-      conversationEntities: agentConfig.role === 'coordinator' ? conversationEntities : undefined,
-      documentWorkspaceEnabled: pinResolution.documentWorkspaceEnabled,
-      workingDocsRepo,
-      // taskRepo serves both task-wake scheduler refresh (tasks/heartbeat) and
-      // document project-root resolution (documents). Wire whenever either skill is pinned.
-      taskRepo: (pinResolution.heartbeatEligible || pinResolution.documentWorkspaceEnabled)
-        ? taskRepo
-        : undefined,
-    });
-    agent.register();
-
-    if (agentToolDefs.length > 0) {
-      logger.info({ agent: agentConfig.name, skills: agentToolDefs.map(d => d.name) }, 'Agent tools configured');
+    if (assembled.toolDefs.length > 0) {
+      logger.info({ agent: agentConfig.name, skills: assembled.toolDefs.map(d => d.name) }, 'Agent tools configured');
     }
   }
 
@@ -2771,19 +2581,15 @@ async function main(): Promise<void> {
           'Voice runtime started without tool wiring — resolved model lacks tools capability',
         );
       } else {
-      const coordinatorEntry = agentConfigs.find(a => a.role === 'coordinator' || a.name === 'coordinator');
-      const pinResolution = coordinatorEntry
-        ? resolvePinnedSkills(
-          coordinatorEntry.pinned_skills ?? [],
-          skillRegistry,
-          toolRegistry,
-          logger,
-          coordinatorEntry.name,
-        )
-        : null;
-      const voiceToolNames = pinResolution?.toolNames ?? [];
+      // Reuse the coordinator's assembled pins rather than resolving them a second
+      // time. Copy — the array below is extended with voice-only tools and must not
+      // alias the text runtime's pinnedTools.
+      const coordinatorAgent = assembledAgents.find(
+        a => a.agentConfig.role === 'coordinator' || a.agentConfig.name === 'coordinator',
+      );
+      const voiceToolNames = [...(coordinatorAgent?.pinnedToolNames ?? [])];
       // Keep discovery tools available when the coordinator allows discovery.
-      if (coordinatorEntry?.allow_discovery) {
+      if (coordinatorAgent?.agentConfig.allow_discovery) {
         for (const discoveryTool of ['tool-registry', 'skill-activate'] as const) {
           if (!voiceToolNames.includes(discoveryTool)) voiceToolNames.push(discoveryTool);
         }
