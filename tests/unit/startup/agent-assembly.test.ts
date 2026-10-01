@@ -314,3 +314,24 @@ describe('rendered coordinator system string', () => {
     }
   });
 });
+
+describe('buildBaseSystemPrompt block failures', () => {
+  const sources = {
+    agentId: 'coordinator',
+    systemPrompt: 'Body.',
+    officeIdentityService: {
+      compileSystemPromptBlock: () => { throw new Error('identity table unreadable'); },
+    } as unknown as OfficeIdentityService,
+  };
+  const logger = createLogger('silent');
+
+  it('omits the failed block on a live turn', async () => {
+    const prompt = await buildBaseSystemPrompt(sources, { now: FIXED_NOW, logger });
+    expect(prompt.startsWith('Body.')).toBe(true);
+  });
+
+  it('throws for a render, so a partial prompt is never printed', async () => {
+    await expect(buildBaseSystemPrompt(sources, { now: FIXED_NOW, logger, onBlockError: 'throw' }))
+      .rejects.toThrow(/block 'identity' failed for agent 'coordinator'/);
+  });
+});
