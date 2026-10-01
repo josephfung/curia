@@ -188,6 +188,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Override floor audit** — seven more pins raised off versions that were still vulnerable. (#1933)
 - **Override floors** — `smol-toml`, `js-yaml`, `brace-expansion` raised off versions carrying upstream-only advisories. (#1934)
 - **Override floors** — `hono`, `shell-quote`, `@hono/node-server` raised off floors that resolved to vulnerable releases. (#1934)
+- **`sharp`** — floor raised to 0.35.5, clearing an upstream-only librsvg advisory in the resolved tree. (#1949)
 
 ## [0.43.0] — 2026-09-11 — "C-3PO"
 
