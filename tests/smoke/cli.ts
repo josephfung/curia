@@ -20,6 +20,10 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const tags = parseArg(args, '--tags')?.split(',');
   const caseFilter = parseArg(args, '--case');
+  // Route every agent to one model (e.g. the production standard-tier model).
+  // The provider follows from the model registry, so this also picks Anthropic
+  // vs OpenRouter. Omitted → the configured model_routing.
+  const model = parseArg(args, '--model');
 
   // Validate OPENAI_API_KEY for judge
   const openaiKey = process.env.OPENAI_API_KEY;
@@ -42,17 +46,18 @@ async function main(): Promise<void> {
   const timeoutSec = Math.round(RESPONSE_TIMEOUT_MS / 1000);
   process.stdout.write(`\nCuria Smoke Test\n`);
   process.stdout.write(`   ${cases.length} test cases loaded\n`);
-  process.stdout.write(`   Response timeout: ${timeoutSec}s (override with SMOKE_TIMEOUT_MS)\n\n`);
+  process.stdout.write(`   Response timeout: ${timeoutSec}s (override with SMOKE_TIMEOUT_MS)\n`);
+  process.stdout.write(`   Model: ${model ?? 'configured model_routing'}\n\n`);
 
   // Boot harness
   process.stdout.write('   Booting Curia stack...\n');
   let harness;
   try {
-    harness = await createHarness();
+    harness = await createHarness({ model });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     process.stderr.write(`\nFailed to boot Curia stack: ${detail}\n`);
-    process.stderr.write('Check that DATABASE_URL and ANTHROPIC_API_KEY are set and the database is reachable.\n');
+    process.stderr.write('Check that DATABASE_URL is set, the database is reachable, and the API key for the selected model\'s provider (ANTHROPIC_API_KEY or OPENROUTER_API_KEY) is set.\n');
     process.exit(1);
   }
   process.stdout.write('   Stack ready.\n\n');
