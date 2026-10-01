@@ -23,12 +23,19 @@
 //     scheduler service, task repo, action log (pending approvals), outbound-context
 //     service or bullpen service, and the gateway gets no outbound queue. Tools that
 //     need them fail with a missing-capability error; scenario tests stub them.
+//     `disabledTools` lists them per agent. Runtimes see pending bullpen threads but
+//     never write read watermarks, which would hide threads from the real agent.
+//   - No shared-setting writes. Smoke turns run with principal standing, so agents get
+//     read-only views of the autonomy score and office identity (a real instance would
+//     send under a changed score), and no working-docs repo (ceo-inbox shadow drafts
+//     feed the real instance's learning signal).
 //   - No calendar client, MCP servers, browser, scheduler loop or heartbeat.
 //
 // The real vault IS read, the way boot reads it (#911): LLM API keys, the Signal
 // number and the email-account grants come from it, so the prompt's contact-details
-// block matches production. That needs SECRET_ENCRYPTION_KEY. The vault service is
-// used here only; the ExecutionLayer never sees it.
+// block matches production. That needs SECRET_ENCRYPTION_KEY. The vault service and
+// the values it returns stay inside createTestModeStack: the ExecutionLayer never sees
+// the vault, and the returned `config` carries no vault value.
 //
 // Known differences from production (none of them change the system prompt):
 //   - The tools above fail closed instead of running.
@@ -62,7 +69,6 @@ import { resolveEmailAccounts } from '../channels/email/resolve-email-accounts.j
 import { ContactService } from '../contacts/contact-service.js';
 import { ContactResolver } from '../contacts/contact-resolver.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
-import { WorkingDocsRepo } from '../db/working-docs-repo.js';
 import { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import { bootstrapAgentIdentity } from '../entity-context/bootstrap.js';
 import { EntityContextAssembler } from '../entity-context/assembler.js';
@@ -74,7 +80,9 @@ import { EntityMemory } from '../memory/entity-memory.js';
 import { KnowledgeGraphStore } from '../memory/knowledge-graph.js';
 import { MemoryValidator } from '../memory/validation.js';
 import { WorkingMemory } from '../memory/working-memory.js';
+import { loadRegistryDefaults, reconcileRegistries } from '../registry/reconcile.js';
 import { RegistryRepo } from '../registry/registry-repo.js';
+import type { IRegistryRepo, RegistryRow } from '../registry/types.js';
 import { applyVaultSecrets } from '../secrets/apply-vault-secrets.js';
 import { loadEncryptionKey } from '../secrets/crypto.js';
 import { SecretsService } from '../secrets/secrets-service.js';
@@ -141,10 +149,11 @@ export interface TestModeStackOptions {
    */
   model?: string;
   /**
-   * Which agents/tools/skills load. 'registry' (default) honours the enabled flags in
-   * agent_registry / tool_registry / skill_registry, like production; a table with no
-   * rows (a fresh DB that has never booted) enables everything on disk for that kind.
-   * 'all' ignores the tables.
+   * Which agents/tools/skills load. 'registry' (default) is what production would load
+   * on its next boot: the enabled rows in tool_registry / skill_registry /
+   * agent_registry, plus any core default (config/registry-defaults.yaml) that has no
+   * row yet — production's own reconcile, run without writing. 'all' loads everything
+   * on disk.
    */
   enablement?: 'registry' | 'all';
   /** See ExecutionLayerWrapper. */
@@ -171,17 +180,30 @@ export interface TestModeStack {
   contactResolver: ContactResolver;
   officeIdentityService: OfficeIdentityService;
   autonomyService: AutonomyService;
-  /** Read-only here: agents see pending threads, but cannot post (see header). */
+  /** The real service. Agents only read it (see header); seed threads through it. */
   bullpenService: BullpenService;
   agentContactId: string | undefined;
   principalContactId: string | undefined;
   /** Every assembled agent, already registered on the bus. */
   agents: AssembledAgent[];
+  /**
+   * Per agent: tools it is offered that the test-mode ExecutionLayer will refuse
+   * (missing capability), with the capabilities each lacks. Empty agents omitted.
+   * Measured on the unwrapped layer — a stub wrapper may answer some of these.
+   */
+  disabledTools: Record<string, Array<{ tool: string; missing: string[] }>>;
+  /**
+   * Ways this stack differs from production that change what agents see (no vault
+   * key, unresolved pins). Callers print these: the stack's own logger is usually silent.
+   */
+  warnings: string[];
   /** Look up an assembled agent by name. Throws if it is not loaded. */
   agent(name: string): AssembledAgent;
   /**
    * The exact system string the runtime sends this agent for an ordinary
    * (non-scheduler, non-task-bound) turn at `now`. Same functions AgentRuntime calls.
+   * Throws if a block that would be in production's prompt fails to build — the
+   * runtime omits it and carries on, a render must not.
    */
   renderSystemPrompt(agentName?: string, opts?: { now?: Date }): Promise<string>;
   shutdown(): Promise<void>;
@@ -212,7 +234,11 @@ export function createTestModeSecrets(): SecretsService {
         'Stub the tool instead (see ExecutionLayerWrapper).',
       );
     },
-    listUserNames: async (): Promise<string[]> => [],
+    // Throw rather than return []: an empty list would tell the model the principal
+    // has no stored secrets, which is false, not withheld.
+    listUserNames: async (): Promise<string[]> => {
+      throw new Error('User secret names are withheld in test mode.');
+    },
   };
   // Cast: ExecutionLayer types the option as the concrete SecretsService class but
   // only calls the two methods above (src/skills/execution.ts).
@@ -247,21 +273,107 @@ export function createNoSendOutboundGateway(deps: {
 }
 
 /**
- * Names enabled in a registry table, or null when the table is empty (never booted)
- * and everything on disk should load.
+ * A registry repo that reads the real table and keeps reconcile's enrolments in
+ * memory. Lets the stack run production's reconcileRegistries() and get production's
+ * enabled set without writing a row. Reconcile only calls listRows and installAndEnable.
  */
-async function enabledNamesFrom(
-  pool: DbPool,
-  table: 'agent_registry' | 'tool_registry' | 'skill_registry',
-  logger: Logger,
-): Promise<Set<string> | null> {
-  const rows = await new RegistryRepo(pool, table).listRows();
-  if (rows.length === 0) {
-    logger.warn({ table }, 'test-mode stack: registry table is empty — enabling everything on disk');
-    return null;
+class DryRunRegistryRepo implements IRegistryRepo {
+  private readonly enrolled: RegistryRow[] = [];
+  constructor(private readonly real: RegistryRepo) {}
+
+  async listRows(): Promise<RegistryRow[]> {
+    return [...(await this.real.listRows()), ...this.enrolled];
   }
-  return new Set(rows.filter(r => r.enabled).map(r => r.name));
+
+  async installAndEnable(name: string, actor: string): Promise<RegistryRow | null> {
+    const now = new Date().toISOString();
+    const row: RegistryRow = {
+      name, enabled: true, installedAt: now, installedBy: actor, enabledAt: now, enabledBy: actor, updatedAt: now,
+    };
+    this.enrolled.push(row);
+    return row;
+  }
+
+  private refuse(method: string): never {
+    throw new Error(`DryRunRegistryRepo.${method}: the test-mode stack never writes the registry`);
+  }
+  async getRow(): Promise<RegistryRow | null> { return this.refuse('getRow'); }
+  async install(): Promise<RegistryRow> { return this.refuse('install'); }
+  async enable(): Promise<RegistryRow> { return this.refuse('enable'); }
+  async disable(): Promise<RegistryRow> { return this.refuse('disable'); }
+  async uninstall(): Promise<boolean> { return this.refuse('uninstall'); }
+  async uninstallIfDisabled(): Promise<boolean> { return this.refuse('uninstallIfDisabled'); }
 }
+
+/**
+ * The tools, skills and agents production would enable on its next boot against
+ * this database: production's reconcile, run against dry-run repos.
+ */
+async function productionEnabledNames(
+  pool: DbPool,
+  discovered: { tools: Set<string>; skills: Set<string>; agents: Set<string> },
+  logger: Logger,
+): Promise<{ tool: Set<string>; skill: Set<string>; agent: Set<string> }> {
+  const toolRepo = new DryRunRegistryRepo(new RegistryRepo(pool, 'tool_registry'));
+  const skillRepo = new DryRunRegistryRepo(new RegistryRepo(pool, 'skill_registry'));
+  const agentRepo = new DryRunRegistryRepo(new RegistryRepo(pool, 'agent_registry'));
+  await reconcileRegistries({
+    toolRepo,
+    agentRepo,
+    skillRepo,
+    toolDiscoveryNames: discovered.tools,
+    agentDiscoveryNames: discovered.agents,
+    skillDiscoveryNames: discovered.skills,
+    defaults: loadRegistryDefaults(path.join(REPO_ROOT, 'config', 'registry-defaults.yaml')),
+    logger,
+  });
+  const enabled = async (repo: DryRunRegistryRepo): Promise<Set<string>> =>
+    new Set((await repo.listRows()).filter(r => r.enabled).map(r => r.name));
+  return { tool: await enabled(toolRepo), skill: await enabled(skillRepo), agent: await enabled(agentRepo) };
+}
+
+/**
+ * A view of the bullpen service whose read-watermark writes do nothing. AgentRuntime
+ * marks injected threads as seen per agent id; from a test run sharing the database,
+ * that would hide pending threads from the real agent of the same name.
+ */
+export function readOnlyBullpen(bullpen: BullpenService): BullpenService {
+  return Object.assign(Object.create(bullpen) as BullpenService, {
+    markThreadsSeen: async () => {},
+    recordUnhandledInjection: async () => {},
+  });
+}
+
+/**
+ * A view of `target` on which only `readMethods` work; any other method throws. Used
+ * for services whose writes change state a real instance sharing the database acts
+ * on. Allowlist, so a write method added later is refused until someone lists it.
+ */
+export function readOnlyView<T extends object>(target: T, readMethods: readonly string[], label: string): T {
+  const allowed = new Set(readMethods);
+  return new Proxy(target, {
+    get(obj, prop, receiver) {
+      const value: unknown = Reflect.get(obj, prop, receiver);
+      if (typeof value !== 'function') return value;
+      if (typeof prop === 'string' && allowed.has(prop)) {
+        return (value as (...args: unknown[]) => unknown).bind(obj);
+      }
+      return () => {
+        throw new Error(`${label}.${String(prop)} is read-only in test mode — it would change state a real instance shares`);
+      };
+    },
+  });
+}
+
+const AUTONOMY_READS = ['getConfig', 'getHistory', 'getHistoryPaginated', 'getScoredActionCount'] as const;
+const OFFICE_IDENTITY_READS = ['get', 'compileSystemPromptBlock', 'history'] as const;
+
+/** Methods AgentRuntime calls on its ExecutionLayer. A wrapper must keep all of them. */
+const EXECUTION_LAYER_METHODS = [
+  'invoke',
+  'getToolDefinitions',
+  'resolveSkillActivationForAgent',
+] as const;
 
 function routingFor(yamlConfig: YamlConfig, model: string | undefined, modelRegistry: ModelRegistry): ModelRoutingConfig {
   const configured = yamlConfig.model_routing;
@@ -286,9 +398,14 @@ function routingFor(yamlConfig: YamlConfig, model: string | undefined, modelRegi
  * identity, agent contact), and whatever the agents do while it runs.
  */
 export async function createTestModeStack(options: TestModeStackOptions = {}): Promise<TestModeStack> {
-  // A copy: vault values are written onto it below.
+  // Returned to the caller, so it never receives vault values (those stay in locals).
   const config: Config = { ...(options.config ?? loadConfig()) };
+  let anthropicApiKey = config.anthropicApiKey;
+  let openrouterApiKey = config.openrouterApiKey;
+  let openaiApiKey = config.openaiApiKey;
+  let signalPhoneNumber = config.signalPhoneNumber;
   const llmMode = options.llm ?? 'live';
+  const warnings: string[] = [];
   const yamlConfig = options.yamlConfig ?? loadYamlConfig(path.join(REPO_ROOT, 'config'));
   const logger = options.logger ?? createLogger('error');
   const agentsDir = options.agentsDir ?? path.join(REPO_ROOT, 'agents');
@@ -319,23 +436,32 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // Same resolution as src/index.ts: bootstrap secrets (LLM keys) and channel secrets
     // (Signal number) onto config. Only provider construction and the prompt's own
     // contact details read them; no transport client is ever built from them.
+    // Only an UNSET key is tolerated (offline). A malformed one is a config bug and
+    // loadEncryptionKey() throws for it in every mode.
     let vault: SecretsService | undefined;
     let encryptionKey: Buffer | undefined;
-    try {
+    if (process.env.SECRET_ENCRYPTION_KEY) {
       encryptionKey = loadEncryptionKey();
-    } catch (err) {
-      if (llmMode === 'live') {
-        throw new Error(
-          'SECRET_ENCRYPTION_KEY is required: LLM API keys are read from the vault (#911). ' +
-          `${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      logger.warn({ err }, 'test-mode stack: no vault key — rendering without vault-held contact details');
+    } else if (llmMode === 'live') {
+      throw new Error('SECRET_ENCRYPTION_KEY is required: LLM API keys are read from the vault (#911)');
+    } else {
+      warnings.push(
+        'SECRET_ENCRYPTION_KEY is not set — no vault: the Signal number is missing from Your Contact ' +
+        'Details and email addresses skip the grant check, so the prompt may differ from production.',
+      );
     }
     if (encryptionKey) {
       vault = new SecretsService(pool, encryptionKey, logger);
-      await applyVaultSecrets(config, vault, logger);
-      await applyChannelVaultSecrets(config, vault, process.env, logger);
+      // Resolve onto a throwaway copy and keep only what the stack uses: the LLM keys
+      // and the Signal number for the prompt. Nylas, Slack, SMS and API tokens are
+      // dropped here, so nothing downstream can build a transport client from them.
+      const resolved: Config = { ...config };
+      await applyVaultSecrets(resolved, vault, logger);
+      await applyChannelVaultSecrets(resolved, vault, process.env, logger);
+      anthropicApiKey = resolved.anthropicApiKey;
+      openrouterApiKey = resolved.openrouterApiKey;
+      openaiApiKey = resolved.openaiApiKey;
+      signalPhoneNumber = resolved.signalPhoneNumber;
     }
 
     const autonomyService = new AutonomyService(pool, logger);
@@ -352,19 +478,19 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       providerRegistry.set('anthropic', offlineProvider('anthropic'));
       providerRegistry.set('openrouter', offlineProvider('openrouter'));
     } else {
-      if (config.anthropicApiKey) {
-        providerRegistry.set('anthropic', new AnthropicProvider(config.anthropicApiKey, logger, modelRegistry));
+      if (anthropicApiKey) {
+        providerRegistry.set('anthropic', new AnthropicProvider(anthropicApiKey, logger, modelRegistry));
       }
-      if (config.openrouterApiKey) {
-        providerRegistry.set('openrouter', new OpenRouterProvider(config.openrouterApiKey, logger, modelRegistry));
+      if (openrouterApiKey) {
+        providerRegistry.set('openrouter', new OpenRouterProvider(openrouterApiKey, logger, modelRegistry));
       }
     }
 
     // ── Memory, contacts, identity ─────────────────────────────────────────
     const memory = WorkingMemory.createWithPostgres(pool, logger);
     let entityMemory: EntityMemory | undefined;
-    if (config.openaiApiKey) {
-      const embeddingService = EmbeddingService.createWithOpenAI(config.openaiApiKey, logger, bus, modelRegistry);
+    if (openaiApiKey) {
+      const embeddingService = EmbeddingService.createWithOpenAI(openaiApiKey, logger, bus, modelRegistry);
       const kgStore = KnowledgeGraphStore.createWithPostgres(pool, embeddingService, logger);
       entityMemory = new EntityMemory(kgStore, new MemoryValidator(kgStore, embeddingService), embeddingService, logger);
     }
@@ -383,8 +509,18 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       const snapshot = await readPrincipalIdentitySnapshot(contactService, principalContact.id);
       principalIdentities.push(...snapshot.identities);
       principalPrimaryEmail.current = snapshot.primaryEmail;
+    } else if (llmMode === 'live') {
+      // Production refuses to serve without a principal (setup-required mode), so a
+      // live run without one would test a path production never takes.
+      throw new Error(
+        'No principal contact (system_role=principal) in this database. Production does not run agents ' +
+        'until onboarding creates one; complete onboarding at /setup first.',
+      );
     } else {
-      logger.warn('test-mode stack: no principal contact — the Principal Contact Details block will be absent');
+      warnings.push(
+        'No principal contact (system_role=principal): the Principal Contact Details block is absent and ' +
+        '${principal_contact_id} renders empty. Production would not serve this prompt until onboarding.',
+      );
     }
     const principalNames = [principalContact?.displayName, principalContact?.preferredName]
       .filter((n): n is string => typeof n === 'string' && n.trim().length > 0);
@@ -397,28 +533,34 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       ? (await resolveEmailAccounts(emailAccountsRepo, vault, logger)).map(a => a.selfEmail)
       : (await emailAccountsRepo.list()).filter(a => a.enabled).map(a => a.selfEmail);
 
-    // Documents are inert rows — nothing outside this process acts on them.
-    const workingDocsRepo = new WorkingDocsRepo(pool, logger);
+    // What agents get: reads only (see header). The real services stay on the
+    // returned stack so tests can seed state through them.
+    const agentAutonomy = readOnlyView(autonomyService, AUTONOMY_READS, 'autonomyService');
+    const agentOfficeIdentity = readOnlyView(officeIdentityService, OFFICE_IDENTITY_READS, 'officeIdentityService');
 
     // ── Tools, skills, agents ──────────────────────────────────────────────
-    const byRegistry = (options.enablement ?? 'registry') === 'registry';
+    const toolDiscovery = discoverToolManifests(skillsDir, logger);
+    const skillDiscovery = discoverSkillManifests(skillsDir, logger);
+    const agentDiscovery = discoverAgentManifests(agentsDir);
+    const discovered = {
+      tools: new Set(toolDiscovery.map(d => d.name)),
+      skills: new Set(skillDiscovery.map(d => d.name)),
+      agents: new Set(agentDiscovery.map(d => d.name)),
+    };
+    const enabled = (options.enablement ?? 'registry') === 'registry'
+      ? await productionEnabledNames(pool, discovered, logger)
+      : { tool: discovered.tools, skill: discovered.skills, agent: discovered.agents };
+
     const toolRegistry = new ToolRegistry(config.timezone);
     const skillRegistry = new SkillRegistry();
-    const toolDiscovery = discoverToolManifests(skillsDir, logger);
-    const enabledTools = (byRegistry ? await enabledNamesFrom(pool, 'tool_registry', logger) : null)
-      ?? new Set(toolDiscovery.map(d => d.name));
-    await loadToolsFromDirectory(toolDiscovery, toolRegistry, logger, enabledTools);
-    const skillDiscovery = discoverSkillManifests(skillsDir, logger);
-    const enabledSkills = (byRegistry ? await enabledNamesFrom(pool, 'skill_registry', logger) : null)
-      ?? new Set(skillDiscovery.map(d => d.name));
-    loadSkillsFromDiscovery(skillDiscovery, skillRegistry, logger, enabledSkills);
+    await loadToolsFromDirectory(toolDiscovery, toolRegistry, logger, enabled.tool);
+    loadSkillsFromDiscovery(skillDiscovery, skillRegistry, logger, enabled.skill);
     registerSyntheticSingletonSkills(toolRegistry, skillRegistry, logger);
 
-    const agentDiscovery = discoverAgentManifests(agentsDir);
-    const enabledAgents = byRegistry ? await enabledNamesFrom(pool, 'agent_registry', logger) : null;
+    const enabledAgents = enabled.agent;
     const agentConfigs: AgentYamlConfig[] = [];
     for (const disc of agentDiscovery) {
-      if (enabledAgents && !enabledAgents.has(disc.name)) continue;
+      if (!enabledAgents.has(disc.name)) continue;
       if (!disc.config) {
         throw new Error(`Agent '${disc.name}' has an invalid config: ${disc.error ?? 'unknown error'}`);
       }
@@ -431,12 +573,12 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
 
     // ── Execution layer ────────────────────────────────────────────────────
     const outboundGateway = createNoSendOutboundGateway({
-      contactService, bus, logger, principalIdentities, autonomyService,
+      contactService, bus, logger, principalIdentities, autonomyService: agentAutonomy,
     });
     const lateDelivery = resolveLateDeliveryConfig(yamlConfig.delegate);
     // Deliberately absent (see header — deferred work a real instance would act on):
     // schedulerService, taskRepo, actionLogRepo, outboundContextService, bullpenService,
-    // approvalTrigger, nylasCalendarClient, browserService.
+    // workingDocsRepo, approvalTrigger, nylasCalendarClient, browserService.
     const baseExecutionLayer = new ExecutionLayer(toolRegistry, logger, {
       bus,
       agentRegistry,
@@ -445,11 +587,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       entityMemory,
       entityContextAssembler,
       agentContactId,
-      autonomyService,
+      autonomyService: agentAutonomy,
       secretsService: createTestModeSecrets(),
-      officeIdentityService,
+      officeIdentityService: agentOfficeIdentity,
       auditLogRepo: new AuditLogRepo(pool, logger),
-      workingDocsRepo,
       timezone: config.timezone,
       selfEmail: selfEmails[0],
       selfEmails,
@@ -463,6 +604,13 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     const executionLayer = options.wrapExecutionLayer
       ? options.wrapExecutionLayer(baseExecutionLayer)
       : baseExecutionLayer;
+    // Catch a wrapper that forwards only invoke() at boot, not mid-task on a wake path.
+    const missingMethods = EXECUTION_LAYER_METHODS.filter(
+      m => typeof (executionLayer as unknown as Record<string, unknown>)[m] !== 'function',
+    );
+    if (missingMethods.length > 0) {
+      throw new Error(`wrapExecutionLayer returned a layer without ${missingMethods.join(', ')} — delegate them to the real layer`);
+    }
 
     // ── Agents (same builder as src/index.ts) ──────────────────────────────
     const agents = assembleAgents(agentConfigs, {
@@ -476,11 +624,11 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       memory,
       entityMemory,
       estimateCostUsd,
-      autonomyService,
-      officeIdentityService,
+      autonomyService: agentAutonomy,
+      officeIdentityService: agentOfficeIdentity,
       securityContextBlock,
       timezone: config.timezone,
-      channelAccounts: { email: selfEmails[0], phone: config.signalPhoneNumber },
+      channelAccounts: { email: selfEmails[0], phone: signalPhoneNumber },
       selfEmails,
       principalIdentities,
       principalPrimaryEmail,
@@ -488,13 +636,32 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       principalContactId: principalContact?.id,
       defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
       lateDelivery: { ttlMinutes: lateDelivery.ttlMinutes, sweepIntervalMinutes: lateDelivery.sweepIntervalMinutes },
-      bullpenService,
+      bullpenService: readOnlyBullpen(bullpenService),
       conversationEntities,
-      workingDocsRepo,
-      // No taskRepo: task-wake progress writes belong to a real instance.
+      // No taskRepo or workingDocsRepo — see header.
     });
     for (const assembled of agents) {
       new AgentRuntime(assembled.runtimeConfig).register();
+    }
+
+    // Unresolved pins drop tools and SKILL.md bodies; resolvePinnedSkills only logs
+    // them, and the stack's logger is usually silent. MCP servers are never loaded
+    // here, so an MCP-projected pin (google-workspace) always appears.
+    for (const assembled of agents) {
+      for (const pin of assembled.pinResolution.unresolvedPins) {
+        warnings.push(
+          `${assembled.agentConfig.name}: pin '${pin.pin}' unresolved (${pin.reason}` +
+          `${pin.missingTools ? `: ${pin.missingTools.join(', ')}` : ''})`,
+        );
+      }
+    }
+
+    const disabledTools: TestModeStack['disabledTools'] = {};
+    for (const assembled of agents) {
+      const disabled = assembled.toolDefs
+        .map(def => ({ tool: def.name, missing: baseExecutionLayer.unavailableCapabilities(def.name) }))
+        .filter(entry => entry.missing.length > 0);
+      if (disabled.length > 0) disabledTools[assembled.agentConfig.name] = disabled;
     }
 
     const identityService = officeIdentityService;
@@ -523,17 +690,28 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       agentContactId,
       principalContactId: principalContact?.id,
       agents,
+      disabledTools,
+      warnings,
       agent,
       renderSystemPrompt: async (agentName = 'coordinator', renderOpts = {}) => {
         const assembled = agent(agentName);
         // An ordinary chat turn: no intent anchor, not a scheduler run, so the task
         // tail is empty and the task-bound harness blocks never apply.
-        return (await buildBaseSystemPrompt(assembled.runtimeConfig, { now: renderOpts.now ?? new Date(), logger }))
+        return (await buildBaseSystemPrompt(assembled.runtimeConfig, {
+          now: renderOpts.now ?? new Date(),
+          logger,
+          onBlockError: 'throw',
+        }))
           + formatTaskTailBlocks({ channelId: 'cli', conversationId: 'render', hasToolAllowlist: false });
       },
       shutdown: async () => {
-        await identityService.stop();
-        await pool.end();
+        // End the pool even if the identity watcher fails to stop — a leaked pool
+        // keeps the process alive.
+        try {
+          await identityService.stop();
+        } finally {
+          await pool.end();
+        }
       },
     };
   } catch (err) {
@@ -541,12 +719,12 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     try {
       await officeIdentityService?.stop();
     } catch (stopErr) {
-      logger.warn({ err: stopErr }, 'test-mode stack: identity service stop failed during boot cleanup');
+      logger.error({ err: stopErr }, 'test-mode stack: identity service stop failed during boot cleanup');
     }
     try {
       await pool.end();
     } catch (endErr) {
-      logger.warn({ err: endErr }, 'test-mode stack: pool.end() failed during boot cleanup');
+      logger.error({ err: endErr }, 'test-mode stack: pool.end() failed during boot cleanup');
     }
     throw err;
   }

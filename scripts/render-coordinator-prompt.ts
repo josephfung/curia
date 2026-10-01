@@ -23,8 +23,10 @@
 //   - Specialist agents (agents/*.yaml) or their registry enablement
 //
 // Requires: DATABASE_URL in .env pointing at a migrated Curia instance. No LLM API
-// key is needed — providers are offline. Writes only the idempotent bootstrap rows
-// a normal boot writes (office identity, agent contact).
+// key is needed — providers are offline. SECRET_ENCRYPTION_KEY is optional; without
+// it the vault-held contact details are missing (a stderr warning says so). Writes
+// only the idempotent bootstrap rows a normal boot writes (office identity, agent
+// contact).
 
 import { createTestModeStack } from '../src/startup/test-mode-stack.js';
 import { createSilentLogger } from '../src/logger.js';
@@ -32,12 +34,12 @@ import { createSilentLogger } from '../src/logger.js';
 async function main(): Promise<void> {
   const stack = await createTestModeStack({ llm: 'offline', logger: createSilentLogger() });
   try {
-    if (!stack.principalContactId) {
-      process.stderr.write(
-        'render-coordinator-prompt: warning: no principal contact found (system_role=principal).\n' +
-        '  The Principal Contact Details block is absent, as it would be in production.\n',
-      );
+    // The stack logs nothing here (silent logger), so everything that makes this
+    // render differ from production is surfaced on stderr instead.
+    for (const warning of stack.warnings) {
+      process.stderr.write(`render-coordinator-prompt: warning: ${warning}\n`);
     }
+    // Throws if any prompt block fails to build — never prints a partial prompt.
     process.stdout.write(await stack.renderSystemPrompt('coordinator') + '\n');
   } finally {
     try {
