@@ -1307,7 +1307,10 @@ export class SchedulerService {
     // looping task; reusing keeps one scheduled_jobs row per task so the table stays searchable.
     // Failure bookkeeping is preserved when reviving a 'failed'/'suspended' row (mirrors
     // upsertDeclarativeJob) so the SUSPEND_THRESHOLD circuit-breaker accumulates across reuse
-    // cycles for a persistently-failing wake; a clean 'completed'/'cancelled' row starts fresh.
+    // cycles for a persistently-failing wake. A 'completed' row also keeps last_run_outcome
+    // (and the summary/context columns, which this UPDATE never clears) so the next fire
+    // still gets [Prior run context] (#1951). consecutive_failures still resets on a clean
+    // completed/cancelled row. A 'cancelled' row drops the outcome — that run was abandoned.
     // Fix 1 (#1410): the _touch CTE bumps the task's updated_at so an *attended* task leaves the
     // heartbeat's idle window for a full idleThresholdHours rather than being re-selected on the
     // next tick (a no-op wake previously never bumped updated_at, so the task looped forever).
@@ -1322,7 +1325,7 @@ export class SchedulerService {
             SET status = 'pending', run_at = $2, next_run_at = $2, run_started_at = NULL,
                 consecutive_failures = CASE WHEN status IN ('failed','suspended') THEN consecutive_failures ELSE 0 END,
                 last_error = CASE WHEN status IN ('failed','suspended') THEN last_error ELSE NULL END,
-                last_run_outcome = CASE WHEN status IN ('failed','suspended') THEN last_run_outcome ELSE NULL END,
+                last_run_outcome = CASE WHEN status IN ('failed','suspended','completed') THEN last_run_outcome ELSE NULL END,
                 agent_id = $1, created_by = $4, timezone = $5,
                 task_payload = $3::jsonb, originator = $7::jsonb
           WHERE id = (

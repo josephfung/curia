@@ -61,6 +61,39 @@ describeIf('SchedulerService.enqueueTaskWake (#1410 reuse + updated_at touch)', 
     expect(rows[0]!.task_payload.type).toBe('task-wake');
   });
 
+  it('keeps last_run_outcome when reviving a completed wake (#1951)', async () => {
+    const taskId = await seedTask(pool, { updatedAt: new Date(Date.now() - 10 * 3600_000) });
+    const first = await svc.enqueueTaskWake({ taskId, agentId: 'coordinator', runAt: new Date(Date.now() - 3600_000) });
+    await pool.query(
+      `UPDATE scheduled_jobs
+          SET status = 'completed',
+              last_run_outcome = 'completed',
+              last_run_summary = 'signal sent',
+              last_run_context = '{"signal_sent": true}'::jsonb
+        WHERE id = $1`,
+      [first.jobId],
+    );
+
+    const second = await svc.enqueueTaskWake({ taskId, agentId: 'coordinator', runAt: new Date() });
+    expect(second.jobId).toBe(first.jobId);
+
+    const { rows } = await pool.query(
+      `SELECT status, last_run_outcome, last_run_summary, last_run_context
+         FROM scheduled_jobs WHERE id = $1`,
+      [first.jobId],
+    );
+    const row = rows[0] as {
+      status: string;
+      last_run_outcome: string | null;
+      last_run_summary: string | null;
+      last_run_context: Record<string, unknown> | null;
+    };
+    expect(row.status).toBe('pending');
+    expect(row.last_run_outcome).toBe('completed');
+    expect(row.last_run_summary).toBe('signal sent');
+    expect(row.last_run_context).toEqual({ signal_sent: true });
+  });
+
   it('revives the existing terminal wake row instead of inserting a new one', async () => {
     const taskId = await seedTask(pool, { updatedAt: new Date(Date.now() - 10 * 3600_000) });
     const first = await svc.enqueueTaskWake({ taskId, agentId: 'coordinator', runAt: new Date(Date.now() - 3600_000) });

@@ -286,6 +286,8 @@ have idle work. Two candidate populations:
 | **Idle-unblocked** | `owner='curia'`, `status IN ('open','in_progress')`, unblocked, no pending/running wake, `updated_at` older than `idleThresholdHours` (default 4h) | advances the work |
 | **Orphaned wait** | `owner='curia'`, `status IN ('waiting','blocked')`, `waiting_on_contact_id IS NULL`, no pending/running wake, `updated_at` older than `staleWaitThresholdHours` (default 48h) | re-evaluates: escalate, or re-park with a proper `wake_at` |
 
+A task tagged `needs-disposition` is excluded from both populations (#1951). The scheduler applies that tag when a task wake and its one disposition follow-up both leave the task `open` or `in_progress`. The heartbeat does not revive it; a CEO review row is the surface. A task parked with a progress note and no such tag is still resurfaced after its threshold.
+
 Both populations are scoped to `owner='curia'` — the heartbeat never chases work the CEO or
 an external party owns. The orphaned-wait path additionally requires `waiting_on_contact_id
 IS NULL`: a task explicitly waiting on a specific person is **excluded entirely**, not merely
