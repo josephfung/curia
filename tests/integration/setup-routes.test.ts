@@ -388,7 +388,12 @@ describeIf('/api/setup/* routes', () => {
     // identity version to exist, so we write our own and tolerate whatever
     // else is in the database. INSERT...ON CONFLICT keeps this idempotent
     // even when a parallel test file's principal still exists.
-    async function seedSetupPrerequisites() {
+    // Returns the id of the identity version row it inserted so the caller can
+    // remove it. That row is never made current (office_identity_current is left
+    // alone), which is a state production cannot reach: update() writes both in one
+    // transaction. Left behind, it makes the next OfficeIdentityService.initialize()
+    // on this DB try to seed version 1 and fail on UNIQUE(version) (#1966 CI).
+    async function seedSetupPrerequisites(): Promise<number> {
       // Principal contact. The partial unique index on system_role='principal'
       // means at most one row can have that role; ON CONFLICT DO NOTHING is
       // the cheapest way to express "make sure one exists, don't care whose".
@@ -403,57 +408,71 @@ describeIf('/api/setup/* routes', () => {
       // max+1 expression races with concurrent inserters but pg raises 23505
       // rather than silently producing dup keys — retry once is enough for
       // a two-worker collision in practice.
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; ; attempt++) {
         try {
-          await pool.query(
+          const inserted = await pool.query<{ id: number }>(
             `INSERT INTO office_identity_versions (version, config, changed_by, note)
              VALUES (
                (SELECT COALESCE(MAX(version), 0) + 1 FROM office_identity_versions),
                '{}'::jsonb,
                'wizard',
                'setup-routes test'
-             )`,
+             )
+             RETURNING id`,
           );
-          break;
+          return inserted.rows[0]!.id;
         } catch (err) {
           if ((err as { code?: string }).code !== '23505' || attempt === 2) throw err;
         }
       }
     }
 
+    // Delete only the row this test inserted, and only while nothing points at it.
+    async function removeSeededIdentityVersion(id: number): Promise<void> {
+      await pool.query(
+        `DELETE FROM office_identity_versions
+         WHERE id = $1
+           AND NOT EXISTS (SELECT 1 FROM office_identity_current WHERE version_id = $1)`,
+        [id],
+      );
+    }
+
     it('schedules a process exit when setup is complete in setup-required mode', async () => {
-      await seedSetupPrerequisites();
+      const seededIdentityVersionId = await seedSetupPrerequisites();
+      try {
+        // Sanity-check that the seed actually landed before exercising the
+        // endpoint under test. Integration tests share a single DB across
+        // worker processes, so a precondition that "should be" true can be
+        // raced out from under us (e.g. another file's beforeAll wiping
+        // principals). Asserting here means a 409 from the restart POST is
+        // unambiguous — it'd be a real bug in the endpoint, not seed flake.
+        const statusRes = await appSetupMode.inject({
+          method: 'GET',
+          url: '/api/setup/status',
+          headers: AUTH_HEADER,
+        });
+        const status = JSON.parse(statusRes.body);
+        expect(status.principalExists, 'principal must exist for happy-path seed').toBe(true);
+        expect(status.identityConfigured, 'identity must be configured for happy-path seed').toBe(true);
 
-      // Sanity-check that the seed actually landed before exercising the
-      // endpoint under test. Integration tests share a single DB across
-      // worker processes, so a precondition that "should be" true can be
-      // raced out from under us (e.g. another file's beforeAll wiping
-      // principals). Asserting here means a 409 from the restart POST is
-      // unambiguous — it'd be a real bug in the endpoint, not seed flake.
-      const statusRes = await appSetupMode.inject({
-        method: 'GET',
-        url: '/api/setup/status',
-        headers: AUTH_HEADER,
-      });
-      const status = JSON.parse(statusRes.body);
-      expect(status.principalExists, 'principal must exist for happy-path seed').toBe(true);
-      expect(status.identityConfigured, 'identity must be configured for happy-path seed').toBe(true);
-
-      const res = await appSetupMode.inject({
-        method: 'POST',
-        url: '/api/setup/restart',
-        headers: AUTH_HEADER,
-      });
-      // If this assertion ever fails again on CI, surface the response body
-      // so the failure tells us which branch the endpoint took.
-      expect(res.statusCode, `restart POST body: ${res.body}`).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.restarting).toBe(true);
-      expect(typeof body.exitDelayMs).toBe('number');
-      // Asserting on the captured spy rather than the wall clock so the test
-      // doesn't have to actually wait for the (mocked) exit to fire.
-      expect(processExitCalls).toHaveLength(1);
-      expect(processExitCalls[0]).toBe(body.exitDelayMs);
+        const res = await appSetupMode.inject({
+          method: 'POST',
+          url: '/api/setup/restart',
+          headers: AUTH_HEADER,
+        });
+        // If this assertion ever fails again on CI, surface the response body
+        // so the failure tells us which branch the endpoint took.
+        expect(res.statusCode, `restart POST body: ${res.body}`).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.restarting).toBe(true);
+        expect(typeof body.exitDelayMs).toBe('number');
+        // Asserting on the captured spy rather than the wall clock so the test
+        // doesn't have to actually wait for the (mocked) exit to fire.
+        expect(processExitCalls).toHaveLength(1);
+        expect(processExitCalls[0]).toBe(body.exitDelayMs);
+      } finally {
+        await removeSeededIdentityVersion(seededIdentityVersionId);
+      }
     });
 
     it('returns 409 in setup-required mode when prerequisites are not met', async () => {
