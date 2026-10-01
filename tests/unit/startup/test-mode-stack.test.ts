@@ -15,9 +15,12 @@ import { createLogger } from '../../../src/logger.js';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
+import type { BullpenService } from '../../../src/memory/bullpen.js';
 import {
   createNoSendOutboundGateway,
   createTestModeSecrets,
+  readOnlyBullpen,
+  readOnlyView,
   TEST_MODE_PASSTHROUGH_SECRETS,
 } from '../../../src/startup/test-mode-stack.js';
 
@@ -101,6 +104,10 @@ describe('createTestModeSecrets', () => {
     await expect(vault.get('channel.signal.phone_number')).rejects.toThrow(/withheld in test mode/);
   });
 
+  it('withholds user secret names rather than claiming there are none', async () => {
+    await expect(createTestModeSecrets().listUserNames()).rejects.toThrow(/withheld in test mode/);
+  });
+
   it('lets read-only lookups fall back to env', async () => {
     const vault = createTestModeSecrets();
     for (const name of TEST_MODE_PASSTHROUGH_SECRETS) {
@@ -179,5 +186,44 @@ describe('ExecutionLayerWrapper (#1956 stub hook)', () => {
     expect(await wrapped.invoke('stubbed-tool', {})).toEqual({ success: true, data: 'stubbed' });
     expect(await wrapped.invoke('real-tool', {})).toMatchObject({ success: true, data: 'real' });
     expect(wrapped.getToolDefinitions(['real-tool']).map(t => t.name)).toEqual(['real-tool']);
+  });
+});
+
+// Shared-database writes a real instance would act on (#1966 review).
+describe('readOnlyView', () => {
+  class Score {
+    value = 50;
+    async getConfig(): Promise<number> { return this.value; }
+    async setScore(next: number): Promise<void> { this.value = next; }
+  }
+
+  it('passes allowed reads through, bound to the real object', async () => {
+    const view = readOnlyView(new Score(), ['getConfig'], 'autonomyService');
+    await expect(view.getConfig()).resolves.toBe(50);
+  });
+
+  it('refuses every method not on the allowlist', async () => {
+    const real = new Score();
+    const view = readOnlyView(real, ['getConfig'], 'autonomyService');
+    expect(() => view.setScore(95)).toThrow(/autonomyService\.setScore is read-only in test mode/);
+    expect(real.value).toBe(50);
+  });
+});
+
+describe('readOnlyBullpen', () => {
+  it('reads threads but never writes read watermarks', async () => {
+    const markThreadsSeen = vi.fn();
+    const recordUnhandledInjection = vi.fn();
+    const getPendingThreadsForAgent = vi.fn().mockResolvedValue([]);
+    const real = { markThreadsSeen, recordUnhandledInjection, getPendingThreadsForAgent } as unknown as BullpenService;
+    const view = readOnlyBullpen(real);
+
+    await view.getPendingThreadsForAgent('coordinator', 60);
+    await view.markThreadsSeen('coordinator', []);
+    await view.recordUnhandledInjection('coordinator', []);
+
+    expect(getPendingThreadsForAgent).toHaveBeenCalledOnce();
+    expect(markThreadsSeen).not.toHaveBeenCalled();
+    expect(recordUnhandledInjection).not.toHaveBeenCalled();
   });
 });

@@ -60,7 +60,20 @@ async function main(): Promise<void> {
     process.stderr.write('Check that DATABASE_URL is set, the database is reachable, and the API key for the selected model\'s provider (ANTHROPIC_API_KEY or OPENROUTER_API_KEY) is set.\n');
     process.exit(1);
   }
-  process.stdout.write('   Stack ready.\n\n');
+  process.stdout.write('   Stack ready.\n');
+  // Differences from production that change what the agents see or can do. The
+  // stack's own logger is error-level, so print them here or nobody sees them.
+  for (const warning of harness.stack.warnings) {
+    process.stdout.write(`   [WARN] ${warning}\n`);
+  }
+  const coordinatorDisabled = harness.stack.disabledTools['coordinator'] ?? [];
+  if (coordinatorDisabled.length > 0) {
+    process.stdout.write(
+      `   Coordinator tools disabled in test mode (${coordinatorDisabled.length}): ` +
+      `${coordinatorDisabled.map(d => d.tool).join(', ')}\n`,
+    );
+  }
+  process.stdout.write('\n');
 
   // Run test cases
   process.stdout.write('-- Running Test Cases --\n\n');

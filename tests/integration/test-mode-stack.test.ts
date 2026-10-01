@@ -1,12 +1,16 @@
-// The test-mode stack against a real database (#1966). Two promises to keep:
+// The test-mode stack against a real database (#1966). Three promises to keep:
 //   1. Its coordinator gets the production system prompt — every block AgentRuntime
 //      adds, built from the real agents/ and skills/ directories.
 //   2. Nothing it does can send a message.
+//   3. It leaves nothing a real instance sharing the database would act on: no
+//      registry rows, no autonomy or identity changes.
 //
-// Not destructive: the stack writes only the idempotent bootstrap rows a real boot
-// writes (office identity, agent contact). Skips without DATABASE_URL.
+// Not destructive: booting writes only the idempotent bootstrap rows a real boot
+// writes (office identity, agent contact). No agent turn runs here (offline LLM).
+// Skips without DATABASE_URL.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { OfficeIdentity } from '../../src/identity/types.js';
 import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../src/agents/prompts/date-resolve-guardrail.js';
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../../src/security/security-context.js';
@@ -103,9 +107,8 @@ describeIf('test-mode stack', () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    // Whichever layer refuses first — today the missing outboundContext capability,
-    // otherwise the transport-less gateway above — the result must be a failure with
-    // no network call. Asserting on the outcome keeps this true if the wiring changes.
+    // Refused at the capability check (no outboundContext service — see disabledTools);
+    // the transport-less gateway above is the second line if that ever changes.
     it('fails email-send and signal-send invoked the way the coordinator would', async () => {
       const opts = { agentId: 'coordinator', channelId: 'cli', conversationId: 'test-mode-no-send' };
       const email = await stack.executionLayer.invoke(
@@ -120,9 +123,15 @@ describeIf('test-mode stack', () => {
         undefined,
         opts,
       );
-      expect(email.success).toBe(false);
-      expect(signal.success).toBe(false);
+      expect(email).toMatchObject({ success: false, error: expect.stringMatching(/requires capabilities/) });
+      expect(signal).toMatchObject({ success: false, error: expect.stringMatching(/requires capabilities/) });
       expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('reports the refused tools per agent', () => {
+      const coordinator = stack.disabledTools['coordinator'] ?? [];
+      expect(coordinator.find(d => d.tool === 'email-send')?.missing).toContain('outboundContext');
+      expect(coordinator.find(d => d.tool === 'signal-send')?.missing).toContain('outboundContext');
     });
 
     it('withholds env credentials from a skill that calls Nylas directly', async () => {
@@ -134,8 +143,42 @@ describeIf('test-mode stack', () => {
         undefined,
         { agentId: 'ceo-inbox', channelId: 'cli', conversationId: 'test-mode-no-send' },
       );
-      expect(result.success).toBe(false);
+      // The handler maps the withheld-secret error to "not configured".
+      expect(result).toMatchObject({ success: false, error: expect.stringMatching(/not configured|withheld/) });
       expect(fetchSpy).not.toHaveBeenCalled();
     });
+  });
+
+  describe('leaves no state a real instance would act on', () => {
+    it('gives agents a read-only autonomy score and office identity', async () => {
+      const before = await stack.autonomyService.getConfig();
+      const rc = stack.agent('coordinator').runtimeConfig;
+
+      expect(rc.autonomyService).not.toBe(stack.autonomyService);
+      expect(() => rc.autonomyService!.setScore(99, 'test')).toThrow(/read-only in test mode/);
+      expect(() => rc.officeIdentityService!.update({} as OfficeIdentity, 'test')).toThrow(/read-only in test mode/);
+      expect(await stack.autonomyService.getConfig()).toEqual(before);
+    });
+
+    it('boots in registry mode without writing a registry row', async () => {
+      // Reconcile enrols as 'reconciliation'. Scope to rows written during this boot,
+      // so another suite using the shared database cannot make this flake.
+      const { rows: [{ now: startedAt }] } = await stack.pool.query<{ now: Date }>('SELECT now()');
+      const registryStack = await createTestModeStack({ llm: 'offline', enablement: 'registry' });
+      try {
+        // Production's reconcile, dry-run: the coordinator is a core default, so it
+        // loads even on a database Curia never booted against.
+        expect(registryStack.agent('coordinator')).toBeDefined();
+      } finally {
+        await registryStack.shutdown();
+      }
+      const { rows } = await stack.pool.query<{ n: string }>(
+        `SELECT (SELECT count(*) FROM tool_registry WHERE installed_by = 'reconciliation' AND installed_at >= $1)
+              + (SELECT count(*) FROM skill_registry WHERE installed_by = 'reconciliation' AND installed_at >= $1)
+              + (SELECT count(*) FROM agent_registry WHERE installed_by = 'reconciliation' AND installed_at >= $1) AS n`,
+        [startedAt],
+      );
+      expect(Number(rows[0]!.n)).toBe(0);
+    }, 120_000);
   });
 });

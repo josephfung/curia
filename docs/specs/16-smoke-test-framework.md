@@ -85,13 +85,21 @@ model registry, so this selects Anthropic or OpenRouter.
 - Skills that call a provider directly with a declared secret (ceo-inbox → Nylas) get a
   "withheld in test mode" error. Only `TEST_MODE_PASSTHROUGH_SECRETS` (read-only lookups such
   as web search) resolve.
-- Smoke usually shares the dev database with a real instance. So the ExecutionLayer gets no
-  scheduler, task repo, action log, context-bridge or bullpen service, because a real process
-  would act on what those leave behind. Tools that need them fail with a missing-capability
-  error.
+- Smoke usually shares the dev database with a real instance, so test mode leaves nothing that
+  instance would act on. The ExecutionLayer gets no scheduler, task repo, action log,
+  context-bridge, bullpen or working-docs service. Agents get read-only views of the autonomy
+  score and office identity, and runtimes never write bullpen read watermarks. Tools that need a
+  missing service fail with a missing-capability error.
 
 `tests/unit/startup/test-mode-stack.test.ts` and `tests/integration/test-mode-stack.test.ts`
-assert both guarantees.
+assert these guarantees.
+
+**Matching production's configuration:** agents, tools and skills load as production would on
+its next boot against the same database. That means the registry's enabled rows plus any core
+default that has no row yet, from production's own reconcile run without writing. A live run
+needs a principal contact, because production serves no agent before onboarding. The boot
+header prints every difference that remains: the stack's `warnings` (unresolved pins, no vault
+key) and the coordinator tools test mode refuses (`disabledTools`).
 
 **Tool stubs (#1956):** `createHarness({ wrapExecutionLayer })` and
 `createTestModeStack({ wrapExecutionLayer })` take a function that wraps the ExecutionLayer before
