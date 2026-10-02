@@ -2,106 +2,106 @@
   "_note": "Written by tests/scenarios/cli.ts after each case. unstubbed is the MAX over that measurement's runs: the worst run is the one that reveals a hole in the stub table. Checked by tests/unit/scenarios/cases.test.ts.",
   "cases": {
     "bullpen mention stays on thread": {
-      "unstubbed": 3,
+      "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.079Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "direct email reply as text": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.079Z"
+      "recordedAt": "2026-10-02T02:15:58.961Z"
     },
     "external reply first person": {
-      "unstubbed": 1,
+      "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.079Z"
+      "recordedAt": "2026-10-02T02:28:42.328Z"
     },
     "no-reply automated notification": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:22:54.926Z"
     },
     "no-reply calendar decline": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:23:46.069Z"
     },
     "paused delegate no redelegate": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.079Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "principal reply no internals": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.079Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "reply-shaped non-principal": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "reply-shaped principal no context": {
-      "unstubbed": 3,
+      "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "scheduler additive create": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.079Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "scheduler ambiguous asks": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.079Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "scheduler edit in place": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.079Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "sweep-on-close closing result": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "sweep-on-close interim result": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "transfer-ownership sounds good": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     },
     "transfer-ownership trivial yes": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:13:25.176Z"
     },
     "transfer-ownership yes thursday": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:44:11.078Z"
+      "recordedAt": "2026-10-02T02:13:25.177Z"
     }
   }
 }

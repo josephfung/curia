@@ -63,3 +63,27 @@ task-create:
 web-browser:
   - match: {}
     error: The browser is not available right now.
+# Inbox housekeeping on an inbound email: legitimate, and harmless as a stub.
+email-mark-read:
+  - match: {}
+    return: { marked_read: true }
+email-archive:
+  - match: {}
+    return: { archived: true }
+# Test mode cannot activate skills (skill-activate is disabled there). Say so plainly
+# rather than refusing it as a stub hole; the coordinator can still delegate.
+skill-activate:
+  - match: {}
+    error: No additional skills can be activated right now.
+# Updating the task task-create above returned (any task id): the pair goes together.
+task-update:
+  - match: {}
+    return:
+      task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+      title: (updated)
+      status: open
+      owner: curia
+      priority: 3
+      tags: []
+      updated_at: "2026-10-01T12:05:00-04:00"
+      displayTimezone: America/Toronto

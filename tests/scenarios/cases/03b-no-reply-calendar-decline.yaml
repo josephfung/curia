@@ -23,10 +23,6 @@ inbound:
     Q4 planning sync
     When: Thursday Oct 8, 2026 2pm – 3pm (Eastern Time)
 tool_stubs:
-  # Archiving an FYI is a legitimate part of handling it silently.
-  email-archive:
-    - match: {}
-      return: { archived: true }
   delegate:
     - match: {}
       return: { agent: calendar, response: "Noted: Marcus Lindqvist declined the Q4 planning sync." }
