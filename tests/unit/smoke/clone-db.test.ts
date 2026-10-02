@@ -21,3 +21,22 @@ describe('clone-db', () => {
     expect(() => cloneName('x'.repeat(60), 4242)).toThrow(/63-character/);
   });
 });
+
+describe('clone ownership and safety', () => {
+  it('sweeps only names cloneName() produces', async () => {
+    const { isCloneOf } = await import('../../smoke/clone-db.js');
+    expect(isCloneOf('curia_smoke_4242', 'curia')).toBe(true);
+    expect(isCloneOf('curia_smoke_baseline', 'curia')).toBe(false);
+    expect(isCloneOf('curia_smoke_', 'curia')).toBe(false);
+    expect(isCloneOf('curia_dev_smoke_1', 'curia')).toBe(false);
+  });
+
+  it('accepts only local database hosts', async () => {
+    const { isLocalDatabase } = await import('../../smoke/clone-db.js');
+    expect(isLocalDatabase('postgresql://u:p@localhost:5432/curia')).toBe(true);
+    expect(isLocalDatabase('postgresql://u:p@127.0.0.1:5432/curia')).toBe(true);
+    expect(isLocalDatabase('postgresql://u:p@[::1]:5432/curia')).toBe(true);
+    expect(isLocalDatabase('postgresql://u@%2Fvar%2Frun%2Fpostgresql/curia')).toBe(true);
+    expect(isLocalDatabase('postgresql://u:p@db.example.net:5432/curia')).toBe(false);
+  });
+});

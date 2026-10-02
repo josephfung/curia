@@ -21,6 +21,8 @@ describe('loadPeople', () => {
 
   it('refuses an address outside the reserved .example TLD', () => {
     expect(() => loadPeople(peopleFile('- { display_name: Real Person, email: someone@gmail.com }'))).toThrow(/\.example/);
+    // A real address smuggled in front of a reserved one.
+    expect(() => loadPeople(peopleFile('- { display_name: Two, email: "bob@gmail.com,x@y.example" }'))).toThrow(/\.example/);
   });
 
   it('rejects unknown keys and missing fields', () => {
