@@ -43,6 +43,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-02T14:36:29.678Z"
     },
+    "relayed follow-up routes to owner": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T22:45:31.518Z"
+    },
     "reply-shaped non-principal": {
       "unstubbed": 0,
       "runs": 5,

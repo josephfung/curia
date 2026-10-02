@@ -1,0 +1,65 @@
+# Case 11 (#1972): ceo-inbox has no send tools. When a counterparty answers and the
+# principal must decide, ceo-inbox opens a bullpen thread asking the coordinator to send
+# the principal a message, and the coordinator's send registers the outbound-context
+# entry. Since #1972 the platform attributes that entry to ceo-inbox (agent and
+# delegation_hint) whatever the coordinator wrote. This case seeds that entry and checks
+# that the principal's answer goes back to ceo-inbox, not to the coordinator's own
+# handling. Rule: agents/coordinator.yaml, "The transfer-ownership reply rule".
+name: relayed follow-up routes to owner
+description: >
+  Dana answered the principal's counter-proposal by suggesting Wednesday at 2pm instead.
+  ceo-inbox asked the coordinator to relay that to the principal over Signal, and the
+  entry is attributed to ceo-inbox. The principal replies "Wednesday works". It is the
+  only active entry. The coordinator must hand the answer to ceo-inbox with the entry
+  id, not reply to Dana or touch the calendar itself.
+tags: [outbound-context, routing, transfer-ownership]
+stub_sets: [human-channels]
+seed:
+  outbound_context:
+    - key: dana_counter
+      channel: signal
+      agent: ceo-inbox
+      content: >
+        Dana Whitfield, Partnership call: she can't do Tuesday at 11 and suggests
+        Wednesday at 2pm instead. Accept, or should I propose another time?
+      expected_reply: Decision or follow-up instruction
+      delegation_hint: ceo-inbox
+      sent_minutes_ago: 25
+inbound:
+  from: principal
+  content: Wednesday works
+tool_stubs:
+  delegate:
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: >
+          Drafted a reply to Dana accepting Wednesday at 2pm. It's in your Drafts, ready
+          to send.
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:dana_counter}}" }
+expected_behaviors:
+  - id: routes_to_owner
+    weight: critical
+    description: Delegates to ceo-inbox, passing the matched entry id in the brief.
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+      contains: { task: "{{entry:dana_counter}}" }
+  - id: sends_nothing_itself
+    weight: critical
+    description: >
+      Sends no message itself on any channel; the specialist that asked the question
+      owns the answer.
+    check:
+      not_called: [email-send, email-reply, email-draft-save, signal-send, sms-send, slack-send]
+  - id: honest_status
+    weight: important
+    description: >
+      If it replies, it says a reply to Dana was drafted (or is being handled), not that
+      the meeting is booked or that Dana has confirmed.
+failure_modes:
+  - Answers "Great, booked for Wednesday" itself without delegating
+  - Delegates to the calendar specialist instead of the entry's owner
+  - Delegates without the entry id, so ceo-inbox cannot tell which exchange was answered
