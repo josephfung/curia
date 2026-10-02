@@ -102,6 +102,32 @@ describe('loadScenarioCase', () => {
     expect(() => loadScenarioCase(write('bad2.yaml', body))).toThrow(error);
   });
 
+  it('parses an any_of check into its alternatives (#1972)', () => {
+    const body = VALID.replace(
+      '    check:\n      called: delegate\n      with: { agent: ceo-inbox }\n      contains: { task: "{{entry:offsite}}" }\n      max: 1',
+      '    check:\n      any_of:\n        - called: delegate\n          with: { agent: ceo-inbox, outbound_entry_id: "{{entry:offsite}}" }\n        - called: delegate\n          with: { agent: ceo-inbox }\n          contains: { task: "{{entry:offsite}}" }',
+    );
+    const c = loadScenarioCase(write('any.yaml', body));
+    expect(c.expectedBehaviors[0]!.check).toEqual({
+      kind: 'any_of',
+      checks: [
+        { kind: 'called', tool: 'delegate', with: { agent: 'ceo-inbox', outbound_entry_id: '{{entry:offsite}}' } },
+        { kind: 'called', tool: 'delegate', with: { agent: 'ceo-inbox' }, contains: { task: '{{entry:offsite}}' } },
+      ],
+    });
+  });
+
+  it.each([
+    ['an empty any_of', '    check:\n      any_of: []'],
+    ['an any_of of non-mappings', '    check:\n      any_of: [delegate]'],
+  ])('rejects %s', (_label, check) => {
+    const body = VALID.replace(
+      '    check:\n      called: delegate\n      with: { agent: ceo-inbox }\n      contains: { task: "{{entry:offsite}}" }\n      max: 1',
+      check,
+    );
+    expect(() => loadScenarioCase(write('bad3.yaml', body))).toThrow(/any_of/);
+  });
+
   it('requires a bullpen inbound to name a seeded thread', () => {
     const body = VALID.replace('from: principal', 'from: bullpen');
     expect(() => loadScenarioCase(write('b.yaml', body))).toThrow(/needs 'thread'/);

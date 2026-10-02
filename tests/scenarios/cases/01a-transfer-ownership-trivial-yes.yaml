@@ -30,8 +30,8 @@ tool_stubs:
       return:
         agent: ceo-inbox
         response: Sent the reply to Sam Rivera confirming Thursday at 10 for the Q3 offsite.
-  # Releasing after the specialist's closing result is the sweep-on-close rule (case 2),
-  # and allowed here; ceo-inbox may already have released it, which is also fine.
+  # The platform releases the entry when delegate returns (#1972); a coordinator call
+  # here is refused in production, so it is stubbed only to keep the path available.
   context-bridge-release:
     - match: {}
       return: { released: "{{entry:sam_offsite}}" }
@@ -40,9 +40,14 @@ expected_behaviors:
     weight: critical
     description: Delegates to ceo-inbox, passing the matched entry id in the brief.
     check:
-      called: delegate
-      with: { agent: ceo-inbox }
-      contains: { task: "{{entry:sam_offsite}}" }
+      # Linked either way: outbound_entry_id, or the id quoted in the brief, which
+      # delegate also links (#1972).
+      any_of:
+        - called: delegate
+          with: { agent: ceo-inbox, outbound_entry_id: "{{entry:sam_offsite}}" }
+        - called: delegate
+          with: { agent: ceo-inbox }
+          contains: { task: "{{entry:sam_offsite}}" }
   - id: sends_nothing_itself
     weight: critical
     description: Sends no message itself on any channel; the specialist owns the reply.

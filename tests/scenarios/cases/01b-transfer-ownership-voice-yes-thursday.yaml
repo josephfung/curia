@@ -33,9 +33,14 @@ expected_behaviors:
     weight: critical
     description: Delegates to ceo-inbox, passing the matched entry id in the brief.
     check:
-      called: delegate
-      with: { agent: ceo-inbox }
-      contains: { task: "{{entry:inbox_1}}" }
+      # Linked either way: outbound_entry_id, or the id quoted in the brief, which
+      # delegate also links (#1972).
+      any_of:
+        - called: delegate
+          with: { agent: ceo-inbox, outbound_entry_id: "{{entry:inbox_1}}" }
+        - called: delegate
+          with: { agent: ceo-inbox }
+          contains: { task: "{{entry:inbox_1}}" }
   - id: sends_nothing_itself
     weight: critical
     description: Sends no message itself; ceo-inbox owns the send.

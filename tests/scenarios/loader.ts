@@ -66,6 +66,7 @@ const CHECK_KEYS: Record<string, readonly string[]> = {
   reply: ['reply'],
   reply_excludes: ['reply_excludes'],
   reply_excludes_internal_names: ['reply_excludes_internal_names'],
+  any_of: ['any_of'],
 };
 
 function str(raw: Raw, key: string, file: string, where: string): string {
@@ -108,10 +109,10 @@ function list(raw: Raw, key: string, file: string): Raw[] {
 
 function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
   if (!isObject(raw)) throw new CaseError(file, `${where}: check must be a mapping`);
-  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names']
+  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'any_of']
     .filter(k => k in raw);
   if (kinds.length !== 1) {
-    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names (got ${kinds.join(', ') || 'none'})`);
+    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names, any_of (got ${kinds.join(', ') || 'none'})`);
   }
   onlyKeys(raw, CHECK_KEYS[kinds[0]!]!, file, where);
   const withArgs = raw['with'];
@@ -155,6 +156,16 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
         }
       }
       return { kind: 'reply_excludes', patterns };
+    }
+    case 'any_of': {
+      const alternatives = raw['any_of'];
+      if (!Array.isArray(alternatives) || alternatives.length === 0 || !alternatives.every(isObject)) {
+        throw new CaseError(file, `${where}: 'any_of' must be a non-empty list of checks`);
+      }
+      return {
+        kind: 'any_of',
+        checks: alternatives.map((alt, i) => parseCheck(alt, file, `${where} any_of[${i}]`)),
+      };
     }
     default:
       if (raw['reply_excludes_internal_names'] !== true) {

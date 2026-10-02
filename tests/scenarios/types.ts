@@ -41,7 +41,13 @@ export type BehaviorCheck =
   | { kind: 'reply'; is: 'no_reply' | 'not_no_reply' }
   | { kind: 'reply_excludes'; patterns: string[] }
   /** No tool, agent or system identifier from the running stack appears in the reply. */
-  | { kind: 'reply_excludes_internal_names' };
+  | { kind: 'reply_excludes_internal_names' }
+  /**
+   * Passes when any alternative passes. For a behavior the platform accepts in more
+   * than one shape — e.g. delegate links an entry from `outbound_entry_id` or from its
+   * id quoted in the brief (#1972).
+   */
+  | { kind: 'any_of'; checks: BehaviorCheck[] };
 
 export interface ExpectedBehavior {
   id: string;
