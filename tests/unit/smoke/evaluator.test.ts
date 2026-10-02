@@ -16,6 +16,7 @@ function testCase(overrides: Partial<TestCase> = {}): TestCase {
     tags: [],
     sender: 'principal',
     judgeToolCalls: false,
+    toolStubs: {},
     turns: [{ role: 'user', content: 'Book lunch with Dana' }],
     expectedBehaviors: [{ id: 'books', description: 'Books it', weight: 'critical' }],
     failureModes: [],
@@ -32,6 +33,7 @@ function execution(overrides: Partial<CaseExecution> = {}): CaseExecution {
       durationMs: 10,
       toolCalls: [{ name: 'calendar-create-event', input: { title: 'Lunch' }, result: { success: false, error: 'no calendar' } }],
     }],
+    agentCalls: [],
     ...overrides,
   };
 }
@@ -134,6 +136,12 @@ describe('Evaluator', () => {
       expect(input).toContain('FAILED: no calendar');
     });
 
+    it('gives the judge today\'s date, so relative dates can be checked', () => {
+      expect(formatJudgeInput(execution(), undefined, 'Friday, October 2, 2026 (America/Toronto)'))
+        .toContain('## Today\nFriday, October 2, 2026 (America/Toronto)');
+      expect(formatJudgeInput(execution())).not.toContain('## Today');
+    });
+
     it('names the sender', () => {
       expect(formatJudgeInput(execution(), 'Pat Example')).toContain('the principal, Pat Example');
       expect(formatJudgeInput(execution({ testCase: testCase({ sender: 'unknown' }) })))
@@ -195,10 +203,10 @@ describe('Evaluator', () => {
         .rejects.toThrow(/Judge call failed \(AUTH_ERROR\)/);
     });
 
-    it('fails a case whose cleanup failed even when the model passed', async () => {
-      const [result] = await evaluateCases([execution({ cleanupError: 'connection reset' })], judgeReplying(pass));
-      expect(result!.passed).toBe(false);
-      expect(result!.failures[0]).toMatch(/^cleanup failed/);
+    it('carries every agent\'s tool calls into the result', async () => {
+      const agentCalls = [{ agentId: 'calendar', toolName: 'calendar-list-events', input: {}, disposition: 'stubbed' as const, success: true }];
+      const [result] = await evaluateCases([execution({ agentCalls })], judgeReplying(pass));
+      expect(result!.agentCalls).toEqual(agentCalls);
     });
   });
 

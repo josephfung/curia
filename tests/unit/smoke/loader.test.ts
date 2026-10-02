@@ -121,4 +121,56 @@ describe('Smoke test loader', () => {
       expect(() => load('judge_tool_call: true')).toThrow(/Unknown key\(s\) 'judge_tool_call'/);
     });
   });
+
+  describe('tool_stubs and known_failure', () => {
+    function loadYaml(yamlText: string): ReturnType<typeof loadTestCase> {
+      const dir = mkdtempSync(join(tmpdir(), 'curia-smoke-test-'));
+      tempDirs.push(dir);
+      const file = join(dir, 'case.yaml');
+      writeFileSync(file, yamlText);
+      return loadTestCase(file);
+    }
+    const behaviors = ['expected_behaviors:', '  - id: respond', '    description: Responds'].join('\n');
+
+    it('reads case-level and turn-level stubs', () => {
+      const tc = loadYaml([
+        'name: Stubbed',
+        'tool_stubs:',
+        '  calendar-list-events:',
+        '    - match: {}',
+        '      return: { events: [] }',
+        'turns:',
+        '  - content: first',
+        '  - content: second',
+        '    tool_stubs:',
+        '      scheduler-list:',
+        '        - match: { status: active }',
+        '          error: scheduler down',
+        behaviors,
+      ].join('\n'));
+      expect(tc.toolStubs).toEqual({ 'calendar-list-events': [{ match: {}, return: { events: [] } }] });
+      expect(tc.turns[0]!.toolStubs).toBeUndefined();
+      expect(tc.turns[1]!.toolStubs).toEqual({ 'scheduler-list': [{ match: { status: 'active' }, error: 'scheduler down' }] });
+    });
+
+    it('defaults to no stubs', () => {
+      expect(loadYaml(minimalYaml('Plain')).toolStubs).toEqual({});
+    });
+
+    it('rejects a stub with both return and error', () => {
+      expect(() => loadYaml(`${minimalYaml('Bad')}\ntool_stubs:\n  x:\n    - match: {}\n      return: 1\n      error: no`))
+        .toThrow(/exactly one of 'return' or 'error'/);
+    });
+
+    it('rejects an unknown turn key', () => {
+      expect(() => loadYaml(['name: Bad', 'turns:', '  - content: hi', '    tool_stub: {}', behaviors].join('\n')))
+        .toThrow(/Unknown key\(s\) 'tool_stub' in turn 0/);
+    });
+
+    it('reads known_failure and requires an issue reference', () => {
+      expect(loadYaml(`${minimalYaml('Known')}\nknown_failure: { issue: "#1980" }`).knownFailure).toEqual({ issue: '#1980' });
+      expect(() => loadYaml(`${minimalYaml('Known')}\nknown_failure: { issue: "soon" }`)).toThrow(/known_failure/);
+      expect(() => loadYaml(`${minimalYaml('Known')}\nknown_failure: true`)).toThrow(/known_failure/);
+    });
+  });
 });

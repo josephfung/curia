@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
+import { parseStubs } from '../scenarios/loader.js';
 import { SMOKE_SENDERS, type TestCase, type Turn, type ExpectedBehavior, type BehaviorWeight, type SmokeSender } from './types.js';
 
 const VALID_WEIGHTS: BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
@@ -12,7 +13,9 @@ interface RawTestCase {
   tags?: string[];
   sender?: unknown;
   judge_tool_calls?: unknown;
-  turns?: Array<{ role?: string; content?: string; delay_ms?: number }>;
+  tool_stubs?: unknown;
+  known_failure?: unknown;
+  turns?: Array<{ role?: string; content?: string; delay_ms?: number; tool_stubs?: unknown }>;
   expected_behaviors?: Array<{ id?: string; description?: string; weight?: string }>;
   failure_modes?: string[];
 }
@@ -20,8 +23,20 @@ interface RawTestCase {
 // A misspelt key (`judge_tool_call`, `senders`) would otherwise be dropped silently and the
 // case would run with the default — passing for the wrong reason.
 const CASE_KEYS: ReadonlySet<string> = new Set([
-  'name', 'description', 'tags', 'sender', 'judge_tool_calls', 'turns', 'expected_behaviors', 'failure_modes',
+  'name', 'description', 'tags', 'sender', 'judge_tool_calls', 'tool_stubs', 'known_failure',
+  'turns', 'expected_behaviors', 'failure_modes',
 ]);
+const TURN_KEYS: ReadonlySet<string> = new Set(['role', 'content', 'delay_ms', 'tool_stubs']);
+
+/** `known_failure: { issue: "#123" }` — the tracking issue is required, so the marker can be retired. */
+function parseKnownFailure(raw: unknown, filePath: string): { issue: string } | undefined {
+  if (raw === undefined) return undefined;
+  const issue = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>)['issue'] : undefined;
+  if (typeof issue !== 'string' || !/^#\d+$/.test(issue) || Object.keys(raw as object).length !== 1) {
+    throw new Error(`'known_failure' must be { issue: "#<number>" } in ${filePath}`);
+  }
+  return { issue };
+}
 
 /**
  * Load a single YAML test case from a file path.
@@ -48,17 +63,23 @@ export function loadTestCase(filePath: string): TestCase {
   if (raw.judge_tool_calls !== undefined && typeof raw.judge_tool_calls !== 'boolean') {
     throw new Error(`'judge_tool_calls' must be true or false in ${filePath}`);
   }
+  const knownFailure = parseKnownFailure(raw.known_failure, filePath);
   if (!raw.turns || raw.turns.length === 0) throw new Error(`Missing 'turns' in ${filePath}`);
   if (!raw.expected_behaviors || raw.expected_behaviors.length === 0) {
     throw new Error(`Missing 'expected_behaviors' in ${filePath}`);
   }
 
   const turns: Turn[] = raw.turns.map((t, i) => {
+    const unknownTurnKeys = Object.keys(t).filter(k => !TURN_KEYS.has(k));
+    if (unknownTurnKeys.length > 0) {
+      throw new Error(`Unknown key(s) ${unknownTurnKeys.map(k => `'${k}'`).join(', ')} in turn ${i} of ${filePath}`);
+    }
     if (!t.content) throw new Error(`Turn ${i} missing 'content' in ${filePath}`);
     return {
       role: 'user' as const,
       content: t.content,
       delayMs: t.delay_ms,
+      ...(t.tool_stubs !== undefined ? { toolStubs: parseStubs(t.tool_stubs, filePath) } : {}),
     };
   });
 
@@ -79,6 +100,8 @@ export function loadTestCase(filePath: string): TestCase {
     tags: raw.tags ?? [],
     sender: sender as SmokeSender,
     judgeToolCalls: raw.judge_tool_calls === true,
+    toolStubs: parseStubs(raw.tool_stubs, filePath),
+    ...(knownFailure ? { knownFailure } : {}),
     turns,
     expectedBehaviors,
     failureModes: raw.failure_modes ?? [],

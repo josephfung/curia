@@ -44,7 +44,11 @@ Respond with ONLY a JSON object in this exact format:
 export async function evaluateCases(
   executions: CaseExecution[],
   judge: Judge,
-  options?: { onCaseEval?: (name: string, index: number, total: number) => void },
+  options?: {
+    onCaseEval?: (name: string, index: number, total: number) => void;
+    /** "Today" as the agents saw it, so the judge can check relative dates. */
+    today?: string;
+  },
 ): Promise<CaseResult[]> {
   const results: CaseResult[] = [];
 
@@ -61,7 +65,7 @@ export async function evaluateCases(
         justification: `Case execution failed: ${exec.error}`,
       }));
     } else {
-      ({ scores, error: judgeError } = await judgeCase(exec, judge));
+      ({ scores, error: judgeError } = await judgeCase(exec, judge, options?.today));
     }
 
     const weightedScore = exec.error ? 0 : computeWeightedScore(exec.testCase.expectedBehaviors, scores);
@@ -71,12 +75,12 @@ export async function evaluateCases(
       weightedScore,
       ...(exec.error ? { error: exec.error } : {}),
       ...(judgeError ? { judgeError } : {}),
-      ...(exec.cleanupError ? { cleanupError: exec.cleanupError } : {}),
     };
     const failures = caseFailures(gateInput);
     results.push({
       ...gateInput,
       responses: exec.responses,
+      agentCalls: exec.agentCalls,
       passed: failures.length === 0,
       failures,
     });
@@ -86,7 +90,7 @@ export async function evaluateCases(
 }
 
 /** The transcript the judge reads: each turn's message, optionally its tool calls, and the reply. */
-export function formatJudgeInput(exec: CaseExecution, principalName?: string): string {
+export function formatJudgeInput(exec: CaseExecution, principalName?: string, today?: string): string {
   const tc = exec.testCase;
   const principal = principalName ? `the principal, ${principalName}` : 'the principal';
   const sender = tc.sender === 'unknown'
@@ -107,6 +111,9 @@ export function formatJudgeInput(exec: CaseExecution, principalName?: string): s
     `## Scenario`,
     tc.description.trim() || tc.name,
     ``,
+    // Without it the judge grades dates against its own training-era "now" and marks a
+    // correct "next Tuesday" wrong.
+    ...(today ? [`## Today`, today, ``] : []),
     `## Sender`,
     sender,
     ``,
@@ -144,6 +151,7 @@ function formatToolCalls(calls: CaseExecution['responses'][number]['toolCalls'])
 async function judgeCase(
   exec: CaseExecution,
   judge: Judge,
+  today?: string,
 ): Promise<{ scores: BehaviorScore[]; error?: string }> {
   let lastError = '';
   for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
@@ -151,7 +159,7 @@ async function judgeCase(
       model: judge.model,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: formatJudgeInput(exec, judge.principalName) },
+        { role: 'user', content: formatJudgeInput(exec, judge.principalName, today) },
       ],
     });
 

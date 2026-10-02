@@ -1,19 +1,23 @@
 // tests/smoke/cli.ts
 //
-// `pnpm smoke [--model <id>] [--case <substring>] [--tags a,b]`
+// `pnpm smoke [--model <id>] [--case <substring>] [--tags a,b] [--show-calls]`
 //
 // Exits 1 when any case fails the gate (gate.ts: weighted score below 80%, a critical
-// behavior rated MISS, an execution or judge error, or a failed cleanup). The release
-// pre-flight in CLAUDE.md runs it on the production standard-tier model.
+// behavior rated MISS, or an execution or judge error), known failures aside. The
+// release pre-flight in CLAUDE.md runs it on the production standard-tier model.
+//
+// The run happens on a throwaway copy of DATABASE_URL's database (clone-db.ts),
+// dropped afterwards, so nothing the agents write reaches the real one.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { createJudge } from '../scenarios/judge.js';
+import { cloneDatabase, databaseName, type DatabaseClone } from './clone-db.js';
 import { loadTestCases } from './loader.js';
 import { createHarness, RESPONSE_TIMEOUT_MS, type CuriaHarness } from './harness.js';
 import { runTestCases } from './runner.js';
 import { evaluateCases } from './evaluator.js';
-import { formatPct } from './gate.js';
+import { formatPct, gatingFailures, staleKnownFailures } from './gate.js';
 import { generateReport } from './report.js';
 import { CASE_PASS_THRESHOLD, type RunResult, type HistoricalEntry } from './types.js';
 
@@ -50,6 +54,8 @@ async function main(): Promise<void> {
   // The provider follows from the model registry, so this also picks Anthropic
   // vs OpenRouter. Omitted → the configured model_routing.
   const model = parseArg(args, '--model');
+  // Print every agent's tool calls per case — what to stub when writing a case.
+  const showCalls = args.includes('--show-calls');
 
   // Load test cases
   let cases = loadTestCases(CASES_DIR, tags ? { tags } : undefined);
@@ -69,12 +75,47 @@ async function main(): Promise<void> {
   out(`   Response timeout: ${timeoutSec}s (override with SMOKE_TIMEOUT_MS)`);
   out(`   Gate: every case ≥ ${formatPct(CASE_PASS_THRESHOLD)} weighted, no critical behavior MISS\n`);
 
+  // Copy the database before anything connects to it: Postgres copies a template only
+  // while no one else is attached.
+  const sourceUrl = process.env.DATABASE_URL;
+  if (!sourceUrl) {
+    err('DATABASE_URL is not set');
+    process.exit(1);
+  }
+  let clone: DatabaseClone;
+  try {
+    const created = await cloneDatabase(sourceUrl);
+    clone = created;
+    out(`   Database: throwaway copy of '${databaseName(sourceUrl)}' (${created.name}), dropped after the run`);
+    if (created.removedStale.length > 0) out(`   Dropped copies left by earlier runs: ${created.removedStale.join(', ')}`);
+  } catch (e) {
+    err(`\nCould not copy the database: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
+  // Everything below — the stack, the vault, every tool — reads the copy.
+  process.env.DATABASE_URL = clone.url;
+  const dropClone = async (): Promise<void> => {
+    try {
+      await clone.drop();
+    } catch (e) {
+      err(`  [WARN] could not drop ${clone.name}: ${e instanceof Error ? e.message : String(e)} — the next run drops it`);
+    }
+  };
+  // Ctrl-C would skip the finally below; drop the copy on the way out instead.
+  const onSignal = (signal: NodeJS.Signals): void => {
+    err(`\n${signal}: dropping ${clone.name} before exiting...`);
+    void dropClone().finally(() => process.exit(130));
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+
   // Boot harness
   out('   Booting Curia stack...');
   let harness: CuriaHarness;
   try {
     harness = await createHarness({ model });
   } catch (e) {
+    await dropClone();
     const detail = e instanceof Error ? e.message : String(e);
     err(`\nFailed to boot Curia stack: ${detail}`);
     // LLM keys are read from the vault only (#911) — exporting ANTHROPIC_API_KEY or
@@ -106,27 +147,12 @@ async function main(): Promise<void> {
     const coordinatorDisabled = harness.stack.disabledTools['coordinator'] ?? [];
     if (coordinatorDisabled.length > 0) {
       out(
-        `   Coordinator tools disabled in test mode (${coordinatorDisabled.length}): ` +
+        `   Coordinator tools disabled in test mode unless a case stubs them (${coordinatorDisabled.length}): ` +
         `${coordinatorDisabled.map(d => d.tool).join(', ')}`,
       );
     }
-
-    // An interrupted earlier run may have left conversation rows that would leak into
-    // later principal turns. Found only by smoke's own conversation-id prefixes.
-    const swept = await harness.sweep();
-    const sweptRows = Object.entries(swept).filter(([, n]) => n > 0);
-    if (sweptRows.length > 0) {
-      out(`   Removed leftovers from an earlier run: ${sweptRows.map(([t, n]) => `${t} ×${n}`).join(', ')}`);
-    }
-    // Ctrl-C mid-case would skip the case's cleanup. Sweep on the way out instead.
-    const onSignal = (signal: NodeJS.Signals): void => {
-      err(`\n${signal}: removing smoke conversation rows before exiting...`);
-      void harness.sweep()
-        .catch((e: unknown) => err(`  [WARN] cleanup on ${signal} failed: ${e instanceof Error ? e.message : String(e)} — re-run to sweep leftovers`))
-        .finally(() => process.exit(130));
-    };
-    process.once('SIGINT', onSignal);
-    process.once('SIGTERM', onSignal);
+    const today = todayIn(harness.stack.config.timezone);
+    out(`   Today: ${today}`);
     out('');
 
     // Run test cases
@@ -140,12 +166,19 @@ async function main(): Promise<void> {
           ? `ERROR (${exec.error})`
           : exec.responses.map(r => `${r.durationMs}ms`).join(' + ');
         out(`   [${index}/${total}] ${exec.testCase.name}... ${status}`);
+        if (showCalls) {
+          for (const c of exec.agentCalls) {
+            const outcome = c.success === undefined ? '' : c.success ? ' ok' : ' FAILED';
+            out(`        ${c.agentId ?? '?'} → ${c.toolName} [${c.disposition}${outcome}] ${JSON.stringify(c.input).slice(0, 160)}`);
+          }
+        }
       },
     });
 
     // Evaluate with judge (before shutdown: the judge uses the stack's provider)
     out('\n-- Evaluating Responses --\n');
     const caseResults = await evaluateCases(executions, judge, {
+      today,
       onCaseEval: (name, i, total) => {
         out(`   [${i}/${total}] Judging: ${name}...`);
       },
@@ -155,7 +188,9 @@ async function main(): Promise<void> {
     const overallScore = caseResults.length > 0
       ? caseResults.reduce((sum, c) => sum + c.weightedScore, 0) / caseResults.length
       : 0;
-    const failing = caseResults.filter(c => !c.passed);
+    const failing = gatingFailures(caseResults);
+    const knownFailing = caseResults.filter(c => !c.passed && !failing.includes(c));
+    const stale = staleKnownFailures(caseResults);
 
     const runResult: RunResult = {
       timestamp,
@@ -194,7 +229,8 @@ async function main(): Promise<void> {
     // Summary
     out('\n-- Summary --\n');
     out(`   Overall Score: ${formatPct(overallScore)}`);
-    out(`   Passed:        ${caseResults.length - failing.length}/${caseResults.length} cases`);
+    out(`   Passed:        ${caseResults.filter(c => c.passed).length}/${caseResults.length} cases` +
+      (knownFailing.length > 0 ? ` (${knownFailing.length} known failure(s))` : ''));
     out(`   Duration:      ${Math.round(runResult.durationMs / 1000)}s`);
     out(`   Commit:        ${commit}`);
     out(`   Results:       ${resultsFile}`);
@@ -202,10 +238,16 @@ async function main(): Promise<void> {
 
     // Per-case summary
     for (const c of caseResults) {
-      out(`   [${c.passed ? 'PASS' : 'FAIL'}] ${formatPct(c.weightedScore).padStart(4)}  ${c.testCase.name}`);
+      const label = c.passed ? 'PASS' : knownFailing.includes(c) ? 'KNOWN' : 'FAIL';
+      const issue = c.testCase.knownFailure ? `  (known failure ${c.testCase.knownFailure.issue})` : '';
+      out(`   [${label}] ${formatPct(c.weightedScore).padStart(4)}  ${c.testCase.name}${issue}`);
       for (const f of c.failures) out(`            ${f}`);
     }
     out('');
+    for (const c of stale) {
+      out(`   [WARN] '${c.testCase.name}' passed but is marked known_failure ${c.testCase.knownFailure!.issue} — ` +
+        'if that issue is fixed, remove the marker.');
+    }
 
     if (!runResult.passed) {
       err(`GATE FAILED: ${failing.length} case(s) below the gate.`);
@@ -225,8 +267,17 @@ async function main(): Promise<void> {
     } catch (e) {
       err(`  [WARN] Harness shutdown error: ${e instanceof Error ? e.message : String(e)}`);
     }
+    await dropClone();
     process.exit(exitCode);
   }
+}
+
+/** e.g. "Friday, October 2, 2026 (America/Toronto)" — the date the agents were told. */
+function todayIn(timezone: string): string {
+  const date = new Date().toLocaleDateString('en-US', {
+    timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+  return `${date} (${timezone})`;
 }
 
 function parseArg(args: string[], flag: string): string | undefined {

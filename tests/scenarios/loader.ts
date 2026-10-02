@@ -164,7 +164,8 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
   }
 }
 
-function parseStubs(raw: unknown, file: string): Record<string, ToolStub[]> {
+/** Parse a `tool_stubs` mapping (also used by smoke's loader). */
+export function parseStubs(raw: unknown, file: string): Record<string, ToolStub[]> {
   if (raw === undefined) return {};
   if (!isObject(raw)) throw new CaseError(file, `'tool_stubs' must be a mapping of tool name → list`);
   const stubs: Record<string, ToolStub[]> = {};

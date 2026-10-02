@@ -1,6 +1,6 @@
 // tests/unit/smoke/gate.test.ts — smoke's pass/fail gate (#1956).
 import { describe, it, expect } from 'vitest';
-import { caseFailures, type GateInput } from '../../smoke/gate.js';
+import { caseFailures, gatingFailures, staleKnownFailures, type GateInput } from '../../smoke/gate.js';
 import type { BehaviorRating, BehaviorWeight, TestCase } from '../../smoke/types.js';
 
 function gateInput(
@@ -14,6 +14,7 @@ function gateInput(
     tags: [],
     sender: 'principal',
     judgeToolCalls: false,
+    toolStubs: {},
     turns: [{ role: 'user', content: 'hi' }],
     expectedBehaviors: behaviors.map(([id, weight]) => ({ id, description: id, weight })),
     failureModes: [],
@@ -63,8 +64,34 @@ describe('smoke gate', () => {
       .toEqual(['judge error (not a model failure): unparseable reply']);
   });
 
-  it('fails a passing case whose cleanup failed', () => {
-    expect(caseFailures(gateInput([['a', 'critical', 'PASS']], 1, { cleanupError: 'reset' })))
-      .toEqual(['cleanup failed (leftover rows leak into later turns): reset']);
+});
+
+describe('known failures', () => {
+  function result(passed: boolean, knownFailure?: string, extra: { error?: string; judgeError?: string } = {}) {
+    const input = gateInput([['a', 'critical', passed ? 'PASS' : 'MISS']], passed ? 1 : 0);
+    return {
+      ...input,
+      testCase: { ...input.testCase, ...(knownFailure ? { knownFailure: { issue: knownFailure } } : {}) },
+      passed,
+      ...extra,
+    };
+  }
+
+  it('does not gate a known_failure case the model failed', () => {
+    expect(gatingFailures([result(false, '#1')])).toEqual([]);
+  });
+
+  it('still gates an unmarked failure', () => {
+    expect(gatingFailures([result(false)])).toHaveLength(1);
+  });
+
+  it('gates a known_failure case that errored or was misjudged — that says nothing about its bug', () => {
+    expect(gatingFailures([result(false, '#1', { error: 'Timeout' })])).toHaveLength(1);
+    expect(gatingFailures([result(false, '#1', { judgeError: 'unparseable' })])).toHaveLength(1);
+  });
+
+  it('flags a known_failure case that passed as possibly stale', () => {
+    expect(staleKnownFailures([result(true, '#1'), result(true), result(false, '#2')]).map(c => c.testCase.knownFailure?.issue))
+      .toEqual(['#1']);
   });
 });
