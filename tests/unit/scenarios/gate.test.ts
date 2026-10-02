@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gateFailures, passRate, scoreCase } from '../../scenarios/gate.js';
+import { gateFailures, knownFailureLines, passRate, scoreCase, staleKnownFailures } from '../../scenarios/gate.js';
 import type { ExpectedBehavior, RunRating, ScenarioRun } from '../../scenarios/types.js';
 
 const P: RunRating = { rating: 'PASS', justification: '' };
@@ -76,5 +76,25 @@ describe('gateFailures', () => {
 
   it('is empty when everything clears', () => {
     expect(gateFailures([scoreCase('ok', [critical], runs(5), new Map([['routes', [P, P, P, P, P]]]))])).toEqual([]);
+  });
+});
+
+describe('known failures', () => {
+  const known = { issue: '#1972', reason: 'releases on interim results' };
+
+  it('reports a known critical failure without gating it', () => {
+    const result = scoreCase('sweep', [critical], runs(5), new Map([['routes', [P, P, P, M, M]]]), known);
+    expect(gateFailures([result])).toEqual([]);
+    expect(knownFailureLines([result])).toEqual(["sweep: 'routes' fully passed 60% of runs — known failure #1972"]);
+  });
+
+  it('still gates an errored run in a known-failure case', () => {
+    const result = scoreCase('sweep', [critical], runs(2, 'Timeout'), new Map([['routes', [M, P]]]), known);
+    expect(gateFailures([result])).toEqual(['sweep: 1 run(s) errored — Timeout']);
+  });
+
+  it('warns when a known failure passes', () => {
+    const result = scoreCase('sweep', [critical], runs(5), new Map([['routes', [P, P, P, P, P]]]), known);
+    expect(staleKnownFailures([result])).toHaveLength(1);
   });
 });

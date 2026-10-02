@@ -6,6 +6,11 @@ description: >
   principal says to counter-propose. ceo-inbox reports it has emailed Dana a new time and
   is waiting for Dana's answer — the exchange is still open, so the entry stays active.
 tags: [outbound-context, lifecycle]
+# Baseline 2026-10-01 on deepseek/deepseek-v4.1-flash: leaves_entry_active fully passed
+# 3/5 — the coordinator released the entry after an interim result in 2 runs.
+known_failure:
+  issue: "#1972"
+  reason: Releases the outbound-context entry after an interim specialist result (2/5 runs).
 seed:
   outbound_context:
     - key: dana

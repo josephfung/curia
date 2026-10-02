@@ -34,6 +34,7 @@ export function scoreCase(
   behaviors: ExpectedBehavior[],
   runs: ScenarioRun[],
   ratingsByBehavior: Map<string, RunRating[]>,
+  knownFailure?: { issue: string; reason: string },
 ): CaseResult {
   const results: BehaviorResult[] = behaviors.map(behavior => {
     const ratings = ratingsByBehavior.get(behavior.id) ?? [];
@@ -56,6 +57,7 @@ export function scoreCase(
     criticalFailures: results
       .filter(r => r.behavior.weight === 'critical' && r.strictPassRate < CRITICAL_PASS_THRESHOLD)
       .map(r => r.behavior.id),
+    ...(knownFailure ? { knownFailure } : {}),
     // Counted per run, not per behavior: one judge failure misses every judged behavior.
     judgeErrors: runs.filter((_, i) =>
       results.some(r => r.ratings[i]!.justification.startsWith(JUDGE_ERROR_PREFIX)),
@@ -67,7 +69,9 @@ export function scoreCase(
 export function gateFailures(cases: CaseResult[]): string[] {
   const failures: string[] = [];
   for (const c of cases) {
-    for (const id of c.criticalFailures) {
+    // A known failure is reported by knownFailureLines, not gated. Everything below it
+    // (judge errors, cleanup, errored runs) still gates: those are not the tracked bug.
+    for (const id of c.knownFailure ? [] : c.criticalFailures) {
       const result = c.behaviors.find(b => b.behavior.id === id)!;
       failures.push(
         `${c.name}: critical behavior '${id}' fully passed ${formatPct(result.strictPassRate)} of runs ` +
@@ -96,4 +100,22 @@ export function gateFailures(cases: CaseResult[]): string[] {
 
 export function formatPct(value: number): string {
   return `${Math.round(value * 100)}%`;
+}
+
+/** Critical failures in cases marked known_failure, one line each — reported, not gated. */
+export function knownFailureLines(cases: CaseResult[]): string[] {
+  return cases.flatMap(c => (c.knownFailure ? c.criticalFailures : []).map(id => {
+    const result = c.behaviors.find(b => b.behavior.id === id)!;
+    return `${c.name}: '${id}' fully passed ${formatPct(result.strictPassRate)} of runs — known failure ${c.knownFailure!.issue}`;
+  }));
+}
+
+/**
+ * A case marked known_failure whose critical behaviors all cleared: the marker may be
+ * stale. A warning, not a failure — one good run is not proof — but it must be seen.
+ */
+export function staleKnownFailures(cases: CaseResult[]): string[] {
+  return cases
+    .filter(c => c.knownFailure && c.criticalFailures.length === 0 && c.runs.every(r => !r.error))
+    .map(c => `${c.name} is marked known_failure (${c.knownFailure!.issue}) but passed its critical behaviors — remove the marker if it holds`);
 }

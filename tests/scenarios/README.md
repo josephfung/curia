@@ -102,6 +102,12 @@ The figures come from curia-deploy's eval README:
 At 3 runs the gate demands unanimity and is flaky. At 5 runs it rarely blocks a good
 prompt. Use 9 runs for a decision that needs to catch a mediocre behavior.
 
+**Known failures.** A case can carry `known_failure: { issue: "#1234", reason: … }` for a
+tracked regression. It still runs, and its critical failures are printed under "Known
+failures" with their pass rates, but they do not fail the gate. Errored runs, judge
+errors, cleanup failures and stub holes in that case still do. When the case passes, the
+CLI warns that the marker may be stale. Remove the marker in the PR that fixes the issue.
+
 ## How a run works
 
 1. **Seed** the case's rows through the real services (see the next section).
@@ -208,6 +214,7 @@ description: >                            # shown to the judge
 tags: [outbound-context, routing]
 runs: 5                                   # optional; CLI --runs overrides
 timeout_seconds: 300                      # optional
+known_failure: { issue: "#1234", reason: … }   # optional; reported, not gated
 stub_sets: [human-channels]               # optional; `defaults` always applies
 seed:
   contacts:                               # → {{contact:<key>}}

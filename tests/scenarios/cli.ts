@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { evaluateCheck } from './assertions.js';
-import { formatPct, gateFailures, scoreCase } from './gate.js';
+import { formatPct, gateFailures, knownFailureLines, scoreCase, staleKnownFailures } from './gate.js';
 import {
   acquireSuiteLock,
   createScenarioHarness,
@@ -291,10 +291,14 @@ async function main(): Promise<void> {
               : c.name).join(', ') || 'no tools';
         out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `ERROR ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}`}`);
       }
-      const result = scoreCase(scenario.name, scenario.expectedBehaviors, runs, await rateRuns(scenario, runs, harness, judge));
+      const result = scoreCase(
+        scenario.name, scenario.expectedBehaviors, runs, await rateRuns(scenario, runs, harness, judge), scenario.knownFailure,
+      );
       results.push(result);
       for (const b of result.behaviors) {
-        const flag = result.criticalFailures.includes(b.behavior.id) ? 'FAIL' : b.passRate >= CRITICAL_PASS_THRESHOLD ? 'ok  ' : 'low ';
+        const flag = result.criticalFailures.includes(b.behavior.id)
+          ? (result.knownFailure ? 'KNWN' : 'FAIL')
+          : b.passRate >= CRITICAL_PASS_THRESHOLD ? 'ok  ' : 'low ';
         out(`      ${flag} ${formatPct(b.passRate).padStart(4)}  ${b.behavior.id} [${b.behavior.weight}]`);
         if (b.passRate < 1) {
           const firstMiss = b.ratings.find(r => r.rating !== 'PASS');
@@ -325,6 +329,8 @@ async function main(): Promise<void> {
           ...(args.runs !== undefined ? { runs: args.runs } : {}),
         }
       : undefined;
+    const known = knownFailureLines(results);
+    const warnings = staleKnownFailures(results);
     const suite: SuiteResult = {
       timestamp: new Date(started).toISOString(),
       model,
@@ -333,6 +339,8 @@ async function main(): Promise<void> {
       cases: results,
       passed: failures.length === 0,
       ...(filtered ? { filtered } : {}),
+      knownFailures: known,
+      warnings,
       gateFailures: failures,
       durationMs: Date.now() - started,
     };
@@ -342,12 +350,18 @@ async function main(): Promise<void> {
 
     out('\n-- Summary --\n');
     for (const r of results) {
-      out(`   ${r.criticalFailures.length === 0 ? 'PASS' : 'FAIL'} ${formatPct(r.weightedScore).padStart(4)}  ${r.name}`);
+      const status = r.criticalFailures.length === 0 ? 'PASS' : r.knownFailure ? 'KNWN' : 'FAIL';
+      out(`   ${status} ${formatPct(r.weightedScore).padStart(4)}  ${r.name}${r.knownFailure ? `  (known failure ${r.knownFailure.issue})` : ''}`);
     }
     out(`\n   Commit:  ${suite.commit ?? '(unknown)'}`);
     out(`   Model:   ${model}`);
     out(`   Results: ${resultsFile}`);
     out(`   Time:    ${Math.round(suite.durationMs / 1000)}s`);
+    if (known.length > 0) {
+      out('\n   Known failures (reported, not gated):');
+      for (const k of known) out(`   - ${k}`);
+    }
+    for (const w of warnings) out(`\n   [WARN] ${w}`);
     if (failures.length > 0) {
       out('\n   GATE FAILED:');
       for (const f of failures) out(`   - ${f}`);
