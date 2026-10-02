@@ -5,11 +5,13 @@
 // closed and call context-bridge-release itself; on the production model it released
 // after interim results. Now delegate links the entry (outbound_entry_id, or the id of
 // an entry the target owns quoted in the brief) and settles it from the result shape:
-// a reply the specialist took is released unless it kept the exchange open; a reply it
-// never took (failure, timeout, decline, in-flight refusal) keeps the entry active.
+// kept only while routing the reply again could still work (no run started, or a
+// retryable failure), released otherwise unless the specialist kept it open.
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { DelegateHandler } from './handler.js';
+import { settlementFor } from './outbound-entry.js';
+import { encodeResumeToken } from '../../src/agents/resume-token.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { BusEvent, AgentTaskEvent, AgentResponseEvent } from '../../src/bus/events.js';
@@ -130,16 +132,25 @@ describe('delegate: outbound-context entry lifecycle (#1972)', () => {
     expect(oc.releaseUnlessKeptOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the entry when the specialist fails — it never handled the reply', async () => {
-    const { bus } = makeBus({ isError: true, reason: 'api_error', retryable: false, content: 'error' });
+  it('keeps the entry on a retryable failure, so routing the reply again can link it', async () => {
+    const { bus } = makeBus({ isError: true, reason: 'api_error', retryable: true, content: 'error' });
     const oc = makeOutboundContext([row(ENTRY_ID, 'ceo-inbox')]);
     const result = await new DelegateHandler().execute(makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID }));
 
     expect(result.success && (result.data as Record<string, unknown>).failed).toBe(true);
     expect(oc.releaseUnlessKeptOpen).not.toHaveBeenCalled();
+    expect((result as { data: Record<string, unknown> }).data.outbound_entry).toEqual({ id: ENTRY_ID, status: 'kept' });
   });
 
-  it('keeps the entry when the specialist declines', async () => {
+  it('releases on a non-retryable failure — routing the reply again cannot help', async () => {
+    const { bus } = makeBus({ isError: true, reason: 'maxTurns', retryable: false, content: 'error' });
+    const oc = makeOutboundContext([row(ENTRY_ID, 'ceo-inbox')]);
+    await new DelegateHandler().execute(makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID }));
+
+    expect(oc.releaseUnlessKeptOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases when the specialist declines — the exchange is over for that owner', async () => {
     const { bus } = makeBus({
       content: 'I cannot do this.\n<specialist_decline reason="out_of_scope">Not an inbox task.</specialist_decline>',
     });
@@ -147,7 +158,27 @@ describe('delegate: outbound-context entry lifecycle (#1972)', () => {
     const result = await new DelegateHandler().execute(makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID }));
 
     expect(result.success && (result.data as Record<string, unknown>).declined).toBe(true);
+    expect(oc.releaseUnlessKeptOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the outcome to the coordinator on the result', async () => {
+    const { bus } = makeBus();
+    const oc = makeOutboundContext([row(ENTRY_ID, 'ceo-inbox')]);
+    const result = await new DelegateHandler().execute(makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID }));
+
+    expect((result as { data: Record<string, unknown> }).data.outbound_entry).toEqual({ id: ENTRY_ID, status: 'released' });
+  });
+
+  it('never links a task-wake binding — the coordinator closes it with reply', async () => {
+    const { bus } = makeBus();
+    const binding = { ...row(ENTRY_ID, 'ceo-inbox'), metadata: { bind_reply: true, task_id: 'task-1' } };
+    const oc = makeOutboundContext([binding]);
+    const result = await new DelegateHandler().execute(makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID }));
+
     expect(oc.releaseUnlessKeptOpen).not.toHaveBeenCalled();
+    expect((result as { data: Record<string, unknown> }).data.outbound_entry).toMatchObject({
+      id: ENTRY_ID, status: 'not_linked', reason: expect.stringMatching(/task-wake/),
+    });
   });
 
   it('links an entry the target owns when the brief quotes its id instead of passing outbound_entry_id', async () => {
@@ -175,10 +206,14 @@ describe('delegate: outbound-context entry lifecycle (#1972)', () => {
     const oc = makeOutboundContext([row(ENTRY_ID, 'calendar')]);
     const result = await new DelegateHandler().execute(makeCtx(bus, oc, { outbound_entry_id: ENTRY_ID }));
 
-    // The reply still reaches the specialist the coordinator chose; only the release is withheld.
+    // The reply still reaches the specialist the coordinator chose; only the release is
+    // withheld, and the coordinator is told why.
     expect(result.success).toBe(true);
     expect(publishedTask(published)).toBeDefined();
     expect(oc.releaseUnlessKeptOpen).not.toHaveBeenCalled();
+    expect((result as { data: Record<string, unknown> }).data.outbound_entry).toMatchObject({
+      status: 'not_linked', reason: 'entry is owned by calendar, not ceo-inbox',
+    });
   });
 
   it('delegates without linking when the entry is no longer active', async () => {
@@ -223,5 +258,40 @@ describe('delegate: outbound-context entry lifecycle (#1972)', () => {
     const { bus } = makeBus();
     const result = await new DelegateHandler().execute(makeCtx(bus, undefined, { outbound_entry_id: ENTRY_ID }));
     expect(result.success).toBe(true);
+  });
+});
+
+describe('settlementFor: every delegate result shape (#1972)', () => {
+  const ok = (data: Record<string, unknown>) => ({ success: true as const, data });
+  const created = { taskCreated: true, resumeToken: undefined };
+
+  it.each([
+    ['an answer', ok({ response: 'done', agent: 'x' }), 'release'],
+    ['a clarification request', ok({ needs_clarification: true, question: 'q', context: 'c', resume_token: 't' }), 'release'],
+    ['a paused long task', ok({ paused: true, done: 1, total: 3, next: 'n', message: 'm' }), 'release'],
+    ['a decline', ok({ declined: true, failed: true, reason: 'specialist_decline', retryable: false }), 'release'],
+    ['a non-retryable failure', ok({ failed: true, reason: 'maxTurns', retryable: false }), 'release'],
+    ['a wait timeout', ok({ failed: true, reason: 'timeout', retryable: false, possibly_succeeded: true }), 'release'],
+    ['a retryable failure', ok({ failed: true, reason: 'api_error', retryable: true }), 'keep'],
+    ['an in-flight refusal', ok({ in_flight: true, reason: 'already_in_flight' }), 'keep'],
+    ['a guard block', ok({ failed: true, blocked: true, reason: 'blocked', retryable: false }), 'keep'],
+  ] as const)('%s → %s', (_label, result, action) => {
+    expect(settlementFor(result, created).action).toBe(action);
+  });
+
+  it('keeps on a brief rejected before dispatch (e.g. date validation)', () => {
+    expect(settlementFor({ success: false, error: 'resolve the date first' }, { taskCreated: false, resumeToken: undefined }).action)
+      .toBe('keep');
+  });
+
+  it('releases when a resume token cannot be decoded — that entry can only lead to the same dead resume', () => {
+    expect(settlementFor({ success: false, error: 'corrupted' }, { taskCreated: false, resumeToken: 'not-a-token' }).action)
+      .toBe('release');
+  });
+
+  it('keeps when a valid token was aimed at the wrong specialist — the coordinator can re-route', () => {
+    const token = encodeResumeToken({ agent: 'calendar', originalTask: 'find a time', context: 'asked a day' });
+    expect(settlementFor({ success: false, error: 'agent mismatch' }, { taskCreated: false, resumeToken: token }).action)
+      .toBe('keep');
   });
 });

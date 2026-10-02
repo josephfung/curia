@@ -446,6 +446,37 @@ export class ExecutionLayer {
     };
   }
 
+  /**
+   * The outbound-context capability for one invocation, scoped to its conversation.
+   * Attribution (#1972): the platform, not the model's context_bridge JSON, decides
+   * who owns a reply. That needs the roster; without one, entries pass through as
+   * written (unit-test wiring only — bootstrap always passes it).
+   */
+  private scopedOutboundContext(
+    service: OutboundContextService,
+    conversationId: string,
+    options: InvokeOptions | undefined,
+    skillLogger: Logger,
+  ): ScopedOutboundContext {
+    const roster = this.agentRegistry ? rosterFromRegistry(this.agentRegistry) : undefined;
+    return new ScopedOutboundContext(
+      service,
+      conversationId,
+      roster
+        ? {
+            roster,
+            relayRequester: relayRequesterFor({
+              channelId: options?.channelId,
+              taskMetadata: options?.taskMetadata,
+              invokingAgentId: options?.agentId,
+              roster,
+            }),
+            log: skillLogger,
+          }
+        : undefined,
+    );
+  }
+
   /** Declared capabilities this layer cannot satisfy — the same check invoke() fails closed on. */
   private missingCapabilities(caps: readonly string[], services: Record<string, unknown>): string[] {
     return caps.filter(cap => {
@@ -1973,26 +2004,7 @@ export class ExecutionLayer {
       } else if (cap === 'outboundContext') {
         // Scoped instance: pre-fills conversationId so skills don't need it.
         if (this.outboundContextService && options?.conversationId) {
-          // Attribution (#1972): the platform, not the model's context_bridge JSON,
-          // decides who owns a reply. Needs the roster; without one, entries pass
-          // through as written (unit-test wiring only — bootstrap always passes it).
-          const roster = this.agentRegistry ? rosterFromRegistry(this.agentRegistry) : undefined;
-          ctx.outboundContext = new ScopedOutboundContext(
-            this.outboundContextService,
-            options.conversationId,
-            roster
-              ? {
-                  roster,
-                  relayRequester: relayRequesterFor({
-                    channelId: options.channelId,
-                    taskMetadata: options.taskMetadata,
-                    invokingAgentId: options.agentId,
-                    roster,
-                  }),
-                  log: skillLogger,
-                }
-              : undefined,
-          );
+          ctx.outboundContext = this.scopedOutboundContext(this.outboundContextService, options.conversationId, options, skillLogger);
         } else if (this.outboundContextService && !options?.conversationId) {
           skillLogger.debug(
             { toolName },
@@ -2066,6 +2078,15 @@ export class ExecutionLayer {
       } else {
         (ctx as unknown as Record<string, unknown>)[cap] = capabilityServices[cap];
       }
+    }
+
+    // delegate links and releases the outbound-context entry whose reply it routes
+    // (#1972). That is best-effort, so it is injected here rather than declared as a
+    // capability: a declared capability fails closed when the service is absent,
+    // and the test-mode stack deliberately runs without it. Same pattern as the
+    // delegate-only openDelegationLookup / senderId above.
+    if (manifest.name === 'delegate' && this.outboundContextService && options?.conversationId) {
+      ctx.outboundContext = this.scopedOutboundContext(this.outboundContextService, options.conversationId, options, skillLogger);
     }
 
     // entityContextAssembler — universal (not capability-gated).
