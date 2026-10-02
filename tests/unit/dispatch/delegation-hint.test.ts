@@ -81,22 +81,28 @@ describe('canonicalDelegationHint (#1972)', () => {
 });
 
 describe('delegationHintOwner (#1972)', () => {
-  it('reads the owning agent from a canonical hint', () => {
-    expect(delegationHintOwner('ceo-inbox')).toBe('ceo-inbox');
-    expect(delegationHintOwner('research-analyst clarification pending')).toBe('research-analyst');
+  const roster = makeRoster();
+
+  it('reads the owning specialist from a canonical hint', () => {
+    expect(delegationHintOwner('ceo-inbox', roster)).toBe('ceo-inbox');
+    expect(delegationHintOwner('research-analyst clarification pending', roster)).toBe('research-analyst');
   });
 
   it('returns null for no hint', () => {
-    expect(delegationHintOwner(null)).toBeNull();
-    expect(delegationHintOwner(undefined)).toBeNull();
-    expect(delegationHintOwner('  ')).toBeNull();
+    expect(delegationHintOwner(null, roster)).toBeNull();
+    expect(delegationHintOwner(undefined, roster)).toBeNull();
+    expect(delegationHintOwner('  ', roster)).toBeNull();
   });
 
-  it('reads the first token of a legacy free-text hint written before #1972', () => {
-    // Entries registered before normalization shipped live up to 72h. A legacy hint
-    // whose first token is not an agent id yields that token, which matches no
-    // caller — so only the platform can release it, the safe direction.
-    expect(delegationHintOwner('Delegate replies to ceo-inbox')).toBe('delegate');
+  it('treats a legacy free-text hint written before #1972 as unowned, so it stays releasable', () => {
+    expect(delegationHintOwner('Delegate replies to ceo-inbox', roster)).toBeNull();
+    expect(delegationHintOwner('CEO Inbox should handle', roster)).toBeNull();
+    // A legacy hint that happens to lead with a specialist id still resolves.
+    expect(delegationHintOwner('ceo-inbox: route reply', roster)).toBe('ceo-inbox');
+  });
+
+  it('treats the coordinator as no owner', () => {
+    expect(delegationHintOwner('coordinator', roster)).toBeNull();
   });
 });
 

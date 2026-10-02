@@ -3,14 +3,23 @@ import { ContextBridgeReleaseHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { TaskRepo } from '../../../../src/db/task-repo.js';
 import pino from 'pino';
+import { AgentRegistry } from '../../../../src/agents/agent-registry.js';
 
 const handler = new ContextBridgeReleaseHandler();
 const TASK_ID = '00000000-0000-4000-8000-000000000001';
 const ENTRY_ID = '00000000-0000-4000-8000-000000000002';
 
+/** The roster ownership is resolved against (#1972). */
+const agentRegistry = new AgentRegistry();
+agentRegistry.register('coordinator', { role: 'coordinator', description: 'router' });
+agentRegistry.register('ceo-inbox', { role: 'specialist', description: 'inbox' });
+agentRegistry.register('calendar', { role: 'specialist', description: 'calendar' });
+agentRegistry.register('research-analyst', { role: 'specialist', description: 'research' });
+
 function makeCtx(input: Record<string, unknown>, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input,
+    agentRegistry,
     secret: vi.fn((name: string) => { throw new Error(`Missing secret: ${name}`); }),
     log: pino({ level: 'silent' }),
     outboundContext: {
@@ -226,6 +235,22 @@ describe('ContextBridgeReleaseHandler', () => {
       const result = await handler.execute(ctx);
       expect(result.success).toBe(true);
       expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('treats a legacy free-text hint as unowned, so the coordinator can still release it', async () => {
+      // Rows registered before #1972 normalized hints live up to 72h.
+      const ctx = ownedCtx('coordinator', { delegationHint: 'Delegate replies to ceo-inbox' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('fails closed without the agent registry instead of skipping the ownership check', async () => {
+      const ctx = ownedCtx('coordinator', { delegationHint: 'ceo-inbox' });
+      (ctx as unknown as Record<string, unknown>).agentRegistry = undefined;
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect(ctx.outboundContext!.releaseEntry).not.toHaveBeenCalled();
     });
 
     it('still lets the coordinator release an entry with no hint', async () => {

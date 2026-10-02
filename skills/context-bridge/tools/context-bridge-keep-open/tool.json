@@ -15,6 +15,7 @@
   "secrets": [],
   "timeout": 10000,
   "capabilities": [
-    "outboundContext"
+    "outboundContext",
+    "agentRegistry"
   ]
 }

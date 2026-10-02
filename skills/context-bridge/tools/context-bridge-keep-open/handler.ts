@@ -15,7 +15,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isUuid } from '../../../../src/util/uuid.js';
-import { delegationHintOwner } from '../../../../src/dispatch/delegation-hint.js';
+import { delegationHintOwner, rosterFromRegistry } from '../../../../src/dispatch/delegation-hint.js';
 
 export class ContextBridgeKeepOpenHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -32,6 +32,9 @@ export class ContextBridgeKeepOpenHandler implements ToolHandler {
     if (!ctx.outboundContext) {
       return { success: false, error: 'context-bridge-keep-open requires outboundContext capability.' };
     }
+    if (!ctx.agentRegistry) {
+      return { success: false, error: 'context-bridge-keep-open requires agentRegistry capability.' };
+    }
     if (!ctx.taskMetadata?.['delegationOrigin'] || !ctx.taskEventId || !ctx.agentId) {
       return {
         success: false,
@@ -46,7 +49,7 @@ export class ContextBridgeKeepOpenHandler implements ToolHandler {
       if (!entry) {
         return { success: false, error: 'outbound context entry not found or already released' };
       }
-      const owner = delegationHintOwner(entry.delegationHint);
+      const owner = delegationHintOwner(entry.delegationHint, rosterFromRegistry(ctx.agentRegistry));
       if (owner && owner !== ctx.agentId) {
         return {
           success: false,

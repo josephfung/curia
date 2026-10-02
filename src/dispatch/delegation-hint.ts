@@ -100,13 +100,19 @@ export function canonicalDelegationHint(
 }
 
 /**
- * The agent that owns an entry, read from its stored hint: the first token of
- * the canonical forms `<agent>` and `<agent> clarification pending`. Null when
- * the entry has no hint, so nobody owns it but the coordinator.
+ * The specialist that owns an entry, read from its stored hint: the leading word
+ * of the canonical forms `<agent>` and `<agent> clarification pending`, when that
+ * word is a registered specialist. Null otherwise, which means the entry is
+ * unowned: no hint, or a free-text hint written before #1972 normalized them
+ * (such rows live up to 72h). Treating those as unowned keeps them releasable,
+ * rather than owned by a word like `delegate` that matches no caller.
  */
-export function delegationHintOwner(hint: string | null | undefined): string | null {
-  const first = hint?.trim().split(/\s+/)[0];
-  return first ? first.toLowerCase() : null;
+export function delegationHintOwner(
+  hint: string | null | undefined,
+  roster: DelegationHintRoster,
+): string | null {
+  const lead = leadingWord(hint ?? undefined);
+  return lead && roster.isSpecialist(lead) ? lead : null;
 }
 
 /**
