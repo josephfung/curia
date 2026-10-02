@@ -3,8 +3,9 @@
 //
 // Run for a manual migration (reads the current .env):
 //   pnpm run seed-vault
-// Add a single secret later (transient env var, then run):
-//   NYLAS_API_KEY=nyk_... pnpm run seed-vault
+// Add a single secret later — scope the run with SEED_VAULT_ONLY, or every other secret
+// in .env is re-upserted too:
+//   SEED_VAULT_ONLY=nylas_api_key NYLAS_API_KEY=nyk_... pnpm run seed-vault
 //
 // Invoked by scripts/setup.sh after migrations for fresh installs.
 import { pathToFileURL } from 'node:url';
@@ -93,10 +94,18 @@ export async function seedVault(
   secrets: SecretsService,
   env: NodeJS.ProcessEnv,
   log: pino.Logger,
+  options: { only?: ReadonlySet<string> } = {},
 ): Promise<{ seeded: string[]; skipped: string[] }> {
   const seeded: string[] = [];
   const skipped: string[] = [];
   for (const name of SEED_SECRET_NAMES) {
+    // `only` scopes a run to the named secrets. The CLI loads the whole .env, so without
+    // it "add one key" would also re-upsert every other secret .env happens to hold,
+    // overwriting newer vault values with whatever plaintext is lying there.
+    if (options.only && !options.only.has(name)) {
+      skipped.push(name);
+      continue;
+    }
     // Trim before checking and storing: a copy-pasted value often carries a trailing
     // newline, and a whitespace-only value (e.g. ` `) is unusable at runtime — the
     // Anthropic client, HTTP auth, and Signal account id all reject it. Treating a
@@ -112,6 +121,21 @@ export async function seedVault(
   }
   log.info({ seeded, skipped }, 'Vault seeding complete');
   return { seeded, skipped };
+}
+
+/**
+ * Parse SEED_VAULT_ONLY (comma-separated vault names). Unknown names are an error rather
+ * than ignored: a typo would otherwise seed nothing and report success.
+ */
+export function parseSeedOnly(raw: string | undefined): ReadonlySet<string> | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const names = raw.split(',').map(n => n.trim()).filter(n => n.length > 0);
+  const known = new Set<string>(SEED_SECRET_NAMES);
+  const unknown = names.filter(n => !known.has(n));
+  if (unknown.length > 0) {
+    throw new Error(`SEED_VAULT_ONLY names unknown secret(s): ${unknown.join(', ')}. Known: ${[...known].join(', ')}`);
+  }
+  return new Set(names);
 }
 
 // CLI entry — only when executed directly (not when imported by tests).
@@ -130,9 +154,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(1);
     throw new Error('unreachable'); // guards against process.exit mocks
   }
+  let only: ReadonlySet<string> | undefined;
+  try {
+    only = parseSeedOnly(process.env.SEED_VAULT_ONLY);
+  } catch (err) {
+    logger.error({ err }, 'seed-vault: invalid SEED_VAULT_ONLY');
+    process.exit(1);
+    throw new Error('unreachable'); // guards against process.exit mocks
+  }
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const secrets = new SecretsService(pool, key, logger);
-  seedVault(secrets, process.env, logger)
+  seedVault(secrets, process.env, logger, { only })
     .then(async () => {
       // setup.sh sets SEED_VAULT_VERIFY=1 so a partial/failed seed (e.g. the resume path
       // where api_token was never persisted) fails the install loudly instead of booting

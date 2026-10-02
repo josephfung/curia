@@ -402,9 +402,10 @@ Nylas trio, Signal number, Tavily) lives only in the vault.
 
 - **Fresh install** — `pnpm run setup` seeds the vault automatically after migrations,
   so the app never boots against an empty vault.
-- **Add or update one secret later** — supply it as a transient env var and run the
-  seeder: `VAR=value pnpm run seed-vault`. The seeder upserts present values; absent
-  ones are skipped, never cleared.
+- **Add or update one secret later** — supply it as a transient env var and scope the
+  run to it: `SEED_VAULT_ONLY=var_name VAR_NAME=value pnpm run seed-vault`. The seeder
+  loads `.env` too, so without `SEED_VAULT_ONLY` it re-upserts every other secret `.env`
+  holds. It upserts present values; absent ones are skipped, never cleared.
 
 **Missing secrets:** a missing *required* secret fails closed. Most fail at their consumer
 (e.g. `anthropic_api_key`). `api_token` is special-cased with an explicit boot guard that

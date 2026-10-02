@@ -51,6 +51,32 @@ function setup() {
 
 const coordinatorCall = { agentId: 'coordinator', conversationId: 'scenario-1' };
 
+describe('mustStub: capabilities', () => {
+  it('refuses a "none"-risk tool that can re-invoke tools, send or resolve approvals', () => {
+    const registry = new ToolRegistry();
+    for (const cap of ['executionLayer', 'outboundGateway', 'actionLogRepo', 'secretCapture']) {
+      registry.register({ ...manifest(`t-${cap}`, 'none'), capabilities: [cap] }, { execute: async () => ({ success: true, data: null }) });
+      expect(mustStub(`t-${cap}`, registry), cap).toBe(true);
+    }
+    registry.register({ ...manifest('reader-with-bus', 'none'), capabilities: ['bus'] }, { execute: async () => ({ success: true, data: null }) });
+    expect(mustStub('reader-with-bus', registry)).toBe(false);
+  });
+});
+
+describe('stale conversations', () => {
+  it('refuses, and does not record, a call from a conversation other than the run\'s', async () => {
+    const { layer, controller, executed } = setup();
+    controller.beginRun({ 'signal-send': [{ match: {}, return: { sent: true } }] }, 'scenario-2');
+    const stale = await layer.invoke('signal-send', {}, undefined, { agentId: 'coordinator', conversationId: 'scenario-1' });
+    expect(stale.success).toBe(false);
+    const stalePassthrough = await layer.invoke('memory-query', {}, undefined, { agentId: 'coordinator', conversationId: 'scenario-1' });
+    expect(stalePassthrough.success).toBe(false);
+    expect(executed).toEqual([]);
+    expect(controller.staleCalls).toBe(2);
+    expect(controller.endRun()).toEqual([]);
+  });
+});
+
 describe('mustStub', () => {
   it('requires a stub for any tool above action_risk none, and for delegate', () => {
     const registry = new ToolRegistry();
@@ -70,7 +96,7 @@ describe('mustStub', () => {
 describe('scenario stub layer', () => {
   it('fails closed for an unstubbed send and never reaches the real tool', async () => {
     const { layer, controller, executed } = setup();
-    controller.beginRun({});
+    controller.beginRun({}, 'scenario-1');
     for (const tool of ['email-send', 'signal-send', 'context-bridge-release', 'delegate', 'risky-by-number']) {
       const result = await layer.invoke(tool, { to: 'someone@example.com' }, undefined, coordinatorCall);
       expect(result.success).toBe(false);
@@ -82,7 +108,7 @@ describe('scenario stub layer', () => {
 
   it('answers a stubbed send itself and never reaches the real tool', async () => {
     const { layer, controller, executed } = setup();
-    controller.beginRun({ 'email-send': [{ match: {}, return: { sent: true } }] });
+    controller.beginRun({ 'email-send': [{ match: {}, return: { sent: true } }] }, 'scenario-1');
     const result = await layer.invoke('email-send', { to: 'x@example.com' }, undefined, coordinatorCall);
     expect(result).toEqual({ success: true, data: { sent: true } });
     expect(executed).toEqual([]);
@@ -90,19 +116,19 @@ describe('scenario stub layer', () => {
 
   it('returns a scripted error as a skill error', async () => {
     const { layer, controller } = setup();
-    controller.beginRun({ delegate: [{ match: {}, error: 'specialist unavailable' }] });
+    controller.beginRun({ delegate: [{ match: {}, error: 'specialist unavailable' }] }, 'scenario-1');
     const result = await layer.invoke('delegate', { agent: 'calendar' }, undefined, coordinatorCall);
     expect(result).toEqual({ success: false, error: '<skill_error>specialist unavailable</skill_error>' });
   });
 
   it('passes an unstubbed read-only tool through to the real layer', async () => {
     const { layer, controller, executed } = setup();
-    controller.beginRun({});
+    controller.beginRun({}, 'scenario-1');
     const result = await layer.invoke('memory-query', {}, undefined, coordinatorCall);
     expect(result).toMatchObject({ success: true, data: 'real memory-query' });
     expect(executed).toEqual(['memory-query']);
     expect(controller.endRun()).toEqual([
-      { agentId: 'coordinator', toolName: 'memory-query', input: {}, disposition: 'passthrough' },
+      { agentId: 'coordinator', invokeEventId: undefined, toolName: 'memory-query', input: {}, disposition: 'passthrough' },
     ]);
   });
 
@@ -122,7 +148,7 @@ describe('scenario stub layer', () => {
   it('does not let a stub return be mutated by a later run', async () => {
     const { layer, controller } = setup();
     const stubs = { 'email-send': [{ match: {}, return: { sent: true } }] };
-    controller.beginRun(stubs);
+    controller.beginRun(stubs, 'scenario-1');
     const first = await layer.invoke('email-send', {}, undefined, coordinatorCall);
     if (first.success) (first.data as Record<string, unknown>).sent = false;
     const second = await layer.invoke('email-send', {}, undefined, coordinatorCall);
@@ -132,7 +158,7 @@ describe('scenario stub layer', () => {
   it('records the real layer not being called even when invoke is spied', async () => {
     const { layer, controller } = setup();
     const spy = vi.spyOn(ExecutionLayer.prototype, 'invoke');
-    controller.beginRun({ 'signal-send': [{ match: {}, return: { sent: true } }] });
+    controller.beginRun({ 'signal-send': [{ match: {}, return: { sent: true } }] }, 'scenario-1');
     await layer.invoke('signal-send', {}, undefined, coordinatorCall);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();

@@ -3,7 +3,7 @@ import pg from 'pg';
 import pino from 'pino';
 import { loadEncryptionKey } from '../../src/secrets/crypto.js';
 import { SecretsService } from '../../src/secrets/secrets-service.js';
-import { seedVault, verifyRequiredSecrets, SEED_SECRET_NAMES, REQUIRED_SECRET_NAMES } from '../../scripts/seed-vault.js';
+import { seedVault, verifyRequiredSecrets, parseSeedOnly, SEED_SECRET_NAMES, REQUIRED_SECRET_NAMES } from '../../scripts/seed-vault.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL && process.env.SECRET_ENCRYPTION_KEY ? describe : describe.skip;
@@ -47,6 +47,14 @@ describeIf('seedVault', () => {
     expect(await secrets.get('nylas_api_key')).toBe('nyk_test_123');
     expect(await secrets.get('tavily_api_key')).toBe('tvly_test_456');
     expect(await secrets.get('anthropic_api_key')).toBeNull();
+  });
+
+  it('seeds only the names in `only`, leaving other present values alone', async () => {
+    const env = { NYLAS_API_KEY: 'nyk_test_123', OPENROUTER_API_KEY: 'sk-or-test' };
+    const { seeded } = await seedVault(secrets, env, logger, { only: new Set(['openrouter_api_key']) });
+    expect(seeded).toEqual(['openrouter_api_key']);
+    expect(await secrets.get('openrouter_api_key')).toBe('sk-or-test');
+    expect(await secrets.get('nylas_api_key')).toBeNull();
   });
 
   it('treats empty-string env values as absent (skipped)', async () => {
@@ -120,5 +128,20 @@ describeIf('seedVault', () => {
       logger,
     );
     expect(await verifyRequiredSecrets(secrets, logger)).toEqual([]);
+  });
+});
+
+describe('parseSeedOnly', () => {
+  it('is undefined when unset or blank', () => {
+    expect(parseSeedOnly(undefined)).toBeUndefined();
+    expect(parseSeedOnly('  ')).toBeUndefined();
+  });
+
+  it('parses a comma list of known names', () => {
+    expect([...parseSeedOnly('openrouter_api_key, openai_api_key')!]).toEqual(['openrouter_api_key', 'openai_api_key']);
+  });
+
+  it('rejects an unknown name instead of seeding nothing', () => {
+    expect(() => parseSeedOnly('openrouter_key')).toThrow(/unknown secret\(s\): openrouter_key/);
   });
 });

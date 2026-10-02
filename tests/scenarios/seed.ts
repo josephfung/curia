@@ -6,6 +6,7 @@
 // real services, so the Dispatcher's block formatting and the runtime's bullpen
 // injection are production's; but every read path an agent sees is narrowed to the
 // rows this run created, and every row is deleted when the run ends.
+import { randomUUID } from 'node:crypto';
 import type { DbPool } from '../../src/db/connection.js';
 import { OutboundContextService, type OutboundContextRow } from '../../src/dispatch/outbound-context.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
@@ -20,6 +21,15 @@ import type { ScenarioCase, SeedContact } from './types.js';
  */
 export const SCENARIO_CONTACT_NOTE = 'Scenario-suite fixture (#1956) — safe to delete.';
 
+/** `kg_nodes.source` of every node the suite mints. Only nodes with it are ever deleted. */
+export const SCENARIO_KG_SOURCE = 'scenario-test';
+
+/** Prefix of `bullpen_threads.source_message_id` on every seeded thread (not shown to agents). */
+const SCENARIO_THREAD_MARKER = 'scenario:';
+
+/** conversation_id prefix of seeded outbound-context entries. */
+const SCENARIO_ENTRY_ORIGIN = 'scenario-origin-';
+
 /** Channels the ContactResolver maps to the principal without an identity lookup. */
 const PRINCIPAL_LOCAL_CHANNELS = new Set(['cli', 'smoke-test', 'web']);
 
@@ -30,10 +40,17 @@ const PRINCIPAL_LOCAL_CHANNELS = new Set(['cli', 'smoke-test', 'web']);
 export class SeedScope {
   readonly entryIds = new Set<string>();
   readonly threadIds = new Set<string>();
+  /**
+   * Failures inside the scoped views. The Dispatcher and runtime log such a failure
+   * and carry on WITHOUT the block — a case would then be scored on a premise it never
+   * had — so the harness fails the run when this is non-empty.
+   */
+  readonly errors: string[] = [];
 
   clear(): void {
     this.entryIds.clear();
     this.threadIds.clear();
+    this.errors.length = 0;
   }
 }
 
@@ -46,11 +63,16 @@ export class SeedScope {
 export function scopedOutboundContext(real: OutboundContextService, scope: SeedScope): OutboundContextService {
   return Object.assign(Object.create(real) as OutboundContextService, {
     getActive: async (limit = 10): Promise<OutboundContextRow[]> => {
-      const rows = await Promise.all([...scope.entryIds].map(id => real.getEntry(id)));
-      return rows
-        .filter((r): r is OutboundContextRow => r !== null)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .slice(0, limit);
+      try {
+        const rows = await Promise.all([...scope.entryIds].map(id => real.getEntry(id)));
+        return rows
+          .filter((r): r is OutboundContextRow => r !== null)
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+          .slice(0, limit);
+      } catch (err) {
+        scope.errors.push(`outbound-context read failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
     },
   });
 }
@@ -58,9 +80,15 @@ export function scopedOutboundContext(real: OutboundContextService, scope: SeedS
 /** The bullpen as runtimes see it, narrowed to this run's threads (real SQL underneath). */
 export function scopedBullpen(real: BullpenService, scope: SeedScope): BullpenService {
   return Object.assign(Object.create(real) as BullpenService, {
-    getPendingThreadsForAgent: async (agentId: string, windowMinutes: number) =>
-      (await real.getPendingThreadsForAgent(agentId, windowMinutes))
-        .filter(t => scope.threadIds.has(t.threadId)),
+    getPendingThreadsForAgent: async (agentId: string, windowMinutes: number) => {
+      try {
+        return (await real.getPendingThreadsForAgent(agentId, windowMinutes))
+          .filter(t => scope.threadIds.has(t.threadId));
+      } catch (err) {
+        scope.errors.push(`bullpen read failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
+    },
   });
 }
 
@@ -98,7 +126,7 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
     for (const raw of scenario.seed.outboundContext) {
       const entry = resolvePlaceholders(raw, seeded.refs);
       const id = await outboundContext.register({
-        conversationId: `scenario-origin-${entry.key}`,
+        conversationId: `${SCENARIO_ENTRY_ORIGIN}${entry.key}`,
         channelId: entry.channelId,
         agentId: entry.agentId,
         content: entry.content,
@@ -125,6 +153,10 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
         thread.participants,
         thread.content,
         thread.mentionedAgentIds,
+        undefined,
+        // The marker sweepLeftovers() finds a crashed run's threads by. It is the dedup
+        // key, which agents never see, so it does not change the prompt.
+        `${SCENARIO_THREAD_MARKER}${randomUUID()}`,
       );
       seeded.threads.set(thread.key, {
         threadId: opened.thread.id,
@@ -136,7 +168,17 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
       seeded.refs.set(`thread:${thread.key}`, opened.thread.id);
     }
   } catch (err) {
-    await cleanupRun(stack, seeded, scope);
+    // Keep the seed error as the cause; a cleanup failure on top of it is attached, not
+    // substituted — otherwise the reason the seed failed is lost.
+    try {
+      await cleanupRun(stack, seeded, scope);
+    } catch (cleanupErr) {
+      throw new Error(
+        `${err instanceof Error ? err.message : String(err)} (and removing the partial seed failed: ` +
+        `${describeError(cleanupErr)})`,
+        { cause: err },
+      );
+    }
     throw err;
   }
   return seeded;
@@ -155,18 +197,45 @@ async function seedContact(stack: TestModeStack, contact: SeedContact): Promise<
         `real contact (${existing.contactId}). Use an identifier under example.test.`,
       );
     }
-    await deleteContact(stack.pool, stack, existing.contactId, row.kgNodeId ?? null);
+    await deleteContact(stack, existing.contactId, row.kgNodeId ?? null);
   }
 
-  const created = await stack.contactService.createContact({
-    displayName: contact.displayName,
-    tier: contact.tier,
-    kind: contact.kind,
-    role: contact.role,
-    notes: SCENARIO_CONTACT_NOTE,
-    source: 'scenario-test',
-    ...(contact.channel === 'email' ? { primaryEmail: contact.identifier } : {}),
-  });
+  // Mint the contact's own KG node and hand it to createContact. Left to itself,
+  // createContact may ADOPT an existing node — an unanchored person node with the same
+  // label, or a shared organization node for the domain (ADR-040) — and cleanup would
+  // then remove a real node with all its edges. A node we mint is tagged, anchored
+  // (outside the label-uniqueness index, so it cannot collide) and the only kind
+  // deleteContact() below will ever remove. No embedding: fixtures are found by
+  // channel identity, not by semantic search.
+  const node = await stack.pool.query<{ id: string }>(
+    `INSERT INTO kg_nodes (type, label, properties, source, identity_source)
+     VALUES ($1, $2, $3, $4, 'contact')
+     RETURNING id`,
+    [
+      contact.kind === 'organization' ? 'organization' : 'person',
+      contact.displayName,
+      JSON.stringify(contact.role ? { role: contact.role } : {}),
+      SCENARIO_KG_SOURCE,
+    ],
+  );
+  const kgNodeId = node.rows[0]!.id;
+
+  let created: { id: string };
+  try {
+    created = await stack.contactService.createContact({
+      displayName: contact.displayName,
+      tier: contact.tier,
+      kind: contact.kind,
+      role: contact.role,
+      notes: SCENARIO_CONTACT_NOTE,
+      source: SCENARIO_KG_SOURCE,
+      kgNodeId,
+      ...(contact.channel === 'email' ? { primaryEmail: contact.identifier } : {}),
+    });
+  } catch (err) {
+    await stack.pool.query(`DELETE FROM kg_nodes WHERE id = $1 AND source = $2`, [kgNodeId, SCENARIO_KG_SOURCE]);
+    throw err;
+  }
   try {
     await stack.contactService.linkIdentity({
       contactId: created.id,
@@ -176,30 +245,65 @@ async function seedContact(stack: TestModeStack, contact: SeedContact): Promise<
       verified: true,
     });
   } catch (err) {
-    await deleteContact(stack.pool, stack, created.id, created.kgNodeId ?? null);
+    await deleteContact(stack, created.id, kgNodeId);
     throw err;
   }
-  return { id: created.id, kgNodeId: created.kgNodeId ?? null };
+  return { id: created.id, kgNodeId };
 }
 
-async function deleteContact(pool: DbPool, stack: TestModeStack, id: string, kgNodeId: string | null): Promise<void> {
-  await stack.contactService.deleteContact(id);
-  // deleteContact archives the contact's KG node rather than removing it. A scenario
-  // node holds nothing anyone needs, so remove it (edges cascade). Scoped to a node
-  // whose label is still the scenario contact's, never a node someone else adopted.
+/**
+ * Remove a fixture contact and, if the suite minted it, its KG node (edges cascade).
+ * The node delete requires `source = 'scenario-test'`, so a node that is anyone else's
+ * survives even if a bug ever linked one to a fixture.
+ */
+async function deleteContact(stack: TestModeStack, id: string, kgNodeId: string | null): Promise<void> {
+  // Not archiveAnchoredNode: the node is removed outright below, scoped to our tag.
+  await stack.contactService.deleteContact(id, { archiveAnchoredNode: false });
   if (kgNodeId) {
-    await pool.query(
-      `DELETE FROM kg_nodes WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM contacts WHERE kg_node_id = $1)`,
-      [kgNodeId],
-    );
+    await stack.pool.query(`DELETE FROM kg_nodes WHERE id = $1 AND source = $2`, [kgNodeId, SCENARIO_KG_SOURCE]);
   }
 }
 
 /**
- * Remove every row the run created, and anything the coordinator wrote that hangs off
- * them. Collects errors and throws once at the end, so one failed delete does not
- * leave the rest behind.
+ * Remove whatever a crashed or interrupted run left, found only by the suite's own
+ * markers: tagged contacts and nodes, entries from `scenario-origin-*`, marked bullpen
+ * threads, and conversation rows of `scenario-*` / `email:scenario-*` conversations.
+ * Run at start-up and on SIGINT/SIGTERM. Returns what it removed, for the log.
  */
+export async function sweepLeftovers(stack: TestModeStack): Promise<Record<string, number>> {
+  const removed: Record<string, number> = {};
+  const count = async (label: string, sql: string, params: unknown[]): Promise<void> => {
+    const result = await stack.pool.query(sql, params);
+    if ((result.rowCount ?? 0) > 0) removed[label] = result.rowCount ?? 0;
+  };
+
+  const contacts = await stack.pool.query<{ id: string; kg_node_id: string | null }>(
+    `SELECT id, kg_node_id FROM contacts WHERE notes = $1`,
+    [SCENARIO_CONTACT_NOTE],
+  );
+  for (const c of contacts.rows) await deleteContact(stack, c.id, c.kg_node_id);
+  if (contacts.rows.length > 0) removed['contacts'] = contacts.rows.length;
+
+  // Nodes minted for a contact whose creation then failed.
+  await count('kg_nodes',
+    `DELETE FROM kg_nodes n WHERE n.source = $1
+       AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.kg_node_id = n.id)`,
+    [SCENARIO_KG_SOURCE]);
+  await count('outbound_context',
+    `DELETE FROM outbound_context WHERE conversation_id LIKE $1`,
+    [`${SCENARIO_ENTRY_ORIGIN}%`]);
+  await count('bullpen_threads',
+    `DELETE FROM bullpen_threads WHERE source_message_id LIKE $1`,
+    [`${SCENARIO_THREAD_MARKER}%`]);
+  for (const table of CONVERSATION_TABLES) {
+    // Table names come from the constant, never from input.
+    await count(table,
+      `DELETE FROM ${table} WHERE conversation_id LIKE 'scenario-%' OR conversation_id LIKE 'email:scenario-%'`,
+      []);
+  }
+  return removed;
+}
+
 /**
  * Per-conversation rows the coordinator writes during a run. They must go too: the
  * runtime injects a sender's recent turns from OTHER conversations (contact recent
@@ -243,13 +347,21 @@ export async function cleanupRun(
     await attempt(() => cleanupConversation(stack.pool, conversationId));
   }
   for (const contact of seeded.contacts) {
-    await attempt(() => deleteContact(stack.pool, stack, contact.id, contact.kgNodeId));
+    await attempt(() => deleteContact(stack, contact.id, contact.kgNodeId));
   }
   scope.clear();
 
   if (errors.length > 0) {
     throw new AggregateError(errors, `Scenario cleanup failed for ${errors.length} item(s) — check the database for leftovers`);
   }
+}
+
+/** An error's message, including every inner error of an AggregateError (its stack omits them). */
+export function describeError(err: unknown): string {
+  if (err instanceof AggregateError) {
+    return `${err.message}: ${err.errors.map(e => (e instanceof Error ? e.message : String(e))).join('; ')}`;
+  }
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** Where a seeded case's inbound comes from: the Dispatcher's view of the sender. */
