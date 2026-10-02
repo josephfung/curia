@@ -7,10 +7,10 @@
 // injection are production's; but every read path an agent sees is narrowed to the
 // rows this run created, and every row is deleted when the run ends.
 import { randomUUID } from 'node:crypto';
-import type { DbPool } from '../../src/db/connection.js';
 import { OutboundContextService, type OutboundContextRow } from '../../src/dispatch/outbound-context.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
 import type { TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { cleanupConversation, sweepConversations } from '../shared/turn-capture.js';
 import { resolvePlaceholders } from './loader.js';
 import type { ScenarioCase, SeedContact } from './types.js';
 
@@ -295,30 +295,15 @@ export async function sweepLeftovers(stack: TestModeStack): Promise<Record<strin
   await count('bullpen_threads',
     `DELETE FROM bullpen_threads WHERE source_message_id LIKE $1`,
     [`${SCENARIO_THREAD_MARKER}%`]);
-  for (const table of CONVERSATION_TABLES) {
-    // Table names come from the constant, never from input.
-    await count(table,
-      `DELETE FROM ${table} WHERE conversation_id LIKE 'scenario-%' OR conversation_id LIKE 'email:scenario-%'`,
-      []);
+  const conversations = await sweepConversations(stack.pool, SCENARIO_CONVERSATION_PREFIXES);
+  for (const [table, rows] of Object.entries(conversations)) {
+    if (rows > 0) removed[table] = rows;
   }
   return removed;
 }
 
-/**
- * Per-conversation rows the coordinator writes during a run. They must go too: the
- * runtime injects a sender's recent turns from OTHER conversations (contact recent
- * history), and every principal run is attributed to the real principal, so a kept
- * turn from one case shows up in the next case's prompt. audit_log stays — it is
- * append-only by design.
- */
-const CONVERSATION_TABLES = ['working_memory', 'conversation_checkpoints', 'conversation_resolved_entities'] as const;
-
-export async function cleanupConversation(pool: DbPool, conversationId: string): Promise<void> {
-  for (const table of CONVERSATION_TABLES) {
-    // Table names come from the constant above, never from input.
-    await pool.query(`DELETE FROM ${table} WHERE conversation_id = $1`, [conversationId]);
-  }
-}
+/** Conversation ids a run uses (harness.ts); the sweep finds leftovers by them. */
+export const SCENARIO_CONVERSATION_PREFIXES = ['scenario-', 'email:scenario-'] as const;
 
 export async function cleanupRun(
   stack: TestModeStack,
