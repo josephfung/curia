@@ -33,6 +33,16 @@ const describeIf = DATABASE_URL ? describe : describe.skip;
 const TEST_SECRET = 'setup-route-test-secret';
 const AUTH_HEADER = { 'x-web-bootstrap-secret': TEST_SECRET };
 const TEST_LABEL_PREFIX = 'Setup-Route Test';
+// Person labels this file writes that do not use the prefix above.
+const OWNED_KG_LABELS = [
+  'Original Name',
+  'Corrected Name',
+  'Same Name',
+  'Profile Owner',
+  'TZ Tester',
+  'Full Profile',
+  'Partial',
+];
 
 describeIf('/api/setup/* routes', () => {
   let pool: pg.Pool;
@@ -114,23 +124,57 @@ describeIf('/api/setup/* routes', () => {
     });
   });
 
+  // Person nodes this file mints (source bootstrap) and the setup-wizard facts
+  // hanging off them. Edges cascade with the node. A node another contact still
+  // points at is left alone — that is someone else's row, and deleting it fails
+  // the contacts_kg_node_id_fkey the moment an agent identity is in the database.
+  async function deleteOwnedKnowledgeGraph(): Promise<void> {
+    await pool.query(
+      `WITH owned_people AS (
+         SELECT n.id
+           FROM kg_nodes n
+          WHERE n.type = 'person'
+            AND n.source = 'bootstrap'
+            AND (n.label LIKE $1 OR n.label = ANY($2::text[]))
+       ),
+       owned_facts AS (
+         SELECT f.id
+           FROM kg_edges e
+           JOIN kg_nodes person ON person.id = e.source_node_id
+           JOIN kg_nodes f ON f.id = e.target_node_id
+          WHERE person.type = 'person'
+            AND (person.label LIKE $1 OR person.label = ANY($2::text[]))
+            AND f.type = 'fact'
+            AND f.source = 'system:setup-wizard'
+       )
+       DELETE FROM kg_nodes
+        WHERE id IN (SELECT id FROM owned_people UNION SELECT id FROM owned_facts)
+          AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.kg_node_id = kg_nodes.id)`,
+      [`${TEST_LABEL_PREFIX}%`, OWNED_KG_LABELS],
+    );
+  }
+
   afterAll(async () => {
     await appSetupMode.close();
     await appNormalMode.close();
-    // Clean up in FK dependency order: identities → contacts → edges → nodes.
-    await pool.query(
-      `DELETE FROM contact_channel_identities WHERE contact_id IN
-         (SELECT id FROM contacts WHERE system_role = 'principal')`,
-    );
-    await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
-    await pool.query('DELETE FROM kg_edges');
-    await pool.query('DELETE FROM kg_nodes');
-    await pool.end();
+    // Identities → contacts, then only the graph rows this file created.
+    try {
+      await pool.query(
+        `DELETE FROM contact_channel_identities WHERE contact_id IN
+           (SELECT id FROM contacts WHERE system_role = 'principal')`,
+      );
+      await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
+      await deleteOwnedKnowledgeGraph();
+    } finally {
+      await pool.end();
+    }
   });
 
-  // Clean up only test-prefixed rows. We never blind-delete by system_role='principal'
-  // because that would destroy a real operator's principal contact when these tests
-  // are run against a working dev database. The partial unique index on
+  // Clean up rows this file created. Prefixed contacts go here; the graph helper
+  // drops this file's person nodes and wizard facts once nothing links them.
+  // We never blind-delete by system_role='principal' in this hook because that
+  // would destroy a real operator's principal contact when these tests are run
+  // against a working dev database. The partial unique index on
   // system_role='principal' means tests that try to create a new principal MUST run
   // against a database where no prior principal exists — typically a fresh CI DB.
   beforeEach(async () => {
@@ -140,10 +184,7 @@ describeIf('/api/setup/* routes', () => {
       [`${TEST_LABEL_PREFIX}%`],
     );
     await pool.query(`DELETE FROM contacts WHERE display_name LIKE $1`, [`${TEST_LABEL_PREFIX}%`]);
-    await pool.query(
-      `DELETE FROM kg_nodes WHERE source = 'bootstrap' AND label LIKE $1`,
-      [`${TEST_LABEL_PREFIX}%`],
-    );
+    await deleteOwnedKnowledgeGraph();
     // Reset the captured restart-trigger calls between tests so each restart
     // test sees a fresh array.
     processExitCalls.length = 0;
@@ -534,8 +575,7 @@ describeIf('/api/setup/* routes', () => {
            (SELECT id FROM contacts WHERE system_role = 'principal')`,
       );
       await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
-      await pool.query('DELETE FROM kg_edges');
-      await pool.query('DELETE FROM kg_nodes');
+      await deleteOwnedKnowledgeGraph();
     });
 
     it('GET /api/setup/principal returns { exists:false } when no principal', async () => {
@@ -588,8 +628,7 @@ describeIf('/api/setup/* routes', () => {
            (SELECT id FROM contacts WHERE system_role = 'principal')`,
       );
       await pool.query(`DELETE FROM contacts WHERE system_role = 'principal'`);
-      await pool.query('DELETE FROM kg_edges');
-      await pool.query('DELETE FROM kg_nodes');
+      await deleteOwnedKnowledgeGraph();
     });
 
     it('POST profile rejects an invalid timezone with 422', async () => {

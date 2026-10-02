@@ -6,10 +6,12 @@
 //      registry rows, no autonomy or identity changes.
 //
 // Not destructive: booting writes only the idempotent bootstrap rows a real boot
-// writes (office identity, agent contact). No agent turn runs here (offline LLM).
+// writes (office identity, agent contact). The agent contact and node are removed
+// afterward when this file created them. No agent turn runs here (offline LLM).
 // Skips without DATABASE_URL.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import pg from 'pg';
 import type { OfficeIdentity } from '../../src/identity/types.js';
 import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../src/agents/prompts/date-resolve-guardrail.js';
@@ -19,12 +21,29 @@ import { createTestModeStack, type TestModeStack } from '../../src/startup/test-
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
+const { Pool } = pg;
 
 describeIf('test-mode stack', () => {
   let stack: TestModeStack;
   let rendered: string;
+  // Fail closed: delete only after the probe proves this file is what created the row.
+  // A boot that throws before the probe must not wipe an agent another suite left behind.
+  let agentContactWasPresent = true;
+  let agentNodeWasPresent = true;
 
   beforeAll(async () => {
+    const probe = new Pool({ connectionString: DATABASE_URL });
+    try {
+      const { rows } = await probe.query<{ contact: boolean; node: boolean }>(
+        `SELECT
+           EXISTS (SELECT 1 FROM contacts WHERE system_role = 'agent') AS contact,
+           EXISTS (SELECT 1 FROM kg_nodes WHERE (properties->>'is_agent') = 'true') AS node`,
+      );
+      agentContactWasPresent = rows[0]?.contact === true;
+      agentNodeWasPresent = rows[0]?.node === true;
+    } finally {
+      await probe.end();
+    }
     // Offline providers: rendering and invoking tools need no API key. 'all' so the
     // result does not depend on whatever another suite left in the registry tables.
     stack = await createTestModeStack({ llm: 'offline', enablement: 'all' });
@@ -32,7 +51,29 @@ describeIf('test-mode stack', () => {
   }, 120_000);
 
   afterAll(async () => {
-    await stack?.shutdown();
+    // Boot upserts the agent contact and node. Remove only the side this file
+    // created, and do it even when boot threw after the insert (stack is unset).
+    try {
+      if (!agentContactWasPresent || !agentNodeWasPresent) {
+        const pool = new Pool({ connectionString: DATABASE_URL });
+        try {
+          if (!agentContactWasPresent) {
+            await pool.query(`DELETE FROM contacts WHERE system_role = 'agent'`);
+          }
+          if (!agentNodeWasPresent) {
+            await pool.query(
+              `DELETE FROM kg_nodes
+                WHERE (properties->>'is_agent') = 'true'
+                  AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.kg_node_id = kg_nodes.id)`,
+            );
+          }
+        } finally {
+          await pool.end();
+        }
+      }
+    } finally {
+      await stack?.shutdown();
+    }
   });
 
   describe('coordinator system prompt', () => {

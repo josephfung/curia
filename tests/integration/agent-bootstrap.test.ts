@@ -34,17 +34,25 @@ describeIf('bootstrapAgentIdentity', () => {
     await pool.query('SELECT 1 FROM kg_nodes LIMIT 0');
   });
 
-  afterAll(async () => {
-    await pool.end();
-  });
-
-  // Strip the singleton agent rows before each test. The partial unique indexes
+  // Strip the singleton agent rows. The partial unique indexes
   // (idx_kg_nodes_agent_singleton, idx_contacts_kg_node_unique, idx_contacts_system_role_agent)
   // mean we can only have one agent at a time, so wipe completely before each case.
-  beforeEach(async () => {
+  // afterAll repeats it: this file shares the database, and the last case's rows
+  // would otherwise block a later suite's contact-linked node deletes.
+  async function deleteAgentIdentity(): Promise<void> {
     await pool.query(`DELETE FROM contacts WHERE system_role = 'agent'`);
     await pool.query(`DELETE FROM kg_nodes WHERE (properties->>'is_agent') = 'true'`);
+  }
+
+  afterAll(async () => {
+    try {
+      await deleteAgentIdentity();
+    } finally {
+      await pool.end();
+    }
   });
+
+  beforeEach(deleteAgentIdentity);
 
   it('creates a fresh agent identity (KG node + contact) with the given display name', async () => {
     const result = await bootstrapAgentIdentity('Agent Test First', pool, logger);
