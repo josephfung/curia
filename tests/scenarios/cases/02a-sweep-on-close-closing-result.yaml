@@ -1,11 +1,15 @@
-# Case 2 (#1956): sweep-on-close. When the specialist's result closes the exchange, the
-# coordinator calls context-bridge-release with the matched entry id before replying.
-# Rule: agents/coordinator.yaml, "Active outbound context" → "Sweep on close".
+# Case 2 (#1956, reworked for #1972): the release of a matched entry belongs to the
+# platform. The coordinator routes the principal's answer to the owning specialist and
+# links the entry to that delegation; delegate releases it once the specialist has
+# handled the reply. The coordinator no longer judges from the specialist's prose
+# whether the exchange closed, and does not call context-bridge-release itself.
+# Release rule: skills/delegate/outbound-entry.ts (unit-tested there).
 name: sweep-on-close closing result
 description: >
   research-analyst asked the principal which of two vendors to shortlist. The principal
-  picks one. The coordinator routes the answer to research-analyst, which reports the
-  shortlist is final and nothing further is expected — so the entry should be released.
+  picks one. The coordinator routes the answer to research-analyst, linking the entry;
+  the specialist reports the shortlist is final. Releasing the entry is the platform's
+  job, so the coordinator does not release it.
 tags: [outbound-context, lifecycle]
 seed:
   outbound_context:
@@ -29,28 +33,29 @@ tool_stubs:
         response: >
           Done. Northwind is shortlisted and the comparison memo is final — saved as "CRM
           evaluation — Northwind". Nothing further is needed from the principal.
+  # A coordinator release of a hinted entry is refused in production (#1972). The stub
+  # succeeds only so that path stays available for leaves_release_to_platform to test.
   context-bridge-release:
     - match: {}
       return: { released: "{{entry:vendor}}" }
 expected_behaviors:
-  - id: routes_to_owner
+  - id: routes_and_links
     weight: critical
-    description: Delegates the answer to research-analyst with the entry id.
+    description: >
+      Delegates the answer to research-analyst, linking the entry so the platform can
+      release it — as outbound_entry_id, or by quoting the entry id in the brief.
     check:
-      called: delegate
-      with: { agent: research-analyst }
-      contains: { task: "{{entry:vendor}}" }
-  - id: releases_matched_entry
-    weight: critical
-    description: Calls context-bridge-release with the matched entry id.
-    check:
-      called: context-bridge-release
-      with: { entry_id: "{{entry:vendor}}" }
-  - id: releases_after_result
+      any_of:
+        - called: delegate
+          with: { agent: research-analyst, outbound_entry_id: "{{entry:vendor}}" }
+        - called: delegate
+          with: { agent: research-analyst }
+          contains: { task: "{{entry:vendor}}" }
+  - id: leaves_release_to_platform
     weight: important
-    description: Releases only after the specialist's closing result came back.
+    description: Does not call context-bridge-release for the entry itself.
     check:
-      order: [delegate, context-bridge-release]
+      not_called: [context-bridge-release]
 failure_modes:
-  - Leaves the entry active after a final answer, so later replies get misrouted
-  - Releases before delegating, losing the binding if the delegation fails
+  - Delegates without linking the entry, so it stays active after the exchange closed
+  - Answers the principal itself instead of routing to research-analyst

@@ -65,6 +65,31 @@ describe('evaluateCheck: not_called', () => {
   });
 });
 
+describe('evaluateCheck: any_of (#1972)', () => {
+  // The delegate links an entry either from outbound_entry_id or from its id quoted in
+  // the brief; a routing check should pass on either.
+  const linked = {
+    kind: 'any_of' as const,
+    checks: [
+      { kind: 'called' as const, tool: 'delegate', with: { agent: 'ceo-inbox', outbound_entry_id: 'e-1' } },
+      { kind: 'called' as const, tool: 'delegate', with: { agent: 'ceo-inbox' }, contains: { task: 'e-1' } },
+    ],
+  };
+
+  it('passes when any alternative passes, naming it', () => {
+    const byParam = evaluateCheck(linked, run([call('delegate', { agent: 'ceo-inbox', task: 'go', outbound_entry_id: 'e-1' })]), ctx);
+    expect(byParam.rating).toBe('PASS');
+    const byText = evaluateCheck(linked, run([call('delegate', { agent: 'ceo-inbox', task: 'answer to e-1' })]), ctx);
+    expect(byText.rating).toBe('PASS');
+  });
+
+  it('misses only when every alternative misses, with each reason', () => {
+    const result = evaluateCheck(linked, run([call('delegate', { agent: 'calendar', task: 'e-1' })]), ctx);
+    expect(result.rating).toBe('MISS');
+    expect(result.justification.match(/expected delegate/g)).toHaveLength(2);
+  });
+});
+
 describe('evaluateCheck: order', () => {
   it('passes when the tools appear in that order (other calls in between are fine)', () => {
     const r = run([call('delegate'), call('memory-query'), call('context-bridge-release')]);

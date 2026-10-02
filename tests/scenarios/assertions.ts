@@ -94,7 +94,17 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
       const hits = ctx.internalNames.filter(name => containsIdentifier(reply, name));
       return hits.length === 0 ? pass('reply names no internal identifier') : miss(`reply names ${hits.join(', ')}`);
     }
+    case 'any_of': {
+      const ratings = check.checks.map(alt => evaluateCheck(alt, run, ctx));
+      const hit = ratings.find(r => r.rating === 'PASS');
+      return hit ? pass(`any_of: ${hit.justification}`) : miss(`no alternative passed: ${ratings.map(r => r.justification).join(' | ')}`);
+    }
   }
+}
+
+/** A check and every alternative nested in it, for validation that inspects leaf checks. */
+export function leafChecks(check: BehaviorCheck): BehaviorCheck[] {
+  return check.kind === 'any_of' ? check.checks.flatMap(leafChecks) : [check];
 }
 
 function isSilent(run: ScenarioRun): boolean {

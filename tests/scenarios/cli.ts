@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { evaluateCheck } from './assertions.js';
+import { evaluateCheck, leafChecks } from './assertions.js';
 import { formatPct, gateFailures, knownFailureLines, scoreCase, staleKnownFailures } from './gate.js';
 import {
   acquireSuiteLock,
@@ -88,43 +88,45 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
       harness.coordinatorTools.has(tool) && !c.toolStubs[tool] && mustStub(tool, registry, harness.unavailableTools);
 
     for (const b of c.expectedBehaviors) {
-      const check = b.check;
-      if (!check) continue;
+      if (!b.check) continue;
       const where = `${c.name}: behavior '${b.id}'`;
-      const named = check.kind === 'called' ? [check.tool]
-        : check.kind === 'not_called' || check.kind === 'order' ? check.tools : [];
+      // any_of alternatives are validated like top-level checks (#1972).
+      for (const check of leafChecks(b.check)) {
+        const named = check.kind === 'called' ? [check.tool]
+          : check.kind === 'not_called' || check.kind === 'order' ? check.tools : [];
 
-      // A check on a tool that does not exist can never fail (not_called) or never pass
-      // (called) — either way it measures a typo.
-      for (const tool of named) {
-        if (!registry.get(tool)) problems.push(`${where} names '${tool}', which is not a registered tool`);
-      }
-      if ((check.kind === 'called' || check.kind === 'order')) {
-        for (const tool of named.filter(t => registry.get(t) && !harness.coordinatorTools.has(t))) {
-          problems.push(`${where} expects '${tool}', which the coordinator is not offered, so it can never pass`);
-        }
-      }
-      // Argument keys must exist on the tool, or `with`/`contains` silently never match.
-      if ((check.kind === 'called' || check.kind === 'not_called')) {
-        const keys = [...Object.keys(check.with ?? {}), ...Object.keys(check.contains ?? {})];
+        // A check on a tool that does not exist can never fail (not_called) or never pass
+        // (called) — either way it measures a typo.
         for (const tool of named) {
-          const inputs = registry.get(tool)?.manifest.inputs;
-          if (!inputs) continue;
-          for (const key of keys.filter(k => !(k in inputs))) {
-            problems.push(`${where}: '${key}' is not an input of ${tool} (inputs: ${Object.keys(inputs).join(', ')})`);
+          if (!registry.get(tool)) problems.push(`${where} names '${tool}', which is not a registered tool`);
+        }
+        if ((check.kind === 'called' || check.kind === 'order')) {
+          for (const tool of named.filter(t => registry.get(t) && !harness.coordinatorTools.has(t))) {
+            problems.push(`${where} expects '${tool}', which the coordinator is not offered, so it can never pass`);
           }
         }
-      }
-      if (check.kind === 'called' && needsStub(check.tool)) {
-        problems.push(`${where} expects ${check.tool}, which has no stub and would be refused`);
-      }
-      // A forbidden tool must be stubbed to SUCCEED: the wrong path has to be available,
-      // or the case tests a refusal rather than the model's choice — and a refusal there
-      // would also trip the coverage gate, blaming the harness for the model's mistake.
-      if (check.kind === 'not_called') {
-        for (const tool of check.tools) {
-          if (harness.coordinatorTools.has(tool) && mustStub(tool, registry, harness.unavailableTools) && !hasSuccessStub(tool)) {
-            problems.push(`${where} forbids ${tool}; give it a succeeding stub so the wrong path is available`);
+        // Argument keys must exist on the tool, or `with`/`contains` silently never match.
+        if ((check.kind === 'called' || check.kind === 'not_called')) {
+          const keys = [...Object.keys(check.with ?? {}), ...Object.keys(check.contains ?? {})];
+          for (const tool of named) {
+            const inputs = registry.get(tool)?.manifest.inputs;
+            if (!inputs) continue;
+            for (const key of keys.filter(k => !(k in inputs))) {
+              problems.push(`${where}: '${key}' is not an input of ${tool} (inputs: ${Object.keys(inputs).join(', ')})`);
+            }
+          }
+        }
+        if (check.kind === 'called' && needsStub(check.tool)) {
+          problems.push(`${where} expects ${check.tool}, which has no stub and would be refused`);
+        }
+        // A forbidden tool must be stubbed to SUCCEED: the wrong path has to be available,
+        // or the case tests a refusal rather than the model's choice — and a refusal there
+        // would also trip the coverage gate, blaming the harness for the model's mistake.
+        if (check.kind === 'not_called') {
+          for (const tool of check.tools) {
+            if (harness.coordinatorTools.has(tool) && mustStub(tool, registry, harness.unavailableTools) && !hasSuccessStub(tool)) {
+              problems.push(`${where} forbids ${tool}; give it a succeeding stub so the wrong path is available`);
+            }
           }
         }
       }
