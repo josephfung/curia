@@ -1,4 +1,11 @@
 // tests/smoke/evaluator.ts
+//
+// The judge: gpt-4o, reached through the stack's own OpenRouter provider (the same
+// judge as the scenario suite — tests/scenarios/judge.ts), so the key stays in the
+// vault (#911) and no OPENAI_API_KEY is needed.
+import type { Judge } from '../scenarios/judge.js';
+import { extractJsonObject } from '../scenarios/judge.js';
+import { caseFailures } from './gate.js';
 import type {
   CaseExecution,
   CaseResult,
@@ -8,73 +15,20 @@ import type {
 } from './types.js';
 import { WEIGHT_VALUES, RATING_VALUES } from './types.js';
 
-const JUDGE_MODEL = 'gpt-4o';
-const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
+const RATINGS: readonly BehaviorRating[] = ['PASS', 'PARTIAL', 'MISS'];
 
-/**
- * Evaluate all case executions using GPT-4o as a judge.
- * Processes cases sequentially to avoid hammering the OpenAI API.
- */
-export async function evaluateCases(
-  executions: CaseExecution[],
-  apiKey: string,
-  options?: { onCaseEval?: (name: string, index: number, total: number) => void },
-): Promise<CaseResult[]> {
-  const results: CaseResult[] = [];
+/** Transient provider failures worth another attempt; anything else fails the same way every case. */
+const RETRYABLE: ReadonlySet<string> = new Set(['PROVIDER_ERROR', 'TIMEOUT', 'UNKNOWN']);
+const JUDGE_ATTEMPTS = 3;
 
-  for (let i = 0; i < executions.length; i++) {
-    const exec = executions[i]!;
-    options?.onCaseEval?.(exec.testCase.name, i + 1, executions.length);
-
-    // If the case failed to execute, skip judging and mark all behaviors MISS
-    if (exec.error) {
-      const scores: BehaviorScore[] = exec.testCase.expectedBehaviors.map(b => ({
-        behaviorId: b.id,
-        rating: 'MISS' as BehaviorRating,
-        justification: `Case execution failed: ${exec.error}`,
-      }));
-      results.push({
-        testCase: exec.testCase,
-        responses: exec.responses,
-        scores,
-        weightedScore: 0,
-        error: exec.error,
-      });
-      continue;
-    }
-
-    const scores = await judgeCase(exec, apiKey);
-    const weightedScore = computeWeightedScore(exec.testCase.expectedBehaviors, scores);
-
-    results.push({
-      testCase: exec.testCase,
-      responses: exec.responses,
-      scores,
-      weightedScore,
-    });
-  }
-
-  return results;
-}
-
-/**
- * Send a single case to GPT-4o for evaluation.
- * Falls back to all-MISS on any API or network error so the run continues.
- */
-async function judgeCase(exec: CaseExecution, apiKey: string): Promise<BehaviorScore[]> {
-  // Concatenate all turns and responses so the judge sees the full conversation
-  const userPrompts = exec.testCase.turns.map(t => t.content).join('\n---\n');
-  const assistantResponses = exec.responses.map(r => r.content).join('\n---\n');
-  const behaviorsText = exec.testCase.expectedBehaviors
-    .map(b => `- ${b.id}: ${b.description} [${b.weight}]`)
-    .join('\n');
-
-  const systemPrompt = `You are evaluating an AI assistant's response against expected behaviors.
+const SYSTEM_PROMPT = `You are evaluating an AI executive assistant's conversation against expected behaviors.
 
 Rate each behavior as:
 - PASS: clearly and correctly demonstrated
 - PARTIAL: attempted but incomplete, imprecise, or only partly correct
-- MISS: not demonstrated at all
+- MISS: not demonstrated at all, or contradicted
+
+"NO_REPLY" as an entire response means the assistant deliberately sent nothing. When tool calls are shown, they are actions the assistant took; a result marked FAILED means that action did not happen.
 
 Respond with ONLY a JSON object in this exact format:
 {
@@ -83,130 +37,205 @@ Respond with ONLY a JSON object in this exact format:
   ]
 }`;
 
-  const userMessage = `## User Input
-${userPrompts}
+/**
+ * Judge every case, sequentially. Cases that did not complete are not judged: every
+ * behavior scores MISS and the gate reports the execution error instead.
+ */
+export async function evaluateCases(
+  executions: CaseExecution[],
+  judge: Judge,
+  options?: { onCaseEval?: (name: string, index: number, total: number) => void },
+): Promise<CaseResult[]> {
+  const results: CaseResult[] = [];
 
-## Assistant Response
-${assistantResponses}
+  for (let i = 0; i < executions.length; i++) {
+    const exec = executions[i]!;
+    options?.onCaseEval?.(exec.testCase.name, i + 1, executions.length);
 
-## Expected Behaviors
-${behaviorsText}
-
-Rate each behavior. Respond with JSON only.`;
-
-  try {
-    const response = await fetch(OPENAI_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: JUDGE_MODEL,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        // Low temperature for deterministic scoring
-        temperature: 0.1,
-        response_format: { type: 'json_object' },
-      }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => '<unreadable>');
-      throw new Error(`Judge API error ${response.status}: ${body}`);
+    let scores: BehaviorScore[];
+    let judgeError: string | undefined;
+    if (exec.error) {
+      scores = exec.testCase.expectedBehaviors.map(b => ({
+        behaviorId: b.id,
+        rating: 'MISS' as BehaviorRating,
+        justification: `Case execution failed: ${exec.error}`,
+      }));
+    } else {
+      ({ scores, error: judgeError } = await judgeCase(exec, judge));
     }
 
-    const json = await response.json() as {
-      choices: Array<{ message: { content: string } }>;
+    const weightedScore = exec.error ? 0 : computeWeightedScore(exec.testCase.expectedBehaviors, scores);
+    const gateInput = {
+      testCase: exec.testCase,
+      scores,
+      weightedScore,
+      ...(exec.error ? { error: exec.error } : {}),
+      ...(judgeError ? { judgeError } : {}),
+      ...(exec.cleanupError ? { cleanupError: exec.cleanupError } : {}),
     };
-    const content = json.choices[0]?.message?.content ?? '';
-    return parseJudgeResponse(content, exec.testCase.expectedBehaviors);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-
-    // Systemic errors should abort — falling back to all-MISS would produce
-    // a garbage run that's indistinguishable from "Curia is broken."
-    if (message.includes('401') || message.includes('403')) {
-      throw new Error(`Judge API authentication failed — check OPENAI_API_KEY: ${message}`);
-    }
-    if (message.includes('429')) {
-      throw new Error(`Judge API rate limited — wait and retry: ${message}`);
-    }
-
-    // Per-case failure: fall back to MISS but warn the operator
-    process.stderr.write(`  [WARN] Judge failed for "${exec.testCase.name}": ${message}\n`);
-
-    return exec.testCase.expectedBehaviors.map(b => ({
-      behaviorId: b.id,
-      rating: 'MISS' as BehaviorRating,
-      justification: `Judge error: ${message}`,
-    }));
+    const failures = caseFailures(gateInput);
+    results.push({
+      ...gateInput,
+      responses: exec.responses,
+      passed: failures.length === 0,
+      failures,
+    });
   }
+
+  return results;
+}
+
+/** The transcript the judge reads: each turn's message, optionally its tool calls, and the reply. */
+export function formatJudgeInput(exec: CaseExecution, principalName?: string): string {
+  const tc = exec.testCase;
+  const principal = principalName ? `the principal, ${principalName}` : 'the principal';
+  const sender = tc.sender === 'unknown'
+    ? `an unknown external sender by email (no contact record, not ${principal})`
+    : `${principal} (the executive the assistant works for)`;
+
+  const turns = tc.turns.map((turn, i) => {
+    const response = exec.responses[i];
+    const lines = [`### Turn ${i + 1}`, `Message:`, turn.content.trim(), ``];
+    if (tc.judgeToolCalls) {
+      lines.push(`Tool calls:`, formatToolCalls(response?.toolCalls ?? []), ``);
+    }
+    lines.push(`Assistant response:`, response ? response.content : '(none)');
+    return lines.join('\n');
+  });
+
+  return [
+    `## Scenario`,
+    tc.description.trim() || tc.name,
+    ``,
+    `## Sender`,
+    sender,
+    ``,
+    `## Conversation`,
+    turns.join('\n\n'),
+    ``,
+    `## Expected Behaviors`,
+    tc.expectedBehaviors.map(b => `- ${b.id}: ${b.description.trim()} [${b.weight}]`).join('\n'),
+    ...(tc.failureModes.length > 0
+      ? [``, `## Known Failure Modes`, tc.failureModes.map(f => `- ${f}`).join('\n')]
+      : []),
+    ``,
+    `Rate each behavior. Respond with JSON only.`,
+  ].join('\n');
+}
+
+function formatToolCalls(calls: CaseExecution['responses'][number]['toolCalls']): string {
+  if (calls.length === 0) return '(no tool calls)';
+  return calls.map((c, i) => {
+    const result = c.result === undefined
+      ? '(no result recorded)'
+      : c.result.success
+        ? JSON.stringify(c.result.data)
+        : `FAILED: ${c.result.error}`;
+    return `${i + 1}. ${c.name} ${JSON.stringify(c.input)}\n   Result: ${result}`;
+  }).join('\n');
 }
 
 /**
- * Parse the judge's JSON response into BehaviorScore[].
- * Falls back to all-MISS (using fallbackBehaviors) if parsing fails.
- * If fallbackBehaviors is omitted and parsing fails, returns an empty array.
+ * Judge one case.
+ * - Auth, rate-limit, not-found (judge model retired) and validation errors throw: they
+ *   would repeat on every case, and an all-MISS run would read as a broken Curia.
+ * - Transient errors are retried, then reported as the case's judge error.
+ */
+async function judgeCase(
+  exec: CaseExecution,
+  judge: Judge,
+): Promise<{ scores: BehaviorScore[]; error?: string }> {
+  let lastError = '';
+  for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
+    const response = await judge.provider.chat({
+      model: judge.model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: formatJudgeInput(exec, judge.principalName) },
+      ],
+    });
+
+    if (response.type === 'text') {
+      return parseJudgeResponse(extractJsonObject(response.content), exec.testCase.expectedBehaviors);
+    }
+    if (response.type === 'tool_use') {
+      lastError = 'answered with a tool call, not JSON';
+      continue;
+    }
+    const { type, message } = response.error;
+    if (!RETRYABLE.has(type)) {
+      throw new Error(`Judge call failed (${type}): ${message}`);
+    }
+    lastError = `${type}: ${message}`;
+    // Brief backoff before the next attempt.
+    await new Promise(resolve => setTimeout(resolve, 1_000 * attempt));
+  }
+  return {
+    scores: exec.testCase.expectedBehaviors.map(b => ({
+      behaviorId: b.id,
+      rating: 'MISS' as BehaviorRating,
+      justification: `Judge failed after ${JUDGE_ATTEMPTS} attempts: ${lastError}`,
+    })),
+    error: `failed after ${JUDGE_ATTEMPTS} attempts — ${lastError}`,
+  };
+}
+
+/**
+ * Parse the judge's JSON reply into one score per expected behavior.
  *
- * When fallbackBehaviors is provided, also validates the returned IDs against
- * the expected set and warns on any mismatch (extra or missing IDs). This
- * catches cases where the judge reformats IDs (e.g. underscores vs hyphens)
- * before they silently zero-score in computeWeightedScore.
+ * Anything the judge got wrong — an unparseable reply, a behavior it skipped, an
+ * invalid rating — scores that behavior MISS and is returned as `error`, so the gate
+ * reports a judge failure rather than blaming the model. IDs the judge invented are
+ * ignored with a warning (they usually come paired with a skipped one, which errors).
  */
 export function parseJudgeResponse(
   raw: string,
-  fallbackBehaviors?: ExpectedBehavior[],
-): BehaviorScore[] {
+  behaviors: ExpectedBehavior[],
+): { scores: BehaviorScore[]; error?: string } {
+  let returned: Array<{ behaviorId?: unknown; rating?: unknown; justification?: unknown }>;
   try {
-    const parsed = JSON.parse(raw) as { scores: BehaviorScore[] };
-    if (!Array.isArray(parsed.scores)) throw new Error('Missing scores array');
-
-    // Normalize any unrecognized rating values to MISS for safety
-    const scores = parsed.scores.map(s => ({
-      behaviorId: s.behaviorId,
-      rating: (['PASS', 'PARTIAL', 'MISS'].includes(s.rating) ? s.rating : 'MISS') as BehaviorRating,
-      justification: s.justification ?? '',
-    }));
-
-    // Validate returned IDs against expected set when we have one.
-    // IDs the judge invented won't be matched by computeWeightedScore;
-    // IDs the judge dropped will silently score 0. Both are surfaced here.
-    if (fallbackBehaviors) {
-      const expectedIds = new Set(fallbackBehaviors.map(b => b.id));
-      const returnedIds = new Set(scores.map(s => s.behaviorId));
-
-      for (const id of returnedIds) {
-        if (!expectedIds.has(id)) {
-          process.stderr.write(
-            `  [WARN] Judge returned unexpected behavior ID '${id}' — not in expected set, will be ignored by scorer\n`,
-          );
-        }
-      }
-      for (const id of expectedIds) {
-        if (!returnedIds.has(id)) {
-          process.stderr.write(
-            `  [WARN] Judge did not return a score for expected behavior '${id}' — will score as 0\n`,
-          );
-        }
-      }
-    }
-
-    return scores;
+    const parsed = JSON.parse(raw) as { scores?: unknown };
+    if (!Array.isArray(parsed.scores)) throw new Error('missing scores array');
+    returned = parsed.scores as typeof returned;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    // Always warn so the operator knows a parse failure occurred, even when
-    // fallbackBehaviors is absent (without this the caller receives [] silently).
-    process.stderr.write(`  [WARN] Failed to parse judge response: ${detail}\n`);
-    if (!fallbackBehaviors) return [];
-    return fallbackBehaviors.map(b => ({
-      behaviorId: b.id,
-      rating: 'MISS' as BehaviorRating,
-      justification: `Failed to parse judge response: ${detail}`,
-    }));
+    return {
+      scores: behaviors.map(b => ({
+        behaviorId: b.id,
+        rating: 'MISS' as BehaviorRating,
+        justification: `Failed to parse judge response: ${detail}`,
+      })),
+      error: `unparseable reply: ${detail}`,
+    };
   }
+
+  const expectedIds = new Set(behaviors.map(b => b.id));
+  for (const s of returned) {
+    if (typeof s.behaviorId === 'string' && !expectedIds.has(s.behaviorId)) {
+      process.stderr.write(`  [WARN] Judge returned unexpected behavior ID '${s.behaviorId}' — ignored\n`);
+    }
+  }
+
+  const problems: string[] = [];
+  const scores = behaviors.map((b): BehaviorScore => {
+    const s = returned.find(x => x.behaviorId === b.id);
+    if (!s) {
+      problems.push(`no score for '${b.id}'`);
+      return { behaviorId: b.id, rating: 'MISS', justification: 'Judge returned no score for this behavior' };
+    }
+    const rating = typeof s.rating === 'string' ? s.rating.trim().toUpperCase() : '';
+    if (!RATINGS.includes(rating as BehaviorRating)) {
+      problems.push(`invalid rating '${String(s.rating)}' for '${b.id}'`);
+      return { behaviorId: b.id, rating: 'MISS', justification: `Judge returned an invalid rating '${String(s.rating)}'` };
+    }
+    return {
+      behaviorId: b.id,
+      rating: rating as BehaviorRating,
+      justification: typeof s.justification === 'string' ? s.justification : '',
+    };
+  });
+
+  return problems.length > 0 ? { scores, error: problems.join('; ') } : { scores };
 }
 
 /**
@@ -230,11 +259,8 @@ export function computeWeightedScore(
     if (score) {
       earnedWeight += w * RATING_VALUES[score.rating];
     } else {
-      // Backstop warn: no score entry for this behavior — counts as 0.
-      // parseJudgeResponse will have already identified the specific cause (ID mismatch,
-      // dropped behavior, etc.) when it was given the expected behaviors. This warning
-      // fires regardless, so the score impact is always surfaced even if parsing was called
-      // without fallbackBehaviors.
+      // Backstop warn: parseJudgeResponse scores every expected behavior, so this only
+      // fires for a caller that built scores some other way. Counts as 0.
       process.stderr.write(
         `  [WARN] No score entry for behavior '${b.id}' — counting as 0\n`,
       );

@@ -6,26 +6,63 @@ import type { RunResult, HistoricalEntry } from '../../smoke/types.js';
 describe('Report generator', () => {
   const mockRun: RunResult = {
     timestamp: '2026-03-25T22:00:00.000Z',
+    model: 'deepseek/deepseek-v4.1-flash',
+    commit: 'abc1234',
+    filtered: false,
     durationMs: 45000,
     overallScore: 0.65,
+    passed: false,
     cases: [
       {
         testCase: {
           name: 'Test Case 1',
           description: 'A test',
           tags: ['inference'],
+          sender: 'principal',
+          judgeToolCalls: false,
           turns: [{ role: 'user', content: 'Hello' }],
           expectedBehaviors: [
             { id: 'greet', description: 'Greets back', weight: 'critical' },
           ],
           failureModes: ['Ignores greeting'],
         },
-        responses: [{ content: 'Hi there!', agentId: 'coordinator', durationMs: 1200 }],
+        responses: [{
+          content: 'Hi there!',
+          agentId: 'coordinator',
+          durationMs: 1200,
+          toolCalls: [{ name: 'contact-lookup', input: {}, result: { success: false, error: 'nope' } }],
+        }],
         scores: [{ behaviorId: 'greet', rating: 'PASS', justification: 'Greeted warmly' }],
         weightedScore: 1.0,
+        passed: true,
+        failures: [],
+      },
+      {
+        testCase: {
+          name: 'Test Case 2',
+          description: 'Another',
+          tags: [],
+          sender: 'unknown',
+          judgeToolCalls: false,
+          turns: [{ role: 'user', content: 'Who are you?' }],
+          expectedBehaviors: [{ id: 'careful', description: 'Is careful', weight: 'critical' }],
+          failureModes: [],
+        },
+        responses: [],
+        scores: [{ behaviorId: 'careful', rating: 'MISS', justification: 'Timed out' }],
+        weightedScore: 0,
+        error: 'Timeout',
+        passed: false,
+        failures: ['did not complete: Timeout'],
       },
     ],
   };
+
+  it('shows the gate failures and the tools a turn called', () => {
+    const html = generateReport(mockRun);
+    expect(html).toContain('did not complete: Timeout');
+    expect(html).toContain('contact-lookup (failed)');
+  });
 
   it('generates valid HTML with required sections', () => {
     const html = generateReport(mockRun);
