@@ -1,0 +1,58 @@
+# Case 1 (#1956), ported from the voice-brain-parity fixtures
+# (routing-transfer-sounds-good). A second, unrelated entry is present so the match has
+# to be chosen, not assumed.
+name: transfer-ownership sounds good
+description: >
+  Two active entries: ceo-inbox's proposed intro email to Priya awaiting approval, and an
+  unrelated coordinator note about a Google security alert. The principal approves the
+  Priya intro. The reply matches the ceo-inbox entry, which has a delegation hint.
+tags: [outbound-context, routing, transfer-ownership, voice-parity]
+stub_sets: [human-channels]
+seed:
+  outbound_context:
+    - key: inbox_2
+      channel: email
+      agent: ceo-inbox
+      content: Proposed intro email to Priya — OK to send?
+      expected_reply: approval to send
+      delegation_hint: ceo-inbox
+      sent_minutes_ago: 5
+    - key: alert
+      channel: signal
+      agent: coordinator
+      content: "Google security alert: new sign-in on your account."
+      sent_minutes_ago: 3
+inbound:
+  from: principal
+  content: Sounds good — go ahead and send the Priya intro.
+tool_stubs:
+  delegate:
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: Sent the introduction email to Priya.
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:inbox_2}}" }
+expected_behaviors:
+  - id: routes_to_owner
+    weight: critical
+    description: Delegates to ceo-inbox with the Priya entry's id in the brief.
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+      contains: { task: "{{entry:inbox_2}}" }
+  - id: sends_nothing_itself
+    weight: critical
+    description: Sends no message itself; ceo-inbox owns the send.
+    check:
+      not_called: [email-send, email-reply, email-draft-save, signal-send, sms-send, slack-send]
+  - id: leaves_unrelated_entry
+    weight: important
+    description: Does not release the unrelated security-alert entry.
+    check:
+      not_called: [context-bridge-release]
+      with: { entry_id: "{{entry:alert}}" }
+failure_modes:
+  - Routes the approval to the wrong entry
+  - Sends the intro itself

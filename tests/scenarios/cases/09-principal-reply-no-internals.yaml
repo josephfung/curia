@@ -1,0 +1,48 @@
+# Case 9 (#1956): a principal-facing reply names no tools, agents or systems. The
+# outbound judge skips principal-only messages, so the prompt is the only guard. Rule:
+# agents/coordinator.yaml, "Who I am" and Audience awareness → "Talking to the principal".
+#
+# The stubbed specialist result is deliberately full of internals (agent names, ids,
+# "knowledge graph") — the realistic shape of a contacts briefing — so relaying it
+# verbatim fails.
+name: principal reply no internals
+description: >
+  The principal asks who someone is. The contacts specialist returns a briefing written
+  in system terms. The coordinator should present it as a human chief of staff would.
+tags: [audience, voice]
+inbound:
+  from: principal
+  content: Remind me who Jordan Lee is and when we last spoke?
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: contacts
+        response: >
+          contacts agent: resolved Jordan Lee (contact_id 5f3e2a10-7c4b-4d8e-9a1f-2b6c8d0e4f77,
+          kg_node 91c0…). Knowledge graph facts: VP Partnerships at Meridian Health; met at
+          HLTH 2026; last interaction 2026-09-14 (email thread "Pilot scope"); entity-context
+          shows timezone America/Chicago.
+        resolvedContactIds: [5f3e2a10-7c4b-4d8e-9a1f-2b6c8d0e4f77]
+expected_behaviors:
+  - id: no_identifiers
+    weight: critical
+    description: The reply contains no tool, agent or system identifier.
+    check:
+      reply_excludes_internal_names: true
+  - id: no_system_language
+    weight: critical
+    description: >
+      The reply does not mention agents, specialists, delegation, tools, the knowledge
+      graph, contact ids, databases or "the system". It reads like a human chief of staff.
+  - id: answers
+    weight: important
+    description: Says Jordan is VP Partnerships at Meridian Health and they last spoke mid-September (the "Pilot scope" thread).
+  - id: no_uuid
+    weight: important
+    description: No UUIDs in the reply.
+    check:
+      reply_excludes: ["[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"]
+failure_modes:
+  - Relays "my contacts agent found..." or "according to the knowledge graph"
+  - Quotes the contact id

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -92,6 +92,28 @@ describe('loadScenarioCase', () => {
   it('requires a bullpen inbound to name a seeded thread', () => {
     const body = VALID.replace('from: principal', 'from: bullpen');
     expect(() => loadScenarioCase(write('b.yaml', body))).toThrow(/needs 'thread'/);
+  });
+});
+
+describe('stub sets', () => {
+  it('appends a shared set after the case\'s own stubs', () => {
+    const casesDir = path.join(dir, 'cases');
+    const stubsDir = path.join(dir, 'stubs');
+    mkdirSync(casesDir);
+    mkdirSync(stubsDir);
+    writeFileSync(path.join(stubsDir, 'defaults.yaml'), 'email-list:\n  - match: {}\n    return: { messages: [], count: 0 }\n');
+    writeFileSync(path.join(stubsDir, 'sends.yaml'), 'delegate:\n  - match: {}\n    return: { from: set }\nsignal-send:\n  - match: {}\n    return: { delivered_to: x, channel: signal }\n');
+    const file = path.join(casesDir, 'c.yaml');
+    writeFileSync(file, VALID.replace('tags: [routing]', 'tags: [routing]\nstub_sets: [sends]'));
+    const c = loadScenarioCase(file, { stubsDir });
+    expect(c.toolStubs['delegate']!.map(s => s.return ?? s.error)).toEqual([{ response: 'Sent.' }, 'wrong specialist', { from: 'set' }]);
+    expect(c.toolStubs['signal-send']).toHaveLength(1);
+    // defaults always applies, without being named
+    expect(c.toolStubs['email-list']).toHaveLength(1);
+  });
+
+  it('rejects an unknown set', () => {
+    expect(() => loadScenarioCase(write('c.yaml', VALID.replace('tags: [routing]', 'tags: [routing]\nstub_sets: [nope]')))).toThrow(/stub set 'nope'/);
   });
 });
 

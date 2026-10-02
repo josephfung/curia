@@ -1,0 +1,51 @@
+# Case 1 (#1956), ported from the voice-brain-parity fixtures
+# (scripts/spikes/voice-brain-parity/fixtures.json, routing-transfer-yes).
+name: transfer-ownership yes thursday
+description: >
+  ceo-inbox drafted a reply to Sam about the Q3 offsite and asked the principal whether
+  Thursday works. The principal approves and says to send it. The entry carries
+  delegation_hint ceo-inbox, so the approval belongs to ceo-inbox.
+tags: [outbound-context, routing, transfer-ownership, voice-parity]
+stub_sets: [human-channels]
+seed:
+  outbound_context:
+    - key: inbox_1
+      channel: email
+      agent: ceo-inbox
+      content: Draft reply to Sam about the Q3 offsite — does Thursday work?
+      expected_reply: yes/no on Thursday
+      delegation_hint: ceo-inbox
+      sent_minutes_ago: 12
+inbound:
+  from: principal
+  content: Yes, Thursday works — go ahead and send it.
+tool_stubs:
+  delegate:
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: Sent the reply to Sam confirming Thursday for the Q3 offsite.
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:inbox_1}}" }
+expected_behaviors:
+  - id: routes_to_owner
+    weight: critical
+    description: Delegates to ceo-inbox, passing the matched entry id in the brief.
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+      contains: { task: "{{entry:inbox_1}}" }
+  - id: sends_nothing_itself
+    weight: critical
+    description: Sends no message itself; ceo-inbox owns the send.
+    check:
+      not_called: [email-send, email-reply, email-draft-save, signal-send, sms-send, slack-send]
+  - id: no_substantive_answer
+    weight: important
+    description: >
+      Does not answer substantively or claim the email went out before ceo-inbox reported
+      it. Any reply only relays ceo-inbox's result.
+failure_modes:
+  - Claims "Sent!" without delegating
+  - Delegates to a different specialist than the hint names

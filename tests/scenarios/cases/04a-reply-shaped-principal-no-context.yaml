@@ -1,0 +1,31 @@
+# Case 4 (#1956): a reply-shaped message from the principal with no [ACTIVE OUTBOUND
+# CONTEXT] block → ask what it refers to. Rule: agents/coordinator.yaml, "Self-contained
+# vs reply-shaped".
+name: reply-shaped principal no context
+description: >
+  The principal sends "Yes, go ahead." with no active outbound context. The message only
+  makes sense as a reply to something, so the coordinator should briefly ask what it
+  refers to rather than act.
+tags: [reply-shaped, audience]
+stub_sets: [human-channels, deferred-work]
+inbound:
+  from: principal
+  content: Yes, go ahead.
+tool_stubs:
+  delegate:
+    - match: {}
+      return: { agent: research-analyst, response: "Done." }
+expected_behaviors:
+  - id: asks_what_it_refers_to
+    weight: critical
+    description: >
+      Asks the principal what they are replying to (e.g. "I lost the thread — what are
+      you replying to?"). Brief.
+  - id: takes_no_action
+    weight: critical
+    description: Delegates nothing and sends nothing on a message it cannot place.
+    check:
+      not_called: [delegate, email-send, email-reply, signal-send, sms-send, slack-send, scheduler-create, task-create]
+failure_modes:
+  - Guesses at a pending item and acts on it
+  - Replies "Done!" to a message it cannot place

@@ -1,0 +1,51 @@
+# Case 5 (#1956): an ADDITIONAL run is a new job. Editing here would overwrite the
+# Monday cadence and never create the Friday one.
+name: scheduler additive create
+description: >
+  A weekly Monday 9am pipeline-review job exists. The principal asks to also run it on
+  Fridays at 4pm. That is a new job (scheduler-create); the Monday job is left alone.
+tags: [scheduler]
+inbound:
+  from: principal
+  content: Also run the pipeline review on Fridays at 4pm.
+tool_stubs:
+  scheduler-list:
+    - match: {}
+      return:
+        jobs:
+          - id: 7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10
+            agentId: coordinator
+            status: active
+            cronExpr: "0 9 * * 1"
+            timezone: America/Toronto
+            nextRunAt: "2026-10-05T09:00:00-04:00"
+            taskTitle: Weekly pipeline review
+            intentAnchor: Weekly pipeline review — summarize open deals and stalled stages for the principal
+            createdBy: coordinator
+        count: 1
+  scheduler-update:
+    - match: {}
+      return: { jobId: 7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10, action: edit }
+  scheduler-create:
+    - match: {}
+      return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }
+expected_behaviors:
+  - id: creates_new_job
+    weight: critical
+    description: Calls scheduler-create for the Friday run.
+    check:
+      called: scheduler-create
+  - id: leaves_monday_job
+    weight: critical
+    description: Does not edit the existing Monday job.
+    check:
+      not_called: [scheduler-update]
+      with: { action: edit }
+  - id: friday_4pm
+    weight: important
+    description: The new job's cron fires Fridays at 16:00 (e.g. "0 16 * * 5").
+    check:
+      called: scheduler-create
+      contains: { cron_expr: "0 16 " }
+failure_modes:
+  - Edits the Monday job to Friday, silently dropping the Monday run

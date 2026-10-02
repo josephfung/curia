@@ -1,0 +1,16 @@
+# Creating tasks and jobs succeeds. Include this in a case that forbids deferring the
+# work, so the wrong path is available (see human-channels.yaml).
+task-create:
+  - match: {}
+    return:
+      task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+      title: (created)
+      status: open
+      owner: curia
+      priority: 3
+      tags: []
+      created_at: "2026-10-01T12:00:00-04:00"
+      displayTimezone: America/Toronto
+scheduler-create:
+  - match: {}
+    return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }

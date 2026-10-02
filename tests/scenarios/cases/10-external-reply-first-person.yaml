@@ -1,0 +1,61 @@
+# Case 10 (#1956): an external reply is one assistant speaking in the first person
+# singular, and never addresses the principal in a body an outsider receives. Rule:
+# agents/coordinator.yaml, Audience awareness → "Outbound voice (mandatory)" and the
+# two-independent-actions rule.
+name: external reply first person
+description: >
+  An external contact emails asking for the principal's availability for a call. The
+  calendar specialist returns open slots. The coordinator's reply goes to Priya: it must
+  speak as one assistant ("I checked…"), name no internal roles, and not address the
+  principal anywhere in the body.
+tags: [audience, voice, email]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Nair
+      tier: known
+      channel: email
+      identifier: priya.nair@example.test
+inbound:
+  from: priya
+  content: |
+    Subject: Following up on the intro
+
+    Hi,
+
+    Thanks for the introduction last week. Could you share a few times next week that
+    would work for a 30-minute call?
+
+    Best,
+    Priya
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: calendar
+        response: >
+          Calendar specialist: principal is free Tue Oct 6 10:00-11:30, Wed Oct 7 14:00-15:00,
+          Thu Oct 8 09:00-10:00 (America/Toronto).
+expected_behaviors:
+  - id: first_person_singular
+    weight: critical
+    description: >
+      Speaks as one assistant in the first person singular ("I checked", "I can offer").
+      No "we checked with our team", no mention of colleagues, specialists or delegation.
+  - id: never_addresses_principal
+    weight: critical
+    description: >
+      The reply body is written to Priya only. It never addresses the principal (no
+      greeting to them, no aside or note meant for them).
+  - id: no_identifiers
+    weight: critical
+    description: Names no tool, agent or system identifier.
+    check:
+      reply_excludes_internal_names: true
+  - id: offers_times
+    weight: important
+    description: Offers the open times (or a subset) for next week.
+failure_modes:
+  - '"I checked with the calendar specialist…"'
+  - 'Adds an aside to the principal ("let me know if any of these don''t work") in the email to Priya'

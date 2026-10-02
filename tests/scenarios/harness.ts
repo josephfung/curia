@@ -36,6 +36,7 @@ import {
   scopedOutboundContext,
   SeedScope,
   seedRun,
+  type SeededRun,
 } from './seed.js';
 import { createStubController, type StubController, type StubbedCall } from './stub-layer.js';
 import type { CapturedToolCall, ScenarioCase, ScenarioRun } from './types.js';
@@ -136,17 +137,20 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
 
   async function runOnce(scenario: ScenarioCase, runIndex: number): Promise<ScenarioRun> {
     const started = Date.now();
-    const seeded = await seedRun(scenario, { stack, outboundContext, scope });
+    // Set once seeding succeeds. seedRun removes its own partial rows when it throws, so
+    // a failed seed becomes this run's error instead of aborting the suite.
+    let seeded: SeededRun | undefined;
+    let conversationId: string | undefined;
     let stubbedCalls: StubbedCall[] = [];
     let inboundContent = '';
     try {
+      seeded = await seedRun(scenario, { stack, outboundContext, scope });
       const stubTable = resolvePlaceholders(scenario.toolStubs, seeded.refs);
       const inbound = resolvePlaceholders(scenario.inbound, seeded.refs);
       inboundContent = inbound.content;
 
       const sender = await resolveSender(scenario, stack);
       controller.beginRun(stubTable);
-      let conversationId: string;
       let outcome: CaptureOutcome;
       try {
         if (sender === 'bullpen') {
@@ -187,20 +191,23 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         stubbedCalls = controller.endRun();
       }
 
+      const merged = mergeCalls(outcome.calls, stubbedCalls);
       return {
         runIndex,
         inboundContent,
-        toolCalls: mergeCalls(outcome.calls, stubbedCalls),
+        refs: Object.fromEntries(seeded.refs),
+        toolCalls: merged,
         reply: outcome.reply,
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
         durationMs: Date.now() - started,
-        unstubbedCalls: stubbedCalls.filter(c => c.disposition === 'refused' && c.agentId === COORDINATOR).length,
+        unstubbedCalls: countHoles(merged),
         ...(outcome.error ? { error: outcome.error } : {}),
       };
     } catch (err) {
       return {
         runIndex,
         inboundContent,
+        refs: seeded ? Object.fromEntries(seeded.refs) : {},
         toolCalls: [],
         reply: null,
         durationMs: Date.now() - started,
@@ -208,7 +215,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         error: err instanceof Error ? err.message : String(err),
       };
     } finally {
-      await cleanupRun(stack, seeded, scope);
+      if (seeded) await cleanupRun(stack, seeded, scope, conversationId);
     }
   }
 
@@ -220,6 +227,19 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     runOnce,
     shutdown: () => stack.shutdown(),
   };
+}
+
+/**
+ * Calls the harness, not the model, decided: refused by the stub layer, or a real
+ * read-only tool that failed because test mode cannot serve it (no mail client, no
+ * task service…). Either way the model reacted to the harness's gap. Counting failed
+ * passthroughs here means a newly unservable read shows up in the coverage gate with
+ * no list of "tools that don't work in test mode" to keep current.
+ */
+export function countHoles(calls: CapturedToolCall[]): number {
+  return calls.filter(c =>
+    c.disposition === 'refused' || (c.disposition === 'passthrough' && c.result?.success === false),
+  ).length;
 }
 
 /** The metadata the email adapter attaches, minus anything a scenario cannot know. */
@@ -313,7 +333,12 @@ function createCapture(bus: EventBus): { waitFor(conversationId: string): Promis
     const { payload } = event as AgentResponseEvent;
     const p = forCoordinator(payload.agentId, payload.conversationId);
     if (!p) return;
-    p.reply = payload.content;
+    // The runtime lifts an exact NO_REPLY out of the content before publishing (#1732):
+    // what arrives is empty content with suppressDelivery. Put the sentinel back so
+    // checks and the judge see the decision the model made. A narrated decline
+    // ("NO_REPLY — automated notice") keeps its text and suppressDelivery, so it still
+    // reads as not-exactly-NO_REPLY — which is the failure the check exists to catch.
+    p.reply = payload.suppressDelivery && payload.content === '' ? 'NO_REPLY' : payload.content;
     if (payload.isError) p.error = `coordinator returned an error response: ${payload.content.slice(0, 200)}`;
     finish(payload.conversationId, p);
   });

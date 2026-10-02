@@ -8,7 +8,7 @@ const M: RunRating = { rating: 'MISS', justification: '' };
 
 function runs(n: number, error?: string): ScenarioRun[] {
   return Array.from({ length: n }, (_, i) => ({
-    runIndex: i, inboundContent: '', toolCalls: [], reply: 'x', durationMs: 1, unstubbedCalls: 0,
+    runIndex: i, inboundContent: '', refs: {}, toolCalls: [], reply: 'x', durationMs: 1, unstubbedCalls: 0,
     ...(error && i === 0 ? { error } : {}),
   }));
 }

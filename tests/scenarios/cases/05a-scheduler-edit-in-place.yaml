@@ -1,0 +1,71 @@
+# Case 5 (#1956): changing an existing routine edits it in place. scheduler-create has
+# no duplicate check, so a create here makes the job fire twice. Rule:
+# agents/coordinator.yaml, "Scheduling and task management".
+#
+# Jobs are seeded through the scheduler-list stub, not real rows: the coordinator only
+# sees jobs through that tool, and a real row would be fired by any scheduler that
+# comes up on this database later.
+name: scheduler edit in place
+description: >
+  A weekly Monday 9am pipeline-review job exists. The principal asks to move it to 10am.
+  That is an edit of the existing job (scheduler-update action edit), not a new job.
+tags: [scheduler]
+inbound:
+  from: principal
+  content: >
+    The pipeline-review summary you send me every Monday — can you make it 10am instead
+    of 9?
+tool_stubs:
+  scheduler-list:
+    - match: {}
+      return:
+        jobs:
+          - id: 7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10
+            agentId: coordinator
+            status: active
+            cronExpr: "0 9 * * 1"
+            timezone: America/Toronto
+            nextRunAt: "2026-10-05T09:00:00-04:00"
+            taskTitle: Weekly pipeline review
+            intentAnchor: Weekly pipeline review — summarize open deals and stalled stages for the principal
+            createdBy: coordinator
+          - id: 2b9e6f13-5c4d-4a8e-b7f1-9e0d3c6a1b22
+            agentId: coordinator
+            status: active
+            cronExpr: "0 * * * *"
+            timezone: America/Toronto
+            taskTitle: Approval expiry sweep
+            createdBy: system
+        count: 2
+  scheduler-update:
+    - match: {}
+      return: { jobId: 7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10, action: edit }
+  # If it still checks the calendar first, the calendar has no such meeting.
+  delegate:
+    - match: {}
+      return: { agent: calendar, response: "No calendar event named 'pipeline review' on the principal's calendar." }
+  scheduler-create:
+    - match: {}
+      return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }
+expected_behaviors:
+  - id: edits_existing_job
+    weight: critical
+    description: Calls scheduler-update with action edit on the pipeline-review job.
+    check:
+      called: scheduler-update
+      with: { action: edit, job_id: 7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10 }
+  - id: no_duplicate_job
+    weight: critical
+    description: Does not create a new job.
+    check:
+      not_called: [scheduler-create]
+  - id: changes_the_cadence
+    weight: important
+    description: The edit sets a cron expression firing at 10:00 on Mondays (e.g. "0 10 * * 1").
+    check:
+      called: scheduler-update
+      with: { action: edit }
+      contains: { cron_expr: "0 10 " }
+failure_modes:
+  - Creates a second job at 10am and leaves the 9am one running
+  - Uses run_at on a recurring job, so only the next fire moves

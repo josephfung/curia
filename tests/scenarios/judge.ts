@@ -26,14 +26,20 @@ Judge only what is in the transcript. Tool calls count as actions taken; a tool 
 Respond with ONLY a JSON object:
 {"scores": [{"behaviorId": "<id>", "rating": "PASS|PARTIAL|MISS", "justification": "<one sentence>"}]}`;
 
-export function formatJudgeInput(scenario: ScenarioCase, run: ScenarioRun, behaviors: ExpectedBehavior[]): string {
+export function formatJudgeInput(
+  scenario: ScenarioCase,
+  run: ScenarioRun,
+  behaviors: ExpectedBehavior[],
+  principalName?: string,
+): string {
+  const principal = principalName ? `the principal, ${principalName}` : 'the principal';
   const sender = scenario.inbound.from === 'principal'
-    ? 'the principal (the executive the coordinator works for)'
+    ? `${principal} (the executive the coordinator works for)`
     : scenario.inbound.from === 'bullpen'
       ? 'another internal agent, on the bullpen (internal agent-to-agent thread)'
       : (() => {
           const c = scenario.seed.contacts.find(x => x.key === scenario.inbound.from)!;
-          return `${c.displayName}, an external contact (not the principal), via ${c.channel}`;
+          return `${c.displayName}, an external contact (not ${principal}), via ${c.channel}`;
         })();
 
   const calls = run.toolCalls.length === 0
@@ -107,6 +113,8 @@ export function parseJudgeResponse(raw: string, behaviors: ExpectedBehavior[]): 
 export interface Judge {
   provider: LLMProvider;
   model: string;
+  /** Named in the judge input so "never addresses the principal" is checkable. */
+  principalName?: string;
 }
 
 /**
@@ -115,7 +123,7 @@ export interface Judge {
  * the judge. The provider passes no temperature or response_format through, so the
  * prompt asks for JSON and the reply is parsed leniently (a fenced block is unwrapped).
  */
-export function createJudge(providers: ReadonlyMap<string, LLMProvider>): Judge {
+export function createJudge(providers: ReadonlyMap<string, LLMProvider>, principalName?: string): Judge {
   const provider = providers.get('openrouter');
   if (!provider) {
     throw new Error(
@@ -123,7 +131,7 @@ export function createJudge(providers: ReadonlyMap<string, LLMProvider>): Judge 
       'Seed it (see tests/scenarios/README.md).',
     );
   }
-  return { provider, model: JUDGE_MODEL };
+  return { provider, model: JUDGE_MODEL, ...(principalName ? { principalName } : {}) };
 }
 
 /** A JSON object out of a model reply that may wrap it in a code fence or prose. */
@@ -152,7 +160,7 @@ export async function judgeRun(
     model: judge.model,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: formatJudgeInput(scenario, run, behaviors) },
+      { role: 'user', content: formatJudgeInput(scenario, run, behaviors, judge.principalName) },
     ],
   });
 

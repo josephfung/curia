@@ -1,0 +1,61 @@
+# Case 6 (#1956): a bullpen mention is other agents talking — the reply goes on the
+# thread with the bullpen tool, never to a human channel. This is the plain mention path,
+# outside the scheduler (#1609) and open-delegation (#1917) special cases. Rule:
+# agents/coordinator.yaml, "Bullpen threads are internal agent-to-agent discussions".
+#
+# Every human-channel send is stubbed to succeed, so the wrong path is available and
+# the case tests the choice rather than a refusal.
+name: bullpen mention stays on thread
+description: >
+  research-analyst posts on a bullpen thread with the coordinator, mentioning it: the Q3
+  competitor brief is done and saved, and it asks the coordinator to acknowledge. The
+  acknowledgement belongs on the thread.
+tags: [bullpen, channel]
+stub_sets: [human-channels]
+seed:
+  bullpen:
+    - key: brief
+      topic: Q3 competitor brief
+      creator: research-analyst
+      participants: [research-analyst, coordinator]
+      content: Starting the Q3 competitor brief the principal asked for. Will post when done.
+      mentions: []
+inbound:
+  from: bullpen
+  thread: brief
+  content: >
+    @coordinator the Q3 competitor brief is finished and saved in the documents workspace
+    as "Q3 competitor brief". Can you acknowledge you've got it?
+tool_stubs:
+  bullpen:
+    - match: { action: get_thread }
+      return:
+        thread:
+          id: "{{thread:brief}}"
+          topic: Q3 competitor brief
+          status: open
+          participants: [research-analyst, coordinator]
+        messages:
+          - sender: research-analyst
+            content: Starting the Q3 competitor brief the principal asked for. Will post when done.
+          - sender: research-analyst
+            content: >
+              @coordinator the Q3 competitor brief is finished and saved in the documents
+              workspace as "Q3 competitor brief". Can you acknowledge you've got it?
+    - match: {}
+      return: { posted: true, thread_id: "{{thread:brief}}" }
+expected_behaviors:
+  - id: replies_on_thread
+    weight: critical
+    description: Replies with the bullpen tool on that thread (or closes it).
+    check:
+      called: bullpen
+      with: { thread_id: "{{thread:brief}}" }
+  - id: no_human_channel
+    weight: critical
+    description: Sends nothing on Signal, SMS, Slack or email.
+    check:
+      not_called: [signal-send, sms-send, slack-send, email-send, email-reply]
+failure_modes:
+  - Messages the principal on Signal with "@research-analyst got it"
+  - Acknowledges in its reply text only, leaving the thread unanswered

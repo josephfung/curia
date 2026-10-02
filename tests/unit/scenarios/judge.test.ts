@@ -39,10 +39,10 @@ describe('formatJudgeInput', () => {
     name: 'paused', description: 'Delegate returns paused.', tags: [], sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: 'How is the research going?' },
-    toolStubs: {}, expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
+    toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
   };
   const run: ScenarioRun = {
-    runIndex: 0, inboundContent: 'How is the research going?', durationMs: 1, unstubbedCalls: 0,
+    runIndex: 0, inboundContent: 'How is the research going?', refs: {}, durationMs: 1, unstubbedCalls: 0,
     reply: 'Still working — 3 of 8 done.',
     toolCalls: [
       { name: 'delegate', input: { agent: 'research-analyst' }, disposition: 'stubbed', result: { success: true, data: { paused: true, done: 3, total: 8 } } },

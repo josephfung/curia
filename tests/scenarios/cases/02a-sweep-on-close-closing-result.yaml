@@ -1,0 +1,56 @@
+# Case 2 (#1956): sweep-on-close. When the specialist's result closes the exchange, the
+# coordinator calls context-bridge-release with the matched entry id before replying.
+# Rule: agents/coordinator.yaml, "Active outbound context" → "Sweep on close".
+name: sweep-on-close closing result
+description: >
+  research-analyst asked the principal which of two vendors to shortlist. The principal
+  picks one. The coordinator routes the answer to research-analyst, which reports the
+  shortlist is final and nothing further is expected — so the entry should be released.
+tags: [outbound-context, lifecycle]
+seed:
+  outbound_context:
+    - key: vendor
+      channel: signal
+      agent: research-analyst
+      content: >
+        For the CRM evaluation, should I shortlist Northwind or Contoso? I'll finalize the
+        comparison memo once you pick.
+      expected_reply: which vendor to shortlist
+      delegation_hint: research-analyst
+      sent_minutes_ago: 30
+inbound:
+  from: principal
+  content: Go with Northwind.
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: research-analyst
+        response: >
+          Done. Northwind is shortlisted and the comparison memo is final — saved as "CRM
+          evaluation — Northwind". Nothing further is needed from the principal.
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:vendor}}" }
+expected_behaviors:
+  - id: routes_to_owner
+    weight: critical
+    description: Delegates the answer to research-analyst with the entry id.
+    check:
+      called: delegate
+      with: { agent: research-analyst }
+      contains: { task: "{{entry:vendor}}" }
+  - id: releases_matched_entry
+    weight: critical
+    description: Calls context-bridge-release with the matched entry id.
+    check:
+      called: context-bridge-release
+      with: { entry_id: "{{entry:vendor}}" }
+  - id: releases_after_result
+    weight: important
+    description: Releases only after the specialist's closing result came back.
+    check:
+      order: [delegate, context-bridge-release]
+failure_modes:
+  - Leaves the entry active after a final answer, so later replies get misrouted
+  - Releases before delegating, losing the binding if the delegation fails

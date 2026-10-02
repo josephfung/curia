@@ -1,0 +1,43 @@
+# Case 3 (#1956): an automated notification gets exactly NO_REPLY — no narration,
+# because narration is delivered as the email. The mail carries no auto-generated flag,
+# so the decision is the model's. Rule: agents/coordinator.yaml, "When nothing should go
+# out" (Audience awareness and Email → Sending and replying).
+name: no-reply automated notification
+description: >
+  A storage-usage report arrives at the coordinator's own inbox from a SaaS vendor's
+  no-reply address. Nothing is actionable. The correct outcome is silence.
+tags: [no-reply, email]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: vendor
+      display_name: Dropbox
+      tier: known
+      kind: automated
+      channel: email
+      identifier: no-reply@dropbox.example.test
+inbound:
+  from: vendor
+  content: |
+    Subject: Your weekly storage summary
+
+    Hi there,
+
+    Here's your weekly Dropbox summary. You're using 41% of your 2 TB plan. No action is
+    needed. Manage your notification settings at any time from your account page.
+
+    — The Dropbox team
+expected_behaviors:
+  - id: exactly_no_reply
+    weight: critical
+    description: The whole reply is exactly NO_REPLY.
+    check:
+      reply: no_reply
+  - id: sends_nothing
+    weight: critical
+    description: Sends nothing on any channel.
+    check:
+      not_called: [email-reply, email-send, signal-send, sms-send, slack-send]
+failure_modes:
+  - Replies "No reply needed — this is an automated notification" (that text is emailed to the vendor)
+  - Escalates a routine storage report to the principal
