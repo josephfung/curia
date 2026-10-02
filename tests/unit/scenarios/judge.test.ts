@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatJudgeInput, parseJudgeResponse } from '../../scenarios/judge.js';
+import { createJudge, extractJsonObject, formatJudgeInput, parseJudgeResponse } from '../../scenarios/judge.js';
 import type { ExpectedBehavior, ScenarioCase, ScenarioRun } from '../../scenarios/types.js';
 
 const behaviors: ExpectedBehavior[] = [
@@ -59,5 +59,19 @@ describe('formatJudgeInput', () => {
     expect(text).toContain('Still working — 3 of 8 done.');
     expect(text).toContain('- honest: Reports progress');
     expect(text).toContain('- Blames an API outage');
+  });
+});
+
+describe('extractJsonObject', () => {
+  it('unwraps a fenced block or surrounding prose', () => {
+    expect(extractJsonObject('```json\n{"scores": []}\n```')).toBe('{"scores": []}');
+    expect(extractJsonObject('Here you go: {"scores": []} hope that helps')).toBe('{"scores": []}');
+    expect(extractJsonObject('{"a": {"b": 1}}')).toBe('{"a": {"b": 1}}');
+  });
+});
+
+describe('createJudge', () => {
+  it('needs the OpenRouter provider and says how to get it', () => {
+    expect(() => createJudge(new Map())).toThrow(/openrouter_api_key/);
   });
 });

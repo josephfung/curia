@@ -25,6 +25,7 @@
     "lint": "eslint src/ tests/ apps/",
     "migrate": "tsx --env-file=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir src/db/migrations --migration-file-language sql",
     "smoke": "tsx --env-file=.env tests/smoke/cli.ts",
+    "scenarios": "tsx --env-file=.env tests/scenarios/cli.ts",
     "inspect-prompts": "tsx --env-file=.env scripts/inspect-prompts.ts",
     "render-coordinator-prompt": "tsx --env-file=.env scripts/render-coordinator-prompt.ts",
     "redteam": "promptfoo redteam run --config tests/redteam/promptfooconfig.yaml --env-file .env",
