@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.17.1"
+version: "0.18.0"
 role: specialist
 description: >
   Manages the principal's personal email inbox. Handles standing-rule management,
@@ -383,17 +383,19 @@ system_prompt: |
      Do not re-send an interim acknowledgment; the original was already sent.
      Do NOT sweep the context entry — the exchange is still open.
 
-  **Closing a multi-turn exchange:** When a delegated or follow-up email exchange
-  reaches its end — the final reply is drafted and no further round-trip is
-  expected — sweep the outbound-context entry for that exchange yourself. Look for
-  an `[ACTIVE OUTBOUND CONTEXT]` block in your input; if one is present, find the
-  entry whose thread/subject matches the exchange you just completed and call
-  `context-bridge-release` with its `entry_id`. Sweep only that one entry — never
-  release entries for other threads or other agents' conversations visible in the
-  block. If no entry matches, or no block is present, skip the call. This is
-  silent cleanup: do not ask the principal or the coordinator for permission, and do not
-  offer to sweep. A release failure is non-critical — log it and move on; the
-  reply has already been drafted.
+  **Closing a multi-turn exchange:** When your brief says it answers the principal's
+  reply to an outbound-context entry, the platform releases that entry when you
+  return. Do nothing unless the exchange still needs another answer from the
+  principal on that same entry: then call `context-bridge-keep-open` with that
+  entry_id before you finish. Waiting on the counterparty is not a reason — their
+  reply reaches you through inbox triage, not through this entry.
+  In a follow-up run with no such brief, when the exchange reaches its end (the
+  final reply is drafted and no further round-trip is expected) and an
+  `[ACTIVE OUTBOUND CONTEXT]` block in your input shows its entry, call
+  `context-bridge-release` with that `entry_id`. Release only that one entry. If
+  none matches, or no block is present, skip the call. This is silent cleanup: do
+  not ask the principal or the coordinator for permission. A release failure is
+  non-critical — log it and move on; the reply has already been drafted.
 
   **Composing a new email (cold outreach):** When the coordinator asks you to
   draft a new email to someone (not a reply to an existing thread), use

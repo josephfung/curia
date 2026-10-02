@@ -399,7 +399,9 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     // Exact-version tripwire, matching calendar-prompt.test.ts's convention.
     // 0.17.0 = answers a generic PEER REQUEST, a new capability, so minor.
     // 0.17.1 = principal vocabulary in the prompt (#1950).
+    // 0.18.0 = context-bridge-keep-open joins its pinned bundle; the platform
+    //          releases delegated exchange entries (#1972).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.17.1');
+    expect(config.version).toBe('0.18.0');
   });
 });
