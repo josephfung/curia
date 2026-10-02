@@ -1,5 +1,7 @@
 // tests/smoke/types.ts
+import type { ToolStub } from '../scenarios/types.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
+import type { AgentToolCall } from './stub-layer.js';
 
 // -- Test case definition (loaded from YAML) --
 
@@ -16,6 +18,8 @@ export interface Turn {
   content: string;
   /** Delay before sending this turn (ms). Simulates pauses in multi-turn. */
   delayMs?: number;
+  /** Stubs for this turn only, tried before the case's (e.g. a list that now shows what turn 1 created). */
+  toolStubs?: Record<string, ToolStub[]>;
 }
 
 /**
@@ -33,6 +37,13 @@ export interface TestCase {
   sender: SmokeSender;
   /** Show the judge each turn's tool calls and results, not only the reply text. */
   judgeToolCalls: boolean;
+  /**
+   * Fixture answers for tools test mode cannot reach (calendar, mailbox, scheduler…),
+   * for any agent. Same schema as the scenario suite's; unstubbed calls run for real.
+   */
+  toolStubs: Record<string, ToolStub[]>;
+  /** A tracked bug this case currently catches: reported, but does not fail the gate. */
+  knownFailure?: { issue: string };
   turns: Turn[];
   expectedBehaviors: ExpectedBehavior[];
   failureModes: string[];
@@ -51,9 +62,9 @@ export interface CapturedResponse {
 export interface CaseExecution {
   testCase: TestCase;
   responses: CapturedResponse[];
+  /** Every agent's tool calls during the case (specialists included), for stub authoring. */
+  agentCalls: AgentToolCall[];
   error?: string;
-  /** Set when deleting the case's conversation rows failed; leftovers may remain. */
-  cleanupError?: string;
 }
 
 // -- Evaluation results --
@@ -75,8 +86,8 @@ export interface CaseResult {
   error?: string;
   /** The judge failed (not the model): its scores are placeholders. Gated separately. */
   judgeError?: string;
-  cleanupError?: string;
-  /** The case clears the gate (gate.ts). */
+  agentCalls: AgentToolCall[];
+  /** The case clears the gate (gate.ts). A known_failure case that fails is not passed, but not gated. */
   passed: boolean;
   /** Why it did not, one line each; empty when it passed. */
   failures: string[];
@@ -95,7 +106,7 @@ export interface RunResult {
   cases: CaseResult[];
   /** Overall weighted score 0-1 across all cases */
   overallScore: number;
-  /** The suite passes when every case passes. */
+  /** The suite passes when every case passes, known failures aside. */
   passed: boolean;
   durationMs: number;
 }

@@ -6,24 +6,19 @@
 // Dispatcher. No HTTP or CLI channel and no transport clients: nothing leaves the
 // process. sendMessage() publishes an inbound.message and reads the coordinator's
 // turn off the bus (tests/shared/turn-capture.ts): its tool calls and its reply.
+//
+// The CLI points DATABASE_URL at a throwaway copy of the database (clone-db.ts) before
+// booting, so whatever the agents write is dropped with it. Tool stubs (stub-layer.ts)
+// answer calls test mode cannot serve.
 
 import { randomUUID } from 'node:crypto';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { createInboundMessage } from '../../src/bus/events.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
-import {
-  createTestModeStack,
-  type ExecutionLayerWrapper,
-  type TestModeStack,
-} from '../../src/startup/test-mode-stack.js';
-import {
-  cleanupConversation,
-  createTurnCapture,
-  sweepConversations,
-  withoutRecentHistory,
-  type ObservedToolCall,
-} from '../shared/turn-capture.js';
+import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { createTurnCapture, withoutRecentHistory, type ObservedToolCall } from '../shared/turn-capture.js';
+import { createSmokeStubs, type SmokeStubs } from './stub-layer.js';
 import type { SmokeSender } from './types.js';
 
 // How long each sendMessage() call waits for the coordinator's response.
@@ -44,12 +39,6 @@ export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout >
 const LATE_TURN_GRACE_MS = 60_000;
 
 /**
- * Conversation-id prefixes smoke uses. Its rows are found by them: deleted after each
- * case, and swept at start-up in case an interrupted run left some.
- */
-export const SMOKE_CONVERSATION_PREFIXES = ['smoke-', 'email:smoke-'] as const;
-
-/**
  * The `unknown` sender: an address with no contact record. `example.test` is reserved
  * (RFC 2606), so it can never be a real person's address. Nothing creates a contact for
  * it — the Dispatcher only publishes contact.unknown and routes in low-trust mode.
@@ -67,8 +56,6 @@ export interface HarnessOptions {
    * follows from the model registry). Default: the configured model_routing.
    */
   model?: string;
-  /** Wrap the ExecutionLayer before agents get it — tool stubs (#1956). */
-  wrapExecutionLayer?: ExecutionLayerWrapper;
 }
 
 export interface TurnResponse {
@@ -82,6 +69,8 @@ export interface CuriaHarness {
   logger: Logger;
   /** The underlying test-mode stack (services, assembled agents, prompt render). */
   stack: TestModeStack;
+  /** Per-case tool stubs and the record of every agent's calls. */
+  stubs: SmokeStubs;
   /**
    * Send a single message and wait for the coordinator's turn to end. Rejects if it
    * errors or does not end within RESPONSE_TIMEOUT_MS.
@@ -97,10 +86,6 @@ export interface CuriaHarness {
    * The response is discarded — we only care that the stack is primed.
    */
   warmUp(): Promise<void>;
-  /** Delete a finished case's conversation rows (working memory, checkpoints, entities). */
-  cleanup(conversationId: string): Promise<void>;
-  /** Delete conversation rows an interrupted run left behind. Returns rows removed per table. */
-  sweep(): Promise<Record<string, number>>;
   shutdown(): Promise<void>;
 }
 
@@ -108,9 +93,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   // Agents, services and the no-send outbound gateway — the production assembly
   // path in test mode. Throws with the provider name if the chosen model's API key
   // is missing.
+  const stubs = createSmokeStubs();
   const stack = await createTestModeStack({
     model: options.model,
-    wrapExecutionLayer: options.wrapExecutionLayer,
+    wrapExecutionLayer: (layer) => stubs.wrap(layer),
     // No contact recent history: a case must not inherit another case's turns, or the
     // real principal's, through cross-conversation recall.
     wrapWorkingMemory: withoutRecentHistory,
@@ -130,9 +116,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   /**
    * Turns still running after sendMessage gave up on them. EventBus.publish awaits every
    * subscriber, so a publish resolves only when the whole coordinator turn has finished;
-   * sendMessage therefore races the capture's timeout instead of awaiting it. When a late
-   * turn finally ends it has written rows after its case's cleanup, so they are deleted
-   * again, and shutdown waits for these before closing the pool.
+   * sendMessage therefore races the capture's timeout instead of awaiting it. Shutdown
+   * waits (bounded) for these before closing the pool.
    */
   const lateTurns = new Set<Promise<void>>();
 
@@ -141,11 +126,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
       .catch((err: unknown) => {
         // sendMessage has its outcome already (capture.fail or the timeout).
         logger.error({ err, conversationId }, 'smoke harness: a coordinator turn failed');
-      })
-      .then(() => cleanupConversation(stack.pool, conversationId))
-      .catch((err: unknown) => {
-        logger.error({ err, conversationId }, 'smoke harness: late conversation cleanup failed');
-        process.stderr.write(`  [WARN] late cleanup failed for ${conversationId}: ${err instanceof Error ? err.message : String(err)}\n`);
       })
       .finally(() => { lateTurns.delete(settled); });
     lateTurns.add(settled);
@@ -206,13 +186,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     // warm-up, first LLM API round-trip, skill registry init, etc.
     // A failure is reported but not fatal — if the stack is broken, real test cases
     // will surface it with clearer context.
-    const conversationId = `smoke-warmup-${randomUUID()}`;
     try {
-      await sendMessage({ conversationId, content: 'hello' });
+      await sendMessage({ conversationId: `smoke-warmup-${randomUUID()}`, content: 'hello' });
     } catch (err) {
       process.stderr.write(`  [WARN] warm-up turn failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
-    await cleanupConversation(stack.pool, conversationId);
+    // The warm-up's calls are not any case's.
+    stubs.clear();
   }
 
   async function shutdown(): Promise<void> {
@@ -227,14 +207,5 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     await stack.shutdown();
   }
 
-  return {
-    bus,
-    logger,
-    stack,
-    sendMessage,
-    warmUp,
-    cleanup: (conversationId) => cleanupConversation(stack.pool, conversationId),
-    sweep: () => sweepConversations(stack.pool, SMOKE_CONVERSATION_PREFIXES),
-    shutdown,
-  };
+  return { bus, logger, stack, stubs, sendMessage, warmUp, shutdown };
 }
