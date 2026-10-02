@@ -192,20 +192,22 @@ Three approaches were considered:
   rejecting unknown keys would break legitimate tuning. The startup
   `Outbound context TTL policy resolved` line prints the merged map so a typo
   is visible next to the value it failed to override.
-- **`agent_id` and `delegation_hint` are platform-owned, not model-written (#1972).**
-  Both fields used to be whatever the model put in a send skill's `context_bridge`.
+- **`delegation_hint` is platform-owned, not model-written (#1972).**
+  It used to be whatever the model put in a send skill's `context_bridge`.
   Production had nine spellings of "ceo-inbox", hints naming agents that do not
   exist, and relays that dropped the hint, so a principal reply to a specialist's
   follow-up reached the coordinator unowned. `ScopedOutboundContext.register` now
-  applies two rules (`src/dispatch/delegation-hint.ts`). A send made on a bullpen
-  wake where a specialist opened the thread and mentioned the sender is a relay:
-  the entry is attributed to that specialist, `agent_id` and hint both. Any other
-  hint is reduced to the single registered specialist it names, or dropped. The
-  one structured form kept is `<agent> clarification pending`, and only when the
-  metadata carries a `resume_token`. Trade-off: a hint naming no specialist
-  (or the coordinator) is lost rather than shown to the model, which is the
-  point — the coordinator treats any hint as a binding hand-off, so a hint the
-  platform cannot route is a misroute waiting to happen.
+  applies three rules in order (`src/dispatch/delegation-hint.ts`). An entry whose
+  metadata carries a `resume_token` belongs to the agent the token was minted for,
+  with hint `<agent> clarification pending`. A send made on a bullpen wake where a
+  specialist opened the thread and mentioned the sender is a relay, attributed to
+  that specialist (`agent_id` and hint). Any other hint keeps only its leading word
+  when that word is a registered specialist, and is otherwise dropped with a warning.
+  Leading word only, because `calendar`, `contacts` and `diagnostics` are English
+  words too and the coordinator treats any hint as a binding hand-off. Outside the
+  first two rules the model-written `agent_id` passes through; it is display-only.
+  Trade-off: a hint the platform cannot route is lost rather than shown to the
+  model, which is the point — it would be a misroute waiting to happen.
 - Metadata is JSONB capped at 16 KB. Oversize metadata is dropped at
   serialization time (text fields like `expected_reply` and `delegation_hint`
   are truncated to 500 chars with a marker). This protects against runaway

@@ -516,21 +516,27 @@ export class ScopedOutboundContext implements OutboundContextCapability {
       return this.service.register({ ...entry, conversationId: this.conversationId });
     }
     // Every send skill registers through here, so this is the one place the
-    // model-written agent_id / delegation_hint get replaced by code-owned values.
+    // hint is canonicalized and, on a relay or clarification, agent_id is set by
+    // code. Outside those two cases the model-written agent_id passes through:
+    // it is display-only ("on behalf of X") and routes nothing.
     const { roster, relayRequester, log } = this.attribution;
     const { entry: attributed, changes } = attributeOutboundEntry(entry, { roster, relayRequester });
-    if (changes.hintDropped !== undefined) {
-      // Warn: the model asked for a hand-off the platform cannot route, so a reply
-      // to this message will reach the coordinator as an unowned message.
-      log.warn(
-        { channelId: entry.channelId, agentId: attributed.agentId, droppedHint: changes.hintDropped },
-        'outbound context: delegation_hint names no registered specialist — registering without a hint',
-      );
+    // conversationId ties these lines to the send that registered the entry (it is
+    // the invoking conversation: bullpen thread, scheduler run, Signal peer).
+    const fields = {
+      conversationId: this.conversationId,
+      channelId: entry.channelId,
+      agentId: attributed.agentId,
+      delegationHint: attributed.delegationHint,
+      ...changes,
+    };
+    if (changes.hintDropped !== undefined || changes.resumeTokenMissing) {
+      // Warn: the model asked for a hand-off (or a resume) the platform cannot
+      // honour, so a reply to this message reaches the coordinator unowned, or is
+      // re-delegated fresh instead of resuming the paused specialist.
+      log.warn(fields, 'outbound context: delegation_hint cannot be honoured as written — registering what the platform can route');
     } else if (Object.keys(changes).length > 0) {
-      log.info(
-        { channelId: entry.channelId, agentId: attributed.agentId, delegationHint: attributed.delegationHint, ...changes },
-        'outbound context: entry attribution set by platform',
-      );
+      log.info(fields, 'outbound context: entry attribution set by platform');
     }
     return this.service.register({ ...attributed, conversationId: this.conversationId });
   }
