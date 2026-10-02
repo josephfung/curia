@@ -314,13 +314,23 @@ export class DelegateHandler implements ToolHandler {
     // The outbound-context entry this delegation answers, if any (#1972). Linked
     // before the run so the specialist's brief can name it, settled after from the
     // result shape. See ./outbound-entry.ts.
-    const { agent, task, outbound_entry_id } = ctx.input as { agent?: unknown; task?: unknown; outbound_entry_id?: unknown };
-    const link = typeof agent === 'string' && typeof task === 'string'
+    const { agent, task, outbound_entry_id, resume_token } = ctx.input as {
+      agent?: unknown; task?: unknown; outbound_entry_id?: unknown; resume_token?: unknown;
+    };
+    const { link, report: linkReport } = typeof agent === 'string' && typeof task === 'string'
       ? await linkOutboundEntry(ctx, agent, task, outbound_entry_id)
-      : null;
+      : { link: null, report: undefined };
     let delegatedTaskId: string | undefined;
     const result = await this.run(ctx, link, (id) => { delegatedTaskId = id; });
-    if (link) await settleOutboundEntry(ctx, link, result, delegatedTaskId);
+    const report = link
+      ? await settleOutboundEntry(ctx, link, result, { delegatedTaskId, resumeToken: resume_token })
+      : linkReport;
+    // Tell the coordinator what happened to the entry it named, so a wrong id or
+    // owner is visible to the model that chose it rather than only in the logs.
+    // A failed result has no data object; its error text already leads.
+    if (report && result.success) {
+      return { ...result, data: { ...(result.data as Record<string, unknown>), outbound_entry: report } };
+    }
     return result;
   }
 

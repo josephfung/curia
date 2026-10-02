@@ -9,7 +9,7 @@
     "task": "string",
     "conversation_id": "string?",
     "resume_token": "string?",
-    "outbound_entry_id": "string? (When this delegation routes the principal's reply to an [ACTIVE OUTBOUND CONTEXT] entry, that entry's entry_id. The platform releases the entry when the specialist has handled the reply, and keeps it active if the specialist could not. Do not call context-bridge-release for it yourself.)"
+    "outbound_entry_id": "string? (When this delegation routes the principal's reply to an [ACTIVE OUTBOUND CONTEXT] entry, that entry's entry_id. The platform releases the entry when the delegation ends, and keeps it only when routing the reply again could still work; the result's outbound_entry says which. Do not call context-bridge-release for it yourself.)"
   },
   "outputs": {
     "response": "string?",
@@ -34,15 +34,15 @@
     "wait_timeout_ms": "number?",
     "open_handle_age_ms": "number? (ms since the already_in_flight row was written; a running claim starts at dispatch, a promoted pending handle keeps that time)",
     "handle_status": "string? (running or pending, on an already_in_flight result)",
-    "handle_expires_at": "string? (ISO time the already_in_flight row stops blocking, before the sweep's lag)"
+    "handle_expires_at": "string? (ISO time the already_in_flight row stops blocking, before the sweep's lag)",
+    "outbound_entry": "object? ({ id, status, reason? } — what the platform did with the linked outbound-context entry: released, kept_open (the specialist still needs the principal on it), kept (the specialist could not take the reply; retry or tell the principal), already_released, release_failed, or not_linked with the reason)"
   },
   "permissions": [],
   "secrets": [],
   "timeout": 900000,
   "capabilities": [
     "bus",
-    "agentRegistry",
-    "outboundContext"
+    "agentRegistry"
   ],
   "allowed_callers": ["coordinator"]
 }
