@@ -1,13 +1,13 @@
 // tests/smoke/runner.ts
-import { randomUUID } from 'node:crypto';
-import type { CuriaHarness } from './harness.js';
+import { conversationIdFor, type CuriaHarness } from './harness.js';
 import type { TestCase, CaseExecution, CapturedResponse } from './types.js';
 
 /**
  * Execute all test cases against a live Curia harness.
  * Sends a warm-up message first to absorb cold-start latency (DB pool warm-up,
- * first Anthropic API round-trip), then runs each case with a unique
- * conversationId to avoid cross-contamination.
+ * first model API round-trip), then runs each case with a unique
+ * conversationId to avoid cross-contamination, and deletes the case's
+ * conversation rows afterwards.
  * Multi-turn cases send turns sequentially with configured delays.
  */
 export async function runTestCases(
@@ -19,7 +19,7 @@ export async function runTestCases(
   },
 ): Promise<CaseExecution[]> {
   // Prime the stack so the first real test case doesn't pay cold-start cost.
-  // warmUp() swallows its own errors — harness failures surface through cases.
+  // warmUp() reports its own failure — harness failures surface through cases.
   options?.onWarmUp?.();
   await harness.warmUp();
 
@@ -27,17 +27,30 @@ export async function runTestCases(
 
   for (let i = 0; i < cases.length; i++) {
     const tc = cases[i]!;
+    const conversationId = conversationIdFor(tc.sender);
+    const responses: CapturedResponse[] = [];
     let execution: CaseExecution;
 
     try {
-      execution = await runSingleCase(harness, tc);
+      await runSingleCase(harness, tc, conversationId, responses);
+      execution = { testCase: tc, responses };
     } catch (err) {
-      // Case-level failure (e.g., all turns timed out)
+      // Case-level failure (a turn timed out or errored). Turns that did complete are
+      // kept for the report.
       execution = {
         testCase: tc,
-        responses: [],
+        responses,
         error: err instanceof Error ? err.message : String(err),
       };
+    }
+
+    // Recorded on the case, not thrown: a throw would lose every case run so far.
+    // The gate fails the case, since leftovers leak into later principal turns.
+    try {
+      await harness.cleanup(conversationId);
+    } catch (err) {
+      execution.cleanupError = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`  [WARN] cleanup failed after '${tc.name}': ${execution.cleanupError}\n`);
     }
 
     results.push(execution);
@@ -50,10 +63,9 @@ export async function runTestCases(
 async function runSingleCase(
   harness: CuriaHarness,
   tc: TestCase,
-): Promise<CaseExecution> {
-  const conversationId = `smoke-${randomUUID()}`;
-  const responses: CapturedResponse[] = [];
-
+  conversationId: string,
+  responses: CapturedResponse[],
+): Promise<void> {
   for (const turn of tc.turns) {
     // Delay between turns for multi-turn cases
     if (turn.delayMs) {
@@ -63,14 +75,15 @@ async function runSingleCase(
     const response = await harness.sendMessage({
       conversationId,
       content: turn.content,
+      sender: tc.sender,
     });
 
     responses.push({
       content: response.content,
-      agentId: 'coordinator', // TODO: capture actual agent from bus events
+      // The capture reads the coordinator's own agent.response, so this is exact.
+      agentId: 'coordinator',
       durationMs: response.durationMs,
+      toolCalls: response.toolCalls,
     });
   }
-
-  return { testCase: tc, responses };
 }

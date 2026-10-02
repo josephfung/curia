@@ -87,4 +87,38 @@ describe('Smoke test loader', () => {
 
     expect(() => loadTestCases(dir)).not.toThrow();
   });
+
+  describe('sender and judge_tool_calls (#1956)', () => {
+    function load(extra: string): ReturnType<typeof loadTestCase> {
+      const dir = mkdtempSync(join(tmpdir(), 'curia-smoke-test-'));
+      tempDirs.push(dir);
+      const file = join(dir, 'case.yaml');
+      writeFileSync(file, `${minimalYaml('Case')}\n${extra}`);
+      return loadTestCase(file);
+    }
+
+    it('defaults to the principal, with the judge reading replies only', () => {
+      const tc = load('');
+      expect(tc.sender).toBe('principal');
+      expect(tc.judgeToolCalls).toBe(false);
+    });
+
+    it('reads an unknown sender and opting the judge into tool calls', () => {
+      const tc = load('sender: unknown\njudge_tool_calls: true');
+      expect(tc.sender).toBe('unknown');
+      expect(tc.judgeToolCalls).toBe(true);
+    });
+
+    it('rejects an invalid sender', () => {
+      expect(() => load('sender: ceo')).toThrow(/Invalid sender 'ceo'/);
+    });
+
+    it('rejects a non-boolean judge_tool_calls', () => {
+      expect(() => load('judge_tool_calls: "yes"')).toThrow(/judge_tool_calls/);
+    });
+
+    it('rejects an unknown top-level key, so a typo cannot silently fall back to a default', () => {
+      expect(() => load('judge_tool_call: true')).toThrow(/Unknown key\(s\) 'judge_tool_call'/);
+    });
+  });
 });

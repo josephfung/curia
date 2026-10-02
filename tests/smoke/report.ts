@@ -139,7 +139,7 @@ function buildTrendChart(history: HistoricalEntry[]): string {
  * Render a single case result as a collapsible details card.
  */
 function renderCaseCard(caseResult: CaseResult): string {
-  const { testCase, responses, scores, weightedScore, error } = caseResult;
+  const { testCase, responses, scores, weightedScore, failures } = caseResult;
   const color = scoreColor(weightedScore);
 
   // Tags as pills
@@ -157,6 +157,9 @@ function renderCaseCard(caseResult: CaseResult): string {
     .map(r => `
       <div class="response-block">
         <div class="response-meta">Agent: ${escapeHtml(r.agentId)} &middot; ${formatDuration(r.durationMs)}</div>
+        ${r.toolCalls.length > 0
+          ? `<div class="response-meta">Tools: ${r.toolCalls.map(c => escapeHtml(c.result && !c.result.success ? `${c.name} (failed)` : c.name)).join(', ')}</div>`
+          : ''}
         <div class="response-content">${escapeHtml(r.content)}</div>
       </div>`)
     .join('\n');
@@ -187,9 +190,9 @@ function renderCaseCard(caseResult: CaseResult): string {
       </div>`
     : '';
 
-  // Error banner (if execution errored)
-  const errorBanner = error
-    ? `<div class="error-banner">${escapeHtml(error)}</div>`
+  // Gate failures (execution or judge error, critical MISS, score below threshold)
+  const errorBanner = failures.length > 0
+    ? `<div class="error-banner">${failures.map(f => escapeHtml(f)).join('<br>')}</div>`
     : '';
 
   return `

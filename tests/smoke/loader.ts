@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
-import type { TestCase, Turn, ExpectedBehavior, BehaviorWeight } from './types.js';
+import { SMOKE_SENDERS, type TestCase, type Turn, type ExpectedBehavior, type BehaviorWeight, type SmokeSender } from './types.js';
 
 const VALID_WEIGHTS: BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
 
@@ -10,10 +10,18 @@ interface RawTestCase {
   name?: string;
   description?: string;
   tags?: string[];
+  sender?: unknown;
+  judge_tool_calls?: unknown;
   turns?: Array<{ role?: string; content?: string; delay_ms?: number }>;
   expected_behaviors?: Array<{ id?: string; description?: string; weight?: string }>;
   failure_modes?: string[];
 }
+
+// A misspelt key (`judge_tool_call`, `senders`) would otherwise be dropped silently and the
+// case would run with the default — passing for the wrong reason.
+const CASE_KEYS: ReadonlySet<string> = new Set([
+  'name', 'description', 'tags', 'sender', 'judge_tool_calls', 'turns', 'expected_behaviors', 'failure_modes',
+]);
 
 /**
  * Load a single YAML test case from a file path.
@@ -28,7 +36,18 @@ export function loadTestCase(filePath: string): TestCase {
   if (!raw || typeof raw !== 'object') {
     throw new Error(`Invalid test case file: ${filePath}`);
   }
+  const unknownKeys = Object.keys(raw).filter(k => !CASE_KEYS.has(k));
+  if (unknownKeys.length > 0) {
+    throw new Error(`Unknown key(s) ${unknownKeys.map(k => `'${k}'`).join(', ')} in ${filePath}`);
+  }
   if (!raw.name) throw new Error(`Missing 'name' in ${filePath}`);
+  const sender = raw.sender ?? 'principal';
+  if (!SMOKE_SENDERS.includes(sender as SmokeSender)) {
+    throw new Error(`Invalid sender '${String(raw.sender)}' in ${filePath} — use ${SMOKE_SENDERS.join(' or ')}`);
+  }
+  if (raw.judge_tool_calls !== undefined && typeof raw.judge_tool_calls !== 'boolean') {
+    throw new Error(`'judge_tool_calls' must be true or false in ${filePath}`);
+  }
   if (!raw.turns || raw.turns.length === 0) throw new Error(`Missing 'turns' in ${filePath}`);
   if (!raw.expected_behaviors || raw.expected_behaviors.length === 0) {
     throw new Error(`Missing 'expected_behaviors' in ${filePath}`);
@@ -58,6 +77,8 @@ export function loadTestCase(filePath: string): TestCase {
     name: raw.name,
     description: raw.description ?? '',
     tags: raw.tags ?? [],
+    sender: sender as SmokeSender,
+    judgeToolCalls: raw.judge_tool_calls === true,
     turns,
     expectedBehaviors,
     failureModes: raw.failure_modes ?? [],
