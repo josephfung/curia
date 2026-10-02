@@ -9,16 +9,16 @@ turns:
   - role: user
     content: |
       FYI — forwarding this from David Marchetti. He said he'd have the due
-      diligence report for the Apex acquisition to us by next Wednesday. His
+      diligence report for the Apex acquisition to us by Wednesday. His
       team is also supposed to send over the environmental assessment separately
       but he didn't give a date on that one.
 
       ---------- Forwarded message ----------
-      From: David Marchetti <dmarchetti@owlcapital.com>
+      From: David Marchetti <dmarchetti@owlcapital.example>
       Subject: Re: Apex DD Timeline
 
-      Alex — we're on track. Full DD report will be in your hands by
-      Wednesday March 31st. Environmental piece is still with the
+      {{principal:first}} — we're on track. Full DD report will be in your hands by
+      {{day:next-wednesday}}. Environmental piece is still with the
       consultants, will send as soon as it lands.
 
       David
@@ -31,7 +31,7 @@ expected_behaviors:
     description: Identifies David Marchetti (Owl Capital) as the person who made the commitment
     weight: important
   - id: identify-deadline
-    description: Captures Wednesday March 31st as the deadline for the DD report
+    description: Captures the coming Wednesday (the date in David's email) as the deadline for the DD report
     weight: critical
   - id: track-second-item
     description: Notes the environmental assessment as a separate deliverable with no firm date

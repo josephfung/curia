@@ -12,20 +12,20 @@ turns:
       Can you pull the action items out of this thread and track them?
 
       ---------- Forwarded message ----------
-      From: Amara Osei <amara@curiatech.com>
-      To: Alex Chen <alex@curiatech.com>, Kevin Tao <kevin@curiatech.com>,
-          Priya Sharma <priya@curiatech.com>
-      Subject: Re: Product Launch Prep — Week of April 7
+      From: Amara Osei <amara@curiatech.example>
+      To: {{principal:name}} <principal@curiatech.example>, Kevin Tao <kevin@curiatech.example>,
+          Priya Sharma <priya.sharma@curiatech.example>
+      Subject: Re: Product Launch Prep — Week of {{day:next-monday}}
 
       Team — thanks for a productive sync. Here's what I captured:
 
       - Kevin: finalize the press release draft and send to comms for review
         by EOD Friday
       - Priya: confirm the demo environment is stable and run a full dry-run
-        by Monday April 7
+        by {{day:next-monday}}
       - Amara (me): schedule the customer advisory board pre-briefing for
-        the week of March 31
-      - Alex: sign off on the pricing page copy — Priya will send it over
+        this week
+      - {{principal:first}}: sign off on the pricing page copy — Priya will send it over
         by Thursday
 
       Let me know if I missed anything.
@@ -34,19 +34,19 @@ turns:
 
 expected_behaviors:
   - id: identify-all-owners
-    description: Identifies all four people with action items (Kevin, Priya, Amara, Alex)
+    description: Identifies all four people with action items (Kevin, Priya, Amara, and the principal)
     weight: critical
   - id: separate-tracking
     description: Tracks each action item separately with the correct owner
     weight: critical
   - id: capture-deadlines
-    description: Captures the deadlines for each item (EOD Friday, Monday April 7, week of March 31, Thursday)
+    description: Captures each item's deadline as the thread states it (EOD Friday, the coming Monday, this week, Thursday)
     weight: important
   - id: flag-user-item
-    description: Highlights Alex's own action item (sign off on pricing page copy)
+    description: Highlights the principal's own action item (sign off on pricing page copy)
     weight: important
   - id: note-dependencies
-    description: Notes that Alex's sign-off depends on Priya sending the pricing page copy first
+    description: Notes that the principal's sign-off depends on Priya sending the pricing page copy first
     weight: nice-to-have
   - id: offer-reminders
     description: Offers to set reminders for upcoming deadlines
@@ -56,4 +56,4 @@ failure_modes:
   - Only captures some of the action items, missing one or more people
   - Attributes an action item to the wrong person
   - Treats the entire thread as one big task instead of separate items
-  - Misses the dependency between Priya's delivery and Alex's sign-off
+  - Misses the dependency between Priya's delivery and the principal's sign-off
