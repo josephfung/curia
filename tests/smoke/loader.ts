@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { parseStubs } from '../scenarios/loader.js';
+import { resolveDatePlaceholders } from './date-placeholders.js';
 import { SMOKE_SENDERS, type TestCase, type Turn, type ExpectedBehavior, type BehaviorWeight, type SmokeSender } from './types.js';
 
 const VALID_WEIGHTS: BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
@@ -93,6 +94,13 @@ export function loadTestCase(filePath: string): TestCase {
     }
     return { id: b.id, description: b.description, weight };
   });
+
+  // Catch a malformed date placeholder at load time, not mid-run.
+  try {
+    resolveDatePlaceholders([raw.tool_stubs, raw.turns.map(t => t.tool_stubs)], 'UTC');
+  } catch (err) {
+    throw new Error(`Bad date placeholder in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   return {
     name: raw.name,

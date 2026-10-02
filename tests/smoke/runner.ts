@@ -1,5 +1,6 @@
 // tests/smoke/runner.ts
 import { conversationIdFor, type CuriaHarness } from './harness.js';
+import { resolveDatePlaceholders } from './date-placeholders.js';
 import { mergeStubs } from './stub-layer.js';
 import type { TestCase, CaseExecution, CapturedResponse } from './types.js';
 
@@ -60,7 +61,8 @@ async function runSingleCase(
       await new Promise(resolve => setTimeout(resolve, turn.delayMs));
     }
 
-    harness.stubs.set(mergeStubs(turn.toolStubs, tc.toolStubs));
+    // Dates in fixtures are relative to today in the principal's timezone, as the agents see it.
+    harness.stubs.set(resolveDatePlaceholders(mergeStubs(turn.toolStubs, tc.toolStubs), harness.stack.config.timezone));
     const response = await harness.sendMessage({
       conversationId,
       content: turn.content,
