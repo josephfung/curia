@@ -12,7 +12,7 @@ turns:
       1) Can you check if the Q2 board deck has been shared with me yet? I think
          Priya was supposed to send it by end of day yesterday.
       2) Remind me to call Sarah Chen about the Nexus partnership deal tomorrow at 2pm.
-      3) Also — what time is my flight to Montreal on Thursday? I can't remember
+      3) Also — what time is my flight to Montreal on {{day:next-thursday}}? I can't remember
          if it's the 7am or the 9am.
 
 expected_behaviors:

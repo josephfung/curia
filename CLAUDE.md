@@ -390,8 +390,8 @@ pnpm smoke --model <standard-tier model>        # ~40 min; docs/dev/smoke-tests.
 pnpm scenarios --model <standard-tier model>    # ~25 min; tests/scenarios/README.md
 ```
 
-- **Block the release** if either command exits non-zero: any smoke case fails its gate, or any critical scenario behavior is below threshold. Judge errors and errored runs also fail the gate; re-run those rather than waving them through. A scenario case marked `known_failure` is reported but not gated; confirm its issue is still open.
-- **Record the results with the gate SHA.** Each suite prints the `Commit:` it ran on, and it must equal `<gate-sha>`. Note both suites' outcomes next to the security gate's (smoke: cases passed; scenarios: gate passed, plus any known failures).
+- **Block the release** if either command exits non-zero: any smoke case fails its gate, or any critical scenario behavior is below threshold. Judge errors and errored runs also fail the gate; re-run those rather than waving them through. A case marked `known_failure` (smoke shows it as `KNOWN`; scenarios list it under known failures) is reported but not gated: confirm each one's issue is still open, because a marker on a closed issue would wave a regression through.
+- **Record the results with the gate SHA.** Each suite prints the `Commit:` it ran on, and it must equal `<gate-sha>` exactly — a `-dirty` suffix means uncommitted changes were tested, so the run does not count. Note both suites' outcomes next to the security gate's (smoke: cases passed, any `PASS*` retries and `KNOWN` known failures; scenarios: gate passed, plus any known failures).
 - Fix a failure on a normal branch, as with the security gate. That moves `main`, so re-run **both B and C** on the new commit. Step 7's diff against `<gate-sha>` then proves the tag is code-identical to what both gates checked.
 
 With docs synced and both gates clear, cut the release:
