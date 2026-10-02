@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Coordinator scenario suite** — `pnpm scenarios` tests coordinator decisions; exits non-zero when a critical behavior passes under 80%. (#1956)
+- **Test-mode stack** — `wrapBullpenService` and `llmProviders` hooks for the scenario suite. (#1956)
 - **`agent.task` (public API)** — optional `toolAllowlist` limits one turn to the named tools. (#1951)
 - **`report-agent-context`** — read-only report of an agent's per-call context and tool usage. (#1955)
 - **Peer-request protocol** — any agent can ask another a question over the bullpen and get a structured answer.
