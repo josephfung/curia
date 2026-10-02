@@ -1,5 +1,9 @@
 name: Photo of Receipt Only
-description: Agent receives an image of a receipt with no accompanying text — tests image processing capability (expected to fail until image support is built)
+description: >
+  The principal sends a photo of a receipt with no accompanying text. Smoke cannot attach
+  a real image, so the photo arrives as its transcription; this tests what Curia does with
+  a receipt it can read — pull out the details and ask (or say) what it will do with it —
+  not image recognition itself.
 tags:
   - inference
   - expense
@@ -21,7 +25,7 @@ turns:
 
 expected_behaviors:
   - id: process-image
-    description: Processes the receipt image and extracts structured data
+    description: Treats the message as a receipt and extracts its details as structured data
     weight: critical
   - id: extract-total
     description: Extracts the total amount ($16.67)
