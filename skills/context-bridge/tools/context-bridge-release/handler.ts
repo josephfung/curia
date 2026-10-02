@@ -11,7 +11,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { isTaskWakeReplyBinding, recordTaskWakeReply } from '../../../../src/dispatch/task-wake-reply.js';
 import { isUuid } from '../../../../src/util/uuid.js';
-import { delegationHintOwner } from '../../../../src/dispatch/delegation-hint.js';
+import { delegationHintOwner, rosterFromRegistry } from '../../../../src/dispatch/delegation-hint.js';
 
 /**
  * A non-UUID `entry_id` is a Postgres 22P02 on the uuid column, and the driver
@@ -33,7 +33,8 @@ function ownedEntryError(entryId: string, owner: string): string {
   return (
     `Entry ${entryId} is owned by ${owner}, so do not release it yourself. When you ` +
     `route the reply, pass this id to delegate as outbound_entry_id; the platform ` +
-    `releases the entry when ${owner} returns, unless ${owner} keeps the exchange open.`
+    `releases the entry when ${owner} returns, unless ${owner} keeps the exchange open. If delegate ` +
+    `reported outbound_entry status kept, ${owner} could not take the reply: route it again or tell the principal.`
   );
 }
 
@@ -59,6 +60,11 @@ export class ContextBridgeReleaseHandler implements ToolHandler {
         success: false,
         error: 'context-bridge-release requires outboundContext capability.',
       };
+    }
+    // The roster decides who owns a hinted entry (#1972). Without it the ownership
+    // check cannot run, and skipping it would silently re-open the coordinator path.
+    if (!ctx.agentRegistry) {
+      return { success: false, error: 'context-bridge-release requires agentRegistry capability.' };
     }
 
     try {
@@ -101,7 +107,7 @@ export class ContextBridgeReleaseHandler implements ToolHandler {
       // owner releases it directly; otherwise the platform does, when the delegation
       // that routed the reply returns. Task-wake bindings stay the caller's to close.
       // A missing entry (already released or expired) falls through to the no-op release.
-      const owner = entry ? delegationHintOwner(entry.delegationHint) : null;
+      const owner = entry ? delegationHintOwner(entry.delegationHint, rosterFromRegistry(ctx.agentRegistry)) : null;
       if (entry && owner && owner !== ctx.agentId && !isTaskWakeReplyBinding(entry.metadata)) {
         ctx.log.info(
           { entryId, owner, caller: ctx.agentId },

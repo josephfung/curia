@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
+import { AgentRegistry } from '../../../../src/agents/agent-registry.js';
 import { ContextBridgeKeepOpenHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 
@@ -7,9 +8,17 @@ const handler = new ContextBridgeKeepOpenHandler();
 const ENTRY_ID = '00000000-0000-4000-8000-000000000002';
 
 /** A delegated specialist's ctx: delegate stamps delegationOrigin on every delegated task. */
+/** The roster ownership is resolved against (#1972). */
+const agentRegistry = new AgentRegistry();
+agentRegistry.register('coordinator', { role: 'coordinator', description: 'router' });
+agentRegistry.register('ceo-inbox', { role: 'specialist', description: 'inbox' });
+agentRegistry.register('calendar', { role: 'specialist', description: 'calendar' });
+agentRegistry.register('research-analyst', { role: 'specialist', description: 'research' });
+
 function makeCtx(input: Record<string, unknown>, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     input,
+    agentRegistry,
     log: pino({ level: 'silent' }),
     agentId: 'ceo-inbox',
     taskEventId: 'task-delegated-1',

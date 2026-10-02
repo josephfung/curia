@@ -17,6 +17,7 @@
   "timeout": 10000,
   "capabilities": [
     "outboundContext",
-    "taskRepo"
+    "taskRepo",
+    "agentRegistry"
   ]
 }
