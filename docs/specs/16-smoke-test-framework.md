@@ -105,7 +105,16 @@ key) and the coordinator tools test mode refuses (`disabledTools`).
 `createTestModeStack({ wrapExecutionLayer })` take a function that wraps the ExecutionLayer before
 any agent receives it. Return a Proxy (or subclass) whose `invoke` answers stubbed tools and
 delegates every other method to the real layer. `tool.invoke` / `tool.result` bus events and
-the runtime's `<task_error>` formatting are unchanged.
+the runtime's `<task_error>` formatting are unchanged. `wrapBullpenService` narrows what
+runtimes read from the bullpen, and `stack.llmProviders` lets test code make its own model
+calls without the vault key leaving the stack.
+
+**Coordinator scenario suite (#1956):** `pnpm scenarios` (`tests/scenarios/`) is the sibling
+of smoke for coordinator *decisions*. It uses the same test-mode stack with a fail-closed stub
+layer, seeds outbound-context entries, bullpen threads and contacts as real rows scoped to
+each run, asserts tool calls in code, judges prose through the stack's OpenRouter provider, and
+exits non-zero when a critical behavior passes fewer than 80% of its runs. See
+`tests/scenarios/README.md`.
 
 **Timeout:** Each `sendMessage()` call has a hard 60-second timeout. A case with multiple turns
 can take several minutes; no overall run timeout exists today (see [What's Not Here Yet](#whats-not-here-yet)).
