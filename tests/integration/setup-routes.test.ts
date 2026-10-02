@@ -60,6 +60,10 @@ describeIf('/api/setup/* routes', () => {
   // Captured calls into the injected scheduleProcessExit hook; assert on this
   // instead of actually exiting the test runner.
   const processExitCalls: number[] = [];
+  // Node ids present when this file started. Cleanup never deletes them: a
+  // pre-existing row can share a label with a principal this file creates.
+  let preExistingNodeIds: string[] = [];
+  let graphSnapshotReady = false;
 
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
@@ -122,13 +126,20 @@ describeIf('/api/setup/* routes', () => {
     appNormalMode = await buildApp(false, bootStartedAtNormalMode, (delayMs) => {
       processExitCalls.push(delayMs);
     });
+
+    const existing = await pool.query<{ id: string }>(`SELECT id FROM kg_nodes`);
+    preExistingNodeIds = existing.rows.map((row) => row.id);
+    graphSnapshotReady = true;
   });
 
-  // Person nodes this file mints (source bootstrap) and the setup-wizard facts
-  // hanging off them. Edges cascade with the node. A node another contact still
-  // points at is left alone — that is someone else's row, and deleting it fails
-  // the contacts_kg_node_id_fkey the moment an agent identity is in the database.
+  // Person nodes this file mints (source bootstrap, not already in the database,
+  // and not linked to a contact) and the setup-wizard facts hanging off those
+  // people. Facts are reached only through that set, so a matching label on
+  // someone else's person cannot pull their facts into the delete. Edges
+  // cascade with the node. The contact guard is the second line: deleting a
+  // linked node fails contacts_kg_node_id_fkey.
   async function deleteOwnedKnowledgeGraph(): Promise<void> {
+    if (!graphSnapshotReady) return;
     await pool.query(
       `WITH owned_people AS (
          SELECT n.id
@@ -136,21 +147,22 @@ describeIf('/api/setup/* routes', () => {
           WHERE n.type = 'person'
             AND n.source = 'bootstrap'
             AND (n.label LIKE $1 OR n.label = ANY($2::text[]))
+            AND NOT (n.id = ANY($3::uuid[]))
+            AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.kg_node_id = n.id)
        ),
        owned_facts AS (
          SELECT f.id
            FROM kg_edges e
-           JOIN kg_nodes person ON person.id = e.source_node_id
+           JOIN owned_people person ON person.id = e.source_node_id
            JOIN kg_nodes f ON f.id = e.target_node_id
-          WHERE person.type = 'person'
-            AND (person.label LIKE $1 OR person.label = ANY($2::text[]))
-            AND f.type = 'fact'
+          WHERE f.type = 'fact'
             AND f.source = 'system:setup-wizard'
+            AND NOT (f.id = ANY($3::uuid[]))
        )
        DELETE FROM kg_nodes
         WHERE id IN (SELECT id FROM owned_people UNION SELECT id FROM owned_facts)
           AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.kg_node_id = kg_nodes.id)`,
-      [`${TEST_LABEL_PREFIX}%`, OWNED_KG_LABELS],
+      [`${TEST_LABEL_PREFIX}%`, OWNED_KG_LABELS, preExistingNodeIds],
     );
   }
 
@@ -188,6 +200,77 @@ describeIf('/api/setup/* routes', () => {
     // Reset the captured restart-trigger calls between tests so each restart
     // test sees a fresh array.
     processExitCalls.length = 0;
+  });
+
+  describe('knowledge-graph cleanup', () => {
+    it('keeps pre-existing rows, foreign people, and facts whose person is still linked', async () => {
+      const insertPair = async (personSource: string) => {
+        const inserted = await pool.query<{ person_id: string; fact_id: string }>(
+          `WITH person AS (
+             INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, identity_source)
+             VALUES ('person', 'Partial', '{}', 1, 'permanent', $1, 'contact')
+             RETURNING id
+           ),
+           fact AS (
+             INSERT INTO kg_nodes (type, label, properties, confidence, decay_class, source, identity_source)
+             VALUES ('fact', 'Working hours', '{"attribute":"working_hours"}', 1, 'permanent', 'system:setup-wizard', 'label')
+             RETURNING id
+           ),
+           edge AS (
+             INSERT INTO kg_edges (source_node_id, target_node_id, type, source)
+             SELECT person.id, fact.id, 'relates_to', 'system:setup-wizard' FROM person, fact
+             RETURNING source_node_id, target_node_id
+           )
+           SELECT source_node_id AS person_id, target_node_id AS fact_id FROM edge`,
+          [personSource],
+        );
+        return inserted.rows[0]!;
+      };
+
+      const prior = await insertPair('bootstrap');
+      preExistingNodeIds.push(prior.person_id, prior.fact_id);
+      const foreign = await insertPair('other-suite');
+      const linked = await insertPair('bootstrap');
+      const contact = await pool.query<{ id: string }>(
+        `INSERT INTO contacts (kg_node_id, display_name, role, tier, kind)
+         VALUES ($1, 'Linked Partial', 'friend', 'known', 'person')
+         RETURNING id`,
+        [linked.person_id],
+      );
+      const contactId = contact.rows[0]!.id;
+      const protectedIds = [prior.person_id, prior.fact_id, foreign.person_id, foreign.fact_id, linked.person_id, linked.fact_id];
+
+      try {
+        await deleteOwnedKnowledgeGraph();
+        const kept = await pool.query<{ id: string }>(
+          `SELECT id FROM kg_nodes WHERE id = ANY($1::uuid[])`,
+          [protectedIds],
+        );
+        expect(kept.rows).toHaveLength(protectedIds.length);
+        const priorEdge = await pool.query(
+          `SELECT id FROM kg_edges WHERE source_node_id = $1 AND target_node_id = $2`,
+          [prior.person_id, prior.fact_id],
+        );
+        expect(priorEdge.rows).toHaveLength(1);
+
+        await pool.query(`DELETE FROM contacts WHERE id = $1`, [contactId]);
+        await deleteOwnedKnowledgeGraph();
+        const afterUnlink = await pool.query<{ id: string }>(
+          `SELECT id FROM kg_nodes WHERE id = ANY($1::uuid[])`,
+          [protectedIds],
+        );
+        const remaining = new Set(afterUnlink.rows.map((row) => row.id));
+        expect(remaining.has(prior.person_id)).toBe(true);
+        expect(remaining.has(prior.fact_id)).toBe(true);
+        expect(remaining.has(foreign.person_id)).toBe(true);
+        expect(remaining.has(foreign.fact_id)).toBe(true);
+        expect(remaining.has(linked.person_id)).toBe(false);
+        expect(remaining.has(linked.fact_id)).toBe(false);
+      } finally {
+        await pool.query(`DELETE FROM contacts WHERE id = $1`, [contactId]);
+        await pool.query(`DELETE FROM kg_nodes WHERE id = ANY($1::uuid[])`, [protectedIds]);
+      }
+    });
   });
 
   describe('POST /api/setup/principal', () => {

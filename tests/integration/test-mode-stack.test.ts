@@ -18,6 +18,7 @@ import { DATE_RESOLVE_GUARDRAIL } from '../../src/agents/prompts/date-resolve-gu
 import { formatPrincipalContactDetailsBlock } from '../../src/agents/principal-contact-block.js';
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../../src/security/security-context.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
@@ -30,10 +31,16 @@ describeIf('test-mode stack', () => {
   // A boot that throws before the probe must not wipe an agent another suite left behind.
   let agentContactWasPresent = true;
   let agentNodeWasPresent = true;
+  // Set only after requireCuriaTestDatabase confirms curia_test. vitest still runs afterAll
+  // when beforeAll throws, and DATABASE_URL being set is not proof of which database it reached.
+  let onTestDb = false;
 
   beforeAll(async () => {
     const probe = new Pool({ connectionString: DATABASE_URL });
     try {
+      // Before the existence probe and before any later cleanup pool is opened.
+      await requireCuriaTestDatabase(probe);
+      onTestDb = true;
       const { rows } = await probe.query<{ contact: boolean; node: boolean }>(
         `SELECT
            EXISTS (SELECT 1 FROM contacts WHERE system_role = 'agent') AS contact,
@@ -54,7 +61,7 @@ describeIf('test-mode stack', () => {
     // Boot upserts the agent contact and node. Remove only the side this file
     // created, and do it even when boot threw after the insert (stack is unset).
     try {
-      if (!agentContactWasPresent || !agentNodeWasPresent) {
+      if (onTestDb && (!agentContactWasPresent || !agentNodeWasPresent)) {
         const pool = new Pool({ connectionString: DATABASE_URL });
         try {
           if (!agentContactWasPresent) {
