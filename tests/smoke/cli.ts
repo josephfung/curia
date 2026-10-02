@@ -1,6 +1,6 @@
 // tests/smoke/cli.ts
 //
-// `pnpm smoke [--model <id>] [--case <substring>]... [--tags a,b] [--show-calls]`
+// `pnpm smoke [--model <id>] [--case <substring>]... [--tags a,b] [--show-calls] [--allow-remote-db]`
 //
 // Exits 1 when any case fails the gate (gate.ts: weighted score below 80%, a critical
 // behavior rated MISS, or an execution or judge error), known failures aside. The
@@ -12,7 +12,9 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { createJudge } from '../scenarios/judge.js';
-import { cloneDatabase, databaseName, type DatabaseClone } from './clone-db.js';
+import { parseSmokeArgs, type SmokeArgs } from './args.js';
+import { stubProblems } from './stub-check.js';
+import { cloneDatabase, databaseName, isLocalDatabase, type DatabaseClone } from './clone-db.js';
 import { loadPeople, seedPeople } from './fixtures.js';
 import { loadDefaultStubs, loadTestCases } from './loader.js';
 import { createHarness, RESPONSE_TIMEOUT_MS, type CuriaHarness } from './harness.js';
@@ -32,9 +34,16 @@ const OFFICE_PEOPLE = path.resolve(import.meta.dirname, 'fixtures', 'people.yaml
 const out = (line: string): void => { process.stdout.write(`${line}\n`); };
 const err = (line: string): void => { process.stderr.write(`${line}\n`); };
 
+/**
+ * The commit the run is testing, with `-dirty` when tracked files have uncommitted changes:
+ * the release pre-flight compares this to the security gate's SHA, and a clean SHA over
+ * edited code would claim a result for code that never ran.
+ */
 function gitCommit(): string {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: import.meta.dirname, encoding: 'utf-8' }).trim();
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: import.meta.dirname, encoding: 'utf-8' }).trim();
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: import.meta.dirname, encoding: 'utf-8' });
+    return status.trim() === '' ? sha : `${sha}-dirty`;
   } catch {
     // Not fatal — results are still useful without it — but say so: the release gate
     // records this SHA, and a silent blank would look like it was never captured.
@@ -50,17 +59,17 @@ async function main(): Promise<void> {
   // move during a long run.
   const commit = gitCommit();
 
-  // Parse CLI args
-  const args = process.argv.slice(2);
-  const tags = parseArg(args, '--tags')?.split(',');
-  // --case may repeat; a case runs when its name contains any of the values.
-  const caseFilters = parseArgs(args, '--case');
-  // Route every agent to one model (e.g. the production standard-tier model).
-  // The provider follows from the model registry, so this also picks Anthropic
-  // vs OpenRouter. Omitted → the configured model_routing.
-  const model = parseArg(args, '--model');
-  // Print every agent's tool calls per case — what to stub when writing a case.
-  const showCalls = args.includes('--show-calls');
+  // Parse CLI args strictly (args.ts): a typo must not silently change what is measured.
+  let args: SmokeArgs;
+  try {
+    args = parseSmokeArgs(process.argv.slice(2));
+  } catch (e) {
+    err(`smoke: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
+  const { tags, model, showCalls } = args;
+  // A case runs when its name contains any --case value.
+  const caseFilters = args.cases;
 
   // Load test cases
   let cases = loadTestCases(CASES_DIR, tags ? { tags } : undefined);
@@ -90,6 +99,13 @@ async function main(): Promise<void> {
     err('DATABASE_URL is not set');
     process.exit(1);
   }
+  if (!isLocalDatabase(sourceUrl) && !args.allowRemoteDb) {
+    err(
+      `DATABASE_URL points at a non-local server (${new URL(sourceUrl).hostname}). Smoke copies that database and ` +
+      'sweeps old copies on its server; it is meant for a local dev database. Pass --allow-remote-db to proceed.',
+    );
+    process.exit(1);
+  }
   let clone: DatabaseClone;
   try {
     const created = await cloneDatabase(sourceUrl);
@@ -109,13 +125,27 @@ async function main(): Promise<void> {
       err(`  [WARN] could not drop ${clone.name}: ${e instanceof Error ? e.message : String(e)} — the next run drops it`);
     }
   };
-  // Ctrl-C would skip the finally below; drop the copy on the way out instead.
-  const onSignal = (signal: NodeJS.Signals): void => {
-    err(`\n${signal}: dropping ${clone.name} before exiting...`);
-    void dropClone().finally(() => process.exit(130));
+  // Ctrl-C, a closed terminal or a crash would skip the finally below; drop the copy (a
+  // full copy of the vault) on the way out instead. Repeated signals while it drops are
+  // ignored, so a second Ctrl-C does not kill the process mid-drop.
+  let exiting = false;
+  const dropAndExit = (why: string, code: number): void => {
+    if (exiting) return;
+    exiting = true;
+    err(`\n${why}: dropping ${clone.name} before exiting...`);
+    void dropClone().finally(() => process.exit(code));
   };
-  process.once('SIGINT', onSignal);
-  process.once('SIGTERM', onSignal);
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.on(signal, () => dropAndExit(signal, 130));
+  }
+  process.on('uncaughtException', (e) => {
+    err(`Uncaught exception: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+    dropAndExit('uncaught exception', 1);
+  });
+  process.on('unhandledRejection', (e) => {
+    err(`Unhandled rejection: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+    dropAndExit('unhandled rejection', 1);
+  });
 
   // Boot harness
   out('   Booting Curia stack...');
@@ -142,7 +172,12 @@ async function main(): Promise<void> {
     const principal = harness.stack.principalContactId
       ? await harness.stack.contactService.getContact(harness.stack.principalContactId)
       : undefined;
-    const judge = createJudge(harness.stack.llmProviders, principal?.displayName);
+    if (!principal) {
+      // Cases name the principal ({{principal:…}}) and the judge checks "never addresses
+      // the principal"; without one they would run on literal placeholders.
+      throw new Error('this database has no principal contact; smoke needs an onboarded database');
+    }
+    const judge = createJudge(harness.stack.llmProviders, principal.displayName);
     out('   Stack ready.');
     out(`   Model: ${modelLabel ?? 'configured model_routing'}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
@@ -161,6 +196,24 @@ async function main(): Promise<void> {
     }
     const today = todayIn(harness.stack.config.timezone);
     out(`   Today: ${today}`);
+
+    // A stub naming a tool or input that doesn't exist never fires; fail before a paid run.
+    const problems = stubProblems(
+      [
+        { source: 'stubs/office.yaml', stubs: defaultStubs },
+        ...cases.flatMap(c => [
+          { source: c.name, stubs: c.toolStubs },
+          ...c.turns.map((t, i) => ({ source: `${c.name} turn ${i + 1}`, stubs: t.toolStubs ?? {} })),
+        ]),
+      ],
+      { inputsOf: (tool) => { const t = harness.stack.toolRegistry.get(tool); return t ? Object.keys(t.manifest.inputs ?? {}) : undefined; } },
+    );
+    if (problems.length > 0) {
+      err('\nStub problems (fix before a paid run):');
+      for (const p of problems) err(`   ${p}`);
+      exitCode = 1;
+      return;
+    }
     const seeded = await seedPeople(harness.stack, people);
     out(`   Fixture office: ${seeded} people seeded; ${Object.keys(defaultStubs).length} tools stubbed by default`);
     out('');
@@ -179,8 +232,7 @@ async function main(): Promise<void> {
         }
       }
     };
-    const principalRef = principal ? { name: principal.displayName, contactId: principal.id } : undefined;
-    if (!principalRef) out('   [WARN] no principal contact: {{principal:…}} placeholders stay unresolved');
+    const principalRef = { name: principal.displayName, contactId: principal.id };
     const executions = await runTestCases(harness, cases, {
       defaultStubs,
       principal: principalRef,
@@ -296,14 +348,35 @@ async function main(): Promise<void> {
     err(`Fatal error: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
     exitCode = 1;
   } finally {
+    // Bounded: pg's pool.end() waits for every checked-out client, and a turn still running
+    // past its grace period would hold one forever, leaving the copy undropped.
     try {
-      await harness.shutdown();
+      const outcome = await Promise.race([
+        harness.shutdown().then(() => 'done' as const),
+        new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), SHUTDOWN_TIMEOUT_MS).unref()),
+      ]);
+      if (outcome === 'timeout') err(`  [WARN] harness shutdown did not finish in ${SHUTDOWN_TIMEOUT_MS / 1000}s; dropping the copy anyway`);
     } catch (e) {
       err(`  [WARN] Harness shutdown error: ${e instanceof Error ? e.message : String(e)}`);
     }
     await dropClone();
-    process.exit(exitCode);
+    await exitAfterFlush(exitCode);
   }
+}
+
+/** How long the harness gets to shut down before the copy is force-dropped regardless. */
+const SHUTDOWN_TIMEOUT_MS = 120_000;
+
+/**
+ * Exit once stdout and stderr have drained. Piped output (`pnpm smoke | tee release.log`)
+ * is asynchronous on macOS, and a bare process.exit can clip the verdict lines.
+ */
+async function exitAfterFlush(code: number): Promise<never> {
+  await Promise.all([
+    new Promise<void>(resolve => process.stdout.write('', () => resolve())),
+    new Promise<void>(resolve => process.stderr.write('', () => resolve())),
+  ]);
+  process.exit(code);
 }
 
 /** e.g. "Friday, October 2, 2026 (America/Toronto)" — the date the agents were told. */
@@ -312,19 +385,6 @@ function todayIn(timezone: string): string {
     timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
   return `${date} (${timezone})`;
-}
-
-/** Every value given for a repeatable flag, in order. */
-function parseArgs(args: string[], flag: string): string[] {
-  const values: string[] = [];
-  for (let i = 0; i < args.length - 1; i++) if (args[i] === flag) values.push(args[i + 1]!);
-  return values;
-}
-
-function parseArg(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  return args[idx + 1];
 }
 
 function fileTimestamp(iso: string): string {

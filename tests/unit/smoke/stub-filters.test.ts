@@ -100,3 +100,23 @@ describe('CalendarState', () => {
     expect((shapeStubResult('calendar-list-events', base, wed) as { count: number }).count).toBe(2);
   });
 });
+
+describe('matchesMailQuery: ordinary Gmail queries', () => {
+  const priya = { from: [{ name: 'Priya Sharma', email: 'priya.sharma@curiatech.example' }], subject: 'Q2 board deck', snippet: 'Attached' };
+  const elena = { from: [{ name: 'Elena Ruiz', email: 'elena.ruiz@northstar.example' }], subject: 'Need to talk today', snippet: 'board matter' };
+
+  it('treats OR as either side', () => {
+    expect(matchesMailQuery(priya, 'from:priya OR from:daniel')).toBe(true);
+    expect(matchesMailQuery(elena, 'from:priya OR from:daniel')).toBe(false);
+  });
+
+  it('excludes negated terms, and ignores negated operators it cannot evaluate', () => {
+    expect(matchesMailQuery(priya, 'board -from:elena')).toBe(true);
+    expect(matchesMailQuery(elena, 'board -from:elena')).toBe(false);
+    expect(matchesMailQuery(priya, 'is:unread -category:promotions')).toBe(true);
+  });
+
+  it('ignores parentheses', () => {
+    expect(matchesMailQuery(elena, '(from:elena OR from:priya) board')).toBe(true);
+  });
+});

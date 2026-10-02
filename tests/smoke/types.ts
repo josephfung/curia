@@ -59,6 +59,8 @@ export interface CapturedResponse {
   durationMs: number;
   /** The coordinator's tool calls during this turn, in order. */
   toolCalls: ObservedToolCall[];
+  /** Set when the Dispatcher suppressed delivery: the sender never received the reply. */
+  noReplyReason?: string;
 }
 
 export interface CaseExecution {

@@ -1,5 +1,5 @@
 // tests/smoke/runner.ts
-import { conversationIdFor, type CuriaHarness } from './harness.js';
+import { conversationIdFor, RESPONSE_TIMEOUT_MS, type CuriaHarness } from './harness.js';
 import { resolveDatePlaceholders } from './date-placeholders.js';
 import { resolvePrincipalPlaceholders, type PrincipalRef } from './fixtures.js';
 import { mergeStubs } from './stub-layer.js';
@@ -41,15 +41,30 @@ export async function runTestCases(
     const responses: CapturedResponse[] = [];
     let error: string | undefined;
 
-    try {
-      await runSingleCase(harness, tc, responses, options?.defaultStubs ?? {}, options?.principal);
-    } catch (err) {
-      // Case-level failure (a turn timed out or errored). Turns that did complete are
-      // kept for the report.
-      error = err instanceof Error ? err.message : String(err);
+    // A turn that outlived its timeout (an earlier case's, or the warm-up's) keeps calling
+    // tools; the stub layer would answer and record them as this case's, and its calendar
+    // writes would show up in this case's listings. Wait for it, then start clean.
+    const isolated = await harness.settle(RESPONSE_TIMEOUT_MS);
+    harness.stubs.clear();
+    harness.takeFallbacks();
+
+    if (!isolated) {
+      // Fail closed: running anyway could pass or fail this case on another case's activity.
+      error = 'an earlier turn was still running after the timeout, so this case could not run in isolation';
+    } else {
+      try {
+        await runSingleCase(harness, tc, responses, options?.defaultStubs ?? {}, options?.principal);
+      } catch (err) {
+        // Case-level failure (a turn timed out or errored). Turns that did complete are
+        // kept for the report.
+        error = err instanceof Error ? err.message : String(err);
+      }
     }
     // Also stops this case's stubs answering a later case's calls.
     const agentCalls = harness.stubs.clear();
+    // A specialist that fell back ran on a model the results are not labelled with.
+    const fallbacks = harness.takeFallbacks();
+    if (fallbacks.length > 0) error ??= `model fallback: ${fallbacks.join('; ')}`;
 
     const execution: CaseExecution = { testCase: tc, responses, agentCalls, ...(error ? { error } : {}) };
     results.push(execution);
@@ -95,6 +110,7 @@ async function runSingleCase(
       agentId: 'coordinator',
       durationMs: response.durationMs,
       toolCalls: response.toolCalls,
+      ...(response.noReplyReason ? { noReplyReason: response.noReplyReason } : {}),
     });
   }
 }

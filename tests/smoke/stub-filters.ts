@@ -88,26 +88,44 @@ function filterFreeWindows(data: Json, input: Json): Json {
 }
 
 /**
- * Gmail-style query, loosely: `field:value` terms (from, to, subject) match that field,
- * bare words match the sender, subject or snippet, and operators this fixture cannot
- * evaluate (is:, has:, newer_than:, label:, in:…) are ignored rather than matching nothing.
+ * Gmail-style query, loosely. Terms are ANDed; `a OR b` matches either (OR binds the terms
+ * either side of it); `-term` excludes; parentheses are ignored. `field:value` terms (from,
+ * to, subject) match that field, bare words the sender, subject or snippet. Operators this
+ * fixture cannot evaluate (is:, has:, in:, label:, category:, newer_than:…) are ignored —
+ * including when negated — rather than matching nothing, so a real specialist query never
+ * finds an empty fixture inbox for the wrong reason.
  */
 export function matchesMailQuery(message: Json, query: string): boolean {
-  const terms = query.match(/(\w+:"[^"]*"|\w+:\S+|"[^"]*"|\S+)/g) ?? [];
-  return terms.every((raw) => {
-    const term = raw.toLowerCase();
-    if (term === 'or' || term === 'and') return true;
-    const field = /^(\w+):(.*)$/.exec(term);
-    if (field) {
-      const value = field[2]!.replace(/^"|"$/g, '');
-      if (field[1] === 'from') return text(message['from']).includes(value);
-      if (field[1] === 'to') return text(message['to']).includes(value);
-      if (field[1] === 'subject') return text(message['subject']).includes(value);
-      return true;
-    }
+  const tokens = (query.replace(/[()]/g, ' ').match(/-?(\w+:"[^"]*"|\w+:\S+|"[^"]*"|\S+)/g) ?? []);
+  // Group into AND-ed clauses, each a list of OR-ed alternatives.
+  const clauses: string[][] = [];
+  let joinNext = false;
+  for (const raw of tokens) {
+    if (raw === 'OR' || raw === '|') { joinNext = clauses.length > 0; continue; }
+    if (raw.toUpperCase() === 'AND') continue;
+    if (joinNext) clauses[clauses.length - 1]!.push(raw);
+    else clauses.push([raw]);
+    joinNext = false;
+  }
+  return clauses.every(alternatives => alternatives.some(term => termMatches(message, term)));
+}
+
+function termMatches(message: Json, raw: string): boolean {
+  const negated = raw.startsWith('-') && raw.length > 1;
+  const term = (negated ? raw.slice(1) : raw).toLowerCase();
+  const field = /^(\w+):(.*)$/.exec(term);
+  let hit: boolean;
+  if (field) {
+    const value = field[2]!.replace(/^"|"$/g, '');
+    if (field[1] === 'from') hit = text(message['from']).includes(value);
+    else if (field[1] === 'to') hit = text(message['to']).includes(value);
+    else if (field[1] === 'subject') hit = text(message['subject']).includes(value);
+    else return true; // an operator the fixture can't evaluate: ignore it either way
+  } else {
     const word = term.replace(/^"|"$/g, '');
-    return `${text(message['from'])} ${text(message['subject'])} ${text(message['snippet'])}`.includes(word);
-  });
+    hit = `${text(message['from'])} ${text(message['subject'])} ${text(message['snippet'])}`.includes(word);
+  }
+  return negated ? !hit : hit;
 }
 
 /** ceo-inbox-list / ceo-inbox-search: unread and query filters, then the limit. */

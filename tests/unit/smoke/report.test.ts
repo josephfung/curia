@@ -69,6 +69,20 @@ describe('Report generator', () => {
     expect(html).toContain('contact-lookup (failed)');
   });
 
+  it('labels each case with the gate verdict, including retries and known failures', () => {
+    const [first, second] = mockRun.cases;
+    const html = generateReport({
+      ...mockRun,
+      cases: [
+        { ...first!, firstAttempt: { weightedScore: 0.4, failures: ['weighted score 40% is below 80%'] } },
+        { ...second!, error: undefined, failures: ['critical behavior \'careful\' rated MISS'], testCase: { ...second!.testCase, knownFailure: { issue: '#1975' } } },
+      ],
+    });
+    expect(html).toContain('PASS*');
+    expect(html).toContain('First attempt 40%');
+    expect(html).toContain('KNOWN #1975');
+  });
+
   it('generates valid HTML with required sections', () => {
     const html = generateReport(mockRun);
     expect(html).toContain('<!DOCTYPE html>');

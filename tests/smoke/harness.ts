@@ -3,8 +3,10 @@
 // Headless bus stack harness for smoke tests. Boots the production agent stack in
 // test mode (src/startup/test-mode-stack.ts) — the same agent assembly src/index.ts
 // uses, so the coordinator sees the production system prompt — and adds a
-// Dispatcher. No HTTP or CLI channel and no transport clients: nothing leaves the
-// process. sendMessage() publishes an inbound.message and reads the coordinator's
+// Dispatcher. No HTTP or CLI channel and no transport clients: no message can be sent.
+// (Read-only tools still reach the outside world: web-fetch and web-search make real
+// requests, and model and embedding calls go to their providers.) sendMessage()
+// publishes an inbound.message and reads the coordinator's
 // turn off the bus (tests/shared/turn-capture.ts): its tool calls and its reply.
 //
 // The CLI points DATABASE_URL at a throwaway copy of the database (clone-db.ts) before
@@ -13,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
-import { createInboundMessage } from '../../src/bus/events.js';
+import { createInboundMessage, type ModelFallbackEngagedEvent } from '../../src/bus/events.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
@@ -40,6 +42,13 @@ export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout >
 const LATE_TURN_GRACE_MS = 60_000;
 
 /**
+ * After a publish resolves (the whole turn is over), how long to wait for the coordinator's
+ * response before calling the turn finished without one — e.g. the Dispatcher rejected
+ * the inbound. Without this the case would sit out the full timeout and report it as one.
+ */
+const NO_RESPONSE_GRACE_MS = 1_000;
+
+/**
  * The `unknown` sender: an address with no contact record. `example.test` is reserved
  * (RFC 2606), so it can never be a real person's address. Nothing creates a contact for
  * it — the Dispatcher only publishes contact.unknown and routes in low-trust mode.
@@ -63,6 +72,8 @@ export interface TurnResponse {
   content: string;
   durationMs: number;
   toolCalls: ObservedToolCall[];
+  /** Set when the Dispatcher suppressed delivery: the reply never reached the sender. */
+  noReplyReason?: string;
 }
 
 export interface CuriaHarness {
@@ -87,6 +98,14 @@ export interface CuriaHarness {
    * The response is discarded — we only care that the stack is primed.
    */
   warmUp(): Promise<void>;
+  /**
+   * Wait (up to `maxMs`) for turns that outlived their timeout. A late turn keeps calling
+   * tools, and the stub layer would answer and record them as the next case's. Returns
+   * false if some are still running.
+   */
+  settle(maxMs: number): Promise<boolean>;
+  /** Model fallbacks (any agent, specialists included) since the last call, and clear them. */
+  takeFallbacks(): string[];
   shutdown(): Promise<void>;
 }
 
@@ -113,6 +132,15 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   // This harness is headless: the only way to inject messages is sendMessage().
 
   const capture = createTurnCapture(bus);
+
+  // A fallback means some agent ran on a different model than the one the run is labelled
+  // with. The shared capture only sees the coordinator's; specialists work in their own
+  // conversations, so collect every agent's here and let the runner charge the case.
+  let fallbacks: string[] = [];
+  bus.subscribe('model.fallback', 'system', async (event) => {
+    const { payload } = event as ModelFallbackEngagedEvent;
+    fallbacks.push(`${payload.agentId}: ${payload.failedModel} → ${payload.fallbackModel} (${payload.reason})`);
+  });
 
   /**
    * Turns still running after sendMessage gave up on them. EventBus.publish awaits every
@@ -169,8 +197,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
       capture.fail(options.conversationId, err);
       delivery = Promise.resolve();
     }
-    // A publish that fails outright must end the turn now, not after the timeout.
-    delivery.catch((err: unknown) => capture.fail(options.conversationId, err));
+    // A publish that fails outright must end the turn now, not after the timeout. One that
+    // completes without a coordinator response (fail() is a no-op once the turn ended)
+    // ends it shortly after, instead of waiting out the timeout.
+    delivery.then(
+      () => { setTimeout(() => capture.fail(options.conversationId, new Error('the turn ended without a coordinator response')), NO_RESPONSE_GRACE_MS); },
+      (err: unknown) => capture.fail(options.conversationId, err),
+    );
     trackDelivery(delivery, options.conversationId);
 
     const outcome = await waiter;
@@ -179,7 +212,17 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
       content: outcome.reply ?? '',
       durationMs: Date.now() - start,
       toolCalls: outcome.calls,
+      ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
     };
+  }
+
+  async function settle(maxMs: number): Promise<boolean> {
+    if (lateTurns.size === 0) return true;
+    await Promise.race([
+      Promise.allSettled([...lateTurns]),
+      new Promise(resolve => setTimeout(resolve, maxMs)),
+    ]);
+    return lateTurns.size === 0;
   }
 
   async function warmUp(): Promise<void> {
@@ -192,8 +235,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     } catch (err) {
       process.stderr.write(`  [WARN] warm-up turn failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
-    // The warm-up's calls are not any case's.
+    // The warm-up's calls and fallbacks are not any case's.
     stubs.clear();
+    fallbacks = [];
   }
 
   async function shutdown(): Promise<void> {
@@ -208,5 +252,19 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     await stack.shutdown();
   }
 
-  return { bus, logger, stack, stubs, sendMessage, warmUp, shutdown };
+  return {
+    bus,
+    logger,
+    stack,
+    stubs,
+    sendMessage,
+    warmUp,
+    settle,
+    takeFallbacks: () => {
+      const taken = fallbacks;
+      fallbacks = [];
+      return taken;
+    },
+    shutdown,
+  };
 }
