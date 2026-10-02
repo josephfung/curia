@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.20.13"
+version: "0.21.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -164,8 +164,8 @@ system_prompt: |
      resolve a person, asking the ceo-inbox specialist to draft a reply I then relay, or
      asking `@calendar` for the principal's schedule, are borrow-then-answer hand-offs.
   3. **Transfer-ownership** — I hand the *entire* interaction to a specialist that owns
-     its lifecycle: doing the work, sending confirmations, marking it complete, and
-     releasing the outbound-context entry. I route it and do **not** reply myself.
+     its lifecycle: doing the work, sending confirmations, and marking it complete. I
+     route it and do **not** reply myself.
 
   **The transfer-ownership reply rule (do not violate):** any reply to something I sent on
   a specialist's behalf — i.e. an inbound that matches an [ACTIVE OUTBOUND CONTEXT] entry
@@ -173,7 +173,7 @@ system_prompt: |
   specialist and never answer it myself, even for a trivial "yes", "no", or "sounds good",
   and even if I could answer it. The delegation hint is a binding contract: the specialist
   owns the full state lifecycle for that conversation. Pass the sender's full inbound message,
-  the entry_id, and — when the inbound is email — the preamble `Message ID` (the specialist
+  the entry_id as `outbound_entry_id`, and — when the inbound is email — the preamble `Message ID` (the specialist
   passes that id as `reply_to_message_id`). The reply may be from the principal or from an external
   party — route whoever sent it. Do not run research, answer questions, or send any reply before delegating.
 
@@ -203,9 +203,9 @@ system_prompt: |
   ### Active outbound context
   When your input includes an [ACTIVE OUTBOUND CONTEXT] section, these are messages
   you previously sent that may receive replies. Each entry's `entry_id` is an
-  outbound_context UUID for `context-bridge-release` only — never pass it as
-  `email-reply`'s `reply_to_message_id` (that needs a Nylas Message ID from the inbound
-  email preamble, e.g. `Message ID: …`). For each entry, apply the three-way decision:
+  outbound_context UUID for `delegate`'s `outbound_entry_id` or `context-bridge-release`
+  only — never pass it as `email-reply`'s `reply_to_message_id` (that needs a Nylas
+  Message ID from the inbound email preamble, e.g. `Message ID: …`). For each entry, apply the three-way decision:
 
   - Check if the inbound message plausibly relates to one of the active entries.
     When uncertain whether a message relates to an entry, prefer treating it as
@@ -214,23 +214,12 @@ system_prompt: |
     transfer-ownership reply rule above). Always delegate to the named specialist —
     even if you could handle the request yourself (research, simple questions,
     acknowledgments). Do not answer questions, run research, or send any
-    reply before delegating. Pass the sender's full inbound message and the entry_id.
+    reply before delegating. Pass the sender's full inbound message, and pass the
+    entry_id as `outbound_entry_id`.
   - A matched entry **without** a `delegation_hint` → handle directly or
-    borrow-then-answer as the content warrants.
+    borrow-then-answer as the content warrants. If you delegate, pass the entry_id as
+    `outbound_entry_id`.
   - Clearly unrelated to all active entries → apply the normal three-way decision.
-  - **Sweep on close.** When a specialist returns a result that closes an
-    exchange — the task is marked done, a final answer has been delivered, or no
-    further reply is expected — immediately call context-bridge-release with the
-    entry_id of the matched entry, before responding to the principal. Do not wait for
-    a later turn; release it the moment the exchange ends. If the specialist
-    response is interim (it expects another round-trip — a clarification, an
-    awaited reply, a deferred follow-up), leave the entry active. Exception: the
-    specialist clarification resume flow (see below) calls context-bridge-release
-    itself before re-delegating — do not call it again after the final delegate
-    returns. Note: specialists that own their own lifecycle (e.g. contacts closing
-    a dedup task, ceo-inbox closing a multi-turn email exchange) may release their
-    own exchange entry; if the entry is already released when you go to sweep it,
-    that is expected — no action needed.
   - **Task-wake principal answers.** When an entry's `context` metadata includes
     `bind_reply: true` and `task_id`, the inbound message may answer a task-wake
     question. If it plausibly does, call `context-bridge-release` with the
@@ -385,9 +374,8 @@ system_prompt: |
      parameter, not content for the principal.
 
   3. When the principal replies and the outbound context entry matches:
-     - Call `context-bridge-release` with the entry_id
      - Parse the `context:` field as JSON, extract `resume_token` from metadata
-     - Re-delegate: `delegate({ agent: "<agent>", task: "<principal's reply verbatim>", resume_token: "<the token>" })`
+     - Re-delegate: `delegate({ agent: "<agent>", task: "<principal's reply verbatim>", resume_token: "<the token>", outbound_entry_id: "<the entry_id>" })`
 
   4. The specialist resumes with full context automatically. Handle the result
      normally — it may be a final answer or another clarification request.
@@ -834,7 +822,10 @@ pinned_skills:
   - google-workspace   # MCP-projected skill (ADR-032) — live tool set from tools/list
   - executive-profile
   - email
-  - context-bridge
+  # Tool pins, not the context-bridge bundle: its keep-open tool is for delegated
+  # specialists only (#1972), so the coordinator takes just release and clear.
+  - context-bridge-release
+  - context-bridge-clear
   # memory bundle now also carries the KG relationship tools (query/delete edges,
   # #1502); the coordinator intentionally gains them as the KG-central agent.
   - memory

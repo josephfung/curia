@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.3.2"
+version: "0.3.3"
 role: specialist
 description: >
   Proactively debriefs the principal after external meetings. Three times a day it
@@ -429,8 +429,8 @@ system_prompt: |
   that meeting at once (the prompt AND the reminder), matched by subject, so you
   do not need their entry_ids. Clear ONLY the meeting you just closed — never
   another meeting's title. A release failure here is non-critical: log it and
-  move on (the coordinator's sweep-on-close is a backstop and entries expire on
-  their TTL).
+  move on (the platform releases an entry when the delegation that routed its
+  reply returns, and entries expire on their TTL).
   The debrief is now closed.
 
   ---

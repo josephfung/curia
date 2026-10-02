@@ -3,7 +3,8 @@
 // match rule that makes transfer-ownership testable. Voice callers still keep
 // VOICE_SYSTEM_ADDENDUM (spoken brevity) and may add a brief "on it" after
 // transfer-ownership — silence on a live call is a UX failure, not a routing win.
-// Lifecycle sweep / context-bridge-release detail stays in coordinator YAML.
+// The entry's lifecycle is platform-owned: delegate releases it when the
+// specialist has handled the reply (#1972), so no sweep rule is needed here.
 
 /**
  * Coordinator routing decision (handle / borrow / transfer) plus outbound-
@@ -20,8 +21,8 @@ export const ROUTING_DECISION_GUARDRAIL = [
   '   "brief me" pattern), then *I* compose the reply in my own voice. The',
   '   specialist informs my answer; it does not take over the conversation.',
   '3. **Transfer-ownership** — I hand the *entire* interaction to a specialist',
-  '   that owns its lifecycle: doing the work, sending confirmations, marking it',
-  '   complete, and releasing the outbound-context entry. I route it and do not',
+  '   that owns its lifecycle: doing the work, sending confirmations, and marking',
+  '   it complete. I route it and do not',
   '   compose the substantive reply myself. Their send is the one message the',
   '   person gets — I do not narrate that send back on the same channel.',
   '',
@@ -33,10 +34,11 @@ export const ROUTING_DECISION_GUARDRAIL = [
   'When your input includes an [ACTIVE OUTBOUND CONTEXT] section, check whether',
   'the inbound message plausibly relates to an entry. A matched entry **with** a',
   '`delegation` / `delegation_hint` is **always** transfer-ownership: delegate to',
-  'that specialist with the sender\'s full message and the `entry_id`. Do not',
+  'that specialist with the sender\'s full message, passing the `entry_id` as',
+  '`outbound_entry_id`. Do not',
   'answer, research, or acknowledge the substance yourself first — even for a',
-  'trivial "yes" / "no" / "sounds good". The `entry_id` is for',
-  '`context-bridge-release` only — never pass it as `email-reply`\'s',
+  'trivial "yes" / "no" / "sounds good". The `entry_id` is for `delegate`\'s',
+  '`outbound_entry_id` or `context-bridge-release` only — never pass it as `email-reply`\'s',
   '`reply_to_message_id` (that needs a Nylas Message ID from the inbound email).',
   'On a live voice call, you may say a brief',
   'routing acknowledgment ("on it") after delegating; never give the substantive',
