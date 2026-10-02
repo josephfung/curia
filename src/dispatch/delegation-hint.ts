@@ -12,20 +12,26 @@
 // the hint entirely, so the principal's reply to a specialist's follow-up
 // reached the coordinator as an unowned message.
 //
-// Two rules, applied at the one place every send skill registers an entry
-// (ScopedOutboundContext.register):
+// Three rules, in order, applied at the one place every send skill registers an
+// entry (ScopedOutboundContext.register):
 //
-// 1. A send made on a bullpen wake, where a specialist opened the thread and
+// 1. An entry carrying a `resume_token` relays a specialist's clarification
+//    question. Its owner is the agent the token was minted for (the runtime
+//    writes that, not the model), and its hint is `<agent> clarification pending`,
+//    the form the coordinator's clarification-resume flow looks for.
+// 2. A send made on a bullpen wake, where a specialist opened the thread and
 //    mentioned the sending agent, is a relay on that specialist's behalf. The
 //    entry is attributed to that specialist — agent_id and hint both — whatever
 //    the model wrote. ceo-inbox reaches the principal only this way: it has no
 //    send tools and asks the coordinator to send for it.
-// 2. Any other hint is reduced to a registered specialist id, or dropped. The
-//    one structured form kept is `<agent> clarification pending`, and only when
-//    the entry carries the `resume_token` that the coordinator's
-//    clarification-resume flow needs.
+// 3. Any other hint keeps only its leading word, and only when that word is a
+//    registered specialist; otherwise the hint is dropped. Leading word only,
+//    because `calendar`, `contacts` and `diagnostics` are also English words, and
+//    the coordinator treats any hint as a binding hand-off — a hint that merely
+//    mentions a specialist must not become one.
 
 import type { AgentRegistry } from '../agents/agent-registry.js';
+import { decodeResumeToken } from '../agents/resume-token.js';
 import type { OutboundContextEntry } from './outbound-context.js';
 
 /** Suffix of the clarification-resume hint form (`<agent> clarification pending`). */
@@ -55,31 +61,42 @@ export function rosterFromRegistry(registry: AgentRegistry): DelegationHintRoste
   };
 }
 
-function hasResumeToken(metadata: Record<string, unknown> | undefined): boolean {
+/**
+ * The specialist a clarification-pending entry resumes, read from its
+ * `resume_token`, or null when the entry carries no decodable token for a
+ * registered specialist. The token's agent is minted by the runtime when the
+ * specialist calls request-clarification, so it is not model-written.
+ */
+export function clarificationAgent(
+  metadata: Record<string, unknown> | undefined,
+  roster: DelegationHintRoster,
+): string | null {
   const token = metadata?.[RESUME_TOKEN_KEY];
-  return typeof token === 'string' && token.length > 0;
+  if (typeof token !== 'string' || token.length === 0) return null;
+  const agent = decodeResumeToken(token)?.agent;
+  return agent && roster.isSpecialist(agent) ? agent : null;
+}
+
+/** The hint's leading word, lowercased and stripped of punctuation (`ceo-inbox:` → `ceo-inbox`). */
+function leadingWord(raw: string | undefined): string {
+  const first = raw?.trim().split(/\s+/)[0] ?? '';
+  return first.toLowerCase().replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '');
 }
 
 /**
- * Reduce a model-written hint to the specialist it names, or null.
- *
- * Matching is by whole token (agent names are lowercase with hyphens), so
- * `calendar-specialist` does not match `calendar`. A hint naming more than one
- * specialist is ambiguous and dropped rather than guessed at.
+ * Reduce a hint to its canonical form, or null when it names no specialist.
+ * Rule 1 then rule 3 from the header; the relay rule needs the invoking task,
+ * so it lives in attributeOutboundEntry.
  */
 export function canonicalDelegationHint(
   raw: string | undefined,
   metadata: Record<string, unknown> | undefined,
   roster: DelegationHintRoster,
 ): string | null {
-  if (!raw) return null;
-  const tokens = raw.toLowerCase().split(/[^a-z0-9_-]+/).filter((t) => t.length > 0);
-  const named = [...new Set(tokens.filter((t) => roster.isSpecialist(t)))];
-  if (named.length !== 1) return null;
-  const agent = named[0]!;
-  return hasResumeToken(metadata) && raw.toLowerCase().includes(CLARIFICATION_PENDING_SUFFIX)
-    ? `${agent} ${CLARIFICATION_PENDING_SUFFIX}`
-    : agent;
+  const resumes = clarificationAgent(metadata, roster);
+  if (resumes) return `${resumes} ${CLARIFICATION_PENDING_SUFFIX}`;
+  const lead = leadingWord(raw);
+  return lead && roster.isSpecialist(lead) ? lead : null;
 }
 
 /**
@@ -109,16 +126,24 @@ type EntryInput = Omit<OutboundContextEntry, 'conversationId'>;
 
 /** What attribution changed, for the registration log. Empty when nothing did. */
 export interface AttributionChanges {
+  /** Rule 1: the specialist the entry's resume_token resumes. */
+  resumes?: string;
+  /** Rule 2: the specialist the send was relayed for. */
   relayRequester?: string;
-  /** The model-written agent_id that a relay replaced. */
+  /** The model-written agent_id that rule 1 or 2 replaced. */
   agentIdFrom?: string;
   /** The model-written hint that was rewritten. */
   hintFrom?: string;
   /** The model-written hint that named no specialist and was removed. */
   hintDropped?: string;
+  /**
+   * The hint promised a clarification resume, but the entry has no usable
+   * resume_token — the coordinator will re-delegate fresh instead of resuming.
+   */
+  resumeTokenMissing?: true;
 }
 
-/** Apply the two rules above to an entry about to be registered. */
+/** Apply the three rules in the header to an entry about to be registered. */
 export function attributeOutboundEntry(
   entry: EntryInput,
   opts: { roster: DelegationHintRoster; relayRequester: string | null },
@@ -127,20 +152,30 @@ export function attributeOutboundEntry(
   const changes: AttributionChanges = {};
   const raw = entry.delegationHint;
 
-  let agentId = entry.agentId;
+  // Rule 1 outranks the relay: when ceo-inbox's relay wake delegated to calendar
+  // and calendar asked a question, the entry must resume calendar, not ceo-inbox.
+  const resumes = clarificationAgent(entry.metadata, roster);
+  let owner: string | null = null;
   let hint: string | null;
-  if (relayRequester) {
+  if (resumes) {
+    changes.resumes = resumes;
+    owner = resumes;
+    hint = `${resumes} ${CLARIFICATION_PENDING_SUFFIX}`;
+  } else if (relayRequester) {
     changes.relayRequester = relayRequester;
-    if (agentId !== relayRequester) changes.agentIdFrom = agentId;
-    agentId = relayRequester;
-    hint = hasResumeToken(entry.metadata) && raw?.toLowerCase().includes(CLARIFICATION_PENDING_SUFFIX)
-      ? `${relayRequester} ${CLARIFICATION_PENDING_SUFFIX}`
-      : relayRequester;
+    owner = relayRequester;
+    hint = relayRequester;
   } else {
     hint = canonicalDelegationHint(raw, entry.metadata, roster);
-    if (raw && hint === null) changes.hintDropped = raw;
   }
+  let agentId = entry.agentId;
+  if (owner && agentId !== owner) {
+    changes.agentIdFrom = agentId;
+    agentId = owner;
+  }
+  if (raw && hint === null) changes.hintDropped = raw;
   if (raw && hint !== null && hint !== raw) changes.hintFrom = raw;
+  if (!resumes && raw?.toLowerCase().includes(CLARIFICATION_PENDING_SUFFIX)) changes.resumeTokenMissing = true;
 
   const attributed: EntryInput = { ...entry, agentId };
   if (hint !== null) attributed.delegationHint = hint;

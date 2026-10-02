@@ -7,6 +7,7 @@ import {
   type DelegationHintRoster,
 } from '../../../src/dispatch/delegation-hint.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
+import { encodeResumeToken } from '../../../src/agents/resume-token.js';
 
 function makeRoster(): DelegationHintRoster {
   const registry = new AgentRegistry();
@@ -24,6 +25,11 @@ const bullpenWake = {
   threadCreatorAgentId: 'ceo-inbox',
 };
 
+/** A resume_token as the runtime mints it when `agent` calls request-clarification. */
+function tokenFor(agent: string): string {
+  return encodeResumeToken({ agent, originalTask: 'find a time with Dana', context: 'asked which day' });
+}
+
 describe('canonicalDelegationHint (#1972)', () => {
   const roster = makeRoster();
 
@@ -31,25 +37,24 @@ describe('canonicalDelegationHint (#1972)', () => {
     expect(canonicalDelegationHint('ceo-inbox', undefined, roster)).toBe('ceo-inbox');
   });
 
-  it('reduces free text that names exactly one specialist to that id', () => {
-    // Forms seen in production relays.
-    expect(canonicalDelegationHint('Delegate replies to ceo-inbox', undefined, roster)).toBe('ceo-inbox');
+  it('keeps the leading word when it is a specialist (forms seen in production)', () => {
     expect(canonicalDelegationHint('ceo-inbox scheduling escalation', undefined, roster)).toBe('ceo-inbox');
     expect(canonicalDelegationHint('CEO-INBOX routing', undefined, roster)).toBe('ceo-inbox');
+    expect(canonicalDelegationHint('ceo-inbox: route reply', undefined, roster)).toBe('ceo-inbox');
+    // A second specialist later in the text does not make it ambiguous: the lead decides.
+    expect(canonicalDelegationHint('ceo-inbox calendar invite handling', undefined, roster)).toBe('ceo-inbox');
   });
 
-  it('drops a hint that names no specialist', () => {
-    // `calendar-specialist` is not an agent id; a token match must not read it as `calendar`.
+  it('drops a hint whose leading word is not a specialist, even if it mentions one', () => {
+    // `calendar` is also an English word; a mention must not become a binding hand-off.
+    expect(canonicalDelegationHint('principal may mention calendar', undefined, roster)).toBeNull();
+    expect(canonicalDelegationHint('Delegate replies to ceo-inbox', undefined, roster)).toBeNull();
+    // `calendar-specialist` is not an agent id and must not be read as `calendar`.
     expect(canonicalDelegationHint('calendar-specialist', undefined, roster)).toBeNull();
-    expect(canonicalDelegationHint('someone should look at this', undefined, roster)).toBeNull();
   });
 
   it('drops a hint that names the coordinator — it is the router, not an owner', () => {
     expect(canonicalDelegationHint('coordinator', undefined, roster)).toBeNull();
-  });
-
-  it('drops a hint that names more than one specialist', () => {
-    expect(canonicalDelegationHint('ceo-inbox or calendar', undefined, roster)).toBeNull();
   });
 
   it('drops an empty or whitespace hint', () => {
@@ -58,13 +63,19 @@ describe('canonicalDelegationHint (#1972)', () => {
     expect(canonicalDelegationHint(undefined, undefined, roster)).toBeNull();
   });
 
-  it('keeps the clarification-pending form only when a resume_token backs it', () => {
-    const withToken = { resume_token: 'tok-123' };
-    expect(canonicalDelegationHint('ceo-inbox clarification pending', withToken, roster))
-      .toBe('ceo-inbox clarification pending');
-    // No token: the marker would promise a resume that cannot happen.
+  it('takes the clarification owner from the resume_token, not the hint text', () => {
+    const meta = { resume_token: tokenFor('calendar') };
+    expect(canonicalDelegationHint('calendar clarification pending', meta, roster)).toBe('calendar clarification pending');
+    // Prose that leads with, or mentions, another specialist cannot redirect the resume.
+    expect(canonicalDelegationHint('contacts to confirm; calendar clarification pending', meta, roster))
+      .toBe('calendar clarification pending');
+    expect(canonicalDelegationHint(undefined, meta, roster)).toBe('calendar clarification pending');
+  });
+
+  it('falls back to the leading word when the token is missing or undecodable', () => {
     expect(canonicalDelegationHint('ceo-inbox clarification pending', undefined, roster)).toBe('ceo-inbox');
-    expect(canonicalDelegationHint('ceo-inbox clarification pending', { resume_token: '' }, roster)).toBe('ceo-inbox');
+    expect(canonicalDelegationHint('ceo-inbox clarification pending', { resume_token: 'not-base64-json' }, roster))
+      .toBe('ceo-inbox');
   });
 });
 
@@ -170,5 +181,32 @@ describe('attributeOutboundEntry (#1972)', () => {
     );
     expect(entry.delegationHint).toBe('calendar');
     expect(changes).toEqual({});
+  });
+
+  it('resumes the token\'s specialist on a relay, not the relay requester', () => {
+    // ceo-inbox opened the thread; on that wake the coordinator delegated to calendar,
+    // which asked a question. The relayed question must resume calendar.
+    const { entry, changes } = attributeOutboundEntry(
+      {
+        ...base,
+        agentId: 'coordinator',
+        delegationHint: 'calendar clarification pending',
+        metadata: { resume_token: tokenFor('calendar') },
+      },
+      { roster, relayRequester: 'ceo-inbox' },
+    );
+    expect(entry.agentId).toBe('calendar');
+    expect(entry.delegationHint).toBe('calendar clarification pending');
+    expect(changes.resumes).toBe('calendar');
+    expect(changes.relayRequester).toBeUndefined();
+  });
+
+  it('flags a clarification hint with no usable resume_token', () => {
+    const { entry, changes } = attributeOutboundEntry(
+      { ...base, agentId: 'coordinator', delegationHint: 'ceo-inbox clarification pending' },
+      { roster, relayRequester: null },
+    );
+    expect(entry.delegationHint).toBe('ceo-inbox');
+    expect(changes.resumeTokenMissing).toBe(true);
   });
 });
