@@ -6,6 +6,9 @@ tags:
   - contacts
   - single-turn
 
+# 'Attempts to look up David Kim' happens in the contacts specialist the coordinator
+# delegates to; without the calls the judge only sees the brief.
+judge_tool_calls: true
 turns:
   - role: user
     content: |
