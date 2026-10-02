@@ -100,6 +100,16 @@ export function canonicalDelegationHint(
 }
 
 /**
+ * The agent that owns an entry, read from its stored hint: the first token of
+ * the canonical forms `<agent>` and `<agent> clarification pending`. Null when
+ * the entry has no hint, so nobody owns it but the coordinator.
+ */
+export function delegationHintOwner(hint: string | null | undefined): string | null {
+  const first = hint?.trim().split(/\s+/)[0];
+  return first ? first.toLowerCase() : null;
+}
+
+/**
  * The specialist a send is relayed for, or null when the send is the agent's own.
  *
  * The channel check is what makes this trustworthy: only the BullpenDispatcher

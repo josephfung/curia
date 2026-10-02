@@ -1,0 +1,20 @@
+{
+  "name": "context-bridge-keep-open",
+  "description": "Keep an outbound-context entry active after you finish a delegated task that is handling the principal's reply to it. By default the platform releases that entry when you return, and the principal's next message no longer routes to you. Call this only when the exchange still needs another answer from the principal on that same entry. Waiting on a third party is not a reason: their reply reaches you another way. If you need the principal's answer before you can continue, use request-clarification instead. entry_id is the outbound-context entry named in your task brief.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "entry_id": "string (the outbound-context entry UUID named in your task brief)",
+    "reason": "string? (what you still expect from the principal — for the logs)"
+  },
+  "outputs": {
+    "kept_open": "string"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": [
+    "outboundContext"
+  ]
+}
