@@ -115,6 +115,12 @@ export interface ScenarioCase {
   /** Per-case override of the CLI default. */
   runs?: number;
   /**
+   * A tracked regression: the case still runs and reports, but its critical failures do
+   * not fail the gate. Requires an issue, so the exception is reviewable and has an
+   * owner. Errored runs, judge errors and stub holes still fail the gate.
+   */
+  knownFailure?: { issue: string; reason: string };
+  /**
    * Per-run wait for the coordinator, overriding SCENARIO_TIMEOUT_MS / the 180s default.
    * For cases where exploring before answering is legitimate and slow.
    */
@@ -215,6 +221,8 @@ export interface CaseResult {
   weightedScore: number;
   /** Critical behaviors whose strict pass rate is under CRITICAL_PASS_THRESHOLD. */
   criticalFailures: string[];
+  /** Copied from the case: when set, criticalFailures are reported, not gated. */
+  knownFailure?: { issue: string; reason: string };
   /** Runs where the judge itself failed (not the model) — reported as a gate failure. */
   judgeErrors: number;
 }
@@ -232,6 +240,10 @@ export interface SuiteResult {
    * gate result, whatever `passed` says.
    */
   filtered?: { caseFilter?: string; tags?: string[]; runs?: number };
+  /** Critical failures in cases marked known_failure — reported, not gated. */
+  knownFailures: string[];
+  /** Notices that need a human but do not fail the gate (a known failure now passing). */
+  warnings: string[];
   /** Non-behavioral reasons the suite failed (coverage gate, errored runs). */
   gateFailures: string[];
   durationMs: number;

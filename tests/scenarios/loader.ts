@@ -50,7 +50,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'runs', 'timeout_seconds', 'stub_sets', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen'] as const;
 const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier'] as const;
 const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'sent_minutes_ago', 'expires_in_hours'] as const;
@@ -391,6 +391,16 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     throw new CaseError(file, `'runs' must be a positive integer`);
   }
 
+  let knownFailure: ScenarioCase['knownFailure'];
+  const knownRaw = raw['known_failure'];
+  if (knownRaw !== undefined) {
+    if (!isObject(knownRaw)) throw new CaseError(file, `'known_failure' must be a mapping {issue, reason}`);
+    onlyKeys(knownRaw, ['issue', 'reason'], file, 'known_failure');
+    const issue = str(knownRaw, 'issue', file, 'known_failure');
+    // An issue reference, so the exception has an owner and an exit.
+    if (!/^#\d+$/.test(issue)) throw new CaseError(file, `known_failure.issue must look like '#1234'`);
+    knownFailure = { issue, reason: str(knownRaw, 'reason', file, 'known_failure') };
+  }
   const timeoutSeconds = optNum(raw, 'timeout_seconds', file, 'case');
   if (timeoutSeconds !== undefined && timeoutSeconds < 10) {
     throw new CaseError(file, `'timeout_seconds' must be at least 10`);
@@ -402,6 +412,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     tags: strList(raw, 'tags', file, 'case'),
     ...(runs !== undefined ? { runs } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(knownFailure ? { knownFailure } : {}),
     seed,
     inbound: parseInbound(raw['inbound'], file),
     toolStubs: stubSets.stubs,
