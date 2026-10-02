@@ -36,7 +36,7 @@ export function loadPeople(filePath: string): FixturePerson[] {
     const displayName = str('display_name');
     const email = str('email');
     if (!displayName || !email) throw new Error(`${filePath}: entry ${i} needs display_name and email`);
-    if (!/@[a-z0-9.-]+\.example$/i.test(email)) {
+    if (!/^[^@\s,;]+@[a-z0-9.-]+\.example$/i.test(email)) {
       throw new Error(`${filePath}: '${email}' must be under the reserved .example TLD`);
     }
     const title = str('title');
