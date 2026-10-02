@@ -40,3 +40,23 @@ describe('resolveDatePlaceholders', () => {
     expect(() => resolveDatePlaceholders('{{time:today 25:00}}', TZ, NOW)).toThrow(/invalid time/);
   });
 });
+
+describe('prose dates and offsets from a weekday', () => {
+  it('renders {{day:…}} for a message', () => {
+    expect(resolveDatePlaceholders('due {{day:next-wednesday}}', TZ, NOW)).toBe('due Wednesday, October 7');
+  });
+
+  it('adds days to next-<weekday>', () => {
+    expect(resolveDatePlaceholders('{{date:next-monday+7}}', TZ, NOW)).toBe('2026-10-12');
+  });
+
+  it('resolves {{at:…}} relative to now, to the minute', () => {
+    expect(resolveDatePlaceholders('{{at:now+60m}}', TZ, NOW)).toBe('2026-10-02T11:00:00.000-04:00');
+    expect(resolveDatePlaceholders('{{at:now-2h}}', TZ, NOW)).toBe('2026-10-02T08:00:00.000-04:00');
+    expect(() => resolveDatePlaceholders('{{at:soon}}', TZ, NOW)).toThrow(/now\+Nm/);
+  });
+
+  it('fills {{timezone}}', () => {
+    expect(resolveDatePlaceholders('{{timezone}}', TZ, NOW)).toBe('America/Toronto');
+  });
+});

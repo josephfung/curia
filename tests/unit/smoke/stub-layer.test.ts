@@ -17,10 +17,10 @@ describe('createSmokeStubs', () => {
     const { layer, invoke } = realLayer();
     const stubs = createSmokeStubs();
     const wrapped = stubs.wrap(layer);
-    stubs.set({ 'calendar-list-events': [{ match: { date: '2026-10-07' }, return: { events: ['standup'] } }] });
+    stubs.set({ 'calendar-list-calendars': [{ match: { contactId: 'p1' }, return: { calendars: ['work'] } }] });
 
-    const result = await wrapped.invoke('calendar-list-events', { date: '2026-10-07' }, undefined as never, opts('calendar') as never);
-    expect(result).toEqual({ success: true, data: { events: ['standup'] } });
+    const result = await wrapped.invoke('calendar-list-calendars', { contactId: 'p1' }, undefined as never, opts('calendar') as never);
+    expect(result).toEqual({ success: true, data: { calendars: ['work'] } });
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -83,8 +83,17 @@ describe('mergeStubs', () => {
     expect(merged['b']!.map(s => s.return)).toEqual(['b']);
   });
 
-  it('uses the case\'s stubs when the turn has none', () => {
-    const base = { a: [{ match: {}, return: 1 }] };
-    expect(mergeStubs(undefined, base)).toBe(base);
+  it('uses the case\'s stubs when the turn has none, then the shared defaults', () => {
+    const merged = mergeStubs(undefined, { a: [{ match: {}, return: 'case' }] }, { a: [{ match: {}, return: 'office' }], b: [{ match: {}, return: 'office' }] });
+    expect(merged['a']!.map(s => s.return)).toEqual(['case', 'office']);
+    expect(merged['b']!.map(s => s.return)).toEqual(['office']);
+  });
+
+  it('shapes a stubbed result for the call (time range, echoed inputs)', async () => {
+    const stubs = createSmokeStubs();
+    const wrapped = stubs.wrap(realLayer().layer);
+    stubs.set({ 'calendar-create-event': [{ match: {}, return: { event: { title: '{{input:title}}' } } }] });
+    expect(await wrapped.invoke('calendar-create-event', { title: 'Roadmap' }, undefined as never, opts('calendar') as never))
+      .toEqual({ success: true, data: { event: { title: 'Roadmap' } } });
   });
 });

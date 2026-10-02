@@ -13,17 +13,21 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 
 import * as path from 'node:path';
 import { createJudge } from '../scenarios/judge.js';
 import { cloneDatabase, databaseName, type DatabaseClone } from './clone-db.js';
-import { loadTestCases } from './loader.js';
+import { loadPeople, seedPeople } from './fixtures.js';
+import { loadDefaultStubs, loadTestCases } from './loader.js';
 import { createHarness, RESPONSE_TIMEOUT_MS, type CuriaHarness } from './harness.js';
 import { runTestCases } from './runner.js';
 import { evaluateCases } from './evaluator.js';
-import { formatPct, gatingFailures, staleKnownFailures } from './gate.js';
+import { formatPct, gatingFailures, mergeRetries, staleKnownFailures } from './gate.js';
 import { generateReport } from './report.js';
-import { CASE_PASS_THRESHOLD, type RunResult, type HistoricalEntry } from './types.js';
+import { CASE_PASS_THRESHOLD, type CaseExecution, type RunResult, type HistoricalEntry } from './types.js';
 
 const CASES_DIR = path.resolve(import.meta.dirname, 'cases');
 const RESULTS_DIR = path.resolve(import.meta.dirname, 'results');
 const REPORTS_DIR = path.resolve(import.meta.dirname, 'reports');
+/** The fixture office every case runs in: calendar, mailbox, tasks (stubs) and people (contacts). */
+const OFFICE_STUBS = path.resolve(import.meta.dirname, 'stubs', 'office.yaml');
+const OFFICE_PEOPLE = path.resolve(import.meta.dirname, 'fixtures', 'people.yaml');
 
 const out = (line: string): void => { process.stdout.write(`${line}\n`); };
 const err = (line: string): void => { process.stderr.write(`${line}\n`); };
@@ -63,6 +67,9 @@ async function main(): Promise<void> {
     cases = cases.filter(c => c.name.toLowerCase().includes(caseFilter.toLowerCase()));
   }
   const filtered = Boolean(tags || caseFilter);
+  // Load (and validate) the fixture office before paying for a database copy.
+  const defaultStubs = loadDefaultStubs(OFFICE_STUBS);
+  const people = loadPeople(OFFICE_PEOPLE);
 
   if (cases.length === 0) {
     err('No test cases found matching the filters');
@@ -153,36 +160,56 @@ async function main(): Promise<void> {
     }
     const today = todayIn(harness.stack.config.timezone);
     out(`   Today: ${today}`);
+    const seeded = await seedPeople(harness.stack, people);
+    out(`   Fixture office: ${seeded} people seeded; ${Object.keys(defaultStubs).length} tools stubbed by default`);
     out('');
 
     // Run test cases
     out('-- Running Test Cases --\n');
+    const onCaseComplete = (exec: CaseExecution, index: number, total: number): void => {
+      const status = exec.error
+        ? `ERROR (${exec.error})`
+        : exec.responses.map(r => `${r.durationMs}ms`).join(' + ');
+      out(`   [${index}/${total}] ${exec.testCase.name}... ${status}`);
+      if (showCalls) {
+        for (const c of exec.agentCalls) {
+          const outcome = c.success === undefined ? '' : c.success ? ' ok' : ' FAILED';
+          out(`        ${c.agentId ?? '?'} → ${c.toolName} [${c.disposition}${outcome}] ${JSON.stringify(c.input).slice(0, 160)}`);
+        }
+      }
+    };
+    const principalRef = principal ? { name: principal.displayName, contactId: principal.id } : undefined;
+    if (!principalRef) out('   [WARN] no principal contact: {{principal:…}} placeholders stay unresolved');
     const executions = await runTestCases(harness, cases, {
+      defaultStubs,
+      principal: principalRef,
       onWarmUp: () => {
         out('   Warming up stack...');
       },
-      onCaseComplete: (exec, index, total) => {
-        const status = exec.error
-          ? `ERROR (${exec.error})`
-          : exec.responses.map(r => `${r.durationMs}ms`).join(' + ');
-        out(`   [${index}/${total}] ${exec.testCase.name}... ${status}`);
-        if (showCalls) {
-          for (const c of exec.agentCalls) {
-            const outcome = c.success === undefined ? '' : c.success ? ' ok' : ' FAILED';
-            out(`        ${c.agentId ?? '?'} → ${c.toolName} [${c.disposition}${outcome}] ${JSON.stringify(c.input).slice(0, 160)}`);
-          }
-        }
-      },
+      onCaseComplete,
     });
 
     // Evaluate with judge (before shutdown: the judge uses the stack's provider)
     out('\n-- Evaluating Responses --\n');
-    const caseResults = await evaluateCases(executions, judge, {
-      today,
-      onCaseEval: (name, i, total) => {
-        out(`   [${i}/${total}] Judging: ${name}...`);
-      },
-    });
+    const onCaseEval = (name: string, i: number, total: number): void => {
+      out(`   [${i}/${total}] Judging: ${name}...`);
+    };
+    let caseResults = await evaluateCases(executions, judge, { today, onCaseEval });
+
+    // One retry for each gating failure (gate.ts explains why). Known failures are not
+    // retried: they are expected to fail.
+    const toRetry = gatingFailures(caseResults);
+    if (toRetry.length > 0) {
+      out(`\n-- Retrying ${toRetry.length} failing case(s) once --\n`);
+      const retryExecutions = await runTestCases(harness, toRetry.map(c => c.testCase), {
+        defaultStubs,
+        principal: principalRef,
+        warmUp: false,
+        onCaseComplete,
+      });
+      const retryResults = await evaluateCases(retryExecutions, judge, { today, onCaseEval });
+      caseResults = mergeRetries(caseResults, retryResults);
+    }
 
     // Compute overall score
     const overallScore = caseResults.length > 0
@@ -238,10 +265,16 @@ async function main(): Promise<void> {
 
     // Per-case summary
     for (const c of caseResults) {
-      const label = c.passed ? 'PASS' : knownFailing.includes(c) ? 'KNOWN' : 'FAIL';
+      const label = c.passed ? (c.firstAttempt ? 'PASS*' : 'PASS') : knownFailing.includes(c) ? 'KNOWN' : 'FAIL';
       const issue = c.testCase.knownFailure ? `  (known failure ${c.testCase.knownFailure.issue})` : '';
       out(`   [${label}] ${formatPct(c.weightedScore).padStart(4)}  ${c.testCase.name}${issue}`);
+      if (c.firstAttempt) {
+        out(`            first attempt ${formatPct(c.firstAttempt.weightedScore)}: ${c.firstAttempt.failures.join('; ')}`);
+      }
       for (const f of c.failures) out(`            ${f}`);
+    }
+    if (caseResults.some(c => c.passed && c.firstAttempt)) {
+      out('\n   PASS* = failed once, passed on retry. Worth a look if the same case keeps needing it.');
     }
     out('');
     for (const c of stale) {

@@ -52,6 +52,8 @@ export interface TestCase {
 // -- Execution results --
 
 export interface CapturedResponse {
+  /** The message sent for this turn, date placeholders resolved. */
+  prompt: string;
   content: string;
   agentId: string;
   durationMs: number;
@@ -91,6 +93,11 @@ export interface CaseResult {
   passed: boolean;
   /** Why it did not, one line each; empty when it passed. */
   failures: string[];
+  /**
+   * Set when the case failed its first attempt and was run again (cli.ts retries each
+   * gating failure once). The result above is the retry's; this is what the first said.
+   */
+  firstAttempt?: { weightedScore: number; failures: string[] };
 }
 
 // -- Run-level results --

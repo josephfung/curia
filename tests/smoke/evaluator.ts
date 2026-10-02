@@ -99,7 +99,8 @@ export function formatJudgeInput(exec: CaseExecution, principalName?: string, to
 
   const turns = tc.turns.map((turn, i) => {
     const response = exec.responses[i];
-    const lines = [`### Turn ${i + 1}`, `Message:`, turn.content.trim(), ``];
+    // What was actually sent: the turn with its date placeholders resolved.
+    const lines = [`### Turn ${i + 1}`, `Message:`, (response?.prompt ?? turn.content).trim(), ``];
     if (tc.judgeToolCalls) {
       lines.push(`Tool calls:`, formatToolCalls(response?.toolCalls ?? []), ``);
     }

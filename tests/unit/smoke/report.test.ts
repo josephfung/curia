@@ -28,6 +28,7 @@ describe('Report generator', () => {
           failureModes: ['Ignores greeting'],
         },
         responses: [{
+          prompt: 'Hello',
           content: 'Hi there!',
           agentId: 'coordinator',
           durationMs: 1200,

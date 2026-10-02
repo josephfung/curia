@@ -28,6 +28,7 @@ function execution(overrides: Partial<CaseExecution> = {}): CaseExecution {
   return {
     testCase: testCase(),
     responses: [{
+      prompt: 'Book lunch with Dana',
       content: 'Done.',
       agentId: 'coordinator',
       durationMs: 10,
@@ -152,8 +153,8 @@ describe('Evaluator', () => {
       const exec = execution({
         testCase: testCase({ turns: [{ role: 'user', content: 'first' }, { role: 'user', content: 'second' }] }),
         responses: [
-          { content: 'one', agentId: 'coordinator', durationMs: 1, toolCalls: [] },
-          { content: 'two', agentId: 'coordinator', durationMs: 1, toolCalls: [] },
+          { prompt: 'first', content: 'one', agentId: 'coordinator', durationMs: 1, toolCalls: [] },
+          { prompt: 'second', content: 'two', agentId: 'coordinator', durationMs: 1, toolCalls: [] },
         ],
       });
       const input = formatJudgeInput(exec);

@@ -12,6 +12,7 @@
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolResult } from '../../src/skills/types.js';
 import { matchToolStub } from '../scenarios/stub-matcher.js';
+import { shapeStubResult } from './stub-filters.js';
 import type { ToolStub } from '../scenarios/types.js';
 
 /** One tool call by any agent during a case, and how it was answered. */
@@ -43,16 +44,16 @@ function skillError(message: string): string {
 }
 
 /**
- * Per-turn stubs first, then the case's: the first matching stub wins, so a turn can
- * override a case-level answer for the same tool.
+ * Per-turn stubs first, then the case's, then the shared defaults: the first matching
+ * stub wins, so a turn overrides its case and a case overrides the default world.
  */
 export function mergeStubs(
-  turn: Record<string, ToolStub[]> | undefined,
-  base: Record<string, ToolStub[]>,
+  ...layers: Array<Record<string, ToolStub[]> | undefined>
 ): Record<string, ToolStub[]> {
-  if (!turn) return base;
-  const merged: Record<string, ToolStub[]> = { ...base };
-  for (const [tool, stubs] of Object.entries(turn)) merged[tool] = [...stubs, ...(base[tool] ?? [])];
+  const merged: Record<string, ToolStub[]> = {};
+  for (const layer of layers) {
+    for (const [tool, stubs] of Object.entries(layer ?? {})) merged[tool] = [...(merged[tool] ?? []), ...stubs];
+  }
   return merged;
 }
 
@@ -75,8 +76,9 @@ export function createSmokeStubs(): SmokeStubs {
       record.disposition = 'stubbed';
       record.success = stub.error === undefined;
       if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
-      // Clone so a handler-side mutation cannot change the fixture for a later call.
-      return { success: true, data: structuredClone(stub.return ?? null) };
+      // Clone so a handler-side mutation cannot change the fixture for a later call, then
+      // answer the question asked (time range, search query, echoed inputs).
+      return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input) };
     }
     const result = await real.invoke(...args);
     record.success = result.success;

@@ -4,6 +4,12 @@
 // (weighted), and had no critical behavior rated MISS. The suite passes when every case
 // does, apart from cases marked known_failure (a tracked bug); the CLI exits 1 otherwise.
 //
+// Each gating failure is run once more (cli.ts) and fails only if the retry fails too:
+// a single run swings a lot on the same code (one case scored 94% then 38%), and a
+// release gate that blocks at random teaches people to ignore it. A behavior that fails
+// half the time still fails both attempts a quarter of the time, and the report marks
+// every case that needed a retry.
+//
 // Why both conditions: the weighted score alone lets one critical MISS hide behind
 // enough passes (five critical PASS and one critical MISS is 83%), and a critical
 // behavior is by definition one whose absence is a regression.
@@ -48,6 +54,22 @@ export function gatingFailures<T extends { passed: boolean; error?: string; judg
 /** known_failure cases that passed: the bug may be fixed, so the marker may be stale. */
 export function staleKnownFailures<T extends { passed: boolean; testCase: TestCase }>(cases: T[]): T[] {
   return cases.filter(c => c.passed && c.testCase.knownFailure);
+}
+
+/**
+ * Fold a retry pass into the first pass's results. A retried case takes its retry's
+ * result (passing if the retry passed) and keeps what the first attempt said, so the
+ * report shows a case that needed a second chance. Order follows `first`.
+ */
+export function mergeRetries<T extends { testCase: TestCase; weightedScore: number; failures: string[]; firstAttempt?: { weightedScore: number; failures: string[] } }>(
+  first: T[],
+  retries: T[],
+): T[] {
+  const byName = new Map(retries.map(r => [r.testCase.name, r]));
+  return first.map((c) => {
+    const retry = byName.get(c.testCase.name);
+    return retry ? { ...retry, firstAttempt: { weightedScore: c.weightedScore, failures: c.failures } } : c;
+  });
 }
 
 export function formatPct(value: number): string {
