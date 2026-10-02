@@ -1,14 +1,15 @@
 {
   "name": "delegate",
   "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description. How long to wait for the specialist is set by the runtime — do not pass a timeout. If the result reason is already_in_flight, that specialist is still working in this conversation: tell the user the request is queued, and do not call delegate for them again.",
-  "version": "1.9.5",
+  "version": "1.10.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "agent": "string",
     "task": "string",
     "conversation_id": "string?",
-    "resume_token": "string?"
+    "resume_token": "string?",
+    "outbound_entry_id": "string? (When this delegation routes the principal's reply to an [ACTIVE OUTBOUND CONTEXT] entry, that entry's entry_id. The platform releases the entry when the specialist has handled the reply, and keeps it active if the specialist could not. Do not call context-bridge-release for it yourself.)"
   },
   "outputs": {
     "response": "string?",
@@ -40,7 +41,8 @@
   "timeout": 900000,
   "capabilities": [
     "bus",
-    "agentRegistry"
+    "agentRegistry",
+    "outboundContext"
   ],
   "allowed_callers": ["coordinator"]
 }
