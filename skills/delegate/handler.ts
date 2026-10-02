@@ -22,6 +22,12 @@
 import { randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { parseResolvedContactIds } from '../../src/agents/resolved-entities.js';
+import {
+  linkOutboundEntry,
+  outboundEntryNote,
+  settleOutboundEntry,
+  type LinkedOutboundEntry,
+} from './outbound-entry.js';
 import { createAgentTask, type AgentResponseEvent, type AgentResponseFailureReason } from '../../src/bus/events.js';
 // Resume-token format lives in ONE place (#995): decode + version via the shared helper, so a
 // future format change can't silently desync this handler from runtime.ts and the resume subscriber.
@@ -305,6 +311,24 @@ function formatStructuredFailureMessage(agent: string, reason: AgentResponseFail
 
 export class DelegateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
+    // The outbound-context entry this delegation answers, if any (#1972). Linked
+    // before the run so the specialist's brief can name it, settled after from the
+    // result shape. See ./outbound-entry.ts.
+    const { agent, task, outbound_entry_id } = ctx.input as { agent?: unknown; task?: unknown; outbound_entry_id?: unknown };
+    const link = typeof agent === 'string' && typeof task === 'string'
+      ? await linkOutboundEntry(ctx, agent, task, outbound_entry_id)
+      : null;
+    let delegatedTaskId: string | undefined;
+    const result = await this.run(ctx, link, (id) => { delegatedTaskId = id; });
+    if (link) await settleOutboundEntry(ctx, link, result, delegatedTaskId);
+    return result;
+  }
+
+  private async run(
+    ctx: ToolContext,
+    link: LinkedOutboundEntry | null,
+    onTaskCreated: (taskEventId: string) => void,
+  ): Promise<ToolResult> {
     const { agent, task, conversation_id, timeout_ms, resume_token } = ctx.input as {
       agent?: string;
       task?: string;
@@ -593,7 +617,9 @@ export class DelegateHandler implements ToolHandler {
       conversationId,
       channelId: 'internal',
       senderId: 'coordinator',
-      content: effectiveTask,
+      // The entry note goes on this run's content only, not on delegationOrigin's
+      // originalTask, which seeds a later resume_token for a different exchange.
+      content: link ? effectiveTask + outboundEntryNote(link.entryId) : effectiveTask,
       metadata: delegationMetadata,
       // Forward the live-principal-turn signal (#1126) across this SYNCHRONOUS delegation: a
       // specialist acting inside the principal's live turn (e.g. the contacts specialist running
@@ -606,6 +632,7 @@ export class DelegateHandler implements ToolHandler {
       liveTurn: ctx.liveTurn,
       parentEventId: `delegate-${randomUUID()}`,
     });
+    onTaskCreated(taskEvent.id);
 
     // Claim before subscribing. A refusal returns before the response listener
     // and its timer exist, so a busy conversation does not accumulate subscribers
