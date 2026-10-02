@@ -8,6 +8,9 @@ description: >
   handles the inbound on its own merits instead of asking what it refers to.
 tags: [reply-shaped, audience, email]
 stub_sets: [human-channels]
+# Looking around before deciding what an unexplained "Yes" means is legitimate, and
+# slow on this model (up to ~140s in debug runs).
+timeout_seconds: 300
 seed:
   contacts:
     - key: lena

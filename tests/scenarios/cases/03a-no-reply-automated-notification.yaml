@@ -27,6 +27,11 @@ inbound:
     needed. Manage your notification settings at any time from your account page.
 
     — The Dropbox team
+tool_stubs:
+  # Archiving an FYI is a legitimate part of handling it silently.
+  email-archive:
+    - match: {}
+      return: { archived: true }
 expected_behaviors:
   - id: exactly_no_reply
     weight: critical
