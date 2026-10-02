@@ -7,6 +7,9 @@ description: >
   withheld for non-principal senders, so the missing context is expected; the coordinator
   handles the inbound on its own merits instead of asking what it refers to.
 tags: [reply-shaped, audience, email]
+known_failure:
+  issue: "#1978"
+  reason: Asks the sender which option they mean (5/5 runs) and puts principal-facing notes in the external reply (3/5).
 stub_sets: [human-channels]
 # Looking around before deciding what an unexplained "Yes" means is legitimate, and
 # slow on this model (up to ~140s in debug runs).
