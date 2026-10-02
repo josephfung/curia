@@ -85,6 +85,8 @@ describe('task-wake-reply', () => {
         register: vi.fn(),
         release: vi.fn(),
         clearBySubjects: vi.fn(),
+        markExchangeOpen: vi.fn(),
+        releaseUnlessKeptOpen: vi.fn(),
         defaultExpiryHours: 6,
         explicitExpiryHours: 24,
         defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),

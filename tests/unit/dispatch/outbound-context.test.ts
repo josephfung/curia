@@ -175,6 +175,47 @@ describe('OutboundContextService', () => {
     });
   });
 
+  describe('markExchangeOpen (#1972)', () => {
+    it('stamps the exchange_open mark with the delegated task id on an active entry', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 1 });
+      const marked = await service.markExchangeOpen('entry-1', { agentId: 'ceo-inbox', taskEventId: 'task-9', reason: 'needs a time' });
+      expect(marked).toBe(true);
+      const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(sql).toContain('released = false');
+      expect(params).toEqual(['entry-1', 'exchange_open', 'ceo-inbox', 'task-9', 'needs a time']);
+    });
+
+    it('returns false when no active entry matched', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 0 });
+      expect(await service.markExchangeOpen('gone', { agentId: 'ceo-inbox', taskEventId: 'task-9' })).toBe(false);
+    });
+  });
+
+  describe('releaseUnlessKeptOpen (#1972)', () => {
+    it('releases in one statement that skips an entry marked open by this delegation', async () => {
+      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ rowCount: 1 });
+      expect(await service.releaseUnlessKeptOpen('entry-1', 'task-9')).toBe('released');
+      const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(sql).toMatch(/UPDATE outbound_context SET released = true/);
+      expect(sql).toContain('IS DISTINCT FROM');
+      expect(params).toEqual(['entry-1', 'exchange_open', 'task-9']);
+    });
+
+    it('reports kept_open when the update skipped an entry this delegation marked', async () => {
+      (pool.query as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ rowCount: 0 })
+        .mockResolvedValueOnce({ rowCount: 1 });
+      expect(await service.releaseUnlessKeptOpen('entry-1', 'task-9')).toBe('kept_open');
+    });
+
+    it('reports not_active when the entry was already released or expired', async () => {
+      (pool.query as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ rowCount: 0 })
+        .mockResolvedValueOnce({ rowCount: 0 });
+      expect(await service.releaseUnlessKeptOpen('entry-1', 'task-9')).toBe('not_active');
+    });
+  });
+
   describe('clearBySubjects', () => {
     it('releases all active entries matching each subject (case-insensitive) and returns per-subject counts', async () => {
       // Subject "Sean Brownlee" → 4 rows; "Khanjan Desai" → 2 rows.
@@ -258,7 +299,7 @@ describe('OutboundContextService', () => {
 
       expect(result).not.toBeNull();
       expect(result).toContain('[ACTIVE OUTBOUND CONTEXT');
-      expect(result).toContain('entry_id (for context-bridge-release only — NOT a Nylas/email message id): abc-123');
+      expect(result).toContain('entry_id (for delegate\'s outbound_entry_id or context-bridge-release — NOT a Nylas/email message id): abc-123');
       expect(result).toContain('Do not pass it as email-reply reply_to_message_id');
       expect(result).toContain('via signal');
       expect(result).toContain('on behalf of meeting-debrief');

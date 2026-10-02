@@ -55,7 +55,7 @@ describe('OutboundContextService integration (read path)', () => {
 
     expect(result).not.toBeNull();
     expect(result).toContain('[ACTIVE OUTBOUND CONTEXT');
-    expect(result).toContain('entry_id (for context-bridge-release only — NOT a Nylas/email message id): entry-1');
+    expect(result).toContain('entry_id (for delegate\'s outbound_entry_id or context-bridge-release — NOT a Nylas/email message id): entry-1');
     expect(result).toContain('on behalf of meeting-debrief');
     expect(result).toContain('Hello from CEO');
   });
@@ -125,7 +125,7 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
         if (entries.length === 0) return null;
         return [
           '[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]',
-          `entry_id (for context-bridge-release only — NOT a Nylas/email message id): ${entries[0]!.id}`,
+          `entry_id (for delegate\'s outbound_entry_id or context-bridge-release — NOT a Nylas/email message id): ${entries[0]!.id}`,
           `preview: "${entries[0]!.contentPreview}"`,
           '',
           originalContent,

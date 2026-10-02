@@ -95,6 +95,9 @@ describeIf('task-wake reply binding (#1299)', () => {
       releaseEntry: (id: string) => outboundContext.releaseEntry(id),
       getEntry: (id: string) => outboundContext.getEntry(id),
       clearBySubjects: (subjects: string[]) => outboundContext.clearBySubjects(subjects),
+      markExchangeOpen: (id: string, mark: { agentId: string; taskEventId: string; reason?: string }) =>
+        outboundContext.markExchangeOpen(id, mark),
+      releaseUnlessKeptOpen: (id: string, taskEventId: string) => outboundContext.releaseUnlessKeptOpen(id, taskEventId),
       defaultExpiryHours: outboundContext.defaultExpiryHours,
       explicitExpiryHours: outboundContext.explicitExpiryHours,
       defaultExpiryHoursFor: (channelId: string) => outboundContext.defaultExpiryHoursFor(channelId),
@@ -226,6 +229,9 @@ describeIf('task-wake reply binding (#1299)', () => {
       releaseEntry: (id: string) => outboundContext.releaseEntry(id),
       getEntry: (id: string) => outboundContext.getEntry(id),
       clearBySubjects: (subjects: string[]) => outboundContext.clearBySubjects(subjects),
+      markExchangeOpen: (id: string, mark: { agentId: string; taskEventId: string; reason?: string }) =>
+        outboundContext.markExchangeOpen(id, mark),
+      releaseUnlessKeptOpen: (id: string, taskEventId: string) => outboundContext.releaseUnlessKeptOpen(id, taskEventId),
       defaultExpiryHours: outboundContext.defaultExpiryHours,
       explicitExpiryHours: outboundContext.explicitExpiryHours,
       defaultExpiryHoursFor: (channelId: string) => outboundContext.defaultExpiryHoursFor(channelId),
