@@ -9,7 +9,7 @@ tags:
 turns:
   - role: user
     content: |
-      I need to reschedule my Thursday call with the board chair.
+      I need to reschedule my {{day:next-thursday}} call with the board chair.
       Something came up. Move it to next week and send my apologies.
 
 expected_behaviors:

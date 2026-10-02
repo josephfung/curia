@@ -11,7 +11,7 @@ tags:
 turns:
   - role: user
     content: |
-      I'm flying to New York on {{weekday:next-tuesday}}. Flight departs at 10am from
+      I'm flying to New York on {{day:next-tuesday}}. Flight departs at 10am from
       YYZ. Make sure I have travel time blocked and no meetings after
       I land.
 

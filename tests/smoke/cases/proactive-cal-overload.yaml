@@ -9,7 +9,7 @@ tags:
 turns:
   - role: user
     content: |
-      How does my Wednesday look? I'm feeling like it might be
+      How does {{day:next-wednesday}} look? I'm feeling like it might be
       packed.
 
 expected_behaviors:

@@ -5,6 +5,9 @@ tags:
   - scheduling
   - single-turn
 
+# 'Creates the event on the principal's calendar' is decided by the calendar specialist's
+# calendar-create-event call, so the judge needs to see it.
+judge_tool_calls: true
 turns:
   - role: user
     content: |

@@ -181,12 +181,23 @@ Email polling never runs, so tests do not trigger on live inbox events.
 
 `runTestCases()` processes cases sequentially (one at a time). For each case:
 - A unique `conversationId` is allocated, shaped by the case's sender.
+- Before the case, any earlier turn that outlived its timeout is waited for (it would otherwise
+  call tools against this case's stubs); the stubs and the fallback record are reset.
 - Each turn is sent via `harness.sendMessage()`, optionally preceded by a `delay_ms` pause.
 - Before each turn the stubs are set (turn, case, office) and placeholders resolved, once per
   turn, so the message and the fixtures agree on "now".
-- All responses are captured as `CapturedResponse[]`, each with the message actually sent and
-  that turn's coordinator tool calls. Every agent's calls are recorded on the case
-  (`agentCalls`; `--show-calls` prints them).
+- All responses are captured as `CapturedResponse[]`, each with the message actually sent,
+  that turn's coordinator tool calls, and `noReplyReason` when the Dispatcher suppressed
+  delivery. Every agent's calls are recorded on the case (`agentCalls`; `--show-calls` prints
+  them). A model fallback by any agent — specialists included — makes the case an error: it
+  ran on a model the results are not labelled with.
+
+**Before a paid run** the CLI checks that every stub names a registered tool and only that
+tool's real inputs (`stub-check.ts`), and the loader rejects any placeholder it cannot resolve.
+Flags are parsed strictly (`args.ts`): an unknown flag or `--model=x` is an error rather than
+silently running on the dev config. The database must have a principal contact, and
+`DATABASE_URL` must be local unless `--allow-remote-db` is passed. The recorded commit gets a
+`-dirty` suffix when tracked files have uncommitted changes.
 
 **Sequential execution is intentional.** Parallel execution would require multiple harness
 instances or careful isolation, since the shared database could produce non-deterministic results.
@@ -198,8 +209,9 @@ See [Future Work](#future-work) for planned concurrency improvements.
 provider — the scenario suite's judge, so the key stays in the vault (#911). For each case, the
 judge receives:
 - Who the sender is (the principal, by name, or an unknown external sender)
-- Each turn's message and the assistant's response, interleaved; with `judge_tool_calls`, also the
-  turn's tool calls, arguments and results (failures marked `FAILED`)
+- Each turn's message and the assistant's response, interleaved, and whether delivery was
+  suppressed; with `judge_tool_calls`, also the turn's tool calls, arguments and results
+  (failures marked `FAILED`) and every specialist's calls in the case — what it delegated
 - The list of expected behaviors with their IDs, descriptions, and weights, and the failure modes
 - Instructions to rate each behavior as `PASS`, `PARTIAL`, or `MISS` and provide a brief justification
 
@@ -208,7 +220,7 @@ Cases that did not complete are not judged. The judge is called sequentially.
 **Error handling:**
 - Auth, rate-limit, not-found and validation errors abort the run — they would repeat on every
   case, and an all-MISS run would read as a broken Curia
-- Transient errors (provider error, timeout) are retried three times with backoff
+- Transient errors (provider error, timeout, a provider that throws) get up to three attempts with backoff
 - A judge that still fails, an unparseable reply, a skipped behavior or an invalid rating becomes
   the case's **judge error**: its behaviors score `MISS`, and the gate reports it as a judge failure,
   not a model failure
@@ -431,7 +443,8 @@ For behaviors that need several runs and a pass-rate threshold, use the scenario
 - **Shared database state** — a run starts from a copy of the dev database, and all its cases share that copy; test cases cannot assume a clean slate. Cases should be written to work against a populated knowledge base.
 - **Non-determinism** — LLM outputs vary between runs. A test case with tightly worded behaviors may flip between `PASS` and `PARTIAL` across runs. Prefer behaviors that describe structural outcomes ("includes two options") over wording-dependent ones ("says 'I can help with that'").
 - **Judge model dependency** — the judge is `openai/gpt-4o` through OpenRouter. If OpenRouter is unavailable, the evaluation phase fails.
-- **Test mode can't reach the outside world** — email, calendar, scheduler, task, document and human-channel tools fail closed. A case about them tests what Curia does when they fail; decisions that need those tools to succeed belong in the scenario suite, where results are stubbed.
+- **The office is a fixture** — email, calendar, scheduler, task and document tools answer from `stubs/office.yaml` and the case's own stubs, not real systems; human-channel sends always fail (no transport). A stubbed call skips the real ExecutionLayer's trust and autonomy checks, so a stubbed write "succeeds" even where production would gate it. Read-only tools that are not stubbed (web-fetch, web-search) reach the real internet.
+- **Isolation is per run, not per case** — cases share one database copy in a fixed order, so a contact or fact one case writes is visible to later cases and to retries. Each case does start with no leftover turn: before it runs, the runner waits for any earlier turn that outlived its timeout, and fails the case closed ("could not run in isolation") if one is still going.
 - **No case-level parallelism** — cases run sequentially; a 34-case run against the full stack takes several minutes.
 
 ---

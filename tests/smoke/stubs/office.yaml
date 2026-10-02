@@ -96,15 +96,14 @@ calendar-create-event:
         calendarId: cal-principal-work
         busy: true
 
+# Only the id: echoing fields the call didn't set would read as "cleared". The case's
+# CalendarState applies the changed fields to later listings (stub-filters.ts).
 calendar-update-event:
   - match: {}
     return:
       displayTimezone: "{{timezone}}"
       event:
         id: "{{input:eventId}}"
-        title: "{{input:title}}"
-        startTime: "{{input:start}}"
-        endTime: "{{input:end}}"
         status: confirmed
         calendarId: cal-principal-work
 

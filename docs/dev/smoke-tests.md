@@ -40,6 +40,8 @@ pnpm smoke --tags email-triage,briefing
 pnpm smoke --case "urgent" --show-calls
 ```
 
+Flags are parsed strictly: an unknown flag, a missing value or `--model=x` stops the run instead of being ignored. The database needs a principal contact, and `DATABASE_URL` must point at this machine (`--allow-remote-db` overrides). Before any case runs, every stub is checked against the tool registry: a misspelt tool name or input is an error, since such a stub would never fire. The `Commit:` line ends in `-dirty` when tracked files have uncommitted changes.
+
 **Requirements:** `DATABASE_URL` (a migrated database with a principal contact) and `SECRET_ENCRYPTION_KEY`. Model keys come from the vault, never from env (#911): the model's provider key (`anthropic_api_key` or `openrouter_api_key`), plus `openrouter_api_key` for the judge.
 
 **It runs on a copy.** Smoke copies `DATABASE_URL`'s database (`CREATE DATABASE <name>_smoke_<pid> TEMPLATE <name>`), runs every case there and drops the copy afterwards, including on Ctrl-C. Copies a crashed run left behind are dropped at the next start. Agents write contacts, knowledge-graph facts and settings as they work, and one early run on the dev database added 17 contacts and stored a fake Zoom link as the principal's. Postgres copies a database only while nothing else is connected to it, so stop the dev instance first (`docker stop curia-curia-1`). Contact recent history is withheld, so a case never sees another case's turns.
@@ -118,7 +120,9 @@ Test mode can't reach a real calendar, mailbox, scheduler or task store. So ever
   List and search results are narrowed to the call's time range or query, the way the real tools narrow them. Writes succeed and echo their inputs (`{{input:title}}`).
 - **`tests/smoke/fixtures/people.yaml`** seeds the people cases mention (Sarah Chen, David Kim, the board chair…) as real contacts in the copy. They use the reserved `.example` domain only.
 
-A case's own `tool_stubs` are tried first, then the office's, so a case can change one answer (a scheduler that now lists the job turn 1 created) or break one (a specialist that declines). Calls nothing stubs run for real, on the copy. `--show-calls` prints every agent's calls, which tells you what a new case needs.
+A case's own `tool_stubs` are tried first, then the office's, so a case can change one answer (a scheduler that now lists the job turn 1 created) or break one (a specialist that declines). Calendar writes are remembered for the rest of the case, so an event created in a case shows up when it re-reads the day. Calls nothing stubs run for real, on the copy. `--show-calls` prints every agent's calls, which tells you what a new case needs.
+
+A stubbed call is answered before the real tool layer, so trust and autonomy checks don't run on it: a stubbed write "succeeds" even where production would gate it. Stub a write when the case is about what Curia does next, not about whether it may write.
 
 ### Placeholders
 
@@ -142,7 +146,7 @@ A day is `today`, `today±N` or `next-<weekday>` (strictly after today), optiona
 
 ### Judging tool calls
 
-By default the judge sees each turn's message and Curia's reply. Set `judge_tool_calls: true` when the behavior is an action rather than a reply, such as "looks the contact up before answering" or "does not send anything". The judge then also sees each tool call, its arguments, and its result (a failed call is marked `FAILED`).
+By default the judge sees each turn's message and Curia's reply. Set `judge_tool_calls: true` when the behavior is an action rather than a reply, such as "looks the contact up before answering" or "does not send anything". The judge then also sees each tool call, its arguments, and its result (a failed call is marked `FAILED`), plus the calls of every specialist the coordinator delegated to, so "created the event on the principal's calendar" is judged on what was done, not on what the reply says.
 
 For coordinator decisions that must be checked exactly, across several runs with a pass rate, use the scenario suite (`tests/scenarios/README.md`). It asserts tool calls in code and refuses any unstubbed write.
 
