@@ -44,9 +44,14 @@ expected_behaviors:
     weight: critical
     description: Delegates to ceo-inbox, passing the matched entry id in the brief.
     check:
-      called: delegate
-      with: { agent: ceo-inbox }
-      contains: { task: "{{entry:dana_counter}}" }
+      # Linked either way: outbound_entry_id, or the id quoted in the brief, which
+      # delegate also links (#1972).
+      any_of:
+        - called: delegate
+          with: { agent: ceo-inbox, outbound_entry_id: "{{entry:dana_counter}}" }
+        - called: delegate
+          with: { agent: ceo-inbox }
+          contains: { task: "{{entry:dana_counter}}" }
   - id: sends_nothing_itself
     weight: critical
     description: >
