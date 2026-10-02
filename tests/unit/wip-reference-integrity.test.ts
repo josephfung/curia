@@ -37,6 +37,16 @@ const WIP_DIR = join(REPO_ROOT, 'docs/wip');
 const DURABLE_TREES = ['src', 'tests', 'skills', 'scripts', 'docs/specs', 'docs/adr', 'docs/dev'];
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git']);
+/**
+ * Gitignored run output of the behavior suites (#1956), by path from the repo root. Every
+ * local `pnpm smoke` / `pnpm scenarios` run writes reports and results here; they are not
+ * hand-written and never committed, so they are neither scanned nor counted in the census.
+ */
+const GENERATED_DIRS = new Set(['tests/smoke/reports', 'tests/smoke/results', 'tests/scenarios/results']);
+
+function isSkippedDir(full: string, name: string): boolean {
+  return SKIP_DIRS.has(name) || GENERATED_DIRS.has(relative(REPO_ROOT, full).split(sep).join('/'));
+}
 // Every hand-written text format in the durable trees. `.sh` and `.py` are here because
 // the durable trees really do contain them — the CI and docker test harnesses under
 // `tests/`, and skill fixture scripts — and a comment in one can cite a design doc exactly
@@ -102,7 +112,7 @@ function collectFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
+      if (isSkippedDir(full, entry.name)) continue;
       collectFiles(full, out);
     } else if (isScannedFile(entry.name)) {
       out.push(full);
@@ -117,7 +127,7 @@ function collectAllFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
+      if (isSkippedDir(full, entry.name)) continue;
       collectAllFiles(full, out);
     } else {
       out.push(full);
