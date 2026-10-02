@@ -19,15 +19,26 @@ tool_stubs:
     - match: {}
       return:
         messages:
-          - { id: msg-acme-23, threadId: thr-acme, from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v7", date: "{{time:today-1 16:10}}", snippet: "As a path to signature, Acme proposes a 60/40 split of ownership in jointly developed features, with Curia holding 60%.", unread: true, folders: [INBOX], attachments: [] }
-          - { id: msg-acme-22, threadId: thr-acme, from: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], to: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v7", date: "{{time:today-2 11:45}}", snippet: "We can't accept shared ownership of jointly developed features. Our position remains full ownership with a perpetual license back to Acme.", unread: false, folders: [INBOX], attachments: [] }
-          - { id: msg-acme-21, threadId: thr-acme, from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v6", date: "{{time:today-4 09:30}}", snippet: "Indemnification cap agreed at 12 months of fees. On IP, Acme still needs shared ownership of what we build together.", unread: false, folders: [INBOX], attachments: [] }
+          - { id: 18f2c4a91e7b3d06, threadId: 18e9b2c7a4f1d360, from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v7", date: "{{time:today-1 16:10}}", snippet: "As a path to signature, Acme proposes a 60/40 split of ownership in jointly developed features, with Curia holding 60%.", unread: true, folders: [INBOX], attachments: [] }
+          - { id: 18f1e07bc53a92d4, threadId: 18e9b2c7a4f1d360, from: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], to: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v7", date: "{{time:today-2 11:45}}", snippet: "We can't accept shared ownership of jointly developed features. Our position remains full ownership with a perpetual license back to Acme.", unread: false, folders: [INBOX], attachments: [] }
+          - { id: 18f0a3d6e1c4b875, threadId: 18e9b2c7a4f1d360, from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v6", date: "{{time:today-4 09:30}}", snippet: "Indemnification cap agreed at 12 months of fees. On IP, Acme still needs shared ownership of what we build together.", unread: false, folders: [INBOX], attachments: [] }
         count: 3
-  ceo-inbox-read:
-    - match: { message_id: msg-acme-23 }
+  # Listing the inbox shows the thread too (search finds it as well, narrowed by query).
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, drafts: [], count: 0 }
+    - match: {}
       return:
-        id: msg-acme-23
-        threadId: thr-acme
+        messages:
+          - { id: 18f2c4a91e7b3d06, threadId: 18e9b2c7a4f1d360, from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v7", date: "{{time:today-1 16:10}}", snippet: "As a path to signature, Acme proposes a 60/40 split of ownership in jointly developed features, with Curia holding 60%.", unread: true, folders: [INBOX], attachments: [] }
+          - { id: 18f2a1c7d93e5b08, threadId: 18f2a1c7d93e5b08, from: [{ name: Priya Sharma, email: priya.sharma@curiatech.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Q2 board deck — final for your review, date: "{{time:today-1 17:42}}", snippet: "Attached is the final Q2 board deck.", unread: true, folders: [INBOX], attachments: [] }
+        count: 2
+        has_more: false
+  ceo-inbox-read:
+    - match: { message_id: 18f2c4a91e7b3d06 }
+      return:
+        id: 18f2c4a91e7b3d06
+        threadId: 18e9b2c7a4f1d360
         from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }]
         to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }]
         cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }]
@@ -55,6 +66,46 @@ tool_stubs:
         date: 0
         labels: [INBOX, UNREAD]
         attachments: []
+    - match: { message_id: 18f1e07bc53a92d4 }
+      return:
+        id: 18f1e07bc53a92d4
+        threadId: 18e9b2c7a4f1d360
+        from: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }]
+        to: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }]
+        cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }]
+        subject: "Re: Acme–Curia partnership agreement — redline v7"
+        body_plain: |
+          Mark,
+
+          We can't accept shared ownership of jointly developed features. Our position remains
+          full ownership with a perpetual, royalty-free license back to Acme for its own products.
+
+          Hannah Brooks
+          General Counsel, Curia Tech
+        date: 0
+        labels: [INBOX]
+        attachments: []
+    - match: { message_id: 18f0a3d6e1c4b875 }
+      return:
+        id: 18f0a3d6e1c4b875
+        threadId: 18e9b2c7a4f1d360
+        from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }]
+        to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }]
+        cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }]
+        subject: "Re: Acme–Curia partnership agreement — redline v6"
+        body_plain: |
+          Hannah,
+
+          Indemnification cap agreed at 12 months of fees. On IP, Acme still needs shared
+          ownership of what we build together; we can't take it to our board otherwise.
+
+          Mark
+        date: 0
+        labels: [INBOX]
+        attachments: []
+    # Any other id: the thread's earlier messages are not in this mailbox view.
+    - match: {}
+      error: Message not found in this mailbox.
 
 turns:
   - role: user
