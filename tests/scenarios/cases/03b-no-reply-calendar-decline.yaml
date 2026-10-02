@@ -38,13 +38,13 @@ expected_behaviors:
       reply: no_reply
   - id: does_not_email_the_decliner
     weight: critical
-    description: Sends nothing to Marcus.
+    description: Does not email Marcus a new message (email-reply is covered below — it has no `to`).
     check:
-      not_called: [email-reply, email-send]
+      not_called: [email-send]
       contains: { to: marcus.lindqvist@example.test }
   - id: no_reply_tool
-    weight: important
-    description: Does not call email-reply at all.
+    weight: critical
+    description: Does not call email-reply at all — the decline needs no answer on its thread.
     check:
       not_called: [email-reply]
 failure_modes:
