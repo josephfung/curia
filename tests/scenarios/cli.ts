@@ -85,7 +85,7 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
     }
     const hasSuccessStub = (tool: string): boolean => (c.toolStubs[tool] ?? []).some(st => st.error === undefined);
     const needsStub = (tool: string): boolean =>
-      harness.coordinatorTools.has(tool) && !c.toolStubs[tool] && mustStub(tool, registry);
+      harness.coordinatorTools.has(tool) && !c.toolStubs[tool] && mustStub(tool, registry, harness.unavailableTools);
 
     for (const b of c.expectedBehaviors) {
       const check = b.check;
@@ -123,7 +123,7 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
       // would also trip the coverage gate, blaming the harness for the model's mistake.
       if (check.kind === 'not_called') {
         for (const tool of check.tools) {
-          if (harness.coordinatorTools.has(tool) && mustStub(tool, registry) && !hasSuccessStub(tool)) {
+          if (harness.coordinatorTools.has(tool) && mustStub(tool, registry, harness.unavailableTools) && !hasSuccessStub(tool)) {
             problems.push(`${where} forbids ${tool}; give it a succeeding stub so the wrong path is available`);
           }
         }
@@ -178,6 +178,9 @@ function gitCommit(): string | undefined {
 
 async function main(): Promise<void> {
   const started = Date.now();
+  // At start, not at the end: the results must name the code that ran, and HEAD can move
+  // during a half-hour suite.
+  const commit = gitCommit();
   const args = parseArgs(process.argv.slice(2));
 
   let cases = loadScenarioCases(CASES_DIR);
@@ -325,7 +328,7 @@ async function main(): Promise<void> {
     const suite: SuiteResult = {
       timestamp: new Date(started).toISOString(),
       model,
-      commit: gitCommit(),
+      commit,
       runsPerCase: Object.fromEntries(results.map(r => [r.name, r.runs.length])),
       cases: results,
       passed: failures.length === 0,

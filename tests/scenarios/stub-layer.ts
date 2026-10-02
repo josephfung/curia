@@ -43,9 +43,18 @@ const DANGEROUS_CAPABILITIES: ReadonlySet<string> = new Set([
   'secretCapture',
 ]);
 
-/** True when an unstubbed call to `toolName` must be refused rather than run. */
-export function mustStub(toolName: string, registry: ToolRegistry): boolean {
-  if (ALWAYS_STUB.has(toolName)) return true;
+/**
+ * True when an unstubbed call to `toolName` must be refused rather than run.
+ * `unavailable` names tools test mode cannot serve (missing capabilities): running one
+ * only produces a failure production never shows, so it is refused — and counted as a
+ * stub hole — instead.
+ */
+export function mustStub(
+  toolName: string,
+  registry: ToolRegistry,
+  unavailable: ReadonlySet<string> = new Set(),
+): boolean {
+  if (ALWAYS_STUB.has(toolName) || unavailable.has(toolName)) return true;
   const tool = registry.get(toolName);
   // Not registered: the real layer answers "not found", which is what production does.
   if (!tool) return false;
@@ -89,7 +98,10 @@ function skillError(message: string): string {
  * `registry` is a getter because the stub layer is created inside createTestModeStack's
  * wrapExecutionLayer hook, before the stack (and its tool registry) is returned.
  */
-export function createStubController(registry: () => ToolRegistry): StubController {
+export function createStubController(
+  registry: () => ToolRegistry,
+  unavailable: () => ReadonlySet<string> = () => new Set(),
+): StubController {
   let stubs: Record<string, ToolStub[]> | null = null;
   let runConversationId: string | null = null;
   let calls: StubbedCall[] = [];
@@ -127,7 +139,7 @@ export function createStubController(registry: () => ToolRegistry): StubControll
       return { success: true, data: structuredClone(stub.return ?? null) };
     }
 
-    if (stubs === null || mustStub(toolName, registry())) {
+    if (stubs === null || mustStub(toolName, registry(), unavailable())) {
       record('refused');
       return {
         success: false,
