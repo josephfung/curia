@@ -7,30 +7,25 @@
 // the ExecutionLayer (wrapped by the stub layer); the runtime formats failures as
 // <task_error>. The harness only adds seeding, stubs and capture.
 //
-// Capture listens as the `system` layer, which unlike the smoke harness's `channel`
-// subscription also sees agent.response — so a NO_REPLY turn, or a reply Gate C holds
-// for a non-principal sender, still ends the run instead of timing out.
+// Capture (tests/shared/turn-capture.ts) listens as the `system` layer, so a NO_REPLY
+// turn, or a reply Gate C holds for a non-principal sender, still ends the run instead
+// of timing out.
 import { randomUUID } from 'node:crypto';
-import type { EventBus } from '../../src/bus/bus.js';
-import {
-  createAgentDiscuss,
-  createInboundMessage,
-  type AgentErrorEvent,
-  type AgentResponseEvent,
-  type BusEvent,
-  type ModelFallbackEngagedEvent,
-  type OutboundNoReplyEvent,
-  type ToolInvokeEvent,
-  type ToolResultEvent,
-} from '../../src/bus/events.js';
+import { createAgentDiscuss, createInboundMessage } from '../../src/bus/events.js';
 import { loadConfig } from '../../src/config.js';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import {
+  cleanupConversation,
+  createTurnCapture,
+  withoutRecentHistory,
+  type ObservedToolCall,
+  type TurnOutcome,
+} from '../shared/turn-capture.js';
 import { internalNamesFor } from './assertions.js';
 import { resolvePlaceholders } from './loader.js';
 import {
-  cleanupConversation,
   cleanupRun,
   createOutboundContextService,
   resolveSender,
@@ -68,13 +63,6 @@ export function parseTimeout(raw: string | undefined): number {
   }
   return value;
 }
-
-/**
- * After agent.response, wait this long for the Dispatcher's follow-up events
- * (outbound.no_reply) before closing the run. They are published in the same tick
- * chain, so a short settle is enough.
- */
-const SETTLE_MS = 250;
 
 /** How long shutdown waits for turns that outlived their run's timeout. */
 const LATE_TURN_GRACE_MS = 60_000;
@@ -171,12 +159,8 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     model: options.model,
     wrapExecutionLayer: (layer) => controller.wrap(layer),
     wrapBullpenService: (bullpen) => scopedBullpen(bullpen, scope),
-    // No contact recent history: every case starts from a clean slate. On the dev
-    // database that recall surfaces smoke runs' and the real principal's other turns
-    // (it once turned a reply-shaped "Yes, go ahead." into a real pending research ask).
-    wrapWorkingMemory: (memory) => Object.assign(Object.create(memory) as typeof memory, {
-      getContactRecentHistory: async () => [],
-    }),
+    // No contact recent history: every case starts from a clean slate.
+    wrapWorkingMemory: withoutRecentHistory,
   });
   booted = stack;
   // Tools any agent is offered that test mode refuses for a missing capability.
@@ -197,7 +181,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   // Bullpen mentions reach the coordinator the way they do in production.
   new BullpenDispatcher(bus, logger, stack.bullpenService, stack.agentRegistry).register();
 
-  const capture = createCapture(bus);
+  const capture = createTurnCapture(bus);
   const coordinator = stack.agent(COORDINATOR);
   const coordinatorTools = new Set(coordinator.toolDefs.map(t => t.name));
   const internalNames = internalNamesFor({
@@ -259,7 +243,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       conversationId = runConversationId;
 
       controller.beginRun(stubTable, runConversationId);
-      let outcome: CaptureOutcome;
+      let outcome: TurnOutcome;
       try {
         const waiter = capture.waitFor(runConversationId, timeoutMs);
         let delivery: Promise<void>;
@@ -389,146 +373,10 @@ function emailMetadata(senderEmail: string, email: ScenarioCase['inbound']['emai
  * the ExecutionLayer: the runtime answered it itself (a tool outside the turn's
  * allowlist, a delegation its guard blocked). That is the model's doing, not a hole.
  */
-function mergeCalls(observed: CapturedToolCall[], stubbed: StubbedCall[]): CapturedToolCall[] {
+function mergeCalls(observed: ObservedToolCall[], stubbed: StubbedCall[]): CapturedToolCall[] {
   const byInvoke = new Map(stubbed.filter(s => s.invokeEventId).map(s => [s.invokeEventId!, s]));
   return observed.map(call => {
     const s = call.invokeEventId ? byInvoke.get(call.invokeEventId) : undefined;
     return { ...call, disposition: s ? s.disposition : 'runtime' };
   });
-}
-
-// ── Bus capture ────────────────────────────────────────────────────────────
-
-interface CaptureOutcome {
-  calls: CapturedToolCall[];
-  reply: string | null;
-  noReplyReason?: string;
-  error?: string;
-}
-
-interface PendingCapture {
-  calls: CapturedToolCall[];
-  invokeIndex: Map<string, number>;
-  reply: string | null;
-  noReplyReason?: string;
-  error?: string;
-  done: boolean;
-  resolve: (outcome: CaptureOutcome) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-interface Capture {
-  waitFor(conversationId: string, timeoutMs: number): Promise<CaptureOutcome>;
-  /** End a pending run now with an error (its inbound could not be delivered). */
-  fail(conversationId: string, err: unknown): void;
-}
-
-function createCapture(bus: EventBus): Capture {
-  const pending = new Map<string, PendingCapture>();
-
-  const finish = (conversationId: string, p: PendingCapture): void => {
-    if (p.done) return;
-    p.done = true;
-    clearTimeout(p.timer);
-    // Let the Dispatcher's follow-up (outbound.no_reply) land before closing.
-    setTimeout(() => {
-      pending.delete(conversationId);
-      p.resolve({
-        calls: p.calls,
-        reply: p.reply,
-        ...(p.noReplyReason ? { noReplyReason: p.noReplyReason } : {}),
-        ...(p.error ? { error: p.error } : {}),
-      });
-    }, SETTLE_MS);
-  };
-
-  const forCoordinator = (agentId: string, conversationId: string): PendingCapture | undefined =>
-    agentId === COORDINATOR ? pending.get(conversationId) : undefined;
-
-  const on = (type: BusEvent['type'], handler: (event: BusEvent) => void): void => {
-    bus.subscribe(type, 'system', async (event) => handler(event));
-  };
-
-  on('tool.invoke', (event) => {
-    const { payload } = event as ToolInvokeEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
-    if (!p || p.done) return;
-    p.invokeIndex.set(event.id, p.calls.length);
-    // disposition is filled in by mergeCalls from the stub layer's record.
-    p.calls.push({ name: payload.toolName, input: payload.input, invokeEventId: event.id, disposition: 'runtime' });
-  });
-
-  on('tool.result', (event) => {
-    const { payload, parentEventId } = event as ToolResultEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
-    if (!p || p.done || !parentEventId) return;
-    const index = p.invokeIndex.get(parentEventId);
-    if (index === undefined) return;
-    const result = payload.result;
-    p.calls[index]!.result = result.success
-      ? { success: true, data: result.data }
-      : { success: false, error: result.error };
-  });
-
-  on('agent.response', (event) => {
-    const { payload } = event as AgentResponseEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
-    if (!p || p.done) return; // a second response in the settle window must not replace the first
-    // The runtime lifts an exact NO_REPLY out of the content before publishing (#1732):
-    // what arrives is empty content with suppressDelivery. Put the sentinel back so
-    // checks and the judge see the decision the model made. A narrated decline
-    // ("NO_REPLY — automated notice") keeps its text and suppressDelivery, so it still
-    // reads as not-exactly-NO_REPLY — which is the failure the check exists to catch.
-    p.reply = payload.suppressDelivery && payload.content === '' ? 'NO_REPLY' : payload.content;
-    if (payload.isError) p.error ??= `coordinator returned an error response: ${payload.content.slice(0, 200)}`;
-    finish(payload.conversationId, p);
-  });
-
-  on('agent.error', (event) => {
-    const { payload } = event as AgentErrorEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
-    if (!p) return;
-    p.error = `agent.error ${payload.errorType}: ${payload.message}`;
-    finish(payload.conversationId, p);
-  });
-
-  // A fallback means the turn ran on a different model than the one the results are
-  // labelled with — scoring it would credit or blame the wrong model.
-  on('model.fallback', (event) => {
-    const { payload } = event as ModelFallbackEngagedEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
-    if (!p || p.done) return;
-    p.error = `model fallback: ${payload.failedModel} → ${payload.fallbackModel} (${payload.reason})`;
-  });
-
-  on('outbound.no_reply', (event) => {
-    const { payload } = event as OutboundNoReplyEvent;
-    const p = pending.get(payload.conversationId);
-    if (p) p.noReplyReason = payload.reason;
-  });
-
-  return {
-    fail(conversationId, err) {
-      const p = pending.get(conversationId);
-      if (!p || p.done) return;
-      p.error = `could not deliver the inbound: ${err instanceof Error ? err.message : String(err)}`;
-      finish(conversationId, p);
-    },
-    waitFor(conversationId, timeoutMs) {
-      return new Promise((resolve) => {
-        const p: PendingCapture = {
-          calls: [],
-          invokeIndex: new Map(),
-          reply: null,
-          done: false,
-          resolve,
-          timer: setTimeout(() => {
-            p.error = `Timeout waiting for the coordinator (${Math.round(timeoutMs / 1000)}s)`;
-            finish(conversationId, p);
-          }, timeoutMs),
-        };
-        pending.set(conversationId, p);
-      });
-    },
-  };
 }

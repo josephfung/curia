@@ -3,6 +3,7 @@
 // A scenario is one inbound message to the coordinator, with seeded state and
 // stubbed tools, run N times on the production prompt. Behaviors are scored per
 // run, either in code (`check`) or by the LLM judge (no `check`).
+import type { ObservedToolCall } from '../shared/turn-capture.js';
 
 // ── Case definition (loaded from YAML) ─────────────────────────────────────
 
@@ -146,19 +147,14 @@ export interface ScenarioCase {
 
 // ── Execution ─────────────────────────────────────────────────────────────
 
-export interface CapturedToolCall {
-  name: string;
-  input: Record<string, unknown>;
-  /** What the runtime handed back: data on success, the error string on failure. */
-  result?: { success: true; data: unknown } | { success: false; error: string };
+/** A bus-observed call (tests/shared/turn-capture.ts) plus how the harness answered it. */
+export interface CapturedToolCall extends ObservedToolCall {
   /**
    * stubbed = answered by a stub; passthrough = real read-only tool; refused = fail-closed
    * by the stub layer; runtime = the runtime answered it without the ExecutionLayer (a
    * tool outside the turn's allowlist, a delegation its guard blocked).
    */
   disposition: 'stubbed' | 'passthrough' | 'refused' | 'runtime';
-  /** The tool.invoke event id, joining the bus record to the stub layer's. */
-  invokeEventId?: string;
 }
 
 export interface ScenarioRun {
