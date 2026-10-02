@@ -19,7 +19,8 @@ import type {
 } from './types.js';
 
 const WEIGHTS: readonly BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
-const CONTACT_TIERS = ['known', 'trusted', 'unknown'] as const;
+// Not 'trusted': that tier is a grant made after creation, and createContact refuses it.
+const CONTACT_TIERS = ['known', 'unknown'] as const;
 const CONTACT_KINDS = ['person', 'organization', 'automated'] as const;
 
 /** `{{kind:key}}` or `{{principal_contact_id}}`. */
@@ -36,6 +37,36 @@ class CaseError extends Error {
 function isObject(v: unknown): v is Raw {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
+
+/**
+ * Reject keys the schema does not know. A typo must not be silent: `weigth: critical`
+ * would quietly un-gate a behavior, `checks:` would hand a code check to the judge, and
+ * `wth:` inside a check would loosen `called` to any arguments.
+ */
+function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: string): void {
+  const unknown = Object.keys(raw).filter(k => !allowed.includes(k));
+  if (unknown.length > 0) {
+    throw new CaseError(file, `${where}: unknown key(s) ${unknown.join(', ')} (allowed: ${allowed.join(', ')})`);
+  }
+}
+
+const CASE_KEYS = ['name', 'description', 'tags', 'runs', 'timeout_seconds', 'stub_sets', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
+const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen'] as const;
+const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier'] as const;
+const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'sent_minutes_ago', 'expires_in_hours'] as const;
+const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
+const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'email'] as const;
+const EMAIL_KEYS = ['nylas_message_id', 'auto_generated', 'auto_generated_signals'] as const;
+const STUB_KEYS = ['match', 'return', 'error'] as const;
+const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check'] as const;
+const CHECK_KEYS: Record<string, readonly string[]> = {
+  called: ['called', 'with', 'contains', 'min', 'max'],
+  not_called: ['not_called', 'with', 'contains'],
+  order: ['order'],
+  reply: ['reply'],
+  reply_excludes: ['reply_excludes'],
+  reply_excludes_internal_names: ['reply_excludes_internal_names'],
+};
 
 function str(raw: Raw, key: string, file: string, where: string): string {
   const v = raw[key];
@@ -82,6 +113,7 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
   if (kinds.length !== 1) {
     throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names (got ${kinds.join(', ') || 'none'})`);
   }
+  onlyKeys(raw, CHECK_KEYS[kinds[0]!]!, file, where);
   const withArgs = raw['with'];
   if (withArgs !== undefined && !isObject(withArgs)) throw new CaseError(file, `${where}: 'with' must be a mapping`);
   const contains = raw['contains'];
@@ -142,6 +174,7 @@ function parseStubs(raw: unknown, file: string): Record<string, ToolStub[]> {
     }
     stubs[tool] = entries.map((e, i) => {
       const where = `tool_stubs.${tool}[${i}]`;
+      onlyKeys(e, STUB_KEYS, file, where);
       const match = e['match'] ?? {};
       if (!isObject(match)) throw new CaseError(file, `${where}: 'match' must be a mapping`);
       const hasReturn = 'return' in e;
@@ -160,6 +193,7 @@ function parseBehaviors(raw: Raw, file: string): ExpectedBehavior[] {
   const seen = new Set<string>();
   return behaviors.map((b, i) => {
     const where = `expected_behaviors[${i}]`;
+    onlyKeys(b, BEHAVIOR_KEYS, file, where);
     const id = str(b, 'id', file, where);
     if (seen.has(id)) throw new CaseError(file, `duplicate behavior id '${id}'`);
     seen.add(id);
@@ -177,6 +211,7 @@ function parseBehaviors(raw: Raw, file: string): ExpectedBehavior[] {
 function parseContacts(raw: Raw, file: string): SeedContact[] {
   return list(raw, 'contacts', file).map((c, i) => {
     const where = `seed.contacts[${i}]`;
+    onlyKeys(c, CONTACT_KEYS, file, where);
     const tier = c['tier'] ?? 'known';
     if (!CONTACT_TIERS.includes(tier as typeof CONTACT_TIERS[number])) {
       throw new CaseError(file, `${where}: tier must be one of ${CONTACT_TIERS.join(', ')}`);
@@ -200,6 +235,7 @@ function parseContacts(raw: Raw, file: string): SeedContact[] {
 function parseOutbound(raw: Raw, file: string): SeedOutboundEntry[] {
   return list(raw, 'outbound_context', file).map((e, i) => {
     const where = `seed.outbound_context[${i}]`;
+    onlyKeys(e, ENTRY_KEYS, file, where);
     const metadata = e['metadata'];
     if (metadata !== undefined && !isObject(metadata)) throw new CaseError(file, `${where}: 'metadata' must be a mapping`);
     return {
@@ -219,6 +255,7 @@ function parseOutbound(raw: Raw, file: string): SeedOutboundEntry[] {
 function parseBullpen(raw: Raw, file: string): SeedBullpenThread[] {
   return list(raw, 'bullpen', file).map((t, i) => {
     const where = `seed.bullpen[${i}]`;
+    onlyKeys(t, THREAD_KEYS, file, where);
     const creator = str(t, 'creator', file, where);
     const participants = strList(t, 'participants', file, where, true);
     if (!participants.includes(creator)) throw new CaseError(file, `${where}: creator must be a participant`);
@@ -235,8 +272,10 @@ function parseBullpen(raw: Raw, file: string): SeedBullpenThread[] {
 
 function parseInbound(raw: unknown, file: string): ScenarioInbound {
   if (!isObject(raw)) throw new CaseError(file, `'inbound' must be a mapping`);
+  onlyKeys(raw, INBOUND_KEYS, file, 'inbound');
   const email = raw['email'];
   if (email !== undefined && !isObject(email)) throw new CaseError(file, `inbound.email must be a mapping`);
+  if (email) onlyKeys(email, EMAIL_KEYS, file, 'inbound.email');
   return {
     from: str(raw, 'from', file, 'inbound'),
     channel: optStr(raw, 'channel', file, 'inbound'),
@@ -336,9 +375,11 @@ function mergeStubSets(
 export function loadScenarioCase(file: string, options: LoadOptions = {}): ScenarioCase {
   const raw = yaml.load(readFileSync(file, 'utf-8'));
   if (!isObject(raw)) throw new CaseError(file, 'not a YAML mapping');
+  onlyKeys(raw, CASE_KEYS, file, 'case');
 
   const seedRaw = raw['seed'] ?? {};
   if (!isObject(seedRaw)) throw new CaseError(file, `'seed' must be a mapping`);
+  onlyKeys(seedRaw, SEED_KEYS, file, 'seed');
   const seed = {
     contacts: parseContacts(seedRaw, file),
     outboundContext: parseOutbound(seedRaw, file),
@@ -388,6 +429,17 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   scenario.seed.contacts.forEach(c => add('contact', c.key));
   scenario.seed.outboundContext.forEach(e => add('entry', e.key));
   scenario.seed.bullpen.forEach(t => add('thread', t.key));
+
+  // failure_modes go to the judge as written; a placeholder there would reach it raw.
+  if (placeholdersIn(scenario.failureModes).length > 0) {
+    throw new CaseError(file, `failure_modes cannot contain {{…}} placeholders`);
+  }
+  // Fixture contacts must never collide with a real person's address.
+  for (const c of scenario.seed.contacts) {
+    if (c.channel === 'email' && !/@([a-z0-9-]+\.)*example\.test$/i.test(c.identifier)) {
+      throw new CaseError(file, `seed contact '${c.key}': email identifiers must be under example.test`);
+    }
+  }
 
   for (const ref of placeholdersIn({
     seed: scenario.seed,

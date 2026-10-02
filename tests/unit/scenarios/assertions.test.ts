@@ -92,6 +92,14 @@ describe('evaluateCheck: reply', () => {
   });
 });
 
+describe('reply-content checks need a reply', () => {
+  it.each([[null], ['NO_REPLY'], ['  ']])('miss on a silent reply (%j)', (reply) => {
+    const r = run([], reply);
+    expect(evaluateCheck({ kind: 'reply_excludes', patterns: ['x'] }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'reply_excludes_internal_names' }, r, ctx).rating).toBe('MISS');
+  });
+});
+
 describe('internal names', () => {
   it('collects hyphenated tool and agent identifiers and @-mentions', () => {
     const names = internalNamesFor({ tools: ['delegate', 'email-send', 'memory_query'], agents: ['calendar', 'ceo-inbox'] });

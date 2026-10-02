@@ -54,7 +54,8 @@ export interface ExpectedBehavior {
 export interface SeedContact {
   key: string;
   displayName: string;
-  tier: 'known' | 'trusted' | 'unknown';
+  /** `trusted` is a grant made after creation; createContact refuses it. */
+  tier: 'known' | 'unknown';
   kind?: 'person' | 'organization' | 'automated';
   role?: string;
   /** Channel identity used when this contact is the sender. */
@@ -144,8 +145,14 @@ export interface CapturedToolCall {
   input: Record<string, unknown>;
   /** What the runtime handed back: data on success, the error string on failure. */
   result?: { success: true; data: unknown } | { success: false; error: string };
-  /** stubbed = answered by a stub; passthrough = real read-only tool; refused = fail-closed. */
-  disposition: 'stubbed' | 'passthrough' | 'refused';
+  /**
+   * stubbed = answered by a stub; passthrough = real read-only tool; refused = fail-closed
+   * by the stub layer; runtime = the runtime answered it without the ExecutionLayer (a
+   * tool outside the turn's allowlist, a delegation its guard blocked).
+   */
+  disposition: 'stubbed' | 'passthrough' | 'refused' | 'runtime';
+  /** The tool.invoke event id, joining the bus record to the stub layer's. */
+  invokeEventId?: string;
 }
 
 export interface ScenarioRun {
@@ -167,6 +174,8 @@ export interface ScenarioRun {
   unstubbedCalls: number;
   /** Set when the run could not complete (timeout, boot error, agent.error). */
   error?: string;
+  /** Set when removing the run's rows failed; leftovers may be in the database. */
+  cleanupError?: string;
 }
 
 // ── Scoring ───────────────────────────────────────────────────────────────
@@ -188,8 +197,14 @@ export interface BehaviorResult {
   behavior: ExpectedBehavior;
   /** One rating per run, in run order. */
   ratings: RunRating[];
-  /** Mean of RATING_VALUES over ratings. */
+  /** Mean of RATING_VALUES over ratings (PARTIAL = 0.5). Feeds the weighted score. */
   passRate: number;
+  /**
+   * Share of runs rated a full PASS. The critical gate uses this, not passRate: the
+   * binomial table behind "≥0.8 at 5 runs" assumes pass/fail, and with PARTIAL at 0.5
+   * three PASS and two PARTIAL would clear 0.8 on a behavior that fully held 60% of the time.
+   */
+  strictPassRate: number;
 }
 
 export interface CaseResult {
@@ -198,17 +213,25 @@ export interface CaseResult {
   behaviors: BehaviorResult[];
   /** Σ(weight × passRate) / Σweight. */
   weightedScore: number;
-  /** Critical behaviors under CRITICAL_PASS_THRESHOLD. */
+  /** Critical behaviors whose strict pass rate is under CRITICAL_PASS_THRESHOLD. */
   criticalFailures: string[];
+  /** Runs where the judge itself failed (not the model) — reported as a gate failure. */
+  judgeErrors: number;
 }
 
 export interface SuiteResult {
   timestamp: string;
   model: string;
   commit?: string;
-  runsPerCase: number;
+  /** Runs each case actually got (a case's `runs` or --runs can differ from the default). */
+  runsPerCase: Record<string, number>;
   cases: CaseResult[];
   passed: boolean;
+  /**
+   * Set when the run was narrowed (--case, --tags, --runs): its pass is not a release
+   * gate result, whatever `passed` says.
+   */
+  filtered?: { caseFilter?: string; tags?: string[]; runs?: number };
   /** Non-behavioral reasons the suite failed (coverage gate, errored runs). */
   gateFailures: string[];
   durationMs: number;

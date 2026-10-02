@@ -34,6 +34,20 @@ describe('scoreCase', () => {
     expect(scoreCase('c', [critical], runs(3), new Map([['routes', [P, P, M]]])).criticalFailures).toEqual(['routes']);
   });
 
+  it('counts only full passes for a critical behavior (3 PASS + 2 PARTIAL fails)', () => {
+    const result = scoreCase('c', [critical], runs(5), new Map([['routes', [P, P, P, H, H]]]));
+    expect(result.behaviors[0]!.passRate).toBe(0.8);
+    expect(result.behaviors[0]!.strictPassRate).toBe(0.6);
+    expect(result.criticalFailures).toEqual(['routes']);
+  });
+
+  it('counts runs where the judge failed and reports them separately', () => {
+    const J: RunRating = { rating: 'MISS', justification: 'judge error PROVIDER_ERROR: 502' };
+    const result = scoreCase('c', [critical, minor], runs(3), new Map([['routes', [P, P, P]], ['tone', [J, P, J]]]));
+    expect(result.judgeErrors).toBe(2);
+    expect(gateFailures([result])).toEqual(['c: the judge errored on 2 run(s) — those behaviors were not measured']);
+  });
+
   it('never gates a non-critical behavior', () => {
     expect(scoreCase('c', [minor], runs(2), new Map([['tone', [M, M]]])).criticalFailures).toEqual([]);
   });
@@ -55,7 +69,7 @@ describe('gateFailures', () => {
     const errored = scoreCase('sweep', [minor], runs(2, 'Timeout waiting for response'), new Map([['tone', [M, P]]]));
     const lines = gateFailures([failing, errored]);
     expect(lines).toEqual([
-      "transfer: critical behavior 'routes' passed 20% of runs (needs 80%)",
+      "transfer: critical behavior 'routes' fully passed 20% of runs (needs 80%)",
       'sweep: 1 run(s) errored — Timeout waiting for response',
     ]);
   });
