@@ -89,6 +89,18 @@ describe('loadScenarioCase', () => {
     expect(() => loadScenarioCase(write('bad.yaml', body))).toThrow(error);
   });
 
+  it.each([
+    ['a trusted tier (a grant, refused at create)', VALID.replace('tier: known', 'tier: trusted'), /tier must be one of known, unknown/],
+    ['an email outside example.test', VALID.replace('sam@example.test', 'sam@gmail.com'), /under example.test/],
+    ['a misspelled weight key', VALID.replace('weight: critical', 'weigth: critical'), /unknown key\(s\) weigth/],
+    ['a misspelled check key', VALID.replace('    check:\n      called: delegate', '    checks:\n      called: delegate'), /unknown key\(s\) checks/],
+    ['an unknown key inside a check', VALID.replace('with: { agent: ceo-inbox }\n      contains', 'wth: { agent: ceo-inbox }\n      contains'), /unknown key\(s\) wth/],
+    ['an unknown top-level key', VALID + 'run: 3\n', /unknown key\(s\) run/],
+    ['a placeholder in failure_modes', VALID + 'failure_modes:\n  - "drops {{entry:offsite}}"\n', /failure_modes cannot contain/],
+  ])('rejects %s', (_label, body, error) => {
+    expect(() => loadScenarioCase(write('bad2.yaml', body))).toThrow(error);
+  });
+
   it('requires a bullpen inbound to name a seeded thread', () => {
     const body = VALID.replace('from: principal', 'from: bullpen');
     expect(() => loadScenarioCase(write('b.yaml', body))).toThrow(/needs 'thread'/);

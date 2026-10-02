@@ -15,6 +15,15 @@ export function passRate(ratings: RunRating[]): number {
   return ratings.reduce((sum, r) => sum + RATING_VALUES[r.rating], 0) / ratings.length;
 }
 
+/** Share of ratings that are a full PASS — what the critical gate counts. */
+export function strictPassRate(ratings: RunRating[]): number {
+  if (ratings.length === 0) return 0;
+  return ratings.filter(r => r.rating === 'PASS').length / ratings.length;
+}
+
+/** Marks a rating the judge could not produce (an infrastructure failure, not the model's). */
+export const JUDGE_ERROR_PREFIX = 'judge error';
+
 /**
  * Fold per-run ratings into a case result. `ratingsByBehavior` must hold one rating per
  * run for every behavior; a missing one is a harness bug, so it throws rather than
@@ -33,7 +42,7 @@ export function scoreCase(
         `${name}: behavior '${behavior.id}' has ${ratings.length} rating(s) for ${runs.length} run(s)`,
       );
     }
-    return { behavior, ratings, passRate: passRate(ratings) };
+    return { behavior, ratings, passRate: passRate(ratings), strictPassRate: strictPassRate(ratings) };
   });
 
   const totalWeight = results.reduce((s, r) => s + WEIGHT_VALUES[r.behavior.weight], 0);
@@ -45,8 +54,12 @@ export function scoreCase(
     behaviors: results,
     weightedScore: totalWeight === 0 ? 0 : earned / totalWeight,
     criticalFailures: results
-      .filter(r => r.behavior.weight === 'critical' && r.passRate < CRITICAL_PASS_THRESHOLD)
+      .filter(r => r.behavior.weight === 'critical' && r.strictPassRate < CRITICAL_PASS_THRESHOLD)
       .map(r => r.behavior.id),
+    // Counted per run, not per behavior: one judge failure misses every judged behavior.
+    judgeErrors: runs.filter((_, i) =>
+      results.some(r => r.ratings[i]!.justification.startsWith(JUDGE_ERROR_PREFIX)),
+    ).length,
   };
 }
 
@@ -57,9 +70,18 @@ export function gateFailures(cases: CaseResult[]): string[] {
     for (const id of c.criticalFailures) {
       const result = c.behaviors.find(b => b.behavior.id === id)!;
       failures.push(
-        `${c.name}: critical behavior '${id}' passed ${formatPct(result.passRate)} of runs ` +
+        `${c.name}: critical behavior '${id}' fully passed ${formatPct(result.strictPassRate)} of runs ` +
         `(needs ${formatPct(CRITICAL_PASS_THRESHOLD)})`,
       );
+    }
+    // The judge failing is not the model failing. Its MISSes already count against the
+    // pass rate, so say so separately — otherwise it reads as a model regression.
+    if (c.judgeErrors > 0) {
+      failures.push(`${c.name}: the judge errored on ${c.judgeErrors} run(s) — those behaviors were not measured`);
+    }
+    const leftovers = c.runs.filter(r => r.cleanupError);
+    if (leftovers.length > 0) {
+      failures.push(`${c.name}: cleanup failed on ${leftovers.length} run(s) — ${leftovers[0]!.cleanupError}`);
     }
     // A run that errored (timeout, agent.error) was rated MISS on every behavior, so it
     // already counts against the pass rate. Report it as well: "the model got it wrong"

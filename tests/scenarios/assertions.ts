@@ -81,16 +81,24 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
         : miss(wanted ? `expected exactly NO_REPLY; got: ${run.reply.slice(0, 200)}` : 'replied NO_REPLY');
     }
     case 'reply_excludes': {
-      const reply = run.reply ?? '';
+      // A reply-content check needs a reply. Silence trivially "contains nothing", and
+      // scoring it PASS would let a coordinator that stops answering clear the gate.
+      if (isSilent(run)) return miss('no reply to check (silent or NO_REPLY)');
+      const reply = run.reply!;
       const hit = check.patterns.find(p => new RegExp(p, 'i').test(reply));
       return hit === undefined ? pass('reply contains none of the excluded patterns') : miss(`reply matches /${hit}/i`);
     }
     case 'reply_excludes_internal_names': {
-      const reply = run.reply ?? '';
+      if (isSilent(run)) return miss('no reply to check (silent or NO_REPLY)');
+      const reply = run.reply!;
       const hits = ctx.internalNames.filter(name => containsIdentifier(reply, name));
       return hits.length === 0 ? pass('reply names no internal identifier') : miss(`reply names ${hits.join(', ')}`);
     }
   }
+}
+
+function isSilent(run: ScenarioRun): boolean {
+  return run.reply === null || run.reply.trim() === '' || run.reply.trim() === NO_REPLY;
 }
 
 /** Match `name` as a whole identifier, so `email-send` does not hit `email-sender`. */

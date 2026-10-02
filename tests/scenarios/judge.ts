@@ -6,6 +6,7 @@
 // "delegated instead of answering". gpt-4o, as in smoke and curia-deploy's eval, so
 // scores stay comparable across the three.
 import type { LLMProvider } from '../../src/agents/llm/provider.js';
+import { JUDGE_ERROR_PREFIX } from './gate.js';
 import type { BehaviorRating, ExpectedBehavior, RunRating, ScenarioCase, ScenarioRun } from './types.js';
 
 /** gpt-4o, as smoke and curia-deploy's eval use, reached through OpenRouter. */
@@ -99,13 +100,14 @@ export function parseJudgeResponse(raw: string, behaviors: ExpectedBehavior[]): 
   for (const b of behaviors) {
     const s = scores.find(x => x.behaviorId === b.id);
     if (!s) {
-      out.set(b.id, { rating: 'MISS', justification: parseError ? `judge reply unparseable: ${parseError}` : 'judge returned no score' });
+      // Prefixed JUDGE_ERROR_PREFIX: the judge failed, not the model — gate.ts reports it apart.
+      out.set(b.id, { rating: 'MISS', justification: parseError ? `${JUDGE_ERROR_PREFIX}: reply unparseable: ${parseError}` : `${JUDGE_ERROR_PREFIX}: no score returned` });
       continue;
     }
     const rating = typeof s.rating === 'string' ? s.rating.trim().toUpperCase() : '';
     out.set(b.id, RATINGS.includes(rating as BehaviorRating)
       ? { rating: rating as BehaviorRating, justification: typeof s.justification === 'string' ? s.justification : '' }
-      : { rating: 'MISS', justification: `judge gave an invalid rating '${String(s.rating)}'` });
+      : { rating: 'MISS', justification: `${JUDGE_ERROR_PREFIX}: invalid rating '${String(s.rating)}'` });
   }
   return out;
 }
@@ -143,10 +145,17 @@ export function extractJsonObject(text: string): string {
   return start !== -1 && end > start ? body.slice(start, end + 1) : body;
 }
 
+/** Transient provider failures worth another attempt; anything else fails the same way every run. */
+const RETRYABLE: ReadonlySet<string> = new Set(['PROVIDER_ERROR', 'TIMEOUT', 'UNKNOWN']);
+const JUDGE_ATTEMPTS = 3;
+
 /**
- * Judge one run's prose behaviors. An auth or rate-limit failure throws: it would
- * repeat on every run, and an all-MISS suite would read as a broken coordinator.
- * Any other provider error scores the run's judged behaviors MISS, saying why.
+ * Judge one run's prose behaviors.
+ *
+ * - Auth, rate-limit, not-found (judge model retired) and validation errors throw: they
+ *   would repeat on every run, and an all-MISS suite would read as a broken coordinator.
+ * - Transient errors are retried, then score the run's judged behaviors MISS with a
+ *   JUDGE_ERROR_PREFIX justification, which the gate reports as a judge failure.
  */
 export async function judgeRun(
   scenario: ScenarioCase,
@@ -156,23 +165,33 @@ export async function judgeRun(
 ): Promise<Map<string, RunRating>> {
   if (behaviors.length === 0) return new Map();
 
-  const response = await judge.provider.chat({
-    model: judge.model,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: formatJudgeInput(scenario, run, behaviors, judge.principalName) },
-    ],
-  });
+  let lastError = '';
+  for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
+    const response = await judge.provider.chat({
+      model: judge.model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: formatJudgeInput(scenario, run, behaviors, judge.principalName) },
+      ],
+    });
 
-  if (response.type === 'error') {
+    if (response.type === 'text') {
+      return parseJudgeResponse(extractJsonObject(response.content), behaviors);
+    }
+    if (response.type === 'tool_use') {
+      lastError = 'answered with a tool call, not JSON';
+      continue;
+    }
     const { type, message } = response.error;
-    if (type === 'AUTH_FAILURE' || type === 'RATE_LIMIT') {
+    if (!RETRYABLE.has(type)) {
       throw new Error(`Judge call failed (${type}): ${message}`);
     }
-    return new Map(behaviors.map(b => [b.id, { rating: 'MISS' as const, justification: `judge error ${type}: ${message}` }]));
+    lastError = `${type}: ${message}`;
+    // Brief backoff before the next attempt.
+    await new Promise(resolve => setTimeout(resolve, 1_000 * attempt));
   }
-  if (response.type !== 'text') {
-    return new Map(behaviors.map(b => [b.id, { rating: 'MISS' as const, justification: 'judge answered with a tool call, not JSON' }]));
-  }
-  return parseJudgeResponse(extractJsonObject(response.content), behaviors);
+  return new Map(behaviors.map(b => [b.id, {
+    rating: 'MISS' as const,
+    justification: `${JUDGE_ERROR_PREFIX} after ${JUDGE_ATTEMPTS} attempts — ${lastError}`,
+  }]));
 }

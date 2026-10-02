@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createJudge, extractJsonObject, formatJudgeInput, parseJudgeResponse } from '../../scenarios/judge.js';
+import { createJudge, extractJsonObject, formatJudgeInput, judgeRun, parseJudgeResponse } from '../../scenarios/judge.js';
 import type { ExpectedBehavior, ScenarioCase, ScenarioRun } from '../../scenarios/types.js';
 
 const behaviors: ExpectedBehavior[] = [
@@ -20,12 +20,12 @@ describe('parseJudgeResponse', () => {
 
   it('scores a skipped behavior MISS and says why', () => {
     const out = parseJudgeResponse(JSON.stringify({ scores: [{ behaviorId: 'honest', rating: 'PASS' }] }), behaviors);
-    expect(out.get('brief')).toEqual({ rating: 'MISS', justification: 'judge returned no score' });
+    expect(out.get('brief')).toEqual({ rating: 'MISS', justification: 'judge error: no score returned' });
   });
 
   it('scores everything MISS on an unparseable reply', () => {
     const out = parseJudgeResponse('not json', behaviors);
-    expect([...out.values()].every(r => r.rating === 'MISS' && r.justification.includes('unparseable'))).toBe(true);
+    expect([...out.values()].every(r => r.rating === 'MISS' && r.justification.startsWith('judge error: reply unparseable'))).toBe(true);
   });
 
   it('rejects an invalid rating', () => {
@@ -68,6 +68,30 @@ describe('extractJsonObject', () => {
     expect(extractJsonObject('Here you go: {"scores": []} hope that helps')).toBe('{"scores": []}');
     expect(extractJsonObject('{"a": {"b": 1}}')).toBe('{"a": {"b": 1}}');
   });
+});
+
+describe('judgeRun', () => {
+  const scenario = {
+    name: 'x', description: '', tags: [], sourceFile: 'x.yaml',
+    seed: { contacts: [], outboundContext: [], bullpen: [] },
+    inbound: { from: 'principal', content: 'hi' },
+    toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],
+  } as ScenarioCase;
+  const run: ScenarioRun = { runIndex: 0, inboundContent: 'hi', refs: {}, toolCalls: [], reply: 'ok', durationMs: 1, unstubbedCalls: 0 };
+  const error = (type: string) => ({ type: 'error' as const, error: { type, source: 'openrouter', message: 'x', retryable: false, context: {}, timestamp: new Date() } });
+
+  it('throws on an error that would repeat every run', async () => {
+    const provider = { id: 'openrouter', chat: async () => error('NOT_FOUND') } as never;
+    await expect(judgeRun(scenario, run, behaviors, { provider, model: 'm' })).rejects.toThrow(/NOT_FOUND/);
+  });
+
+  it('retries a transient error, then marks the ratings as judge errors', async () => {
+    let calls = 0;
+    const provider = { id: 'openrouter', chat: async () => { calls++; return error('PROVIDER_ERROR'); } } as never;
+    const out = await judgeRun(scenario, run, behaviors, { provider, model: 'm' });
+    expect(calls).toBe(3);
+    expect([...out.values()].every(r => r.justification.startsWith('judge error after 3 attempts'))).toBe(true);
+  }, 15_000);
 });
 
 describe('createJudge', () => {

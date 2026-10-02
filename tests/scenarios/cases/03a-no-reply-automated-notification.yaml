@@ -11,11 +11,11 @@ stub_sets: [human-channels]
 seed:
   contacts:
     - key: vendor
-      display_name: Dropbox
+      display_name: Cloudvault Storage
       tier: known
       kind: automated
       channel: email
-      identifier: no-reply@dropbox.example.test
+      identifier: no-reply@cloudvault.example.test
 inbound:
   from: vendor
   content: |
@@ -23,10 +23,10 @@ inbound:
 
     Hi there,
 
-    Here's your weekly Dropbox summary. You're using 41% of your 2 TB plan. No action is
+    Here's your weekly Cloudvault summary. You're using 41% of your 2 TB plan. No action is
     needed. Manage your notification settings at any time from your account page.
 
-    — The Dropbox team
+    — The Cloudvault team
 tool_stubs:
   # Archiving an FYI is a legitimate part of handling it silently.
   email-archive:

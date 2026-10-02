@@ -29,6 +29,18 @@ describe('mergeCoverage', () => {
     expect(merged.cases['b']).toEqual({ unstubbed: null, reason: 'new' });
   });
 
+  it('ignores errored runs, and keeps the prior entry when none completed', () => {
+    const merged = mergeCoverage(
+      { cases: { a: { unstubbed: 3 }, b: { unstubbed: null, reason: 'new' } } },
+      [
+        { name: 'a', model: 'm', runs: [{ unstubbedCalls: 0, error: 'Timeout' }, { unstubbedCalls: 2 }] },
+        { name: 'b', model: 'm', runs: [{ unstubbedCalls: 0, error: 'seed failed' }] },
+      ],
+    );
+    expect(merged.cases['a']).toMatchObject({ unstubbed: 2, runs: 1 });
+    expect(merged.cases['b']).toEqual({ unstubbed: null, reason: 'new' });
+  });
+
   it('replaces rather than folds, so a fixed stub table clears', () => {
     const merged = mergeCoverage({ cases: { a: { unstubbed: 4 } } }, [{ name: 'a', model: 'm', runs: [{ unstubbedCalls: 0 }] }]);
     expect(merged.cases['a']!.unstubbed).toBe(0);

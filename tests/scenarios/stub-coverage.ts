@@ -57,7 +57,7 @@ export function readCoverage(file: string): CoverageFile {
 export interface CoverageUpdate {
   name: string;
   model: string;
-  runs: Array<{ unstubbedCalls: number }>;
+  runs: Array<{ unstubbedCalls: number; error?: string }>;
 }
 
 export function mergeCoverage(existing: CoverageFile, updates: CoverageUpdate[]): CoverageFile {
@@ -65,13 +65,18 @@ export function mergeCoverage(existing: CoverageFile, updates: CoverageUpdate[])
   // cannot blank the record for the rest.
   const cases = { ...existing.cases };
   for (const u of updates) {
+    // An errored run (failed seed, timeout) measured little or nothing; counting its 0
+    // would record a clean bill for a case nobody observed. No completed run → keep the
+    // prior entry as it was.
+    const completed = u.runs.filter(r => !r.error);
+    if (completed.length === 0) continue;
     const prior = cases[u.name];
     cases[u.name] = {
       // An allowance is a reviewed human decision, so it survives re-measurement. A
       // `reason` explains an unmeasured entry and is dropped once there is data.
       ...(prior?.allowUnstubbed ? { allowUnstubbed: prior.allowUnstubbed } : {}),
-      unstubbed: Math.max(0, ...u.runs.map(r => r.unstubbedCalls)),
-      runs: u.runs.length,
+      unstubbed: Math.max(0, ...completed.map(r => r.unstubbedCalls)),
+      runs: completed.length,
       model: u.model,
       recordedAt: new Date().toISOString(),
     };

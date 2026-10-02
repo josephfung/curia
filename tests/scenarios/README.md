@@ -4,8 +4,8 @@ Behavioral tests for the coordinator rules that only its prompt enforces (#1956)
 case is one inbound message with seeded state and stubbed tools. It runs N times on the
 production prompt and the model you choose. A behavior is scored either in code
 (was `delegate` called with this entry id?) or by an LLM judge that sees the tool calls
-and the reply. A `critical` behavior must pass at least 80% of its runs, or the suite
-exits non-zero.
+and the reply. A `critical` behavior must fully pass at least 80% of its runs, or the
+suite exits non-zero.
 
 Smoke (`tests/smoke/`, spec 16) asks "does the whole stack produce a good answer?". This
 suite asks "did the coordinator make the right decision?", which is usually a tool call:
@@ -30,7 +30,12 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
 | `--allow-other-connections` | Run even though another client is connected to the database (see below). |
 
 `SCENARIO_TIMEOUT_MS` sets the default per-run wait (180s). A case can set its own
-`timeout_seconds`.
+`timeout_seconds`. The wait is a hard bound: a turn that outlives it is scored as an
+errored run, its later tool calls are refused (never answered by the next run's stubs),
+and its conversation rows are cleaned when it finally ends.
+
+A run narrowed with `--case`, `--tags` or `--runs` can exit 0, but it says it is **not**
+a release-gate result, and the results JSON records the filters.
 
 ### What it needs
 
@@ -42,19 +47,24 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
   - `anthropic_api_key`, if you run an Anthropic model;
   - `openai_api_key` (valid), for embeddings. Seeding a contact creates its KG node.
 
-  To add one key without touching the others, put it in `.env` and blank the rest. A
-  variable already set in the shell beats `--env-file`, and empty values are skipped:
+  To add one key without touching the others, put it in `.env` and scope the seeder to
+  it (the seeder loads all of `.env`, and would otherwise re-upsert every secret there):
 
   ```bash
-  ANTHROPIC_API_KEY= OPENAI_API_KEY= API_TOKEN= WEB_APP_BOOTSTRAP_SECRET= NYLAS_API_KEY= \
-  NYLAS_GRANT_ID= NYLAS_SELF_EMAIL= TAVILY_API_KEY= pnpm run seed-vault   # seeds OPENROUTER_API_KEY only
+  SEED_VAULT_ONLY=openrouter_api_key pnpm run seed-vault
   ```
 
+  Then remove the key from `.env`; the vault is where it lives.
+
 - **No running Curia instance on that database.** A run writes real rows (see below), and
-  a live instance would act on them. The CLI refuses to start while any other client is
-  connected (`pg_stat_activity`). Stop the instance (`docker stop curia-curia-1`). Pass
-  `--allow-other-connections` only when the other client is not Curia, such as a psql
-  session.
+  a live instance would act on them. The CLI refuses to start, and stops before any case,
+  while another client is connected (`pg_stat_activity`, including other roles' sessions).
+  Stop the instance (`docker stop curia-curia-1`). Pass `--allow-other-connections` only
+  when the other client is not Curia, such as a psql session. A second `pnpm scenarios`
+  against the same database is refused by an advisory lock.
+- **A database whose data you are willing to send to the judge.** The judge (OpenAI,
+  via OpenRouter) sees each run's tool calls and results, which can include real dev-DB
+  reads and the principal's name. The model under test sees the same data already.
 
 ### Output
 
@@ -65,17 +75,22 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
   every run's tool calls, reply and ratings.
 - `tests/scenarios/stub-coverage.json` (committed). See [Stub coverage](#stub-coverage).
 - **Exit 1** when any of these is true:
-  - a critical behavior is under 0.8;
-  - a run errored (timeout, `agent.error`);
+  - a critical behavior fully passed fewer than 80% of its runs;
+  - a run errored (timeout, `agent.error`, a `model.fallback`, seeded state not visible);
+  - the judge itself failed on a run (reported separately from model failures);
+  - cleaning up a run's rows failed;
   - a case's worst run had stub holes above its allowance;
-  - the CLI found a case problem before running.
+  - the CLI found a case problem before running, or another client connected mid-suite.
 
 ## The gate
 
-A `critical` behavior's pass rate is the mean over runs (PASS = 1, PARTIAL = 0.5,
-MISS = 0), and it must be at least **0.8**. The default is **5 runs** because the gate's
-discrimination depends on the run count. The figures come from curia-deploy's eval README
-(binomial):
+A `critical` behavior must be rated a full **PASS** in at least **80%** of its runs. A
+PARTIAL counts as a miss here: the table below is binomial (pass/fail), and with PARTIAL
+at 0.5, three PASS and two PARTIAL would clear 0.8 on a behavior that fully held in 60% of
+runs. PARTIAL still earns half credit in the weighted score shown per case.
+
+The default is **5 runs** because the gate's discrimination depends on the run count.
+The figures come from curia-deploy's eval README:
 
 | Runs | 0.8 means | Fails a truly 95%-reliable behavior | Catches a truly 60% behavior |
 |---|---|---|---|
@@ -113,15 +128,24 @@ prompt. Use 9 runs for a decision that needs to catch a mediocre behavior.
 
 `audit_log` keeps the runs' events. It is append-only by design.
 
+**Interrupted runs.** Every fixture carries a marker: contacts a `notes` tag, their KG
+nodes `source = 'scenario-test'` (the suite mints each fixture's node itself, so a contact
+never adopts a real node), entries a `scenario-origin-` conversation id, threads a
+`scenario:` `source_message_id`. On Ctrl-C/SIGTERM, and at every start-up, the CLI sweeps
+anything carrying those markers — and nothing else.
+
 ### Stubs, and why nothing can send
 
 The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
 
 1. A **matching stub** answers the call. The real tool never runs.
-2. **No stub, and the tool must be stubbed** (`action_risk` above `none`, or `delegate`):
-   the call is refused with a `<skill_error>`. It never falls through. The runtime formats
-   the error as production's `<task_error>`.
+2. **No stub, and the tool must be stubbed** — `action_risk` above `none`, `delegate`, or
+   any tool declaring the `executionLayer`, `outboundGateway`, `actionLogRepo` or
+   `secretCapture` capability (some of those say `none` but can re-invoke tools, send or
+   resolve approvals): the call is refused with a `<skill_error>`. It never falls through.
+   The runtime formats the error as production's `<task_error>`.
 3. **No stub, read-only tool:** the real tool runs (memory reads, `date-resolve`).
+4. **A call from another conversation** (a timed-out earlier turn) is refused.
 
 This sits on top of the test-mode stack's own guarantee: a gateway with no transport
 client (spec 16). So a run cannot send, and `tests/unit/scenarios/stub-layer.test.ts`
@@ -140,7 +164,13 @@ a tool are matched first.
 **A forbidden tool must be stubbed to succeed.** If a behavior says `not_called:
 [signal-send]`, the case must stub `signal-send` (usually through `human-channels`). The
 wrong path has to be available, or the case tests a refusal instead of the model's choice.
-The CLI checks this before any paid call.
+
+Before any paid call the CLI also checks that every tool a check names is registered (a
+typo in `not_called` would otherwise pass forever), that `called`/`order` tools are
+offered to the coordinator, and that `with`/`contains` keys are real inputs of the tool.
+The loader rejects unknown keys anywhere in a case, so `weigth:` or `checks:` is an error,
+not a silently un-gated behavior. Reply-content checks (`reply_excludes*`) miss on a
+silent reply: saying nothing is not "naming no internals".
 
 ### Stub coverage
 
@@ -177,7 +207,7 @@ seed:
   contacts:                               # → {{contact:<key>}}
     - key: sam
       display_name: Sam Rivera
-      tier: known                         # known | trusted | unknown
+      tier: known                         # known | unknown
       kind: person                        # person | organization | automated
       channel: email
       identifier: sam@example.test        # always under example.test
