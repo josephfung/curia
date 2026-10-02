@@ -1,0 +1,66 @@
+# Case 1 (#1956): a reply that matches an [ACTIVE OUTBOUND CONTEXT] entry carrying a
+# delegation_hint is ALWAYS transfer-ownership — the coordinator routes it to the named
+# specialist with the entry id and does not answer it, even when the reply is a bare
+# "yes" it could trivially handle. Rule: agents/coordinator.yaml, "The transfer-ownership
+# reply rule" and "Active outbound context".
+name: transfer-ownership trivial yes
+description: >
+  ceo-inbox sent the principal a draft reply for approval. The principal answers with a
+  bare "Yes". The matching entry has delegation_hint ceo-inbox, so the coordinator must
+  hand the reply to ceo-inbox with the entry id rather than act on it or answer it.
+tags: [outbound-context, routing, transfer-ownership]
+stub_sets: [human-channels]
+seed:
+  outbound_context:
+    - key: sam_offsite
+      channel: signal
+      agent: ceo-inbox
+      content: >
+        Draft reply to Sam Rivera about the Q3 offsite: "Thursday works for us — see you
+        at 10." Want me to send it?
+      expected_reply: approval to send the draft
+      delegation_hint: ceo-inbox
+      sent_minutes_ago: 12
+inbound:
+  from: principal
+  content: "Yes"
+tool_stubs:
+  delegate:
+    - match: { agent: ceo-inbox }
+      return:
+        agent: ceo-inbox
+        response: Sent the reply to Sam Rivera confirming Thursday at 10 for the Q3 offsite.
+  # Releasing after the specialist's closing result is the sweep-on-close rule (case 2),
+  # and allowed here; ceo-inbox may already have released it, which is also fine.
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:sam_offsite}}" }
+expected_behaviors:
+  - id: routes_to_owner
+    weight: critical
+    description: Delegates to ceo-inbox, passing the matched entry id in the brief.
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+      contains: { task: "{{entry:sam_offsite}}" }
+  - id: sends_nothing_itself
+    weight: critical
+    description: Sends no message itself on any channel; the specialist owns the reply.
+    check:
+      not_called: [email-send, email-reply, email-draft-save, signal-send, sms-send, slack-send]
+  - id: does_not_handle_it_directly
+    weight: important
+    description: >
+      Does not act on the "yes" itself — no claim that it sent the draft, no answer of its
+      own before delegating. Any reply to the principal only relays what ceo-inbox reported
+      (or is a brief acknowledgement).
+  - id: one_delegation
+    weight: important
+    description: Delegates exactly once.
+    check:
+      called: delegate
+      max: 1
+failure_modes:
+  - Replies "Done!" without delegating, as if it had sent the draft itself
+  - Asks the principal what "yes" refers to although the block shows the matching entry
+  - Delegates without the entry id, so ceo-inbox cannot tell which draft was approved

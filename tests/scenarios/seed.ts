@@ -200,7 +200,28 @@ async function deleteContact(pool: DbPool, stack: TestModeStack, id: string, kgN
  * them. Collects errors and throws once at the end, so one failed delete does not
  * leave the rest behind.
  */
-export async function cleanupRun(stack: TestModeStack, seeded: SeededRun, scope: SeedScope): Promise<void> {
+/**
+ * Per-conversation rows the coordinator writes during a run. They must go too: the
+ * runtime injects a sender's recent turns from OTHER conversations (contact recent
+ * history), and every principal run is attributed to the real principal, so a kept
+ * turn from one case shows up in the next case's prompt. audit_log stays — it is
+ * append-only by design.
+ */
+const CONVERSATION_TABLES = ['working_memory', 'conversation_checkpoints', 'conversation_resolved_entities'] as const;
+
+export async function cleanupConversation(pool: DbPool, conversationId: string): Promise<void> {
+  for (const table of CONVERSATION_TABLES) {
+    // Table names come from the constant above, never from input.
+    await pool.query(`DELETE FROM ${table} WHERE conversation_id = $1`, [conversationId]);
+  }
+}
+
+export async function cleanupRun(
+  stack: TestModeStack,
+  seeded: SeededRun,
+  scope: SeedScope,
+  conversationId?: string,
+): Promise<void> {
   const errors: unknown[] = [];
   const attempt = async (fn: () => Promise<unknown>): Promise<void> => {
     try {
@@ -217,6 +238,9 @@ export async function cleanupRun(stack: TestModeStack, seeded: SeededRun, scope:
   if (threadIds.length > 0) {
     // Messages and read watermarks cascade.
     await attempt(() => stack.pool.query(`DELETE FROM bullpen_threads WHERE id = ANY($1::uuid[])`, [threadIds]));
+  }
+  if (conversationId) {
+    await attempt(() => cleanupConversation(stack.pool, conversationId));
   }
   for (const contact of seeded.contacts) {
     await attempt(() => deleteContact(stack.pool, stack, contact.id, contact.kgNodeId));

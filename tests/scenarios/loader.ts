@@ -292,7 +292,48 @@ export function resolvePlaceholders<T>(value: T, refs: ReadonlyMap<string, strin
   return walk(value) as T;
 }
 
-export function loadScenarioCase(file: string): ScenarioCase {
+/** Where shared stub sets live: tests/scenarios/stubs/<name>.yaml. */
+export const DEFAULT_STUBS_DIR = path.join(import.meta.dirname, 'stubs');
+
+export interface LoadOptions {
+  /** Override for tests. */
+  stubsDir?: string;
+}
+
+/**
+ * Shared stub tables named by a case's `stub_sets`, plus `defaults` for every case. The
+ * case's own stubs for a tool come first, so its specific matches win and a set
+ * supplies the catch-all.
+ */
+function mergeStubSets(
+  raw: Raw,
+  own: Record<string, ToolStub[]>,
+  file: string,
+  stubsDir: string,
+): { stubs: Record<string, ToolStub[]>; explicit: string[] } {
+  // `defaults` always applies, last: an empty office for reads test mode cannot serve.
+  const names = [...strList(raw, 'stub_sets', file, 'case').filter(n => n !== 'defaults'), 'defaults'];
+  const merged: Record<string, ToolStub[]> = { ...own };
+  const explicit = new Set(Object.keys(own));
+  for (const name of names) {
+    if (!/^[a-z0-9-]+$/.test(name)) throw new CaseError(file, `stub set name '${name}' must be kebab-case`);
+    const setFile = path.join(stubsDir, `${name}.yaml`);
+    let setRaw: unknown;
+    try {
+      setRaw = yaml.load(readFileSync(setFile, 'utf-8'));
+    } catch (err) {
+      throw new CaseError(file, `stub set '${name}' could not be read: ${(err as Error).message}`);
+    }
+    const set = parseStubs(setRaw, setFile);
+    for (const [tool, stubs] of Object.entries(set)) {
+      merged[tool] = [...(merged[tool] ?? []), ...stubs];
+      if (name !== 'defaults') explicit.add(tool);
+    }
+  }
+  return { stubs: merged, explicit: [...explicit].sort() };
+}
+
+export function loadScenarioCase(file: string, options: LoadOptions = {}): ScenarioCase {
   const raw = yaml.load(readFileSync(file, 'utf-8'));
   if (!isObject(raw)) throw new CaseError(file, 'not a YAML mapping');
 
@@ -309,6 +350,7 @@ export function loadScenarioCase(file: string): ScenarioCase {
     throw new CaseError(file, `'runs' must be a positive integer`);
   }
 
+  const stubSets = mergeStubSets(raw, parseStubs(raw['tool_stubs'], file), file, options.stubsDir ?? DEFAULT_STUBS_DIR);
   const scenario: ScenarioCase = {
     name: str(raw, 'name', file, 'case'),
     description: optStr(raw, 'description', file, 'case') ?? '',
@@ -316,7 +358,8 @@ export function loadScenarioCase(file: string): ScenarioCase {
     ...(runs !== undefined ? { runs } : {}),
     seed,
     inbound: parseInbound(raw['inbound'], file),
-    toolStubs: parseStubs(raw['tool_stubs'], file),
+    toolStubs: stubSets.stubs,
+    explicitStubTools: stubSets.explicit,
     expectedBehaviors: parseBehaviors(raw, file),
     failureModes: strList(raw, 'failure_modes', file, 'case'),
     sourceFile: file,
@@ -368,9 +411,9 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
 }
 
 /** All cases in `dir`, sorted by file name. Case names must be unique (case-insensitive). */
-export function loadScenarioCases(dir: string): ScenarioCase[] {
+export function loadScenarioCases(dir: string, options: LoadOptions = {}): ScenarioCase[] {
   const files = readdirSync(dir).filter(f => f.endsWith('.yaml') || f.endsWith('.yml')).sort();
-  const cases = files.map(f => loadScenarioCase(path.join(dir, f)));
+  const cases = files.map(f => loadScenarioCase(path.join(dir, f), options));
   const seen = new Set<string>();
   for (const c of cases) {
     const key = c.name.trim().toLowerCase();

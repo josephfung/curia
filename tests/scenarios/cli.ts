@@ -12,7 +12,7 @@ import { evaluateCheck } from './assertions.js';
 import { formatPct, gateFailures, scoreCase } from './gate.js';
 import { createScenarioHarness, otherDatabaseClients, RUN_TIMEOUT_MS, type ScenarioHarness } from './harness.js';
 import { createJudge, judgeRun, type Judge } from './judge.js';
-import { loadScenarioCases } from './loader.js';
+import { loadScenarioCases, resolvePlaceholders } from './loader.js';
 import { mustStub } from './stub-layer.js';
 import { coverageViolations, mergeCoverage, readCoverage, writeCoverage } from './stub-coverage.js';
 import {
@@ -69,14 +69,24 @@ const err = (line: string): void => { process.stderr.write(`${line}\n`); };
 function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string[] {
   const problems: string[] = [];
   for (const c of cases) {
-    for (const tool of Object.keys(c.toolStubs)) {
+    for (const tool of c.explicitStubTools) {
       if (!harness.coordinatorTools.has(tool)) {
         problems.push(`${c.name}: stubs '${tool}', which the coordinator is not offered in this stack`);
       }
     }
+    const needsStub = (tool: string): boolean =>
+      harness.coordinatorTools.has(tool) && !c.toolStubs[tool] && mustStub(tool, harness.stack.toolRegistry);
     for (const b of c.expectedBehaviors) {
-      if (b.check?.kind === 'called' && !c.toolStubs[b.check.tool] && mustStub(b.check.tool, harness.stack.toolRegistry)) {
+      if (b.check?.kind === 'called' && needsStub(b.check.tool)) {
         problems.push(`${c.name}: behavior '${b.id}' expects ${b.check.tool}, which has no stub and would be refused`);
+      }
+      // A forbidden tool must be stubbed to SUCCEED: the wrong path has to be available,
+      // or the case tests a refusal rather than the model's choice — and a refusal there
+      // would also trip the coverage gate, blaming the harness for the model's mistake.
+      if (b.check?.kind === 'not_called') {
+        for (const tool of b.check.tools.filter(needsStub)) {
+          problems.push(`${c.name}: behavior '${b.id}' forbids ${tool}; stub it to succeed so the wrong path is available`);
+        }
       }
     }
   }
@@ -90,9 +100,11 @@ async function rateRuns(
   judge: Judge,
 ): Promise<Map<string, RunRating[]>> {
   const ratings = new Map<string, RunRating[]>(scenario.expectedBehaviors.map(b => [b.id, []]));
-  const judged = scenario.expectedBehaviors.filter(b => !b.check);
 
   for (const run of runs) {
+    // Each run seeded its own rows, so {{entry:x}} in a check means this run's id.
+    const behaviors = resolvePlaceholders(scenario.expectedBehaviors, new Map(Object.entries(run.refs)));
+    const judged = behaviors.filter(b => !b.check);
     if (run.error) {
       // A run that never finished demonstrates nothing; every behavior misses.
       for (const b of scenario.expectedBehaviors) {
@@ -101,7 +113,7 @@ async function rateRuns(
       continue;
     }
     const judgeScores = await judgeRun(scenario, run, judged, judge);
-    for (const b of scenario.expectedBehaviors) {
+    for (const b of behaviors) {
       ratings.get(b.id)!.push(
         b.check
           ? evaluateCheck(b.check, run, { internalNames: harness.internalNames })
@@ -152,7 +164,10 @@ async function main(): Promise<void> {
   const model = args.model ?? harness.stack.yamlConfig.model_routing?.tiers.standard.model ?? 'configured routing';
   let exitCode = 0;
   try {
-    const judge = createJudge(harness.stack.llmProviders);
+    const principal = harness.stack.principalContactId
+      ? await harness.stack.contactService.getContact(harness.stack.principalContactId)
+      : undefined;
+    const judge = createJudge(harness.stack.llmProviders, principal?.displayName);
     out(`   Model: ${model}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
     for (const warning of harness.stack.warnings) out(`   [WARN] ${warning}`);
@@ -187,7 +202,12 @@ async function main(): Promise<void> {
       for (let i = 0; i < n; i++) {
         const run = await harness.runOnce(scenario, i);
         runs.push(run);
-        const calls = run.toolCalls.map(c => c.disposition === 'refused' ? `${c.name}!` : c.name).join(', ') || 'no tools';
+        // `name!` = refused by the stub layer (a hole in the stub table);
+        // `name?` = a real read-only tool that failed (e.g. no mail client in test mode).
+        const calls = run.toolCalls.map(c =>
+          c.disposition === 'refused' ? `${c.name}!`
+            : c.disposition === 'passthrough' && c.result?.success === false ? `${c.name}?`
+              : c.name).join(', ') || 'no tools';
         out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `ERROR ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}`}`);
       }
       const result = scoreCase(scenario.name, scenario.expectedBehaviors, runs, await rateRuns(scenario, runs, harness, judge));

@@ -1,0 +1,107 @@
+{
+  "_note": "Written by tests/scenarios/cli.ts after each case. unstubbed is the MAX over that measurement's runs: the worst run is the one that reveals a hole in the stub table. Checked by tests/unit/scenarios/cases.test.ts.",
+  "cases": {
+    "bullpen mention stays on thread": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "direct email reply as text": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "external reply first person": {
+      "unstubbed": 1,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "no-reply automated notification": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "no-reply calendar decline": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "paused delegate no redelegate": {
+      "unstubbed": 1,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "principal reply no internals": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "reply-shaped non-principal": {
+      "unstubbed": 1,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "reply-shaped principal no context": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "scheduler additive create": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "scheduler ambiguous asks": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "scheduler edit in place": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "sweep-on-close closing result": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "sweep-on-close interim result": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "transfer-ownership sounds good": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "transfer-ownership trivial yes": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    },
+    "transfer-ownership yes thursday": {
+      "unstubbed": 0,
+      "runs": 1,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:06:59.663Z"
+    }
+  }
+}

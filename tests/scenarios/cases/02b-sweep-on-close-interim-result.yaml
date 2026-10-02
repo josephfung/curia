@@ -1,0 +1,54 @@
+# Case 2 (#1956): the other half of sweep-on-close. An interim specialist result — one
+# that expects another round-trip — leaves the entry active.
+name: sweep-on-close interim result
+description: >
+  ceo-inbox asked the principal whether to accept Dana's proposed meeting time. The
+  principal says to counter-propose. ceo-inbox reports it has emailed Dana a new time and
+  is waiting for Dana's answer — the exchange is still open, so the entry stays active.
+tags: [outbound-context, lifecycle]
+seed:
+  outbound_context:
+    - key: dana
+      channel: email
+      agent: ceo-inbox
+      content: >
+        Dana Whitfield proposed Tuesday 8am for the partnership call. Accept, or should I
+        suggest another time?
+      expected_reply: accept or counter-propose
+      delegation_hint: ceo-inbox
+      sent_minutes_ago: 20
+inbound:
+  from: principal
+  content: 8am is too early — suggest Tuesday at 11 instead.
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: ceo-inbox
+        response: >
+          I've emailed Dana suggesting Tuesday at 11am instead. Waiting on her reply — I'll
+          follow up as soon as she answers.
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:dana}}" }
+expected_behaviors:
+  - id: routes_to_owner
+    weight: critical
+    description: Delegates to ceo-inbox with the entry id.
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+      contains: { task: "{{entry:dana}}" }
+  - id: leaves_entry_active
+    weight: critical
+    description: Does not release the entry — the specialist is still awaiting a reply.
+    check:
+      not_called: [context-bridge-release]
+  - id: honest_status
+    weight: important
+    description: >
+      If it replies, it says a new time was proposed and Dana has not answered yet — it
+      does not say the meeting is booked.
+failure_modes:
+  - Releases the entry on an interim result, so Dana's answer later arrives as an unrecognised cold inbound
+  - Tells the principal the call is confirmed

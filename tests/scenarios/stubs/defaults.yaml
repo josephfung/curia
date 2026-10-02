@@ -1,0 +1,54 @@
+# Applied to EVERY case, after the case's own stubs and its stub_sets (so either can
+# override). An "empty office": reads that cannot run in test mode — no mail client, no
+# task, working-docs or approval services — answer as a quiet day instead of failing.
+#
+# Without these the model sees tool failures production never shows and spirals (one
+# early run made 29 calls in 131s chasing a broken email-list). Only reads and the
+# harmless task-create belong here; a case that tests a write stubs it itself.
+email-list:
+  - match: {}
+    return: { messages: [], count: 0 }
+email-get:
+  - match: {}
+    error: Message not found in this mailbox.
+email-list-folders:
+  - match: {}
+    return: { folders: [{ id: INBOX, name: Inbox }], count: 1 }
+doc-search:
+  - match: {}
+    return: { query: "", path_prefix: "/", match_count: 0, matches: [] }
+doc-list:
+  - match: {}
+    return:
+      directory: /
+      index_path: /index.md
+      manifest: "# Documents\n\n(no documents)"
+      document_count: 0
+      documents: []
+      updated_at: "2026-10-01T09:00:00-04:00"
+      displayTimezone: America/Toronto
+task-list:
+  - match: {}
+    return: { tasks: [], count: 0, displayTimezone: America/Toronto }
+activity-log:
+  - match: {}
+    return: { actions: [], count: 0, displayTimezone: America/Toronto }
+list-pending-actions:
+  - match: {}
+    return: { pending: [], message: No pending approval requests. }
+config-store:
+  - match: { action: list_namespaces }
+    return: { namespaces: [] }
+  - match: { action: retrieve }
+    return: { found: false }
+task-create:
+  - match: {}
+    return:
+      task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+      title: (created)
+      status: open
+      owner: curia
+      priority: 3
+      tags: []
+      created_at: "2026-10-01T12:00:00-04:00"
+      displayTimezone: America/Toronto

@@ -1,0 +1,58 @@
+# Case 7 (#1956): replying to a direct inbound email is returning the text — the system
+# threads it. Calling email-reply or email-send starts a new thread. Rule:
+# agents/coordinator.yaml, Email → "Sending and replying".
+name: direct email reply as text
+description: >
+  An external contact emails the coordinator's own inbox with a simple logistics question
+  about tomorrow's meeting. The reply should come back as the response text, not through
+  an email tool.
+tags: [email, channel]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: tomas
+      display_name: Tomas Reyes
+      tier: known
+      channel: email
+      identifier: tomas.reyes@example.test
+inbound:
+  from: tomas
+  content: |
+    Subject: Tomorrow's workshop
+
+    Hi,
+
+    Thanks for sending the agenda for tomorrow's strategy workshop. Quick one: should I
+    bring printed copies of the deck, or will slides be shared on screen?
+
+    Thanks,
+    Tomas
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: ceo-inbox
+        response: The workshop deck will be shown on screen; no printed copies are needed.
+expected_behaviors:
+  - id: no_reply_tool
+    weight: critical
+    description: Does not call email-reply.
+    check:
+      not_called: [email-reply]
+  - id: no_send_to_sender
+    weight: critical
+    description: Does not email Tomas through email-send.
+    check:
+      not_called: [email-send]
+      contains: { to: tomas.reyes@example.test }
+  - id: replies_with_text
+    weight: critical
+    description: Returns a reply (not NO_REPLY).
+    check:
+      reply: not_no_reply
+  - id: reply_is_addressed_to_tomas
+    weight: important
+    description: The reply text is written to Tomas and responds to his question (or says it will follow up).
+failure_modes:
+  - Calls email-reply, creating a second thread
+  - Returns a confirmation like "I've replied to Tomas" as the reply text, which is itself emailed to Tomas

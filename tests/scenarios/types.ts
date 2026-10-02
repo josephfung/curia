@@ -120,6 +120,12 @@ export interface ScenarioCase {
   };
   inbound: ScenarioInbound;
   toolStubs: Record<string, ToolStub[]>;
+  /**
+   * Tools the case stubbed itself (tool_stubs and named stub_sets), as opposed to the
+   * `defaults` set every case gets. Only these must name a tool the coordinator is
+   * offered — a default for a tool this registry did not load is simply unused.
+   */
+  explicitStubTools: string[];
   expectedBehaviors: ExpectedBehavior[];
   failureModes: string[];
   /** File the case came from, for messages. */
@@ -141,13 +147,18 @@ export interface ScenarioRun {
   runIndex: number;
   /** The inbound content after placeholder resolution. */
   inboundContent: string;
+  /**
+   * `kind:key` → id for the rows this run seeded. Checks and judge descriptions that
+   * name a seeded row ({{entry:x}}) are resolved against it at rating time.
+   */
+  refs: Record<string, string>;
   toolCalls: CapturedToolCall[];
   /** The coordinator's agent.response content (NO_REPLY included verbatim). */
   reply: string | null;
   /** Set when the Dispatcher suppressed delivery (outbound.no_reply reason). */
   noReplyReason?: string;
   durationMs: number;
-  /** Calls to side-effecting tools no stub answered. */
+  /** Calls the harness answered badly: refused by the stub layer, or a failed passthrough read. */
   unstubbedCalls: number;
   /** Set when the run could not complete (timeout, boot error, agent.error). */
   error?: string;
