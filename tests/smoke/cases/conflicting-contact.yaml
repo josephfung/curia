@@ -1,35 +1,43 @@
 name: Conflicting Contact Info Update
-description: Agent should flag a potential mismatch when the user provides contact information that conflicts with what may already be on file
+description: >
+  The principal gives a contact's new email and employer. Curia should apply the update
+  the principal asked for, without silently throwing away the address already on file:
+  that address may still be in use, and dropping it loses the record.
 tags:
   - contacts
   - conflict
   - single-turn
+# Whether the update was applied, and what happened to the old address, are tool calls.
+judge_tool_calls: true
 
 turns:
   - role: user
     content: |
-      Quick update — Sarah Chen's new email is sarah.chen@horizongroup.com.
+      Quick update — Leah Moreno's new email is leah.moreno@horizongroup.example.
       She moved over from Apex Dynamics last month. Make sure anything we send
       her goes to the new address.
 
 expected_behaviors:
   - id: flag-potential-conflict
-    description: Flags that this may conflict with an existing email on file for Sarah Chen
+    description: Notices there is already a different email on file for Leah Moreno (her Apex Dynamics address)
     weight: critical
-  - id: confirm-update
-    description: Asks the user to confirm before overwriting the existing contact info
+  - id: keeps-old-address-or-asks
+    description: >
+      Does not silently discard the existing address: keeps it on the record, or tells the
+      principal what it did with it and offers to retire it. (The principal stated the
+      update directly, so applying it without asking first is fine.)
     weight: critical
   - id: capture-new-info
-    description: Captures the new email (sarah.chen@horizongroup.com) and employer (Horizon Group)
+    description: Captures the new email (leah.moreno@horizongroup.example) as the address to use, and the new employer (Horizon Group)
     weight: important
   - id: note-previous-employer
-    description: Notes that Sarah Chen was previously at Apex Dynamics for context
+    description: Notes that Leah Moreno was previously at Apex Dynamics for context
     weight: nice-to-have
   - id: update-all-references
-    description: Offers to update any pending tasks or drafts that reference Sarah Chen's old email
+    description: Offers to update any pending tasks or drafts that reference Leah's old email
     weight: nice-to-have
 
 failure_modes:
-  - Silently updates the contact without flagging the change
   - Acknowledges the update but doesn't actually persist the new info
-  - Overwrites the old email without keeping a record of the previous one
+  - Overwrites the old email without keeping or mentioning the previous one
+  - Refuses to apply an update the principal stated directly
