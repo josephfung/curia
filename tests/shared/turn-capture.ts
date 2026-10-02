@@ -72,7 +72,9 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     clearTimeout(p.timer);
     // Let the Dispatcher's follow-up (outbound.no_reply) land before closing.
     setTimeout(() => {
-      pending.delete(conversationId);
+      // A later turn on the same conversation may have registered during the settle
+      // window (smoke runs several turns on one conversation); leave its entry alone.
+      if (pending.get(conversationId) === p) pending.delete(conversationId);
       p.resolve({
         calls: p.calls,
         reply: p.reply,
@@ -155,6 +157,15 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     },
     waitFor(conversationId, timeoutMs) {
       return new Promise((resolve) => {
+        // Two live turns on one conversation can't be told apart: events are matched by
+        // conversation id alone. Fail the newcomer closed rather than silently
+        // replacing the entry and orphaning the first turn. (A finished turn still in
+        // its settle window is fine: it no longer takes events.)
+        const live = pending.get(conversationId);
+        if (live && !live.done) {
+          resolve({ calls: [], reply: null, error: `a turn is already pending on conversation ${conversationId}` });
+          return;
+        }
         const p: PendingTurn = {
           calls: [],
           invokeIndex: new Map(),

@@ -84,6 +84,47 @@ describe('createTurnCapture', () => {
     capture.fail('conv-5', new Error('no subscriber'));
     expect((await turn).error).toBe('could not deliver the inbound: no subscriber');
   });
+
+  // Smoke runs several turns on one conversation. The earlier turn's settle timer must
+  // not remove the later turn's entry, or the later turn sees nothing and times out.
+  it('keeps a later turn on the same conversation when an earlier one finishes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, capture } = setup();
+      const first = capture.waitFor('conv-6', 5_000);
+      await respond(bus, 'conv-6', 'first');
+      // The first turn is done but still in its settle window.
+      const second = capture.waitFor('conv-6', 5_000);
+      await vi.advanceTimersByTimeAsync(300);
+      expect((await first).reply).toBe('first');
+
+      await respond(bus, 'conv-6', 'second');
+      await vi.advanceTimersByTimeAsync(300);
+      const outcome = await second;
+      expect(outcome.reply).toBe('second');
+      expect(outcome.error).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails a second turn closed while the first is still waiting on the same conversation', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, capture } = setup();
+      const first = capture.waitFor('conv-7', 5_000);
+      const second = capture.waitFor('conv-7', 5_000);
+      await vi.advanceTimersByTimeAsync(300);
+      expect((await second).error).toBe('a turn is already pending on conversation conv-7');
+
+      // The first turn is unaffected.
+      await respond(bus, 'conv-7', 'first');
+      await vi.advanceTimersByTimeAsync(300);
+      expect((await first).reply).toBe('first');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('withoutRecentHistory', () => {

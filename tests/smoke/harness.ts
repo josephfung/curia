@@ -167,7 +167,15 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   }): Promise<TurnResponse> {
     const start = Date.now();
     const sender = options.sender ?? 'principal';
-    const waiter = capture.waitFor(options.conversationId, RESPONSE_TIMEOUT_MS);
+    // capture.fail() is keyed by conversation, and later turns of a case reuse this
+    // conversation id. Once this turn has its outcome, its own late handlers below must
+    // not fail whichever turn is pending by then.
+    let turnEnded = false;
+    const waiter = capture.waitFor(options.conversationId, RESPONSE_TIMEOUT_MS)
+      .then((outcome) => { turnEnded = true; return outcome; });
+    const failThisTurn = (err: unknown): void => {
+      if (!turnEnded) capture.fail(options.conversationId, err);
+    };
     const inbound = sender === 'unknown'
       ? createInboundMessage({
           conversationId: options.conversationId,
@@ -194,15 +202,18 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     try {
       delivery = bus.publish('channel', inbound);
     } catch (err) {
-      capture.fail(options.conversationId, err);
+      failThisTurn(err);
       delivery = Promise.resolve();
     }
     // A publish that fails outright must end the turn now, not after the timeout. One that
-    // completes without a coordinator response (fail() is a no-op once the turn ended)
-    // ends it shortly after, instead of waiting out the timeout.
+    // completes without a coordinator response ends it shortly after, instead of waiting
+    // out the timeout. Both are no-ops once this turn has its outcome.
     delivery.then(
-      () => { setTimeout(() => capture.fail(options.conversationId, new Error('the turn ended without a coordinator response')), NO_RESPONSE_GRACE_MS); },
-      (err: unknown) => capture.fail(options.conversationId, err),
+      () => {
+        // unref: the grace timer alone must not keep the process alive at shutdown.
+        setTimeout(() => failThisTurn(new Error('the turn ended without a coordinator response')), NO_RESPONSE_GRACE_MS).unref();
+      },
+      (err: unknown) => failThisTurn(err),
     );
     trackDelivery(delivery, options.conversationId);
 
