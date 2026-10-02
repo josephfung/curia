@@ -2,7 +2,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { parseStubs } from '../scenarios/loader.js';
+import type { ToolStub } from '../scenarios/types.js';
 import { resolveDatePlaceholders } from './date-placeholders.js';
+import { resolvePrincipalPlaceholders } from './fixtures.js';
 import { SMOKE_SENDERS, type TestCase, type Turn, type ExpectedBehavior, type BehaviorWeight, type SmokeSender } from './types.js';
 
 const VALID_WEIGHTS: BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
@@ -97,9 +99,12 @@ export function loadTestCase(filePath: string): TestCase {
 
   // Catch a malformed date placeholder at load time, not mid-run.
   try {
-    resolveDatePlaceholders([raw.tool_stubs, raw.turns.map(t => t.tool_stubs)], 'UTC');
+    resolvePrincipalPlaceholders(
+      resolveDatePlaceholders([raw.tool_stubs, raw.turns.map(t => [t.content, t.tool_stubs])], 'UTC'),
+      { name: 'Placeholder Check', contactId: '00000000-0000-0000-0000-000000000000' },
+    );
   } catch (err) {
-    throw new Error(`Bad date placeholder in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Bad placeholder in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   return {
@@ -114,6 +119,17 @@ export function loadTestCase(filePath: string): TestCase {
     expectedBehaviors,
     failureModes: raw.failure_modes ?? [],
   };
+}
+
+/** The shared fixture world every case runs in (stubs/office.yaml), parsed and validated. */
+export function loadDefaultStubs(filePath: string): Record<string, ToolStub[]> {
+  const stubs = parseStubs(yaml.load(readFileSync(filePath, 'utf-8')), filePath);
+  try {
+    resolvePrincipalPlaceholders(resolveDatePlaceholders(stubs, 'UTC'), { name: 'Placeholder Check', contactId: '00000000-0000-0000-0000-000000000000' });
+  } catch (err) {
+    throw new Error(`Bad date placeholder in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return stubs;
 }
 
 /**

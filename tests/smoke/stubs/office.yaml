@@ -1,0 +1,227 @@
+# The fixture office every smoke case runs in (#1956): the principal's calendar, inbox,
+# task list and scheduler, for the tools test mode cannot reach. Tried after a case's own
+# tool_stubs, so a case overrides any of it. The people named here are seeded as real
+# contacts (fixtures/people.yaml).
+#
+# Dates are relative to the day the suite runs (date-placeholders.ts), and list/search
+# results are narrowed to the call's time range or query (stub-filters.ts), so one
+# fixture answers "today", "Wednesday" and "mail from Priya" alike. Writes succeed and
+# echo their inputs ({{input:…}}). Without this office the specialists find every
+# system down and decline, and a case can only test how Curia says "I couldn't".
+
+# ── Calendar ───────────────────────────────────────────────────────────────
+
+calendar-list-calendars:
+  - match: {}
+    return:
+      calendars:
+        - id: cal-principal-work
+          name: Work
+          description: ""
+          timezone: "{{timezone}}"
+          isPrimary: true
+          readOnly: false
+          isOwnedByUser: true
+          registered: true
+          contactId: "{{principal:contact_id}}"
+          contactName: "{{principal:name}}"
+          registryLabel: primary
+
+calendar-list-events:
+  - match: {}
+    return:
+      displayTimezone: "{{timezone}}"
+      events:
+        # Today
+        - { id: evt-today-standup, title: Leadership standup, location: Zoom, startTime: "{{time:today 08:30}}", endTime: "{{time:today 09:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.sharma@curiatech.example, name: Priya Sharma, status: yes }, { email: daniel.okafor@curiatech.example, name: Daniel Okafor, status: yes }] }
+        - { id: evt-today-davidkim, title: Intro — David Kim (Sequoia Capital), description: Series B conversation., location: Zoom, startTime: "{{at:now+60m}}", endTime: "{{at:now+105m}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: david.kim@sequoia.example, name: David Kim, status: yes }] }
+        - { id: evt-today-lunch, title: Lunch 1:1 — Priya Sharma, location: Bar Raval, startTime: "{{time:today 12:30}}", endTime: "{{time:today 13:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.sharma@curiatech.example, name: Priya Sharma, status: yes }] }
+        - { id: evt-today-northwind, title: Customer call — Northwind renewal, description: Renewal terms; they want a multi-year discount., location: Zoom, startTime: "{{time:today 15:00}}", endTime: "{{time:today 15:45}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: daniel.okafor@curiatech.example, name: Daniel Okafor, status: yes }] }
+        # Monday
+        - { id: evt-mon-standup, title: Leadership standup, location: Zoom, startTime: "{{time:next-monday 08:30}}", endTime: "{{time:next-monday 09:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-mon-exec, title: Weekly exec team, location: Boardroom, startTime: "{{time:next-monday 10:00}}", endTime: "{{time:next-monday 11:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-mon-interview, title: Interview — Senior PM candidate, location: Zoom, startTime: "{{time:next-monday 14:00}}", endTime: "{{time:next-monday 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        # Tuesday
+        - { id: evt-tue-standup, title: Leadership standup, location: Zoom, startTime: "{{time:next-tuesday 08:30}}", endTime: "{{time:next-tuesday 09:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-tue-deck, title: Board deck review — Priya Sharma, location: Boardroom, startTime: "{{time:next-tuesday 13:00}}", endTime: "{{time:next-tuesday 14:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.sharma@curiatech.example, name: Priya Sharma, status: yes }] }
+        # Wednesday: back-to-back from 8:30 to 4:30, no lunch, and the usual focus block gone
+        - { id: evt-wed-standup, title: Leadership standup, location: Zoom, startTime: "{{time:next-wednesday 08:30}}", endTime: "{{time:next-wednesday 09:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-wed-pipeline, title: Q4 pipeline review, location: Boardroom, startTime: "{{time:next-wednesday 09:00}}", endTime: "{{time:next-wednesday 10:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: daniel.okafor@curiatech.example, name: Daniel Okafor, status: yes }] }
+        - { id: evt-wed-hiring, title: Hiring committee, location: Boardroom, startTime: "{{time:next-wednesday 10:00}}", endTime: "{{time:next-wednesday 11:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-wed-nexus, title: Partner call — Nexus (Sarah Chen), location: Zoom, startTime: "{{time:next-wednesday 11:00}}", endTime: "{{time:next-wednesday 12:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: sarah.chen@nexus.example, name: Sarah Chen, status: yes }] }
+        - { id: evt-wed-finance, title: Working lunch — finance review, location: Boardroom, startTime: "{{time:next-wednesday 12:00}}", endTime: "{{time:next-wednesday 13:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-wed-roadmap, title: Product roadmap review, description: Moved into the Wednesday focus block., location: Boardroom, startTime: "{{time:next-wednesday 13:00}}", endTime: "{{time:next-wednesday 14:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: priya.sharma@curiatech.example, name: Priya Sharma, status: yes }] }
+        - { id: evt-wed-investor, title: Investor update prep, location: Office, startTime: "{{time:next-wednesday 14:30}}", endTime: "{{time:next-wednesday 15:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-wed-escalation, title: Customer escalation review, location: Zoom, startTime: "{{time:next-wednesday 15:30}}", endTime: "{{time:next-wednesday 16:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: daniel.okafor@curiatech.example, name: Daniel Okafor, status: yes }] }
+        # Thursday
+        - { id: evt-thu-flight, title: Flight AC 401 Toronto (YYZ) → Montreal (YUL), description: "Air Canada AC 401, departs 9:00 AM, arrives 10:15 AM. Seat 12C. Confirmation QX7P2L.", location: "Toronto Pearson, Terminal 1", startTime: "{{time:next-thursday 09:00}}", endTime: "{{time:next-thursday 10:15}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-thu-boardchair, title: Board chair check-in — Margaret Ellis, location: Phone, startTime: "{{time:next-thursday 16:00}}", endTime: "{{time:next-thursday 16:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: margaret.ellis@ellisadvisors.example, name: Margaret Ellis, status: yes }] }
+        # Friday
+        - { id: evt-fri-standup, title: Leadership standup, location: Zoom, startTime: "{{time:next-friday 08:30}}", endTime: "{{time:next-friday 09:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-fri-allhands, title: All-hands, location: Main floor, startTime: "{{time:next-friday 10:00}}", endTime: "{{time:next-friday 11:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-fri-sales, title: 1:1 — Daniel Okafor, location: Office, startTime: "{{time:next-friday 11:30}}", endTime: "{{time:next-friday 12:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: daniel.okafor@curiatech.example, name: Daniel Okafor, status: yes }] }
+        - { id: evt-fri-vendor, title: Vendor review — Acme Logistics, location: Zoom, startTime: "{{time:next-friday 14:00}}", endTime: "{{time:next-friday 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+        - { id: evt-fri-coffee, title: Coffee — founder mentoring, description: Optional; happy to move., location: Pilot Coffee, startTime: "{{time:next-friday 15:30}}", endTime: "{{time:next-friday 16:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+
+calendar-find-free-time:
+  - match: {}
+    return:
+      displayTimezone: "{{timezone}}"
+      freeWindows:
+        - { start: "{{time:next-monday 11:00}}", end: "{{time:next-monday 14:00}}" }
+        - { start: "{{time:next-monday 15:00}}", end: "{{time:next-monday 17:00}}" }
+        - { start: "{{time:next-tuesday 09:00}}", end: "{{time:next-tuesday 13:00}}" }
+        - { start: "{{time:next-tuesday 14:00}}", end: "{{time:next-tuesday 17:00}}" }
+        - { start: "{{time:next-thursday 11:00}}", end: "{{time:next-thursday 16:00}}" }
+        - { start: "{{time:next-friday 12:00}}", end: "{{time:next-friday 14:00}}" }
+
+calendar-check-conflicts:
+  - match: {}
+    return: { conflicts: [], clear: true, displayTimezone: null }
+
+calendar-create-event:
+  - match: {}
+    return:
+      displayTimezone: "{{timezone}}"
+      event:
+        id: evt-created-0001
+        title: "{{input:title}}"
+        description: "{{input:description}}"
+        location: "{{input:location}}"
+        startTime: "{{input:start}}"
+        endTime: "{{input:end}}"
+        participants: "{{input:attendees}}"
+        conferencing: "{{input:conferencing}}"
+        status: confirmed
+        calendarId: cal-principal-work
+        busy: true
+
+calendar-update-event:
+  - match: {}
+    return:
+      displayTimezone: "{{timezone}}"
+      event:
+        id: "{{input:eventId}}"
+        title: "{{input:title}}"
+        startTime: "{{input:start}}"
+        endTime: "{{input:end}}"
+        status: confirmed
+        calendarId: cal-principal-work
+
+calendar-create-hold:
+  - match: {}
+    return:
+      held: true
+      holdEventId: evt-hold-0001
+      display: "{{input:start}} -- {{input:end}}"
+      displayTimezone: "{{timezone}}"
+
+calendar-delete-event:
+  - match: {}
+    return: { deleted: true }
+
+# ── Principal's inbox (ceo-inbox) ──────────────────────────────────────────
+
+ceo-inbox-list:
+  - match: { folder: DRAFTS }
+    return: { folder: DRAFTS, drafts: [], count: 0 }
+  - match: {}
+    return: &inbox
+      messages:
+        - { id: msg-investor-1, threadId: thr-investor-1, from: [{ name: Elena Ruiz, email: elena.ruiz@northstar.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Need to talk today — board matter, date: "{{at:now-45m}}", snippet: "Something came up on the board side that I'd rather not put in writing. Can you get on a call with me today?", unread: true, folders: [INBOX], attachments: [] }
+        - { id: msg-deck-1, threadId: thr-deck-1, from: [{ name: Priya Sharma, email: priya.sharma@curiatech.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Q2 board deck — final for your review, date: "{{time:today-1 17:42}}", snippet: "Attached is the final Q2 board deck. Pages 4 and 9 changed since the draft.", unread: true, folders: [INBOX], attachments: [{ id: att-deck-1, filename: Q2-board-deck-final.pdf, contentType: application/pdf, size: 2481152 }] }
+        - { id: msg-renewal-1, threadId: thr-renewal-1, from: [{ name: Contracts Desk, email: contracts@globex.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Contract renewal — signature needed by {{weekday:next-friday}}", date: "{{time:today-1 10:05}}", snippet: "Your Globex master agreement renews on {{date:next-friday}}. Countersign by then or the current terms lapse.", unread: true, folders: [INBOX], attachments: [] }
+        - { id: msg-complaint-1, threadId: thr-complaint-1, from: [{ name: Daniel Okafor, email: daniel.okafor@curiatech.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Fwd: Unacceptable outage response", date: "{{time:today-1 15:20}}", snippet: "Forwarding — Northwind's COO is unhappy with how we handled Tuesday's outage. They renew this quarter.", unread: true, folders: [INBOX], attachments: [] }
+        - { id: msg-invoice-1, threadId: thr-invoice-1, from: [{ name: Acme Logistics Billing, email: billing@acmelogistics.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Invoice 4471 — due in 30 days, date: "{{time:today-2 09:12}}", snippet: "Please find attached invoice 4471 for September services.", unread: true, folders: [INBOX], attachments: [{ id: att-invoice-1, filename: invoice-4471.pdf, contentType: application/pdf, size: 88211 }] }
+        - { id: msg-meeting-1, threadId: thr-meeting-1, from: [{ name: Sarah Johnson, email: sarah.johnson@lumen.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Follow-up after the demo?, date: "{{time:today-2 11:30}}", snippet: "Could we find 30 minutes next week to go through pricing?", unread: true, folders: [INBOX], attachments: [] }
+        - { id: msg-newsletter-1, threadId: thr-newsletter-1, from: [{ name: SaaS Weekly, email: newsletter@saasweekly.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "SaaS Weekly: pricing pages that convert", date: "{{time:today-1 06:00}}", snippet: "This week: five pricing page teardowns.", unread: true, folders: [INBOX], attachments: [] }
+      count: 7
+ceo-inbox-search:
+  - match: { folder: DRAFTS }
+    return: { folder: DRAFTS, drafts: [], count: 0 }
+  - match: {}
+    return: *inbox
+
+ceo-inbox-read:
+  - match: { message_id: msg-investor-1 }
+    return: { id: msg-investor-1, threadId: thr-investor-1, from: [{ name: Elena Ruiz, email: elena.ruiz@northstar.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Need to talk today — board matter, body_plain: "Hi {{principal:first}},\n\nSomething came up on the board side that I'd rather not put in writing. Can you get on a call with me today? Any time after 1pm works.\n\nElena", date: 0, labels: [INBOX, UNREAD], attachments: [] }
+  - match: { message_id: msg-deck-1 }
+    return: { id: msg-deck-1, threadId: thr-deck-1, from: [{ name: Priya Sharma, email: priya.sharma@curiatech.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Q2 board deck — final for your review, body_plain: "Hi {{principal:first}},\n\nAttached is the final Q2 board deck. Pages 4 (ARR bridge) and 9 (hiring plan) changed since the draft.\n\nPriya", date: 0, labels: [INBOX, UNREAD], attachments: [{ id: att-deck-1, filename: Q2-board-deck-final.pdf, contentType: application/pdf, size: 2481152 }] }
+  - match: {}
+    error: Message not found in this mailbox.
+
+ceo-inbox-draft-reply:
+  - match: {}
+    return: { draft_id: draft-0001, subject: Re, to: [], cc: [] }
+ceo-inbox-draft-compose:
+  - match: {}
+    return: { draft_id: draft-0002, subject: "{{input:subject}}", to: "{{input:to}}", cc: [] }
+ceo-inbox-mark-read:
+  - match: {}
+    return: { marked_read: true }
+ceo-inbox-archive:
+  - match: {}
+    return: { archived: true }
+
+# The coordinator's own mailbox (Curia's), separate from the principal's.
+email-list:
+  - match: {}
+    return: { messages: [], count: 0 }
+
+# ── Tasks, scheduler, docs, approvals ──────────────────────────────────────
+
+task-list:
+  - match: {}
+    return: { tasks: [], count: 0, displayTimezone: "{{timezone}}" }
+task-create:
+  - match: {}
+    return:
+      task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+      title: "{{input:title}}"
+      status: open
+      owner: "{{input:owner}}"
+      priority: 3
+      tags: []
+      created_at: "{{at:now}}"
+      displayTimezone: "{{timezone}}"
+task-update:
+  - match: {}
+    return: { task_id: "{{input:task_id}}", title: (updated), status: open, updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+task-complete:
+  - match: {}
+    return: { task_id: "{{input:task_id}}", title: (completed), status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+
+scheduler-list:
+  - match: {}
+    return: { jobs: [], count: 0, truncated: false, limit: 50, displayTimezone: "{{timezone}}" }
+scheduler-create:
+  - match: {}
+    return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }
+scheduler-update:
+  - match: {}
+    return: { jobId: "{{input:job_id}}", action: "{{input:action}}" }
+scheduler-cancel:
+  - match: {}
+    return: { cancelled: true, jobId: "{{input:job_id}}" }
+
+doc-search:
+  - match: {}
+    return: { query: "{{input:query}}", path_prefix: "/", match_count: 0, matches: [] }
+doc-list:
+  - match: {}
+    return: { directory: /, index_path: /index.md, manifest: "# Documents\n\n(no documents)", document_count: 0, documents: [], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+doc-read:
+  - match: {}
+    error: Document not found.
+
+list-pending-actions:
+  - match: {}
+    return: { pending: [], message: No pending approval requests. }
+activity-log:
+  - match: {}
+    return: { actions: [], count: 0, displayTimezone: "{{timezone}}" }
+
+# No headless browser in test mode; web-fetch (a plain read) still runs for real.
+web-browser:
+  - match: {}
+    error: The browser is not available right now.

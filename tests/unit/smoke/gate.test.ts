@@ -1,6 +1,6 @@
 // tests/unit/smoke/gate.test.ts — smoke's pass/fail gate (#1956).
 import { describe, it, expect } from 'vitest';
-import { caseFailures, gatingFailures, staleKnownFailures, type GateInput } from '../../smoke/gate.js';
+import { caseFailures, gatingFailures, mergeRetries, staleKnownFailures, type GateInput } from '../../smoke/gate.js';
 import type { BehaviorRating, BehaviorWeight, TestCase } from '../../smoke/types.js';
 
 function gateInput(
@@ -93,5 +93,29 @@ describe('known failures', () => {
   it('flags a known_failure case that passed as possibly stale', () => {
     expect(staleKnownFailures([result(true, '#1'), result(true), result(false, '#2')]).map(c => c.testCase.knownFailure?.issue))
       .toEqual(['#1']);
+  });
+});
+
+describe('mergeRetries', () => {
+  type Attempt = { weightedScore: number; failures: string[] };
+  function named(name: string, weightedScore: number, failures: string[]): GateInput & { failures: string[]; passed: boolean; firstAttempt?: Attempt } {
+    const input = gateInput([['a', 'critical', failures.length ? 'MISS' : 'PASS']], weightedScore);
+    return { ...input, testCase: { ...input.testCase, name }, failures, passed: failures.length === 0 };
+  }
+
+  it('takes the retry\'s result and keeps what the first attempt said', () => {
+    const merged = mergeRetries(
+      [named('A', 1, []), named('B', 0.4, ['weighted score 40% is below 80%'])],
+      [named('B', 0.9, [])],
+    );
+    expect(merged.map(c => [c.testCase.name, c.passed])).toEqual([['A', true], ['B', true]]);
+    expect(merged[1]!.firstAttempt).toEqual({ weightedScore: 0.4, failures: ['weighted score 40% is below 80%'] });
+    expect(merged[0]!.firstAttempt).toBeUndefined();
+  });
+
+  it('fails a case that fails its retry too', () => {
+    const merged = mergeRetries([named('B', 0.4, ['x'])], [named('B', 0.5, ['y'])]);
+    expect(merged[0]!.passed).toBe(false);
+    expect(merged[0]!.failures).toEqual(['y']);
   });
 });

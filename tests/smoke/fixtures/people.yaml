@@ -1,0 +1,48 @@
+# The people in smoke's fixture office (#1956), seeded as known contacts with verified
+# email identities into each run's throwaway database copy (fixtures.ts). Cases refer to
+# them by name; stubs/office.yaml puts them on the calendar and in the inbox.
+#
+# Addresses use the reserved .example TLD, so none can ever be a real mailbox. Keep the
+# cast small: every name here changes what "who is X?" returns in every case.
+- display_name: Sarah Chen
+  email: sarah.chen@nexus.example
+  title: VP Partnerships
+  organization: Nexus Systems
+  notes: Leads Nexus's side of the partnership deal under negotiation.
+
+- display_name: Sarah Johnson
+  email: sarah.johnson@lumen.example
+  title: Founder and CEO
+  organization: Lumen Analytics
+  notes: Potential design partner; asked for a follow-up meeting after the September demo.
+
+- display_name: David Kim
+  email: david.kim@sequoia.example
+  title: Partner
+  organization: Sequoia Capital
+  notes: >
+    Met at a founders' dinner in May. Interested in co-leading the Series B. Last spoke
+    by phone in August about growth metrics and net revenue retention.
+
+- display_name: Margaret Ellis
+  email: margaret.ellis@ellisadvisors.example
+  title: Chair of the Board
+  organization: Ellis Advisors
+  notes: Chair of the company's board. Prefers plenty of notice for schedule changes.
+
+- display_name: Elena Ruiz
+  email: elena.ruiz@northstar.example
+  title: General Partner
+  organization: Northstar Ventures
+  notes: Lead investor in the Series A; holds a board seat.
+
+- display_name: Priya Sharma
+  email: priya.sharma@curiatech.example
+  title: VP Product
+  organization: Curia Tech
+  notes: Owns the quarterly board deck.
+
+- display_name: Daniel Okafor
+  email: daniel.okafor@curiatech.example
+  title: VP Sales
+  organization: Curia Tech
