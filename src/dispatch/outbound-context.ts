@@ -19,6 +19,8 @@ const MAX_PREVIEW_LENGTH = 300;
 // context fields while still preventing runaway payloads.
 const MAX_METADATA_LENGTH = 16_000;
 const MAX_FIELD_LENGTH = 500;
+/** Metadata key a delegated specialist's keep-open mark is stored under (#1972). */
+export const EXCHANGE_OPEN_KEY = 'exchange_open';
 
 // ── Config ───────────────────────────────────────────────────────────────
 
@@ -130,6 +132,10 @@ export interface OutboundContextCapability {
   getEntry(entryId: string): Promise<OutboundContextRow | null>;
   /** Release every active entry whose metadata subject matches one of `subjects`. */
   clearBySubjects(subjects: string[]): Promise<SubjectClearResult>;
+  /** A delegated specialist keeps the entry for its exchange open past its return (#1972). */
+  markExchangeOpen(entryId: string, mark: { agentId: string; taskEventId: string; reason?: string }): Promise<boolean>;
+  /** Release unless the given delegation marked the entry open — the delegate's release (#1972). */
+  releaseUnlessKeptOpen(entryId: string, taskEventId: string): Promise<'released' | 'kept_open' | 'not_active'>;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -328,6 +334,52 @@ export class OutboundContextService {
     return this.release(entryId);
   }
 
+  /**
+   * Record that the specialist handling a delegated reply still expects another
+   * answer from the principal on this entry (#1972). Stamped with the delegated
+   * task's id so the mark only stops the release that delegation triggers — a
+   * later delegation on the same entry is not held open by an old mark.
+   * Returns false when no active entry matched.
+   */
+  async markExchangeOpen(
+    entryId: string,
+    mark: { agentId: string; taskEventId: string; reason?: string },
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE outbound_context
+          SET metadata = COALESCE(metadata, '{}'::jsonb)
+                || jsonb_build_object($2::text, jsonb_build_object(
+                     'agent_id', $3::text, 'task_event_id', $4::text, 'reason', $5::text))
+        WHERE id = $1 AND released = false AND expires_at > now()`,
+      [entryId, EXCHANGE_OPEN_KEY, mark.agentId, mark.taskEventId, mark.reason ?? null],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
+   * Release an entry unless the given delegation marked it open (#1972). One
+   * UPDATE, so a mark written while the delegation ran cannot race the release.
+   * The follow-up SELECT only tells the caller which of the two no-op cases it hit.
+   */
+  async releaseUnlessKeptOpen(
+    entryId: string,
+    taskEventId: string,
+  ): Promise<'released' | 'kept_open' | 'not_active'> {
+    const result = await this.pool.query(
+      `UPDATE outbound_context SET released = true
+        WHERE id = $1 AND released = false
+          AND (metadata -> $2::text ->> 'task_event_id') IS DISTINCT FROM $3::text`,
+      [entryId, EXCHANGE_OPEN_KEY, taskEventId],
+    );
+    if ((result.rowCount ?? 0) > 0) return 'released';
+    const kept = await this.pool.query(
+      `SELECT 1 FROM outbound_context
+        WHERE id = $1 AND released = false AND (metadata -> $2::text ->> 'task_event_id') = $3::text`,
+      [entryId, EXCHANGE_OPEN_KEY, taskEventId],
+    );
+    return (kept.rowCount ?? 0) > 0 ? 'kept_open' : 'not_active';
+  }
+
   /** Mark an entry as released — stop expecting replies. */
   async release(entryId: string, conversationId?: string): Promise<void> {
     const result = conversationId
@@ -426,7 +478,7 @@ export class OutboundContextService {
         '---',
         // Keep the key name `entry_id` (agents and context-bridge-release still
         // look for it) but make the id space unambiguous in the label (#1817).
-        `entry_id (for context-bridge-release only — NOT a Nylas/email message id): ${e.id}`,
+        `entry_id (for delegate's outbound_entry_id or context-bridge-release — NOT a Nylas/email message id): ${e.id}`,
         `[sent ${timeAgo(e.createdAt)} via ${e.channelId}, on behalf of ${e.agentId}, expires in ${timeUntil(e.expiresAt)}]`,
         `preview: "${e.contentPreview.replace(/\n/g, ' ')}"`,
       ];
@@ -439,7 +491,7 @@ export class OutboundContextService {
 
     return [
       '[ACTIVE OUTBOUND CONTEXT — messages you\'ve sent that may receive replies]',
-      'Each entry_id below is an outbound_context UUID for context-bridge-release only. Do not pass it as email-reply reply_to_message_id — that field needs a Nylas Message ID from the inbound email preamble (Message ID: …).',
+      'Each entry_id below is an outbound_context UUID for delegate\'s outbound_entry_id or context-bridge-release only. Do not pass it as email-reply reply_to_message_id — that field needs a Nylas Message ID from the inbound email preamble (Message ID: …).',
       ...blocks,
       '',
       originalContent,
@@ -557,5 +609,22 @@ export class ScopedOutboundContext implements OutboundContextCapability {
     // Intentionally conversation-agnostic — see OutboundContextService.clearBySubjects.
     // The subject is the scope, not this.conversationId, so we delegate without scoping.
     return this.service.clearBySubjects(subjects);
+  }
+
+  // Both entry-lifecycle calls are conversation-agnostic: the delegated specialist
+  // and the delegate call run on conversations other than the one that registered
+  // the entry (bullpen thread, scheduler run).
+  async markExchangeOpen(
+    entryId: string,
+    mark: { agentId: string; taskEventId: string; reason?: string },
+  ): Promise<boolean> {
+    return this.service.markExchangeOpen(entryId, mark);
+  }
+
+  async releaseUnlessKeptOpen(
+    entryId: string,
+    taskEventId: string,
+  ): Promise<'released' | 'kept_open' | 'not_active'> {
+    return this.service.releaseUnlessKeptOpen(entryId, taskEventId);
   }
 }

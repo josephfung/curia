@@ -21,6 +21,6 @@ export function replyToMessageIdLooksLikeEntryIdError(): string {
   return (
     'reply_to_message_id looks like an outbound_context entry_id (UUID), not a Nylas message ID. ' +
     'Pass the Nylas Message ID from the inbound email preamble (e.g. "Message ID: …"), not the ' +
-    'entry_id from [ACTIVE OUTBOUND CONTEXT]. Use that entry_id only with context-bridge-release.'
+    'entry_id from [ACTIVE OUTBOUND CONTEXT]. Use that entry_id only as delegate\'s outbound_entry_id or with context-bridge-release.'
   );
 }

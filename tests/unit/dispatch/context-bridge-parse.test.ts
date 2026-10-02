@@ -19,6 +19,8 @@ function makeCap(overrides?: Partial<OutboundContextCapability>): OutboundContex
     releaseEntry: vi.fn().mockResolvedValue(undefined),
     getEntry: vi.fn().mockResolvedValue(null),
     clearBySubjects: vi.fn().mockResolvedValue({ totalReleased: 0, perSubject: [], unmatched: [] }),
+    markExchangeOpen: vi.fn().mockResolvedValue(true),
+    releaseUnlessKeptOpen: vi.fn().mockResolvedValue('released'),
     defaultExpiryHours: 6,
     explicitExpiryHours: 24,
     defaultExpiryHoursFor: (channelId: string) => CHANNEL_TTL[channelId] ?? 6,
