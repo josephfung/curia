@@ -47,7 +47,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T22:45:31.518Z"
+      "recordedAt": "2026-10-02T22:50:21.096Z"
     },
     "reply-shaped non-principal": {
       "unstubbed": 0,
@@ -83,31 +83,31 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T14:36:29.678Z"
+      "recordedAt": "2026-10-02T22:50:21.096Z"
     },
     "sweep-on-close interim result": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T14:36:29.678Z"
+      "recordedAt": "2026-10-02T22:50:21.096Z"
     },
     "transfer-ownership sounds good": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T14:36:29.678Z"
+      "recordedAt": "2026-10-02T22:50:21.096Z"
     },
     "transfer-ownership trivial yes": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T14:36:29.677Z"
+      "recordedAt": "2026-10-02T22:50:21.096Z"
     },
     "transfer-ownership yes thursday": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T14:36:29.678Z"
+      "recordedAt": "2026-10-02T22:50:21.096Z"
     }
   }
 }
