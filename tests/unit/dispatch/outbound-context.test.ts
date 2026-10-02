@@ -548,4 +548,56 @@ describe('ScopedOutboundContext', () => {
 
     expect(releaseSpy).toHaveBeenCalledWith('entry-1', 'conv-42');
   });
+
+  describe('attribution (#1972)', () => {
+    const roster = { isSpecialist: (id: string) => id === 'ceo-inbox' || id === 'calendar' };
+
+    it('attributes a relayed send to the requesting specialist before it reaches the service', async () => {
+      const service = new OutboundContextService(makePool(), logger);
+      const registerSpy = vi.spyOn(service, 'register').mockResolvedValue('new-id');
+
+      const scoped = new ScopedOutboundContext(service, 'thread-1', { roster, relayRequester: 'ceo-inbox', log: logger });
+      await scoped.register({
+        channelId: 'signal',
+        agentId: 'coordinator',
+        content: 'Dana proposes Wednesday instead. Accept?',
+        delegationHint: 'Delegate replies to ceo-inbox',
+      });
+
+      expect(registerSpy).toHaveBeenCalledWith({
+        conversationId: 'thread-1',
+        channelId: 'signal',
+        agentId: 'ceo-inbox',
+        content: 'Dana proposes Wednesday instead. Accept?',
+        delegationHint: 'ceo-inbox',
+      });
+    });
+
+    it('drops an unroutable hint on a non-relayed send', async () => {
+      const service = new OutboundContextService(makePool(), logger);
+      const registerSpy = vi.spyOn(service, 'register').mockResolvedValue('new-id');
+
+      const scoped = new ScopedOutboundContext(service, 'conv-42', { roster, relayRequester: null, log: logger });
+      await scoped.register({
+        channelId: 'signal',
+        agentId: 'coordinator',
+        content: 'Departure confirm',
+        delegationHint: 'calendar-specialist',
+      });
+
+      const registered = registerSpy.mock.calls[0]![0];
+      expect(registered.agentId).toBe('coordinator');
+      expect(registered).not.toHaveProperty('delegationHint');
+    });
+
+    it('passes the entry through unchanged when no attribution is configured', async () => {
+      const service = new OutboundContextService(makePool(), logger);
+      const registerSpy = vi.spyOn(service, 'register').mockResolvedValue('new-id');
+
+      const scoped = new ScopedOutboundContext(service, 'conv-42');
+      await scoped.register({ channelId: 'signal', agentId: 'coordinator', content: 'x', delegationHint: 'free text' });
+
+      expect(registerSpy.mock.calls[0]![0].delegationHint).toBe('free text');
+    });
+  });
 });

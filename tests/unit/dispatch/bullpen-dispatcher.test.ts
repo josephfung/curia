@@ -85,6 +85,27 @@ describe('BullpenDispatcher', () => {
     expect(task?.payload.metadata?.threadId).toBe(thread.id);
   });
 
+  it('stamps the agent that opened the thread on every task (#1972)', async () => {
+    // A send the coordinator makes on this wake is a relay for the thread's opener,
+    // even when a later post in the thread came from someone else.
+    const { thread } = await bullpenService.openThread(
+      'Urgent: Dana', 'agent-b', ['agent-b', 'coordinator', 'agent-c'], 'Please tell the principal', ['coordinator'],
+    );
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-2', topic: 'Urgent: Dana',
+      senderAgentId: 'agent-c', participants: ['agent-b', 'coordinator', 'agent-c'],
+      mentionedAgentIds: ['coordinator'], content: 'Adding context', parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const tasks = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task')
+      .map(([_l, e]) => e as { payload: { agentId: string; metadata: Record<string, unknown> } });
+    expect(tasks.length).toBeGreaterThan(0);
+    for (const t of tasks) {
+      expect(t.payload.metadata?.threadCreatorAgentId).toBe('agent-b');
+    }
+  });
+
   it('marks mentioned agents with mentioned: true in metadata', async () => {
     const { thread } = await bullpenService.openThread(
       'Mention test', 'coordinator', ['coordinator', 'agent-b', 'agent-c'], 'Hi', ['agent-b'],

@@ -99,6 +99,7 @@ import type { ApprovalTriggerService } from '../autonomy/approval-trigger.js';
 import { TempFileStore } from './temp-file-store.js';
 import type { InfraLlmService } from './infra-llm.js';
 import { OutboundContextService, ScopedOutboundContext } from '../dispatch/outbound-context.js';
+import { relayRequesterFor, rosterFromRegistry } from '../dispatch/delegation-hint.js';
 import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import { DEFAULT_RESUMABLE_CEILINGS, type ResumableCeilingsConfig } from '../config.js';
 import type { ExportControlService } from '../security/export-controls.js';
@@ -1972,9 +1973,25 @@ export class ExecutionLayer {
       } else if (cap === 'outboundContext') {
         // Scoped instance: pre-fills conversationId so skills don't need it.
         if (this.outboundContextService && options?.conversationId) {
+          // Attribution (#1972): the platform, not the model's context_bridge JSON,
+          // decides who owns a reply. Needs the roster; without one, entries pass
+          // through as written (unit-test wiring only — bootstrap always passes it).
+          const roster = this.agentRegistry ? rosterFromRegistry(this.agentRegistry) : undefined;
           ctx.outboundContext = new ScopedOutboundContext(
             this.outboundContextService,
             options.conversationId,
+            roster
+              ? {
+                  roster,
+                  relayRequester: relayRequesterFor({
+                    channelId: options.channelId,
+                    taskMetadata: options.taskMetadata,
+                    invokingAgentId: options.agentId,
+                    roster,
+                  }),
+                  log: skillLogger,
+                }
+              : undefined,
           );
         } else if (this.outboundContextService && !options?.conversationId) {
           skillLogger.debug(
