@@ -9,20 +9,20 @@ turns:
   - role: user
     content: |
       ---------- Forwarded message ----------
-      From: Lisa Park <lisa.park@acme.co>
-      To: Derek Huang <derek.huang@acme.co>
-      CC: me
-      Subject: Re: Q2 Planning Offsite
+      From: Lisa Park <lisa.park@acme.example>
+      To: Derek Huang <derek.huang@acme.example>
+      CC: {{principal:name}}
+      Subject: Re: Planning Offsite
 
-      Derek — does the week of April 14 work for you? I was thinking we book
+      Derek — does the week of {{day:next-monday+7}} work for you? I was thinking we book
       the boardroom at the Waterloo office for the full day, maybe 9am–4pm.
       We'll need lunch catered too.
 
       Lisa
 
-      > On Mar 23, Derek Huang wrote:
-      > Lisa, let's lock in a date for the Q2 offsite. I'm flexible most of
-      > April but want to avoid the week of the 21st — I'll be in Vancouver.
+      > On {{day:today-3}}, Derek Huang wrote:
+      > Lisa, let's lock in a date for the planning offsite. I'm flexible over
+      > the next month but want to avoid the week of {{day:next-monday+14}} — I'll be in Vancouver.
 
 expected_behaviors:
   - id: detect-scheduling

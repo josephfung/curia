@@ -11,6 +11,8 @@ tags:
   - scheduler-update
   - multi-turn
   - no-duplicate
+# Whether turn 2 edits or duplicates is a tool call (scheduler-update vs scheduler-create).
+judge_tool_calls: true
 
 turns:
   - role: user
@@ -21,6 +23,26 @@ turns:
     delay_ms: 2000
     content: |
       Actually, make that 10am instead of 9am. Same thing otherwise.
+    # The office's scheduler-create (stubs/office.yaml) answered turn 1 with this job id;
+    # by turn 2 the scheduler lists it, as the real one would.
+    tool_stubs:
+      scheduler-list:
+        - match: {}
+          return:
+            jobs:
+              - id: 0f0f0f0f-0000-4000-8000-000000000001
+                agentId: coordinator
+                status: active
+                cronExpr: "0 9 * * 1-5"
+                timezone: "{{timezone}}"
+                nextRunAt: "{{time:next-monday 09:00}}"
+                taskTitle: Weekday investor inbox check
+                intentAnchor: Every weekday at 9am, scan the principal's inbox for mail from investors and flag it
+                createdBy: coordinator
+            count: 1
+            truncated: false
+            limit: 50
+            displayTimezone: "{{timezone}}"
 
 expected_behaviors:
   - id: edits_in_place_not_duplicate

@@ -8,6 +8,8 @@ tags:
   - contacts
   - delegation
   - single-turn
+# Three of the behaviors are about which tools were called, not what the reply says.
+judge_tool_calls: true
 
 turns:
   - role: user

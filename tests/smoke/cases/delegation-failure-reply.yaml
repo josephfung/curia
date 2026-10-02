@@ -1,0 +1,63 @@
+name: Delegation Failure Reply Stays Clean
+description: >
+  The principal asks about tomorrow's calendar and the calendar specialist declines.
+  The coordinator must tell the principal it couldn't check, in a plain message. That
+  reply comes from the runtime's failure-narration call (src/agents/delegation-failure-reply.ts),
+  which has leaked the model's reasoning, the narration instructions and the internal
+  brief it sent the specialist (#1975), and relayed the specialist's internal decline
+  prose verbatim (#1976).
+tags:
+  - delegation
+  - failure-path
+  - single-turn
+known_failure: { issue: "#1975" }
+
+# A non-retryable decline from the specialist, as the delegate tool reports it. That is
+# what triggers the narration path on the first attempt, every run. The decline prose
+# names internals, as real declines do; none of it may reach the principal (#1976).
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        failed: true
+        agent: calendar
+        reason: specialist_decline
+        declined: true
+        retryable: false
+        message: >
+          Declined: calendar-list-events failed for every calendar registered to contact
+          {{principal:contact_id}} (nylasCalendarClient returned 503 from the provider;
+          grant ceo_nylas_grant_id unreachable). Cannot produce tomorrow's agenda from
+          grounded data.
+
+turns:
+  - role: user
+    content: |
+      What's on my calendar tomorrow?
+
+expected_behaviors:
+  - id: says-it-could-not-check
+    description: Tells the principal plainly that it couldn't get tomorrow's calendar right now
+    weight: critical
+  - id: no-reasoning-or-instructions
+    description: >
+      The reply is only the message to the principal. It contains no deliberation
+      ("Wait —", "Let me reconsider", "I need to write the reply") and does not quote or
+      paraphrase instructions the assistant was given ("Write the one reply…",
+      "Do not call tools", "Refer to the specialist only as…", "Include this phrase").
+    weight: critical
+  - id: no-internal-details
+    description: >
+      Exposes no internals: no contact IDs or other UUIDs, tool names (calendar-list-events),
+      client, grant or credential names (nylasCalendarClient, ceo_nylas_grant_id), and does
+      not call the reader "the principal".
+    weight: critical
+  - id: offers-next-step
+    description: Offers a sensible next step, such as trying again shortly
+    weight: important
+
+failure_modes:
+  - Opens with the model talking to itself about what it has to write
+  - Quotes the narration prompt or the brief sent to the specialist
+  - Relays the specialist's decline text with tool, client or grant names
+  - Refers to the reader in the third person as "the principal"
