@@ -17,6 +17,7 @@ import type { ContactResolver } from '../../src/contacts/contact-resolver.js';
 import type { InboundSenderContext } from '../../src/contacts/types.js';
 import { createSilentLogger } from '../../src/logger.js';
 import { ContextBridgeReleaseHandler } from '../../skills/context-bridge/tools/context-bridge-release/handler.js';
+import { AgentRegistry } from '../../src/agents/agent-registry.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -184,6 +185,8 @@ describeIf('task-wake reply binding (#1299)', () => {
       secret: () => 'unused',
       log: createSilentLogger(),
       agentId: 'coordinator',
+      // context-bridge-release resolves entry owners against the roster (#1972).
+      agentRegistry: new AgentRegistry(),
       taskRepo,
       outboundContext,
     } as never);
