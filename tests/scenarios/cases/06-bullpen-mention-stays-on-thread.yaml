@@ -47,10 +47,12 @@ tool_stubs:
 expected_behaviors:
   - id: replies_on_thread
     weight: critical
-    description: Replies with the bullpen tool on that thread (or closes it).
+    description: >
+      Replies on that thread with the bullpen tool (a reply with close_after counts).
+      Reading the thread with get_thread is not a reply.
     check:
       called: bullpen
-      with: { thread_id: "{{thread:brief}}" }
+      with: { action: reply, thread_id: "{{thread:brief}}" }
   - id: no_human_channel
     weight: critical
     description: Sends nothing on Signal, SMS, Slack or email.
