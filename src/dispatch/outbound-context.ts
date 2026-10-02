@@ -9,6 +9,7 @@
 
 import type { DbPool } from '../db/connection.js';
 import type { Logger } from '../logger.js';
+import { attributeOutboundEntry, type DelegationHintRoster } from './delegation-hint.js';
 
 const MAX_PREVIEW_LENGTH = 300;
 // Metadata carries structured delegation context (e.g. resume_tokens for
@@ -474,6 +475,18 @@ export function stripOutboundContextPreamble(content: string): string {
 // ── Scoped Wrapper ─────────────────────────────────────────────────────────
 
 /**
+ * Who owns the entries registered through one skill invocation (#1972). The
+ * execution layer resolves it once per invocation from the agent roster and the
+ * task that invoked the skill. See src/dispatch/delegation-hint.ts.
+ */
+export interface OutboundAttribution {
+  roster: DelegationHintRoster;
+  /** The specialist this send is relayed for, or null when it is the agent's own send. */
+  relayRequester: string | null;
+  log: Logger;
+}
+
+/**
  * Narrow capability surface injected into skills. Pre-scoped with
  * conversationId so skills don't need to know it.
  */
@@ -481,6 +494,9 @@ export class ScopedOutboundContext implements OutboundContextCapability {
   constructor(
     private service: OutboundContextService,
     private conversationId: string,
+    // Optional so callers without an agent roster still work; every production
+    // invocation passes it, which is what makes the attribution code-owned.
+    private attribution?: OutboundAttribution,
   ) {}
 
   get defaultExpiryHours(): number {
@@ -496,7 +512,27 @@ export class ScopedOutboundContext implements OutboundContextCapability {
   }
 
   async register(entry: Omit<OutboundContextEntry, 'conversationId'>): Promise<string> {
-    return this.service.register({ ...entry, conversationId: this.conversationId });
+    if (!this.attribution) {
+      return this.service.register({ ...entry, conversationId: this.conversationId });
+    }
+    // Every send skill registers through here, so this is the one place the
+    // model-written agent_id / delegation_hint get replaced by code-owned values.
+    const { roster, relayRequester, log } = this.attribution;
+    const { entry: attributed, changes } = attributeOutboundEntry(entry, { roster, relayRequester });
+    if (changes.hintDropped !== undefined) {
+      // Warn: the model asked for a hand-off the platform cannot route, so a reply
+      // to this message will reach the coordinator as an unowned message.
+      log.warn(
+        { channelId: entry.channelId, agentId: attributed.agentId, droppedHint: changes.hintDropped },
+        'outbound context: delegation_hint names no registered specialist — registering without a hint',
+      );
+    } else if (Object.keys(changes).length > 0) {
+      log.info(
+        { channelId: entry.channelId, agentId: attributed.agentId, delegationHint: attributed.delegationHint, ...changes },
+        'outbound context: entry attribution set by platform',
+      );
+    }
+    return this.service.register({ ...attributed, conversationId: this.conversationId });
   }
 
   async release(entryId: string): Promise<void> {

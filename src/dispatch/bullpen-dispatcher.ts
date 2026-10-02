@@ -4,6 +4,7 @@ import { createAgentTask } from '../bus/events.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { Logger } from '../logger.js';
 import type { BullpenService } from '../memory/bullpen.js';
+import { THREAD_CREATOR_AGENT_ID_KEY } from './delegation-hint.js';
 import {
   ORIGIN_TURN_OWNS_REPLY_KEY,
   parseOriginTurnOwnsReply,
@@ -132,6 +133,10 @@ export class BullpenDispatcher {
             threadId,
             mentioned: isMentioned,
             threadClosed,
+            // The thread's opener owns the exchange. A send the woken agent makes is a
+            // relay on the opener's behalf, and the outbound-context entry it registers
+            // is attributed to the opener so the principal's reply routes back to it (#1972).
+            [THREAD_CREATOR_AGENT_ID_KEY]: threadRecord.thread.creatorAgentId,
             // Propagate the originator (LINEAGE) so the receiving agent's task carries the
             // original TaskOriginator — this drives the autonomy principal-bypass for `normal`
             // skills at sufficient trust. NOTE (#1126): bullpen is a persisted/async path, so it
