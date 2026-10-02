@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`context-bridge-keep-open`** — a delegated specialist keeps its exchange's outbound-context entry active past its return. (#1972)
+- **`delegate` (public API)** — optional `outbound_entry_id`; the platform releases that entry when the specialist handles the reply. (#1972)
+- **Scenario `any_of` check** — a behavior passes when any listed alternative check passes. (#1972)
 - **Behavior release gate** — release pre-flight runs smoke and scenarios on the production standard-tier model. (#1956)
 - **Smoke senders** — a case can send as the principal or an unknown email sender. (#1956)
 - **Smoke fixture office** — stubbed calendar, inbox and tasks plus seeded contacts, with dates relative to today. (#1956)
@@ -44,6 +47,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Outbound-context release** — coordinator no longer judges exchanges closed; `context-bridge-release` refuses entries another agent owns. (#1972)
+- **Scenario 02b** — rewritten around a result ceo-inbox can produce; no longer a known failure. (#1972)
 - **Smoke gate** — `pnpm smoke` exits 1 when a case fails twice: under 80%, or a critical miss. (#1956)
 - **Smoke judge** — gpt-4o via OpenRouter from the vault, retried, optionally seeing tool calls; no `OPENAI_API_KEY`. (#1956)
 - **Smoke isolation** — runs on a throwaway database copy, so test writes never reach the real one. (#1956)
