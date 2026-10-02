@@ -94,6 +94,26 @@ describe('mergeStubs', () => {
     const wrapped = stubs.wrap(realLayer().layer);
     stubs.set({ 'calendar-create-event': [{ match: {}, return: { event: { title: '{{input:title}}' } } }] });
     expect(await wrapped.invoke('calendar-create-event', { title: 'Roadmap' }, undefined as never, opts('calendar') as never))
-      .toEqual({ success: true, data: { event: { title: 'Roadmap' } } });
+      .toEqual({ success: true, data: { event: { id: 'evt-created-1', title: 'Roadmap' } } });
+  });
+});
+
+describe('calendar writes within a case', () => {
+  it('are visible to later reads in the same case, and forgotten after clear()', async () => {
+    const stubs = createSmokeStubs();
+    const wrapped = stubs.wrap(realLayer().layer);
+    const fixture = {
+      'calendar-create-event': [{ match: {}, return: { event: { title: '{{input:title}}', startTime: '{{input:start}}', endTime: '{{input:end}}' } } }],
+      'calendar-list-events': [{ match: {}, return: { events: [] } }],
+    };
+    stubs.set(fixture);
+    await wrapped.invoke('calendar-create-event', { title: 'Block', start: '2026-10-07T06:30:00-04:00', end: '2026-10-07T08:00:00-04:00' }, undefined as never, opts('calendar') as never);
+    const read = await wrapped.invoke('calendar-list-events', {}, undefined as never, opts('calendar') as never) as { data: { count: number } };
+    expect(read.data.count).toBe(1);
+
+    stubs.clear();
+    stubs.set(fixture);
+    const next = await wrapped.invoke('calendar-list-events', {}, undefined as never, opts('calendar') as never) as { data: { count: number } };
+    expect(next.data.count).toBe(0);
   });
 });

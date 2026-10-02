@@ -30,8 +30,8 @@ pnpm smoke --model deepseek/deepseek-v4.1-flash
 # Full suite on the configured model_routing
 pnpm smoke
 
-# Single case (substring match on name)
-pnpm smoke --case "urgent"
+# Selected cases (substring match on name; repeat --case for several)
+pnpm smoke --case "urgent" --case "board chair"
 
 # Filter by tag
 pnpm smoke --tags email-triage,briefing

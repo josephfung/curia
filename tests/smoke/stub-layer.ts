@@ -12,7 +12,7 @@
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolResult } from '../../src/skills/types.js';
 import { matchToolStub } from '../scenarios/stub-matcher.js';
-import { shapeStubResult } from './stub-filters.js';
+import { CalendarState, shapeStubResult } from './stub-filters.js';
 import type { ToolStub } from '../scenarios/types.js';
 
 /** One tool call by any agent during a case, and how it was answered. */
@@ -60,6 +60,8 @@ export function mergeStubs(
 export function createSmokeStubs(): SmokeStubs {
   let stubs: Record<string, ToolStub[]> = {};
   let calls: AgentToolCall[] = [];
+  // What this case has written to the (stubbed) calendar, replayed onto its later reads.
+  let calendar = new CalendarState();
 
   const invoke = async (real: ExecutionLayer, args: Parameters<ExecutionLayer['invoke']>): Promise<ToolResult> => {
     const [toolName, input, , options] = args;
@@ -78,7 +80,7 @@ export function createSmokeStubs(): SmokeStubs {
       if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
       // Clone so a handler-side mutation cannot change the fixture for a later call, then
       // answer the question asked (time range, search query, echoed inputs).
-      return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input) };
+      return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input, calendar) };
     }
     const result = await real.invoke(...args);
     record.success = result.success;
@@ -106,6 +108,7 @@ export function createSmokeStubs(): SmokeStubs {
       const done = calls;
       stubs = {};
       calls = [];
+      calendar = new CalendarState();
       return done;
     },
   };

@@ -1,6 +1,6 @@
 // tests/smoke/cli.ts
 //
-// `pnpm smoke [--model <id>] [--case <substring>] [--tags a,b] [--show-calls]`
+// `pnpm smoke [--model <id>] [--case <substring>]... [--tags a,b] [--show-calls]`
 //
 // Exits 1 when any case fails the gate (gate.ts: weighted score below 80%, a critical
 // behavior rated MISS, or an execution or judge error), known failures aside. The
@@ -53,7 +53,8 @@ async function main(): Promise<void> {
   // Parse CLI args
   const args = process.argv.slice(2);
   const tags = parseArg(args, '--tags')?.split(',');
-  const caseFilter = parseArg(args, '--case');
+  // --case may repeat; a case runs when its name contains any of the values.
+  const caseFilters = parseArgs(args, '--case');
   // Route every agent to one model (e.g. the production standard-tier model).
   // The provider follows from the model registry, so this also picks Anthropic
   // vs OpenRouter. Omitted → the configured model_routing.
@@ -63,10 +64,10 @@ async function main(): Promise<void> {
 
   // Load test cases
   let cases = loadTestCases(CASES_DIR, tags ? { tags } : undefined);
-  if (caseFilter) {
-    cases = cases.filter(c => c.name.toLowerCase().includes(caseFilter.toLowerCase()));
+  if (caseFilters.length > 0) {
+    cases = cases.filter(c => caseFilters.some(f => c.name.toLowerCase().includes(f.toLowerCase())));
   }
-  const filtered = Boolean(tags || caseFilter);
+  const filtered = Boolean(tags || caseFilters.length > 0);
   // Load (and validate) the fixture office before paying for a database copy.
   const defaultStubs = loadDefaultStubs(OFFICE_STUBS);
   const people = loadPeople(OFFICE_PEOPLE);
@@ -311,6 +312,13 @@ function todayIn(timezone: string): string {
     timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
   return `${date} (${timezone})`;
+}
+
+/** Every value given for a repeatable flag, in order. */
+function parseArgs(args: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length - 1; i++) if (args[i] === flag) values.push(args[i + 1]!);
+  return values;
 }
 
 function parseArg(args: string[], flag: string): string | undefined {
