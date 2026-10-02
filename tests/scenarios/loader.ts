@@ -350,12 +350,17 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     throw new CaseError(file, `'runs' must be a positive integer`);
   }
 
+  const timeoutSeconds = optNum(raw, 'timeout_seconds', file, 'case');
+  if (timeoutSeconds !== undefined && timeoutSeconds < 10) {
+    throw new CaseError(file, `'timeout_seconds' must be at least 10`);
+  }
   const stubSets = mergeStubSets(raw, parseStubs(raw['tool_stubs'], file), file, options.stubsDir ?? DEFAULT_STUBS_DIR);
   const scenario: ScenarioCase = {
     name: str(raw, 'name', file, 'case'),
     description: optStr(raw, 'description', file, 'case') ?? '',
     tags: strList(raw, 'tags', file, 'case'),
     ...(runs !== undefined ? { runs } : {}),
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     seed,
     inbound: parseInbound(raw['inbound'], file),
     toolStubs: stubSets.stubs,

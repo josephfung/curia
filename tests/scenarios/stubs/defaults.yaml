@@ -27,6 +27,9 @@ doc-list:
       documents: []
       updated_at: "2026-10-01T09:00:00-04:00"
       displayTimezone: America/Toronto
+scheduler-list:
+  - match: {}
+    return: { jobs: [], count: 0, truncated: false, limit: 50, displayTimezone: America/Toronto }
 task-list:
   - match: {}
     return: { tasks: [], count: 0, displayTimezone: America/Toronto }

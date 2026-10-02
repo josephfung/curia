@@ -150,13 +150,14 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       inboundContent = inbound.content;
 
       const sender = await resolveSender(scenario, stack);
+      const timeoutMs = scenario.timeoutSeconds ? scenario.timeoutSeconds * 1000 : RUN_TIMEOUT_MS;
       controller.beginRun(stubTable);
       let outcome: CaptureOutcome;
       try {
         if (sender === 'bullpen') {
           const thread = seeded.threads.get(inbound.thread!)!;
           conversationId = thread.threadId;
-          const waiter = capture.waitFor(conversationId);
+          const waiter = capture.waitFor(conversationId, timeoutMs);
           // Posted by the thread's creator, mentioning the coordinator — the event a
           // specialist's bullpen reply produces. BullpenDispatcher turns it into the
           // coordinator's agent.task.
@@ -177,7 +178,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
           conversationId = sender.channelId === 'email'
             ? `email:scenario-${randomUUID()}`
             : `scenario-${randomUUID()}`;
-          const waiter = capture.waitFor(conversationId);
+          const waiter = capture.waitFor(conversationId, timeoutMs);
           await bus.publish('channel', createInboundMessage({
             conversationId,
             channelId: sender.channelId,
@@ -283,7 +284,7 @@ interface PendingCapture {
   timer: ReturnType<typeof setTimeout>;
 }
 
-function createCapture(bus: EventBus): { waitFor(conversationId: string): Promise<CaptureOutcome> } {
+function createCapture(bus: EventBus): { waitFor(conversationId: string, timeoutMs: number): Promise<CaptureOutcome> } {
   const pending = new Map<string, PendingCapture>();
 
   const finish = (conversationId: string, p: PendingCapture): void => {
@@ -358,7 +359,7 @@ function createCapture(bus: EventBus): { waitFor(conversationId: string): Promis
   });
 
   return {
-    waitFor(conversationId) {
+    waitFor(conversationId, timeoutMs) {
       return new Promise((resolve) => {
         const p: PendingCapture = {
           calls: [],
@@ -367,9 +368,9 @@ function createCapture(bus: EventBus): { waitFor(conversationId: string): Promis
           done: false,
           resolve,
           timer: setTimeout(() => {
-            p.error = `Timeout waiting for the coordinator (${Math.round(RUN_TIMEOUT_MS / 1000)}s)`;
+            p.error = `Timeout waiting for the coordinator (${Math.round(timeoutMs / 1000)}s)`;
             finish(conversationId, p);
-          }, RUN_TIMEOUT_MS),
+          }, timeoutMs),
         };
         pending.set(conversationId, p);
       });

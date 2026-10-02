@@ -113,6 +113,11 @@ export interface ScenarioCase {
   tags: string[];
   /** Per-case override of the CLI default. */
   runs?: number;
+  /**
+   * Per-run wait for the coordinator, overriding SCENARIO_TIMEOUT_MS / the 180s default.
+   * For cases where exploring before answering is legitimate and slow.
+   */
+  timeoutSeconds?: number;
   seed: {
     contacts: SeedContact[];
     outboundContext: SeedOutboundEntry[];

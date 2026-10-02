@@ -5,103 +5,103 @@
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "direct email reply as text": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "external reply first person": {
-      "unstubbed": 1,
-      "runs": 1,
-      "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
-    },
-    "no-reply automated notification": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
+    },
+    "no-reply automated notification": {
+      "unstubbed": 0,
+      "runs": 2,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-02T01:16:05.144Z"
     },
     "no-reply calendar decline": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "paused delegate no redelegate": {
-      "unstubbed": 1,
-      "runs": 1,
+      "unstubbed": 0,
+      "runs": 2,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:19:48.390Z"
     },
     "principal reply no internals": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "reply-shaped non-principal": {
-      "unstubbed": 1,
-      "runs": 1,
+      "unstubbed": 0,
+      "runs": 2,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:19:14.732Z"
     },
     "reply-shaped principal no context": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "scheduler additive create": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "scheduler ambiguous asks": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "scheduler edit in place": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "sweep-on-close closing result": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "sweep-on-close interim result": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "transfer-ownership sounds good": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "transfer-ownership trivial yes": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     },
     "transfer-ownership yes thursday": {
       "unstubbed": 0,
       "runs": 1,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-02T01:06:59.663Z"
+      "recordedAt": "2026-10-02T01:15:22.255Z"
     }
   }
 }
