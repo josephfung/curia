@@ -83,6 +83,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Integration tests** — suites remove only the agent identity and knowledge-graph rows they created. (#1970)
 - **Principal contact block** — states the address list is closed and marks the primary email. (#1950)
 - **Principal contact labels** — address-like labels are omitted from the closed contact list. (#1950)
 - **Task wakes** — an undisposed success gets one disposition turn, then a review flag instead of another wake. (#1951)
