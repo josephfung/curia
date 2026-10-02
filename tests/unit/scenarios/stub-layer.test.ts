@@ -44,7 +44,7 @@ function setup() {
     });
   }
   const base = new ExecutionLayer(registry, logger);
-  const controller = createStubController(registry);
+  const controller = createStubController(() => registry);
   const layer = controller.wrap(base);
   return { layer, controller, executed };
 }

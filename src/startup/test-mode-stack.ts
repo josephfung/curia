@@ -158,6 +158,13 @@ export interface TestModeStackOptions {
   enablement?: 'registry' | 'all';
   /** See ExecutionLayerWrapper. */
   wrapExecutionLayer?: ExecutionLayerWrapper;
+  /**
+   * Narrow what agents read from the bullpen. The scenario runner (#1956) uses it so a
+   * runtime injects only the threads a case seeded, not every open thread a real
+   * instance on the same database has. Applied before the read-only view, so the
+   * watermark writes stay disabled whatever the wrapper returns.
+   */
+  wrapBullpenService?: (bullpen: BullpenService) => BullpenService;
   /** Override for fixtures. Default <repo>/agents and <repo>/skills. */
   agentsDir?: string;
   skillsDir?: string;
@@ -636,7 +643,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       principalContactId: principalContact?.id,
       defaultDelegateTimeoutMs: yamlConfig.delegate?.defaultTimeoutMs,
       lateDelivery: { ttlMinutes: lateDelivery.ttlMinutes, sweepIntervalMinutes: lateDelivery.sweepIntervalMinutes },
-      bullpenService: readOnlyBullpen(bullpenService),
+      bullpenService: readOnlyBullpen(
+        options.wrapBullpenService ? options.wrapBullpenService(bullpenService) : bullpenService,
+      ),
       conversationEntities,
       // No taskRepo or workingDocsRepo — see header.
     });
