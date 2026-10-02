@@ -208,6 +208,29 @@ Three approaches were considered:
   first two rules the model-written `agent_id` passes through; it is display-only.
   Trade-off: a hint the platform cannot route is lost rather than shown to the
   model, which is the point — it would be a misroute waiting to happen.
+- **A hinted entry is released by the platform, not judged closed by the coordinator (#1972).**
+  The coordinator's "sweep on close" prompt rule asked it to read a specialist's prose
+  and decide whether the exchange had ended; on the production model it released
+  entries after interim results. Now the coordinator links the entry to the
+  delegation that routes its reply (`delegate`'s `outbound_entry_id`, or an owned
+  entry's id quoted in the brief), and `delegate` settles it from the result shape
+  (`skills/delegate/outbound-entry.ts`). The entry is kept only while the reply can
+  still be handled by routing it again: no specialist run started (in-flight
+  refusal, guard block, a brief rejected before dispatch) or the run failed
+  retryably. Every other outcome releases it — an answer, a clarification request
+  (the follow-up is relayed as a new entry carrying the new `resume_token`), a
+  paused long task, a decline, a non-retryable failure, and a wait timeout (the
+  specialist has the reply and late delivery carries its answer). A resume whose
+  token is unusable also releases the clarification entry, which would otherwise
+  route every later reply into the same dead resume. The specialist can hold a
+  release with `context-bridge-keep-open`, which stamps `metadata.exchange_open`
+  with its delegated task id; the release is one UPDATE that skips an entry stamped
+  by the same delegation. Task-wake bindings are never linked: the coordinator
+  closes those with `context-bridge-release` and `reply`.
+  `context-bridge-release` refuses an entry owned by another registered specialist
+  (task-wake bindings excepted), so the two paths cannot disagree. An entry whose
+  hint names no registered specialist — such as a free-text hint written before
+  this change — counts as unowned.
 - Metadata is JSONB capped at 16 KB. Oversize metadata is dropped at
   serialization time (text fields like `expected_reply` and `delegation_hint`
   are truncated to 500 chars with a marker). This protects against runaway
