@@ -165,9 +165,16 @@ async function rateRuns(
   return ratings;
 }
 
+/**
+ * The commit under test, with `-dirty` when tracked files have uncommitted changes: the
+ * release pre-flight compares this to the security gate's SHA, and a clean SHA over edited
+ * code would claim a result for code that never ran.
+ */
 function gitCommit(): string | undefined {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: import.meta.dirname, encoding: 'utf-8' }).trim();
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: import.meta.dirname, encoding: 'utf-8' }).trim();
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: import.meta.dirname, encoding: 'utf-8' });
+    return status.trim() === '' ? sha : `${sha}-dirty`;
   } catch {
     // Not fatal — results are still useful without it — but say so: the release gate
     // records this SHA, and a silent blank would look like it was never captured.

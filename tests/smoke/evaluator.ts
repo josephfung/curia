@@ -105,8 +105,16 @@ export function formatJudgeInput(exec: CaseExecution, principalName?: string, to
       lines.push(`Tool calls:`, formatToolCalls(response?.toolCalls ?? []), ``);
     }
     lines.push(`Assistant response:`, response ? response.content : '(none)');
+    if (response?.noReplyReason) {
+      lines.push(`(Delivery was suppressed — ${response.noReplyReason}. The sender did not receive this.)`);
+    }
     return lines.join('\n');
   });
+
+  // The coordinator's calls are shown per turn above; what it delegated happened in the
+  // specialists' own turns. Without these, "created the event on the principal's calendar"
+  // or "took no action for the stranger" would be judged from the coordinator's prose alone.
+  const specialistCalls = tc.judgeToolCalls ? exec.agentCalls.filter(c => c.agentId !== 'coordinator') : [];
 
   return [
     `## Scenario`,
@@ -121,6 +129,18 @@ export function formatJudgeInput(exec: CaseExecution, principalName?: string, to
     `## Conversation`,
     turns.join('\n\n'),
     ``,
+    ...(tc.judgeToolCalls
+      ? [
+          `## Specialists' tool calls (work the assistant delegated)`,
+          specialistCalls.length === 0
+            ? '(none)'
+            : specialistCalls.map((c, i) => {
+                const outcome = c.success === undefined ? 'no result' : c.success ? 'ok' : 'FAILED';
+                return `${i + 1}. ${c.agentId ?? 'unknown agent'} → ${c.toolName} ${JSON.stringify(c.input)} [${outcome}]`;
+              }).join('\n'),
+          ``,
+        ]
+      : []),
     `## Expected Behaviors`,
     tc.expectedBehaviors.map(b => `- ${b.id}: ${b.description.trim()} [${b.weight}]`).join('\n'),
     ...(tc.failureModes.length > 0
@@ -156,13 +176,22 @@ async function judgeCase(
 ): Promise<{ scores: BehaviorScore[]; error?: string }> {
   let lastError = '';
   for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
-    const response = await judge.provider.chat({
-      model: judge.model,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: formatJudgeInput(exec, judge.principalName, today) },
-      ],
-    });
+    let response: Awaited<ReturnType<Judge['provider']['chat']>>;
+    try {
+      response = await judge.provider.chat({
+        model: judge.model,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: formatJudgeInput(exec, judge.principalName, today) },
+        ],
+      });
+    } catch (err) {
+      // A provider that throws (network reset, SDK bug) rather than returning an error
+      // result is treated as transient, not allowed to abort the run and lose every result.
+      lastError = `provider threw: ${err instanceof Error ? err.message : String(err)}`;
+      await new Promise(resolve => setTimeout(resolve, 1_000 * attempt));
+      continue;
+    }
 
     if (response.type === 'text') {
       return parseJudgeResponse(extractJsonObject(response.content), exec.testCase.expectedBehaviors);
@@ -205,7 +234,9 @@ export function parseJudgeResponse(
   try {
     const parsed = JSON.parse(raw) as { scores?: unknown };
     if (!Array.isArray(parsed.scores)) throw new Error('missing scores array');
-    returned = parsed.scores as typeof returned;
+    // Drop entries that aren't objects ({"scores": [null]}); their behaviors then count as
+    // skipped — a judge error — instead of crashing the run.
+    returned = (parsed.scores as unknown[]).filter((x): x is Record<string, unknown> => x !== null && typeof x === 'object');
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     return {

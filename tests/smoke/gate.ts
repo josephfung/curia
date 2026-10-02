@@ -38,7 +38,8 @@ export function caseFailures(c: GateInput): string[] {
     }
   }
   if (c.weightedScore < CASE_PASS_THRESHOLD) {
-    failures.push(`weighted score ${formatPct(c.weightedScore)} is below ${formatPct(CASE_PASS_THRESHOLD)}`);
+    // Rounded down, so 79.5% never reads as "80% is below 80%".
+    failures.push(`weighted score ${Math.floor(c.weightedScore * 100)}% is below ${formatPct(CASE_PASS_THRESHOLD)}`);
   }
   return failures;
 }

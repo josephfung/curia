@@ -139,7 +139,15 @@ function buildTrendChart(history: HistoricalEntry[]): string {
  * Render a single case result as a collapsible details card.
  */
 function renderCaseCard(caseResult: CaseResult): string {
-  const { testCase, responses, scores, weightedScore, failures } = caseResult;
+  const { testCase, responses, scores, weightedScore, failures, passed, firstAttempt } = caseResult;
+  // The gate's verdict, as the CLI summary prints it: PASS* passed only on its retry,
+  // KNOWN is a known_failure case that failed (reported, not gated).
+  const verdict = passed
+    ? (firstAttempt ? 'PASS*' : 'PASS')
+    : (testCase.knownFailure && !caseResult.error && !caseResult.judgeError ? `KNOWN ${testCase.knownFailure.issue}` : 'FAIL');
+  const retryNote = firstAttempt
+    ? `<div class="error-banner">First attempt ${pct(firstAttempt.weightedScore)}: ${firstAttempt.failures.map(f => escapeHtml(f)).join('<br>')}</div>`
+    : '';
   const color = scoreColor(weightedScore);
 
   // Tags as pills
@@ -200,10 +208,12 @@ function renderCaseCard(caseResult: CaseResult): string {
       <summary class="case-header">
         <span class="case-name">${escapeHtml(testCase.name)}</span>
         ${tagPills}
+        <span class="tag">${escapeHtml(verdict)}</span>
         <span class="case-score" style="background:${color}">${pct(weightedScore)}</span>
       </summary>
       <div class="case-body">
         ${errorBanner}
+        ${retryNote}
         <h4>Prompt</h4>
         ${promptBlocks}
 

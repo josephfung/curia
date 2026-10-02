@@ -174,3 +174,38 @@ describe('Smoke test loader', () => {
     });
   });
 });
+
+describe('placeholders and behavior ids at load time', () => {
+  function loadText(body: string): ReturnType<typeof loadTestCase> {
+    const dir = mkdtempSync(join(tmpdir(), 'curia-smoke-test-'));
+    tempDirs.push(dir);
+    const file = join(dir, 'case.yaml');
+    writeFileSync(file, body);
+    return loadTestCase(file);
+  }
+  const behavior = ['expected_behaviors:', '  - id: respond', '    description: Responds'].join('\n');
+
+  it('rejects a misspelt placeholder kind in a message', () => {
+    expect(() => loadText(['name: A', 'turns:', '  - content: "due {{dat:today}}"', behavior].join('\n')))
+      .toThrow(/unrecognised placeholder \{\{dat:today\}\}/);
+  });
+
+  it('rejects a principal field with the wrong case', () => {
+    expect(() => loadText(['name: A', 'turns:', '  - content: "Hi {{principal:Name}}"', behavior].join('\n')))
+      .toThrow(/placeholder/);
+  });
+
+  it('leaves {{input:…}} for call time', () => {
+    expect(() => loadText([
+      'name: A', 'tool_stubs:', '  task-create:', '    - match: {}', '      return: { title: "{{input:title}}" }',
+      'turns:', '  - content: hi', behavior,
+    ].join('\n'))).not.toThrow();
+  });
+
+  it('rejects duplicate behavior ids', () => {
+    expect(() => loadText([
+      'name: A', 'turns:', '  - content: hi', 'expected_behaviors:',
+      '  - { id: x, description: one, weight: critical }', '  - { id: x, description: two, weight: nice-to-have }',
+    ].join('\n'))).toThrow(/Duplicate behavior id 'x'/);
+  });
+});

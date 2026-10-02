@@ -7,8 +7,13 @@
 //
 // Unlike the scenario suite's fail-closed layer (tests/scenarios/stub-layer.ts), an
 // unstubbed call here runs the real tool: smoke tests the whole stack, and it runs on
-// a throwaway copy of the database (clone-db.ts), so a real write lands nowhere that
-// matters. Sends still cannot leave: the test-mode stack has no transport (#1966).
+// a throwaway copy of the database (clone-db.ts), so a real database write lands nowhere
+// that matters. Sends still cannot leave: the test-mode stack has no transport (#1966).
+// Real reads can — web-fetch and web-search make real requests.
+//
+// A stubbed call is answered before the real ExecutionLayer, so its trust and autonomy
+// checks do not run: a stubbed write "succeeds" even where production would gate it.
+// Stub a write only where the case is about what Curia does next, not whether it may.
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolResult } from '../../src/skills/types.js';
 import { matchToolStub } from '../scenarios/stub-matcher.js';

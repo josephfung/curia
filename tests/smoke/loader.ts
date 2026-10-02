@@ -86,6 +86,12 @@ export function loadTestCase(filePath: string): TestCase {
     };
   });
 
+  // Duplicate ids would share the judge's first score and collapse in the gate's lookup,
+  // so a critical MISS could hide behind a nice-to-have PASS of the same id.
+  const ids = raw.expected_behaviors.map(b => b.id);
+  const duplicate = ids.find((id, i) => id !== undefined && ids.indexOf(id) !== i);
+  if (duplicate !== undefined) throw new Error(`Duplicate behavior id '${duplicate}' in ${filePath}`);
+
   const expectedBehaviors: ExpectedBehavior[] = raw.expected_behaviors.map((b, i) => {
     if (!b.id) throw new Error(`Behavior ${i} missing 'id' in ${filePath}`);
     if (!b.description) throw new Error(`Behavior ${i} missing 'description' in ${filePath}`);
@@ -97,12 +103,9 @@ export function loadTestCase(filePath: string): TestCase {
     return { id: b.id, description: b.description, weight };
   });
 
-  // Catch a malformed date placeholder at load time, not mid-run.
+  // Catch a malformed or misspelt placeholder at load time, not mid-run.
   try {
-    resolvePrincipalPlaceholders(
-      resolveDatePlaceholders([raw.tool_stubs, raw.turns.map(t => [t.content, t.tool_stubs])], 'UTC'),
-      { name: 'Placeholder Check', contactId: '00000000-0000-0000-0000-000000000000' },
-    );
+    assertResolvable([raw.tool_stubs, raw.turns.map(t => [t.content, t.tool_stubs])]);
   } catch (err) {
     throw new Error(`Bad placeholder in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -121,11 +124,26 @@ export function loadTestCase(filePath: string): TestCase {
   };
 }
 
+/**
+ * Resolve every placeholder in `value` against a stand-in principal and throw if any
+ * `{{…}}` is left (other than `{{input:…}}`, filled per call). A misspelt kind —
+ * `{{dat:today}}`, `{{principal:Name}}` — matches no resolver and would otherwise reach
+ * the model as literal text, or make a stub `match` that never matches.
+ */
+function assertResolvable(value: unknown): void {
+  const resolved = resolvePrincipalPlaceholders(
+    resolveDatePlaceholders(value, 'UTC'),
+    { name: 'Placeholder Check', contactId: '00000000-0000-0000-0000-000000000000' },
+  );
+  const leftover = JSON.stringify(resolved ?? null).match(/\{\{(?!\s*input:)[^}]*\}\}/);
+  if (leftover) throw new Error(`unrecognised placeholder ${leftover[0]}`);
+}
+
 /** The shared fixture world every case runs in (stubs/office.yaml), parsed and validated. */
 export function loadDefaultStubs(filePath: string): Record<string, ToolStub[]> {
   const stubs = parseStubs(yaml.load(readFileSync(filePath, 'utf-8')), filePath);
   try {
-    resolvePrincipalPlaceholders(resolveDatePlaceholders(stubs, 'UTC'), { name: 'Placeholder Check', contactId: '00000000-0000-0000-0000-000000000000' });
+    assertResolvable(stubs);
   } catch (err) {
     throw new Error(`Bad date placeholder in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
