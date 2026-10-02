@@ -59,7 +59,11 @@ function skillError(message: string): string {
   return `<skill_error>${message}</skill_error>`;
 }
 
-export function createStubController(registry: ToolRegistry): StubController {
+/**
+ * `registry` is a getter because the stub layer is created inside createTestModeStack's
+ * wrapExecutionLayer hook, before the stack (and its tool registry) is returned.
+ */
+export function createStubController(registry: () => ToolRegistry): StubController {
   let stubs: Record<string, ToolStub[]> | null = null;
   let calls: StubbedCall[] = [];
 
@@ -80,7 +84,7 @@ export function createStubController(registry: ToolRegistry): StubController {
       return { success: true, data: structuredClone(stub.return ?? null) };
     }
 
-    if (stubs === null || mustStub(toolName, registry)) {
+    if (stubs === null || mustStub(toolName, registry())) {
       record('refused');
       return {
         success: false,

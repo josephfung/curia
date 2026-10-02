@@ -1,0 +1,117 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  loadScenarioCase,
+  loadScenarioCases,
+  placeholdersIn,
+  resolvePlaceholders,
+} from '../../scenarios/loader.js';
+
+let dir: string;
+beforeEach(() => { dir = mkdtempSync(path.join(tmpdir(), 'scenarios-')); });
+afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+function write(name: string, body: string): string {
+  const file = path.join(dir, name);
+  writeFileSync(file, body);
+  return file;
+}
+
+const VALID = `
+name: transfer yes
+tags: [routing]
+runs: 3
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      tier: known
+      channel: email
+      identifier: sam@example.test
+  outbound_context:
+    - key: offsite
+      channel: email
+      agent: ceo-inbox
+      content: Does Thursday work?
+      delegation_hint: ceo-inbox
+inbound:
+  from: principal
+  content: "Yes"
+tool_stubs:
+  delegate:
+    - match: { agent: ceo-inbox }
+      return: { response: "Sent." }
+    - match: {}
+      error: wrong specialist
+expected_behaviors:
+  - id: routes
+    weight: critical
+    description: delegates to ceo-inbox with the entry id
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+      contains: { task: "{{entry:offsite}}" }
+      max: 1
+  - id: silent
+    description: does not answer directly
+`;
+
+describe('loadScenarioCase', () => {
+  it('loads a valid case', () => {
+    const c = loadScenarioCase(write('a.yaml', VALID));
+    expect(c.name).toBe('transfer yes');
+    expect(c.runs).toBe(3);
+    expect(c.seed.contacts[0]).toMatchObject({ key: 'sam', tier: 'known', kind: 'person' });
+    expect(c.seed.outboundContext[0]).toMatchObject({ key: 'offsite', delegationHint: 'ceo-inbox' });
+    expect(c.toolStubs['delegate']).toEqual([
+      { match: { agent: 'ceo-inbox' }, return: { response: 'Sent.' } },
+      { match: {}, error: 'wrong specialist' },
+    ]);
+    expect(c.expectedBehaviors[0]!.check).toEqual({
+      kind: 'called', tool: 'delegate', with: { agent: 'ceo-inbox' }, contains: { task: '{{entry:offsite}}' }, max: 1,
+    });
+    expect(c.expectedBehaviors[1]).toEqual({ id: 'silent', description: 'does not answer directly', weight: 'important' });
+  });
+
+  it.each([
+    ['a placeholder for an unseeded entry', VALID.replace('{{entry:offsite}}', '{{entry:missing}}'), /names no seeded entry/],
+    ['an unknown placeholder kind', VALID.replace('{{entry:offsite}}', '{{job:x}}'), /unknown placeholder/],
+    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen or a seeded contact/],
+    ['a stub with both return and error', VALID.replace("error: wrong specialist", "error: x\n      return: {}"), /exactly one of 'return' or 'error'/],
+    ['a check with two kinds', VALID.replace('max: 1', 'max: 1\n      not_called: [email-send]'), /exactly one of/],
+    ['an invalid weight', VALID.replace('weight: critical', 'weight: urgent'), /invalid weight/],
+    ['a duplicate behavior id', VALID.replace('id: silent', 'id: routes'), /duplicate behavior id/],
+    ['zero runs', VALID.replace('runs: 3', 'runs: 0'), /positive integer/],
+    ['a bad regex', VALID.replace('description: does not answer directly', 'description: x\n    check: { reply_excludes: ["("] }'), /invalid pattern/],
+  ])('rejects %s', (_label, body, error) => {
+    expect(() => loadScenarioCase(write('bad.yaml', body))).toThrow(error);
+  });
+
+  it('requires a bullpen inbound to name a seeded thread', () => {
+    const body = VALID.replace('from: principal', 'from: bullpen');
+    expect(() => loadScenarioCase(write('b.yaml', body))).toThrow(/needs 'thread'/);
+  });
+});
+
+describe('loadScenarioCases', () => {
+  it('rejects duplicate names', () => {
+    write('a.yaml', VALID);
+    write('b.yaml', VALID.replace('name: transfer yes', 'name: Transfer Yes'));
+    expect(() => loadScenarioCases(dir)).toThrow(/Duplicate scenario name/);
+  });
+});
+
+describe('placeholders', () => {
+  it('finds and resolves them deeply', () => {
+    const value = { a: 'id {{entry:x}} and {{ principal_contact_id }}', b: ['{{contact:y}}'], c: 3 };
+    expect(placeholdersIn(value)).toEqual(['entry:x', 'principal_contact_id', 'contact:y']);
+    const refs = new Map([['entry:x', 'E1'], ['principal_contact_id', 'P1'], ['contact:y', 'C1']]);
+    expect(resolvePlaceholders(value, refs)).toEqual({ a: 'id E1 and P1', b: ['C1'], c: 3 });
+  });
+
+  it('throws on an unresolved one', () => {
+    expect(() => resolvePlaceholders('{{entry:nope}}', new Map())).toThrow(/Unresolved/);
+  });
+});
