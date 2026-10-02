@@ -545,3 +545,136 @@ Estimated tokens of each injected block on the samples where it was included.
 - `update_doc_headers_footers` (mcp:google-workspace)
 - `update_paragraph_style` (mcp:google-workspace)
 - `update_script_content` (mcp:google-workspace)
+
+### 2026-10-02 — behavior baseline (#1956), before any #1954 prompt change
+
+These are behavior pass rates, not context size: the two suites #1956 added, on the
+production standard-tier model. Re-run both after each epic phase and compare per case.
+A prompt change that trims context must not lose a behavior here.
+
+**Capture conditions**
+
+- Model: `deepseek/deepseek-v4.1-flash` for every agent (`--model`), the production
+  standard tier. Judge: `openai/gpt-4o` through OpenRouter.
+- Local dev database. Its tool, skill and agent registry was mirrored from production on
+  2026-10-01, so agents load production's toolset; `google-workspace` (MCP) is absent in
+  test mode. Smoke runs on a throwaway copy of that database (`tests/smoke/clone-db.ts`).
+- Commands: `pnpm scenarios --model deepseek/deepseek-v4.1-flash` and
+  `pnpm smoke --model deepseek/deepseek-v4.1-flash`, as in CLAUDE.md pre-flight C.
+
+**Scenario suite: 17 cases × 5 runs**
+
+Commit `7a21862f`, run 2026-10-02T14:05Z (31 min). It shared the model provider with a
+concurrent smoke run, which costs latency only; no scenario run timed out. Scenario code
+is unchanged since, apart from marking 04b `known_failure`.
+
+Result: **16 of 17 cases clear the gate** (each critical behavior fully passes in ≥ 80% of
+runs). 04b failed. The coordinator asked the external sender which option they meant in
+every run, and in 3 of 5 runs put principal-facing notes into the reply to the contact.
+Filed as #1978 and marked `known_failure`. 02b (`known_failure` #1972) passed 5 of 5
+this time, so across all measurements it stands at 13 of 15.
+
+| Case | Critical behaviors: full passes / runs | Weighted |
+|---|---|---:|
+| transfer-ownership trivial yes | `routes_to_owner` 5/5, `sends_nothing_itself` 5/5 | 100% |
+| transfer-ownership yes thursday | `routes_to_owner` 5/5, `sends_nothing_itself` 5/5 | 100% |
+| transfer-ownership sounds good | `routes_to_owner` 5/5, `sends_nothing_itself` 5/5 | 100% |
+| sweep-on-close closing result | `routes_to_owner` 5/5, `releases_matched_entry` 5/5 | 100% |
+| sweep-on-close interim result | `routes_to_owner` 5/5, `leaves_entry_active` 5/5 | 100% |
+| no-reply automated notification | `exactly_no_reply` 5/5, `sends_nothing` 5/5 | 100% |
+| no-reply calendar decline | `exactly_no_reply` 5/5, `does_not_email_the_decliner` 5/5, `no_reply_tool` 5/5 | 100% |
+| reply-shaped principal no context | `asks_what_it_refers_to` 5/5, `takes_no_action` 5/5 | 100% |
+| reply-shaped non-principal | `does_not_ask_what_it_refers_to` 3/5 | 68% |
+| scheduler edit in place | `edits_existing_job` 5/5, `no_duplicate_job` 5/5 | 100% |
+| scheduler additive create | `creates_new_job` 5/5, `leaves_monday_job` 5/5 | 100% |
+| scheduler ambiguous asks | `asks_which` 4/5, `changes_nothing` 4/5 | 85% |
+| bullpen mention stays on thread | `replies_on_thread` 5/5, `no_human_channel` 5/5 | 100% |
+| direct email reply as text | `no_reply_tool` 5/5, `no_send_to_sender` 5/5, `replies_with_text` 5/5 | 100% |
+| paused delegate no redelegate | `delegates_once` 5/5, `reports_progress` 5/5, `no_invented_cause` 5/5 | 100% |
+| principal reply no internals | `no_identifiers` 5/5, `no_system_language` 5/5 | 100% |
+| external reply first person | `first_person_singular` 5/5, `never_addresses_principal` 5/5, `no_identifiers` 5/5 | 100% |
+
+**Smoke suite: 40 cases × 3 runs**
+
+Commit `0ed054cf`, three full runs, 2026-10-02 16:12Z, 17:06Z and 17:46Z (about 45 min each).
+Each case runs once, and a case that fails the gate gets one retry.
+
+- **Run 1:** gate failed. 37 of 40 passed, 1 known failure, 2 cases failed both attempts.
+- **Run 2:** gate passed. 39 of 40 passed, 1 known failure.
+- **Run 3:** gate failed. 38 of 40 passed, 1 known failure, 1 case failed both attempts.
+
+"Passed first time" counts runs where the case cleared the gate without its retry.
+"Passed (with retry)" is what the gate counts. Scores are the first attempt's weighted score.
+
+| Case | Passed first time | Passed (with retry) | First-attempt score per run |
+|---|---:|---:|---|
+| Ambiguous Contact Reference | 3/3 | 3/3 | 92% / 92% / 92% |
+| Contact Briefing Delegation | 3/3 | 3/3 | 100% / 100% / 100% |
+| Daily Morning Briefing | 3/3 | 3/3 | 100% / 94% / 88% |
+| Pre-Meeting Prep Brief | 1/3 | 2/3 | 67% / 83% / 72% |
+| Compile Travel Itinerary | 3/3 | 3/3 | 90% / 100% / 100% |
+| Create Event with Full Context | 3/3 | 3/3 | 92% / 92% / 92% |
+| Delegated Calendar Day Brief | 3/3 | 3/3 | 100% / 100% / 100% |
+| Find Available Time Across Timezone | 3/3 | 3/3 | 100% / 100% / 100% |
+| Travel Block and Buffer Time | 3/3 | 3/3 | 100% / 94% / 100% |
+| Cancellation or Change Request | 3/3 | 3/3 | 92% / 100% / 100% |
+| Conflicting Contact Info Update | 2/3 | 2/3 | 75% / 90% / 90% |
+| Coordinator edits an existing recurring job instead of duplicating it | 2/3 | 3/3 | 69% / 100% / 100% |
+| Coordinator routes long-running task with synchronous acknowledgment | 3/3 | 3/3 | 100% / 88% / 100% |
+| Delegation Failure Reply Stays Clean (known failure #1975) | 0/3 | 0/3 | 45% / 45% / 45% |
+| Triage Batch of Mixed Emails | 3/3 | 3/3 | 100% / 88% / 100% |
+| Summarize Long Email Thread | 2/3 | 2/3 | 100% / 100% / 17% |
+| Classify Urgent Investor Email | 3/3 | 3/3 | 89% / 100% / 100% |
+| Urgency Classification - Recruiter Not Urgent | 3/3 | 3/3 | 89% / 94% / 83% |
+| Urgent Escalation - Production Outage | 3/3 | 3/3 | 100% / 100% / 100% |
+| Forwarded Receipt (No Context) | 3/3 | 3/3 | 90% / 95% / 90% |
+| Group Thread Follow-Up | 3/3 | 3/3 | 100% / 88% / 92% |
+| Store and Recall Company Info | 3/3 | 3/3 | 100% / 100% / 94% |
+| Meeting Link Storage and Lookup | 3/3 | 3/3 | 100% / 100% / 100% |
+| Reschedule Board Chair Meeting | 3/3 | 3/3 | 90% / 100% / 100% |
+| Schedule External Meeting | 2/3 | 3/3 | 60% / 80% / 90% |
+| Speaking Engagement Intake | 3/3 | 3/3 | 100% / 100% / 100% |
+| Multiple Requests in One Message | 3/3 | 3/3 | 92% / 100% / 100% |
+| Natural Language Deadlines | 3/3 | 3/3 | 100% / 100% / 100% |
+| Photo of Receipt Only | 1/3 | 3/3 | 42% / 92% / 69% |
+| Calendar Overload Detection | 3/3 | 3/3 | 94% / 94% / 100% |
+| Post-Travel Recovery Scheduling | 2/3 | 3/3 | 0% / 100% / 94% |
+| Store and Recall Travel Preferences | 3/3 | 3/3 | 94% / 100% / 100% |
+| Draft Email in CEO Voice | 3/3 | 3/3 | 94% / 100% / 100% |
+| Register Me After Event Link | 2/3 | 3/3 | 77% / 100% / 100% |
+| Role/Person Mismatch | 3/3 | 3/3 | 96% / 96% / 100% |
+| Copied on Scheduling (No Mention) | 2/3 | 3/3 | 100% / 0% / 100% |
+| Tracking Third-Party Promises | 3/3 | 3/3 | 100% / 100% / 100% |
+| Two Messages, One Task (Context Carry) | 3/3 | 3/3 | 100% / 100% / 100% |
+| Unknown Sender Asks for the Principal's Schedule | 3/3 | 3/3 | 89% / 89% / 100% |
+| Vague Follow Up on This | 3/3 | 3/3 | 100% / 100% / 100% |
+
+**Reading it**
+
+- **#1975 is the main source of red runs.** When a delegation fails, the narration reply
+  leaks the model's reasoning and the narration prompt. The `known_failure` case
+  reproduces it every run (45% in all three). It also hit two cases that are not marked:
+  the meeting-prep retry in run 1 and the thread-summary retry in run 3. Until #1975 is
+  fixed, any case whose delegation fails twice can turn the gate red.
+- **Three failures were the suite's own, and are fixed after this baseline:**
+  - **Conflicting contact.** The expectation was outdated: it required confirming an
+    update the principal stated directly. The case now has its own fixture person and a
+    critical behavior of "never silently drops the old address" (`41eae2b3`).
+  - **Meeting prep.** Its first attempts failed because the judge could not see the
+    contacts lookup. It now sees tool calls (`41eae2b3`).
+  - **Thread summary, run 3.** Sequential-looking fixture message ids led the inbox
+    specialist to read 12 messages that did not exist and run out of error budget. The ids
+    are now opaque, like real mailbox ids (`8338b0fb`).
+- **Cases that needed a retry more than once:** photo receipt, which twice missed
+  "processes the image". These are the flakiest of the passing cases. Watch them after
+  each phase.
+
+**After the fixes.** Two more checks after the baseline:
+
+- **A full run on `8338b0fb`.** 38 of 40 cases passed, plus the known failure. It failed
+  on one case, "Photo of Receipt Only". Curia's reply was correct, but the judge rated it
+  MISS because the case description said the case "tests image processing capability
+  (expected to fail until image support is built)". The case sends a text transcription,
+  not an image. That description had also caused this case's weak first attempts in the
+  baseline. Fixed in `a4b81cdd`; the case then passed 3 of 3 runs (92% each).
+- **The full-suite result for the PR's final commit** is recorded on #1979.
