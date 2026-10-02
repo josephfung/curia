@@ -346,7 +346,7 @@ A release is a deliberate, standalone step — separate from day-to-day PR work.
 
 **Pre-flight — get `main` release-ready (before the numbered steps)**
 
-Both of the steps below happen *before* cutting the release, while there is still room to fix problems on a normal branch. They land as ordinary PRs — each with its own CHANGELOG entry, which then rolls into this release — and never inside the release PR itself, which carries no code changes (step 6).
+All three steps below happen *before* cutting the release, while there is still room to fix problems on a normal branch. Any fixes they need land as ordinary PRs — each with its own CHANGELOG entry, which then rolls into this release — and never inside the release PR itself, which carries no code changes (step 6).
 
 ***A. Sync the documentation***
 
@@ -380,7 +380,21 @@ Don't merge other code PRs between clearing this gate and tagging. If code lands
 
 The ZAP DAST scan (`zap-dast` category) is alert-only and review-only for now — until its first run is triaged into the `alertFilter` baseline in `.zap/plan.yaml`, its findings are informational and do not block a release. Once a triaged baseline exists (and `failOnError` flips), treat its unresolved CRITICALs the same as the other scanners.
 
-With docs synced and the security gate clear, cut the release:
+***C. Behavior gate***
+
+Run both behavior suites against the **same `main` commit as the security gate**, on the standard-tier model the production deployment uses (its `model_routing.tiers.standard.model`, e.g. `deepseek/deepseek-v4.1-flash`). Run them from a worktree checked out at that commit, against the local dev database:
+
+```bash
+docker stop curia-curia-1                       # scenarios refuses to run beside a live instance
+pnpm smoke --model <standard-tier model>        # ~40 min; docs/dev/smoke-tests.md
+pnpm scenarios --model <standard-tier model>    # ~25 min; tests/scenarios/README.md
+```
+
+- **Block the release** if either command exits non-zero: any smoke case fails its gate, or any critical scenario behavior is below threshold. Judge errors and errored runs also fail the gate; re-run those rather than waving them through. A scenario case marked `known_failure` is reported but not gated; confirm its issue is still open.
+- **Record the results with the gate SHA.** Each suite prints the `Commit:` it ran on, and it must equal `<gate-sha>`. Note both suites' outcomes next to the security gate's (smoke: cases passed; scenarios: gate passed, plus any known failures).
+- Fix a failure on a normal branch, as with the security gate. That moves `main`, so re-run **both B and C** on the new commit. Step 7's diff against `<gate-sha>` then proves the tag is code-identical to what both gates checked.
+
+With docs synced and both gates clear, cut the release:
 
 **1. Read the unreleased changes**
 
@@ -437,7 +451,7 @@ Write a haiku thematically aligned with the release — drawn from the changes, 
 
 Tag `origin/main` directly (do not rely on local branch state — the release worktree is on `chore/release-X.Y.Z`, not `main`).
 
-Two things must both be true before you tag: the release PR actually merged, and no code has landed since the security gate cleared. Check both explicitly. A bare `grep "X.Y.Z"` on `CHANGELOG.md` is a weak proxy for the first and says nothing about the second — it is an unanchored substring match, so it also hits the `[X.Y.Z]:` compare-link definitions at the bottom of the file and any bullet that happens to cite a version number, and the dots are regex wildcards. Anchor on the heading instead, and corroborate with `package.json`.
+Two things must both be true before you tag: the release PR actually merged, and no code has landed since the security and behavior gates cleared. Check both explicitly. A bare `grep "X.Y.Z"` on `CHANGELOG.md` is a weak proxy for the first and says nothing about the second — it is an unanchored substring match, so it also hits the `[X.Y.Z]:` compare-link definitions at the bottom of the file and any bullet that happens to cite a version number, and the dots are regex wildcards. Anchor on the heading instead, and corroborate with `package.json`.
 
 ```bash
 git -C /path/to/repo fetch origin main
@@ -449,7 +463,7 @@ git -C /path/to/repo show origin/main:package.json | grep '"version": "X.Y.Z"'
 
 # 2. The gate still applies: nothing but the three release files changed
 #    since the commit the scans ran against. <gate-sha> is the commit that
-#    was on main when pre-flight B cleared.
+#    was on main when pre-flights B and C cleared.
 git -C /path/to/repo diff --stat <gate-sha> origin/main
 #    expect exactly: CHANGELOG.md, README.md, package.json
 
@@ -458,7 +472,7 @@ git -C /path/to/repo tag -a vX.Y.Z -m "vX.Y.Z — Character Name" origin/main
 git -C /path/to/repo push origin vX.Y.Z
 ```
 
-If that diff shows anything else, code landed after the gate cleared. Re-run pre-flight B against the new `main` before tagging — this check is what makes the no-code release PR worth the ceremony, so skipping it forfeits the guarantee the whole ordering exists to provide.
+If that diff shows anything else, code landed after the gates cleared. Re-run pre-flights B and C against the new `main` before tagging — this check is what makes the no-code release PR worth the ceremony, so skipping it forfeits the guarantee the whole ordering exists to provide.
 
 Then write the release notes (open with the character blockquote; rewrite the CHANGELOG bullets into natural, friendly prose — past tense, as if narrating what changed; prioritize what a user of Curia would care about; close with a horizontal rule and the haiku) and create the GitHub release:
 
