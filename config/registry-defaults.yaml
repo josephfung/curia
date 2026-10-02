@@ -93,6 +93,7 @@ tools:
   # Utility
   - date-resolve
   - context-bridge-release
+  - context-bridge-keep-open
   - decay-warnings-list
   - delegate
   - async-offramp

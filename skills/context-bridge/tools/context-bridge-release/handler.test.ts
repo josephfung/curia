@@ -19,6 +19,8 @@ function makeCtx(input: Record<string, unknown>, overrides: Partial<ToolContext>
       releaseEntry: vi.fn().mockResolvedValue(undefined),
       getEntry: vi.fn().mockResolvedValue(null),
       clearBySubjects: vi.fn(),
+      markExchangeOpen: vi.fn(),
+      releaseUnlessKeptOpen: vi.fn(),
       defaultExpiryHours: 6,
       explicitExpiryHours: 24,
       defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
@@ -137,6 +139,8 @@ describe('ContextBridgeReleaseHandler', () => {
             metadata: { bind_reply: true, task_id: TASK_ID },
           }),
           clearBySubjects: vi.fn(),
+          markExchangeOpen: vi.fn(),
+          releaseUnlessKeptOpen: vi.fn(),
           defaultExpiryHours: 6,
           explicitExpiryHours: 24,
           defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
@@ -166,6 +170,8 @@ describe('ContextBridgeReleaseHandler', () => {
             metadata: { subject: 'standup' },
           }),
           clearBySubjects: vi.fn(),
+          markExchangeOpen: vi.fn(),
+          releaseUnlessKeptOpen: vi.fn(),
           defaultExpiryHours: 6,
           explicitExpiryHours: 24,
           defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),
@@ -184,6 +190,64 @@ describe('ContextBridgeReleaseHandler', () => {
     );
   });
 
+  describe('entries owned by a specialist (#1972)', () => {
+    /** ctx whose active entry carries `delegationHint` / `metadata`, invoked as `agentId`. */
+    function ownedCtx(agentId: string, entry: { delegationHint: string | null; metadata?: Record<string, unknown> | null }) {
+      const ctx = makeCtx({ entry_id: ENTRY_ID }, { agentId });
+      (ctx.outboundContext!.getEntry as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: ENTRY_ID, metadata: null, ...entry,
+      });
+      return ctx;
+    }
+
+    it('refuses the coordinator and tells it to pass the entry to delegate instead', async () => {
+      const ctx = ownedCtx('coordinator', { delegationHint: 'ceo-inbox' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('ceo-inbox');
+        expect(result.error).toContain('outbound_entry_id');
+      }
+      expect(ctx.outboundContext!.releaseEntry).not.toHaveBeenCalled();
+    });
+
+    it('refuses on the clarification-pending form too', async () => {
+      const ctx = ownedCtx('coordinator', {
+        delegationHint: 'research-analyst clarification pending',
+        metadata: { resume_token: 'tok' },
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      expect(ctx.outboundContext!.releaseEntry).not.toHaveBeenCalled();
+    });
+
+    it('lets the owning specialist release its own entry', async () => {
+      const ctx = ownedCtx('ceo-inbox', { delegationHint: 'ceo-inbox' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('still lets the coordinator release an entry with no hint', async () => {
+      const ctx = ownedCtx('coordinator', { delegationHint: null });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+
+    it('still lets the coordinator release a hinted task-wake binding', async () => {
+      // Task-wake bindings are the coordinator's to close: it judges whether the
+      // principal answered the woken task's question (#1299).
+      const ctx = ownedCtx('coordinator', {
+        delegationHint: 'ceo-inbox',
+        metadata: { bind_reply: true, task_id: TASK_ID },
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(ctx.outboundContext!.releaseEntry).toHaveBeenCalledWith(ENTRY_ID);
+    });
+  });
+
   it('returns error when reply is provided for a task-wake binding but taskRepo is missing', async () => {
     const ctx = makeCtx(
       { entry_id: ENTRY_ID, reply: 'answer' },
@@ -197,6 +261,8 @@ describe('ContextBridgeReleaseHandler', () => {
             metadata: { bind_reply: true, task_id: TASK_ID },
           }),
           clearBySubjects: vi.fn(),
+          markExchangeOpen: vi.fn(),
+          releaseUnlessKeptOpen: vi.fn(),
           defaultExpiryHours: 6,
           explicitExpiryHours: 24,
           defaultExpiryHoursFor: (channelId: string) => (channelId === 'email' ? 72 : 6),

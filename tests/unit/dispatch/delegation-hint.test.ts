@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   attributeOutboundEntry,
   canonicalDelegationHint,
+  delegationHintOwner,
   relayRequesterFor,
   rosterFromRegistry,
   type DelegationHintRoster,
@@ -76,6 +77,26 @@ describe('canonicalDelegationHint (#1972)', () => {
     expect(canonicalDelegationHint('ceo-inbox clarification pending', undefined, roster)).toBe('ceo-inbox');
     expect(canonicalDelegationHint('ceo-inbox clarification pending', { resume_token: 'not-base64-json' }, roster))
       .toBe('ceo-inbox');
+  });
+});
+
+describe('delegationHintOwner (#1972)', () => {
+  it('reads the owning agent from a canonical hint', () => {
+    expect(delegationHintOwner('ceo-inbox')).toBe('ceo-inbox');
+    expect(delegationHintOwner('research-analyst clarification pending')).toBe('research-analyst');
+  });
+
+  it('returns null for no hint', () => {
+    expect(delegationHintOwner(null)).toBeNull();
+    expect(delegationHintOwner(undefined)).toBeNull();
+    expect(delegationHintOwner('  ')).toBeNull();
+  });
+
+  it('reads the first token of a legacy free-text hint written before #1972', () => {
+    // Entries registered before normalization shipped live up to 72h. A legacy hint
+    // whose first token is not an agent id yields that token, which matches no
+    // caller — so only the platform can release it, the safe direction.
+    expect(delegationHintOwner('Delegate replies to ceo-inbox')).toBe('delegate');
   });
 });
 

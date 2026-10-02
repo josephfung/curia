@@ -1,7 +1,7 @@
 {
   "name": "context-bridge-release",
-  "description": "Mark an outbound context bridge entry as released — stop expecting replies for this outbound message. Use when a delegated conversation is complete or to clear stale context. entry_id must be the UUID copied verbatim from the [ACTIVE OUTBOUND CONTEXT] block. If that block is not present in this turn, there is nothing to release — do not call this tool. For task-wake bindings (context metadata bind_reply + task_id), pass reply with the principal's answer verbatim to persist it on the originating task and release in one call.",
-  "version": "1.2.2",
+  "description": "Mark an outbound context bridge entry as released — stop expecting replies for this outbound message. Use to clear stale context on an entry with no delegation hint, or one you own. An entry whose delegation hint names another agent is that agent's: pass its id to delegate as outbound_entry_id when you route the reply, and the platform releases it when the specialist returns (this tool refuses it). entry_id must be the UUID copied verbatim from the [ACTIVE OUTBOUND CONTEXT] block. If that block is not present in this turn, there is nothing to release — do not call this tool. For task-wake bindings (context metadata bind_reply + task_id), pass reply with the principal's answer verbatim to persist it on the originating task and release in one call.",
+  "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
