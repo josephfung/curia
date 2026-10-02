@@ -10,11 +10,11 @@ Curia's smoke test suite runs the full agent stack against real conversations an
 
 Each test is a YAML file describing a conversation and a list of expected behaviors. The runner:
 
-1. Boots a headless Curia stack (full bus, agents, skills — no HTTP or CLI channels)
-2. Plays through the conversation turns against the live Coordinator
-3. Sends the full transcript + expected behaviors to an LLM judge (GPT-4o)
+1. Boots a headless Curia stack in test mode (full bus, agents, skills — no channels, and nothing can send)
+2. Plays through the conversation turns against the live Coordinator, recording its tool calls and replies
+3. Sends the transcript + expected behaviors to an LLM judge (GPT-4o, through OpenRouter)
 4. Scores each expected behavior as `PASS`, `PARTIAL`, or `MISS`
-5. Generates a weighted score and an HTML report with the judge's justifications
+5. Applies the gate (below), writes an HTML report with the judge's justifications, and exits `1` if any case fails
 
 The judge provides a reasoning trace for every behavior rating — useful for debugging why a test passes or fails.
 
@@ -23,7 +23,10 @@ The judge provides a reasoning trace for every behavior rating — useful for de
 ## Running the Tests
 
 ```bash
-# Full suite
+# Full suite on the production standard-tier model (what the release pre-flight runs)
+pnpm smoke --model deepseek/deepseek-v4.1-flash
+
+# Full suite on the configured model_routing
 pnpm smoke
 
 # Single case (substring match on name)
@@ -33,9 +36,22 @@ pnpm smoke --case "urgent"
 pnpm smoke --tags email-triage,briefing
 ```
 
-**Requirements:** `DATABASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (for the judge).
+**Requirements:** `DATABASE_URL` (a migrated database with a principal contact) and `SECRET_ENCRYPTION_KEY`. Model keys come from the vault, never from env (#911): the model's provider key (`anthropic_api_key` or `openrouter_api_key`), plus `openrouter_api_key` for the judge.
 
-Reports land in `tests/smoke/reports/` as self-contained HTML files. Results are saved as JSON in `tests/smoke/results/` for historical tracking.
+Smoke usually runs against the dev database. Each case's conversation rows (working memory, checkpoints, resolved entities) are deleted after it runs, and leftovers from an interrupted run are swept at start-up, so test turns do not leak into the real instance's prompts.
+
+Reports land in `tests/smoke/reports/` as self-contained HTML files. Results are saved as JSON in `tests/smoke/results/` (with the model and commit) for historical tracking.
+
+### The gate
+
+A case **passes** when all of these hold:
+
+- it ran to completion (no timeout or agent error);
+- the judge scored it (a judge failure is reported separately, as not the model's fault);
+- its weighted score is **at least 80%**;
+- no `critical` behavior is rated `MISS`.
+
+The run **passes** when every case passes. Otherwise `pnpm smoke` exits `1` and lists each failing case with its reasons. A run narrowed with `--case` or `--tags` says so, because it is not a full-suite result.
 
 ---
 
@@ -51,6 +67,8 @@ description: |                  # required — what this tests
   One or two sentences describing the scenario and what we're
   checking for. Helps the judge understand context.
 tags: [tag1, tag2]              # required — used for filtering; see tags below
+sender: principal               # optional — principal (default) | unknown
+judge_tool_calls: false         # optional — show the judge each turn's tool calls
 
 turns:                          # required — at least one turn
   - role: user
@@ -68,6 +86,19 @@ failure_modes:                  # optional — things the agent should NOT do
   - "Should not hallucinate a meeting time"
   - "Should not reveal internal contact IDs"
 ```
+
+Unknown keys are rejected, so a typo cannot silently fall back to a default.
+
+### Sender
+
+- `principal` (default) — the principal, on the local `smoke-test` channel. Curia knows who is talking and acts with full standing.
+- `unknown` — an email address with no contact record (`unknown-sender@example.test`). The coordinator gets the low-trust treatment an unknown sender gets in production. Use it for cases about what Curia will and won't do for a stranger.
+
+### Judging tool calls
+
+By default the judge sees each turn's message and Curia's reply. Set `judge_tool_calls: true` when the behavior is an action rather than a reply, such as "looks the contact up before answering" or "does not send anything". The judge then also sees each tool call, its arguments, and its result (a failed call is marked `FAILED`).
+
+Test mode can't reach email, calendars, the scheduler, tasks, documents or human channels, so those tools fail. A case about them should test what Curia does when they fail, such as saying so plainly instead of making something up. For coordinator decisions that need those tools to succeed, use the scenario suite (`tests/scenarios/README.md`), where tool results are stubbed.
 
 ### Behavior weights
 
@@ -91,7 +122,7 @@ The judge reads the full conversation transcript alongside your `description` te
 - **Are independent** — each behavior should stand alone; avoid "does A and B" in a single description
 
 Avoid:
-- Behaviors that check internal state (DB writes, bus events) — the judge only sees the conversation
+- Behaviors that check internal state (DB writes, bus events) — the judge sees the conversation, plus tool calls when `judge_tool_calls` is set, and nothing else
 - Behaviors that are always trivially true ("responds to the user")
 - Behaviors so vague the judge can't reasonably disagree
 
@@ -194,11 +225,12 @@ expected_behaviors:
 
 ## After Writing Your Test
 
-1. Run it: `pnpm smoke --case "your-case-name"`
+1. Run it: `pnpm smoke --case "your-case-name" --model deepseek/deepseek-v4.1-flash`
 2. Open the HTML report in `tests/smoke/reports/` — read the judge's justifications for each behavior
 3. If behaviors are consistently rated `PARTIAL`, the description may be too vague — tighten it
-4. If the test reveals a real bug, open an issue alongside the PR
-5. Submit the YAML file — no other changes needed
+4. Run it a few times: the release gate runs every case once, so a case that passes only some of the time will block releases at random
+5. If the test reveals a real bug, open an issue alongside the PR
+6. Submit the YAML file — no other changes needed
 
 A good smoke test is a gift to the next person who touches that feature. It doesn't have to be complex to be useful.
 

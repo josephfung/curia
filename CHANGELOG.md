@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Behavior release gate** — release pre-flight runs smoke and scenarios on the production standard-tier model. (#1956)
+- **Smoke senders** — a case can send as the principal or an unknown email sender. (#1956)
 - **`seed-vault`** — `SEED_VAULT_ONLY` seeds only the named secrets instead of everything in `.env`. (#1956)
 - **Coordinator scenario suite** — `pnpm scenarios` tests coordinator decisions; exits non-zero when a critical behavior passes under 80%. (#1956)
 - **Test-mode stack** — `wrapBullpenService`, `wrapWorkingMemory` and `llmProviders` hooks for the scenario suite. (#1956)
@@ -40,6 +42,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Smoke gate** — `pnpm smoke` exits 1 when a case scores under 80% or misses a critical behavior. (#1956)
+- **Smoke judge** — gpt-4o via OpenRouter from the vault, retried, optionally seeing tool calls; no `OPENAI_API_KEY`. (#1956)
+- **Smoke cleanup** — deletes its conversation rows and withholds recent history, so test turns don't leak. (#1956)
 - **Test-mode stack** — smoke and the prompt render now use production agent assembly and cannot send. (#1966)
 - **Model-facing prose** — calls the person served "the principal" across prompts and tool descriptions. (#1950)
 - **`resolve-learning-digest` outputs (public API)** — `kind` distinguishes leaving a task done from declining a confirm. (#1936)
