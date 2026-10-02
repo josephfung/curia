@@ -86,6 +86,8 @@ export interface ScenarioHarness {
   internalNames: string[];
   /** Tool names the coordinator is offered (for stub validation). */
   coordinatorTools: Set<string>;
+  /** Tools test mode cannot serve; the stub layer refuses them unless a case stubs them. */
+  unavailableTools: ReadonlySet<string>;
   runOnce(scenario: ScenarioCase, runIndex: number): Promise<ScenarioRun>;
   /** Remove rows an interrupted run left behind (by the suite's own markers). */
   sweep(): Promise<Record<string, number>>;
@@ -155,18 +157,30 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   const config = loadConfig();
   // The registry exists only once the stack is built; the stub layer reads it lazily.
   let booted: TestModeStack | undefined;
-  const controller = createStubController(() => {
-    if (!booted) throw new Error('scenario harness: tool call before the stack finished booting');
-    return booted.toolRegistry;
-  });
+  let unavailable: ReadonlySet<string> = new Set();
+  const controller = createStubController(
+    () => {
+      if (!booted) throw new Error('scenario harness: tool call before the stack finished booting');
+      return booted.toolRegistry;
+    },
+    () => unavailable,
+  );
 
   const stack = await createTestModeStack({
     config: { ...config, databaseUrl: withApplicationName(config.databaseUrl) },
     model: options.model,
     wrapExecutionLayer: (layer) => controller.wrap(layer),
     wrapBullpenService: (bullpen) => scopedBullpen(bullpen, scope),
+    // No contact recent history: every case starts from a clean slate. On the dev
+    // database that recall surfaces smoke runs' and the real principal's other turns
+    // (it once turned a reply-shaped "Yes, go ahead." into a real pending research ask).
+    wrapWorkingMemory: (memory) => Object.assign(Object.create(memory) as typeof memory, {
+      getContactRecentHistory: async () => [],
+    }),
   });
   booted = stack;
+  // Tools any agent is offered that test mode refuses for a missing capability.
+  unavailable = new Set(Object.values(stack.disabledTools).flat().map(d => d.tool));
 
   const { bus, logger } = stack;
   const outboundContext = createOutboundContextService(stack);
@@ -330,6 +344,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     stubs: controller,
     internalNames,
     coordinatorTools,
+    unavailableTools: unavailable,
     runOnce,
     sweep: () => sweepLeftovers(stack),
     shutdown: async () => {
@@ -347,16 +362,15 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
 }
 
 /**
- * Calls the harness, not the model, decided: refused by the stub layer, or a real
- * read-only tool that failed because test mode cannot serve it (no mail client, no
- * task service…). Either way the model reacted to the harness's gap. Counting failed
- * passthroughs here means a newly unservable read shows up in the coverage gate with
- * no list of "tools that don't work in test mode" to keep current.
+ * Calls the harness, not the model, decided: refused by the stub layer — an unstubbed
+ * side-effecting tool, or a read test mode cannot serve (missing capability). Either way
+ * the model reacted to the harness's gap, so the coverage gate counts it.
  */
 export function countHoles(calls: CapturedToolCall[]): number {
-  return calls.filter(c =>
-    c.disposition === 'refused' || (c.disposition === 'passthrough' && c.result?.success === false),
-  ).length;
+  // A passthrough read that fails is a real outcome (e.g. date-resolve rejecting
+  // "next week"): production returns the same. Tools test mode cannot serve are refused
+  // up front (see mustStub's `unavailable`), so they land here as refusals.
+  return calls.filter(c => c.disposition === 'refused').length;
 }
 
 /** The metadata the email adapter attaches, minus anything a scenario cannot know. */

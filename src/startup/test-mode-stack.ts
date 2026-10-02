@@ -165,6 +165,13 @@ export interface TestModeStackOptions {
    * watermark writes stay disabled whatever the wrapper returns.
    */
   wrapBullpenService?: (bullpen: BullpenService) => BullpenService;
+  /**
+   * Narrow what agents read from working memory. The scenario runner (#1956) uses it to
+   * withhold *contact recent history* — a sender's turns from other conversations —
+   * so a case does not inherit the dev database's history (a smoke run's, or the real
+   * principal's) and score on a premise it did not set up.
+   */
+  wrapWorkingMemory?: (memory: WorkingMemory) => WorkingMemory;
   /** Override for fixtures. Default <repo>/agents and <repo>/skills. */
   agentsDir?: string;
   skillsDir?: string;
@@ -502,7 +509,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     }
 
     // ── Memory, contacts, identity ─────────────────────────────────────────
-    const memory = WorkingMemory.createWithPostgres(pool, logger);
+    const baseMemory = WorkingMemory.createWithPostgres(pool, logger);
+    const memory = options.wrapWorkingMemory ? options.wrapWorkingMemory(baseMemory) : baseMemory;
     let entityMemory: EntityMemory | undefined;
     if (openaiApiKey) {
       const embeddingService = EmbeddingService.createWithOpenAI(openaiApiKey, logger, bus, modelRegistry);

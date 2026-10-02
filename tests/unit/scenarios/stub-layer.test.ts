@@ -63,6 +63,15 @@ describe('mustStub: capabilities', () => {
   });
 });
 
+describe('tools test mode cannot serve', () => {
+  it('are refused rather than run into a failure production never shows', () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest('doc-read', 'none'), { execute: async () => ({ success: true, data: null }) });
+    expect(mustStub('doc-read', registry)).toBe(false);
+    expect(mustStub('doc-read', registry, new Set(['doc-read']))).toBe(true);
+  });
+});
+
 describe('stale conversations', () => {
   it('refuses, and does not record, a call from a conversation other than the run\'s', async () => {
     const { layer, controller, executed } = setup();

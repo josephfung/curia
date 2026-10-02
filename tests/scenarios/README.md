@@ -69,7 +69,8 @@ a release-gate result, and the results JSON records the filters.
 ### Output
 
 - A line per run, listing the tools called. `name!` means the stub layer refused the call.
-  `name?` means a real read-only tool failed because test mode can't serve it.
+  `name?` means a real read-only tool failed — a real outcome production would also
+  return (e.g. `date-resolve` rejecting an expression), not a harness gap.
 - Per behavior: its pass rate, and an example justification when it is under 100%.
 - `tests/scenarios/results/<timestamp>.json` (gitignored), with the commit, the model and
   every run's tool calls, reply and ratings.
@@ -124,7 +125,8 @@ prompt. Use 9 runs for a decision that needs to catch a mediocre behavior.
 | Outbound-context entries | `OutboundContextService.register`, backdated to `sent_minutes_ago` | The Dispatcher's `getActive()` returns only this run's entries, each read through the real `getEntry` SQL. Deleted after the run. |
 | Bullpen threads | `BullpenService.openThread` | Runtimes see only this run's threads (the `wrapBullpenService` stack option). Deleted after the run. |
 | Scheduler jobs | the `scheduler-list` stub | Never written. A real row would be fired by any scheduler that comes up later. |
-| The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. Otherwise *contact recent history* injects one principal case's turns into the next. |
+| The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
+| Prior history | | Withheld. *Contact recent history* (a sender's turns from other conversations) returns nothing during a run (the `wrapWorkingMemory` stack option), so a case never inherits smoke runs' or the real principal's turns from the dev database. |
 
 `audit_log` keeps the runs' events. It is append-only by design.
 
@@ -144,7 +146,9 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
    `secretCapture` capability (some of those say `none` but can re-invoke tools, send or
    resolve approvals): the call is refused with a `<skill_error>`. It never falls through.
    The runtime formats the error as production's `<task_error>`.
-3. **No stub, read-only tool:** the real tool runs (memory reads, `date-resolve`).
+3. **No stub, read-only tool test mode can serve:** the real tool runs (memory reads,
+   `date-resolve`, `web-fetch`). A read test mode cannot serve (missing capability) is
+   refused instead.
 4. **A call from another conversation** (a timed-out earlier turn) is refused.
 
 This sits on top of the test-mode stack's own guarantee: a gateway with no transport
@@ -174,7 +178,9 @@ silent reply: saying nothing is not "naming no internals".
 
 ### Stub coverage
 
-A refused call, or a failed passthrough read, is the harness's gap. Whatever the model
+A refused call is the harness's gap — an unstubbed side-effecting tool, or a tool test
+mode cannot serve (missing capability; those are refused up front rather than allowed
+to fail in a way production never does). Whatever the model
 does next is scored against it. The CLI records each case's worst run in
 `stub-coverage.json` (committed, so the gate can't pass vacuously on a clean clone).
 A case fails when its count exceeds its allowance.

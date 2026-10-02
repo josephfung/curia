@@ -107,7 +107,8 @@ any agent receives it. Return a Proxy (or subclass) whose `invoke` answers stubb
 delegates every other method to the real layer. `tool.invoke` / `tool.result` bus events and
 the runtime's `<task_error>` formatting are unchanged. `wrapBullpenService` narrows what
 runtimes read from the bullpen, and `stack.llmProviders` lets test code make its own model
-calls without the vault key leaving the stack.
+calls without the stack handing out the vault key. `wrapWorkingMemory` lets the scenario suite
+withhold contact recent history so a case does not inherit other runs' turns.
 
 **Coordinator scenario suite (#1956):** `pnpm scenarios` (`tests/scenarios/`) is the sibling
 of smoke for coordinator *decisions*. It uses the same test-mode stack with a fail-closed stub
