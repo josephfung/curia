@@ -38,6 +38,7 @@ pgdata/
 # Smoke test outputs (timestamped, not committed)
 tests/smoke/results/*.json
 tests/smoke/reports/*.html
+tests/scenarios/results/
 
 # Claude Code local skills (managed by trimkit, not committed)
 .claude/skills/

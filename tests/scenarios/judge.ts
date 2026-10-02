@@ -5,10 +5,11 @@
 // the reply. Smoke's judge sees only the reply text, which is why it cannot score
 // "delegated instead of answering". gpt-4o, as in smoke and curia-deploy's eval, so
 // scores stay comparable across the three.
+import type { LLMProvider } from '../../src/agents/llm/provider.js';
 import type { BehaviorRating, ExpectedBehavior, RunRating, ScenarioCase, ScenarioRun } from './types.js';
 
-export const JUDGE_MODEL = 'gpt-4o';
-const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
+/** gpt-4o, as smoke and curia-deploy's eval use, reached through OpenRouter. */
+export const JUDGE_MODEL = 'openai/gpt-4o';
 const RATINGS: readonly BehaviorRating[] = ['PASS', 'PARTIAL', 'MISS'];
 
 const SYSTEM_PROMPT = `You are grading one turn of an AI chief of staff (the "coordinator") against expected behaviors.
@@ -103,41 +104,67 @@ export function parseJudgeResponse(raw: string, behaviors: ExpectedBehavior[]): 
   return out;
 }
 
-/** Judge one run's prose behaviors. Auth and rate-limit failures throw: they would repeat for every run. */
+export interface Judge {
+  provider: LLMProvider;
+  model: string;
+}
+
+/**
+ * The judge, called through the stack's own OpenRouter provider: the key stays in the
+ * vault (#911), and the one OpenRouter credential serves both the model under test and
+ * the judge. The provider passes no temperature or response_format through, so the
+ * prompt asks for JSON and the reply is parsed leniently (a fenced block is unwrapped).
+ */
+export function createJudge(providers: ReadonlyMap<string, LLMProvider>): Judge {
+  const provider = providers.get('openrouter');
+  if (!provider) {
+    throw new Error(
+      `The judge (${JUDGE_MODEL}) runs through OpenRouter, and the vault has no openrouter_api_key. ` +
+      'Seed it (see tests/scenarios/README.md).',
+    );
+  }
+  return { provider, model: JUDGE_MODEL };
+}
+
+/** A JSON object out of a model reply that may wrap it in a code fence or prose. */
+export function extractJsonObject(text: string): string {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
+  const body = (fenced ? fenced[1]! : text).trim();
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  return start !== -1 && end > start ? body.slice(start, end + 1) : body;
+}
+
+/**
+ * Judge one run's prose behaviors. An auth or rate-limit failure throws: it would
+ * repeat on every run, and an all-MISS suite would read as a broken coordinator.
+ * Any other provider error scores the run's judged behaviors MISS, saying why.
+ */
 export async function judgeRun(
   scenario: ScenarioCase,
   run: ScenarioRun,
   behaviors: ExpectedBehavior[],
-  apiKey: string,
+  judge: Judge,
 ): Promise<Map<string, RunRating>> {
   if (behaviors.length === 0) return new Map();
 
-  const response = await fetch(OPENAI_URL, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: JUDGE_MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: formatJudgeInput(scenario, run, behaviors) },
-      ],
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-    }),
+  const response = await judge.provider.chat({
+    model: judge.model,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: formatJudgeInput(scenario, run, behaviors) },
+    ],
   });
 
-  if (response.status === 401 || response.status === 403) {
-    throw new Error(`Judge authentication failed (${response.status}) — check OPENAI_API_KEY`);
+  if (response.type === 'error') {
+    const { type, message } = response.error;
+    if (type === 'AUTH_FAILURE' || type === 'RATE_LIMIT') {
+      throw new Error(`Judge call failed (${type}): ${message}`);
+    }
+    return new Map(behaviors.map(b => [b.id, { rating: 'MISS' as const, justification: `judge error ${type}: ${message}` }]));
   }
-  if (response.status === 429) {
-    throw new Error('Judge rate limited (429) — wait and re-run');
+  if (response.type !== 'text') {
+    return new Map(behaviors.map(b => [b.id, { rating: 'MISS' as const, justification: 'judge answered with a tool call, not JSON' }]));
   }
-  if (!response.ok) {
-    const body = await response.text().catch(() => '<unreadable>');
-    const message = `judge API error ${response.status}: ${body.slice(0, 200)}`;
-    return new Map(behaviors.map(b => [b.id, { rating: 'MISS' as const, justification: message }]));
-  }
-
-  const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-  return parseJudgeResponse(json.choices?.[0]?.message?.content ?? '', behaviors);
+  return parseJudgeResponse(extractJsonObject(response.content), behaviors);
 }

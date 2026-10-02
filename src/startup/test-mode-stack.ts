@@ -191,6 +191,13 @@ export interface TestModeStack {
   bullpenService: BullpenService;
   agentContactId: string | undefined;
   principalContactId: string | undefined;
+  /**
+   * The LLM providers agents use, keyed by provider id ('anthropic', 'openrouter').
+   * For test infrastructure that needs its own model calls — the scenario judge (#1956)
+   * — without the raw vault key ever leaving the stack. Offline stacks hold providers
+   * that throw.
+   */
+  llmProviders: ReadonlyMap<string, LLMProvider>;
   /** Every assembled agent, already registered on the bus. */
   agents: AssembledAgent[];
   /**
@@ -698,6 +705,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       bullpenService,
       agentContactId,
       principalContactId: principalContact?.id,
+      llmProviders: providerRegistry,
       agents,
       disabledTools,
       warnings,
