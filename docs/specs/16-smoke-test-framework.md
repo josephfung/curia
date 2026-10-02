@@ -136,7 +136,7 @@ each run, asserts tool calls in code, judges prose through the stack's OpenRoute
 exits non-zero when a critical behavior passes fewer than 80% of its runs. See
 `tests/scenarios/README.md`.
 
-**Timeout:** Each `sendMessage()` call waits 120 seconds by default (`SMOKE_TIMEOUT_MS`). A turn
+**Timeout:** Each `sendMessage()` call waits 180 seconds by default (`SMOKE_TIMEOUT_MS`), as the scenario suite does: with the fixture office, a delegated calendar flow legitimately runs 90–150s. A turn
 that outlives it keeps running, and shutdown waits up to a minute for such turns. A case with
 multiple turns can take several minutes; no overall run timeout exists today (see
 [What's Not Here Yet](#whats-not-here-yet)).
@@ -498,7 +498,7 @@ iteration. Future: a `--judge-model <model-id>` flag.
 ### Per-Case Run Timeout
 
 There is no overall run timeout. A single hanging turn (e.g., a skill that never responds) will
-stall the entire suite indefinitely after the per-`sendMessage` 120-second timeout fires for each
+stall the entire suite indefinitely after the per-`sendMessage` 180-second timeout fires for each
 turn in that case. Needed: a per-case wall-clock timeout and a run-level circuit breaker.
 
 ### Selective Re-run of Failures

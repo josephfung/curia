@@ -1,5 +1,8 @@
 name: Travel Block and Buffer Time
 description: Agent should recognize the need for pre-flight travel blocks and post-arrival buffer time, and protect the calendar accordingly
+# Tuesday, not Thursday: the fixture office's Thursday already holds a Montreal flight
+# (the multiple-requests case asks about it). Tuesday's 1pm board deck review falls in
+# the post-landing window, so protecting it means moving or flagging that meeting.
 tags:
   - calendar
   - travel
@@ -8,7 +11,7 @@ tags:
 turns:
   - role: user
     content: |
-      I'm flying to New York on Thursday. Flight departs at 10am from
+      I'm flying to New York on {{weekday:next-tuesday}}. Flight departs at 10am from
       YYZ. Make sure I have travel time blocked and no meetings after
       I land.
 

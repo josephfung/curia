@@ -1,9 +1,60 @@
 name: Summarize Long Email Thread
-description: Agent should ask for thread details, then produce a structured summary that identifies the core decision point and suggests next steps
+description: >
+  The principal asks where a long legal thread with Acme Corp stands. The thread is in the
+  principal's inbox: Curia should find it, summarize the state of the negotiation, and name
+  the decision the principal now faces.
 tags:
   - email-prioritization
   - summarization
-  - multi-turn
+  - single-turn
+# Finding the thread rather than asking the principal for it is a tool call.
+judge_tool_calls: true
+
+# The thread, on top of the fixture office's inbox. Search returns its latest messages
+# (stub-filters narrows them to the query); the newest one carries the history.
+tool_stubs:
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, drafts: [], count: 0 }
+    - match: {}
+      return:
+        messages:
+          - { id: msg-acme-23, threadId: thr-acme, from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v7", date: "{{time:today-1 16:10}}", snippet: "As a path to signature, Acme proposes a 60/40 split of ownership in jointly developed features, with Curia holding 60%.", unread: true, folders: [INBOX], attachments: [] }
+          - { id: msg-acme-22, threadId: thr-acme, from: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], to: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v7", date: "{{time:today-2 11:45}}", snippet: "We can't accept shared ownership of jointly developed features. Our position remains full ownership with a perpetual license back to Acme.", unread: false, folders: [INBOX], attachments: [] }
+          - { id: msg-acme-21, threadId: thr-acme, from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }], to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }], cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }], subject: "Re: Acme–Curia partnership agreement — redline v6", date: "{{time:today-4 09:30}}", snippet: "Indemnification cap agreed at 12 months of fees. On IP, Acme still needs shared ownership of what we build together.", unread: false, folders: [INBOX], attachments: [] }
+        count: 3
+  ceo-inbox-read:
+    - match: { message_id: msg-acme-23 }
+      return:
+        id: msg-acme-23
+        threadId: thr-acme
+        from: [{ name: Mark Delgado, email: mdelgado@acmecorp.example }]
+        to: [{ name: Hannah Brooks, email: hannah.brooks@curiatech.example }]
+        cc: [{ name: "{{principal:name}}", email: principal@curiatech.example }]
+        subject: "Re: Acme–Curia partnership agreement — redline v7"
+        body_plain: |
+          Hannah,
+
+          Thanks for the call. Acme can't sign with full Curia ownership of jointly developed
+          features; our board sees those features as core to our roadmap too. As a path to
+          signature, Acme proposes a 60/40 split of ownership in jointly developed features,
+          with Curia holding 60%, and each party free to use them in its own products.
+
+          Everything else in redline v7 is agreed, including the indemnification cap at 12
+          months of fees. We'd like to sign by {{day:next-friday}} so the joint launch stays on
+          schedule.
+
+          Mark Delgado
+          General Counsel, Acme Corp
+
+          > On {{day:today-2}}, Hannah Brooks wrote:
+          > We can't accept shared ownership of jointly developed features. Our position
+          > remains full ownership with a perpetual license back to Acme.
+          >
+          > (23 messages in this thread; earlier rounds settled pricing, term and indemnity.)
+        date: 0
+        labels: [INBOX, UNREAD]
+        attachments: []
 
 turns:
   - role: user
@@ -11,30 +62,22 @@ turns:
       There's a long email thread between our legal team and Acme Corp
       about the partnership agreement. It's 23 messages deep. Can you
       summarize where things stand?
-  - role: user
-    delay_ms: 2000
-    content: |
-      The key issue seems to be IP ownership of jointly developed
-      features. Legal wants full ownership, Acme wants shared.
-      Last message was from their counsel suggesting a 60/40 split
-      with us getting the 60.
 
 expected_behaviors:
-  - id: ask-for-details
-    description: Asks for access to the thread or key details before attempting to summarize
+  - id: finds-the-thread
+    description: Looks the thread up in the principal's mail rather than asking the principal to paste it
     weight: critical
   - id: structured-summary
-    description: Produces a structured summary from the provided context
+    description: Summarizes where the negotiation stands in a clear structure (what's agreed, what's open)
     weight: important
   - id: identify-decision-point
-    description: Identifies the core decision point (IP ownership terms and the 60/40 proposal)
-    weight: important
+    description: Identifies the open issue — IP ownership of jointly developed features — and Acme's latest 60/40 proposal (Curia at 60%)
+    weight: critical
   - id: suggest-next-steps
-    description: Suggests what the CEO needs to decide or do next
+    description: Says what the principal needs to decide or do next, noting Acme's signing target
     weight: nice-to-have
 
 failure_modes:
-  - Attempts to summarize without enough context and fabricates details
-  - Misses the core issue (IP ownership)
-  - Doesn't identify the 60/40 proposal as the current state of negotiation
-  - Provides a summary but no suggested next steps
+  - Asks the principal to paste the thread instead of looking for it
+  - Invents terms that are not in the thread
+  - Misses the 60/40 proposal as the current state of negotiation

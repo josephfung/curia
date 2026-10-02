@@ -22,9 +22,10 @@ import { createSmokeStubs, type SmokeStubs } from './stub-layer.js';
 import type { SmokeSender } from './types.js';
 
 // How long each sendMessage() call waits for the coordinator's response.
-// Agentic flows that invoke multiple skills (contact lookup → KG search →
-// calendar check) can legitimately take 60-90s. Default is 120s, tunable
-// via SMOKE_TIMEOUT_MS without code changes.
+// Agentic flows that delegate and then work through the fixture office (read the
+// day, create three events, re-read to verify) legitimately take 90-150s on the
+// production model. Default is 180s, the scenario suite's; tunable via
+// SMOKE_TIMEOUT_MS without code changes.
 //
 // Defensive parse: Number('') === 0 and Number('30s') === NaN, both of which
 // would cause setTimeout to fire immediately. Validate and fall back to the
@@ -33,7 +34,7 @@ import type { SmokeSender } from './types.js';
 const _rawTimeout = parseInt(process.env.SMOKE_TIMEOUT_MS ?? '', 10);
 export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout > 0
   ? _rawTimeout
-  : 120_000;
+  : 180_000;
 
 /** How long shutdown waits for turns that outlived their timeout. */
 const LATE_TURN_GRACE_MS = 60_000;

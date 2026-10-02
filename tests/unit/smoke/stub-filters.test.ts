@@ -66,3 +66,37 @@ describe('fillInputPlaceholders', () => {
     expect(shapeStubResult('task-create', { title: '{{input:title}}', events: 'x' }, { title: 'Chase DD' })).toEqual({ title: 'Chase DD', events: 'x' });
   });
 });
+
+describe('CalendarState', () => {
+  const base = { events: [
+    { id: 'a', title: 'Standup', startTime: '2026-10-07T08:30:00-04:00', endTime: '2026-10-07T09:00:00-04:00' },
+    { id: 'b', title: 'Review', startTime: '2026-10-07T13:00:00-04:00', endTime: '2026-10-07T14:00:00-04:00' },
+  ] };
+  const wed = { timeMin: '2026-10-07T00:00:00-04:00', timeMax: '2026-10-08T00:00:00-04:00' };
+  const created = { event: { id: 'evt-created-0001', title: '{{input:title}}', startTime: '{{input:start}}', endTime: '{{input:end}}' } };
+
+  it('shows a created event in later listings, with a distinct id per create', async () => {
+    const { CalendarState } = await import('../../smoke/stub-filters.js');
+    const state = new CalendarState();
+    const first = shapeStubResult('calendar-create-event', created, { title: 'Airport', start: '2026-10-07T06:30:00-04:00', end: '2026-10-07T08:00:00-04:00' }, state) as { event: { id: string } };
+    const second = shapeStubResult('calendar-create-event', created, { title: 'Recovery', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T17:00:00-04:00' }, state) as { event: { id: string } };
+    expect(first.event.id).not.toBe(second.event.id);
+    const listed = shapeStubResult('calendar-list-events', base, wed, state) as { events: Array<{ title: string }>; count: number };
+    expect(listed.events.map(e => e.title)).toEqual(['Standup', 'Review', 'Airport', 'Recovery']);
+    expect(listed.count).toBe(4);
+  });
+
+  it('applies updates and deletes to listed events', async () => {
+    const { CalendarState } = await import('../../smoke/stub-filters.js');
+    const state = new CalendarState();
+    shapeStubResult('calendar-update-event', { event: {} }, { eventId: 'b', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T16:00:00-04:00' }, state);
+    shapeStubResult('calendar-delete-event', { deleted: true }, { eventId: 'a' }, state);
+    const listed = shapeStubResult('calendar-list-events', base, wed, state) as { events: Array<{ id: string; startTime: string }> };
+    expect(listed.events).toEqual([expect.objectContaining({ id: 'b', startTime: '2026-10-07T15:00:00-04:00' })]);
+  });
+
+  it('keeps nothing without a state (stateless use)', () => {
+    shapeStubResult('calendar-create-event', created, { title: 'X', start: '2026-10-07T06:30:00-04:00', end: '2026-10-07T07:00:00-04:00' });
+    expect((shapeStubResult('calendar-list-events', base, wed) as { count: number }).count).toBe(2);
+  });
+});
