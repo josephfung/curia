@@ -516,6 +516,50 @@ describe('RegistryService — bundle cascade', () => {
     expect(await skillRepo.getRow('gone-bundle')).toBeNull();
   });
 
+  // ── #1974: boot reconciliation re-enrolls rowless members of enabled bundles ──
+
+  it('refuses to uninstall a member tool while its bundle is enabled, and points at disable', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    await skillRepo.enable('ceo-inbox', 'test');
+    const toolRepo = new FakeRepo();
+    await toolRepo.install('ceo-inbox-read', 'test');
+    const svc = new RegistryService(
+      toolRepo, new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, new FakeCascade(),
+    );
+
+    await expect(svc.uninstall('tool', 'ceo-inbox-read', 'web-app'))
+      .rejects.toThrow(/bundle 'ceo-inbox' is enabled.*Disable the tool instead/i);
+    expect(await toolRepo.getRow('ceo-inbox-read')).not.toBeNull();
+  });
+
+  it('uninstalls a member tool once its bundle is disabled', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test'); // installed, not enabled
+    const toolRepo = new FakeRepo();
+    await toolRepo.install('ceo-inbox-read', 'test');
+    const svc = new RegistryService(
+      toolRepo, new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, new FakeCascade(),
+    );
+
+    await svc.uninstall('tool', 'ceo-inbox-read', 'web-app');
+    expect(await toolRepo.getRow('ceo-inbox-read')).toBeNull();
+  });
+
+  it('uninstalls a standalone tool no bundle lists', async () => {
+    const skillRepo = new FakeRepo();
+    await skillRepo.install('ceo-inbox', 'test');
+    await skillRepo.enable('ceo-inbox', 'test');
+    const toolRepo = new FakeRepo();
+    await toolRepo.install('date-resolve', 'test');
+    const svc = new RegistryService(
+      toolRepo, new FakeRepo(), [], [], undefined, skillRepo, bundleDisc, new FakeCascade(),
+    );
+
+    await svc.uninstall('tool', 'date-resolve', 'web-app');
+    expect(await toolRepo.getRow('date-resolve')).toBeNull();
+  });
+
   it('refuses a bundle disable when no cascade repo is wired', async () => {
     // Symmetry with the enable-side guard: cheap to assert, and its absence is what
     // would let a future refactor silently reintroduce the single-table fallback on
