@@ -88,6 +88,18 @@ export class RegistryService {
     return tools;
   }
 
+  /** Enabled bundles whose SKILL.md lists `tool`. Empty when no skill repo is wired (no
+   *  bundles exist to own it). Reads skill rows only when some bundle lists the tool. */
+  private async enabledOwningBundles(tool: string): Promise<string[]> {
+    if (!this.skillRepo) return [];
+    const owners = this.skillDiscovery
+      .filter(d => d.metadata?.tools?.includes(tool))
+      .map(d => d.name);
+    if (owners.length === 0) return [];
+    const enabled = new Set((await this.skillRepo.listRows()).filter(r => r.enabled).map(r => r.name));
+    return owners.filter(b => enabled.has(b));
+  }
+
   private requireCascade(name: string): IBundleCascadeRepo {
     if (!this.cascade) {
       throw new Error(
@@ -380,6 +392,20 @@ export class RegistryService {
       }
       // An 'installed' (not enabled) bundle needs no special handling: it has no live members
       // to strand, and the conditional delete above already covers it.
+    }
+    if (kind === 'tool') {
+      // #1974: boot reconciliation enrolls every member of an ENABLED bundle that has no
+      // row. Deleting a member's row while its bundle is enabled would therefore be undone,
+      // re-enabled, on the next restart — the console would report an uninstall that does
+      // not last. Disable keeps the row, so it survives reconciliation; point there.
+      const owners = await this.enabledOwningBundles(name);
+      if (owners.length > 0) {
+        throw new RegistryGuardError(
+          `Cannot uninstall tool '${name}' while its bundle ${owners.map(b => `'${b}'`).join(', ')} ` +
+          `is enabled: the next restart would enroll it again. Disable the tool instead (that ` +
+          `persists), or disable the bundle first.`,
+        );
+      }
     }
     const deleted = await this.repo(kind).uninstall(name);
     if (!deleted) {
