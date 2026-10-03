@@ -1,9 +1,10 @@
 {
   "name": "delete-relationship",
   "description": "Delete an entity-to-entity relationship from the knowledge graph. Identified by subject name, predicate (edge type), and object name. Permanent — cannot be undone. Use only when the user explicitly says a relationship is wrong or should be removed.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "low",
+  "install": { "requires_secrets": ["openai_api_key"] },
   "inputs": {
     "subject": "string (name or label of the source entity, e.g. 'Jane Doe')",
     "predicate": "string (the edge type to delete, e.g. 'spouse' or 'reports_to'. Must be a known edge type.)",
