@@ -198,6 +198,7 @@ describe('OutboundContextService', () => {
       const [sql, params] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(sql).toMatch(/UPDATE outbound_context SET released = true/);
       expect(sql).toContain('IS DISTINCT FROM');
+      expect(sql).toContain('expires_at > now()');
       expect(params).toEqual(['entry-1', 'exchange_open', 'task-9']);
     });
 

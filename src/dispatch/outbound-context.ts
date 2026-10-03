@@ -360,6 +360,9 @@ export class OutboundContextService {
    * Release an entry unless the given delegation marked it open (#1972). One
    * UPDATE, so a mark written while the delegation ran cannot race the release.
    * The follow-up SELECT only tells the caller which of the two no-op cases it hit.
+   * Both require an unexpired entry, like getEntry and markExchangeOpen: an entry
+   * that expired mid-delegation is already out of the active block, so it reports
+   * not_active rather than a release or a keep that changed nothing.
    */
   async releaseUnlessKeptOpen(
     entryId: string,
@@ -367,14 +370,15 @@ export class OutboundContextService {
   ): Promise<'released' | 'kept_open' | 'not_active'> {
     const result = await this.pool.query(
       `UPDATE outbound_context SET released = true
-        WHERE id = $1 AND released = false
+        WHERE id = $1 AND released = false AND expires_at > now()
           AND (metadata -> $2::text ->> 'task_event_id') IS DISTINCT FROM $3::text`,
       [entryId, EXCHANGE_OPEN_KEY, taskEventId],
     );
     if ((result.rowCount ?? 0) > 0) return 'released';
     const kept = await this.pool.query(
       `SELECT 1 FROM outbound_context
-        WHERE id = $1 AND released = false AND (metadata -> $2::text ->> 'task_event_id') = $3::text`,
+        WHERE id = $1 AND released = false AND expires_at > now()
+          AND (metadata -> $2::text ->> 'task_event_id') = $3::text`,
       [entryId, EXCHANGE_OPEN_KEY, taskEventId],
     );
     return (kept.rowCount ?? 0) > 0 ? 'kept_open' : 'not_active';

@@ -75,6 +75,22 @@ describeIf('outbound-context keep-open and conditional release (#1972)', () => {
     expect(await service.releaseUnlessKeptOpen(id, 'task-c2')).toBe('released');
   });
 
+  it('treats an entry that expired mid-delegation as not_active, marked or not', async () => {
+    const plain = await register();
+    const marked = await register();
+    await service.markExchangeOpen(marked, { agentId: 'ceo-inbox', taskEventId: 'task-e' });
+    // Expire both, as if the TTL ran out while the specialist was working.
+    await pool.query(
+      `UPDATE outbound_context SET expires_at = now() - interval '1 minute' WHERE id = ANY($1::uuid[])`,
+      [[plain, marked]],
+    );
+
+    expect(await service.releaseUnlessKeptOpen(plain, 'task-e')).toBe('not_active');
+    expect(await service.releaseUnlessKeptOpen(marked, 'task-e')).toBe('not_active');
+    // Left for cleanupExpired, not flipped to released.
+    expect(await released(plain)).toBe(false);
+  });
+
   it('reports not_active for an entry already released, and refuses to mark it', async () => {
     const id = await register();
     await service.releaseEntry(id);
