@@ -19,6 +19,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`delegate` (public API)** — optional `outbound_entry_id`; the platform releases that entry when the specialist handles the reply. (#1972)
 - **Scenario `any_of` check** — a behavior passes when any listed alternative check passes. (#1972)
 - **Behavior release gate** — release pre-flight runs smoke and scenarios on the production standard-tier model. (#1956)
+- **Smoke targets** — a case can address a specialist over a bullpen mention; restores ceo-inbox Branch A cases. (#1977)
 - **Smoke senders** — a case can send as the principal or an unknown email sender. (#1956)
 - **Smoke fixture office** — stubbed calendar, inbox and tasks plus seeded contacts, with dates relative to today. (#1956)
 - **Smoke known failures** — `known_failure` reports a case catching a tracked bug without blocking. (#1956)

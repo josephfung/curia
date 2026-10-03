@@ -1,0 +1,69 @@
+# ceo-inbox resume mode, Branch A (Result: ok), with a recalled venue preference (#1977).
+# Rule: agents/ceo-inbox.yaml, "Branch A — Calendar consult reply", step 5b: recalled
+# context shapes the draft, e.g. "avoiding a venue the principal has noted a dislike for".
+name: Branch A Resume Avoids Disliked Venue from Memory
+description: |
+  ceo-inbox parked Bob Martinez's coffee invitation, which suggests Lighthouse Cafe,
+  behind a calendar consult. Calendar has replied with two held slots. Memory says the
+  principal dislikes Lighthouse Cafe and prefers the office or a cafe on Queen St. The
+  draft should offer the slots verbatim without endorsing Lighthouse Cafe.
+tags:
+  - ceo-inbox
+  - resume-mode
+  - memory-recall
+  - scheduling
+judge_tool_calls: true
+
+target:
+  agent: ceo-inbox
+  via: bullpen
+  from: calendar
+  topic: Scheduling consult — Bob Martinez
+  opening: |
+    CONSULT REQUEST
+    Need: 2 conflict-free 60-min slots, with holds placed, returned timezone-labelled
+    For:  reply to Bob Martinez re "Coffee at Lighthouse Cafe?"
+    By:   slots within the next two weeks, daytime
+    Context: source_message_id=18f3d4b0f2e8c561; contact_timezone=America/Toronto
+
+tool_stubs:
+  ceo-inbox-read:
+    - match: { message_id: 18f3d4b0f2e8c561 }
+      return: { id: 18f3d4b0f2e8c561, threadId: 18f3d4b0f2e8c561, from: [{ name: Bob Martinez, email: bob.martinez@partnerco.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Coffee at Lighthouse Cafe?", body_plain: "Hi {{principal:first}},\n\nWould love to catch up now that the partnership is live. Coffee sometime soon? Maybe Lighthouse Cafe on King St, it's close to both of us.\n\nBob", date: 0, labels: [INBOX, "⏳ In Progress"], attachments: [] }
+  memory-query:
+    - match: {}
+      return:
+        results:
+          - { id: 6b0e4f2a-3c1d-4e5f-8a9b-0c1d2e3f4a52, type: fact, label: Principal venue preference, properties: { attribute: venue_preference, value: "Dislikes Lighthouse Cafe on King St. Prefers to meet at the office, or at a cafe on Queen St." }, confidence: 0.9, decay_class: slow_decay, sensitivity: internal, last_confirmed_at: "{{at:now-72h}}", score: 0.84 }
+        count: 1
+
+turns:
+  - role: user
+    content: |
+      CONSULT REPLY
+      Result: ok
+      Slots:
+        1. {{day:next-monday}} at 11:30 AM ET - hold placed
+        2. {{day:next-tuesday}} at 10:00 AM ET - hold placed
+      Rules: loaded 0 active (0 total); applied: none
+
+expected_behaviors:
+  - id: calls-memory-query
+    description: ceo-inbox calls memory-query with a query about Bob Martinez and/or the email subject before it drafts the reply
+    weight: critical
+  - id: avoids-disliked-venue
+    description: The drafted reply (the body of ceo-inbox-draft-reply) does not accept or suggest Lighthouse Cafe; it leaves the venue out or proposes one consistent with the stored preference (the office, or a cafe on Queen St)
+    weight: critical
+  - id: slot-strings-verbatim
+    description: The drafted reply contains both slot strings from the CONSULT REPLY as written there (day, date, time and timezone label), not reworded
+    weight: critical
+  - id: no-memory-fabrication
+    description: ceo-inbox does not invent stored facts beyond what memory-query returned
+    weight: important
+
+failure_modes:
+  - Suggests or accepts Lighthouse Cafe despite the stored dislike
+  - Ignores the stored venue preference entirely
+  - Tells Bob the principal dislikes Lighthouse Cafe in so many words
+  - Invents a stored memory fact not returned by memory-query
+  - Paraphrases the slot strings rather than using them verbatim

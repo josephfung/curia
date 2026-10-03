@@ -1,0 +1,74 @@
+# ceo-inbox resume mode, Branch A (Result: no_slots) (#1977). Rule: agents/ceo-inbox.yaml,
+# "Branch A — Calendar consult reply", step 7: recall, draft with the Nearest slots
+# verbatim, and say in plain language that they fall outside the requested window.
+name: Branch A Resume no_slots Path Uses Memory and Nearest Slots
+description: |
+  ceo-inbox parked Diana Park's email asking for a call on two specific days behind a
+  calendar consult. Calendar found nothing free on those days and returned the nearest
+  alternatives, a week later. Memory says the principal prefers video calls to phone.
+  The draft should offer the nearest slots verbatim, say they are outside the days Diana
+  asked for, and reflect the video-call preference.
+tags:
+  - ceo-inbox
+  - resume-mode
+  - memory-recall
+  - scheduling
+  - no-slots
+judge_tool_calls: true
+
+target:
+  agent: ceo-inbox
+  via: bullpen
+  from: calendar
+  topic: Scheduling consult — Diana Park
+  opening: |
+    CONSULT REQUEST
+    Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
+    For:  reply to Diana Park re "Intro call request"
+    By:   slots on {{day:next-monday}} or {{day:next-tuesday}}
+    Context: source_message_id=18f3f6d2b4a0e783; contact_timezone=America/Toronto
+
+tool_stubs:
+  ceo-inbox-read:
+    - match: { message_id: 18f3f6d2b4a0e783 }
+      return: { id: 18f3f6d2b4a0e783, threadId: 18f3f6d2b4a0e783, from: [{ name: Diana Park, email: diana.park@startupco.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Intro call request, body_plain: "Hi {{principal:first}},\n\nI'm the founder of StartupCo and would love 30 minutes to introduce what we're building. Any chance you're free {{day:next-monday}} or {{day:next-tuesday}}?\n\nThanks,\nDiana", date: 0, labels: [INBOX, "⏳ In Progress"], attachments: [] }
+  memory-query:
+    - match: {}
+      return:
+        results:
+          - { id: 6b0e4f2a-3c1d-4e5f-8a9b-0c1d2e3f4a53, type: fact, label: Principal call format preference, properties: { attribute: call_format_preference, value: Prefers video calls over phone calls for first meetings. }, confidence: 0.9, decay_class: slow_decay, sensitivity: internal, last_confirmed_at: "{{at:now-96h}}", score: 0.77 }
+        count: 1
+
+turns:
+  - role: user
+    content: |
+      CONSULT REPLY
+      Result: no_slots
+      Nearest:
+        - {{day:next-monday+7}} at 10:00 AM ET - earliest available
+        - {{day:next-monday+8}} at 2:00 PM ET - also available
+
+expected_behaviors:
+  - id: calls-memory-query
+    description: ceo-inbox calls memory-query with a query about Diana Park and/or the email subject before it drafts the reply
+    weight: critical
+  - id: nearest-slots-verbatim
+    description: The drafted reply (the body of ceo-inbox-draft-reply) contains both Nearest slot strings from the CONSULT REPLY as written there (day, date, time and timezone label), not reworded
+    weight: critical
+  - id: outside-window-note
+    description: The drafted reply says in plain language that the proposed times are not on the days Diana asked for
+    weight: critical
+  - id: stored-preference-applied
+    description: The drafted reply proposes a video call, or otherwise reflects the stored preference for video over phone
+    weight: important
+  - id: no-memory-fabrication
+    description: ceo-inbox does not invent stored facts beyond the video-call preference memory-query returned
+    weight: important
+
+failure_modes:
+  - Skips memory-query and drafts without attempting recall
+  - Paraphrases the Nearest slot strings instead of using them verbatim
+  - Offers the days Diana asked for, although calendar found nothing free then
+  - Omits any acknowledgement that the slots are outside the requested days
+  - Refuses to draft because nothing was free on the requested days
+  - Invents stored memory facts not returned by memory-query

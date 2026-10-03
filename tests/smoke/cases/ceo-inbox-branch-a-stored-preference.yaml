@@ -1,0 +1,70 @@
+# ceo-inbox resume mode, Branch A (Result: ok), reached the way production reaches it
+# (#1977): ceo-inbox parked Alice's email behind a calendar consult, and calendar's
+# CONSULT REPLY on that thread wakes it. Rule: agents/ceo-inbox.yaml, "Branch A —
+# Calendar consult reply", steps 0, 1, 5a-c and 6.
+name: Branch A Resume Uses Stored Calendly Preference
+description: |
+  ceo-inbox parked Alice Chen's scheduling email and asked the calendar specialist for
+  slots. Calendar has replied with two held slots. Memory holds the principal's Calendly
+  link, which they offer external contacts as an alternative. The draft reply should use
+  the slots verbatim and include the link.
+tags:
+  - ceo-inbox
+  - resume-mode
+  - memory-recall
+  - scheduling
+judge_tool_calls: true
+
+target:
+  agent: ceo-inbox
+  via: bullpen
+  from: calendar
+  topic: Scheduling consult — Alice Chen
+  opening: |
+    CONSULT REQUEST
+    Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
+    For:  reply to Alice Chen re "Let's find a time to connect"
+    By:   slots within the next two weeks
+    Context: source_message_id=18f3c2a9e1d7b450; contact_timezone=America/Los_Angeles
+
+tool_stubs:
+  ceo-inbox-read:
+    - match: { message_id: 18f3c2a9e1d7b450 }
+      return: { id: 18f3c2a9e1d7b450, threadId: 18f3c2a9e1d7b450, from: [{ name: Alice Chen, email: alice.chen@acmecorp.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Let's find a time to connect", body_plain: "Hi {{principal:first}},\n\nIt was great meeting you at the summit. Could we find 30 minutes in the next couple of weeks to talk about a pilot?\n\nAlice Chen\nHead of Operations, Acme Corp", date: 0, labels: [INBOX, "⏳ In Progress"], attachments: [] }
+  memory-query:
+    - match: {}
+      return:
+        results:
+          - { id: 6b0e4f2a-3c1d-4e5f-8a9b-0c1d2e3f4a51, type: fact, label: Principal scheduling link, properties: { attribute: scheduling_link, value: "https://calendly.com/curiatech-principal/30min (offered to external contacts as an alternative to proposed times)" }, confidence: 0.9, decay_class: slow_decay, sensitivity: internal, last_confirmed_at: "{{at:now-48h}}", score: 0.81 }
+        count: 1
+
+turns:
+  - role: user
+    content: |
+      CONSULT REPLY
+      Result: ok
+      Slots:
+        1. {{day:next-tuesday}} at 2:00 PM ET (11:00 AM PT their time) - hold placed
+        2. {{day:next-thursday}} at 1:00 PM ET (10:00 AM PT their time) - hold placed
+      Rules: loaded 0 active (0 total); applied: none
+
+expected_behaviors:
+  - id: calls-memory-query
+    description: ceo-inbox calls memory-query with a query about Alice Chen and/or the email subject before it drafts the reply
+    weight: critical
+  - id: includes-calendly-link
+    description: The drafted reply (the body of ceo-inbox-draft-reply) includes the Calendly link https://calendly.com/curiatech-principal/30min as an alternative or extra option
+    weight: critical
+  - id: slot-strings-verbatim
+    description: The drafted reply contains both slot strings from the CONSULT REPLY as written there (day, date, both times and the timezone labels), not reworded or converted
+    weight: critical
+  - id: voice-profile-applied
+    description: ceo-inbox calls executive-profile-get before drafting, so the draft is written in the principal's voice
+    weight: important
+
+failure_modes:
+  - Drafts the reply without mentioning the Calendly link
+  - Paraphrases or reformats the slot strings instead of using them verbatim
+  - Says the times are pending the principal's calendar, although holds are placed
+  - Fabricates memory facts not returned by memory-query
+  - Calls memory-query after ceo-inbox-draft-reply instead of before
