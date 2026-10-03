@@ -1,10 +1,9 @@
 {
   "name": "calendar-register",
   "description": "Register a Nylas calendar in the contact registry, linking it to a contact. Use this after calendar-list-calendars identifies an unregistered calendar and the principal confirms which contact it belongs to. Always requires an explicit contact_id — ask the principal who owns the calendar if unsure.",
-  "version": "1.0.3",
+  "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "high",
-  "install": { "requires_secrets": ["nylas_api_key", "ceo_nylas_grant_id"] },
   "inputs": {
     "nylas_calendar_id": "string",
     "label": "string",

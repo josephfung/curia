@@ -189,7 +189,7 @@ import { RegistryRepo } from './registry/registry-repo.js';
 import { RegistryService } from './registry/registry-service.js';
 import { BundleCascadeRepo } from './registry/bundle-cascade-repo.js';
 import {
-  bundleMembersFromDiscovery, loadRegistryDefaults, reconcileRegistries, requiredSecretsFromDiscovery,
+  bundleMembersFromDiscovery, loadRegistryDefaults, reconcileRegistries, toolManifestsFromDiscovery,
   type RegistryDefaults,
 } from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
@@ -1101,13 +1101,19 @@ async function main(): Promise<void> {
       toolRepo: toolRegistryRepo,
       agentRepo: agentRegistryRepo,
       skillRepo: skillRegistryRepo,
-      toolDiscoveryNames: new Set(toolDiscovery.map(d => d.name)),
+      toolManifests: toolManifestsFromDiscovery(toolDiscovery),
       agentDiscoveryNames: new Set(agentDiscovery.map(d => d.name)),
       skillDiscoveryNames: new Set(skillBundleDiscovery.map(d => d.name)),
-      // Enabled bundles enroll their member tools; requires_secrets gates which (#1974).
+      // Enabled bundles enroll their member tools, subject to each tool's own gates (#1974).
       bundleMembers: bundleMembersFromDiscovery(skillBundleDiscovery),
-      toolRequiredSecrets: requiredSecretsFromDiscovery(toolDiscovery),
       secrets: secretsService,
+      // Calendar tools are held back until the calendar client exists (Nylas key + the
+      // principal grant, resolved above), so they don't sit in contacts/meeting-debrief
+      // tool lists failing closed. Gated on the BUILT client rather than vault key names
+      // because the key resolves from three sources (channel key, env, legacy key).
+      // entityMemory is deliberately not listed: memory-*/setup-* have always been enabled
+      // without OpenAI and fail closed; the KG relationship tools gate on openai_api_key.
+      unavailableCapabilities: new Set(nylasCalendarClient ? [] : ['nylasCalendarClient']),
       defaults: registryDefaults,
       logger,
     });

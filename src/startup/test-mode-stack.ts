@@ -66,6 +66,7 @@ import { resolveBypassLadder } from '../autonomy/effective-standing.js';
 import { applyChannelVaultSecrets } from '../channels/apply-channel-vault-secrets.js';
 import { EmailAccountsRepo } from '../channels/email/email-accounts-repo.js';
 import { resolveEmailAccounts } from '../channels/email/resolve-email-accounts.js';
+import { resolvePrincipalCalendarGrant } from '../channels/calendar/resolve-calendar-grant.js';
 import { ContactService } from '../contacts/contact-service.js';
 import { ContactResolver } from '../contacts/contact-resolver.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
@@ -81,7 +82,7 @@ import { KnowledgeGraphStore } from '../memory/knowledge-graph.js';
 import { MemoryValidator } from '../memory/validation.js';
 import { WorkingMemory } from '../memory/working-memory.js';
 import {
-  bundleMembersFromDiscovery, loadRegistryDefaults, reconcileRegistries, requiredSecretsFromDiscovery,
+  bundleMembersFromDiscovery, loadRegistryDefaults, reconcileRegistries, toolManifestsFromDiscovery,
 } from '../registry/reconcile.js';
 import { RegistryRepo } from '../registry/registry-repo.js';
 import type { IRegistryRepo, RegistryRow } from '../registry/types.js';
@@ -336,9 +337,10 @@ class DryRunRegistryRepo implements IRegistryRepo {
  */
 async function productionEnabledNames(
   pool: DbPool,
-  discovered: { tools: Set<string>; skills: Set<string>; agents: Set<string> },
+  discovered: { skills: Set<string>; agents: Set<string> },
   discovery: { tools: ToolDiscovery[]; skills: SkillDiscovery[] },
   vault: SecretsService | undefined,
+  calendarConfigured: boolean,
   logger: Logger,
 ): Promise<{ tool: Set<string>; skill: Set<string>; agent: Set<string> }> {
   const toolRepo = new DryRunRegistryRepo(new RegistryRepo(pool, 'tool_registry'));
@@ -348,14 +350,15 @@ async function productionEnabledNames(
     toolRepo,
     agentRepo,
     skillRepo,
-    toolDiscoveryNames: discovered.tools,
+    toolManifests: toolManifestsFromDiscovery(discovery.tools),
     agentDiscoveryNames: discovered.agents,
     skillDiscoveryNames: discovered.skills,
     bundleMembers: bundleMembersFromDiscovery(discovery.skills),
-    toolRequiredSecrets: requiredSecretsFromDiscovery(discovery.tools),
-    // No vault (offline, no SECRET_ENCRYPTION_KEY): gated tools stay out, fail closed —
-    // one more way the prompt may differ from production, already warned about above.
+    // No vault (offline, no SECRET_ENCRYPTION_KEY): tools declaring requires_secrets stay
+    // out, fail closed. The caller adds that gap to the stack's warnings.
     secrets: vault,
+    // Production's condition for building the calendar client, without building one.
+    unavailableCapabilities: new Set(calendarConfigured ? [] : ['nylasCalendarClient']),
     defaults: loadRegistryDefaults(path.join(REPO_ROOT, 'config', 'registry-defaults.yaml')),
     logger,
   });
@@ -472,6 +475,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     // loadEncryptionKey() throws for it in every mode.
     let vault: SecretsService | undefined;
     let encryptionKey: Buffer | undefined;
+    // Whether production would build its calendar client (Nylas key + principal grant).
+    // Decides if reconcile holds back the calendar tools (#1974); no client is built here.
+    let calendarConfigured = false;
     if (process.env.SECRET_ENCRYPTION_KEY) {
       encryptionKey = loadEncryptionKey();
     } else if (llmMode === 'live') {
@@ -479,7 +485,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     } else {
       warnings.push(
         'SECRET_ENCRYPTION_KEY is not set — no vault: the Signal number is missing from Your Contact ' +
-        'Details and email addresses skip the grant check, so the prompt may differ from production.',
+        'Details, email addresses skip the grant check, and tools not yet enrolled that need a vault ' +
+        'secret or the calendar stay off, so the prompt may differ from production.',
       );
     }
     if (encryptionKey) {
@@ -494,6 +501,15 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       openrouterApiKey = resolved.openrouterApiKey;
       openaiApiKey = resolved.openaiApiKey;
       signalPhoneNumber = resolved.signalPhoneNumber;
+      if (resolved.nylasApiKey) {
+        try {
+          calendarConfigured = (await resolvePrincipalCalendarGrant(vault)) !== undefined;
+        } catch (err) {
+          // Production logs this and boots without calendar; mirror that rather than fail.
+          logger.error({ err }, 'test-mode: failed to read ceo_nylas_grant_id; treating calendar as unconfigured');
+          warnings.push('Could not read ceo_nylas_grant_id from the vault — calendar tools not yet enrolled stay off.');
+        }
+      }
     }
 
     const autonomyService = new AutonomyService(pool, logger);
@@ -581,7 +597,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       agents: new Set(agentDiscovery.map(d => d.name)),
     };
     const enabled = (options.enablement ?? 'registry') === 'registry'
-      ? await productionEnabledNames(pool, discovered, { tools: toolDiscovery, skills: skillDiscovery }, vault, logger)
+      ? await productionEnabledNames(
+        pool, discovered, { tools: toolDiscovery, skills: skillDiscovery }, vault, calendarConfigured, logger,
+      )
       : { tool: discovered.tools, skill: discovered.skills, agent: discovered.agents };
 
     const toolRegistry = new ToolRegistry(config.timezone);

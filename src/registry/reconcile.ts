@@ -14,10 +14,8 @@
 // repeated under registry-defaults.yaml `tools:`, and a member added to SKILL.md but not
 // to that list (doc-place, setup-status, ...) never got a row and never loaded.
 //
-// Declared gates still apply: a tool whose manifest declares install.requires_secrets is
-// only enrolled once every one of those keys exists in the vault — the same check an
-// admin enable runs (RegistryService.assertSecretsConfigured). A gated tool that is
-// skipped gets NO row, so a later boot enrolls it once its credentials are configured.
+// Every tool enrollment passes the gates the tool itself declares (ToolGate below). A
+// tool held back by a gate gets NO row, so a later boot enrolls it once the gate clears.
 
 import * as fs from 'node:fs';
 import * as yaml from 'js-yaml';
@@ -52,88 +50,137 @@ export function loadRegistryDefaults(defaultsPath: string): RegistryDefaults {
   return candidate;
 }
 
-/** Bundle name → member tool names, from on-disk SKILL.md discovery. A bundle whose
- *  SKILL.md failed to parse is absent: its members can't be known, so none are expanded. */
+/** Bundle discovery as reconcile sees it: member tools, or `null` when the SKILL.md
+ *  failed to parse (its members can't be known, so none are expanded). */
+export type BundleMembers = ReadonlyMap<string, readonly string[] | null>;
+
 export function bundleMembersFromDiscovery(
   discovery: ReadonlyArray<{ name: string; metadata: { tools: string[] } | null }>,
-): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const d of discovery) {
-    if (d.metadata) out.set(d.name, d.metadata.tools);
-  }
-  return out;
+): Map<string, string[] | null> {
+  return new Map(discovery.map(d => [d.name, d.metadata ? d.metadata.tools : null]));
 }
 
-/** Tool name → its declared install.requires_secrets, from on-disk tool discovery.
- *  Tools that declare none are absent. A tool whose manifest failed to parse is absent
- *  too, and so contributes no gate: an enabled tool with an unparsable manifest fails
- *  boot at load time (loadToolsFromDirectory), so it can never go live without its
- *  credential — the same reasoning as RegistryService.assertBundleSecretsConfigured. */
-export function requiredSecretsFromDiscovery(
-  discovery: ReadonlyArray<{ name: string; metadata: { requiresSecrets?: string[] } | null }>,
-): Map<string, string[]> {
-  const out = new Map<string, string[]>();
-  for (const d of discovery) {
-    const required = d.metadata?.requiresSecrets ?? [];
-    if (required.length > 0) out.set(d.name, required);
-  }
-  return out;
+/** What a tool's manifest declares that bears on whether it may be enrolled. */
+export interface ToolGateInfo {
+  /** install.requires_secrets — vault keys that must all exist. */
+  requiresSecrets: readonly string[];
+  /** Declared capabilities — checked against ReconcileDeps.unavailableCapabilities. */
+  capabilities: readonly string[];
+}
+
+/** Every on-disk tool → its gate info, or `null` when its manifest failed to parse. */
+export type ToolManifests = ReadonlyMap<string, ToolGateInfo | null>;
+
+export function toolManifestsFromDiscovery(
+  discovery: ReadonlyArray<{
+    name: string;
+    metadata: { requiresSecrets?: string[]; capabilities?: string[] } | null;
+  }>,
+): Map<string, ToolGateInfo | null> {
+  return new Map(discovery.map(d => [
+    d.name,
+    d.metadata
+      ? { requiresSecrets: d.metadata.requiresSecrets ?? [], capabilities: d.metadata.capabilities ?? [] }
+      : null,
+  ]));
 }
 
 export interface ReconcileDeps {
   toolRepo: IRegistryRepo;
   agentRepo: IRegistryRepo;
   skillRepo?: IRegistryRepo;
-  toolDiscoveryNames: Set<string>;
+  /** Every tool on disk — see toolManifestsFromDiscovery(). Carries each tool's gates, so
+   *  a caller can't enroll gated tools ungated by forgetting a separate argument. */
+  toolManifests: ToolManifests;
   agentDiscoveryNames: Set<string>;
   skillDiscoveryNames?: Set<string>;
-  /** Member tools of each on-disk bundle — see bundleMembersFromDiscovery(). Required so a
-   *  caller can't silently skip bundle expansion by forgetting to pass it. */
-  bundleMembers: ReadonlyMap<string, readonly string[]>;
-  /** Declared install.requires_secrets per tool — see requiredSecretsFromDiscovery().
-   *  Required for the same reason: omitting it would enroll gated tools ungated. */
-  toolRequiredSecrets: ReadonlyMap<string, readonly string[]>;
+  /** Member tools of each on-disk bundle — see bundleMembersFromDiscovery(). */
+  bundleMembers: BundleMembers;
   /** Vault key lister for the requires_secrets gate. `undefined` means no vault: every
-   *  gated tool is skipped (fail closed), never enrolled unverified. */
+   *  tool that declares secrets is held back (fail closed), never enrolled unverified. */
   secrets: SecretsLister | undefined;
+  /** Capabilities whose backing service this boot did NOT build because its integration
+   *  isn't configured (e.g. nylasCalendarClient without a Nylas key + principal grant).
+   *  A tool declaring one is held back: it would only fail closed at call time while
+   *  sitting in agents' tool lists. Only list integration-optional services here. */
+  unavailableCapabilities: ReadonlySet<string>;
   defaults: RegistryDefaults;
   logger: Logger;
 }
 
-/** Lazily lists vault keys once per reconcile pass, and only if some candidate tool
- *  actually declares a requirement — most boots never need the round-trip. */
-class SecretsGate {
+/**
+ * Decides whether a tool may be enrolled, from what its own manifest declares:
+ *
+ * - An unparsable manifest is refused. RegistryService.assertInstallable refuses it too,
+ *   and an enabled row for it would make loadToolsFromDirectory fail every boot.
+ * - install.requires_secrets must all be in the vault — the same check an admin enable
+ *   runs (RegistryService.assertSecretsConfigured). Vault keys only: env vars and user.*
+ *   keys are not consulted, matching the admin path.
+ * - No declared capability may be in unavailableCapabilities.
+ *
+ * Each tool is judged once per pass, so a tool in two bundles logs once.
+ */
+class ToolGate {
   private configured: Promise<Set<string>> | undefined;
+  private readonly verdicts = new Map<string, Promise<boolean>>();
 
   constructor(
-    private readonly required: ReadonlyMap<string, readonly string[]>,
+    private readonly manifests: ToolManifests,
     private readonly secrets: SecretsLister | undefined,
+    private readonly unavailableCapabilities: ReadonlySet<string>,
     private readonly logger: Logger,
   ) {}
 
-  /** True when `tool` may be enrolled: it declares no secrets, or all of them are configured. */
-  async allows(tool: string, via: string): Promise<boolean> {
-    const required = this.required.get(tool) ?? [];
-    if (required.length === 0) return true;
+  allows(tool: string, via: string): Promise<boolean> {
+    let verdict = this.verdicts.get(tool);
+    if (!verdict) {
+      verdict = this.judge(tool, via);
+      this.verdicts.set(tool, verdict);
+    }
+    return verdict;
+  }
 
-    if (!this.secrets) {
-      this.logger.warn(
-        { tool, via, requiredSecrets: required },
-        'registry: tool requires secrets but no vault is available; not enrolled',
+  private async judge(tool: string, via: string): Promise<boolean> {
+    const info = this.manifests.get(tool);
+    if (info === null || info === undefined) {
+      // error, not warn: a broken manifest is a bug someone has to fix, and until then the
+      // tool is silently absent from every agent that pins it.
+      this.logger.error(
+        { tool, via },
+        'registry: tool manifest is missing or failed to parse; not enrolled (fix tool.json — the next boot enrolls it)',
       );
       return false;
     }
-    // A vault read failure propagates: boot treats reconciliation failure as fatal, and
-    // guessing either way here would be worse (enroll unverified, or silently drop).
+
+    const unavailable = info.capabilities.filter(c => this.unavailableCapabilities.has(c));
+    if (unavailable.length > 0) {
+      // info, not warn: an unconfigured optional integration is a normal state, and pin
+      // resolution already warns per agent when a pinned tool isn't loaded.
+      this.logger.info(
+        { tool, via, unavailableCapabilities: unavailable },
+        'registry: tool not enrolled until its integration is configured',
+      );
+      return false;
+    }
+
+    if (info.requiresSecrets.length === 0) return true;
+    if (!this.secrets) {
+      this.logger.warn(
+        { tool, via, requiredVaultKeys: info.requiresSecrets },
+        'registry: tool requires vault secrets but no vault is available; not enrolled',
+      );
+      return false;
+    }
+    // Listed lazily, once per pass, only if some candidate declares secrets. A vault read
+    // failure propagates: boot treats reconciliation failure as fatal, and guessing either
+    // way would be worse (enroll unverified, or silently drop).
     this.configured ??= this.secrets.list().then(names => new Set(names));
     const configured = await this.configured;
-    const missing = required.filter(s => !configured.has(s));
+    const missing = info.requiresSecrets.filter(s => !configured.has(s));
     if (missing.length > 0) {
-      // info, not warn: an unconfigured optional integration (Tavily, calendar, ...) is a
-      // normal state. No row is written, so the next boot after configuring it enrolls it.
       this.logger.info(
-        { tool, via, missingSecrets: missing },
-        'registry: tool not enrolled until its required secret(s) are configured',
+        { tool, via, missingVaultKeys: missing },
+        'registry: tool not enrolled until its required vault key(s) are set (env vars and user.* keys are not consulted)',
       );
       return false;
     }
@@ -144,11 +191,12 @@ class SecretsGate {
 export async function reconcileRegistries(deps: ReconcileDeps): Promise<void> {
   const {
     toolRepo, agentRepo, skillRepo,
-    toolDiscoveryNames, agentDiscoveryNames, skillDiscoveryNames,
-    bundleMembers, toolRequiredSecrets, secrets,
+    toolManifests, agentDiscoveryNames, skillDiscoveryNames,
+    bundleMembers, secrets, unavailableCapabilities,
     defaults, logger,
   } = deps;
-  const gate = new SecretsGate(toolRequiredSecrets, secrets, logger);
+  const gate = new ToolGate(toolManifests, secrets, unavailableCapabilities, logger);
+  const toolDiscoveryNames = new Set(toolManifests.keys());
 
   await reconcileOne('tool', toolRepo, toolDiscoveryNames, defaults.tools, logger, gate);
   await reconcileOne('agent', agentRepo, agentDiscoveryNames, defaults.agents, logger);
@@ -162,6 +210,8 @@ export async function reconcileRegistries(deps: ReconcileDeps): Promise<void> {
     );
     // After the skill pass, so bundles enrolled just now are expanded on this same boot.
     await expandEnabledBundles(skillRepo, toolRepo, toolDiscoveryNames, bundleMembers, logger, gate);
+  } else if (bundleMembers.size > 0) {
+    logger.warn('registry: no skill_registry repo wired; bundle member tools were not expanded');
   }
 }
 
@@ -171,7 +221,7 @@ async function reconcileOne(
   discoveryNames: Set<string>,
   coreNames: string[],
   logger: Logger,
-  gate?: SecretsGate,
+  gate?: ToolGate,
 ): Promise<void> {
   const existing = new Set((await repo.listRows()).map(r => r.name));
 
@@ -201,14 +251,16 @@ async function reconcileOne(
  * matching the admin's choice for the bundle as a whole.
  *
  * Existing rows are never touched, so an admin who disabled one member keeps it disabled.
+ * Uninstalling (deleting the row of) a member of an enabled bundle would be undone here,
+ * which is why RegistryService.uninstall refuses that and points at disable.
  */
 async function expandEnabledBundles(
   skillRepo: IRegistryRepo,
   toolRepo: IRegistryRepo,
   toolDiscoveryNames: Set<string>,
-  bundleMembers: ReadonlyMap<string, readonly string[]>,
+  bundleMembers: BundleMembers,
   logger: Logger,
-  gate: SecretsGate,
+  gate: ToolGate,
 ): Promise<void> {
   const enabledBundles = (await skillRepo.listRows()).filter(r => r.enabled).map(r => r.name);
   // Re-read: the tools: pass above may have just inserted rows.
@@ -216,9 +268,15 @@ async function expandEnabledBundles(
 
   for (const bundle of enabledBundles) {
     const members = bundleMembers.get(bundle);
-    // No entry = ghost bundle or unparsable SKILL.md. Boot already warns about ghosts,
-    // and an unparsable bundle never loads, so there is nothing safe to expand.
-    if (!members) continue;
+    if (!members) {
+      // undefined = no SKILL.md on disk (ghost); null = SKILL.md failed to parse. Either
+      // way the member list is unknown, so nothing can be expanded safely.
+      logger.warn(
+        { bundle, reason: members === null ? 'SKILL.md failed to parse' : 'no SKILL.md on disk' },
+        'registry: enabled bundle has no readable member list; member tools not expanded',
+      );
+      continue;
+    }
 
     for (const tool of members) {
       if (existing.has(tool)) continue; // respect any existing admin state

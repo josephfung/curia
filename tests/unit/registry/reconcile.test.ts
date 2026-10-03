@@ -58,20 +58,35 @@ describe('reconcileRegistries', () => {
       members?: Record<string, string[]>;
       /** tool → install.requires_secrets */
       requires?: Record<string, string[]>;
+      /** tool → declared capabilities */
+      caps?: Record<string, string[]>;
+      /** tools whose manifest failed to parse */
+      broken?: string[];
+      /** bundles whose SKILL.md failed to parse */
+      brokenBundles?: string[];
     },
     // Vault keys; `undefined` = no vault at all.
     vault: string[] | undefined = [],
+    unavailableCapabilities: string[] = [],
   ) =>
     reconcileRegistries({
       toolRepo,
       agentRepo,
       skillRepo,
-      toolDiscoveryNames: new Set(onDisk.tools),
+      toolManifests: new Map(onDisk.tools.map(t => [
+        t,
+        onDisk.broken?.includes(t)
+          ? null
+          : { requiresSecrets: onDisk.requires?.[t] ?? [], capabilities: onDisk.caps?.[t] ?? [] },
+      ])),
       agentDiscoveryNames: new Set(onDisk.agents),
       skillDiscoveryNames: new Set(onDisk.skills ?? []),
-      bundleMembers: new Map(Object.entries(onDisk.members ?? {})),
-      toolRequiredSecrets: new Map(Object.entries(onDisk.requires ?? {})),
+      bundleMembers: new Map<string, string[] | null>([
+        ...Object.entries(onDisk.members ?? {}),
+        ...(onDisk.brokenBundles ?? []).map((b): [string, null] => [b, null]),
+      ]),
       secrets: vault === undefined ? undefined : { list: async () => { vaultLists++; return vault; } },
+      unavailableCapabilities: new Set(unavailableCapabilities),
       defaults,
       logger,
     });
@@ -178,6 +193,22 @@ describe('reconcileRegistries', () => {
       await run({ tools: [], agents: [], skills: ['documents'] }, { ...disk, members: {} });
       expect((await skillRepo.getRow('documents'))?.enabled).toBe(true);
       expect(await toolRepo.listRows()).toEqual([]);
+      await run({ tools: [], agents: [], skills: ['documents'] }, { ...disk, members: {}, brokenBundles: ['documents'] });
+      expect(await toolRepo.listRows()).toEqual([]);
+    });
+
+    it('refuses a member whose tool.json failed to parse — no row, so boot does not crash-loop', async () => {
+      await run({ tools: [], agents: [], skills: ['documents'] }, { ...disk, broken: ['doc-place'] });
+      expect((await toolRepo.getRow('doc-read'))?.enabled).toBe(true);
+      expect(await toolRepo.getRow('doc-place')).toBeNull();
+      // Once the manifest is fixed, the next boot enrolls it.
+      await run({ tools: [], agents: [], skills: ['documents'] }, disk);
+      expect((await toolRepo.getRow('doc-place'))?.enabled).toBe(true);
+    });
+
+    it('refuses an unparsable standalone default too', async () => {
+      await run({ tools: ['doc-place'], agents: [] }, { ...disk, broken: ['doc-place'] });
+      expect(await toolRepo.getRow('doc-place')).toBeNull();
     });
 
     it('is idempotent', async () => {
@@ -245,6 +276,28 @@ describe('reconcileRegistries', () => {
         [],
       );
       expect(vaultLists).toBe(1);
+    });
+  });
+  describe('unavailable-capability gate (#1974)', () => {
+    const disk = {
+      tools: ['calendar-list-events', 'calendar-register'],
+      agents: [],
+      skills: ['calendar'],
+      members: { calendar: ['calendar-list-events', 'calendar-register'] },
+      caps: { 'calendar-list-events': ['nylasCalendarClient'], 'calendar-register': ['entityMemory'] },
+    };
+
+    it('holds back a member whose declared capability this boot did not build', async () => {
+      await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], ['nylasCalendarClient']);
+      expect(await toolRepo.getRow('calendar-list-events')).toBeNull();
+      // A capability that IS available doesn't hold anything back.
+      expect((await toolRepo.getRow('calendar-register'))?.enabled).toBe(true);
+    });
+
+    it('enrolls it on a later boot once the integration is configured', async () => {
+      await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], ['nylasCalendarClient']);
+      await run({ tools: [], agents: [], skills: ['calendar'] }, disk, [], []);
+      expect((await toolRepo.getRow('calendar-list-events'))?.enabled).toBe(true);
     });
   });
 });
