@@ -8,6 +8,12 @@
 // The delegate brief addresses the specialist and can carry contact ids and "the
 // principal". The specialist's decline prose addresses the coordinator and names
 // tools, grants and secrets. Neither reaches the model's prompt or the fallback.
+//
+// The reply speaks for Curia as one assistant and does not name the specialist
+// (#1975). Which agent the work was handed to is internal; the principal asked
+// Curia, and "the calendar specialist declined" reads as a peek behind the
+// curtain. The display name is still passed in, so a draft that names the
+// specialist anyway can be caught.
 
 import type { Message } from './llm/provider.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
@@ -15,6 +21,7 @@ import { containsRawAgentId } from './agent-display-name.js';
 import { UUID_PATTERN } from '../util/uuid.js';
 
 export interface DelegationFailureReplyInput {
+  /** The specialist's principal-facing label. Never written into the reply; a draft containing it is rejected. */
   displayName: string;
   agentId: string;
   reason: string;
@@ -36,6 +43,7 @@ export type DraftRejection =
   | 'empty'
   | 'no_reply_block'
   | 'agent_id'
+  | 'names_specialist'
   | 'protocol'
   | 'prompt_echo'
   | 'uuid'
@@ -44,14 +52,12 @@ export type DraftRejection =
 // The instruction lines of the narration prompt. Kept apart from the situation lines
 // (what failed, whether a follow-up was logged) because a good reply restates those
 // facts, while it never has a reason to repeat an instruction. The echo check runs
-// against these lines only.
-const REFER_TO_SPECIALIST = 'Refer to the specialist only as';
+// against these lines only. The situation lines avoid "specialist" and "delegated"
+// so the model is not handed the words it is told not to use.
 const NARRATION_INSTRUCTIONS = [
-  'A delegated task failed. Write the one message the principal will read.',
-  'Address them directly as "you".',
-  // Completed with the display name when the prompt is built. Its fixed part is
-  // what the #1975 draft echoed, so it is shingled like the other lines.
-  REFER_TO_SPECIALIST,
+  'Something you were doing for the principal failed. Write the one message they will read.',
+  'Address them directly as "you", and speak for yourself as "I".',
+  'Do not mention specialists, other agents, or handing the work off.',
   'Do not use internal agent ids, tool names, IDs, or protocol markers.',
   'Say briefly, in your own words, what you were trying to do for them.',
   'Write it as a fresh sentence about this request. Do not reuse a stock line.',
@@ -61,17 +67,16 @@ const NARRATION_INSTRUCTIONS = [
 // Every situation and follow-up line the prompt can carry. Listed in one place so
 // the topic check can discount their words (see PROMPT_VOCABULARY).
 const SITUATION = {
-  timeout: 'The specialist did not answer in time.',
-  timeoutMaybeDone: 'The specialist did not answer in time. The work may still be finishing in the background.',
-  blocked: 'The specialist was blocked and could not finish.',
-  declined: 'The specialist declined the task.',
-  other: 'The specialist was not able to finish the task.',
+  timeout: 'It did not get done in time.',
+  timeoutMaybeDone: 'It did not get done in time. The work may still be finishing in the background.',
+  blocked: 'It was blocked and could not be finished.',
+  declined: 'It was turned down and will not be done as asked.',
+  other: 'It could not be finished.',
   escalated: 'A follow-up task has already been logged.',
   notEscalated: 'A follow-up task could not be logged.',
 } as const;
 
 export function delegationFailureNarrationPrompt(input: {
-  displayName: string;
   reason: string;
   possiblySucceeded?: boolean;
   escalated: boolean;
@@ -79,12 +84,9 @@ export function delegationFailureNarrationPrompt(input: {
 }): string {
   const situation = describeFailure(input.reason, input.declined, input.possiblySucceeded);
   const followUp = input.escalated ? SITUATION.escalated : SITUATION.notEscalated;
-  return NARRATION_INSTRUCTIONS.flatMap((line) => {
-    if (line === REFER_TO_SPECIALIST) return [`${line} "${input.displayName}".`];
-    // The situation sits just before the closing format line.
-    if (line === NARRATION_INSTRUCTIONS.at(-1)) return [situation, followUp, line];
-    return [line];
-  }).join('\n');
+  // The situation sits just before the closing format line.
+  const format = NARRATION_INSTRUCTIONS.at(-1)!;
+  return [...NARRATION_INSTRUCTIONS.slice(0, -1), situation, followUp, format].join('\n');
 }
 
 function describeFailure(reason: string, declined: boolean | undefined, possiblySucceeded: boolean | undefined): string {
@@ -95,26 +97,25 @@ function describeFailure(reason: string, declined: boolean | undefined, possibly
 }
 
 /**
- * Deterministic reply. It names the specialist and the kind of failure, and
- * deliberately says nothing about the request: the only request text on hand is
- * the brief (written for the specialist) or the turn content (which may be a
- * scheduler payload or carry a channel preamble). Quoting either is how #1975
- * leaked. The model path is what names the request.
+ * Deterministic reply, in the first person. It states the kind of failure and
+ * deliberately says nothing about the request or the specialist: the only
+ * request text on hand is the brief (written for the specialist) or the turn
+ * content (which may be a scheduler payload or carry a channel preamble).
+ * Quoting either is how #1975 leaked. The model path is what names the request.
  */
 export function formatDelegationFailureFallback(
   input: Omit<DelegationFailureReplyInput, 'modelText'>,
 ): string {
-  const who = input.displayName;
   const parts: string[] = [];
   if (input.reason === 'timeout') {
-    parts.push(`I didn't hear back from the ${who} in time, so I couldn't finish that.`);
+    parts.push("I couldn't get that done in time.");
     if (input.possiblySucceeded) parts.push('It may still be completing in the background.');
   } else if (input.reason === 'blocked') {
-    parts.push(`The ${who} was blocked and couldn't finish that.`);
+    parts.push('I ran into a block and couldn\'t finish that.');
   } else if (input.declined === true || input.reason === SPECIALIST_DECLINE_REASON) {
-    parts.push(`The ${who} declined that request, so I couldn't finish it.`);
+    parts.push("I wasn't able to take that one on.");
   } else {
-    parts.push(`The ${who} wasn't able to finish that.`);
+    parts.push("I wasn't able to finish that.");
   }
   if (input.escalated) {
     parts.push("I've logged a follow-up task to review the outcome.");
@@ -175,13 +176,20 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   const reply = extractReplyBlock(raw);
   if (reply === null) return 'no_reply_block';
   if (containsRawAgentId(reply, input.agentId)) return 'agent_id';
+  if (namesSpecialist(reply, input.displayName)) return 'names_specialist';
   if (reply.includes('_curia_protocol')) return 'protocol';
   if (echoesInstructions(reply)) return 'prompt_echo';
   // Scheduler payloads carry the principal's contact id (#1800), and the model
   // sees the payload as the user turn. No reply to the principal needs a UUID.
   if (UUID_IN_TEXT.test(reply)) return 'uuid';
-  if (!sharesTopic(reply, input.request, input.displayName)) return 'off_topic';
+  if (!sharesTopic(reply, input.request)) return 'off_topic';
   return { reply };
+}
+
+/** The exact label the runtime would have used for the specialist. An empty label matches nothing. */
+function namesSpecialist(reply: string, displayName: string): boolean {
+  const name = displayName.trim().toLowerCase();
+  return name.length > 0 && reply.toLowerCase().includes(name);
 }
 
 // Unanchored and unbounded: the UUID can sit anywhere, including glued to an id
@@ -242,18 +250,15 @@ function isTopicWord(word: string): boolean {
  * True when the reply shares at least one content word with the request.
  *
  * Replaces the verbatim-quote check (#1975): the reply names the request in its
- * own words, so this asks only that it is about the same thing. The specialist's
- * display name is removed from the reply first. Otherwise "calendar specialist"
- * would satisfy a request about the calendar with a stock line. A request with no
- * content words cannot be checked, so any reply passes.
+ * own words, so this asks only that it is about the same thing. A request with no
+ * content words cannot be checked, so any reply passes. (A draft that names the
+ * specialist is rejected before this runs, so "calendar specialist" cannot stand
+ * in for a request about the calendar.)
  */
-function sharesTopic(reply: string, request: string, displayName: string): boolean {
+function sharesTopic(reply: string, request: string): boolean {
   const topic = words(request).filter((w) => isTopicWord(w));
   if (topic.length === 0) return true;
-  // Guard the split: an empty name would split the reply into single characters.
-  const name = displayName.trim().toLowerCase();
-  const withoutName = name.length > 0 ? reply.toLowerCase().split(name).join(' ') : reply.toLowerCase();
-  const replyWords = words(withoutName).filter((r) => isTopicWord(r));
+  const replyWords = words(reply).filter((r) => isTopicWord(r));
   return topic.some((w) => {
     const stem = w.slice(0, TOPIC_PREFIX);
     // Either direction: "briefings" in the reply for "briefing", or "trim" for "trimmed".
