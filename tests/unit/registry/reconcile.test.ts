@@ -50,7 +50,17 @@ describe('reconcileRegistries', () => {
 
   const run = (
     defaults: { tools: string[]; agents: string[]; skills?: string[] },
-    onDisk: { tools: string[]; agents: string[]; skills?: string[] },
+    onDisk: {
+      tools: string[];
+      agents: string[];
+      skills?: string[];
+      /** bundle → member tools (SKILL.md tools:) */
+      members?: Record<string, string[]>;
+      /** tool → install.requires_secrets */
+      requires?: Record<string, string[]>;
+    },
+    // Vault keys; `undefined` = no vault at all.
+    vault: string[] | undefined = [],
   ) =>
     reconcileRegistries({
       toolRepo,
@@ -59,9 +69,14 @@ describe('reconcileRegistries', () => {
       toolDiscoveryNames: new Set(onDisk.tools),
       agentDiscoveryNames: new Set(onDisk.agents),
       skillDiscoveryNames: new Set(onDisk.skills ?? []),
+      bundleMembers: new Map(Object.entries(onDisk.members ?? {})),
+      toolRequiredSecrets: new Map(Object.entries(onDisk.requires ?? {})),
+      secrets: vault === undefined ? undefined : { list: async () => { vaultLists++; return vault; } },
       defaults,
       logger,
     });
+  let vaultLists = 0;
+  beforeEach(() => { vaultLists = 0; });
 
   it('enrolls a core item with no row as enabled', async () => {
     await run({ tools: ['core-skill'], agents: [] }, { tools: ['core-skill', 'other'], agents: [] });
@@ -108,5 +123,128 @@ describe('reconcileRegistries', () => {
     );
     expect((await skillRepo.getRow('tasks'))?.enabled).toBe(true);
     expect(await skillRepo.getRow('other-bundle')).toBeNull();
+  });
+  describe('bundle expansion (#1974)', () => {
+    const disk = {
+      tools: ['doc-read', 'doc-place', 'web-fetch', 'web-search', 'inbox-list'],
+      agents: [],
+      skills: ['documents', 'web', 'inbox'],
+      members: {
+        documents: ['doc-read', 'doc-place'],
+        web: ['web-fetch', 'web-search'],
+        inbox: ['inbox-list'],
+      },
+      requires: { 'web-search': ['tavily_api_key'] },
+    };
+
+    it('enrolls every member of a default bundle without listing it under tools:', async () => {
+      await run({ tools: [], agents: [], skills: ['documents'] }, disk);
+      expect((await toolRepo.getRow('doc-read'))?.enabled).toBe(true);
+      expect((await toolRepo.getRow('doc-place'))?.enabledBy).toBe('reconciliation');
+      // Members of a bundle with no row stay uninstalled.
+      expect(await toolRepo.getRow('inbox-list')).toBeNull();
+    });
+
+    it('expands an admin-enabled bundle that is not a default', async () => {
+      await skillRepo.install('inbox', 'web-app');
+      await skillRepo.enable('inbox', 'web-app');
+      await run({ tools: [], agents: [], skills: [] }, disk);
+      expect((await toolRepo.getRow('inbox-list'))?.enabled).toBe(true);
+    });
+
+    it('does not expand a bundle an admin disabled, even a default one', async () => {
+      await skillRepo.install('documents', 'web-app'); // row present, enabled=false
+      await run({ tools: [], agents: [], skills: ['documents'] }, disk);
+      expect(await toolRepo.getRow('doc-place')).toBeNull();
+    });
+
+    it('never changes an existing member row', async () => {
+      await toolRepo.install('doc-place', 'web-app'); // admin left it disabled
+      await run({ tools: [], agents: [], skills: ['documents'] }, disk);
+      expect((await toolRepo.getRow('doc-place'))?.enabled).toBe(false);
+      expect((await toolRepo.getRow('doc-read'))?.enabled).toBe(true);
+    });
+
+    it('skips a member that is not on disk without throwing', async () => {
+      await run(
+        { tools: [], agents: [], skills: ['documents'] },
+        { ...disk, members: { documents: ['doc-read', 'doc-gone'] } },
+      );
+      expect((await toolRepo.getRow('doc-read'))?.enabled).toBe(true);
+      expect(await toolRepo.getRow('doc-gone')).toBeNull();
+    });
+
+    it('skips a bundle whose members are unknown (ghost or unparsable SKILL.md)', async () => {
+      await run({ tools: [], agents: [], skills: ['documents'] }, { ...disk, members: {} });
+      expect((await skillRepo.getRow('documents'))?.enabled).toBe(true);
+      expect(await toolRepo.listRows()).toEqual([]);
+    });
+
+    it('is idempotent', async () => {
+      await run({ tools: [], agents: [], skills: ['documents', 'web'] }, disk, ['tavily_api_key']);
+      const first = await toolRepo.listRows();
+      await run({ tools: [], agents: [], skills: ['documents', 'web'] }, disk, ['tavily_api_key']);
+      expect(await toolRepo.listRows()).toEqual(first);
+    });
+  });
+
+  describe('requires_secrets gate (#1974)', () => {
+    const disk = {
+      tools: ['web-fetch', 'web-search'],
+      agents: [],
+      skills: ['web'],
+      members: { web: ['web-fetch', 'web-search'] },
+      requires: { 'web-search': ['tavily_api_key'] },
+    };
+
+    it('holds back a gated member while its secret is missing, leaving no row', async () => {
+      await run({ tools: [], agents: [], skills: ['web'] }, disk, ['other_key']);
+      expect((await toolRepo.getRow('web-fetch'))?.enabled).toBe(true);
+      // No row, not a disabled row — so a later boot can still enroll it.
+      expect(await toolRepo.getRow('web-search')).toBeNull();
+    });
+
+    it('enrolls the gated member on a later boot once the secret is configured', async () => {
+      await run({ tools: [], agents: [], skills: ['web'] }, disk, []);
+      expect(await toolRepo.getRow('web-search')).toBeNull();
+      await run({ tools: [], agents: [], skills: ['web'] }, disk, ['tavily_api_key']);
+      expect((await toolRepo.getRow('web-search'))?.enabled).toBe(true);
+    });
+
+    it('fails closed with no vault at all', async () => {
+      await run({ tools: [], agents: [], skills: ['web'] }, disk, undefined);
+      expect((await toolRepo.getRow('web-fetch'))?.enabled).toBe(true);
+      expect(await toolRepo.getRow('web-search')).toBeNull();
+    });
+
+    it('requires every declared secret, not just one', async () => {
+      await run(
+        { tools: [], agents: [], skills: ['web'] },
+        { ...disk, requires: { 'web-search': ['tavily_api_key', 'second_key'] } },
+        ['tavily_api_key'],
+      );
+      expect(await toolRepo.getRow('web-search')).toBeNull();
+    });
+
+    it('applies to standalone tools listed under tools: too', async () => {
+      await run({ tools: ['web-search'], agents: [] }, disk, []);
+      expect(await toolRepo.getRow('web-search')).toBeNull();
+      await run({ tools: ['web-search'], agents: [] }, disk, ['tavily_api_key']);
+      expect((await toolRepo.getRow('web-search'))?.enabled).toBe(true);
+    });
+
+    it('does not read the vault when nothing is gated', async () => {
+      await run({ tools: [], agents: [], skills: ['web'] }, { ...disk, requires: {} });
+      expect(vaultLists).toBe(0);
+    });
+
+    it('reads the vault at most once per pass', async () => {
+      await run(
+        { tools: ['web-search'], agents: [], skills: ['web'] },
+        { ...disk, requires: { 'web-search': ['k'], 'web-fetch': ['k'] } },
+        [],
+      );
+      expect(vaultLists).toBe(1);
+    });
   });
 });

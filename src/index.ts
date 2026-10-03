@@ -188,7 +188,10 @@ import {
 import { RegistryRepo } from './registry/registry-repo.js';
 import { RegistryService } from './registry/registry-service.js';
 import { BundleCascadeRepo } from './registry/bundle-cascade-repo.js';
-import { loadRegistryDefaults, reconcileRegistries, type RegistryDefaults } from './registry/reconcile.js';
+import {
+  bundleMembersFromDiscovery, loadRegistryDefaults, reconcileRegistries, requiredSecretsFromDiscovery,
+  type RegistryDefaults,
+} from './registry/reconcile.js';
 import type { Discovery, RegistryRow } from './registry/types.js';
 import { CHANNEL_CATALOG, type ChannelDescriptor } from './channels/catalog.js';
 import { channelCredentialStatus } from './channels/credential-resolver.js';
@@ -1101,6 +1104,10 @@ async function main(): Promise<void> {
       toolDiscoveryNames: new Set(toolDiscovery.map(d => d.name)),
       agentDiscoveryNames: new Set(agentDiscovery.map(d => d.name)),
       skillDiscoveryNames: new Set(skillBundleDiscovery.map(d => d.name)),
+      // Enabled bundles enroll their member tools; requires_secrets gates which (#1974).
+      bundleMembers: bundleMembersFromDiscovery(skillBundleDiscovery),
+      toolRequiredSecrets: requiredSecretsFromDiscovery(toolDiscovery),
+      secrets: secretsService,
       defaults: registryDefaults,
       logger,
     });

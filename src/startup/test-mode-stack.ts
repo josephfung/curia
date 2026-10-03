@@ -80,7 +80,9 @@ import { EntityMemory } from '../memory/entity-memory.js';
 import { KnowledgeGraphStore } from '../memory/knowledge-graph.js';
 import { MemoryValidator } from '../memory/validation.js';
 import { WorkingMemory } from '../memory/working-memory.js';
-import { loadRegistryDefaults, reconcileRegistries } from '../registry/reconcile.js';
+import {
+  bundleMembersFromDiscovery, loadRegistryDefaults, reconcileRegistries, requiredSecretsFromDiscovery,
+} from '../registry/reconcile.js';
 import { RegistryRepo } from '../registry/registry-repo.js';
 import type { IRegistryRepo, RegistryRow } from '../registry/types.js';
 import { applyVaultSecrets } from '../secrets/apply-vault-secrets.js';
@@ -88,10 +90,11 @@ import { loadEncryptionKey } from '../secrets/crypto.js';
 import { SecretsService } from '../secrets/secrets-service.js';
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../security/security-context.js';
 import { ExecutionLayer } from '../skills/execution.js';
-import { discoverToolManifests, loadToolsFromDirectory } from '../skills/loader.js';
+import { discoverToolManifests, loadToolsFromDirectory, type ToolDiscovery } from '../skills/loader.js';
 import { OutboundGateway } from '../skills/outbound-gateway.js';
 import { ToolRegistry } from '../skills/registry.js';
 import { SkillRegistry } from '../skills/skill-registry.js';
+import type { SkillDiscovery } from '../skills/skill-types.js';
 import {
   discoverSkillManifests,
   loadSkillsFromDiscovery,
@@ -334,6 +337,8 @@ class DryRunRegistryRepo implements IRegistryRepo {
 async function productionEnabledNames(
   pool: DbPool,
   discovered: { tools: Set<string>; skills: Set<string>; agents: Set<string> },
+  discovery: { tools: ToolDiscovery[]; skills: SkillDiscovery[] },
+  vault: SecretsService | undefined,
   logger: Logger,
 ): Promise<{ tool: Set<string>; skill: Set<string>; agent: Set<string> }> {
   const toolRepo = new DryRunRegistryRepo(new RegistryRepo(pool, 'tool_registry'));
@@ -346,6 +351,11 @@ async function productionEnabledNames(
     toolDiscoveryNames: discovered.tools,
     agentDiscoveryNames: discovered.agents,
     skillDiscoveryNames: discovered.skills,
+    bundleMembers: bundleMembersFromDiscovery(discovery.skills),
+    toolRequiredSecrets: requiredSecretsFromDiscovery(discovery.tools),
+    // No vault (offline, no SECRET_ENCRYPTION_KEY): gated tools stay out, fail closed —
+    // one more way the prompt may differ from production, already warned about above.
+    secrets: vault,
     defaults: loadRegistryDefaults(path.join(REPO_ROOT, 'config', 'registry-defaults.yaml')),
     logger,
   });
@@ -571,7 +581,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       agents: new Set(agentDiscovery.map(d => d.name)),
     };
     const enabled = (options.enablement ?? 'registry') === 'registry'
-      ? await productionEnabledNames(pool, discovered, logger)
+      ? await productionEnabledNames(pool, discovered, { tools: toolDiscovery, skills: skillDiscovery }, vault, logger)
       : { tool: discovered.tools, skill: discovered.skills, agent: discovered.agents };
 
     const toolRegistry = new ToolRegistry(config.timezone);
