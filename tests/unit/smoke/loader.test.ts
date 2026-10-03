@@ -151,7 +151,8 @@ describe('Smoke test loader', () => {
     });
 
     it('rejects a missing field and a misspelt one', () => {
-      const { opening: _omitted, ...withoutOpening } = valid;
+      const withoutOpening: Record<string, string> = { ...valid };
+      delete withoutOpening['opening'];
       expect(() => load(target(withoutOpening))).toThrow(/'target.opening' must be non-empty text/);
       expect(() => load(target({ ...valid, openning: 'x' }))).toThrow(/Unknown key\(s\) 'openning' in target/);
     });
