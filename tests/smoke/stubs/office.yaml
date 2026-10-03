@@ -161,6 +161,10 @@ ceo-inbox-mark-read:
 ceo-inbox-archive:
   - match: {}
     return: { archived: true }
+# Succeeds without listing folders: the real result lists folder ids, which no case reads.
+ceo-inbox-update-folders:
+  - match: {}
+    return: { success: true, message_id: "{{input:message_id}}", folders: [], created: [], removed_unresolved: [] }
 
 # The coordinator's own mailbox (Curia's), separate from the principal's.
 email-list:
@@ -212,6 +216,15 @@ doc-list:
 doc-read:
   - match: {}
     error: Document not found.
+
+# Test mode withholds the profile service (no shared-setting access), so the drafting
+# agents' "load the voice profile first" step needs an answer. A plain fixture voice.
+executive-profile-get:
+  - match: {}
+    return:
+      profile:
+        writingVoice: { tone: [direct, warm], formality: 50, patterns: [Concise and to the point, Professional but approachable], vocabulary: { prefer: [], avoid: [] }, signOff: Best }
+      summary: "Tone: direct, warm\nFormality: 50/100\n\nWriting patterns:\n  - Concise and to the point\n  - Professional but approachable\n\nSign-off: Best"
 
 list-pending-actions:
   - match: {}

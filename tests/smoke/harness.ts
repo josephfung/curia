@@ -211,7 +211,45 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
       target.opening,
       [target.from],
     );
-    return { threadId: opened.thread.id, topic: opened.thread.topic, participants: opened.thread.participants };
+    const thread = { threadId: opened.thread.id, topic: opened.thread.topic, participants: opened.thread.participants };
+    answerOnThread(target, thread);
+    return thread;
+  }
+
+  /**
+   * Test mode gives the tool layer no bullpen service, so the bullpen tool is refused. A
+   * woken agent's first step is usually reading the thread it was woken on, and its
+   * natural last step a reply there, and a refusal of either sends it chasing a broken
+   * tool layer. Serve both for this case's thread, through the real service on the
+   * database copy, in the shapes the bullpen handler returns. The reply wakes no one
+   * (see caseOnlyBus above). Any other bullpen call stays refused unless a case stubs it.
+   */
+  function answerOnThread(target: CaseTarget, thread: TargetThread): void {
+    stubs.answer('bullpen', async (input) => {
+      if (input['thread_id'] !== thread.threadId) return undefined;
+      if (input['action'] === 'get_thread') {
+        const loaded = await stack.bullpenService.getThread(thread.threadId);
+        if (!loaded) return { success: false, error: `No bullpen thread with ID ${thread.threadId} exists` };
+        return { success: true, data: { thread_id: thread.threadId, thread: loaded.thread, messages: loaded.messages } };
+      }
+      if (input['action'] === 'reply' && typeof input['content'] === 'string' && input['content'] !== '') {
+        const closeAfter = input['close_after'] === true;
+        try {
+          // Only the targeted agent runs on this thread, so the reply is its.
+          const message = await stack.bullpenService.postMessage(thread.threadId, target.agent, input['content'], [], closeAfter);
+          return {
+            success: true,
+            data: closeAfter
+              ? { thread_id: thread.threadId, message_id: message.id, status: 'closed' }
+              : { thread_id: thread.threadId, message_id: message.id },
+          };
+        } catch (err) {
+          // What the handler reports for a closed or capped thread.
+          return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      return undefined;
+    });
   }
 
   async function closeTargetThread(target: CaseTarget, thread: TargetThread): Promise<void> {
