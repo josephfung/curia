@@ -5918,7 +5918,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
     expect(response.payload.content).not.toContain('social-media');
-    expect(response.payload.content).toContain('social media specialist');
+    expect(response.payload.content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     // The brief was written for the specialist; the fallback never quotes it (#1975).
     expect(response.payload.content).not.toContain('Post to Bluesky');
     expect(response.payload.content).toMatch(/follow.?up|logged/i);
@@ -6004,7 +6004,8 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(taskCreateCount.n).toBe(1);
     expect(provider.chat).toHaveBeenCalledTimes(2);
     expect(agentResponses).toHaveLength(1);
-    expect(agentResponses[0]!.payload.content).toContain('declined');
+    // First person, with no specialist to have "declined" it (#1975).
+    expect(agentResponses[0]!.payload.content).toMatch(/wasn't able to take that one on/i);
     // Neither the brief nor the specialist's decline prose reaches the principal (#1975, #1976).
     expect(agentResponses[0]!.payload.content).not.toContain('Brief me on the CEO calendar for today');
     expect(agentResponses[0]!.payload.content).not.toContain('No contact record for this requester.');
@@ -6118,7 +6119,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
     expect(response.payload.content).not.toContain('social-media');
-    expect(response.payload.content).toContain('social media specialist');
+    expect(response.payload.content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     // The brief was written for the specialist; the fallback never quotes it (#1975).
     expect(response.payload.content).not.toContain('Post to Bluesky');
     expect(response.payload.content).toMatch(/follow.?up|logged/i);
@@ -6231,7 +6232,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
     expect(response.payload.content).not.toContain('T2125-expense-tracker');
-    expect(response.payload.content).toContain('T2125 expense tracker specialist');
+    expect(response.payload.content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     expect(response.payload.content).not.toContain('Run June reconciliation');
     expect(response.payload.content).toMatch(/background|completing|still/i);
     expect(response.payload.content).toMatch(/follow.?up|logged/i);
@@ -6827,7 +6828,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     // Display name, not the bare registry id (#1860). The fallback does not quote
     // the brief (#1975).
-    expect(response.payload.content).toContain('calendar specialist');
+    expect(response.payload.content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     expect(response.payload.content).not.toContain('Check my afternoon');
     expect(response.payload.content).toMatch(/background|completing|still/i);
 
@@ -6906,7 +6907,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const response = agentResponses[0]!;
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
-    expect(response.payload.content).toContain('calendar specialist');
+    expect(response.payload.content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     expect(response.payload.content).not.toContain('Check my afternoon');
     expect(response.payload.content).toMatch(/blocked|couldn't/i);
   });
@@ -6982,7 +6983,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const response = agentResponses[0]!;
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
-    expect(response.payload.content).toContain('calendar specialist');
+    expect(response.payload.content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     expect(response.payload.content).not.toContain('Check my afternoon');
     expect(response.payload.content).toMatch(/wasn't able/i);
   });
@@ -7058,9 +7059,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const response = agentResponses[0]!;
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
-    // Fallback label must not produce "the a specialist" double-article grammar
-    expect(response.payload.content).not.toMatch(/the a specialist/i);
-    expect(response.payload.content).toContain('the specialist');
+    // The empty-id label ("specialist") is never written into the reply, so
+    // neither is a "the a specialist" double article.
+    expect(response.payload.content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     expect(response.payload.content).not.toContain('Check my afternoon');
   });
 
@@ -7163,7 +7164,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     for (const reply of replies) {
       expect(reply).not.toContain('social-media');
       expect(reply).not.toContain('_curia_protocol');
-      expect(reply).toContain('social team');
+      expect(reply).not.toContain('social team'); // Curia speaks for itself (#1975)
     }
     expect(replies[0]).not.toContain('Trim the k8m5 draft');
     expect(replies[1]).not.toContain('Schedule the Thursday hold');
@@ -7205,7 +7206,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       getToolDefinitions: vi.fn(() => [delegateToolDef]),
     } as unknown as ExecutionLayer;
 
-    const modelReply = 'I could not get the k8m5 trim back from the social team in time. It may still be finishing, and I logged a follow-up.';
+    const modelReply = 'I could not get the k8m5 trim done in time. It may still be finishing, and I logged a follow-up.';
     // The brief the coordinator writes for the specialist differs from the principal's
     // message and carries internals. It must not reach the narration call (#1975).
     const brief = 'Trim the k8m5 draft for the principal (contact 6f1c2a9e-4b7d-4e3a-9c51-2d8e7f0a1b34)';
@@ -7276,7 +7277,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(narrationJson).not.toMatch(/include this phrase/i);
   });
 
-  it('uses the display-name fallback when the narration call returns a provider error (#1860)', async () => {
+  it('uses the deterministic fallback when the narration call returns a provider error (#1860)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
     const agentResponses: AgentResponseEvent[] = [];
@@ -7361,7 +7362,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(agentResponses).toHaveLength(1);
     const content = agentResponses[0]!.payload.content;
-    expect(content).toContain('calendar specialist');
+    expect(content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     expect(content).not.toContain('Check my afternoon');
     expect(content).not.toContain("I'm sorry, I was unable to process");
     expect(provider.chat).toHaveBeenCalledTimes(2);
@@ -7449,7 +7450,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(agentResponses).toHaveLength(1);
     const content = agentResponses[0]!.payload.content;
     expect(content).not.toContain('social-media');
-    expect(content).toContain('social media specialist');
+    expect(content).not.toMatch(/specialist/i); // Curia speaks for itself (#1975)
     expect(content).not.toContain('k8m5');
   });
 

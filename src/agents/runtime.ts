@@ -2597,9 +2597,11 @@ export class AgentRuntime {
    * One narration call, with the failed request in context. Tool blocks are
    * dropped so the call is plain text. The model's reply block is used only when
    * it is about that request and passes the structural checks in
-   * selectDelegationFailureReply. Otherwise a display-name fallback is used.
+   * selectDelegationFailureReply. Otherwise a deterministic fallback is used.
    * Neither quotes the delegate brief or the specialist's decline prose: both
-   * were written for another agent, not the principal (#1975, #1976).
+   * were written for another agent, not the principal (#1975, #1976). Neither
+   * names the specialist either; the display name is passed only so a draft
+   * that names it can be rejected.
    * The call is direct (not chatWithRetry): a provider failure must not also
    * publish a generic error response beside the fallback.
    */
@@ -2612,6 +2614,8 @@ export class AgentRuntime {
   ): Promise<string> {
     const { agentId, logger } = this.config;
     const explicit = esc.agent ? this.config.agentRegistry?.get(esc.agent)?.displayName : undefined;
+    // The label a draft would most likely use for the specialist, checked for and
+    // rejected in selectDelegationFailureReply. It is not written into the reply.
     const displayName = principalAgentLabel(esc.agent, explicit);
     const replyInput = {
       displayName,
@@ -2638,7 +2642,6 @@ export class AgentRuntime {
           {
             role: 'system',
             content: delegationFailureNarrationPrompt({
-              displayName,
               reason: esc.reason,
               possiblySucceeded: esc.possiblySucceeded,
               escalated: esc.escalated,
@@ -2660,26 +2663,26 @@ export class AgentRuntime {
           // chat() reports API failures as type:'error' and does not throw.
           logger.warn(
             { err: response.error, agentId, targetAgent: esc.agent, reason: esc.reason },
-            'Delegation-failure narration call failed — using display-name fallback',
+            'Delegation-failure narration call failed — using deterministic fallback',
           );
         } else {
           // A tool call from a call made with no tools is a model or provider
           // regression. Say so instead of falling back quietly.
           logger.warn(
             { agentId, targetAgent: esc.agent, reason: esc.reason, responseType: response.type },
-            'Delegation-failure narration returned a non-text response — using display-name fallback',
+            'Delegation-failure narration returned a non-text response — using deterministic fallback',
           );
         }
       } catch (err) {
         logger.warn(
           { err, agentId, targetAgent: esc.agent, reason: esc.reason },
-          'Delegation-failure narration call failed — using display-name fallback',
+          'Delegation-failure narration call failed — using deterministic fallback',
         );
       }
     } else {
       logger.warn(
         { agentId, targetAgent: esc.agent, turnsUsed: budget.turnsUsed, maxTurns: budget.maxTurns },
-        'Skipping delegation-failure narration — turn budget has no room; using display-name fallback',
+        'Skipping delegation-failure narration — turn budget has no room; using deterministic fallback',
       );
     }
 
@@ -2691,12 +2694,12 @@ export class AgentRuntime {
     } else if (modelText !== undefined) {
       logger.warn(
         { agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via, rejected: selected.rejected },
-        'Delegation failure reply: model draft rejected — using display-name fallback',
+        'Delegation failure reply: model draft rejected — using deterministic fallback',
       );
     } else {
       logger.info(
         { agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via, rejected: selected.rejected },
-        'Delegation failure reply used the display-name fallback',
+        'Delegation failure reply used the deterministic fallback',
       );
     }
     return selected.content;
