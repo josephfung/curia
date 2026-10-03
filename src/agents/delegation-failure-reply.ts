@@ -180,7 +180,7 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   // Before names_specialist: protocol JSON carries "delegation_failure", and the
   // more specific reason is the more useful log line.
   if (reply.includes('_curia_protocol')) return 'protocol';
-  if (namesSpecialist(reply, input.displayName, input.request)) return 'names_specialist';
+  if (namesSpecialist(reply, input.displayName)) return 'names_specialist';
   if (echoesInstructions(reply)) return 'prompt_echo';
   // Scheduler payloads carry the principal's contact id (#1800), and the model
   // sees the payload as the user turn. No reply to the principal needs a UUID.
@@ -198,16 +198,21 @@ const HANDOFF_TERMS = /\bspecialists?\b|\bdelegat/i;
  * True when the draft talks about who the work was handed to.
  *
  * An explicit display name (`display_name: social team`) is matched on word
- * boundaries, and only when the request does not use it too. A label that is a
- * domain noun ("expense tracker") is how the principal names the thing, so a
- * reply about "your expense tracker" is on topic, not a leak.
+ * boundaries. The one use allowed is "your <label>": a label that is a domain
+ * noun ("expense tracker") is how the principal names their own thing, so
+ * "your expense tracker" is on topic. Any other use ("the social team
+ * couldn't…") names the agent as the actor, even when the request mentioned it
+ * too ("ask the social team to…"), so it is rejected. A false reject here only
+ * costs the safe fallback.
  */
-function namesSpecialist(reply: string, displayName: string, request: string): boolean {
+function namesSpecialist(reply: string, displayName: string): boolean {
   if (HANDOFF_TERMS.test(reply)) return true;
   const name = displayName.trim();
   if (name.length === 0) return false;
-  const label = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i');
-  return label.test(reply) && !label.test(request);
+  const label = escapeRegExp(name);
+  // Remove the allowed possessive uses, then look for any other.
+  const withoutPossessive = reply.replace(new RegExp(`\\byour\\s+${label}\\b`, 'gi'), ' ');
+  return new RegExp(`\\b${label}\\b`, 'i').test(withoutPossessive);
 }
 
 // Unanchored and unbounded: the UUID can sit anywhere, including glued to an id
@@ -279,9 +284,24 @@ function sharesTopic(reply: string, request: string): boolean {
   const replyWords = words(reply).filter((r) => isTopicWord(r));
   return topic.some((w) => {
     const stem = w.slice(0, TOPIC_PREFIX);
-    // Either direction: "briefings" in the reply for "briefing", or "trim" for "trimmed".
-    return replyWords.some((r) => r.startsWith(stem) || w.startsWith(r));
+    // Forward: the reply word starts with the request word's stem ("briefings" for
+    // "briefing"). Reverse: the reply word is a long enough prefix ("brief" for
+    // "briefing"), or a short base the request word inflects ("trim" for "trimmed").
+    // A short reply word that merely prefixes an unrelated one ("back" in "backup")
+    // does not count.
+    return replyWords.some((r) => r.startsWith(stem)
+      || (r.length >= TOPIC_PREFIX && w.startsWith(r))
+      || isInflectionOf(w, r));
   });
+}
+
+// Regular English inflections, enough to relate a short base to its forms.
+const INFLECTION_SUFFIXES = ['s', 'es', 'ed', 'd', 'ing', 'er', 'ers'] as const;
+
+/** True when `word` is `base` plus a regular suffix, allowing a doubled final consonant ("trim" → "trimmed"). */
+function isInflectionOf(word: string, base: string): boolean {
+  const last = base.at(-1) ?? '';
+  return INFLECTION_SUFFIXES.some((suffix) => word === base + suffix || word === base + last + suffix);
 }
 
 /**

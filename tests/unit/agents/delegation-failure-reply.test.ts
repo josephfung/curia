@@ -225,10 +225,17 @@ describe('delegation failure draft selection (#1860, #1975)', () => {
     }
   });
 
-  it('rejects an explicit display name, unless the request uses it as a domain noun', () => {
+  it('rejects an explicit display name, except as "your <label>"', () => {
     const team = { ...morning, displayName: 'social team', agentId: 'social-media', request: 'Trim the k8m5 draft' };
     expect(selectDelegationFailureReply({
       ...team,
+      modelText: reply("The social team couldn't trim the k8m5 draft."),
+    }).rejected).toBe('names_specialist');
+
+    // The request naming the team does not license the reply to name it as the actor.
+    expect(selectDelegationFailureReply({
+      ...team,
+      request: 'Ask the social team to trim the k8m5 draft',
       modelText: reply("The social team couldn't trim the k8m5 draft."),
     }).rejected).toBe('names_specialist');
 
@@ -319,6 +326,17 @@ describe('delegation failure draft selection (#1860, #1975)', () => {
       modelText: reply("I didn't get that done in time. A follow-up task has already been logged."),
     });
     expect(selected.rejected).toBe('off_topic');
+  });
+
+  it('matches inflections and long prefixes, not short unrelated prefixes', () => {
+    const select = (request: string, text: string) =>
+      selectDelegationFailureReply({ ...morning, request, modelText: reply(text) });
+    // "back" is a prefix of "backup" but not the same word.
+    expect(select('Did the backup finish?', "I couldn't get back to you on that one.").rejected).toBe('off_topic');
+    // A short base the request word inflects still counts.
+    expect(select('Get it trimmed', "I couldn't trim it down.").via).toBe('model');
+    // So does a long enough prefix.
+    expect(select('Send the briefing', "I couldn't put the brief together.").via).toBe('model');
   });
 
   it('accepts any clean draft when the request has no content words to check', () => {
