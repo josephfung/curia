@@ -1,9 +1,10 @@
 {
   "name": "query-relationships",
   "description": "Query entity-to-entity relationships from the knowledge graph. Resolves the entity by name. Returns all stored relationships, optionally filtered by edge type. When multiple nodes share the same name, returns an ambiguous response with candidates so you can ask the user to clarify.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "none",
+  "install": { "requires_secrets": ["openai_api_key"] },
   "inputs": {
     "entity": "string (the name or label of the entity to query, e.g. 'Jane Doe')",
     "edge_type": "string? (optional edge type filter, e.g. 'spouse' or 'reports_to'. Must be a known edge type.)"
