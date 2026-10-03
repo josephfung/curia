@@ -48,7 +48,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Registry defaults** — an enabled bundle enrolls all its member tools; `tools:` lists standalone tools only. (#1974)
-- **Calendar and KG relationship tools** — declare `install.requires_secrets`; enabling them now requires Nylas or OpenAI keys in the vault. (#1974)
+- **KG relationship tools** — declare `install.requires_secrets: [openai_api_key]`; enabling them needs the key. (#1974)
+- **Registry uninstall** — a tool can't be uninstalled while its bundle is enabled; disable it instead. (#1974)
 - **Outbound-context release** — coordinator no longer judges exchanges closed; `context-bridge-release` refuses entries another agent owns. (#1972)
 - **Scenario 02b** — rewritten around a result ceo-inbox can produce; no longer a known failure. (#1972)
 - **Smoke gate** — `pnpm smoke` exits 1 when a case fails twice: under 80%, or a critical miss. (#1956)
