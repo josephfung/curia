@@ -12,7 +12,7 @@ Each test is a YAML file describing a conversation and a list of expected behavi
 
 1. Copies the database to a throwaway one, so nothing the agents write reaches the real database
 2. Boots a headless Curia stack in test mode on the copy (full bus, agents, skills — no channels, and nothing can send) and seeds the fixture office
-3. Plays through the conversation turns against the live Coordinator, recording its tool calls and replies
+3. Plays through the conversation turns against the live Coordinator (or, for a [targeted case](#target-addressing-a-specialist), the specialist it names), recording its tool calls and replies
 4. Sends the transcript + expected behaviors to an LLM judge (GPT-4o, through OpenRouter)
 5. Scores each expected behavior as `PASS`, `PARTIAL`, or `MISS`
 6. Applies the gate (below), retries each failing case once, writes an HTML report with the judge's justifications, exits `1` if any case still fails, and drops the copy
@@ -76,6 +76,14 @@ description: |                  # required — what this tests
   checking for. Helps the judge understand context.
 tags: [tag1, tag2]              # required — used for filtering; see tags below
 sender: principal               # optional — principal (default) | unknown
+target:                         # optional — address a specialist instead (see "Target")
+  agent: ceo-inbox
+  via: bullpen
+  from: calendar
+  topic: Scheduling consult — Alice Chen
+  opening: |
+    CONSULT REQUEST
+    ...
 judge_tool_calls: false         # optional — show the judge each turn's tool calls
 known_failure: { issue: "#123" } # optional — a tracked bug this case catches (reported, not gated)
 tool_stubs:                     # optional — fixture answers for tools (see "The fixture office")
@@ -108,6 +116,29 @@ Unknown keys are rejected, so a typo cannot silently fall back to a default.
 - `principal` (default) — the principal, on the local `smoke-test` channel. Curia knows who is talking and acts with full standing.
 - `unknown` — an email address with no contact record (`unknown-sender@example.test`). The coordinator gets the low-trust treatment an unknown sender gets in production. Use it for cases about what Curia will and won't do for a stranger.
 
+### Target: addressing a specialist
+
+By default every turn goes to the coordinator. Some behaviors belong to a specialist acting on an event only it receives. For example, ceo-inbox resumes a parked scheduling email when the calendar specialist answers its consult. Sending that consult reply to the coordinator as if the principal had typed it tests the wrong agent. `target` delivers each turn to the specialist the way production does:
+
+| Field | Meaning |
+|---|---|
+| `agent` | The agent under test. Its turn is captured and judged: its tool calls and its final response. |
+| `via` | How the turns reach it. `bullpen` is the only path so far. |
+| `from` | The agent that posts each turn on the thread, mentioning `agent`. |
+| `topic` | The bullpen thread's topic. |
+| `opening` | The thread's first message. `agent` opened the thread with it, addressed to `from`. |
+
+For each case run, the harness opens the thread on the database copy and posts each turn as `from`, mentioning `agent`. Production's `BullpenDispatcher` turns that into `agent`'s task, with the thread as its conversation and the thread injected into its prompt. The thread is closed after the case, so later cases never see it.
+
+- `sender` can't be combined with `target`, because the turns come from `from`.
+- Both agents must be registered in the stack under test. This is checked before any case runs.
+- Placeholders work in `topic` and `opening`.
+- The judge is told which agent it is judging. It sees the thread's opening, that agent's calls and response for each turn, and (with `judge_tool_calls`) other agents' calls separately. Most targeted behaviors are actions, such as "drafts a reply" or "calls memory-query first", so set `judge_tool_calls: true`.
+- Test mode has no bullpen service, so the `bullpen` tool is normally refused. For the case's own thread, `get_thread` returns the real thread and `reply` really posts to it, as in production. Other bullpen calls stay refused unless the case stubs them.
+- A post the specialist makes on the bullpen does not wake anyone mid-case. Only the case's own posts are dispatched, so a reply chain can't run on into the next case. To test a hand-off between two agents, use one case per side.
+
+`tests/smoke/cases/ceo-inbox-branch-a-*.yaml` are worked examples.
+
 ### The fixture office
 
 Test mode can't reach a real calendar, mailbox, scheduler or task store. So every case runs in a small fixture office. Without it, the specialists would find every system down and decline, and a case could only test how Curia says "I couldn't".
@@ -116,6 +147,7 @@ Test mode can't reach a real calendar, mailbox, scheduler or task store. So ever
   - A calendar week: a meeting an hour from now, a packed Wednesday, a Thursday flight, a board-chair call.
   - The principal's inbox: an investor asking to talk, the board deck, a contract renewal, an invoice and newsletters.
   - Task, scheduler, document and approval stores that work.
+  - A plain executive voice profile, since test mode withholds the real one.
 
   List and search results are narrowed to the call's time range or query, the way the real tools narrow them. Writes succeed and echo their inputs (`{{input:title}}`).
 - **`tests/smoke/fixtures/people.yaml`** seeds the people cases mention (Sarah Chen, David Kim, the board chair…) as real contacts in the copy. They use the reserved `.example` domain only.
@@ -199,6 +231,7 @@ Tags are free-form but try to reuse existing ones for consistency. Current tags 
 | `single-turn` | One user message, one response |
 | `security` | Prompt injection, spoofing, leakage |
 | `edge-case` | Unusual or tricky inputs |
+| `ceo-inbox`, `resume-mode` | Targeted cases for the inbox specialist resuming parked work |
 
 ---
 

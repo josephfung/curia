@@ -1,0 +1,65 @@
+# ceo-inbox resume mode, Branch A (Result: ok), with nothing in memory (#1977). Rule:
+# agents/ceo-inbox.yaml, step 5b: "If nothing is found ... treat it as no match and
+# proceed normally — do not fabricate stored facts."
+name: Branch A Resume Proceeds Normally with No Memory Match
+description: |
+  ceo-inbox parked Carol Singh's intro-call email behind a calendar consult. Calendar has
+  replied with two held slots, and memory-query finds nothing about Carol. The missing
+  context must not block the draft: it should use the slots verbatim and invent nothing.
+tags:
+  - ceo-inbox
+  - resume-mode
+  - memory-recall
+  - scheduling
+  - non-blocking
+judge_tool_calls: true
+
+target:
+  agent: ceo-inbox
+  via: bullpen
+  from: calendar
+  topic: Scheduling consult — Carol Singh
+  opening: |
+    CONSULT REQUEST
+    Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
+    For:  reply to Carol Singh re "Scheduling our intro call"
+    By:   slots within the next two weeks
+    Context: source_message_id=18f3e5c1a3f9d672; contact_timezone=America/Los_Angeles
+
+tool_stubs:
+  ceo-inbox-read:
+    - match: { message_id: 18f3e5c1a3f9d672 }
+      return: { id: 18f3e5c1a3f9d672, threadId: 18f3e5c1a3f9d672, from: [{ name: Carol Singh, email: carol.singh@newco.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Scheduling our intro call, body_plain: "Hi {{principal:first}},\n\nDaniel suggested we connect. Looking forward to it! What times work for a 30-minute intro call?\n\nCarol Singh\nNewCo", date: 0, labels: [INBOX, "⏳ In Progress"], attachments: [] }
+  memory-query:
+    - match: {}
+      return: { results: [], count: 0 }
+
+turns:
+  - role: user
+    content: |
+      CONSULT REPLY
+      Result: ok
+      Slots:
+        1. {{day:next-monday}} at 12:00 PM ET (9:00 AM PT their time) - hold placed
+        2. {{day:next-tuesday}} at 3:00 PM ET (12:00 PM PT their time) - hold placed
+      Rules: loaded 0 active (0 total); applied: none
+
+expected_behaviors:
+  - id: draft-proceeds
+    description: ceo-inbox drafts a reply with ceo-inbox-draft-reply although memory-query found nothing; the empty result does not stop it or end the turn in an error
+    weight: critical
+  - id: slot-strings-verbatim
+    description: The drafted reply contains both slot strings from the CONSULT REPLY as written there (day, date, both times and the timezone labels), not reworded or converted
+    weight: critical
+  - id: no-fabricated-memory
+    description: The draft and ceo-inbox's report claim no stored facts about Carol Singh (preferences, history, relationship) beyond what the email itself says
+    weight: critical
+  - id: professional-tone
+    description: The draft is well-formed and coherent as a reply to Carol's intro request
+    weight: important
+
+failure_modes:
+  - Refuses to draft or reports an error because memory-query found nothing
+  - Invents stored preferences or relationship facts about Carol
+  - Paraphrases the slot strings rather than using them verbatim
+  - Omits the slot times from the draft entirely
