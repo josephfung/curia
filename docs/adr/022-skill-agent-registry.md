@@ -51,10 +51,15 @@ default. Only items in the trusted in-repo file can self-enrol on startup.
 > tools only — keeping membership in two lists let new members (e.g. `doc-place`) silently
 > miss enrollment. The trust root for a member tool is therefore the SKILL.md of a bundle
 > that is either in the trusted defaults file or was enabled by an admin; a bundle an
-> admin disabled is never expanded, and existing rows are never changed. Credential-
-> dependent members are held back by their own `install.requires_secrets` gate (the same
-> check an admin enable runs), not by omission from the defaults file: a gated member gets
-> no row until its keys are in the vault, and the next boot after that enrolls it. This
+> admin disabled is never expanded, and existing rows are never changed — which is why
+> uninstalling (deleting the row of) a member tool is refused while its bundle is enabled:
+> the next boot would enroll it again, so disable is the lasting choice. Credential-
+> dependent members are held back by gates they declare, not by omission from the defaults
+> file: `install.requires_secrets` (the same vault check an admin enable runs), or a
+> declared capability whose integration this boot did not build (`nylasCalendarClient`
+> for the calendar tools, whose Nylas key resolves from three sources, so a vault-key name
+> would be the wrong test). A member whose `tool.json` fails to parse is refused too. A
+> held-back member gets no row, and the first boot after its gate clears enrolls it. This
 > relies on there being no upload path that writes SKILL.md or tool manifests — every
 > on-disk item comes from the repo or the operator's deploy layer. An upload feature would
 > need to revisit it, since an uploaded tool named like a missing member of an enabled
