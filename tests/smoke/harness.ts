@@ -23,6 +23,7 @@ import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { createAgentDiscuss, createInboundMessage, type ModelFallbackEngagedEvent } from '../../src/bus/events.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
+import type { BullpenService } from '../../src/memory/bullpen.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import { createTurnCapture, withoutRecentHistory, type ObservedToolCall } from '../shared/turn-capture.js';
 import { createSmokeStubs, type SmokeStubs } from './stub-layer.js';
@@ -142,12 +143,22 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   // path in test mode. Throws with the provider name if the chosen model's API key
   // is missing.
   const stubs = createSmokeStubs();
+  // The bullpen threads agents may see as pending: only the one the running case opened.
+  const caseThreads = new Set<string>();
   const stack = await createTestModeStack({
     model: options.model,
     wrapExecutionLayer: (layer) => stubs.wrap(layer),
     // No contact recent history: a case must not inherit another case's turns, or the
     // real principal's, through cross-conversation recall.
     wrapWorkingMemory: withoutRecentHistory,
+    // Runtimes inject an agent's open bullpen threads from the last week into its prompt.
+    // On a copy of the dev database those are whatever the dev instance left open: a real
+    // CONSULT REPLY would sit beside a targeted case's own. Show only the case's thread
+    // (the scenario suite's scopedBullpen does the same).
+    wrapBullpenService: (bullpen) => Object.assign(Object.create(bullpen) as BullpenService, {
+      getPendingThreadsForAgent: async (agentId: string, windowMinutes: number) =>
+        (await bullpen.getPendingThreadsForAgent(agentId, windowMinutes)).filter(t => caseThreads.has(t.threadId)),
+    }),
   });
   const { bus, logger, contactResolver } = stack;
 
@@ -212,6 +223,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
       [target.from],
     );
     const thread = { threadId: opened.thread.id, topic: opened.thread.topic, participants: opened.thread.participants };
+    caseThreads.add(thread.threadId);
     answerOnThread(target, thread);
     return thread;
   }
@@ -254,6 +266,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   }
 
   async function closeTargetThread(target: CaseTarget, thread: TargetThread): Promise<void> {
+    // Out of view first: even if the close fails, no later case is shown this thread.
+    caseThreads.delete(thread.threadId);
     await stack.bullpenService.closeThread(thread.threadId, target.agent);
   }
 
