@@ -64,11 +64,12 @@
 //     free text and redact them. Different job, different shape (unanchored,
 //     stateful). It must stay separate — do not "consolidate" it here later.
 //
-// Three files compose `UUID_PATTERN` into a larger regex rather than calling
+// Four files compose `UUID_PATTERN` into a larger regex rather than calling
 // `isUuid()` — `src/contacts/dedup-pair-key.ts`,
-// `src/scheduler/conversation-id.ts` and `skills/delegate/outbound-entry.ts`
-// (a /g scan for entry ids quoted in a delegate brief). Those still share this
-// source of truth.
+// `src/scheduler/conversation-id.ts`, `skills/delegate/outbound-entry.ts`
+// (a /g scan for entry ids quoted in a delegate brief) and
+// `src/agents/delegation-failure-reply.ts` (rejects a principal-facing draft
+// that carries any UUID). Those still share this source of truth.
 //
 // If you add another UUID regex anywhere, either import from here or add it to
 // this list with a reason. The list is meant to stay exhaustive, and

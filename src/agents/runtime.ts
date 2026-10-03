@@ -28,6 +28,7 @@ import type { CallerContext } from '../skills/types.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
+import { stripOutboundContextPreamble } from '../dispatch/outbound-context.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
@@ -107,7 +108,6 @@ import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { principalAgentLabel } from './agent-display-name.js';
 import {
   delegationFailureNarrationPrompt,
-  requestAnchor,
   selectDelegationFailureReply,
   transcriptForNarration,
 } from './delegation-failure-reply.js';
@@ -2595,9 +2595,11 @@ export class AgentRuntime {
    * Principal-facing reply after a non-retryable delegation failure (#1860).
    *
    * One narration call, with the failed request in context. Tool blocks are
-   * dropped so the call is plain text. The model's text is used only when it names
-   * that request and does not leak the id. Otherwise a display-name fallback
-   * quotes the request, so two different asks are not the same sentence.
+   * dropped so the call is plain text. The model's reply block is used only when
+   * it is about that request and passes the structural checks in
+   * selectDelegationFailureReply. Otherwise a display-name fallback is used.
+   * Neither quotes the delegate brief or the specialist's decline prose: both
+   * were written for another agent, not the principal (#1975, #1976).
    * The call is direct (not chatWithRetry): a provider failure must not also
    * publish a generic error response beside the fallback.
    */
@@ -2611,9 +2613,6 @@ export class AgentRuntime {
     const { agentId, logger } = this.config;
     const explicit = esc.agent ? this.config.agentRegistry?.get(esc.agent)?.displayName : undefined;
     const displayName = principalAgentLabel(esc.agent, explicit);
-    const anchor = requestAnchor(esc.task || userRequest);
-    const declined = esc.declined === true || esc.reason === SPECIALIST_DECLINE_REASON;
-    const detail = declined ? sanitizeOutput(esc.message).trim().slice(0, 500) : undefined;
     const replyInput = {
       displayName,
       agentId: esc.agent,
@@ -2621,8 +2620,10 @@ export class AgentRuntime {
       declined: esc.declined,
       possiblySucceeded: esc.possiblySucceeded,
       escalated: esc.escalated,
-      delegateTask: esc.task || userRequest,
-      ...(detail !== undefined && detail.length > 0 ? { detail } : {}),
+      // The turn's own content, which the narration model sees, not esc.task (the
+      // brief written for the specialist). The outbound-context preamble is stripped
+      // so its entry ids and previews cannot count as the request's topic.
+      request: stripOutboundContextPreamble(userRequest),
     };
 
     let modelText: string | undefined;
@@ -2638,7 +2639,6 @@ export class AgentRuntime {
             role: 'system',
             content: delegationFailureNarrationPrompt({
               displayName,
-              anchor,
               reason: esc.reason,
               possiblySucceeded: esc.possiblySucceeded,
               escalated: esc.escalated,
@@ -2677,12 +2677,21 @@ export class AgentRuntime {
     }
 
     const selected = selectDelegationFailureReply({ ...replyInput, ...(modelText !== undefined ? { modelText } : {}) });
-    logger.info(
-      { agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via },
-      selected.via === 'model'
-        ? 'Delegation failure reply written by the model'
-        : 'Delegation failure reply used the display-name fallback',
-    );
+    // `rejected` names the check a model draft failed. A draft that came back but
+    // was discarded is a warning: it is the signal for a model or prompt regression.
+    if (selected.via === 'model') {
+      logger.info({ agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via }, 'Delegation failure reply written by the model');
+    } else if (modelText !== undefined) {
+      logger.warn(
+        { agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via, rejected: selected.rejected },
+        'Delegation failure reply: model draft rejected — using display-name fallback',
+      );
+    } else {
+      logger.info(
+        { agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via, rejected: selected.rejected },
+        'Delegation failure reply used the display-name fallback',
+      );
+    }
     return selected.content;
   }
 
