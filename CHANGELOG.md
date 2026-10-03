@@ -101,6 +101,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Delegation-failure reply** — no longer leaks model reasoning, the narration prompt, the delegate brief or decline prose. (#1975, #1976)
 - **Missing bundle tools** — `doc-place`, `setup-status` and six contacts tools now enroll on fresh and existing installs. (#1974)
 - **Relayed sends** — replies route back to the requesting specialist; delegation hints must name a registered specialist. (#1972)
 - **Integration tests** — suites remove only the agent identity and knowledge-graph rows they created. (#1970)
