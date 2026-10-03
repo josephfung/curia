@@ -225,8 +225,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
    * (see caseOnlyBus above). Any other bullpen call stays refused unless a case stubs it.
    */
   function answerOnThread(target: CaseTarget, thread: TargetThread): void {
-    stubs.answer('bullpen', async (input) => {
-      if (input['thread_id'] !== thread.threadId) return undefined;
+    stubs.answer('bullpen', async (input, agentId) => {
+      // Only the targeted agent's calls: a reply is posted as it, so another agent's
+      // (one it delegated to, say) must not be credited to it. Those stay refused.
+      if (input['thread_id'] !== thread.threadId || agentId !== target.agent) return undefined;
       if (input['action'] === 'get_thread') {
         const loaded = await stack.bullpenService.getThread(thread.threadId);
         if (!loaded) return { success: false, error: `No bullpen thread with ID ${thread.threadId} exists` };
@@ -235,7 +237,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
       if (input['action'] === 'reply' && typeof input['content'] === 'string' && input['content'] !== '') {
         const closeAfter = input['close_after'] === true;
         try {
-          // Only the targeted agent runs on this thread, so the reply is its.
           const message = await stack.bullpenService.postMessage(thread.threadId, target.agent, input['content'], [], closeAfter);
           return {
             success: true,

@@ -47,16 +47,19 @@ describe('createSmokeStubs', () => {
     const { layer, invoke } = realLayer();
     const stubs = createSmokeStubs();
     const wrapped = stubs.wrap(layer);
-    stubs.answer('bullpen', async (input) =>
-      input['thread_id'] === 't1' ? { success: true, data: { thread_id: 't1' } } : undefined);
+    // Answers see the calling agent, so they can decline another agent's call.
+    stubs.answer('bullpen', async (input, agentId) =>
+      input['thread_id'] === 't1' && agentId === 'ceo-inbox' ? { success: true, data: { thread_id: 't1' } } : undefined);
     stubs.set({ bullpen: [{ match: {}, return: 'stubbed' }] });
 
     expect(await wrapped.invoke('bullpen', { action: 'get_thread', thread_id: 't1' }, undefined as never, opts('ceo-inbox') as never))
       .toEqual({ success: true, data: { thread_id: 't1' } });
-    // An answer that passes leaves the call to the stubs.
+    // An answer that passes leaves the call to the stubs: another thread, or another agent.
     expect(await wrapped.invoke('bullpen', { action: 'get_thread', thread_id: 't2' }, undefined as never, opts('ceo-inbox') as never))
       .toEqual({ success: true, data: 'stubbed' });
-    expect(stubs.clear().map(c => c.disposition)).toEqual(['stubbed', 'stubbed']);
+    expect(await wrapped.invoke('bullpen', { action: 'get_thread', thread_id: 't1' }, undefined as never, opts('calendar') as never))
+      .toEqual({ success: true, data: 'stubbed' });
+    expect(stubs.clear().map(c => c.disposition)).toEqual(['stubbed', 'stubbed', 'stubbed']);
 
     await wrapped.invoke('bullpen', { action: 'get_thread', thread_id: 't1' }, undefined as never, opts('ceo-inbox') as never);
     expect(invoke).toHaveBeenCalledOnce();
