@@ -24,7 +24,7 @@ import type { ToolStub } from '../scenarios/types.js';
  * An answer computed at call time, for data a fixture cannot know in advance (the id of a
  * thread the harness opened). Returns undefined to leave the call to the stubs.
  */
-export type CallAnswer = (input: Record<string, unknown>) => Promise<ToolResult | undefined>;
+export type CallAnswer = (input: Record<string, unknown>, agentId: string | undefined) => Promise<ToolResult | undefined>;
 
 /** One tool call by any agent during a case, and how it was answered. */
 export interface AgentToolCall {
@@ -91,7 +91,7 @@ export function createSmokeStubs(): SmokeStubs {
     calls.push(record);
 
     for (const answer of answers.get(toolName) ?? []) {
-      const result = await answer(structuredClone(input));
+      const result = await answer(structuredClone(input), options?.agentId);
       if (result) {
         record.disposition = 'stubbed';
         record.success = result.success;
