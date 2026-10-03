@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadTestCases, loadTestCase } from '../../smoke/loader.js';
+import { loadTestCases, loadTestCase, targetProblems } from '../../smoke/loader.js';
 
 // Track temp dirs created in this suite for cleanup
 const tempDirs: string[] = [];
@@ -119,6 +119,57 @@ describe('Smoke test loader', () => {
 
     it('rejects an unknown top-level key, so a typo cannot silently fall back to a default', () => {
       expect(() => load('judge_tool_call: true')).toThrow(/Unknown key\(s\) 'judge_tool_call'/);
+    });
+  });
+
+  describe('target (#1977)', () => {
+    function load(extra: string): ReturnType<typeof loadTestCase> {
+      const dir = mkdtempSync(join(tmpdir(), 'curia-smoke-test-'));
+      tempDirs.push(dir);
+      const file = join(dir, 'case.yaml');
+      writeFileSync(file, `${minimalYaml('Case')}\n${extra}`);
+      return loadTestCase(file);
+    }
+    const target = (fields: Record<string, string>): string =>
+      ['target:', ...Object.entries(fields).map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`)].join('\n');
+    const valid = { agent: 'ceo-inbox', via: 'bullpen', from: 'calendar', topic: 'Consult', opening: 'CONSULT REQUEST' };
+
+    it('has no target by default: the case addresses the coordinator', () => {
+      expect(load('').target).toBeUndefined();
+    });
+
+    it('reads a bullpen target', () => {
+      expect(load(target(valid)).target).toEqual(valid);
+    });
+
+    it('rejects a sender alongside a target, since the turns come from target.from', () => {
+      expect(() => load(`sender: unknown\n${target(valid)}`)).toThrow(/'sender' and 'target' cannot both be set/);
+    });
+
+    it('rejects an unknown delivery path', () => {
+      expect(() => load(target({ ...valid, via: 'email' }))).toThrow(/Invalid target.via 'email'/);
+    });
+
+    it('rejects a missing field and a misspelt one', () => {
+      const { opening: _omitted, ...withoutOpening } = valid;
+      expect(() => load(target(withoutOpening))).toThrow(/'target.opening' must be non-empty text/);
+      expect(() => load(target({ ...valid, openning: 'x' }))).toThrow(/Unknown key\(s\) 'openning' in target/);
+    });
+
+    it('rejects an agent posting to itself', () => {
+      expect(() => load(target({ ...valid, from: 'ceo-inbox' }))).toThrow(/must be another agent/);
+    });
+
+    it('checks placeholders in the opening at load time', () => {
+      expect(() => load(target({ ...valid, opening: 'By {{dat:today}}' }))).toThrow(/unrecognised placeholder/);
+    });
+
+    it('reports targets naming an agent the stack does not run', () => {
+      const tc = load(target({ ...valid, from: 'calender' }));
+      const registered = new Set(['ceo-inbox', 'calendar']);
+      expect(targetProblems([tc], (name) => registered.has(name)))
+        .toEqual([`Case: target.from 'calender' is not a registered agent`]);
+      expect(targetProblems([load('')], () => false)).toEqual([]);
     });
   });
 

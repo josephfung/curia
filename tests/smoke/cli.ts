@@ -16,7 +16,7 @@ import { parseSmokeArgs, type SmokeArgs } from './args.js';
 import { stubProblems } from './stub-check.js';
 import { cloneDatabase, databaseName, isLocalDatabase, type DatabaseClone } from './clone-db.js';
 import { loadPeople, seedPeople } from './fixtures.js';
-import { loadDefaultStubs, loadTestCases } from './loader.js';
+import { loadDefaultStubs, loadTestCases, targetProblems } from './loader.js';
 import { createHarness, RESPONSE_TIMEOUT_MS, type CuriaHarness } from './harness.js';
 import { runTestCases } from './runner.js';
 import { evaluateCases } from './evaluator.js';
@@ -208,8 +208,10 @@ async function main(): Promise<void> {
       ],
       { inputsOf: (tool) => { const t = harness.stack.toolRegistry.get(tool); return t ? Object.keys(t.manifest.inputs ?? {}) : undefined; } },
     );
+    // A target naming an agent this stack does not run would only time out.
+    problems.push(...targetProblems(cases, (name) => harness.stack.agentRegistry.has(name)));
     if (problems.length > 0) {
-      err('\nStub problems (fix before a paid run):');
+      err('\nStub and target problems (fix before a paid run):');
       for (const p of problems) err(`   ${p}`);
       exitCode = 1;
       return;

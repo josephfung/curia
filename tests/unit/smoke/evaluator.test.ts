@@ -149,6 +149,48 @@ describe('Evaluator', () => {
         .toContain('unknown external sender');
     });
 
+    describe('a case targeting a specialist (#1977)', () => {
+      const spec = { agent: 'ceo-inbox', via: 'bullpen' as const, from: 'calendar', topic: 'Consult: {{day:today}}', opening: 'CONSULT REQUEST\nContext: source_message_id={{x}}' };
+      const resolved = { ...spec, topic: 'Consult: Monday, October 5', opening: 'CONSULT REQUEST\nContext: source_message_id=msg-1' };
+      const targeted = (): CaseExecution => execution({
+        testCase: testCase({ target: spec, judgeToolCalls: true }),
+        target: resolved,
+        responses: [{
+          prompt: 'CONSULT REPLY', content: 'Drafted.', agentId: 'ceo-inbox', durationMs: 1,
+          toolCalls: [{ name: 'ceo-inbox-draft-reply', input: { body: 'Monday works' }, result: { success: true, data: {} } }],
+        }],
+        agentCalls: [
+          { agentId: 'ceo-inbox', toolName: 'ceo-inbox-draft-reply', input: { body: 'Monday works' }, disposition: 'stubbed', success: true },
+          { agentId: 'calendar', toolName: 'calendar-list-events', input: {}, disposition: 'stubbed', success: true },
+        ],
+      });
+
+      it('names the agent under test and who posted the turn', () => {
+        const input = formatJudgeInput(targeted());
+        expect(input).toContain('## Agent under test\nceo-inbox: a specialist agent');
+        expect(input).toContain('Judge every behavior against what ceo-inbox did');
+        expect(input).toContain('## Sender\nthe calendar agent, posting on the bullpen thread below and mentioning ceo-inbox');
+        expect(input).toContain("ceo-inbox's tool calls:\n1. ceo-inbox-draft-reply");
+        expect(input).toContain("ceo-inbox's response:\nDrafted.");
+        expect(input).not.toContain('Assistant response');
+      });
+
+      it('shows the thread as the agent saw it, placeholders resolved', () => {
+        const input = formatJudgeInput(targeted());
+        expect(input).toContain('Topic: Consult: Monday, October 5');
+        expect(input).toContain('ceo-inbox opened it with:\nCONSULT REQUEST\nContext: source_message_id=msg-1');
+        expect(input).not.toContain('{{');
+      });
+
+      it('lists other agents\' calls separately, not the judged agent\'s twice', () => {
+        const input = formatJudgeInput(targeted());
+        const others = input.slice(input.indexOf("## Other agents' tool calls"));
+        expect(others).toContain('calendar → calendar-list-events');
+        expect(others).not.toContain('ceo-inbox → ceo-inbox-draft-reply');
+        expect(input).not.toContain("Specialists' tool calls");
+      });
+    });
+
     it('interleaves turns with their responses', () => {
       const exec = execution({
         testCase: testCase({ turns: [{ role: 'user', content: 'first' }, { role: 'user', content: 'second' }] }),

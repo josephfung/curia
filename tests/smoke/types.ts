@@ -30,11 +30,34 @@ export interface Turn {
 export type SmokeSender = 'principal' | 'unknown';
 export const SMOKE_SENDERS: readonly SmokeSender[] = ['principal', 'unknown'];
 
+/** How a targeted case's turns reach its agent. Only bullpen so far (#1977). */
+export type TargetDelivery = 'bullpen';
+export const TARGET_DELIVERIES: readonly TargetDelivery[] = ['bullpen'];
+
+/**
+ * A case that addresses a specialist rather than the coordinator (#1977). The agent
+ * opened a bullpen thread with `opening`; each turn is `from`'s message on that thread,
+ * mentioning the agent, and BullpenDispatcher turns it into the agent's task, as in
+ * production. The agent's own turn is captured and judged.
+ */
+export interface CaseTarget {
+  agent: string;
+  via: TargetDelivery;
+  /** The agent that posts each turn on the thread (e.g. calendar, answering a consult). */
+  from: string;
+  topic: string;
+  /** The thread's first message, posted by `agent` when it opened the thread. */
+  opening: string;
+}
+
 export interface TestCase {
   name: string;
   description: string;
   tags: string[];
+  /** Who sends the turns to the coordinator. Not used by a targeted case. */
   sender: SmokeSender;
+  /** Set when the case addresses a specialist instead of the coordinator. */
+  target?: CaseTarget;
   /** Show the judge each turn's tool calls and results, not only the reply text. */
   judgeToolCalls: boolean;
   /**
@@ -55,9 +78,10 @@ export interface CapturedResponse {
   /** The message sent for this turn, date placeholders resolved. */
   prompt: string;
   content: string;
+  /** Whose turn this was: the coordinator, or a targeted case's agent. */
   agentId: string;
   durationMs: number;
-  /** The coordinator's tool calls during this turn, in order. */
+  /** That agent's tool calls during this turn, in order. */
   toolCalls: ObservedToolCall[];
   /** Set when the Dispatcher suppressed delivery: the sender never received the reply. */
   noReplyReason?: string;
@@ -65,6 +89,8 @@ export interface CapturedResponse {
 
 export interface CaseExecution {
   testCase: TestCase;
+  /** A targeted case's target with its placeholders resolved, as the agent saw it. */
+  target?: CaseTarget;
   responses: CapturedResponse[];
   /** Every agent's tool calls during the case (specialists included), for stub authoring. */
   agentCalls: AgentToolCall[];

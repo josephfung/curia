@@ -93,28 +93,34 @@ export async function evaluateCases(
 export function formatJudgeInput(exec: CaseExecution, principalName?: string, today?: string): string {
   const tc = exec.testCase;
   const principal = principalName ? `the principal, ${principalName}` : 'the principal';
-  const sender = tc.sender === 'unknown'
-    ? `an unknown external sender by email (no contact record, not ${principal})`
-    : `${principal} (the executive the assistant works for)`;
+  // A targeted case is judged against its agent, not the coordinator: "drafts a reply"
+  // means that agent drafted it. The resolved target is the one the agent saw.
+  const target = exec.target ?? tc.target;
+  const agent = target?.agent ?? 'coordinator';
+  const sender = target
+    ? `the ${target.from} agent, posting on the bullpen thread below and mentioning ${target.agent}`
+    : tc.sender === 'unknown'
+      ? `an unknown external sender by email (no contact record, not ${principal})`
+      : `${principal} (the executive the assistant works for)`;
 
   const turns = tc.turns.map((turn, i) => {
     const response = exec.responses[i];
     // What was actually sent: the turn with its date placeholders resolved.
     const lines = [`### Turn ${i + 1}`, `Message:`, (response?.prompt ?? turn.content).trim(), ``];
     if (tc.judgeToolCalls) {
-      lines.push(`Tool calls:`, formatToolCalls(response?.toolCalls ?? []), ``);
+      lines.push(target ? `${agent}'s tool calls:` : `Tool calls:`, formatToolCalls(response?.toolCalls ?? []), ``);
     }
-    lines.push(`Assistant response:`, response ? response.content : '(none)');
+    lines.push(target ? `${agent}'s response:` : `Assistant response:`, response ? response.content : '(none)');
     if (response?.noReplyReason) {
       lines.push(`(Delivery was suppressed — ${response.noReplyReason}. The sender did not receive this.)`);
     }
     return lines.join('\n');
   });
 
-  // The coordinator's calls are shown per turn above; what it delegated happened in the
+  // The judged agent's calls are shown per turn above; what it delegated happened in the
   // specialists' own turns. Without these, "created the event on the principal's calendar"
   // or "took no action for the stranger" would be judged from the coordinator's prose alone.
-  const specialistCalls = tc.judgeToolCalls ? exec.agentCalls.filter(c => c.agentId !== 'coordinator') : [];
+  const specialistCalls = tc.judgeToolCalls ? exec.agentCalls.filter(c => c.agentId !== agent) : [];
 
   return [
     `## Scenario`,
@@ -123,6 +129,20 @@ export function formatJudgeInput(exec: CaseExecution, principalName?: string, to
     // Without it the judge grades dates against its own training-era "now" and marks a
     // correct "next Tuesday" wrong.
     ...(today ? [`## Today`, today, ``] : []),
+    ...(target
+      ? [
+          `## Agent under test`,
+          `${target.agent}: a specialist agent, not the coordinator the principal talks to. ` +
+            `Judge every behavior against what ${target.agent} did. Its tool calls are its actions; ` +
+            `its response is the report it ends its turn with, which goes to no person.`,
+          ``,
+          `## Bullpen thread`,
+          `Topic: ${target.topic}`,
+          `${target.agent} opened it with:`,
+          target.opening.trim(),
+          ``,
+        ]
+      : []),
     `## Sender`,
     sender,
     ``,
@@ -131,7 +151,7 @@ export function formatJudgeInput(exec: CaseExecution, principalName?: string, to
     ``,
     ...(tc.judgeToolCalls
       ? [
-          `## Specialists' tool calls (work the assistant delegated)`,
+          target ? `## Other agents' tool calls` : `## Specialists' tool calls (work the assistant delegated)`,
           specialistCalls.length === 0
             ? '(none)'
             : specialistCalls.map((c, i) => {

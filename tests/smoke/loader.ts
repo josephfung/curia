@@ -5,7 +5,17 @@ import { parseStubs } from '../scenarios/loader.js';
 import type { ToolStub } from '../scenarios/types.js';
 import { resolveDatePlaceholders } from './date-placeholders.js';
 import { resolvePrincipalPlaceholders } from './fixtures.js';
-import { SMOKE_SENDERS, type TestCase, type Turn, type ExpectedBehavior, type BehaviorWeight, type SmokeSender } from './types.js';
+import {
+  SMOKE_SENDERS,
+  TARGET_DELIVERIES,
+  type BehaviorWeight,
+  type CaseTarget,
+  type ExpectedBehavior,
+  type SmokeSender,
+  type TargetDelivery,
+  type TestCase,
+  type Turn,
+} from './types.js';
 
 const VALID_WEIGHTS: BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
 
@@ -15,6 +25,7 @@ interface RawTestCase {
   description?: string;
   tags?: string[];
   sender?: unknown;
+  target?: unknown;
   judge_tool_calls?: unknown;
   tool_stubs?: unknown;
   known_failure?: unknown;
@@ -26,10 +37,49 @@ interface RawTestCase {
 // A misspelt key (`judge_tool_call`, `senders`) would otherwise be dropped silently and the
 // case would run with the default — passing for the wrong reason.
 const CASE_KEYS: ReadonlySet<string> = new Set([
-  'name', 'description', 'tags', 'sender', 'judge_tool_calls', 'tool_stubs', 'known_failure',
+  'name', 'description', 'tags', 'sender', 'target', 'judge_tool_calls', 'tool_stubs', 'known_failure',
   'turns', 'expected_behaviors', 'failure_modes',
 ]);
 const TURN_KEYS: ReadonlySet<string> = new Set(['role', 'content', 'delay_ms', 'tool_stubs']);
+const TARGET_KEYS: ReadonlySet<string> = new Set(['agent', 'via', 'from', 'topic', 'opening']);
+
+/** Agent names are lowercase and hyphenated (the registry rejects anything else at boot). */
+const AGENT_NAME = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * `target: { agent, via: bullpen, from, topic, opening }` — a case that addresses a
+ * specialist (#1977). Whether the agents exist is checked against the registry before a
+ * run (targetProblems below), since the loader does not boot the stack.
+ */
+function parseTarget(raw: unknown, filePath: string): CaseTarget | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`'target' must be a mapping in ${filePath}`);
+  }
+  const t = raw as Record<string, unknown>;
+  const unknownKeys = Object.keys(t).filter(k => !TARGET_KEYS.has(k));
+  if (unknownKeys.length > 0) {
+    throw new Error(`Unknown key(s) ${unknownKeys.map(k => `'${k}'`).join(', ')} in target of ${filePath}`);
+  }
+  for (const key of ['agent', 'from'] as const) {
+    if (typeof t[key] !== 'string' || !AGENT_NAME.test(t[key])) {
+      throw new Error(`'target.${key}' must be an agent name in ${filePath}`);
+    }
+  }
+  if (t['agent'] === t['from']) {
+    throw new Error(`'target.from' must be another agent than 'target.agent' in ${filePath}`);
+  }
+  if (!TARGET_DELIVERIES.includes(t['via'] as TargetDelivery)) {
+    throw new Error(`Invalid target.via '${String(t['via'])}' in ${filePath} — use ${TARGET_DELIVERIES.join(' or ')}`);
+  }
+  for (const key of ['topic', 'opening'] as const) {
+    if (typeof t[key] !== 'string' || t[key].trim() === '') {
+      throw new Error(`'target.${key}' must be non-empty text in ${filePath}`);
+    }
+  }
+  // Each field was checked above; the cast only names the shape.
+  return t as unknown as CaseTarget;
+}
 
 /** `known_failure: { issue: "#123" }` — the tracking issue is required, so the marker can be retired. */
 function parseKnownFailure(raw: unknown, filePath: string): { issue: string } | undefined {
@@ -67,6 +117,11 @@ export function loadTestCase(filePath: string): TestCase {
     throw new Error(`'judge_tool_calls' must be true or false in ${filePath}`);
   }
   const knownFailure = parseKnownFailure(raw.known_failure, filePath);
+  const target = parseTarget(raw.target, filePath);
+  // A targeted case's turns come from target.from on a bullpen thread; a sender would be ignored.
+  if (target && raw.sender !== undefined) {
+    throw new Error(`'sender' and 'target' cannot both be set in ${filePath} — a targeted case's turns come from target.from`);
+  }
   if (!raw.turns || raw.turns.length === 0) throw new Error(`Missing 'turns' in ${filePath}`);
   if (!raw.expected_behaviors || raw.expected_behaviors.length === 0) {
     throw new Error(`Missing 'expected_behaviors' in ${filePath}`);
@@ -105,7 +160,7 @@ export function loadTestCase(filePath: string): TestCase {
 
   // Catch a malformed or misspelt placeholder at load time, not mid-run.
   try {
-    assertResolvable([raw.tool_stubs, raw.turns.map(t => [t.content, t.tool_stubs])]);
+    assertResolvable([raw.tool_stubs, raw.turns.map(t => [t.content, t.tool_stubs]), target?.topic, target?.opening]);
   } catch (err) {
     throw new Error(`Bad placeholder in ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -115,6 +170,7 @@ export function loadTestCase(filePath: string): TestCase {
     description: raw.description ?? '',
     tags: raw.tags ?? [],
     sender: sender as SmokeSender,
+    ...(target ? { target } : {}),
     judgeToolCalls: raw.judge_tool_calls === true,
     toolStubs: parseStubs(raw.tool_stubs, filePath),
     ...(knownFailure ? { knownFailure } : {}),
@@ -137,6 +193,17 @@ function assertResolvable(value: unknown): void {
   );
   const leftover = JSON.stringify(resolved ?? null).match(/\{\{(?!\s*input:)[^}]*\}\}/);
   if (leftover) throw new Error(`unrecognised placeholder ${leftover[0]}`);
+}
+
+/** Targets naming an agent this stack does not run. Checked once the stack is up, before a paid run. */
+export function targetProblems(cases: TestCase[], isAgent: (name: string) => boolean): string[] {
+  return cases.flatMap(c => {
+    const target = c.target;
+    if (!target) return [];
+    return (['agent', 'from'] as const)
+      .filter(key => !isAgent(target[key]))
+      .map(key => `${c.name}: target.${key} '${target[key]}' is not a registered agent`);
+  });
 }
 
 /** The shared fixture world every case runs in (stubs/office.yaml), parsed and validated. */

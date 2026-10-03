@@ -9,21 +9,26 @@
 // publishes an inbound.message and reads the coordinator's
 // turn off the bus (tests/shared/turn-capture.ts): its tool calls and its reply.
 //
+// A targeted case (#1977) addresses a specialist instead: sendMessage() posts the turn on
+// the case's bullpen thread, mentioning the agent, and production's BullpenDispatcher
+// turns it into that agent's task. The agent's turn is captured the same way.
+//
 // The CLI points DATABASE_URL at a throwaway copy of the database (clone-db.ts) before
 // booting, so whatever the agents write is dropped with it. Tool stubs (stub-layer.ts)
 // answer calls test mode cannot serve.
 
 import { randomUUID } from 'node:crypto';
+import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
-import { createInboundMessage, type ModelFallbackEngagedEvent } from '../../src/bus/events.js';
+import { createAgentDiscuss, createInboundMessage, type ModelFallbackEngagedEvent } from '../../src/bus/events.js';
 import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import { createTurnCapture, withoutRecentHistory, type ObservedToolCall } from '../shared/turn-capture.js';
 import { createSmokeStubs, type SmokeStubs } from './stub-layer.js';
-import type { SmokeSender } from './types.js';
+import type { CaseTarget, SmokeSender } from './types.js';
 
-// How long each sendMessage() call waits for the coordinator's response.
+// How long each sendMessage() call waits for the agent's response.
 // Agentic flows that delegate and then work through the fixture office (read the
 // day, create three events, re-read to verify) legitimately take 90-150s on the
 // production model. Default is 180s, the scenario suite's; tunable via
@@ -42,7 +47,7 @@ export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout >
 const LATE_TURN_GRACE_MS = 60_000;
 
 /**
- * After a publish resolves (the whole turn is over), how long to wait for the coordinator's
+ * After a publish resolves (the whole turn is over), how long to wait for the agent's
  * response before calling the turn finished without one — e.g. the Dispatcher rejected
  * the inbound. Without this the case would sit out the full timeout and report it as one.
  */
@@ -58,6 +63,13 @@ export const UNKNOWN_SENDER_EMAIL = 'unknown-sender@example.test';
 /** A fresh conversation id for one case, shaped like the sender's channel. */
 export function conversationIdFor(sender: SmokeSender): string {
   return sender === 'unknown' ? `email:smoke-${randomUUID()}` : `smoke-${randomUUID()}`;
+}
+
+/** The bullpen thread a targeted case's turns are posted on. Its id is the conversation. */
+export interface TargetThread {
+  threadId: string;
+  topic: string;
+  participants: string[];
 }
 
 export interface HarnessOptions {
@@ -86,12 +98,28 @@ export interface CuriaHarness {
   /**
    * Send a single message and wait for the coordinator's turn to end. Rejects if it
    * errors or does not end within RESPONSE_TIMEOUT_MS.
+   *
+   * With `target`, the message is instead `target.spec.from`'s post on the thread,
+   * mentioning `target.spec.agent`, and the turn awaited is that agent's.
+   * `conversationId` must be the thread id: BullpenDispatcher runs the agent with the
+   * thread as its conversation.
    */
   sendMessage(options: {
     conversationId: string;
     content: string;
     sender?: SmokeSender;
+    target?: { spec: CaseTarget; thread: TargetThread };
   }): Promise<TurnResponse>;
+  /**
+   * Open a targeted case's thread: `target.agent` opened it with `target.opening`,
+   * addressed to `target.from`. Written to the database copy, like any agent's post.
+   */
+  openTargetThread(target: CaseTarget): Promise<TargetThread>;
+  /**
+   * Close the thread once the case is done. An open thread is injected into its
+   * participants' later prompts as a pending discussion, so a later case would see it.
+   */
+  closeTargetThread(target: CaseTarget, thread: TargetThread): Promise<void>;
   /**
    * Send a no-op warm-up message to absorb cold-start latency (DB pool
    * warm-up, first LLM API round-trip) before real test cases run.
@@ -128,13 +156,28 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   const dispatcher = new Dispatcher({ bus, logger, contactResolver, channelPolicies: undefined });
   dispatcher.register();
 
+  // Production's BullpenDispatcher, but acting only on the posts a targeted case makes.
+  // Registered for every agent.discuss, it would also wake agents on each post they make
+  // to one another mid-case: turns nothing here awaits, which would run on into the next
+  // case's stubs. So agent-to-agent bullpen wakes still do not happen in smoke.
+  const casePosts = new Set<string>();
+  const caseOnlyBus = Object.assign(Object.create(bus) as EventBus, {
+    subscribe: (...[type, layer, handler]: Parameters<EventBus['subscribe']>) =>
+      bus.subscribe(type, layer, async (event) => {
+        if (!casePosts.has(event.id)) return;
+        await handler(event);
+      }),
+    publish: (...args: Parameters<EventBus['publish']>) => bus.publish(...args),
+  });
+  new BullpenDispatcher(caseOnlyBus, logger, stack.bullpenService, stack.agentRegistry).register();
+
   // -- No HTTP adapter, no CLI adapter, no SIGTERM handler --
   // This harness is headless: the only way to inject messages is sendMessage().
 
   const capture = createTurnCapture(bus);
 
   // A fallback means some agent ran on a different model than the one the run is labelled
-  // with. The shared capture only sees the coordinator's; specialists work in their own
+  // with. The shared capture only sees the awaited agent's; specialists work in their own
   // conversations, so collect every agent's here and let the runner charge the case.
   let fallbacks: string[] = [];
   bus.subscribe('model.fallback', 'system', async (event) => {
@@ -144,7 +187,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
 
   /**
    * Turns still running after sendMessage gave up on them. EventBus.publish awaits every
-   * subscriber, so a publish resolves only when the whole coordinator turn has finished;
+   * subscriber, so a publish resolves only when the whole agent turn has finished;
    * sendMessage therefore races the capture's timeout instead of awaiting it. Shutdown
    * waits (bounded) for these before closing the pool.
    */
@@ -154,34 +197,57 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     const settled = delivery
       .catch((err: unknown) => {
         // sendMessage has its outcome already (capture.fail or the timeout).
-        logger.error({ err, conversationId }, 'smoke harness: a coordinator turn failed');
+        logger.error({ err, conversationId }, 'smoke harness: an agent turn failed');
       })
       .finally(() => { lateTurns.delete(settled); });
     lateTurns.add(settled);
   }
 
-  async function sendMessage(options: {
-    conversationId: string;
-    content: string;
-    sender?: SmokeSender;
-  }): Promise<TurnResponse> {
-    const start = Date.now();
-    const sender = options.sender ?? 'principal';
-    // capture.fail() is keyed by conversation, and later turns of a case reuse this
-    // conversation id. Once this turn has its outcome, its own late handlers below must
-    // not fail whichever turn is pending by then.
-    let turnEnded = false;
-    const waiter = capture.waitFor(options.conversationId, RESPONSE_TIMEOUT_MS)
-      .then((outcome) => { turnEnded = true; return outcome; });
-    const failThisTurn = (err: unknown): void => {
-      if (!turnEnded) capture.fail(options.conversationId, err);
-    };
+  async function openTargetThread(target: CaseTarget): Promise<TargetThread> {
+    const opened = await stack.bullpenService.openThread(
+      target.topic,
+      target.agent,
+      [target.agent, target.from],
+      target.opening,
+      [target.from],
+    );
+    return { threadId: opened.thread.id, topic: opened.thread.topic, participants: opened.thread.participants };
+  }
+
+  async function closeTargetThread(target: CaseTarget, thread: TargetThread): Promise<void> {
+    await stack.bullpenService.closeThread(thread.threadId, target.agent);
+  }
+
+  /** Post `from`'s turn on the thread, then publish the agent.discuss a bullpen reply does. */
+  async function postOnThread(target: CaseTarget, thread: TargetThread, content: string): Promise<void> {
+    const message = await stack.bullpenService.postMessage(thread.threadId, target.from, content, [target.agent]);
+    const discuss = createAgentDiscuss({
+      threadId: thread.threadId,
+      messageId: message.id,
+      topic: thread.topic,
+      senderAgentId: target.from,
+      participants: thread.participants,
+      mentionedAgentIds: [target.agent],
+      content,
+      parentEventId: randomUUID(),
+    });
+    casePosts.add(discuss.id);
+    try {
+      // Resolves when the woken agent's turn is over, like an inbound publish.
+      await bus.publish('agent', discuss);
+    } finally {
+      casePosts.delete(discuss.id);
+    }
+  }
+
+  /** The coordinator path: an inbound.message from the principal or an unknown sender. */
+  function publishInbound(conversationId: string, content: string, sender: SmokeSender): Promise<void> {
     const inbound = sender === 'unknown'
       ? createInboundMessage({
-          conversationId: options.conversationId,
+          conversationId,
           channelId: 'email',
           senderId: UNKNOWN_SENDER_EMAIL,
-          content: options.content,
+          content,
           // What the email adapter attaches, minus anything a test cannot know.
           metadata: {
             participants: [{ email: UNKNOWN_SENDER_EMAIL, role: 'from' }],
@@ -191,27 +257,55 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
           },
         })
       : createInboundMessage({
-          conversationId: options.conversationId,
+          conversationId,
           // The contact resolver treats smoke-test as a local console session: the principal.
           channelId: 'smoke-test',
           senderId: 'smoke-test-user',
-          content: options.content,
+          content,
         });
+    return bus.publish('channel', inbound);
+  }
+
+  async function sendMessage(options: {
+    conversationId: string;
+    content: string;
+    sender?: SmokeSender;
+    target?: { spec: CaseTarget; thread: TargetThread };
+  }): Promise<TurnResponse> {
+    const start = Date.now();
+    const sender = options.sender ?? 'principal';
+    const target = options.target;
+    if (target && target.thread.threadId !== options.conversationId) {
+      // The agent's events carry the thread id; a different id would never match them.
+      throw new Error('a targeted turn must use its thread id as the conversation id');
+    }
+    const agentId = target?.spec.agent ?? 'coordinator';
+    // capture.fail() is keyed by conversation, and later turns of a case reuse this
+    // conversation id. Once this turn has its outcome, its own late handlers below must
+    // not fail whichever turn is pending by then.
+    let turnEnded = false;
+    const waiter = capture.waitFor(options.conversationId, RESPONSE_TIMEOUT_MS, agentId)
+      .then((outcome) => { turnEnded = true; return outcome; });
+    const failThisTurn = (err: unknown): void => {
+      if (!turnEnded) capture.fail(options.conversationId, err);
+    };
 
     let delivery: Promise<void>;
     try {
-      delivery = bus.publish('channel', inbound);
+      delivery = target
+        ? postOnThread(target.spec, target.thread, options.content)
+        : publishInbound(options.conversationId, options.content, sender);
     } catch (err) {
       failThisTurn(err);
       delivery = Promise.resolve();
     }
     // A publish that fails outright must end the turn now, not after the timeout. One that
-    // completes without a coordinator response ends it shortly after, instead of waiting
+    // completes without the agent's response ends it shortly after, instead of waiting
     // out the timeout. Both are no-ops once this turn has its outcome.
     delivery.then(
       () => {
         // unref: the grace timer alone must not keep the process alive at shutdown.
-        setTimeout(() => failThisTurn(new Error('the turn ended without a coordinator response')), NO_RESPONSE_GRACE_MS).unref();
+        setTimeout(() => failThisTurn(new Error(`the turn ended without a response from ${agentId}`)), NO_RESPONSE_GRACE_MS).unref();
       },
       (err: unknown) => failThisTurn(err),
     );
@@ -269,6 +363,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     stack,
     stubs,
     sendMessage,
+    openTargetThread,
+    closeTargetThread,
     warmUp,
     settle,
     takeFallbacks: () => {
