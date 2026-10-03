@@ -9,7 +9,13 @@
 # MCP-backed tools (create_doc, search_drive_files, etc.) are NOT listed here —
 # they are loaded by loadMcpServers and are not on-disk ToolDiscovery items.
 #
-# skills: — SKILL.md bundles (Phase 2 + #1494). Member tools still enroll via tools:.
+# skills: — SKILL.md bundles (Phase 2 + #1494). An enabled bundle enrolls EVERY member
+# tool its SKILL.md lists (#1974) — membership is declared once, in the SKILL.md, not
+# repeated here. Credential-dependent members are kept off by the gate on the tool
+# itself (install.requires_secrets in its tool.json), not by omission: reconciliation
+# skips a gated member until its keys are in the vault, then enrolls it on the next boot.
+# That covers web-search (tavily_api_key), the calendar-* tools (nylas_api_key +
+# ceo_nylas_grant_id) and query-/delete-relationship (openai_api_key).
 # MCP-projected skills (google-workspace, etc.) are NOT listed — they appear in
 # SkillRegistry at runtime from loadMcpServers (ADR-032).
 skills:
@@ -25,95 +31,36 @@ skills:
   - context-bridge
   - executive-profile
   - setup
-  # calendar skill may be enabled while calendar-* tools stay off until credentials
-  # are configured (same pattern as the calendar agent).
   # NOTE: tasks = heartbeat + task-*/plan/checkpoint; documents = doc-* workspace.
   # NOTE: ceo-inbox / learning / diagnostics skill bundles excluded — enable alongside
-  #        their agents (same rationale as the member-tool exclusions below).
+  #        their agents. Enabling one enrolls its member tools on the next boot.
 tools:
+  # STANDALONE tools only — tools that belong to no SKILL.md bundle. A bundle's member
+  # tools are enrolled through the bundle (skills: above), never listed here; a unit test
+  # (registry-defaults-coverage.test.ts) fails if a default bundle's member appears here.
   - tool-registry
   - skill-activate
   # Core communication
-  - email-send
-  - email-reply
-  - email-archive
-  - email-list
-  - email-get
-  - email-download-attachment
-  - email-draft-save
-  - email-label
-  - email-list-folders
-  - email-create-folder
-  - email-mark-read
-  - send-draft
   - signal-send
   - sms-send
   - slack-send
   # Memory + knowledge
-  - memory-query
-  - memory-store
-  - memory-confirm
   - entity-context
-  # Scheduling
-  - scheduler-create
-  - scheduler-list
-  - scheduler-cancel
-  - scheduler-update
-  - scheduler-report
-  # Contacts
-  - contact-create
-  - contact-find-duplicates
-  - contact-grant-permission
-  - contact-link-identity
-  - contact-list
-  - contact-lookup
-  - contact-merge
-  - contact-register
-  - contact-rename
-  - contact-revoke-permission
-  - contact-set-identity-status
-  - contact-unlink-identity
-  - contact-update
-  # Tasks
-  - checkpoint
-  - plan
-  - task-create
-  - task-list
-  - task-complete
-  - task-update
-  # Config + identity
+  # Config
   - config-store
-  - doc-list
-  - doc-read
-  - doc-search
-  - doc-write
-  - executive-profile-get
-  - executive-profile-update
-  - behavioral-preferences-update
   # Utility
   - date-resolve
-  - context-bridge-release
-  - context-bridge-keep-open
-  - decay-warnings-list
   - delegate
   - async-offramp
   - file-parse
   - request-clarification
   - bullpen
-  - web-fetch
-  - web-browser
   - drive-download-file
   - image-generate
   # Personal vault (agent-captured user.* secrets)
   - secret-capture-request
   - list-user-secrets
   # Autonomy
-  - get-autonomy
-  - set-autonomy
-  - approve-action
-  - deny-action
-  - dismiss-action
-  - list-pending-actions
   - activity-log
   - approval-expiry-sweep
   # Infrastructure-only: re-publishes a Gate C–withheld dispatcher relay after CEO
@@ -124,24 +71,20 @@ tools:
   #        read internal audit + operational state and are the principal-only
   #        diagnostics agent's toolset. Opt-in: enable them alongside the diagnostics
   #        agent (Settings → Skills), not on a fresh install.
-  # NOTE: web-search excluded — gated by install.requires_secrets: [tavily_api_key].
-  #        Stays admin-enabled: an operator provisions the Tavily key in the console
-  #        (Settings → Skills → web-search), which lifts the gate and lets them install/enable it.
-  # NOTE: calendar-* excluded — require Google Calendar credentials; enable after calendar setup
   # NOTE: ceo-inbox-* excluded — companion to the ceo-inbox agent; enable alongside it.
   #        The email-observation-learning companions (voice-learn, task-completion-from-sent,
   #        list-learning-digest, resolve-learning-digest) are likewise excluded and must be
   #        enabled alongside ceo-inbox — even though list/resolve are pinned to the coordinator,
   #        they only produce output once the ceo-inbox observer subsystem is running.
-  # NOTE: KG skills (extract-facts, extract-relationships, query-relationships, delete-relationship)
-  #        excluded — require OpenAI embeddings
+  # NOTE: KG extractors (extract-facts, extract-relationships) excluded — require OpenAI
+  #        embeddings. Standalone tools, so no bundle enrolls them.
 agents:
   - coordinator
   - setup-wizard       # required for onboarding on a fresh install
   - contacts
   - research-analyst
   - meeting-debrief
-  # NOTE: calendar excluded — calendar-* skills are not default; enable after calendar credentials configured
+  # NOTE: calendar agent excluded — enable after calendar credentials are configured
   # NOTE: ceo-inbox excluded — specialized inbox agent; must be enabled manually
   # NOTE: diagnostics excluded — principal-only, read-only forensic agent (#1356). Opt-in:
   #        reads internal audit + operational state, so an operator enables it (and its
