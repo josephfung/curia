@@ -205,6 +205,24 @@ describe('delegation failure reply leaks (#1975, #1976)', () => {
     expect(extractReplyBlock('no tags at all')).toBeNull();
   });
 
+  it('drops an abandoned open block and the thinking inside it', () => {
+    const clean = "I couldn't put together your morning briefing today.";
+    const draft = `<reply>Hmm, the specialist declined. I should not mention the principal's contact. Let me redo.\n${reply(clean)}`;
+    expect(extractReplyBlock(draft)).toBe(clean);
+    const selected = selectDelegationFailureReply({ ...morning, modelText: draft });
+    expect(selected.via).toBe('model');
+    expect(selected.content).toBe(clean);
+  });
+
+  it('rejects a reply block that echoes the specialist-naming instruction (#1975)', () => {
+    const selected = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply('Refer to the specialist only as "calendar specialist". Your morning briefing failed.'),
+    });
+    expect(selected.via).toBe('fallback');
+    expect(selected.rejected).toBe('prompt_echo');
+  });
+
   it('rejects a reply block that echoes the narration instructions', () => {
     const selected = selectDelegationFailureReply({
       ...morning,
@@ -239,6 +257,51 @@ describe('delegation failure reply leaks (#1975, #1976)', () => {
     expect(selected.via).toBe('fallback');
     expect(selected.rejected).toBe('uuid');
     expect(selected.content).not.toContain(principalUuid);
+
+    // Glued to an id prefix, where a word boundary would not match.
+    const glued = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply(`I couldn't prepare your morning briefing for contact_${principalUuid}.`),
+    });
+    expect(glued.rejected).toBe('uuid');
+  });
+
+  it('rejects a protocol marker and an empty draft, and reports no rejection when there was no draft', () => {
+    const protocol = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply('{"_curia_protocol":"delegation_failure"} morning briefing'),
+    });
+    expect(protocol.rejected).toBe('protocol');
+    expect(selectDelegationFailureReply({ ...morning, modelText: '   ' }).rejected).toBe('empty');
+    const none = selectDelegationFailureReply(morning);
+    expect(none.via).toBe('fallback');
+    expect(none.rejected).toBeUndefined();
+  });
+
+  it('does not let words the prompt supplies pass the topic check', () => {
+    // "follow", "task" and "time" are in the request, but the prompt hands the model
+    // those words, so a stock line using them says nothing about this request.
+    const selected = selectDelegationFailureReply({
+      displayName: 'contacts specialist',
+      agentId: 'contacts',
+      reason: 'timeout',
+      escalated: true,
+      request: 'Add a task to follow up with Dana next time',
+      modelText: reply("I didn't hear back from the contacts specialist in time. A follow-up task has already been logged."),
+    });
+    expect(selected.rejected).toBe('off_topic');
+  });
+
+  it('suggests a retry only when a retry could help', () => {
+    const notEscalated = { ...morning, escalated: false };
+    const retry = /try again/i;
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'timeout', declined: false })).toMatch(retry);
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'tool_error', declined: false })).toMatch(retry);
+    // May have gone through: a retry could send or post twice.
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'timeout', declined: false, possiblySucceeded: true }))
+      .not.toMatch(retry);
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'blocked', declined: false })).not.toMatch(retry);
+    expect(formatDelegationFailureFallback(notEscalated)).not.toMatch(retry);
   });
 
   it('never quotes the request on any fallback branch', () => {
