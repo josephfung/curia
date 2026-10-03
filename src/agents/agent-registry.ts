@@ -11,7 +11,8 @@ export interface AgentRegistryEntry {
   role: string;
   description: string;
   /**
-   * Principal-facing name from agent YAML `display_name` (#1860).
+   * Agent YAML `display_name` (#1860). Delegation-failure replies reject a
+   * draft that uses it rather than showing it (#1975).
    * Absent when the file does not set one — callers derive a label from `name`.
    */
   displayName?: string;

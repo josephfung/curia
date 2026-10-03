@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { containsRawAgentId, principalAgentLabel, redactRawAgentId } from '../../../src/agents/agent-display-name.js';
+import { containsRawAgentId, principalAgentLabel } from '../../../src/agents/agent-display-name.js';
 import {
+  delegationFailureNarrationPrompt,
+  extractReplyBlock,
   formatDelegationFailureFallback,
   selectDelegationFailureReply,
   transcriptForNarration,
@@ -34,119 +36,302 @@ describe('principal agent labels (#1860)', () => {
     expect(principalAgentLabel('calendar', 'calendar')).toBe('calendar specialist');
     expect(principalAgentLabel('calendar', 'Calendar')).toBe('calendar specialist');
   });
-
-  it('redacts a single-word id only in harness shapes, not in prose', () => {
-    const label = 'calendar specialist';
-    expect(redactRawAgentId('the calendar is full', 'calendar', label)).toBe('the calendar is full');
-    expect(redactRawAgentId("I don't have write access to that calendar", 'calendar', label))
-      .toBe("I don't have write access to that calendar");
-    expect(redactRawAgentId('calendarId', 'calendar', label)).toBe('calendarId');
-    expect(redactRawAgentId('the calendar specialist', 'calendar', label)).toBe('the calendar specialist');
-    expect(redactRawAgentId("Specialist 'calendar' refused", 'calendar', label))
-      .toBe(`Specialist '${label}' refused`);
-    expect(redactRawAgentId('Specialist "Calendar" refused', 'calendar', label))
-      .toBe(`Specialist "${label}" refused`);
-    expect(redactRawAgentId('ask @calendar about it', 'calendar', label)).toBe(`ask ${label} about it`);
-    expect(redactRawAgentId('Social-Media refused', 'social-media', 'social team')).toBe('social team refused');
-  });
 });
 
-describe('delegation failure reply selection (#1860)', () => {
+/** Wrap a draft the way the narration prompt asks the model to. */
+function reply(text: string): string {
+  return `<reply>${text}</reply>`;
+}
+
+describe('delegation failure fallback (#1860, #1975, #1976)', () => {
   const base = {
     displayName: 'social team',
     agentId: 'social-media',
     escalated: true,
-    delegateTask: 'Trim the k8m5 draft',
+    request: 'Trim the k8m5 draft',
   };
+  const branches = [
+    { reason: 'timeout', possiblySucceeded: true },
+    { reason: 'blocked' },
+    { reason: 'tool_error' },
+    { reason: 'specialist_decline', declined: true },
+  ];
 
-  it('quotes the request on every fallback branch and never the registry id', () => {
-    const branches = [
-      { reason: 'timeout', possiblySucceeded: true },
-      { reason: 'blocked' },
-      { reason: 'tool_error' },
-      { reason: 'specialist_decline', declined: true, detail: "Specialist 'social-media' refused" },
-    ];
+  it('speaks for itself on every branch: no specialist, no registry id', () => {
     const texts = branches.map((branch) => formatDelegationFailureFallback({ ...base, ...branch }));
     for (const text of texts) {
       expect(text).not.toContain('social-media');
-      expect(text).toContain('social team');
-      expect(text).toContain('Trim the k8m5 draft');
+      expect(text).not.toContain('social team');
+      expect(text).not.toMatch(/specialist/i);
+      expect(text).toMatch(/^I /);
     }
+    // Each kind of failure still reads differently.
     expect(new Set(texts).size).toBe(branches.length);
     expect(texts[0]).toMatch(/background|completing/i);
-    expect(texts[3]).toContain("'social team' refused");
+  });
 
-    const calendarProse = formatDelegationFailureFallback({
-      displayName: 'calendar specialist',
-      agentId: 'calendar',
+  it('never quotes the request, however internal it is', () => {
+    const principalUuid = '6f1c2a9e-4b7d-4e3a-9c51-2d8e7f0a1b34';
+    const brief = `Prepare the principal's (Alex Example, contact ID ${principalUuid}) morning briefing for today, Thursday.`;
+    for (const branch of branches) {
+      const text = formatDelegationFailureFallback({ ...base, ...branch, request: brief });
+      expect(text).not.toContain(principalUuid);
+      expect(text).not.toMatch(/principal/i);
+      expect(text).not.toContain('Alex Example');
+      expect(text).not.toContain('...');
+    }
+  });
+
+  it('does not relay the specialist decline prose from #1976', () => {
+    // The fallback input no longer carries the decline prose at all. Build the reply
+    // for the decline in #1976 and check none of its internals appear.
+    const text = formatDelegationFailureFallback({
+      displayName: 'ceo inbox specialist',
+      agentId: 'ceo-inbox',
       reason: 'specialist_decline',
       declined: true,
-      escalated: false,
-      delegateTask: 'Move Thursday',
-      detail: "I don't have write access to that calendar",
+      escalated: true,
+      request: 'Summarize where things stand in the long legal thread with Acme',
     });
-    expect(calendarProse).toContain("I don't have write access to that calendar");
-    expect(calendarProse).not.toContain('calendar specialist specialist');
+    for (const internal of ['nylas_api_key', 'workingDocs', 'doc-search', 'KG', 'specialist', 'principal']) {
+      expect(text).not.toContain(internal);
+    }
   });
 
-  it('keeps a model draft that quotes a request containing the domain noun', () => {
-    const ask = 'Check my calendar for Tuesday afternoon';
-    const modelText = `I could not finish "${ask}" with the calendar specialist.`;
+  it('suggests a retry only when a retry could help', () => {
+    const notEscalated = { ...base, escalated: false };
+    const retry = /try again/i;
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'timeout' })).toMatch(retry);
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'tool_error' })).toMatch(retry);
+    // May have gone through: a retry could send or post twice.
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'timeout', possiblySucceeded: true }))
+      .not.toMatch(retry);
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'blocked' })).not.toMatch(retry);
+    expect(formatDelegationFailureFallback({ ...notEscalated, reason: 'specialist_decline', declined: true }))
+      .not.toMatch(retry);
+  });
+});
+
+describe('delegation failure narration prompt (#1975)', () => {
+  const prompt = delegationFailureNarrationPrompt({
+    reason: 'specialist_decline',
+    declined: true,
+    escalated: false,
+  });
+
+  it('asks for a reply block and quotes nothing', () => {
+    expect(prompt).toContain('<reply>');
+    expect(prompt).not.toMatch(/include this phrase/i);
+  });
+
+  it('tells the model not to name the specialist, and does not hand it the word elsewhere', () => {
+    expect(prompt).toMatch(/do not mention specialists/i);
+    const others = prompt.split('\n').filter((line) => !/do not mention specialists/i.test(line));
+    expect(others.join('\n')).not.toMatch(/specialist|delegat/i);
+  });
+});
+
+describe('delegation failure draft selection (#1860, #1975)', () => {
+  const principalUuid = '6f1c2a9e-4b7d-4e3a-9c51-2d8e7f0a1b34';
+  const brief = `Prepare the principal's (Alex Example, contact ID ${principalUuid}) morning briefing for today, Thursday.`;
+  const morning = {
+    displayName: 'calendar specialist',
+    agentId: 'calendar',
+    reason: 'specialist_decline',
+    declined: true,
+    escalated: false,
+    request: 'Prepare the morning briefing for today.',
+  };
+
+  it('keeps a clean first-person draft about the request', () => {
+    const clean = "I couldn't put together your morning briefing today. Want me to have another go later?";
+    const selected = selectDelegationFailureReply({ ...morning, modelText: reply(clean) });
+    expect(selected).toEqual({ content: clean, via: 'model' });
+  });
+
+  it('keeps a paraphrase that shares a stem with the request', () => {
     const selected = selectDelegationFailureReply({
-      displayName: 'calendar specialist',
-      agentId: 'calendar',
+      displayName: 'social team',
+      agentId: 'social-media',
       reason: 'timeout',
       escalated: true,
-      delegateTask: ask,
-      modelText,
+      request: 'Trim the k8m5 draft',
+      modelText: reply("I didn't get the k8m5 trim done in time. I've logged a follow-up."),
     });
     expect(selected.via).toBe('model');
-    expect(selected.content).toBe(modelText);
+  });
 
-    const leaked = selectDelegationFailureReply({
-      displayName: 'calendar specialist',
-      agentId: 'calendar',
+  it('rejects the draft from #1975: reasoning, the narration prompt and the brief, with no reply block', () => {
+    const draft = [
+      'Wait — I need to write the reply. Let me reconsider.',
+      '',
+      'The task says: "A delegated task failed. Write the one reply the principal will read." The specialist declined the task. A follow-up task could not be logged. Do not call tools. Reply in plain text only.',
+      '',
+      'So I need to write a reply to the principal. Include the required phrase. Refer to the specialist only as "calendar specialist".',
+      '',
+      `The phrase to include: "${brief.slice(0, 117)}..."`,
+      '',
+      `Let me compose plainly.I wasn't able to get your morning briefing today — I asked the calendar specialist to ${brief.slice(0, 117)}... and the specialist declined the request.`,
+    ].join('\n');
+    const selected = selectDelegationFailureReply({ ...morning, modelText: draft });
+    expect(selected.via).toBe('fallback');
+    expect(selected.rejected).toBe('no_reply_block');
+    expect(selected.content).not.toContain(principalUuid);
+    expect(selected.content).not.toMatch(/principal/i);
+    expect(selected.content).not.toContain('Let me');
+  });
+
+  it('keeps only the reply block when the model reasons before it', () => {
+    const clean = "I couldn't put together your morning briefing today.";
+    const draft = `Wait, let me think about what to say.\nIt was turned down.\n${reply(clean)}`;
+    const selected = selectDelegationFailureReply({ ...morning, modelText: draft });
+    expect(selected.via).toBe('model');
+    expect(selected.content).toBe(clean);
+  });
+
+  it('takes the last complete reply block', () => {
+    expect(extractReplyBlock(`${reply('first try')}\nhmm\n${reply('  final  ')}`)).toBe('final');
+    expect(extractReplyBlock('<reply>never closed')).toBeNull();
+    expect(extractReplyBlock(reply('   '))).toBeNull();
+    expect(extractReplyBlock('no tags at all')).toBeNull();
+  });
+
+  it('drops an abandoned open block and the thinking inside it', () => {
+    const clean = "I couldn't put together your morning briefing today.";
+    const draft = `<reply>Hmm, that was turned down. I should not mention the principal's contact. Let me redo.\n${reply(clean)}`;
+    expect(extractReplyBlock(draft)).toBe(clean);
+    const selected = selectDelegationFailureReply({ ...morning, modelText: draft });
+    expect(selected.via).toBe('model');
+    expect(selected.content).toBe(clean);
+  });
+
+  it('rejects a draft that names the specialist', () => {
+    const selected = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply("I couldn't get your morning briefing: the Calendar Specialist declined it."),
+    });
+    expect(selected.via).toBe('fallback');
+    expect(selected.rejected).toBe('names_specialist');
+    expect(selected.content).not.toMatch(/specialist/i);
+  });
+
+  it('rejects a draft that talks about a specialist or handing off without the full label', () => {
+    for (const text of [
+      "The specialist didn't get back to me on your morning briefing.",
+      'My scheduling specialists could not prepare your morning briefing.',
+      'I delegated your morning briefing, but it was turned down.',
+    ]) {
+      expect(selectDelegationFailureReply({ ...morning, modelText: reply(text) }).rejected).toBe('names_specialist');
+    }
+  });
+
+  it('rejects an explicit display name, unless the request uses it as a domain noun', () => {
+    const team = { ...morning, displayName: 'social team', agentId: 'social-media', request: 'Trim the k8m5 draft' };
+    expect(selectDelegationFailureReply({
+      ...team,
+      modelText: reply("The social team couldn't trim the k8m5 draft."),
+    }).rejected).toBe('names_specialist');
+
+    const tracker = {
+      ...morning,
+      displayName: 'expense tracker',
+      agentId: 'expense-tracker',
+      request: 'Log this receipt in my expense tracker',
+    };
+    const onTopic = selectDelegationFailureReply({
+      ...tracker,
+      modelText: reply("I couldn't add that receipt to your expense tracker."),
+    });
+    expect(onTopic.via).toBe('model');
+  });
+
+  it('rejects a draft that leaks the registry id', () => {
+    const selected = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply("I couldn't get your morning briefing back from 'calendar'."),
+    });
+    expect(selected.rejected).toBe('agent_id');
+  });
+
+  it('rejects a reply block that echoes the narration instructions', () => {
+    const selected = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply('Something you were doing for the principal failed. Your morning briefing could not be prepared.'),
+    });
+    expect(selected.via).toBe('fallback');
+    expect(selected.rejected).toBe('prompt_echo');
+  });
+
+  it('does not treat restating the follow-up fact as a prompt echo', () => {
+    const selected = selectDelegationFailureReply({
+      ...morning,
+      reason: 'timeout',
+      declined: false,
+      escalated: true,
+      modelText: reply("I couldn't get your morning briefing in time. A follow-up task has already been logged."),
+    });
+    expect(selected.via).toBe('model');
+  });
+
+  it('rejects a reply block that carries a UUID, including one glued to an id prefix', () => {
+    const plain = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply(`I couldn't prepare your morning briefing for contact ${principalUuid}.`),
+    });
+    expect(plain.rejected).toBe('uuid');
+    expect(plain.content).not.toContain(principalUuid);
+    const glued = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply(`I couldn't prepare your morning briefing for contact_${principalUuid}.`),
+    });
+    expect(glued.rejected).toBe('uuid');
+  });
+
+  it('rejects a protocol marker and an empty draft, and reports no rejection when there was no draft', () => {
+    const protocol = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply('{"_curia_protocol":"delegation_failure"} morning briefing'),
+    });
+    expect(protocol.rejected).toBe('protocol');
+    expect(selectDelegationFailureReply({ ...morning, modelText: '   ' }).rejected).toBe('empty');
+    const none = selectDelegationFailureReply(morning);
+    expect(none.via).toBe('fallback');
+    expect(none.rejected).toBeUndefined();
+  });
+
+  it('rejects a stock line that ignores the request', () => {
+    const selected = selectDelegationFailureReply({
+      ...morning,
+      modelText: reply("Something went wrong on my end, sorry. I'll sort it out."),
+    });
+    expect(selected.rejected).toBe('off_topic');
+  });
+
+  it('does not let words the prompt supplies pass the topic check', () => {
+    // "follow", "task" and "time" are in the request, but the prompt hands the model
+    // those words, so a stock line using them says nothing about this request.
+    const selected = selectDelegationFailureReply({
+      displayName: 'contacts specialist',
+      agentId: 'contacts',
       reason: 'timeout',
       escalated: true,
-      delegateTask: ask,
-      modelText: `I could not get "${ask}" back from 'calendar'.`,
+      request: 'Add a task to follow up with Dana next time',
+      modelText: reply("I didn't get that done in time. A follow-up task has already been logged."),
     });
-    expect(leaked.via).toBe('fallback');
-    expect(leaked.content).toContain(ask);
-    expect(leaked.content).not.toContain("'calendar'");
+    expect(selected.rejected).toBe('off_topic');
   });
 
-  it('keeps a model draft that names the request and hides the id', () => {
-    const modelText = 'The social team did not finish "Trim the k8m5 draft" in time.';
-    const selected = selectDelegationFailureReply({ ...base, reason: 'timeout', modelText });
+  it('accepts any clean draft when the request has no content words to check', () => {
+    const selected = selectDelegationFailureReply({
+      ...morning,
+      request: 'do it',
+      modelText: reply("I couldn't get that done just now. I've logged a follow-up."),
+    });
     expect(selected.via).toBe('model');
-    expect(selected.content).toBe(modelText);
   });
+});
 
-  it('rejects a model draft that leaks the registry id or ignores the request', () => {
-    const leaked = selectDelegationFailureReply({
-      ...base,
-      reason: 'timeout',
-      modelText: 'I was not able to reach social-media about "Trim the k8m5 draft".',
-    });
-    expect(leaked.via).toBe('fallback');
-    expect(leaked.content).not.toContain('social-media');
-
-    const generic = selectDelegationFailureReply({
-      ...base,
-      reason: 'blocked',
-      modelText: 'Something went wrong with the social team.',
-    });
-    expect(generic.via).toBe('fallback');
-    expect(generic.content).toContain('Trim the k8m5 draft');
-  });
-
-  it('two different requests are not the same fallback sentence', () => {
-    const first = formatDelegationFailureFallback({ ...base, reason: 'timeout', delegateTask: 'Trim the k8m5 draft' });
-    const second = formatDelegationFailureFallback({ ...base, reason: 'timeout', delegateTask: 'Shorten the Friday post' });
-    expect(first).not.toBe(second);
-  });
-
+describe('narration transcript (#1860)', () => {
   it('drops tool blocks so the narration call does not require a tools list', () => {
     const messages: Message[] = [
       { role: 'user', content: 'Trim the k8m5 draft' },

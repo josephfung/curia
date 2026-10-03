@@ -10,7 +10,6 @@ tags:
   - delegation
   - failure-path
   - single-turn
-known_failure: { issue: "#1975" }
 
 # A non-retryable decline from the specialist, as the delegate tool reports it. That is
 # what triggers the narration path on the first attempt, every run. The decline prose
