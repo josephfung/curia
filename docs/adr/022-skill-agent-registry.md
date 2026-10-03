@@ -45,6 +45,21 @@ overriding a row an admin has already set. The defaults live in the repo, not in
 individual manifests — so an uploaded skill cannot self-enable by declaring itself a
 default. Only items in the trusted in-repo file can self-enrol on startup.
 
+> **Amended (#1974): bundle expansion.** Reconciliation also enrolls every member tool of
+> every *enabled* skill bundle that has no row yet. A bundle's membership is declared once,
+> in its SKILL.md `tools:` list, and `registry-defaults.yaml` `tools:` holds standalone
+> tools only — keeping membership in two lists let new members (e.g. `doc-place`) silently
+> miss enrollment. The trust root for a member tool is therefore the SKILL.md of a bundle
+> that is either in the trusted defaults file or was enabled by an admin; a bundle an
+> admin disabled is never expanded, and existing rows are never changed. Credential-
+> dependent members are held back by their own `install.requires_secrets` gate (the same
+> check an admin enable runs), not by omission from the defaults file: a gated member gets
+> no row until its keys are in the vault, and the next boot after that enrolls it. This
+> relies on there being no upload path that writes SKILL.md or tool manifests — every
+> on-disk item comes from the repo or the operator's deploy layer. An upload feature would
+> need to revisit it, since an uploaded tool named like a missing member of an enabled
+> bundle would enroll itself.
+
 **Enforcement is restart-based.** State changes (enable/disable) take effect on the next
 process restart. No hot-reload in this PR; hot-reload is a larger change with ordering
 and dependency concerns and is explicitly deferred.
