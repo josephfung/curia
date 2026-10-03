@@ -19,6 +19,7 @@ import type { Message } from './llm/provider.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { containsRawAgentId } from './agent-display-name.js';
 import { UUID_PATTERN } from '../util/uuid.js';
+import { escapeRegExp } from '../util/escape-regexp.js';
 
 export interface DelegationFailureReplyInput {
   /** The specialist's principal-facing label. Never written into the reply; a draft containing it is rejected. */
@@ -176,8 +177,10 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   const reply = extractReplyBlock(raw);
   if (reply === null) return 'no_reply_block';
   if (containsRawAgentId(reply, input.agentId)) return 'agent_id';
-  if (namesSpecialist(reply, input.displayName)) return 'names_specialist';
+  // Before names_specialist: protocol JSON carries "delegation_failure", and the
+  // more specific reason is the more useful log line.
   if (reply.includes('_curia_protocol')) return 'protocol';
+  if (namesSpecialist(reply, input.displayName, input.request)) return 'names_specialist';
   if (echoesInstructions(reply)) return 'prompt_echo';
   // Scheduler payloads carry the principal's contact id (#1800), and the model
   // sees the payload as the user turn. No reply to the principal needs a UUID.
@@ -186,10 +189,25 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   return { reply };
 }
 
-/** The exact label the runtime would have used for the specialist. An empty label matches nothing. */
-function namesSpecialist(reply: string, displayName: string): boolean {
-  const name = displayName.trim().toLowerCase();
-  return name.length > 0 && reply.toLowerCase().includes(name);
+// The words the prompt forbids: "specialist(s)" and any form of "delegate". Exact
+// terms, not phrasing, so this stays a structural check. Derived labels all end in
+// "specialist", so this also covers "the calendar specialist".
+const HANDOFF_TERMS = /\bspecialists?\b|\bdelegat/i;
+
+/**
+ * True when the draft talks about who the work was handed to.
+ *
+ * An explicit display name (`display_name: social team`) is matched on word
+ * boundaries, and only when the request does not use it too. A label that is a
+ * domain noun ("expense tracker") is how the principal names the thing, so a
+ * reply about "your expense tracker" is on topic, not a leak.
+ */
+function namesSpecialist(reply: string, displayName: string, request: string): boolean {
+  if (HANDOFF_TERMS.test(reply)) return true;
+  const name = displayName.trim();
+  if (name.length === 0) return false;
+  const label = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i');
+  return label.test(reply) && !label.test(request);
 }
 
 // Unanchored and unbounded: the UUID can sit anywhere, including glued to an id

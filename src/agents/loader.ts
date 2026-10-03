@@ -14,9 +14,11 @@ export interface AgentYamlConfig {
   role?: string;
   description?: string;
   /**
-   * Principal-facing label for delegation-failure replies (#1860). Not
-   * `persona.display_name`, which is interpolated into the system prompt only.
-   * When omitted, the runtime derives a label from `name`.
+   * What a model might call this agent in a principal-facing reply. Since #1975
+   * delegation-failure replies never name the specialist; this label is checked
+   * for and rejected, not shown. Not `persona.display_name`, which is
+   * interpolated into the system prompt only. When omitted, the runtime derives
+   * a label from `name`.
    */
   display_name?: string;
   persona?: {
@@ -102,7 +104,7 @@ export function loadAgentConfig(filePath: string): AgentYamlConfig {
 
   // Interpolate ${persona.*} placeholders in the system prompt.
   // persona.display_name, tone, and signature are prompt text only. The
-  // principal-facing label is the top-level display_name field (#1860).
+  // top-level display_name field is separate (#1860, #1975).
   // Keeping them as references in system_prompt avoids duplication and makes
   // persona changes a one-field edit rather than a find-and-replace across the prompt.
   if (config.persona) {

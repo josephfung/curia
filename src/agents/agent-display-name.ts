@@ -1,17 +1,19 @@
-// Principal-facing labels for agents (#1860).
+// Labels for agents, and the check for leaked registry ids (#1860).
 //
-// Registry ids (`social-media`) are internal handles. A message the principal
-// reads uses `display_name` from the agent YAML, or a phrase derived from the
-// id, so the handle itself never has to stand in as a name.
+// Registry ids (`social-media`) are internal handles that must never reach the
+// principal. The label is `display_name` from the agent YAML, or a phrase
+// derived from the id. Since #1975 the delegation-failure reply does not name
+// the specialist at all; the label is used to catch a draft that does.
 
 import { escapeRegExp } from '../util/escape-regexp.js';
 
 /**
- * Label safe to put in a principal-facing sentence.
+ * The name a model would most likely use for this agent in prose.
  *
- * An explicit display name that is just the registry id is ignored — that is
- * the leak this exists to stop. An empty id becomes "specialist" (no article
- * baked in; callers write "the ${label}").
+ * Delegation-failure replies no longer name the specialist (#1975), so this is
+ * now the label a draft is checked against and rejected for, not one written
+ * into the reply. An explicit display name that is just the registry id is
+ * ignored. An empty id becomes "specialist".
  */
 export function principalAgentLabel(agentId: string, explicitDisplayName?: string): string {
   const id = agentId.trim();

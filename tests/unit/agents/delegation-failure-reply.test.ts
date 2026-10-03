@@ -215,6 +215,36 @@ describe('delegation failure draft selection (#1860, #1975)', () => {
     expect(selected.content).not.toMatch(/specialist/i);
   });
 
+  it('rejects a draft that talks about a specialist or handing off without the full label', () => {
+    for (const text of [
+      "The specialist didn't get back to me on your morning briefing.",
+      'My scheduling specialists could not prepare your morning briefing.',
+      'I delegated your morning briefing, but it was turned down.',
+    ]) {
+      expect(selectDelegationFailureReply({ ...morning, modelText: reply(text) }).rejected).toBe('names_specialist');
+    }
+  });
+
+  it('rejects an explicit display name, unless the request uses it as a domain noun', () => {
+    const team = { ...morning, displayName: 'social team', agentId: 'social-media', request: 'Trim the k8m5 draft' };
+    expect(selectDelegationFailureReply({
+      ...team,
+      modelText: reply("The social team couldn't trim the k8m5 draft."),
+    }).rejected).toBe('names_specialist');
+
+    const tracker = {
+      ...morning,
+      displayName: 'expense tracker',
+      agentId: 'expense-tracker',
+      request: 'Log this receipt in my expense tracker',
+    };
+    const onTopic = selectDelegationFailureReply({
+      ...tracker,
+      modelText: reply("I couldn't add that receipt to your expense tracker."),
+    });
+    expect(onTopic.via).toBe('model');
+  });
+
   it('rejects a draft that leaks the registry id', () => {
     const selected = selectDelegationFailureReply({
       ...morning,
