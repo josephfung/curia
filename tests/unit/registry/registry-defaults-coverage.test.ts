@@ -10,8 +10,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import * as path from 'node:path';
 import { createLogger } from '../../../src/logger.js';
 import {
-  bundleMembersFromDiscovery, loadRegistryDefaults, reconcileRegistries, requiredSecretsFromDiscovery,
-  type RegistryDefaults,
+  bundleMembersFromDiscovery, loadRegistryDefaults, reconcileRegistries, toolManifestsFromDiscovery,
+  type RegistryDefaults, type ToolGateInfo,
 } from '../../../src/registry/reconcile.js';
 import type { IRegistryRepo, RegistryRow, SecretsLister } from '../../../src/registry/types.js';
 import { discoverToolManifests, loadToolsFromDirectory, type ToolDiscovery } from '../../../src/skills/loader.js';
@@ -55,8 +55,20 @@ let defaults: RegistryDefaults;
 let toolDiscovery: ToolDiscovery[];
 let skillDiscovery: SkillDiscovery[];
 let agentDiscovery: AgentDiscovery[];
-let bundleMembers: Map<string, string[]>;
-let requiredSecrets: Map<string, string[]>;
+let bundleMembers: Map<string, string[] | null>;
+let toolManifests: Map<string, ToolGateInfo | null>;
+/** Every vault key any tool declares in install.requires_secrets. */
+let allDeclaredKeys: string[];
+
+/** Capabilities boot leaves unbuilt when their integration isn't configured (src/index.ts). */
+const INTEGRATION_CAPABILITIES = ['nylasCalendarClient'];
+
+/** True when a tool declares a gate that can hold it back on an unconfigured install. */
+function isGated(tool: string): boolean {
+  const info = toolManifests.get(tool);
+  if (!info) return false;
+  return info.requiresSecrets.length > 0 || info.capabilities.some(c => INTEGRATION_CAPABILITIES.includes(c));
+}
 
 beforeAll(() => {
   defaults = loadRegistryDefaults(path.join(REPO_ROOT, 'config', 'registry-defaults.yaml'));
@@ -64,23 +76,25 @@ beforeAll(() => {
   skillDiscovery = discoverSkillManifests(path.join(REPO_ROOT, 'skills'));
   agentDiscovery = discoverAgentManifests(path.join(REPO_ROOT, 'agents'));
   bundleMembers = bundleMembersFromDiscovery(skillDiscovery);
-  requiredSecrets = requiredSecretsFromDiscovery(toolDiscovery);
+  toolManifests = toolManifestsFromDiscovery(toolDiscovery);
+  allDeclaredKeys = [...new Set([...toolManifests.values()].flatMap(i => i?.requiresSecrets ?? []))];
 });
 
-/** Reconcile a fresh install whose vault holds `vaultKeys`. */
-async function freshInstall(vaultKeys: string[]) {
+/** Reconcile a fresh install: bare (no credentials) or fully configured. */
+async function freshInstall(mode: 'bare' | 'configured') {
+  const vaultKeys = mode === 'configured' ? allDeclaredKeys : [];
   const toolRepo = new FreshRepo();
   const skillRepo = new FreshRepo();
   const agentRepo = new FreshRepo();
   const secrets: SecretsLister = { list: async () => vaultKeys };
   await reconcileRegistries({
     toolRepo, agentRepo, skillRepo,
-    toolDiscoveryNames: new Set(toolDiscovery.map(d => d.name)),
+    toolManifests,
     agentDiscoveryNames: new Set(agentDiscovery.map(d => d.name)),
     skillDiscoveryNames: new Set(skillDiscovery.map(d => d.name)),
     bundleMembers,
-    toolRequiredSecrets: requiredSecrets,
     secrets,
+    unavailableCapabilities: new Set(mode === 'configured' ? [] : INTEGRATION_CAPABILITIES),
     defaults,
     logger,
   });
@@ -125,21 +139,21 @@ describe('registry-defaults.yaml on a fresh install (#1974)', () => {
 
   it('lists only standalone tools under tools: — bundle members enroll through their bundle', () => {
     const owner = new Map<string, string>();
-    for (const [bundle, members] of bundleMembers) for (const t of members) owner.set(t, bundle);
+    for (const [bundle, members] of bundleMembers) for (const t of members ?? []) owner.set(t, bundle);
     const listedMembers = defaults.tools.filter(t => owner.has(t)).map(t => `${t} (bundle ${owner.get(t)})`);
     expect(listedMembers, 'remove these from tools: — membership lives in the SKILL.md').toEqual([]);
   });
 
-  it('every default-bundle member is enabled, or held back by a declared requires_secrets gate', async () => {
-    const enabled = await freshInstall([]);
+  it('every default-bundle member is enabled, or held back by a gate it declares', async () => {
+    const enabled = await freshInstall('bare');
     const neither = defaultBundleMembers()
-      .filter(({ tool }) => !enabled.tools.has(tool) && !requiredSecrets.has(tool))
+      .filter(({ tool }) => !enabled.tools.has(tool) && !isGated(tool))
       .map(({ bundle, tool }) => `${bundle}/${tool}`);
-    expect(neither, 'enabled by bundle expansion, or declare install.requires_secrets').toEqual([]);
+    expect(neither, 'enabled by bundle expansion, or declare install.requires_secrets / an integration capability').toEqual([]);
   });
 
   it('enables the members that used to be missing (#1974)', async () => {
-    const enabled = await freshInstall([]);
+    const enabled = await freshInstall('bare');
     for (const tool of [
       'doc-place',
       'setup-status', 'setup-defer', 'system-secret-capture-request',
@@ -152,35 +166,39 @@ describe('registry-defaults.yaml on a fresh install (#1974)', () => {
   });
 
   it('keeps credential-dependent members off without their credentials', async () => {
-    const enabled = await freshInstall([]);
-    const gated = [
-      'web-search', 'query-relationships', 'delete-relationship',
-      ...(bundleMembers.get('calendar') ?? []),
-    ];
-    expect(gated.length).toBeGreaterThan(3);
-    for (const tool of gated) {
-      expect(requiredSecrets.has(tool), `${tool} declares requires_secrets`).toBe(true);
+    const enabled = await freshInstall('bare');
+    const calendar = bundleMembers.get('calendar') ?? [];
+    expect(calendar.length).toBeGreaterThan(0);
+    for (const tool of ['web-search', 'query-relationships', 'delete-relationship']) {
+      expect(toolManifests.get(tool)?.requiresSecrets.length, `${tool} declares requires_secrets`).toBeGreaterThan(0);
+      expect(enabled.tools.has(tool), tool).toBe(false);
+    }
+    // Every calendar member that talks to Nylas declares the client capability and stays
+    // off. calendar-register is the exception by design: a DB-only write (links a calendar
+    // id to a contact) callable only by the calendar agent, which isn't a default.
+    const nylasBacked = calendar.filter(t => t !== 'calendar-register');
+    expect(nylasBacked.length).toBeGreaterThanOrEqual(10);
+    for (const tool of nylasBacked) {
+      expect(toolManifests.get(tool)?.capabilities, `${tool} declares nylasCalendarClient`).toContain('nylasCalendarClient');
       expect(enabled.tools.has(tool), tool).toBe(false);
     }
   });
 
-  it('enables every default-bundle member once all declared secrets are configured', async () => {
-    const allKeys = [...new Set([...requiredSecrets.values()].flat())];
-    const enabled = await freshInstall(allKeys);
+  it('enables every default-bundle member once its integrations are configured', async () => {
+    const enabled = await freshInstall('configured');
     const off = defaultBundleMembers().filter(({ tool }) => !enabled.tools.has(tool)).map(m => m.tool);
     expect(off).toEqual([]);
   });
 
   it('boots with no member_tools_missing pin except gated tools, and none once credentials exist', async () => {
-    const bare = await missingBundleMembers(await freshInstall([]));
+    const bare = await missingBundleMembers(await freshInstall('bare'));
     // Without credentials, a pinned bundle may only be missing its gated members.
-    const ungatedMissing = bare.flatMap(m => m.tools.filter(t => !requiredSecrets.has(t)).map(t => `${m.agent}:${m.pin}/${t}`));
+    const ungatedMissing = bare.flatMap(m => m.tools.filter(t => !isGated(t)).map(t => `${m.agent}:${m.pin}/${t}`));
     expect(ungatedMissing).toEqual([]);
     for (const bundle of ['documents', 'setup', 'contacts', 'context-bridge']) {
       expect(bare.filter(m => m.pin === bundle), bundle).toEqual([]);
     }
 
-    const allKeys = [...new Set([...requiredSecrets.values()].flat())];
-    expect(await missingBundleMembers(await freshInstall(allKeys))).toEqual([]);
+    expect(await missingBundleMembers(await freshInstall('configured'))).toEqual([]);
   });
 });

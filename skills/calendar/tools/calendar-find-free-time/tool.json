@@ -1,10 +1,9 @@
 {
   "name": "calendar-find-free-time",
   "description": "Find available time windows across one or more calendars. Returns free slots within a date range. Only busy/tentative events block availability; free-status events do not block. Use duration (minutes) to filter to slots at least that long. Supports checking multiple people's availability at once.",
-  "version": "1.1.5",
+  "version": "1.1.4",
   "sensitivity": "normal",
   "action_risk": "none",
-  "install": { "requires_secrets": ["nylas_api_key", "ceo_nylas_grant_id"] },
   "inputs": {
     "calendarIds": "string[] (list of calendar IDs to check for availability)",
     "timeMin": "timestamp (start of search window, inclusive)",

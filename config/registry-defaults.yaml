@@ -11,11 +11,13 @@
 #
 # skills: — SKILL.md bundles (Phase 2 + #1494). An enabled bundle enrolls EVERY member
 # tool its SKILL.md lists (#1974) — membership is declared once, in the SKILL.md, not
-# repeated here. Credential-dependent members are kept off by the gate on the tool
-# itself (install.requires_secrets in its tool.json), not by omission: reconciliation
-# skips a gated member until its keys are in the vault, then enrolls it on the next boot.
-# That covers web-search (tavily_api_key), the calendar-* tools (nylas_api_key +
-# ceo_nylas_grant_id) and query-/delete-relationship (openai_api_key).
+# repeated here. Credential-dependent members are kept off by a gate the tool itself
+# declares, not by omission: reconciliation skips a gated member (no row) and the first
+# boot after its integration is configured enrolls it. Two gates exist:
+#   - install.requires_secrets (vault keys): web-search (tavily_api_key) and
+#     query-/delete-relationship (openai_api_key).
+#   - an integration capability boot didn't build: the calendar-* tools declare
+#     nylasCalendarClient, which exists only with a Nylas key + ceo_nylas_grant_id.
 # MCP-projected skills (google-workspace, etc.) are NOT listed — they appear in
 # SkillRegistry at runtime from loadMcpServers (ADR-032).
 skills:
