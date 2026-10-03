@@ -1,5 +1,6 @@
-// tests/shared/turn-capture.ts — what one coordinator turn did, read off the bus.
-// Shared by the scenario suite and smoke (#1956).
+// tests/shared/turn-capture.ts — what one agent turn did, read off the bus.
+// Shared by the scenario suite and smoke (#1956). The agent is the coordinator unless the
+// caller names another: a smoke case can address a specialist directly (#1977).
 //
 // Capture listens as the `system` layer, which (unlike a `channel` subscription to
 // outbound.message) also sees agent.response — so a NO_REPLY turn, or a reply Gate C
@@ -25,7 +26,7 @@ const COORDINATOR = 'coordinator';
  */
 const SETTLE_MS = 250;
 
-/** One coordinator tool call as the bus saw it. */
+/** One tool call by the captured agent, as the bus saw it. */
 export interface ObservedToolCall {
   name: string;
   input: Record<string, unknown>;
@@ -37,7 +38,7 @@ export interface ObservedToolCall {
 
 export interface TurnOutcome {
   calls: ObservedToolCall[];
-  /** The coordinator's agent.response content, with an exact NO_REPLY restored. */
+  /** The agent's agent.response content, with an exact NO_REPLY restored. */
   reply: string | null;
   /** Set when the Dispatcher suppressed delivery (outbound.no_reply reason). */
   noReplyReason?: string;
@@ -46,6 +47,8 @@ export interface TurnOutcome {
 }
 
 interface PendingTurn {
+  /** The agent whose turn this is; every other agent's events on the conversation are ignored. */
+  agentId: string;
   calls: ObservedToolCall[];
   invokeIndex: Map<string, number>;
   reply: string | null;
@@ -57,8 +60,8 @@ interface PendingTurn {
 }
 
 export interface TurnCapture {
-  /** Start waiting for the coordinator's next turn on this conversation. */
-  waitFor(conversationId: string, timeoutMs: number): Promise<TurnOutcome>;
+  /** Start waiting for the agent's (default: the coordinator's) next turn on this conversation. */
+  waitFor(conversationId: string, timeoutMs: number, agentId?: string): Promise<TurnOutcome>;
   /** End a pending turn now with an error (its inbound could not be delivered). */
   fail(conversationId: string, err: unknown): void;
 }
@@ -84,8 +87,12 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     }, SETTLE_MS);
   };
 
-  const forCoordinator = (agentId: string, conversationId: string): PendingTurn | undefined =>
-    agentId === COORDINATOR ? pending.get(conversationId) : undefined;
+  // A conversation can carry several agents' turns at once: on a bullpen thread, the
+  // agent that posted wakes up too if it is mentioned back. Only the awaited agent's count.
+  const forAgent = (agentId: string, conversationId: string): PendingTurn | undefined => {
+    const p = pending.get(conversationId);
+    return p?.agentId === agentId ? p : undefined;
+  };
 
   const on = (type: BusEvent['type'], handler: (event: BusEvent) => void): void => {
     bus.subscribe(type, 'system', async (event) => handler(event));
@@ -93,7 +100,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
 
   on('tool.invoke', (event) => {
     const { payload } = event as ToolInvokeEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
+    const p = forAgent(payload.agentId, payload.conversationId);
     if (!p || p.done) return;
     p.invokeIndex.set(event.id, p.calls.length);
     p.calls.push({ name: payload.toolName, input: payload.input, invokeEventId: event.id });
@@ -101,7 +108,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
 
   on('tool.result', (event) => {
     const { payload, parentEventId } = event as ToolResultEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
+    const p = forAgent(payload.agentId, payload.conversationId);
     if (!p || p.done || !parentEventId) return;
     const index = p.invokeIndex.get(parentEventId);
     if (index === undefined) return;
@@ -113,7 +120,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
 
   on('agent.response', (event) => {
     const { payload } = event as AgentResponseEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
+    const p = forAgent(payload.agentId, payload.conversationId);
     if (!p || p.done) return; // a second response in the settle window must not replace the first
     // The runtime lifts an exact NO_REPLY out of the content before publishing (#1732):
     // what arrives is empty content with suppressDelivery. Put the sentinel back so
@@ -121,13 +128,13 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     // ("NO_REPLY — automated notice") keeps its text and suppressDelivery, so it still
     // reads as not-exactly-NO_REPLY — which is the failure the check exists to catch.
     p.reply = payload.suppressDelivery && payload.content === '' ? 'NO_REPLY' : payload.content;
-    if (payload.isError) p.error ??= `coordinator returned an error response: ${payload.content.slice(0, 200)}`;
+    if (payload.isError) p.error ??= `${p.agentId} returned an error response: ${payload.content.slice(0, 200)}`;
     finish(payload.conversationId, p);
   });
 
   on('agent.error', (event) => {
     const { payload } = event as AgentErrorEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
+    const p = forAgent(payload.agentId, payload.conversationId);
     if (!p) return;
     p.error = `agent.error ${payload.errorType}: ${payload.message}`;
     finish(payload.conversationId, p);
@@ -137,7 +144,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
   // labelled with — scoring it would credit or blame the wrong model.
   on('model.fallback', (event) => {
     const { payload } = event as ModelFallbackEngagedEvent;
-    const p = forCoordinator(payload.agentId, payload.conversationId);
+    const p = forAgent(payload.agentId, payload.conversationId);
     if (!p || p.done) return;
     p.error = `model fallback: ${payload.failedModel} → ${payload.fallbackModel} (${payload.reason})`;
   });
@@ -155,7 +162,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
       p.error = `could not deliver the inbound: ${err instanceof Error ? err.message : String(err)}`;
       finish(conversationId, p);
     },
-    waitFor(conversationId, timeoutMs) {
+    waitFor(conversationId, timeoutMs, agentId = COORDINATOR) {
       return new Promise((resolve) => {
         // Two live turns on one conversation can't be told apart: events are matched by
         // conversation id alone. Fail the newcomer closed rather than silently
@@ -167,13 +174,15 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
           return;
         }
         const p: PendingTurn = {
+          agentId,
           calls: [],
           invokeIndex: new Map(),
           reply: null,
           done: false,
           resolve,
           timer: setTimeout(() => {
-            p.error = `Timeout waiting for the coordinator (${Math.round(timeoutMs / 1000)}s)`;
+            const who = agentId === COORDINATOR ? 'the coordinator' : agentId;
+            p.error = `Timeout waiting for ${who} (${Math.round(timeoutMs / 1000)}s)`;
             finish(conversationId, p);
           }, timeoutMs),
         };

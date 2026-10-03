@@ -64,6 +64,36 @@ describe('createTurnCapture', () => {
     expect((await turn).reply).toBe('the coordinator');
   });
 
+  // A smoke case can address a specialist on a bullpen thread (#1977). The thread is the
+  // conversation for every participant, so the agent filter is what tells turns apart.
+  it('captures a named agent\'s turn and ignores the coordinator on the same conversation', async () => {
+    const { bus, capture } = setup();
+    const turn = capture.waitFor('thread-1', 5_000, 'ceo-inbox');
+    const call = (agentId: string, toolName: string) => createToolInvoke({
+      agentId, conversationId: 'thread-1', toolName, input: {}, taskEventId: 'task-1', parentEventId: 'task-1',
+    });
+    await bus.publish('agent', call('coordinator', 'bullpen'));
+    await bus.publish('agent', call('ceo-inbox', 'ceo-inbox-draft-reply'));
+    await respond(bus, 'thread-1', 'the coordinator');
+    await respond(bus, 'thread-1', 'drafted', { agentId: 'ceo-inbox' });
+
+    const outcome = await turn;
+    expect(outcome.reply).toBe('drafted');
+    expect(outcome.calls.map(c => c.name)).toEqual(['ceo-inbox-draft-reply']);
+  });
+
+  it('names the awaited agent in a timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { capture } = setup();
+      const turn = capture.waitFor('thread-2', 1_000, 'ceo-inbox');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await turn).error).toBe('Timeout waiting for ceo-inbox (1s)');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ends a turn that never answers with a timeout error', async () => {
     vi.useFakeTimers();
     try {
