@@ -41,10 +41,9 @@ export async function runTestCases(
     const responses: CapturedResponse[] = [];
     let error: string | undefined;
     // A targeted case's topic and opening, placeholders resolved: what the agent and the
-    // judge both see. Dates resolve against the moment the case starts.
-    const target = tc.target
-      ? withPrincipalOf(options?.principal)(resolveDatePlaceholders(tc.target, harness.stack.config.timezone, new Date()))
-      : undefined;
+    // judge both see. Dates resolve against the moment the case starts. Resolved inside
+    // the case's try below, so a bad placeholder fails this case, not the whole run.
+    let target: CaseTarget | undefined;
 
     // A turn that outlived its timeout (an earlier case's, or the warm-up's) keeps calling
     // tools; the stub layer would answer and record them as this case's, and its calendar
@@ -58,6 +57,9 @@ export async function runTestCases(
       error = 'an earlier turn was still running after the timeout, so this case could not run in isolation';
     } else {
       try {
+        target = tc.target
+          ? withPrincipalOf(options?.principal)(resolveDatePlaceholders(tc.target, harness.stack.config.timezone, new Date()))
+          : undefined;
         await runSingleCase(harness, tc, target, responses, options?.defaultStubs ?? {}, options?.principal);
       } catch (err) {
         // Case-level failure (a turn timed out or errored). Turns that did complete are
