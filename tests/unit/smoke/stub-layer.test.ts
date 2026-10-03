@@ -42,6 +42,26 @@ describe('createSmokeStubs', () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
+  // The harness answers reads of a targeted case's thread at call time (#1977).
+  it('tries call-time answers before the stubs, across set(), until clear()', async () => {
+    const { layer, invoke } = realLayer();
+    const stubs = createSmokeStubs();
+    const wrapped = stubs.wrap(layer);
+    stubs.answer('bullpen', async (input) =>
+      input['thread_id'] === 't1' ? { success: true, data: { thread_id: 't1' } } : undefined);
+    stubs.set({ bullpen: [{ match: {}, return: 'stubbed' }] });
+
+    expect(await wrapped.invoke('bullpen', { action: 'get_thread', thread_id: 't1' }, undefined as never, opts('ceo-inbox') as never))
+      .toEqual({ success: true, data: { thread_id: 't1' } });
+    // An answer that passes leaves the call to the stubs.
+    expect(await wrapped.invoke('bullpen', { action: 'get_thread', thread_id: 't2' }, undefined as never, opts('ceo-inbox') as never))
+      .toEqual({ success: true, data: 'stubbed' });
+    expect(stubs.clear().map(c => c.disposition)).toEqual(['stubbed', 'stubbed']);
+
+    await wrapped.invoke('bullpen', { action: 'get_thread', thread_id: 't1' }, undefined as never, opts('ceo-inbox') as never);
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
   it('records every call and clears the record and the stubs', async () => {
     const stubs = createSmokeStubs();
     const wrapped = stubs.wrap(realLayer().layer);

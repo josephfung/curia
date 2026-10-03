@@ -20,6 +20,12 @@ import { matchToolStub } from '../scenarios/stub-matcher.js';
 import { CalendarState, shapeStubResult } from './stub-filters.js';
 import type { ToolStub } from '../scenarios/types.js';
 
+/**
+ * An answer computed at call time, for data a fixture cannot know in advance (the id of a
+ * thread the harness opened). Returns undefined to leave the call to the stubs.
+ */
+export type CallAnswer = (input: Record<string, unknown>) => Promise<ToolResult | undefined>;
+
 /** One tool call by any agent during a case, and how it was answered. */
 export interface AgentToolCall {
   agentId: string | undefined;
@@ -38,6 +44,11 @@ export interface SmokeStubs {
    * each turn, so a multi-turn case can change what a tool returns between turns.
    */
   set(stubs: Record<string, ToolStub[]>): void;
+  /**
+   * Answer `toolName` calls with `answer` until the next clear(), before any stub. Kept
+   * across set(), so it holds for every turn of the case.
+   */
+  answer(toolName: string, answer: CallAnswer): void;
   /** Stop stubbing and return every call made since the previous clear(). */
   clear(): AgentToolCall[];
 }
@@ -64,6 +75,7 @@ export function mergeStubs(
 
 export function createSmokeStubs(): SmokeStubs {
   let stubs: Record<string, ToolStub[]> = {};
+  let answers = new Map<string, CallAnswer[]>();
   let calls: AgentToolCall[] = [];
   // What this case has written to the (stubbed) calendar, replayed onto its later reads.
   let calendar = new CalendarState();
@@ -77,6 +89,15 @@ export function createSmokeStubs(): SmokeStubs {
       disposition: 'real',
     };
     calls.push(record);
+
+    for (const answer of answers.get(toolName) ?? []) {
+      const result = await answer(structuredClone(input));
+      if (result) {
+        record.disposition = 'stubbed';
+        record.success = result.success;
+        return result;
+      }
+    }
 
     const stub = matchToolStub(toolName, input, stubs);
     if (stub) {
@@ -109,9 +130,13 @@ export function createSmokeStubs(): SmokeStubs {
     set(next) {
       stubs = next;
     },
+    answer(toolName, answer) {
+      answers.set(toolName, [...(answers.get(toolName) ?? []), answer]);
+    },
     clear() {
       const done = calls;
       stubs = {};
+      answers = new Map();
       calls = [];
       calendar = new CalendarState();
       return done;
