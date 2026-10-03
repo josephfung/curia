@@ -2662,6 +2662,13 @@ export class AgentRuntime {
             { err: response.error, agentId, targetAgent: esc.agent, reason: esc.reason },
             'Delegation-failure narration call failed — using display-name fallback',
           );
+        } else {
+          // A tool call from a call made with no tools is a model or provider
+          // regression. Say so instead of falling back quietly.
+          logger.warn(
+            { agentId, targetAgent: esc.agent, reason: esc.reason, responseType: response.type },
+            'Delegation-failure narration returned a non-text response — using display-name fallback',
+          );
         }
       } catch (err) {
         logger.warn(

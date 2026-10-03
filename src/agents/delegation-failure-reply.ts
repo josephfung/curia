@@ -45,14 +45,30 @@ export type DraftRejection =
 // (what failed, whether a follow-up was logged) because a good reply restates those
 // facts, while it never has a reason to repeat an instruction. The echo check runs
 // against these lines only.
+const REFER_TO_SPECIALIST = 'Refer to the specialist only as';
 const NARRATION_INSTRUCTIONS = [
   'A delegated task failed. Write the one message the principal will read.',
   'Address them directly as "you".',
+  // Completed with the display name when the prompt is built. Its fixed part is
+  // what the #1975 draft echoed, so it is shingled like the other lines.
+  REFER_TO_SPECIALIST,
   'Do not use internal agent ids, tool names, IDs, or protocol markers.',
   'Say briefly, in your own words, what you were trying to do for them.',
   'Write it as a fresh sentence about this request. Do not reuse a stock line.',
   'Do not call tools. Put only the message inside <reply></reply> tags.',
 ] as const;
+
+// Every situation and follow-up line the prompt can carry. Listed in one place so
+// the topic check can discount their words (see PROMPT_VOCABULARY).
+const SITUATION = {
+  timeout: 'The specialist did not answer in time.',
+  timeoutMaybeDone: 'The specialist did not answer in time. The work may still be finishing in the background.',
+  blocked: 'The specialist was blocked and could not finish.',
+  declined: 'The specialist declined the task.',
+  other: 'The specialist was not able to finish the task.',
+  escalated: 'A follow-up task has already been logged.',
+  notEscalated: 'A follow-up task could not be logged.',
+} as const;
 
 export function delegationFailureNarrationPrompt(input: {
   displayName: string;
@@ -62,32 +78,20 @@ export function delegationFailureNarrationPrompt(input: {
   declined?: boolean;
 }): string {
   const situation = describeFailure(input.reason, input.declined, input.possiblySucceeded);
-  const followUp = input.escalated
-    ? 'A follow-up task has already been logged.'
-    : 'A follow-up task could not be logged.';
-  const [opening, addressing, noInternals, ownWords, fresh, format] = NARRATION_INSTRUCTIONS;
-  return [
-    opening,
-    addressing,
-    `Refer to the specialist only as "${input.displayName}".`,
-    noInternals,
-    ownWords,
-    fresh,
-    situation,
-    followUp,
-    format,
-  ].join('\n');
+  const followUp = input.escalated ? SITUATION.escalated : SITUATION.notEscalated;
+  return NARRATION_INSTRUCTIONS.flatMap((line) => {
+    if (line === REFER_TO_SPECIALIST) return [`${line} "${input.displayName}".`];
+    // The situation sits just before the closing format line.
+    if (line === NARRATION_INSTRUCTIONS.at(-1)) return [situation, followUp, line];
+    return [line];
+  }).join('\n');
 }
 
 function describeFailure(reason: string, declined: boolean | undefined, possiblySucceeded: boolean | undefined): string {
-  if (reason === 'timeout') {
-    return possiblySucceeded
-      ? 'The specialist did not answer in time. The work may still be finishing in the background.'
-      : 'The specialist did not answer in time.';
-  }
-  if (reason === 'blocked') return 'The specialist was blocked and could not finish.';
-  if (declined === true || reason === SPECIALIST_DECLINE_REASON) return 'The specialist declined the task.';
-  return 'The specialist was not able to finish the task.';
+  if (reason === 'timeout') return possiblySucceeded ? SITUATION.timeoutMaybeDone : SITUATION.timeout;
+  if (reason === 'blocked') return SITUATION.blocked;
+  if (declined === true || reason === SPECIALIST_DECLINE_REASON) return SITUATION.declined;
+  return SITUATION.other;
 }
 
 /**
@@ -112,10 +116,23 @@ export function formatDelegationFailureFallback(
   } else {
     parts.push(`The ${who} wasn't able to finish that.`);
   }
-  parts.push(input.escalated
-    ? "I've logged a follow-up task to review the outcome."
-    : 'You can ask me to try again in a bit.');
+  if (input.escalated) {
+    parts.push("I've logged a follow-up task to review the outcome.");
+  } else if (retryMayHelp(input)) {
+    parts.push('You can ask me to try again in a bit.');
+  }
   return parts.join(' ');
+}
+
+/**
+ * Whether suggesting a retry is sound advice. Not after a timeout that may have
+ * gone through (a retry could send or post twice), and not after a decline or a
+ * block, which a retry does not change.
+ */
+function retryMayHelp(input: Pick<DelegationFailureReplyInput, 'reason' | 'declined' | 'possiblySucceeded'>): boolean {
+  if (input.reason === 'timeout') return input.possiblySucceeded !== true;
+  if (input.reason === 'blocked') return false;
+  return !(input.declined === true || input.reason === SPECIALIST_DECLINE_REASON);
 }
 
 /**
@@ -124,11 +141,13 @@ export function formatDelegationFailureFallback(
  * The narration prompt asks for the message inside these tags, so anything the
  * model writes around them (thinking out loud, restating the instructions) is
  * dropped by construction rather than detected. The last block wins: a model
- * that drafts, reconsiders and redrafts ends with its final answer. Null when
- * there is no complete, non-empty block.
+ * that drafts, reconsiders and redrafts ends with its final answer. A block's
+ * body never contains another `<reply>`: an opened-and-abandoned block followed
+ * by a complete one must yield only the complete one, not the thinking between.
+ * Null when there is no complete, non-empty block.
  */
 export function extractReplyBlock(text: string): string | null {
-  const blocks = [...text.matchAll(/<reply>([\s\S]*?)<\/reply>/gi)];
+  const blocks = [...text.matchAll(/<reply>((?:(?!<reply>)[\s\S])*?)<\/reply>/gi)];
   const last = blocks.at(-1);
   if (!last) return null;
   const body = (last[1] ?? '').trim();
@@ -137,16 +156,19 @@ export function extractReplyBlock(text: string): string | null {
 
 /**
  * Prefer the model's reply block when it passes every structural check.
- * Otherwise the deterministic fallback.
+ * Otherwise the deterministic fallback. `rejected` is set only when a draft came
+ * back and was discarded; with no draft (call skipped, failed, or not text) the
+ * runtime has already logged why.
  */
 export function selectDelegationFailureReply(
   input: DelegationFailureReplyInput,
 ): { content: string; via: 'model' | 'fallback'; rejected?: DraftRejection } {
   const fallback = formatDelegationFailureFallback(input);
-  const raw = input.modelText?.trim() ?? '';
-  const rejected = raw.length === 0 ? 'empty' : checkDraft(raw, input);
-  if (typeof rejected === 'string') return { content: fallback, via: 'fallback', rejected };
-  return { content: rejected.reply, via: 'model' };
+  if (input.modelText === undefined) return { content: fallback, via: 'fallback' };
+  const raw = input.modelText.trim();
+  const outcome = raw.length === 0 ? 'empty' : checkDraft(raw, input);
+  if (typeof outcome === 'string') return { content: fallback, via: 'fallback', rejected: outcome };
+  return { content: outcome.reply, via: 'model' };
 }
 
 function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejection | { reply: string } {
@@ -162,8 +184,10 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   return { reply };
 }
 
-// Unanchored: the UUID can sit anywhere in the reply. No /g, so no lastIndex state.
-const UUID_IN_TEXT = new RegExp(`\\b${UUID_PATTERN}\\b`);
+// Unanchored and unbounded: the UUID can sit anywhere, including glued to an id
+// prefix (`contact_<uuid>`). 8-4-4-4-12 hex never occurs in prose, so there is no
+// false reject to guard against. No /g, so no lastIndex state.
+const UUID_IN_TEXT = new RegExp(UUID_PATTERN);
 
 // Six consecutive words from an instruction line is a quotation, not a coincidence.
 const ECHO_SHINGLE_WORDS = 6;
@@ -198,10 +222,21 @@ const NON_TOPIC_WORDS: ReadonlySet<string> = new Set([
   'which', 'while', 'will', 'with', 'would', 'your', 'yours', 'principal',
 ]);
 
+// Words the narration prompt itself hands the model ("follow-up task", "in time",
+// "background"). A stock reply uses them whatever was asked, so a request that
+// happens to contain one ("add a task to follow up with Dana") must not count it.
+const PROMPT_VOCABULARY: ReadonlySet<string> = new Set(
+  [...NARRATION_INSTRUCTIONS, ...Object.values(SITUATION)].flatMap(words),
+);
+
 // Words shorter than this are mostly function words; the list above covers the rest.
 const MIN_TOPIC_WORD = 4;
 // Compare on a short prefix so "briefing" matches "brief" and "meeting" matches "meetings".
 const TOPIC_PREFIX = 5;
+
+function isTopicWord(word: string): boolean {
+  return word.length >= MIN_TOPIC_WORD && !NON_TOPIC_WORDS.has(word) && !PROMPT_VOCABULARY.has(word);
+}
 
 /**
  * True when the reply shares at least one content word with the request.
@@ -213,10 +248,12 @@ const TOPIC_PREFIX = 5;
  * content words cannot be checked, so any reply passes.
  */
 function sharesTopic(reply: string, request: string, displayName: string): boolean {
-  const topic = words(request).filter((w) => w.length >= MIN_TOPIC_WORD && !NON_TOPIC_WORDS.has(w));
+  const topic = words(request).filter((w) => isTopicWord(w));
   if (topic.length === 0) return true;
-  const withoutName = reply.toLowerCase().split(displayName.toLowerCase()).join(' ');
-  const replyWords = words(withoutName).filter((r) => r.length >= MIN_TOPIC_WORD && !NON_TOPIC_WORDS.has(r));
+  // Guard the split: an empty name would split the reply into single characters.
+  const name = displayName.trim().toLowerCase();
+  const withoutName = name.length > 0 ? reply.toLowerCase().split(name).join(' ') : reply.toLowerCase();
+  const replyWords = words(withoutName).filter((r) => isTopicWord(r));
   return topic.some((w) => {
     const stem = w.slice(0, TOPIC_PREFIX);
     // Either direction: "briefings" in the reply for "briefing", or "trim" for "trimmed".
