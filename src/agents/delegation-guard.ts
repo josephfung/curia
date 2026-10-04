@@ -9,7 +9,7 @@ import { decodeResumeToken, resumeTokenOriginalTaskForm } from './resume-token.j
 import type { ExecutionLayer, InvokeOptions } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
 import type { Logger } from '../logger.js';
-import { buildDelegationEscalation, renderEscalation } from './task-escalation.js';
+import { buildDelegationEscalation, renderEscalation, type EscalationRequester } from './task-escalation.js';
 
 /** Total identical delegate calls allowed when the specialist failure was retryable. */
 export const MAX_RETRYABLE_IDENTICAL_DELEGATIONS = 2;
@@ -339,7 +339,9 @@ export async function escalateDelegationFailure(
   executionLayer: ExecutionLayer,
   caller: CallerContext | undefined,
   options: InvokeOptions,
-  failure: DelegationFailureInfo & { task: string },
+  // awaitingReply: the outside sender whose inbound this delegation ran on, when there
+  // is one (#1978). It goes on the review task so the principal's digest shows them.
+  failure: DelegationFailureInfo & { task: string; awaitingReply?: EscalationRequester },
   logger: Logger,
 ): Promise<DelegationEscalationResult> {
   // Structured, principal-facing payload (#1267): reason 'blocked' → blocked_on_human,
@@ -352,6 +354,7 @@ export async function escalateDelegationFailure(
     message: failure.message,
     task: failure.task,
     ...(failure.possiblySucceeded === true && { possiblySucceeded: true }),
+    ...(failure.awaitingReply && { awaitingReply: failure.awaitingReply }),
   });
   const rendered = renderEscalation(escalation);
   const title = escalation.failureMode === 'blocked_on_human'
@@ -372,7 +375,13 @@ export async function escalateDelegationFailure(
         owner: 'ceo',
         source: 'coordinator',
         // The failureMode tag distinguishes blocked-on-a-person from couldn't-finish (#1267).
-        tags: ['delegation-failure', failure.agent, escalation.failureMode],
+        // external-waiting marks review tasks an outside sender is waiting on (#1978).
+        tags: [
+          'delegation-failure',
+          failure.agent,
+          escalation.failureMode,
+          ...(failure.awaitingReply ? ['external-waiting'] : []),
+        ],
         progress_note: rendered.progressNote,
         escalation_json: JSON.stringify(escalation),
       },

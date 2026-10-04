@@ -114,6 +114,7 @@ import {
   type ReplyAudience,
 } from './delegation-failure-reply.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
+import { escalationRequester } from './task-escalation.js';
 import {
   DEFAULT_DEFERRED_WAKE_MS,
   enqueueUndispatchedDelegation,
@@ -799,6 +800,14 @@ export class AgentRuntime {
       ? persistableContactId(senderCtx.contactId)
       : undefined;
     const turnChannelId = taskEvent.payload.channelId;
+    // Who reads a delegation-failure reply on this turn (#1978). Settled once so the
+    // escalation (which records an outside sender as waiting) and the reply (which
+    // promises them a follow-up only when that record exists) cannot disagree.
+    const failureAudience = delegationFailureAudience({
+      originator,
+      channelId: turnChannelId,
+      delegated: delegatedTask,
+    });
     if (senderCtx?.resolved) {
       // Sanitize sender fields before prompt inclusion — these originate from
       // external sources (self-claimed names, imported roles) and could contain
@@ -1561,11 +1570,7 @@ export class AgentRuntime {
                 );
               }
               // On an outside sender's inbound this reply is relayed to them (#1978).
-              const { audience, basis } = delegationFailureAudience({
-                originator,
-                channelId: turnChannelId,
-                delegated: delegatedTask,
-              });
+              const { audience, basis } = failureAudience;
               if (basis === 'originator_missing') {
                 // Some relayed tasks carry no originator (e.g. the content-block rewrite
                 // retry). The reply is written for an outside sender to be safe; say so,
@@ -2143,11 +2148,22 @@ export class AgentRuntime {
                   }
                   delegationGuard.recordFailure(dKey, delegateFailure);
                   if (delegationGuard.shouldEscalate(dKey)) {
+                    // On an outside sender's inbound, record them on the review task so the
+                    // principal's digest shows someone is waiting on a reply (#1978).
+                    const awaitingReply = failureAudience.audience === 'sender'
+                      ? escalationRequester({
+                        ...(senderCtx?.resolved && { displayName: senderCtx.displayName }),
+                        ...(attributedSenderContactId !== undefined && { contactId: attributedSenderContactId }),
+                        senderId: taskEvent.payload.senderId,
+                        channel: turnChannelId,
+                        conversationId,
+                      })
+                      : undefined;
                     const escalation = await escalateDelegationFailure(
                       executionLayer,
                       caller,
                       invokeOptions,
-                      { ...delegateFailure, task: delegateTask },
+                      { ...delegateFailure, task: delegateTask, ...(awaitingReply && { awaitingReply }) },
                       logger,
                     );
                     if (escalation.escalated) {

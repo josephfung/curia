@@ -19,7 +19,8 @@
 // (an external email, an unresolved sender) the dispatcher relays this reply to
 // that sender. Those turns get a prompt that names the sender as the reader, and a
 // fallback that promises to follow up rather than reporting the internal follow-up
-// task, which is a note for the principal.
+// task, which is a note for the principal. The promise is made only when that task
+// was logged, because on these turns it records the sender as waiting on a reply.
 
 import type { TaskOriginator } from '../contacts/types.js';
 import type { Message } from './llm/provider.js';
@@ -182,9 +183,11 @@ const SITUATION = {
   other: 'It could not be finished.',
   escalated: 'A follow-up task has already been logged.',
   notEscalated: 'A follow-up task could not be logged.',
-  // For a sender, the logged task is the principal's business, and it does not
-  // name the sender or record a promise to them. So nothing is promised either way.
-  sender: 'Do not promise to follow up or say when they will hear back.',
+  // For a sender, the logged task is the principal's business. What they can be told
+  // is whether someone will come back to them, which is true only when the task was
+  // logged: it records them as waiting on a reply (#1978).
+  escalatedForSender: 'Someone will come back to it, so you may say you will follow up.',
+  notEscalatedForSender: 'Do not promise to follow up or say when they will hear back.',
 } as const;
 
 export function delegationFailureNarrationPrompt(input: {
@@ -196,7 +199,7 @@ export function delegationFailureNarrationPrompt(input: {
 }): string {
   const situation = describeFailure(input.reason, input.declined, input.possiblySucceeded);
   const followUp = input.audience === 'sender'
-    ? SITUATION.sender
+    ? (input.escalated ? SITUATION.escalatedForSender : SITUATION.notEscalatedForSender)
     : (input.escalated ? SITUATION.escalated : SITUATION.notEscalated);
   // The situation sits just before the closing format line.
   return [...narrationInstructions(input.audience), situation, followUp, NARRATION_FORMAT].join('\n');
@@ -216,9 +219,11 @@ function describeFailure(reason: string, declined: boolean | undefined, possibly
  * content (which may be a scheduler payload or carry a channel preamble).
  * Quoting either is how #1975 leaked. The model path is what names the request.
  *
- * For an outside sender there is no escalation line (#1978). The logged task is
- * the principal's to know, and it neither names the sender nor records a promise
- * to them, so telling them "I'll follow up" would be a commitment nothing tracks.
+ * For an outside sender the escalation line is a promise to follow up, not a
+ * report of the internal task, which is the principal's to know (#1978). The
+ * promise is kept honest by the task itself: on a sender's turn it records them as
+ * waiting on a reply, so the principal's digest shows it. With no task logged,
+ * nothing is promised.
  */
 export function formatDelegationFailureFallback(
   input: Omit<DelegationFailureReplyInput, 'modelText'>,
@@ -235,8 +240,8 @@ export function formatDelegationFailureFallback(
     parts.push("I wasn't able to finish that.");
   }
   if (input.audience === 'sender') {
-    // Nothing about follow-ups: see the doc comment.
-    if (!input.escalated && retryMayHelp(input)) parts.push('You can ask me to try again in a bit.');
+    if (input.escalated) parts.push("I'll follow up with you on it.");
+    else if (retryMayHelp(input)) parts.push('You can ask me to try again in a bit.');
   } else if (input.escalated) {
     parts.push("I've logged a follow-up task to review the outcome.");
   } else if (retryMayHelp(input)) {
