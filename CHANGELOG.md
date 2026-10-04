@@ -103,6 +103,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Reply-shaped external email** — coordinator acknowledges instead of asking the sender; principal notes stay out. (#1978)
+- **Delegation-failure reply to external senders** — written for the sender, with no internal follow-up mentioned. (#1978)
 - **Delegation-failure reply** — no longer leaks model reasoning, the narration prompt, the delegate brief or decline prose. (#1975, #1976)
 - **Missing bundle tools** — `doc-place`, `setup-status` and six contacts tools now enroll on fresh and existing installs. (#1974)
 - **Relayed sends** — replies route back to the requesting specialist; delegation hints must name a registered specialist. (#1972)
