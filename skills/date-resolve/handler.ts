@@ -155,6 +155,8 @@ export class DateResolveHandler implements ToolHandler {
     // later from formatDisplayTimezone. Startup validates TIMEZONE, so this is a guard
     // for callers outside the execution layer, and it names the real problem.
     if (!now.isValid) {
+      // A config problem the model can't fix, so make sure operators see it too.
+      ctx.log.error({ timezone, invalidReason: now.invalidReason }, 'date-resolve: invalid timezone');
       return { success: false, error: `Invalid timezone: "${timezone}" (${now.invalidReason ?? 'unknown reason'})` };
     }
 
