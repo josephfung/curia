@@ -319,26 +319,25 @@ A good smoke test is a gift to the next person who touches that feature. It does
 
 ---
 
-## Refreshing eval-harness prompt blocks (`inspect-prompts`)
+## Refreshing the eval-harness prompt inputs (`inspect-prompts`)
 
-Smoke tests in `curia-deploy` mock the system-prompt injection blocks (office identity, executive profile, trust thresholds, agent list) so the LLM judge sees a stable prompt across runs. When any of those resolved blocks change, the mocks have to be refreshed — otherwise the judge is grading against stale context.
+curia-deploy's model-comparison eval harness renders every agent's system prompt locally with curia's own builders (`buildBaseSystemPrompt`, `resolveSystemPromptSources`, pin resolution). It reads this deployment's prompt **inputs** from a snapshot, `tests/eval/prompt-blocks.json`: the identity and security blocks, the specialist roster, the autonomy score, the timezone, and Curia's and the principal's contact details. When any of those change, refresh the snapshot. Otherwise the harness scores a prompt built from stale inputs.
 
-`scripts/inspect-prompts.ts` prints the current resolved blocks as JSON. Run it from a Curia checkout connected to a bootstrapped database and pipe the output into `curia-deploy`:
+`scripts/inspect-prompts.ts` prints those inputs as JSON. It reads them from the coordinator's runtime config in the test-mode stack (`createTestModeStack({ llm: 'offline' })`), so the roster honours registry enablement and `security.trust_thresholds` are validated, not defaulted.
 
-```bash
-pnpm inspect-prompts > /path/to/curia-deploy/tests/eval/prompt-blocks.json
-```
-
-On a live server the same command runs against the production checkout:
+For production, run it through curia-deploy, which execs it in the app container, adds the image's core revision as `curia.commit`, and validates the snapshot before writing it:
 
 ```bash
-pnpm --prefix /opt/curia tsx --env-file=.env scripts/inspect-prompts.ts
+# from the curia-deploy checkout
+scripts/fetch-prompt-blocks.sh <ssh-host> tests/eval/prompt-blocks.json
 ```
+
+Against a local database, `pnpm inspect-prompts` prints the same JSON. It needs `DATABASE_URL`. `SECRET_ENCRYPTION_KEY` is optional; without it the Signal number is missing, and stderr says so.
 
 **Re-run after:**
-- editing `config/office-identity.yaml` or applying identity changes via the API
-- editing `config/executive-profile.yaml` or applying profile changes via the API
+- changing the office identity (wizard or `PUT /api/identity`) or the autonomy score
 - changing `security.trust_thresholds` in `config/default.yaml`
-- adding or removing specialist agents (`agents/*.yaml`)
+- adding, removing or enabling specialist agents
+- changing the principal's verified identities, or Curia's own email or Signal number
 
-The script connects to the database directly and does not require Curia to be running.
+The script does not need Curia running. It writes only the idempotent bootstrap rows every boot writes (office identity seed, agent self-contact), so it is safe beside a live instance.
