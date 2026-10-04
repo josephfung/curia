@@ -332,7 +332,7 @@ For production, run it through curia-deploy, which execs it in the app container
 scripts/fetch-prompt-blocks.sh <ssh-host> tests/eval/prompt-blocks.json
 ```
 
-Against a local database, `pnpm inspect-prompts` prints the same JSON. It needs `DATABASE_URL`. `SECRET_ENCRYPTION_KEY` is optional; without it the Signal number is missing, and stderr says so.
+Against a local database, `pnpm inspect-prompts` prints the same JSON. It needs both `DATABASE_URL` and `SECRET_ENCRYPTION_KEY`. Without the vault key it exits with an error rather than emit a degraded snapshot: the Signal number and the email grant check would be missing, and nothing in the JSON would say so.
 
 **Re-run after:**
 - changing the office identity (wizard or `PUT /api/identity`) or the autonomy score
