@@ -570,6 +570,31 @@ describe('note for the principal on a reply to a sender (#1990)', () => {
     }
   });
 
+  it('keeps a nested note in source order', () => {
+    // After the reply: the reply stands, and the note reads as written.
+    const outside = selectDelegationFailureReply({
+      ...sender,
+      modelText: `${reply(clean)}${note(`before ${note('inside')} after`)}`,
+    });
+    expect(outside.content).toBe(clean);
+    expect(outside.principalNote).toBe('before inside after');
+
+    // Inside the reply: the reply is rejected, and the note still reads as written.
+    const inside = selectDelegationFailureReply({
+      ...sender,
+      modelText: reply(`${clean} ${note(`before ${note('inside')} after`)}`),
+    });
+    expect(inside.rejected).toBe('note_markup');
+    expect(inside.principalNote).toBe('before inside after');
+
+    // A complete note, then an unclosed one: still in the order written.
+    const mixed = selectDelegationFailureReply({
+      ...sender,
+      modelText: `${note('first')}${reply(clean)}<note_for_principal>second`,
+    });
+    expect(mixed.principalNote).toBe('first second');
+  });
+
   it('recovers the text of a note the model never closed, and says so', () => {
     // Inside the reply: the reply is rejected, but what was meant for the principal is kept.
     const inside = selectDelegationFailureReply({

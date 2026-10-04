@@ -313,10 +313,13 @@ const NOTE_BLOCK = /<note_for_principal>((?:(?!<note_for_principal>)[\s\S])*?)<\
 // One whitespace run only (after the optional slash): two adjacent `\s*` around it would
 // backtrack quadratically on a long run of spaces.
 const NOTE_TAG = /<\/?\s*note[\s_-]*for[\s_-]*principal\b[^>]*>/i;
-// An opening tag left over once complete blocks are cut out: a note never closed.
+// Every note tag, for stripping out of recovered note text.
+const NOTE_TAG_ALL = new RegExp(NOTE_TAG.source, 'gi');
+// An opening tag left over once complete blocks are cut out: a note never closed, or the
+// outer note of a nested pair (its inner block was cut out first).
 const UNCLOSED_NOTE_OPEN = /<note_for_principal>/i;
-// Where an unclosed note's text ends: the reply block's opening or closing tag.
-const REPLY_TAG = /<\/?reply>/i;
+// Where a leftover note's text ends: a reply tag, or the outer note's own closing tag.
+const LEFTOVER_NOTE_END = /<\/?reply>|<\/note_for_principal>/i;
 // The note lands in the principal's digest as part of a progress note, so it is folded
 // onto one line and bounded like the other model- or sender-supplied text there.
 const MAX_PRINCIPAL_NOTE = 1000;
@@ -326,26 +329,37 @@ const MAX_PRINCIPAL_NOTE = 1000;
  * the principal (#1990). Every complete note block is cut out first, wherever it sits
  * (before, after or inside the reply block), so none of it can reach the sender.
  *
- * Distinct non-empty blocks are all kept, in order: two blocks may be two separate
- * points, and an exact repeat is dropped. A note opened and never closed (most often
- * cut off by the output limit, since it comes last) is recovered up to the next reply
- * tag or the end, and flagged `unclosed`. Its opening tag stays in `rest`, so when it
- * sits inside the reply the reply is still rejected as `note_markup`.
+ * Distinct non-empty blocks are all kept, in source order: two blocks may be two
+ * separate points, and an exact repeat is dropped. A leftover opening tag is a note
+ * never closed (most often cut off by the output limit, since it comes last) or the
+ * outer note of a nested pair. Its text is recovered from the raw draft up to a reply
+ * tag, its own closing tag, or the end, with any inner note tags stripped, so a nested
+ * note keeps its words in the order written. It is flagged `unclosed`. Its opening tag
+ * stays in `rest`, so when it sits inside the reply the reply is still rejected as
+ * `note_markup`.
  *
  * The note is sanitized, folded onto one line and bounded by code point.
  */
 function splitPrincipalNote(raw: string): { rest: string; note?: string; unclosed?: true } {
-  const notes = [...raw.matchAll(NOTE_BLOCK)].map((m) => (m[1] ?? '').trim()).filter((n) => n.length > 0);
+  let notes = [...raw.matchAll(NOTE_BLOCK)].map((m) => ({ at: m.index, text: (m[1] ?? '').trim() }));
+  // The reply is read from `rest`, where each block becomes one space. `blanked` keeps
+  // every block's length, so a position found in it is the same position in `raw`.
   const rest = raw.replace(NOTE_BLOCK, ' ');
-  const open = UNCLOSED_NOTE_OPEN.exec(rest);
+  const blanked = raw.replace(NOTE_BLOCK, (block) => ' '.repeat(block.length));
+  const open = UNCLOSED_NOTE_OPEN.exec(blanked);
   if (open) {
-    const after = rest.slice(open.index + open[0].length);
-    const end = after.search(REPLY_TAG);
-    const recovered = (end >= 0 ? after.slice(0, end) : after).trim();
-    if (recovered.length > 0) notes.push(recovered);
+    const start = open.index + open[0].length;
+    const tail = blanked.slice(start).search(LEFTOVER_NOTE_END);
+    const end = tail >= 0 ? start + tail : raw.length;
+    // Taken from `raw`, so an inner block keeps its place; the inner block itself is then
+    // dropped as a separate entry, since its words are already in the recovered text.
+    const recovered = raw.slice(start, end).replace(NOTE_TAG_ALL, ' ').trim();
+    notes = notes.filter((n) => n.at < open.index || n.at >= end);
+    notes.push({ at: open.index, text: recovered });
   }
   const unclosed = open ? { unclosed: true as const } : {};
-  const distinct = [...new Set(notes)];
+  const ordered = notes.filter((n) => n.text.length > 0).sort((a, b) => a.at - b.at).map((n) => n.text);
+  const distinct = [...new Set(ordered)];
   if (distinct.length === 0) return { rest, ...unclosed };
   const folded = sanitizeOutput(distinct.join(' ')).replace(/\s+/g, ' ').trim();
   const note = Array.from(folded).slice(0, MAX_PRINCIPAL_NOTE).join('').trim();
