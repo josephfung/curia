@@ -301,8 +301,14 @@ export function extractReplyBlock(text: string): string | null {
 // A complete note block. Same shape as the reply pattern: a body never contains another
 // opening tag, so an abandoned opener followed by a complete block yields only the latter.
 const NOTE_BLOCK = /<note_for_principal>((?:(?!<note_for_principal>)[\s\S])*?)<\/note_for_principal>/gi;
-// Any note tag left over once complete blocks are cut out.
-const NOTE_TAG = /<\/?note_for_principal>/i;
+// Any note tag left in the reply once complete blocks are cut out. Looser than the block
+// pattern on purpose: a variant spelling (`<note_for_principal >`, `<Note-For-Principal>`)
+// is not cut out, so it must be caught here or its text would reach the sender.
+const NOTE_TAG = /<\s*\/?\s*note[\s_-]*for[\s_-]*principal\b[^>]*>/i;
+// An opening tag left over once complete blocks are cut out: a note never closed.
+const UNCLOSED_NOTE_OPEN = /<note_for_principal>/i;
+// Where an unclosed note's text ends: the reply block's opening or closing tag.
+const REPLY_TAG = /<\/?reply>/i;
 // The note lands in the principal's digest as part of a progress note, so it is folded
 // onto one line and bounded like the other model- or sender-supplied text there.
 const MAX_PRINCIPAL_NOTE = 1000;
@@ -310,18 +316,32 @@ const MAX_PRINCIPAL_NOTE = 1000;
 /**
  * Split a sender-audience draft into the text the reply is read from and the note for
  * the principal (#1990). Every complete note block is cut out first, wherever it sits
- * (before, after or inside the reply block), so none of it can reach the sender. The
- * last non-empty block is the note: a model that redrafts ends with its final word.
+ * (before, after or inside the reply block), so none of it can reach the sender.
+ *
+ * Distinct non-empty blocks are all kept, in order: two blocks may be two separate
+ * points, and an exact repeat is dropped. A note opened and never closed (most often
+ * cut off by the output limit, since it comes last) is recovered up to the next reply
+ * tag or the end, and flagged `unclosed`. Its opening tag stays in `rest`, so when it
+ * sits inside the reply the reply is still rejected as `note_markup`.
+ *
  * The note is sanitized, folded onto one line and bounded by code point.
  */
-function splitPrincipalNote(raw: string): { rest: string; note?: string } {
+function splitPrincipalNote(raw: string): { rest: string; note?: string; unclosed?: true } {
   const notes = [...raw.matchAll(NOTE_BLOCK)].map((m) => (m[1] ?? '').trim()).filter((n) => n.length > 0);
   const rest = raw.replace(NOTE_BLOCK, ' ');
-  const last = notes.at(-1);
-  if (last === undefined) return { rest };
-  const folded = sanitizeOutput(last).replace(/\s+/g, ' ').trim();
+  const open = UNCLOSED_NOTE_OPEN.exec(rest);
+  if (open) {
+    const after = rest.slice(open.index + open[0].length);
+    const end = after.search(REPLY_TAG);
+    const recovered = (end >= 0 ? after.slice(0, end) : after).trim();
+    if (recovered.length > 0) notes.push(recovered);
+  }
+  const unclosed = open ? { unclosed: true as const } : {};
+  const distinct = [...new Set(notes)];
+  if (distinct.length === 0) return { rest, ...unclosed };
+  const folded = sanitizeOutput(distinct.join(' ')).replace(/\s+/g, ' ').trim();
   const note = Array.from(folded).slice(0, MAX_PRINCIPAL_NOTE).join('').trim();
-  return note.length > 0 ? { rest, note } : { rest };
+  return note.length > 0 ? { rest, note, ...unclosed } : { rest, ...unclosed };
 }
 
 /**
@@ -333,16 +353,28 @@ function splitPrincipalNote(raw: string): { rest: string; note?: string } {
  * `principalNote` is the sender-audience note for the principal (#1990). It is
  * returned whether or not the reply was used: what the model wanted the principal to
  * know does not depend on whether its message to the sender passed. The principal
- * audience reads no note, so its path is as it was.
+ * audience reads no note, so its path is as it was. `noteUnclosed` is set when a note
+ * was opened and never closed, so the runtime can log it as a model regression.
  */
 export function selectDelegationFailureReply(
   input: DelegationFailureReplyInput,
-): { content: string; via: 'model' | 'fallback'; rejected?: DraftRejection; principalNote?: string } {
+): {
+  content: string;
+  via: 'model' | 'fallback';
+  rejected?: DraftRejection;
+  principalNote?: string;
+  noteUnclosed?: true;
+} {
   const fallback = formatDelegationFailureFallback(input);
   if (input.modelText === undefined) return { content: fallback, via: 'fallback' };
   const trimmed = input.modelText.trim();
-  const { rest, note } = input.audience === 'sender' ? splitPrincipalNote(trimmed) : { rest: trimmed };
-  const withNote = note !== undefined ? { principalNote: note } : {};
+  const { rest, note, unclosed } = input.audience === 'sender'
+    ? splitPrincipalNote(trimmed)
+    : { rest: trimmed, note: undefined, unclosed: undefined };
+  const withNote = {
+    ...(note !== undefined && { principalNote: note }),
+    ...(unclosed === true && { noteUnclosed: true as const }),
+  };
   const raw = rest.trim();
   const outcome = trimmed.length === 0 ? 'empty' : checkDraft(raw, input);
   if (typeof outcome === 'string') return { content: fallback, via: 'fallback', rejected: outcome, ...withNote };
@@ -353,7 +385,8 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   const reply = extractReplyBlock(raw);
   if (reply === null) return 'no_reply_block';
   // Complete note blocks were cut out before this. A tag still here is a note the model
-  // opened and never closed (or closed without opening): its text would reach the sender.
+  // opened and never closed, closed without opening, or spelled differently: its text
+  // would reach the sender.
   if (input.audience === 'sender' && NOTE_TAG.test(reply)) return 'note_markup';
   if (containsRawAgentId(reply, input.agentId)) return 'agent_id';
   // Before names_specialist: protocol JSON carries "delegation_failure", and the

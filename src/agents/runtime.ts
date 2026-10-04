@@ -2806,6 +2806,15 @@ export class AgentRuntime {
         'Delegation failure reply used the deterministic fallback',
       );
     }
+    if (selected.noteUnclosed === true) {
+      // The text was recovered when there was any, but an unclosed note is a model or
+      // output-limit regression worth seeing. taskEventId matches the llm.call row,
+      // which holds the raw draft.
+      logger.warn(
+        { agentId, targetAgent: esc.agent, taskEventId: taskEvent.id, noteRecovered: selected.principalNote !== undefined },
+        'Delegation failure reply: the note for the principal was never closed',
+      );
+    }
     return {
       content: selected.content,
       via: selected.via,
@@ -2820,8 +2829,8 @@ export class AgentRuntime {
    *
    * Neither step can hold up the sender's reply. The task update reports failure in its
    * own log line. A failed audit publish is logged without the note text (it may carry
-   * a sender's details, which stay out of application logs); the review task, when there
-   * is one, still holds the note.
+   * a sender's details, which stay out of application logs), saying where the note
+   * still is: on the review task, or only in the narration call's llm.call archive row.
    */
   private async recordPrincipalNote(
     esc: PendingDelegationEscalation,
@@ -2857,8 +2866,18 @@ export class AgentRuntime {
       }));
     } catch (err) {
       logger.error(
-        { err, agentId, conversationId, noteLength: note.length, addedToReviewTask },
-        'Failed to publish delegation.principal_note — the note is not in the audit log',
+        {
+          err,
+          agentId,
+          conversationId,
+          taskEventId: taskEvent.id,
+          reviewTaskId: esc.reviewTask?.id ?? null,
+          noteLength: note.length,
+          addedToReviewTask,
+        },
+        addedToReviewTask
+          ? 'Failed to publish delegation.principal_note — the note is on the review task but not in the audit log'
+          : 'Failed to publish delegation.principal_note — the note was recorded nowhere; the raw draft is in the llm.call archive for this task event',
       );
     }
   }
