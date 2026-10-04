@@ -450,36 +450,47 @@ describe('delegation failure audience (#1978)', () => {
     initiatedAt: '2026-10-02T10:00:00.000Z',
     tier: 'known' as const,
   };
+  const audienceOf = (turn: Parameters<typeof delegationFailureAudience>[0]) => delegationFailureAudience(turn).audience;
 
   it('is the sender on an inbound from anyone who is not the principal, resolved or not', () => {
-    expect(delegationFailureAudience({ originator: external, channelId: 'email', delegated: false })).toBe('sender');
-    expect(delegationFailureAudience({
+    expect(delegationFailureAudience({ originator: external, channelId: 'email', delegated: false }))
+      .toEqual({ audience: 'sender', basis: 'non_principal_originator' });
+    expect(audienceOf({
       originator: { ...external, contactId: 'stranger@example.test', tier: 'unknown' },
       channelId: 'signal',
       delegated: false,
     })).toBe('sender');
   });
 
-  it('is the principal on the principal\'s own inbound', () => {
+  it('is the principal on the principal\'s own inbound, and on work the platform or Curia started', () => {
     expect(delegationFailureAudience({
       originator: { ...external, systemRole: 'principal', tier: 'principal' },
       channelId: 'email',
       delegated: false,
-    })).toBe('principal');
+    })).toEqual({ audience: 'principal', basis: 'principal_side_originator' });
+    for (const systemRole of ['system', 'agent'] as const) {
+      expect(audienceOf({ originator: { ...external, systemRole, tier: null }, channelId: 'email', delegated: false }))
+        .toBe('principal');
+    }
   });
 
   it('is the principal where no outside sender reads the reply', () => {
     // A delegated specialist answers the agent that delegated, even on external lineage.
-    expect(delegationFailureAudience({ originator: external, channelId: 'internal', delegated: true })).toBe('principal');
+    expect(delegationFailureAudience({ originator: external, channelId: 'internal', delegated: true }))
+      .toEqual({ audience: 'principal', basis: 'delegated' });
     for (const channelId of ['scheduler', 'bullpen', 'internal']) {
-      expect(delegationFailureAudience({ originator: external, channelId, delegated: false })).toBe('principal');
+      expect(delegationFailureAudience({ originator: external, channelId, delegated: false }))
+        .toEqual({ audience: 'principal', basis: 'non_sender_channel' });
     }
-    expect(delegationFailureAudience({
-      originator: { ...external, systemRole: 'system', tier: null },
-      channelId: 'email',
-      delegated: false,
-    })).toBe('principal');
-    expect(delegationFailureAudience({ originator: undefined, channelId: 'email', delegated: false })).toBe('principal');
+  });
+
+  it('fails closed to the sender on a human channel when the originator cannot say otherwise', () => {
+    // The content-block rewrite retry is relayed to the original sender with no originator.
+    expect(delegationFailureAudience({ originator: undefined, channelId: 'email', delegated: false }))
+      .toEqual({ audience: 'sender', basis: 'originator_missing' });
+    // A stored originator with no role field (late-delegation accepts one) is not the principal.
+    const noRole = { ...external, systemRole: undefined } as unknown as Parameters<typeof delegationFailureAudience>[0]['originator'];
+    expect(audienceOf({ originator: noRole, channelId: 'email', delegated: false })).toBe('sender');
   });
 });
 

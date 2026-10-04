@@ -1560,12 +1560,26 @@ export class AgentRuntime {
                   'pendingDelegationEscalation has empty agent name — humanized message using fallback label',
                 );
               }
+              // On an outside sender's inbound this reply is relayed to them (#1978).
+              const { audience, basis } = delegationFailureAudience({
+                originator,
+                channelId: turnChannelId,
+                delegated: delegatedTask,
+              });
+              if (basis === 'originator_missing') {
+                // Some relayed tasks carry no originator (e.g. the content-block rewrite
+                // retry). The reply is written for an outside sender to be safe; say so,
+                // since on a principal turn that is a plainer reply than they would get.
+                logger.warn(
+                  { agentId, conversationId, channelId: turnChannelId },
+                  'Delegation-failure reply: task has no originator — writing for an outside sender',
+                );
+              }
               const escalationContent = await this.composeDelegationFailureReply(
                 workingMessages,
                 esc,
                 taskEvent.payload.content,
-                // On an outside sender's inbound this reply is relayed to them (#1978).
-                delegationFailureAudience({ originator, channelId: turnChannelId, delegated: delegatedTask }),
+                audience,
                 provider,
                 budget,
               );

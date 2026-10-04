@@ -7259,6 +7259,17 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
       channelId: 'signal',
       senderId: '+15551212',
       content: 'Trim the k8m5 draft',
+      // The principal's own inbound, as the dispatcher stamps it. Without an originator
+      // the reply is written for an outside sender (#1978).
+      metadata: {
+        originator: {
+          contactId: 'principal-contact',
+          systemRole: 'principal',
+          channel: 'signal',
+          initiatedAt: '2026-10-02T10:00:00.000Z',
+          tier: 'principal',
+        },
+      },
       parentEventId: 'inbound-1860-model',
     }));
 
