@@ -2812,7 +2812,7 @@ export class AgentRuntime {
       // which holds the raw draft.
       logger.warn(
         { agentId, targetAgent: esc.agent, taskEventId: taskEvent.id, noteRecovered: selected.principalNote !== undefined },
-        'Delegation failure reply: the note for the principal was never closed',
+        'Delegation failure reply: a note for the principal was left unclosed or nested',
       );
     }
     return {
@@ -2827,7 +2827,8 @@ export class AgentRuntime {
    * and also on the review task when one was logged for this failure. Outside senders
    * are where the most care is due, so the record never depends on the escalation.
    *
-   * Neither step can hold up the sender's reply. The task update reports failure in its
+   * Neither step can fail the sender's reply, though the reply waits for both (the task
+   * update is bounded by its manifest timeout). The task update reports failure in its
    * own log line. A failed audit publish is logged without the note text (it may carry
    * a sender's details, which stay out of application logs), saying where the note
    * still is: on the review task, or only in the narration call's llm.call archive row.

@@ -443,7 +443,7 @@ function boundUtf16(text: string, max: number): string {
  * shorten what the digest shows, while reporting success.
  *
  * Best-effort: the note is recorded in the audit log either way, and the reply to the
- * sender must not wait on this. A failure is logged and reported as false.
+ * sender must not fail because of this. A failure is logged and reported as false.
  */
 export async function addPrincipalNoteToReviewTask(
   executionLayer: ExecutionLayer,
