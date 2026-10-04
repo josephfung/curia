@@ -437,7 +437,12 @@ function boundUtf16(text: string, max: number): string {
  * note re-states that summary and appends the note, shortening the note (never the
  * summary) to stay within task-update's limit.
  *
- * Best-effort: the note is already recorded in the audit log, and the reply to the
+ * task-create accepts a longer progress note than task-update, so a long summary (a
+ * specialist's free-text block message is in the headline) can leave no room at all.
+ * Then the task is left as it is: cutting the summary to fit would drop the note and
+ * shorten what the digest shows, while reporting success.
+ *
+ * Best-effort: the note is recorded in the audit log either way, and the reply to the
  * sender must not wait on this. A failure is logged and reported as false.
  */
 export async function addPrincipalNoteToReviewTask(
@@ -449,9 +454,14 @@ export async function addPrincipalNoteToReviewTask(
   logger: Logger,
 ): Promise<boolean> {
   const head = `${reviewTask.progressNote}${PRINCIPAL_NOTE_LABEL}`;
-  // A summary that already fills the limit leaves no room; cut the whole thing then,
-  // since an over-long note is rejected outright and the task would get nothing.
-  const progressNote = boundUtf16(head.length < MAX_PROGRESS_NOTE ? `${head}${note}` : head, MAX_PROGRESS_NOTE);
+  if (head.length >= MAX_PROGRESS_NOTE) {
+    logger.warn(
+      { reviewTaskId: reviewTask.id, summaryLength: reviewTask.progressNote.length, noteLength: note.length },
+      'Review task summary leaves no room for the principal note — note kept in the audit log only',
+    );
+    return false;
+  }
+  const progressNote = boundUtf16(`${head}${note}`, MAX_PROGRESS_NOTE);
   try {
     const result = await executionLayer.invoke(
       'task-update',

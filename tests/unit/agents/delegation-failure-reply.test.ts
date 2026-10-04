@@ -547,24 +547,53 @@ describe('note for the principal on a reply to a sender (#1990)', () => {
       .toEqual({ content: clean, via: 'model' });
   });
 
-  it('takes the last complete note, as with the reply block', () => {
+  it('keeps every distinct note, since two blocks may be two separate points', () => {
     const selected = selectDelegationFailureReply({
       ...sender,
-      modelText: `${note('first draft')}${reply(clean)}${note('final note')}`,
+      modelText: `${note('The budget figure changed.')}${reply(clean)}${note('Thread not found.')}${note('Thread not found.')}`,
     });
-    expect(selected.principalNote).toBe('final note');
+    expect(selected.principalNote).toBe('The budget figure changed. Thread not found.');
   });
 
   it('rejects a reply that still carries note markup, so a broken note never reaches the sender', () => {
     for (const body of [
       `${clean} <note_for_principal>P.S. Placeholder: the thread is gone`,
       `${clean} P.S. Placeholder: the thread is gone</note_for_principal>`,
+      // Tag variants the exact pattern would miss.
+      `${clean} <note_for_principal >P.S. Placeholder: the thread is gone</note_for_principal >`,
+      `${clean} <Note-For-Principal>P.S. Placeholder: the thread is gone`,
     ]) {
       const selected = selectDelegationFailureReply({ ...sender, modelText: reply(body) });
       expect(selected.via, body).toBe('fallback');
       expect(selected.rejected, body).toBe('note_markup');
-      expect(selected.content).not.toMatch(/Placeholder|note_for_principal/);
+      expect(selected.content).not.toMatch(/Placeholder|note_for_principal/i);
     }
+  });
+
+  it('recovers the text of a note the model never closed, and says so', () => {
+    // Inside the reply: the reply is rejected, but what was meant for the principal is kept.
+    const inside = selectDelegationFailureReply({
+      ...sender,
+      modelText: reply(`${clean} <note_for_principal>P.S. Placeholder: the thread is gone`),
+    });
+    expect(inside.rejected).toBe('note_markup');
+    expect(inside.principalNote).toBe('P.S. Placeholder: the thread is gone');
+    expect(inside.noteUnclosed).toBe(true);
+
+    // After the reply, cut off (the likeliest cause is the output limit): the reply stands.
+    const after = selectDelegationFailureReply({
+      ...sender,
+      modelText: `${reply(clean)}\n<note_for_principal>Thread not found, and the`,
+    });
+    expect(after).toEqual({ content: clean, via: 'model', principalNote: 'Thread not found, and the', noteUnclosed: true });
+
+    // Before the reply: the note ends where the reply starts.
+    const before = selectDelegationFailureReply({
+      ...sender,
+      modelText: `<note_for_principal>Thread not found. ${reply(clean)}`,
+    });
+    expect(before.content).toBe(clean);
+    expect(before.principalNote).toBe('Thread not found.');
   });
 
   it('folds the note onto one bounded, sanitized line', () => {

@@ -396,6 +396,17 @@ describe('addPrincipalNoteToReviewTask (#1990)', () => {
     expect(note.startsWith(reviewTask.progressNote)).toBe(true);
   });
 
+  it('leaves the task alone when the summary leaves no room for the note', async () => {
+    // task-create allows a longer progress note than task-update, so a long headline
+    // (a specialist's free-text block message) can fill the limit on its own.
+    const invoke = vi.fn(async () => ({ success: true as const, data: {} }));
+    const layer = { invoke } as unknown as ExecutionLayer;
+    const longTask = { id: 'review-1', progressNote: `Blocked on a person: ${'m'.repeat(2100)}` };
+    expect(await addPrincipalNoteToReviewTask(layer, undefined, {}, longTask, 'Thread not found.', logger)).toBe(false);
+    // Cutting the summary to fit would drop the note and shorten what the digest shows.
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('reports failure without throwing when the update fails or throws', async () => {
     const failing = { invoke: vi.fn(async () => ({ success: false as const, error: 'nope' })) } as unknown as ExecutionLayer;
     expect(await addPrincipalNoteToReviewTask(failing, undefined, {}, reviewTask, 'x', logger)).toBe(false);
