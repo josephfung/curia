@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { containsRawAgentId, principalAgentLabel } from '../../../src/agents/agent-display-name.js';
 import {
+  delegationFailureAudience,
   delegationFailureNarrationPrompt,
   extractReplyBlock,
   formatDelegationFailureFallback,
@@ -45,6 +46,7 @@ function reply(text: string): string {
 
 describe('delegation failure fallback (#1860, #1975, #1976)', () => {
   const base = {
+    audience: 'principal' as const,
     displayName: 'social team',
     agentId: 'social-media',
     escalated: true,
@@ -86,6 +88,7 @@ describe('delegation failure fallback (#1860, #1975, #1976)', () => {
     // The fallback input no longer carries the decline prose at all. Build the reply
     // for the decline in #1976 and check none of its internals appear.
     const text = formatDelegationFailureFallback({
+      audience: 'principal',
       displayName: 'ceo inbox specialist',
       agentId: 'ceo-inbox',
       reason: 'specialist_decline',
@@ -114,6 +117,7 @@ describe('delegation failure fallback (#1860, #1975, #1976)', () => {
 
 describe('delegation failure narration prompt (#1975)', () => {
   const prompt = delegationFailureNarrationPrompt({
+    audience: 'principal',
     reason: 'specialist_decline',
     declined: true,
     escalated: false,
@@ -135,6 +139,7 @@ describe('delegation failure draft selection (#1860, #1975)', () => {
   const principalUuid = '6f1c2a9e-4b7d-4e3a-9c51-2d8e7f0a1b34';
   const brief = `Prepare the principal's (Alex Example, contact ID ${principalUuid}) morning briefing for today, Thursday.`;
   const morning = {
+    audience: 'principal' as const,
     displayName: 'calendar specialist',
     agentId: 'calendar',
     reason: 'specialist_decline',
@@ -151,6 +156,7 @@ describe('delegation failure draft selection (#1860, #1975)', () => {
 
   it('keeps a paraphrase that shares a stem with the request', () => {
     const selected = selectDelegationFailureReply({
+      audience: 'principal',
       displayName: 'social team',
       agentId: 'social-media',
       reason: 'timeout',
@@ -318,6 +324,7 @@ describe('delegation failure draft selection (#1860, #1975)', () => {
     // "follow", "task" and "time" are in the request, but the prompt hands the model
     // those words, so a stock line using them says nothing about this request.
     const selected = selectDelegationFailureReply({
+      audience: 'principal',
       displayName: 'contacts specialist',
       agentId: 'contacts',
       reason: 'timeout',
@@ -346,6 +353,133 @@ describe('delegation failure draft selection (#1860, #1975)', () => {
       modelText: reply("I couldn't get that done just now. I've logged a follow-up."),
     });
     expect(selected.via).toBe('model');
+  });
+});
+
+describe('delegation failure reply for a non-principal reader (#1978)', () => {
+  // A known external contact's email: the dispatcher relays this reply to them.
+  const sender = {
+    audience: 'sender' as const,
+    displayName: 'ceo inbox specialist',
+    agentId: 'ceo-inbox',
+    reason: 'timeout',
+    escalated: true,
+    request: 'Subject: Re: Venue options for the board dinner\n\nYes, go ahead.',
+  };
+  const branches = [
+    { reason: 'timeout', possiblySucceeded: true },
+    { reason: 'timeout' },
+    { reason: 'blocked' },
+    { reason: 'tool_error' },
+    { reason: 'specialist_decline', declined: true },
+  ];
+
+  it('the fallback promises to follow up and mentions no internal follow-up task', () => {
+    for (const branch of branches) {
+      const text = formatDelegationFailureFallback({ ...sender, ...branch });
+      expect(text).toMatch(/^I /);
+      expect(text).toContain("I'll follow up with you on it.");
+      expect(text).not.toMatch(/logged|follow-up task|review the outcome|principal/i);
+    }
+    // The principal still hears that the follow-up was logged.
+    expect(formatDelegationFailureFallback({ ...sender, audience: 'principal' }))
+      .toContain("I've logged a follow-up task to review the outcome.");
+  });
+
+  it('the fallback promises nothing when no follow-up was logged', () => {
+    for (const branch of branches) {
+      const text = formatDelegationFailureFallback({ ...sender, ...branch, escalated: false });
+      expect(text).not.toMatch(/follow up|follow-up|logged/i);
+    }
+  });
+
+  it('the prompt names the sender as the reader and rules out notes for the principal', () => {
+    const prompt = delegationFailureNarrationPrompt({ ...sender });
+    expect(prompt).toMatch(/in reply to the person who sent this message/);
+    expect(prompt).toMatch(/They are not the principal/);
+    expect(prompt).toMatch(/no note, aside or postscript for the principal/);
+    expect(prompt).not.toMatch(/for the principal failed/);
+    // The logged task is not handed to the model as something to tell the sender.
+    expect(prompt).not.toMatch(/follow-up task/i);
+    expect(prompt).toMatch(/you may say you will follow up/);
+    expect(delegationFailureNarrationPrompt({ ...sender, escalated: false })).toMatch(/do not promise to follow up/);
+    // Still no specialist vocabulary outside the line forbidding it.
+    const others = prompt.split('\n').filter((line) => !/do not mention specialists/i.test(line));
+    expect(others.join('\n')).not.toMatch(/specialist|delegat/i);
+  });
+
+  it('the principal prompt is unchanged in substance', () => {
+    const prompt = delegationFailureNarrationPrompt({ ...sender, audience: 'principal' });
+    expect(prompt).toMatch(/for the principal failed/);
+    expect(prompt).toContain('A follow-up task has already been logged.');
+    expect(prompt).not.toMatch(/They are not the principal/);
+  });
+
+  it('keeps a clean draft written to the sender', () => {
+    const clean = "Thanks for confirming the board dinner venue. I couldn't finish setting it up just yet, and I'll follow up with you shortly.";
+    expect(selectDelegationFailureReply({ ...sender, modelText: reply(clean) })).toEqual({ content: clean, via: 'model' });
+  });
+
+  it('rejects a draft that also talks to or about the principal, or reports the logged task', () => {
+    for (const text of [
+      "I couldn't confirm the board dinner venue yet. Internal note for the principal: I couldn't find the thread.",
+      "I couldn't confirm the board dinner venue yet. I've logged it for review.",
+      "I couldn't confirm the board dinner venue yet. A follow-up task has been created.",
+    ]) {
+      const selected = selectDelegationFailureReply({ ...sender, modelText: reply(text) });
+      expect(selected.via).toBe('fallback');
+      expect(selected.rejected).toBe('internal_note');
+      expect(selected.content).not.toMatch(/logged|principal/i);
+    }
+  });
+
+  it('rejects an echo of the sender-only instruction', () => {
+    const selected = selectDelegationFailureReply({
+      ...sender,
+      modelText: reply('Write only to them. Add no note, aside or postscript about the board dinner venue.'),
+    });
+    expect(selected.rejected).toBe('prompt_echo');
+  });
+});
+
+describe('delegation failure audience (#1978)', () => {
+  const external = {
+    contactId: 'contact-lena',
+    systemRole: null,
+    channel: 'email',
+    initiatedAt: '2026-10-02T10:00:00.000Z',
+    tier: 'known' as const,
+  };
+
+  it('is the sender on an inbound from anyone who is not the principal, resolved or not', () => {
+    expect(delegationFailureAudience({ originator: external, channelId: 'email', delegated: false })).toBe('sender');
+    expect(delegationFailureAudience({
+      originator: { ...external, contactId: 'stranger@example.test', tier: 'unknown' },
+      channelId: 'signal',
+      delegated: false,
+    })).toBe('sender');
+  });
+
+  it('is the principal on the principal\'s own inbound', () => {
+    expect(delegationFailureAudience({
+      originator: { ...external, systemRole: 'principal', tier: 'principal' },
+      channelId: 'email',
+      delegated: false,
+    })).toBe('principal');
+  });
+
+  it('is the principal where no outside sender reads the reply', () => {
+    // A delegated specialist answers the agent that delegated, even on external lineage.
+    expect(delegationFailureAudience({ originator: external, channelId: 'internal', delegated: true })).toBe('principal');
+    for (const channelId of ['scheduler', 'bullpen', 'internal']) {
+      expect(delegationFailureAudience({ originator: external, channelId, delegated: false })).toBe('principal');
+    }
+    expect(delegationFailureAudience({
+      originator: { ...external, systemRole: 'system', tier: null },
+      channelId: 'email',
+      delegated: false,
+    })).toBe('principal');
+    expect(delegationFailureAudience({ originator: undefined, channelId: 'email', delegated: false })).toBe('principal');
   });
 });
 
