@@ -22,6 +22,8 @@ import {
 import type { TaskRow } from '../db/queries/tasks.js';
 import { readResumableBlock } from '../db/resumable-progress.js';
 import { readPlanBlock } from '../db/plan-progress.js';
+import { sanitizeOutput } from '../skills/sanitize.js';
+import { isUuid } from '../util/uuid.js';
 
 /**
  * Principal-facing failure categories (#1267). Mapped from real producers:
@@ -65,6 +67,29 @@ export interface TaskEscalation {
   costUsd?: number;
   /** Templated next-action options for the principal (resume / raise ceiling / cancel / re-scope). */
   suggestedActions: string[];
+  /**
+   * An outside sender left waiting by this failure (#1978): the delegation ran on their
+   * inbound, so the reply they got said it could not be done yet. Recorded so the
+   * principal's digest shows someone is waiting, and so that reply can promise a
+   * follow-up that something tracks. Absent when no one outside is waiting.
+   */
+  awaitingReply?: EscalationRequester;
+}
+
+/**
+ * The outside sender waiting on a reply. Built only by escalationRequester(), which
+ * sanitizes and bounds the sender-supplied fields before they reach the digest.
+ */
+export interface EscalationRequester {
+  /** Display name, or the address when the contact has none. */
+  name: string;
+  /** Channel identifier they wrote from (email address, phone number). */
+  address: string;
+  channel: string;
+  /** contacts.id, only when the sender resolved to a contact. */
+  contactId?: string;
+  /** The conversation the reply belongs to, so the thread can be found again. */
+  conversationId: string;
 }
 
 /** The three human-readable renderings derived from a payload. */
@@ -87,6 +112,47 @@ export interface DelegationEscalationInput {
   task: string;
   /** Delegate wait timed out but the specialist may still be running (#1288). */
   possiblySucceeded?: boolean;
+  /** The outside sender waiting on a reply, when the failure ran on their inbound (#1978). */
+  awaitingReply?: EscalationRequester;
+}
+
+// Bounds for the sender-supplied fields. They land in the digest, so a name or
+// address carrying a pasted essay must not take it over.
+const MAX_REQUESTER_NAME = 120;
+const MAX_REQUESTER_ADDRESS = 200;
+
+/** Sanitize one sender-supplied field and fold it onto a single bounded line. */
+function requesterField(raw: string, max: number): string {
+  return sanitizeOutput(raw).replace(/\s+/g, ' ').trim().slice(0, max).trim();
+}
+
+/**
+ * Build the waiting-sender record from the turn's sender (#1978). The name and
+ * address come from outside (self-claimed names, raw channel ids), so both are
+ * sanitized, folded onto one line and bounded. A contact id is kept only when it
+ * is a real contacts UUID; unresolved senders carry their raw address there.
+ */
+export function escalationRequester(input: {
+  displayName?: string;
+  contactId?: string;
+  senderId: string;
+  channel: string;
+  conversationId: string;
+}): EscalationRequester {
+  const address = requesterField(input.senderId, MAX_REQUESTER_ADDRESS);
+  const name = input.displayName !== undefined ? requesterField(input.displayName, MAX_REQUESTER_NAME) : '';
+  return {
+    name: name.length > 0 ? name : address,
+    address,
+    channel: input.channel,
+    ...(isUuid(input.contactId) && { contactId: input.contactId.toLowerCase() }),
+    conversationId: input.conversationId,
+  };
+}
+
+/** "Lena Okafor (lena@example.test, email)", or "lena@example.test (email)" with no name. */
+function describeRequester(r: EscalationRequester): string {
+  return r.name === r.address ? `${r.name} (${r.channel})` : `${r.name} (${r.address}, ${r.channel})`;
 }
 
 function ceilingFailureMode(reason: CircuitBreachReason): EscalationFailureMode {
@@ -246,6 +312,14 @@ export function buildDelegationEscalation(input: DelegationEscalationInput): Tas
       'Do not re-delegate the same work; the original run may still be in flight.',
     ]
     : suggestedActions(failureMode, input.reason, { agent: input.agent });
+  // Someone outside is waiting: replying to them comes first. They were told it could
+  // not be done yet and that it would be followed up (#1978).
+  const actions = input.awaitingReply
+    ? [
+      `Reply to ${input.awaitingReply.name} once this is sorted: they were told it could not be done yet and that it would be followed up.`,
+      ...suggested,
+    ]
+    : suggested;
 
   return {
     failureMode,
@@ -254,7 +328,8 @@ export function buildDelegationEscalation(input: DelegationEscalationInput): Tas
     headline,
     // The agent is the "blocker" for an incomplete; a human-block has no structured "who".
     blocker: failureMode === 'agent_incomplete' ? input.agent : undefined,
-    suggestedActions: suggested,
+    suggestedActions: actions,
+    ...(input.awaitingReply && { awaitingReply: input.awaitingReply }),
   };
 }
 
@@ -265,6 +340,8 @@ export function buildDelegationEscalation(input: DelegationEscalationInput): Tas
  */
 export function renderEscalation(e: TaskEscalation): RenderedEscalation {
   const noteParts: string[] = [e.headline];
+  // Right after the headline: the digest's one line should say a person is waiting.
+  if (e.awaitingReply) noteParts.push(`${describeRequester(e.awaitingReply)} is waiting on a reply.`);
   if (e.progress) noteParts.push(`Progress: ${formatProgress(e.progress)}.`);
   if (e.throughput?.estimateAvailable) noteParts.push(formatResumableThroughputForResume(e.throughput));
   if (typeof e.costUsd === 'number' && e.costUsd > 0) noteParts.push(`Cost so far: $${e.costUsd.toFixed(2)}.`);
@@ -276,6 +353,11 @@ export function renderEscalation(e: TaskEscalation): RenderedEscalation {
   if (e.throughput?.estimateAvailable) detailLines.push(formatResumableThroughputForResume(e.throughput));
   if (typeof e.costUsd === 'number' && e.costUsd > 0) detailLines.push(`Cost so far: $${e.costUsd.toFixed(2)}.`);
   if (e.blocker) detailLines.push(`Blocked by: ${e.blocker}.`);
+  if (e.awaitingReply) {
+    detailLines.push(
+      `Waiting on a reply: ${describeRequester(e.awaitingReply)}, conversation ${e.awaitingReply.conversationId}.`,
+    );
+  }
   detailLines.push('', 'Suggested next steps:', ...e.suggestedActions.map((a) => `- ${a}`));
 
   const description = detailLines.join('\n');

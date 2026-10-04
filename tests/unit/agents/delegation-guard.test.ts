@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { ALREADY_DELIVERED_REASON, DelegationGuard, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
+import { describe, it, expect, vi } from 'vitest';
+import { ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
 import { encodeResumeToken, MAX_RESUME_TASK_LENGTH } from '../../../src/agents/resume-token.js';
 import pino from 'pino';
+import { escalationRequester } from '../../../src/agents/task-escalation.js';
+import type { ExecutionLayer } from '../../../src/skills/execution.js';
 
 describe('DelegationGuard', () => {
   const key = delegationKey('social-media', 'Post to Bluesky');
@@ -313,3 +315,50 @@ describe('seedAlreadyDelivered — long briefs (#1799)', () => {
     expect(guard.isAlreadyDelivered(delegationKey('calendar', `${short}…`))).toBe(false);
   });
 });
+
+describe('escalateDelegationFailure — outside sender waiting (#1978)', () => {
+  const logger = pino({ level: 'silent' });
+  const failure = {
+    agent: 'ceo-inbox',
+    reason: 'timeout' as const,
+    retryable: false,
+    message: "Specialist 'ceo-inbox' did not respond",
+    task: 'Find the venue options thread',
+  };
+
+  function execution() {
+    const invoke = vi.fn(async () => ({ success: true as const, data: { task_id: 'review-1' } }));
+    return { layer: { invoke } as unknown as ExecutionLayer, invoke };
+  }
+
+  it('records the waiting sender on the review task and tags it', async () => {
+    const { layer, invoke } = execution();
+    const awaitingReply = escalationRequester({
+      displayName: 'Lena Okafor',
+      senderId: 'lena.okafor@example.test',
+      channel: 'email',
+      conversationId: 'email:thread-1978',
+    });
+    const result = await escalateDelegationFailure(layer, undefined, {}, { ...failure, awaitingReply }, logger);
+
+    expect(result).toEqual({ escalated: true, reviewTaskId: 'review-1' });
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['tags']).toContain('external-waiting');
+    expect(String(input['progress_note'])).toContain('Lena Okafor (lena.okafor@example.test, email) is waiting on a reply');
+    expect(String(input['description'])).toContain('Waiting on a reply: Lena Okafor');
+    expect(JSON.parse(String(input['escalation_json'])).awaitingReply).toEqual(awaitingReply);
+    // A person waiting is a digest item, not a due date or a direct message (#1978).
+    expect(input['due_at']).toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the review task as before when no one outside is waiting', async () => {
+    const { layer, invoke } = execution();
+    await escalateDelegationFailure(layer, undefined, {}, failure, logger);
+    const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(input['tags']).not.toContain('external-waiting');
+    expect(String(input['progress_note'])).not.toMatch(/waiting on a reply/);
+    expect(JSON.parse(String(input['escalation_json'])).awaitingReply).toBeUndefined();
+  });
+});
+

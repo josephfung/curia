@@ -374,14 +374,16 @@ describe('delegation failure reply for a non-principal reader (#1978)', () => {
     { reason: 'specialist_decline', declined: true },
   ];
 
-  it('the fallback mentions no internal follow-up task and promises nothing', () => {
+  it('the fallback promises a follow-up only when the task recording them was logged', () => {
     for (const branch of branches) {
-      for (const escalated of [true, false]) {
-        const text = formatDelegationFailureFallback({ ...sender, ...branch, escalated });
-        expect(text).toMatch(/^I /);
-        // The logged task neither names the sender nor records a promise to them.
-        expect(text).not.toMatch(/follow up|follow-up|logged|review the outcome|principal/i);
-      }
+      const escalated = formatDelegationFailureFallback({ ...sender, ...branch, escalated: true });
+      expect(escalated).toMatch(/^I /);
+      expect(escalated).toContain("I'll follow up with you on it.");
+      // The logged task itself is the principal's to know.
+      expect(escalated).not.toMatch(/logged|follow-up task|review the outcome|principal/i);
+
+      const notEscalated = formatDelegationFailureFallback({ ...sender, ...branch, escalated: false });
+      expect(notEscalated).not.toMatch(/follow up|follow-up|logged/i);
     }
     // The principal still hears that the follow-up was logged.
     expect(formatDelegationFailureFallback({ ...sender, audience: 'principal' }))
@@ -397,9 +399,9 @@ describe('delegation failure reply for a non-principal reader (#1978)', () => {
     // It does not ask for "what you were trying to do", which is often "find the thread".
     expect(prompt).not.toMatch(/what you were trying to do/);
     expect(prompt).toMatch(/Do not describe what you looked for, could not find, or have no record of/);
-    // The logged task is not handed to the model, and no promise is licensed either way.
+    // The logged task is not handed to the model. A promise is licensed only when it was logged.
     expect(prompt).not.toMatch(/follow-up task/i);
-    expect(prompt).toMatch(/Do not promise to follow up/);
+    expect(prompt).toMatch(/you may say you will follow up/);
     expect(delegationFailureNarrationPrompt({ ...sender, escalated: false })).toMatch(/Do not promise to follow up/);
     // Still no specialist vocabulary outside the line forbidding it.
     const others = prompt.split('\n').filter((line) => !/do not mention specialists/i.test(line));

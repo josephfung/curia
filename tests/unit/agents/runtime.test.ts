@@ -7461,9 +7461,22 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(agentResponses).toHaveLength(1);
     const content = agentResponses[0]!.payload.content;
-    // Escalated, but the sender is told nothing about it, and nothing is promised (#1978).
-    expect(content).toBe("I couldn't get that done in time.");
-    expect(content).not.toMatch(/logged|follow-up|follow up|principal/i);
+    // Escalated: the sender is promised a follow-up, never told about the internal task.
+    expect(content).toBe("I couldn't get that done in time. I'll follow up with you on it.");
+    expect(content).not.toMatch(/logged|follow-up task|principal/i);
+
+    // The review task records who is waiting, so the promise shows in the principal's digest.
+    const escalationCall = vi.mocked(mockExecution.invoke).mock.calls.find(([name]) => name === 'task-create');
+    expect(escalationCall).toBeDefined();
+    const escalationInput = escalationCall![1] as Record<string, unknown>;
+    expect(escalationInput['tags']).toContain('external-waiting');
+    expect(String(escalationInput['progress_note'])).toContain('lena@example.test (email) is waiting on a reply');
+    expect(JSON.parse(String(escalationInput['escalation_json'])).awaitingReply).toEqual({
+      name: 'lena@example.test',
+      address: 'lena@example.test',
+      channel: 'email',
+      conversationId: 'email:thread-1978',
+    });
 
     // The narration prompt named the sender as the reader.
     const narration = vi.mocked(provider.chat).mock.calls[1]![0];
