@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`delegation.principal_note` (public API)** — records a sender reply's note for the principal, kept out of the reply. (#1990)
 - **`context-bridge-keep-open`** — a delegated specialist keeps its exchange's outbound-context entry active past its return. (#1972)
 - **`delegate` (public API)** — optional `outbound_entry_id`; the platform releases that entry when the specialist handles the reply. (#1972)
 - **Scenario `any_of` check** — a behavior passes when any listed alternative check passes. (#1972)
@@ -48,6 +49,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Delegation-failure reply to a sender** — notes for the principal go in their own block, never to the sender. (#1990)
+- **Delegation-failure narration** — now emits `llm.call`, so it is cost-tracked and archived. (#1990)
 - **Delegation-failure reply** — Curia speaks for itself and no longer names the specialist. (#1975)
 - **Registry defaults** — an enabled bundle enrolls all its member tools; `tools:` lists standalone tools only. (#1974)
 - **KG relationship tools** — declare `install.requires_secrets: [openai_api_key]`; enabling them needs the key. (#1974)
