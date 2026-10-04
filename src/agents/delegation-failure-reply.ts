@@ -21,6 +21,13 @@
 // fallback that promises to follow up rather than reporting the internal follow-up
 // task, which is a note for the principal. The promise is made only when that task
 // was logged, because on these turns it records the sender as waiting on a reply.
+//
+// A sender's reply has a second block for the principal (#1990). Told only "add no
+// note for the principal", the model wrote one anyway, addressed by name, inside the
+// reply: it had something real to tell the principal and one place to write it. So
+// the sender prompt asks for anything meant for the principal in a
+// <note_for_principal> block, which is cut out of the text before the reply is read
+// and returned separately for the runtime to record.
 
 import type { TaskOriginator } from '../contacts/types.js';
 import type { Message } from './llm/provider.js';
@@ -28,6 +35,7 @@ import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { containsRawAgentId } from './agent-display-name.js';
 import { UUID_PATTERN } from '../util/uuid.js';
 import { escapeRegExp } from '../util/escape-regexp.js';
+import { sanitizeOutput } from '../skills/sanitize.js';
 
 /**
  * Who reads the reply. `principal` is the principal (or an agent acting for them).
@@ -120,7 +128,10 @@ export type DraftRejection =
   | 'internal_note'
   | 'lost_thread'
   | 'unbacked_promise'
-  | 'off_topic';
+  | 'off_topic'
+  // A sender reply still holding a <note_for_principal> tag after complete note blocks
+  // were cut out: an unclosed note, or a stray closing tag (#1990).
+  | 'note_markup';
 
 // The instruction lines of the narration prompt. Kept apart from the situation lines
 // (what failed, whether a follow-up was logged) because a good reply restates those
@@ -132,7 +143,8 @@ export type DraftRejection =
 // the line on what to say about the request. The principal hears what you were
 // trying to do. A sender hears only about what they asked for: what you were
 // trying to do is often "find our earlier thread", and saying so to them is the
-// #1978 disclosure. A sender also gets a line ruling out notes for the principal.
+// #1978 disclosure. A sender also gets a line keeping internal records out of the
+// reply, and a separate block for anything meant for the principal (#1990).
 const NARRATION_OPENING: Record<ReplyAudience, string> = {
   principal: 'Something you were doing for the principal failed. Write the one message they will read.',
   sender: 'Something you were doing in reply to the person who sent this message failed. '
@@ -149,8 +161,12 @@ const NARRATION_REQUEST_LINE: Record<ReplyAudience, string> = {
     + 'could not find, or have no record of.',
 };
 const NARRATION_FRESH = 'Write it as a fresh sentence about this request. Do not reuse a stock line.';
-const NARRATION_SENDER_ONLY = 'Write only to them. Add no note, aside or postscript for the principal, '
-  + 'and say nothing about tasks, records or reviews kept on your side.';
+const NARRATION_SENDER_ONLY = 'Write only to them, and say nothing about tasks, records or reviews kept on your side.';
+// The redirect (#1990). "Do not write a note" alone did not hold; "write it here" gives
+// the model somewhere to put what the principal should hear.
+const NARRATION_PRINCIPAL_NOTE = 'Anything you would say to the principal goes in '
+  + '<note_for_principal></note_for_principal> tags, outside the reply, never in it. '
+  + 'Only the principal sees that note.';
 const NARRATION_FORMAT = 'Do not call tools. Put only the message inside <reply></reply> tags.';
 
 function narrationInstructions(audience: ReplyAudience): string[] {
@@ -159,7 +175,7 @@ function narrationInstructions(audience: ReplyAudience): string[] {
     ...NARRATION_SHARED,
     NARRATION_REQUEST_LINE[audience],
     NARRATION_FRESH,
-    ...(audience === 'sender' ? [NARRATION_SENDER_ONLY] : []),
+    ...(audience === 'sender' ? [NARRATION_SENDER_ONLY, NARRATION_PRINCIPAL_NOTE] : []),
   ];
 }
 
@@ -171,6 +187,7 @@ const ALL_NARRATION_INSTRUCTIONS: readonly string[] = [
   ...Object.values(NARRATION_REQUEST_LINE),
   NARRATION_FRESH,
   NARRATION_SENDER_ONLY,
+  NARRATION_PRINCIPAL_NOTE,
   NARRATION_FORMAT,
 ];
 
@@ -281,26 +298,63 @@ export function extractReplyBlock(text: string): string | null {
   return body.length > 0 ? body : null;
 }
 
+// A complete note block. Same shape as the reply pattern: a body never contains another
+// opening tag, so an abandoned opener followed by a complete block yields only the latter.
+const NOTE_BLOCK = /<note_for_principal>((?:(?!<note_for_principal>)[\s\S])*?)<\/note_for_principal>/gi;
+// Any note tag left over once complete blocks are cut out.
+const NOTE_TAG = /<\/?note_for_principal>/i;
+// The note lands in the principal's digest as part of a progress note, so it is folded
+// onto one line and bounded like the other model- or sender-supplied text there.
+const MAX_PRINCIPAL_NOTE = 1000;
+
+/**
+ * Split a sender-audience draft into the text the reply is read from and the note for
+ * the principal (#1990). Every complete note block is cut out first, wherever it sits
+ * (before, after or inside the reply block), so none of it can reach the sender. The
+ * last non-empty block is the note: a model that redrafts ends with its final word.
+ * The note is sanitized, folded onto one line and bounded by code point.
+ */
+function splitPrincipalNote(raw: string): { rest: string; note?: string } {
+  const notes = [...raw.matchAll(NOTE_BLOCK)].map((m) => (m[1] ?? '').trim()).filter((n) => n.length > 0);
+  const rest = raw.replace(NOTE_BLOCK, ' ');
+  const last = notes.at(-1);
+  if (last === undefined) return { rest };
+  const folded = sanitizeOutput(last).replace(/\s+/g, ' ').trim();
+  const note = Array.from(folded).slice(0, MAX_PRINCIPAL_NOTE).join('').trim();
+  return note.length > 0 ? { rest, note } : { rest };
+}
+
 /**
  * Prefer the model's reply block when it passes every structural check.
  * Otherwise the deterministic fallback. `rejected` is set only when a draft came
  * back and was discarded; with no draft (call skipped, failed, or not text) the
  * runtime has already logged why.
+ *
+ * `principalNote` is the sender-audience note for the principal (#1990). It is
+ * returned whether or not the reply was used: what the model wanted the principal to
+ * know does not depend on whether its message to the sender passed. The principal
+ * audience reads no note, so its path is as it was.
  */
 export function selectDelegationFailureReply(
   input: DelegationFailureReplyInput,
-): { content: string; via: 'model' | 'fallback'; rejected?: DraftRejection } {
+): { content: string; via: 'model' | 'fallback'; rejected?: DraftRejection; principalNote?: string } {
   const fallback = formatDelegationFailureFallback(input);
   if (input.modelText === undefined) return { content: fallback, via: 'fallback' };
-  const raw = input.modelText.trim();
-  const outcome = raw.length === 0 ? 'empty' : checkDraft(raw, input);
-  if (typeof outcome === 'string') return { content: fallback, via: 'fallback', rejected: outcome };
-  return { content: outcome.reply, via: 'model' };
+  const trimmed = input.modelText.trim();
+  const { rest, note } = input.audience === 'sender' ? splitPrincipalNote(trimmed) : { rest: trimmed };
+  const withNote = note !== undefined ? { principalNote: note } : {};
+  const raw = rest.trim();
+  const outcome = trimmed.length === 0 ? 'empty' : checkDraft(raw, input);
+  if (typeof outcome === 'string') return { content: fallback, via: 'fallback', rejected: outcome, ...withNote };
+  return { content: outcome.reply, via: 'model', ...withNote };
 }
 
 function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejection | { reply: string } {
   const reply = extractReplyBlock(raw);
   if (reply === null) return 'no_reply_block';
+  // Complete note blocks were cut out before this. A tag still here is a note the model
+  // opened and never closed (or closed without opening): its text would reach the sender.
+  if (input.audience === 'sender' && NOTE_TAG.test(reply)) return 'note_markup';
   if (containsRawAgentId(reply, input.agentId)) return 'agent_id';
   // Before names_specialist: protocol JSON carries "delegation_failure", and the
   // more specific reason is the more useful log line.

@@ -390,11 +390,13 @@ describe('delegation failure reply for a non-principal reader (#1978)', () => {
       .toContain("I've logged a follow-up task to review the outcome.");
   });
 
-  it('the prompt names the sender as the reader and rules out notes for the principal', () => {
+  it('the prompt names the sender as the reader and gives notes for the principal their own block', () => {
     const prompt = delegationFailureNarrationPrompt({ ...sender });
     expect(prompt).toMatch(/in reply to the person who sent this message/);
     expect(prompt).toMatch(/They are not the principal/);
-    expect(prompt).toMatch(/no note, aside or postscript for the principal/);
+    // A place to put the note, not only a ban on writing it (#1990).
+    expect(prompt).toContain('<note_for_principal></note_for_principal>');
+    expect(prompt).toMatch(/Only the principal sees that note/);
     expect(prompt).not.toMatch(/for the principal failed/);
     // It does not ask for "what you were trying to do", which is often "find the thread".
     expect(prompt).not.toMatch(/what you were trying to do/);
@@ -414,6 +416,8 @@ describe('delegation failure reply for a non-principal reader (#1978)', () => {
     expect(prompt).toContain('A follow-up task has already been logged.');
     expect(prompt).toMatch(/what you were trying to do for them/);
     expect(prompt).not.toMatch(/They are not the principal/);
+    // The principal is the reader, so there is no one else to write a note for (#1990).
+    expect(prompt).not.toMatch(/note_for_principal/);
   });
 
   it('keeps a clean draft written to the sender', () => {
@@ -473,9 +477,113 @@ describe('delegation failure reply for a non-principal reader (#1978)', () => {
   it('rejects an echo of the sender-only instruction', () => {
     const selected = selectDelegationFailureReply({
       ...sender,
-      modelText: reply('Write only to them. Add no note, aside or postscript about the board dinner venue.'),
+      modelText: reply('Write only to them, and say nothing about tasks kept on the board dinner venue.'),
     });
     expect(selected.rejected).toBe('prompt_echo');
+  });
+});
+
+describe('note for the principal on a reply to a sender (#1990)', () => {
+  const sender = {
+    audience: 'sender' as const,
+    displayName: 'ceo inbox specialist',
+    agentId: 'ceo-inbox',
+    reason: 'timeout',
+    escalated: true,
+    request: 'Subject: Re: Venue options for the board dinner\n\nYes, go ahead.',
+  };
+  const clean = "Thanks for confirming the board dinner venue. I couldn't get it settled just yet.";
+  const note = (text: string): string => `<note_for_principal>${text}</note_for_principal>`;
+
+  it('sends the reply and returns the note separately when the note follows the reply', () => {
+    const selected = selectDelegationFailureReply({
+      ...sender,
+      modelText: `${reply(clean)}\n${note("I couldn't find the original venue thread.")}`,
+    });
+    expect(selected).toEqual({
+      content: clean,
+      via: 'model',
+      principalNote: "I couldn't find the original venue thread.",
+    });
+  });
+
+  it('keeps a note written before the reply, or inside it, out of the reply', () => {
+    const before = selectDelegationFailureReply({
+      ...sender,
+      modelText: `${note('Placeholder Principal, the thread is gone.')}\n${reply(clean)}`,
+    });
+    expect(before.content).toBe(clean);
+    expect(before.principalNote).toBe('Placeholder Principal, the thread is gone.');
+
+    // The #1990 shape: a postscript to the principal inside the reply, now in its own block.
+    const inside = selectDelegationFailureReply({
+      ...sender,
+      modelText: reply(`${clean} ${note('P.S. Placeholder: I could not find the original thread anywhere.')}`),
+    });
+    expect(inside.via).toBe('model');
+    expect(inside.content).toBe(clean);
+    expect(inside.content).not.toMatch(/note_for_principal|P\.S\.|Placeholder/);
+    expect(inside.principalNote).toBe('P.S. Placeholder: I could not find the original thread anywhere.');
+  });
+
+  it('keeps the note when the reply is rejected or missing', () => {
+    const rejected = selectDelegationFailureReply({
+      ...sender,
+      modelText: `${reply('I have no record of the board dinner venue options you mention.')}${note('Thread not found.')}`,
+    });
+    expect(rejected.via).toBe('fallback');
+    expect(rejected.rejected).toBe('lost_thread');
+    expect(rejected.principalNote).toBe('Thread not found.');
+
+    const noReply = selectDelegationFailureReply({ ...sender, modelText: note('Thread not found.') });
+    expect(noReply.via).toBe('fallback');
+    expect(noReply.rejected).toBe('no_reply_block');
+    expect(noReply.principalNote).toBe('Thread not found.');
+  });
+
+  it('treats a missing or empty note as no note, not as a rejection', () => {
+    expect(selectDelegationFailureReply({ ...sender, modelText: reply(clean) })).toEqual({ content: clean, via: 'model' });
+    expect(selectDelegationFailureReply({ ...sender, modelText: `${reply(clean)}${note('   ')}` }))
+      .toEqual({ content: clean, via: 'model' });
+  });
+
+  it('takes the last complete note, as with the reply block', () => {
+    const selected = selectDelegationFailureReply({
+      ...sender,
+      modelText: `${note('first draft')}${reply(clean)}${note('final note')}`,
+    });
+    expect(selected.principalNote).toBe('final note');
+  });
+
+  it('rejects a reply that still carries note markup, so a broken note never reaches the sender', () => {
+    for (const body of [
+      `${clean} <note_for_principal>P.S. Placeholder: the thread is gone`,
+      `${clean} P.S. Placeholder: the thread is gone</note_for_principal>`,
+    ]) {
+      const selected = selectDelegationFailureReply({ ...sender, modelText: reply(body) });
+      expect(selected.via, body).toBe('fallback');
+      expect(selected.rejected, body).toBe('note_markup');
+      expect(selected.content).not.toMatch(/Placeholder|note_for_principal/);
+    }
+  });
+
+  it('folds the note onto one bounded, sanitized line', () => {
+    const selected = selectDelegationFailureReply({
+      ...sender,
+      modelText: `${reply(clean)}${note(`Line one.\n\n  Line two.${' x'.repeat(2000)}`)}`,
+    });
+    expect(selected.principalNote).toMatch(/^Line one\. Line two\./);
+    expect(selected.principalNote).not.toContain('\n');
+    expect(Array.from(selected.principalNote!).length).toBeLessThanOrEqual(1000);
+  });
+
+  it('leaves the principal path unchanged: no note is read for the principal', () => {
+    const selected = selectDelegationFailureReply({
+      ...sender,
+      audience: 'principal',
+      modelText: `${reply("I couldn't settle the board dinner venue in time.")}${note('aside')}`,
+    });
+    expect(selected).toEqual({ content: "I couldn't settle the board dinner venue in time.", via: 'model' });
   });
 });
 
