@@ -31,6 +31,7 @@ import {
   claimPendingDelegation,
   finalizePendingDelegation,
   hasDelegationLateResolvedAudit,
+  listOriginTaskEventIdsForReviewTask,
   releasePendingDelegationClaim,
   renewPendingDelegationClaim,
   setPendingDelegationWakeEventId,
@@ -133,9 +134,11 @@ const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
 
 /**
  * Tag on a review task whose late result was delivered while an outside sender still waits on a
- * reply (#1991). It is the fence for closeAnsweredReviewTasks: the timed-out turn's own "I'll
- * follow up" reply goes out on the same conversation long before the result arrives, and must not
- * be mistaken for the answer. Only a reply delivered after this tag lands can close the task.
+ * reply (#1991). It is the fence for closeAnsweredReviewTasks: a message to the sender before the
+ * result arrived (the timed-out turn's "I'll follow up") must not be mistaken for the answer, so
+ * only a reply delivered after this tag lands can close the task. That turn's reply can still be
+ * in flight after the tag when the specialist finishes quickly; closeAnsweredReviewTasks excludes
+ * it by its agent.task id.
  */
 export const REPLY_PENDING_TAG = 'reply-pending';
 
@@ -843,6 +846,12 @@ export async function resolveLateDelegation(
         // restore the lease this release is handing back.
         stopLeaseRenewal?.();
         stopLeaseRenewal = undefined;
+        // The result never reached the originating turn, so a reply to the sender before the
+        // retry is not the answer. Left on, the tag would let it close the task, and the retry
+        // would then read the closed task as a human disposal and drop the result (#1991).
+        if (opts.closeReviewTask === true) {
+          await unmarkReplyPending({ taskRepo, logger, handle: claimed });
+        }
         if (claimed.claimToken) {
           await releasePendingDelegationClaim(pool, claimed.delegateEventId, claimed.claimToken);
         }
@@ -1187,12 +1196,18 @@ async function recordOnReviewTask(
     // The digest shows only the last progress note. When an outside sender is waiting
     // on this review task, keep that line in front, or the note that matters most (the
     // work was lost) is the one that hides them (#1978).
-    const body = opts.close ? (opts.awaitingReplyNote ?? note) : note;
+    // On delivery the reply-pending tag normally went on before the wake. If that write failed,
+    // add it here, so a reply from any later turn can still close the task. A reply sent during
+    // the wake was then invisible, so the note must not claim nothing went out.
+    const addTag = opts.close && !current.tags.includes(REPLY_PENDING_TAG);
+    const delivered = opts.awaitingReplyNote ?? note;
+    const body = !opts.close
+      ? note
+      : addTag
+        ? `${delivered} A reply may already have gone out during that turn; check the thread before replying.`
+        : delivered;
     const waitingLine = waiting ? awaitingReplyLine(waiting) : undefined;
     const annotated = waitingLine && !body.includes(waitingLine) ? `${waitingLine} ${body}` : body;
-    // On delivery the reply-pending tag normally went on before the wake. If that write failed,
-    // add it here, so a reply from any later turn can still close the task.
-    const addTag = opts.close && !current.tags.includes(REPLY_PENDING_TAG);
     await taskRepo.updateTask(
       handle.reviewTaskId,
       { progressNote: annotated, ...(addTag && { tags: [...current.tags, REPLY_PENDING_TAG] }) },
@@ -1211,9 +1226,9 @@ async function recordOnReviewTask(
 /**
  * Tag a review task reply-pending ahead of the wake, when it records a waiting sender (#1991).
  *
- * Never blocks the wake. A failure here only means a reply sent DURING the wake is not seen as
- * the answer; recordOnReviewTask adds the tag after the wake, and the task then stays open until
- * a later reply or a human closes it, which is the safe direction.
+ * Never blocks the wake. A failure here means a reply sent DURING the wake is not seen as the
+ * answer: recordOnReviewTask adds the tag after the wake, and its note then tells the principal
+ * to check the thread before replying, rather than claiming nothing went out.
  */
 async function markReplyPending(opts: {
   taskRepo: TaskRepo;
@@ -1233,29 +1248,96 @@ async function markReplyPending(opts: {
       'late-delegation',
     );
   } catch (err) {
-    logger.warn(
+    logger.error(
       { err, delegateEventId: handle.delegateEventId, reviewTaskId: handle.reviewTaskId },
       'Late delegation: could not mark the review task reply-pending before the wake — a reply sent during the wake will not close it',
     );
   }
 }
 
-export interface CloseAnsweredReviewTasksOptions {
+/**
+ * Undo markReplyPending after a failed wake. Best effort: if it fails too, the tag stays and a
+ * reply before the retry can close the task early, which the error log makes visible.
+ */
+async function unmarkReplyPending(opts: {
   taskRepo: TaskRepo;
   logger: Logger;
-  /** The conversation an outbound.delivered went out on. */
-  conversationId: string;
+  handle: PendingDelegationRow;
+}): Promise<void> {
+  const { taskRepo, logger, handle } = opts;
+  if (!handle.reviewTaskId) return;
+  try {
+    const current = await taskRepo.getTask(handle.reviewTaskId);
+    if (!current || TERMINAL_TASK_STATUSES.has(current.status)) return;
+    if (!current.tags.includes(REPLY_PENDING_TAG)) return;
+    await taskRepo.updateTask(
+      handle.reviewTaskId,
+      { tags: current.tags.filter((t) => t !== REPLY_PENDING_TAG) },
+      'late-delegation',
+    );
+  } catch (err) {
+    logger.error(
+      { err, delegateEventId: handle.delegateEventId, reviewTaskId: handle.reviewTaskId },
+      'Late delegation: could not clear reply-pending after a failed wake — a reply before the retry may close the review early',
+    );
+  }
+}
+
+/** The parts of an outbound.delivered payload that say who a message actually reached. */
+export interface DeliveredMessage {
+  channel: string;
+  recipientId: string;
+  recipientContactId?: string;
+  /** The agent.task the send came from, when the sender stamped one. */
+  taskEventId?: string;
+}
+
+/** Signal group conversations are keyed `signal:group=<groupId>` (signal/message-converter.ts). */
+const SIGNAL_GROUP_CONVERSATION_PREFIX = 'signal:group=';
+
+/**
+ * Whether a delivered message reached the waiting sender (#1991).
+ *
+ * Keyed on the RECIPIENT, never on the delivered conversationId. A skill send stamps the
+ * conversation of the turn that sent it, so the woken turn emailing a third party, or messaging
+ * the principal, carries the waiting sender's conversationId too. And a held reply that is sent
+ * later from an approval turn carries that turn's conversation, not theirs.
+ *
+ * A Signal group reply goes to the group, not to the person, so a group conversation matches on
+ * its group id instead.
+ */
+export function deliveryReachesWaitingSender(
+  delivered: DeliveredMessage,
+  waiting: EscalationRequester,
+): boolean {
+  if (delivered.channel !== waiting.channel) return false;
+  if (waiting.contactId !== undefined && delivered.recipientContactId === waiting.contactId) return true;
+  const recipient = delivered.recipientId.trim().toLowerCase();
+  if (recipient.length === 0) return false;
+  if (waiting.conversationId.startsWith(SIGNAL_GROUP_CONVERSATION_PREFIX)) {
+    return waiting.conversationId.slice(SIGNAL_GROUP_CONVERSATION_PREFIX.length).toLowerCase() === recipient;
+  }
+  return waiting.address.trim().toLowerCase() === recipient;
+}
+
+export interface CloseAnsweredReviewTasksOptions {
+  pool: Pool;
+  taskRepo: TaskRepo;
+  logger: Logger;
+  delivered: DeliveredMessage;
+  /** The outbound.delivered event id, for the log trail. */
+  deliveredEventId: string;
   deliveredAt: Date;
   timezone?: string;
 }
 
 /**
  * Close every reply-pending review task whose waiting sender has now been answered (#1991):
- * a message was delivered on the conversation recorded in progress.escalation.awaitingReply.
+ * a message reached them (deliveryReachesWaitingSender) after their late result was delivered.
  *
- * Matching is by conversation id alone. Conversation ids are already channel-scoped
- * (`email:<thread>`, `signal:<number>`), and the delivered recipient cannot be compared to the
- * waiting sender's address in general: a Signal group reply goes to the group id, not to them.
+ * A send from the timed-out turn itself does not count. Its "I'll follow up" reply can still be
+ * in flight when a fast specialist's result arrives and the task is tagged, so it is excluded by
+ * that turn's agent.task id.
  *
  * Returns the ids it closed. Throws after trying every match if any close failed, so the caller
  * logs it; the failed task stays open and tagged, and the next reply retries it.
@@ -1263,7 +1345,7 @@ export interface CloseAnsweredReviewTasksOptions {
 export async function closeAnsweredReviewTasks(
   opts: CloseAnsweredReviewTasksOptions,
 ): Promise<string[]> {
-  const { taskRepo, logger, conversationId } = opts;
+  const { pool, taskRepo, logger, delivered, deliveredEventId } = opts;
 
   // listAllTasks, not listTasks: a single page would silently miss a match past its limit.
   const { tasks, truncated } = await taskRepo.listAllTasks({
@@ -1272,7 +1354,7 @@ export async function closeAnsweredReviewTasks(
   });
   if (truncated) {
     logger.warn(
-      { conversationId },
+      { deliveredEventId, fetched: tasks.length },
       'Late delegation: reply-pending task list was truncated — a matching review task may not be closed',
     );
   }
@@ -1281,21 +1363,38 @@ export async function closeAnsweredReviewTasks(
   let firstError: unknown;
   for (const task of tasks) {
     const waiting = readAwaitingReply(task.progress);
-    if (!waiting || waiting.conversationId !== conversationId) continue;
+    if (!waiting || !deliveryReachesWaitingSender(delivered, waiting)) continue;
     try {
-      await taskRepo.completeTask(
+      if (delivered.taskEventId !== undefined) {
+        const originTurns = await listOriginTaskEventIdsForReviewTask(pool, task.id);
+        if (originTurns.includes(delivered.taskEventId)) {
+          logger.info(
+            { reviewTaskId: task.id, deliveredEventId, taskEventId: delivered.taskEventId },
+            'Late delegation: delivery came from the timed-out turn itself — not the follow-up reply, leaving the review open',
+          );
+          continue;
+        }
+      }
+      const completed = await taskRepo.completeTask(
         task.id,
         renderRepliedNote(waiting, formatDeliveredAt(opts.deliveredAt, opts.timezone, logger)),
         'late-delegation',
       );
+      if (!completed) {
+        logger.warn(
+          { reviewTaskId: task.id, deliveredEventId },
+          'Late delegation: reply-pending review task disappeared before it could be closed',
+        );
+        continue;
+      }
       closed.push(task.id);
       logger.info(
-        { reviewTaskId: task.id, conversationId },
+        { reviewTaskId: task.id, deliveredEventId, conversationId: waiting.conversationId },
         'Late delegation: waiting sender got a reply — closed the review task',
       );
     } catch (err) {
       logger.error(
-        { err, reviewTaskId: task.id, conversationId },
+        { err, reviewTaskId: task.id, deliveredEventId },
         'Late delegation: failed to close a reply-pending review task after the reply went out',
       );
       firstError ??= err;

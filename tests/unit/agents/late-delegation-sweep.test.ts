@@ -603,6 +603,28 @@ describe('LateDelegationSweep.tick (#1799)', () => {
       expect(finalized).toHaveLength(1);
       const noteCall = updateTask.mock.calls.find((c) => c[1].progressNote !== undefined);
       expect(noteCall![1].tags).toEqual(['escalation', 'external-waiting', 'reply-pending']);
+      // A reply sent during the wake was invisible, so the note must not claim none went out.
+      expect(noteCall![1].progressNote).toMatch(/check the thread before replying/);
+    });
+
+    it('clears reply-pending when the wake fails, so a reply before the retry cannot close the task', async () => {
+      const { pool, released } = deliverableHandle();
+      // The write-ahead audit insert fails for the wake: nothing was delivered.
+      const bus = new EventBus(logger, async (event) => {
+        if (event.type === 'agent.task') throw new Error('audit_log insert failed');
+      });
+      const log: string[] = [];
+      const { taskRepo, completeTask } = waitingReviewTaskRepo(log);
+
+      const result = await makeSweep(pool, bus, taskRepo).tick(NOW);
+
+      expect(result.untouched).toBe(1);
+      expect(released).toHaveLength(1);
+      expect(log).toEqual([
+        'tags:escalation,external-waiting,reply-pending',
+        'tags:escalation,external-waiting',
+      ]);
+      expect(completeTask).not.toHaveBeenCalled();
     });
   });
 

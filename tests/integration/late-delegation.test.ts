@@ -352,12 +352,20 @@ describeIf('Late delegation — delivery, records, audit (#1799)', () => {
       .toMatch(/^Lena Okafor \(lena\.okafor@example\.test, email\) is waiting on a reply\. calendar delivered at /);
     expect((await lateResolvedAudit(event.payload.delegateEventId))?.payload['reviewTaskOutcome']).toBe('annotated');
 
-    // A reply on some other conversation answers someone else.
+    // The woken turn messaging someone else on Lena's conversation does not answer her.
     await bus.publish('dispatch', createOutboundDelivered({
       channel: 'email',
       recipientId: 'someone.else@example.test',
       content: 'Unrelated.',
-      conversationId: 'email:late-deleg-test-other-thread',
+      conversationId,
+    }));
+    // Nor does the timed-out turn's own "I'll follow up", landing after the tag.
+    await bus.publish('dispatch', createOutboundDelivered({
+      channel: 'email',
+      recipientId: awaitingReply.address,
+      content: 'I could not do that yet; I will follow up.',
+      conversationId,
+      taskEventId: 'origin-task-1',
     }));
     expect((await taskRepo.getTask(review.id))?.status).toBe('open');
 

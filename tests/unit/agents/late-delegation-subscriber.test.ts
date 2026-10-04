@@ -513,49 +513,120 @@ describe('LateDelegationSubscriber — closing a review task once the waiting se
     }).start();
   }
 
-  function delivered(conversationId: string | undefined) {
+  function delivered(opts: {
+    recipientId?: string;
+    conversationId?: string;
+    taskEventId?: string;
+    channel?: 'email' | 'signal';
+  } = {}) {
     return createOutboundDelivered({
-      channel: 'email',
-      recipientId: 'lena.okafor@example.test',
+      channel: opts.channel ?? 'email',
+      recipientId: opts.recipientId ?? 'lena.okafor@example.test',
       content: 'Here is what I found.',
-      ...(conversationId !== undefined && { conversationId }),
+      ...(opts.conversationId !== undefined && { conversationId: opts.conversationId }),
+      ...(opts.taskEventId !== undefined && { taskEventId: opts.taskEventId }),
     });
   }
 
-  it('closes a reply-pending review task when a reply is delivered on its conversation', async () => {
+  it('closes a reply-pending review task when a reply reaches the waiting sender', async () => {
     const task = reviewTask();
     const repo = statefulTaskRepo([task]);
     const bus = new EventBus(logger);
     start(bus, repo);
 
-    await bus.publish('dispatch', delivered(CONVERSATION));
+    await bus.publish('dispatch', delivered({ conversationId: CONVERSATION }));
 
     expect(task.status).toBe('done');
     expect(task.notes.at(-1)).toMatch(/^Replied to Lena Okafor \(lena\.okafor@example\.test, email\) at /);
   });
 
-  it('leaves the task open when the delivery is on a different conversation', async () => {
+  it('leaves the task open when the same conversation sends to someone else', async () => {
+    // A skill send stamps the SENDING turn's conversation. The woken turn emailing a third party
+    // or messaging the principal carries Lena's conversation id, but Lena got nothing.
     const task = reviewTask();
     const repo = statefulTaskRepo([task]);
     const bus = new EventBus(logger);
     start(bus, repo);
 
-    await bus.publish('dispatch', delivered('email:some-other-thread'));
-    await bus.publish('dispatch', delivered(undefined));
+    await bus.publish('dispatch', delivered({ conversationId: CONVERSATION, recipientId: 'bob@vendor.example.test' }));
+    await bus.publish('dispatch', delivered({
+      conversationId: CONVERSATION, channel: 'signal', recipientId: '+15550000001',
+    }));
 
     expect(task.status).toBe('open');
     expect(repo.completeTask).not.toHaveBeenCalled();
   });
 
+  it('closes when a reply reaches the sender from another conversation (an approved held reply)', async () => {
+    // send-draft, run from the principal's approval turn, stamps that turn's conversation.
+    const task = reviewTask();
+    const repo = statefulTaskRepo([task]);
+    const bus = new EventBus(logger);
+    start(bus, repo);
+
+    await bus.publish('dispatch', delivered({
+      conversationId: 'signal:+15550000099', recipientId: 'Lena.Okafor@Example.test',
+    }));
+
+    expect(task.status).toBe('done');
+  });
+
+  it('closes on a queue-flushed send, which carries no conversation id', async () => {
+    const task = reviewTask();
+    const repo = statefulTaskRepo([task]);
+    const bus = new EventBus(logger);
+    start(bus, repo);
+
+    await bus.publish('dispatch', delivered());
+
+    expect(task.status).toBe('done');
+  });
+
+  it('matches a Signal group conversation on the group id', async () => {
+    const groupConversation = 'signal:group=R3JvdXBJZA==';
+    const task = reviewTask({
+      progress: {
+        escalation: {
+          awaitingReply: {
+            name: 'Sam', address: '+15551112222', channel: 'signal', conversationId: groupConversation,
+          },
+        },
+      },
+    });
+    const repo = statefulTaskRepo([task]);
+    const bus = new EventBus(logger);
+    start(bus, repo);
+
+    await bus.publish('dispatch', delivered({ channel: 'signal', recipientId: 'R3JvdXBJZA==' }));
+
+    expect(task.status).toBe('done');
+  });
+
+  it('does not count the timed-out turn\'s own reply, even after the tag', async () => {
+    // A specialist that finishes seconds after the timeout gets the task tagged while the
+    // original turn is still composing "I'll follow up". That reply is not the answer.
+    const task = reviewTask();
+    const repo = statefulTaskRepo([task]);
+    const bus = new EventBus(logger);
+    const { pool } = fakePool({ existingHandle: { origin_task_event_id: 'origin-evt-1' } });
+    start(bus, repo, pool);
+
+    await bus.publish('dispatch', delivered({ conversationId: CONVERSATION, taskEventId: 'origin-evt-1' }));
+    expect(task.status).toBe('open');
+
+    await bus.publish('dispatch', delivered({ conversationId: CONVERSATION, taskEventId: 'wake-evt-1' }));
+    expect(task.status).toBe('done');
+  });
+
   it('does not close a review task whose late result has not been delivered yet', async () => {
-    // The timed-out turn itself replies "I'll follow up" on this same conversation. That reply
-    // must not close the task, and it cannot: the reply-pending tag only goes on at delivery.
+    // The timed-out turn itself replies "I'll follow up" to Lena. That reply must not close
+    // the task, and it cannot: the reply-pending tag only goes on at delivery.
     const task = reviewTask({ tags: ['escalation', 'external-waiting'] });
     const repo = statefulTaskRepo([task]);
     const bus = new EventBus(logger);
     start(bus, repo);
 
-    await bus.publish('dispatch', delivered(CONVERSATION));
+    await bus.publish('dispatch', delivered({ conversationId: CONVERSATION }));
 
     expect(task.status).toBe('open');
   });
@@ -595,7 +666,7 @@ describe('LateDelegationSubscriber — closing a review task once the waiting se
       // Stands in for the woken coordinator plus the dispatcher relay: the reply is delivered
       // while publish() is still awaiting the wake.
       bus.subscribe('agent.task', 'system', async () => {
-        await bus.publish('dispatch', delivered(CONVERSATION));
+        await bus.publish('dispatch', delivered({ conversationId: CONVERSATION }));
       });
       start(bus, repo, handlePool());
 
@@ -603,6 +674,24 @@ describe('LateDelegationSubscriber — closing a review task once the waiting se
 
       expect(task.status).toBe('done');
       expect(task.notes.some((n) => n.startsWith('Replied to Lena Okafor'))).toBe(true);
+    });
+
+    it('keeps the task open when the woken turn only messages someone else', async () => {
+      const task = reviewTask({ tags: ['escalation', 'external-waiting'] });
+      const repo = statefulTaskRepo([task]);
+      const bus = new EventBus(logger);
+      // The follow-up books the vendor, then the reply to Lena comes back NO_REPLY.
+      bus.subscribe('agent.task', 'system', async () => {
+        await bus.publish('dispatch', delivered({
+          conversationId: CONVERSATION, recipientId: 'bookings@vendor.example.test',
+        }));
+      });
+      start(bus, repo, handlePool());
+
+      await bus.publish('agent', lateResponse());
+
+      expect(task.status).toBe('open');
+      expect(task.notes.at(-1)!.startsWith('Lena Okafor (lena.okafor@example.test, email) is waiting on a reply. ')).toBe(true);
     });
 
     it('keeps the task open, waiting line first, when the woken turn sends nothing', async () => {
@@ -621,7 +710,7 @@ describe('LateDelegationSubscriber — closing a review task once the waiting se
       expect(task.notes.at(-1)!.startsWith('Lena Okafor (lena.okafor@example.test, email) is waiting on a reply. ')).toBe(true);
 
       // A later reply, from any turn, is what closes it.
-      await bus.publish('dispatch', delivered(CONVERSATION));
+      await bus.publish('dispatch', delivered({ conversationId: CONVERSATION }));
       expect(task.status).toBe('done');
     });
 
