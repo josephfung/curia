@@ -25,19 +25,22 @@
 //   - Specialist agents (agents/*.yaml) or their registry enablement
 //   - The principal's verified channel identities, or Curia's own email / Signal number
 //
-// Requires: DATABASE_URL pointing at a migrated Curia instance. No LLM key is needed —
-// providers are offline and nothing is sent. SECRET_ENCRYPTION_KEY is optional; without
-// it the Signal number is missing (a stderr warning says so).
+// Requires: DATABASE_URL pointing at a migrated Curia instance, and SECRET_ENCRYPTION_KEY.
+// No LLM key is needed — providers are offline and nothing is sent. The vault key is
+// required (unlike render-coordinator-prompt): without it the Signal number and the
+// email grant check are missing, and the JSON would not record that it is degraded.
 //
 // What it writes: only the idempotent bootstrap upserts every boot already performs
 // (office identity seed, agent self-contact). It does not write registry rows, and it
 // is safe to run beside a live instance.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { inspect } from 'node:util';
+import pino from 'pino';
 import { createTestModeStack, type TestModeStack } from '../src/startup/test-mode-stack.js';
-import { createSilentLogger } from '../src/logger.js';
+import type { Logger } from '../src/logger.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 
@@ -56,7 +59,7 @@ export interface PromptInputsSnapshot {
   available_specialists: string;
   /** null when autonomy_config has no row (pre-migration) — production omits the block too. */
   autonomy: { score: number; band: string } | null;
-  agent_contact_id: string | null;
+  agent_contact_id: string;
   principal_contact_id: string | null;
   /** Verified + active only (readPrincipalIdentitySnapshot) — the fields the block renders. */
   principal_identities: Array<{ channel: string; channel_identifier: string; label: string | null }>;
@@ -73,10 +76,17 @@ export async function buildPromptInputsSnapshot(
 
   // The coordinator always receives these. A missing one means assembly changed shape,
   // and a snapshot without it would silently render a coordinator with that block gone.
+  // The every-agent fields are checked for presence too: an absent principalIdentities
+  // would otherwise read as `[]`, indistinguishable from a principal with no verified
+  // identities, and every agent would lose ## Principal Contact Details unnoticed.
   if (!rc.officeIdentityService) throw new Error('coordinator runtime config has no officeIdentityService');
   if (!rc.securityContextBlock) throw new Error('coordinator runtime config has no securityContextBlock');
   if (rc.availableSpecialists === undefined) throw new Error('coordinator runtime config has no availableSpecialists');
   if (!rc.autonomyService) throw new Error('coordinator runtime config has no autonomyService');
+  if (!rc.principalIdentities) throw new Error('coordinator runtime config has no principalIdentities');
+  if (!rc.principalPrimaryEmail) throw new Error('coordinator runtime config has no principalPrimaryEmail');
+  if (!rc.channelAccounts) throw new Error('coordinator runtime config has no channelAccounts');
+  if (!rc.agentContactId) throw new Error('coordinator runtime config has no agentContactId');
   const timezone = rc.timezone?.trim();
   if (!timezone) throw new Error('coordinator runtime config has no timezone (TIMEZONE)');
 
@@ -94,17 +104,19 @@ export async function buildPromptInputsSnapshot(
     security_context_block: rc.securityContextBlock,
     available_specialists: rc.availableSpecialists,
     autonomy: autonomy ? { score: autonomy.score, band: autonomy.band } : null,
-    agent_contact_id: rc.agentContactId ?? null,
+    agent_contact_id: rc.agentContactId,
+    // null only when the database has no principal; fetch-prompt-blocks.sh refuses that.
     principal_contact_id: stack.principalContactId ?? null,
-    principal_identities: (rc.principalIdentities ?? []).map((id) => ({
+    principal_identities: rc.principalIdentities.map((id) => ({
       channel: id.channel,
       channel_identifier: id.channelIdentifier,
       label: id.label ?? null,
     })),
-    principal_primary_email: rc.principalPrimaryEmail?.current ?? null,
+    // null is legitimate for these three: no primary email set, no mailbox, no Signal.
+    principal_primary_email: rc.principalPrimaryEmail.current ?? null,
     channel_accounts: {
-      email: rc.channelAccounts?.email ?? null,
-      phone: rc.channelAccounts?.phone ?? null,
+      email: rc.channelAccounts.email ?? null,
+      phone: rc.channelAccounts.phone ?? null,
     },
   };
 }
@@ -117,11 +129,48 @@ function readCuriaVersion(): string {
   return pkg.version;
 }
 
+// Pin resolution warns once per pin it cannot resolve. MCP servers never load in the
+// test-mode stack, so every MCP pin trips these on every run; stack.warnings already
+// summarises unresolved pins, and pins do not affect any snapshot field.
+const PIN_NOISE = [
+  'Pinned skill expands to a tool that is not loaded',
+  'Pinned skill not found in SkillRegistry',
+];
+
+/**
+ * warn and above, to stderr. Not the silent logger: a vault read that fails mid-run is
+ * only logged (readVaultKey, resolveEmailAccounts), and swallowing that would let a
+ * snapshot with a missing Signal number or mailbox pass as healthy. Not createLogger():
+ * under NODE_ENV=production it writes to stdout, which is the JSON.
+ */
+function stderrLogger(): Logger {
+  return pino(
+    {
+      level: 'warn',
+      hooks: {
+        logMethod(args, method) {
+          const msg = args.find((a): a is string => typeof a === 'string');
+          if (msg && PIN_NOISE.some((noise) => msg.startsWith(noise))) return;
+          method.apply(this, args);
+        },
+      },
+    },
+    // Synchronous, so a warning is flushed before process.exit on a fatal error.
+    pino.destination({ dest: 2, sync: true }),
+  );
+}
+
 async function main(): Promise<void> {
-  const stack = await createTestModeStack({ llm: 'offline', logger: createSilentLogger() });
+  if (!process.env.SECRET_ENCRYPTION_KEY) {
+    throw new Error(
+      'SECRET_ENCRYPTION_KEY is required: without the vault the Signal number and email grant ' +
+        'check are missing, and the snapshot would not say so.',
+    );
+  }
+  const stack = await createTestModeStack({ llm: 'offline', logger: stderrLogger() });
   try {
-    // The stack's logger is silent, so everything that makes these inputs differ from
-    // what production holds is surfaced on stderr instead.
+    // Ways the stack differs from production (unresolved pins, an unreadable calendar
+    // grant). Pins and the calendar do not change any snapshot field.
     for (const warning of stack.warnings) {
       process.stderr.write(`inspect-prompts: warning: ${warning}\n`);
     }
@@ -133,14 +182,19 @@ async function main(): Promise<void> {
       await stack.shutdown();
     } catch (err: unknown) {
       // Don't let teardown shadow a real error — the snapshot may already be written.
-      process.stderr.write(`inspect-prompts: warning: shutdown failed: ${String(err)}\n`);
+      process.stderr.write(`inspect-prompts: warning: shutdown failed: ${inspect(err, { depth: 5 })}\n`);
     }
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// realpath: import.meta.url is the resolved path, argv[1] is as typed. Through a symlink
+// (macOS /tmp → /private/tmp) a plain comparison is false, main() never runs, and the
+// script prints nothing and exits 0 — an empty snapshot that looks like success.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main().catch((err: unknown) => {
-    process.stderr.write(`inspect-prompts: fatal error\n${String(err)}\n`);
+    // inspect, not String(): a refused connection is an AggregateError whose String() is
+    // just "AggregateError", and String() drops `cause` and the stack.
+    process.stderr.write(`inspect-prompts: fatal error\n${inspect(err, { depth: 5 })}\n`);
     process.exit(1);
   });
 }
