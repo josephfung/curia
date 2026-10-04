@@ -1,10 +1,12 @@
 // late-delegation-subscriber.ts — opens a durable handle when a delegate wait times out, and
 // matches the specialist's late agent.response back to it (#1799).
 //
-// System-layer, wired alongside ResumableContinuationSubscriber. Two subscriptions:
+// System-layer, wired alongside ResumableContinuationSubscriber. Three subscriptions:
 //
 //   delegation.timed_out  → persist the handle (the runtime stays database-free, spec 06 L3)
 //   agent.response        → if it answers an open handle, classify and resolve it
+//   outbound.delivered    → close a reply-pending review task once its waiting sender is
+//                           actually answered on their conversation (#1991)
 //
 // The agent.response path does one indexed point lookup per response rather than keeping an
 // in-memory index of open handles. At this platform's response volume the lookup is free, and
@@ -15,12 +17,17 @@ import type { Pool } from 'pg';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
 import type { TaskRepo } from '../db/task-repo.js';
-import type { AgentResponseEvent, DelegationTimedOutEvent } from '../bus/events.js';
+import type {
+  AgentResponseEvent,
+  DelegationTimedOutEvent,
+  OutboundDeliveredEvent,
+} from '../bus/events.js';
 import {
   getPendingDelegationByDelegateEventId,
   recordPendingDelegation,
 } from '../db/queries/pending-delegations.js';
 import {
+  closeAnsweredReviewTasks,
   computeLateDeliveryExpiry,
   handleLateResponse,
   parseSchedulerJobId,
@@ -63,6 +70,10 @@ export class LateDelegationSubscriber {
 
     this.opts.bus.subscribe('agent.response', 'system', async (event) => {
       await this.handleResponse(event as AgentResponseEvent);
+    });
+
+    this.opts.bus.subscribe('outbound.delivered', 'system', async (event) => {
+      await this.handleDelivered(event as OutboundDeliveredEvent);
     });
 
     this.opts.logger.info(
@@ -192,6 +203,38 @@ export class LateDelegationSubscriber {
       this.opts.logger.error(
         { err, delegateEventId, responseEventId: event.id },
         'Late delegation: failed to resolve a matched late response — the sweep will retry',
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * Close the review task of a waiting sender once a reply reaches their conversation (#1991).
+   *
+   * outbound.delivered is published only after a real wire send. A NO_REPLY turn, a Gate C
+   * hold, a content-filter block and a saved draft never produce one, so each leaves the task
+   * open. A reply sent later on the same conversation, by any turn, closes it then.
+   */
+  private async handleDelivered(event: OutboundDeliveredEvent): Promise<void> {
+    const conversationId = event.payload.conversationId;
+    // Queue-flushed sends carry no conversation id. They leave the task open rather than
+    // guessing which conversation they answered.
+    if (!conversationId) return;
+
+    try {
+      await closeAnsweredReviewTasks({
+        taskRepo: this.opts.taskRepo,
+        logger: this.opts.logger,
+        conversationId,
+        deliveredAt: event.timestamp,
+        ...(this.opts.timezone !== undefined && { timezone: this.opts.timezone }),
+      });
+    } catch (err) {
+      // The task stays open and tagged reply-pending, so the principal still sees the sender
+      // waiting; a later reply on the conversation retries the close.
+      this.opts.logger.error(
+        { err, conversationId, deliveredEventId: event.id },
+        'Late delegation: failed to close reply-pending review tasks after a delivered reply',
       );
       throw err;
     }

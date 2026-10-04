@@ -160,7 +160,7 @@ export function escalationRequester(input: {
 }
 
 /** "Lena Okafor (lena@example.test, email)", or "lena@example.test (email)" with no name. */
-function describeRequester(r: EscalationRequester): string {
+export function describeRequester(r: EscalationRequester): string {
   return r.name === r.address ? `${r.name} (${r.channel})` : `${r.name} (${r.address}, ${r.channel})`;
 }
 

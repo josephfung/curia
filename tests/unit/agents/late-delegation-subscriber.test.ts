@@ -10,7 +10,12 @@ import pino from 'pino';
 import type pg from 'pg';
 import { EventBus } from '../../../src/bus/bus.js';
 import type { TaskRepo } from '../../../src/db/task-repo.js';
-import { createAgentResponse, createDelegationTimedOut, type AgentTaskEvent } from '../../../src/bus/events.js';
+import {
+  createAgentResponse,
+  createDelegationTimedOut,
+  createOutboundDelivered,
+  type AgentTaskEvent,
+} from '../../../src/bus/events.js';
 import { LateDelegationSubscriber } from '../../../src/agents/late-delegation-subscriber.js';
 
 const logger = pino({ level: 'silent' });
@@ -434,5 +439,204 @@ describe('LateDelegationSubscriber — agent.response matching (#1799)', () => {
     expect(wakes).toHaveLength(0);
     const claim = queries.find((q) => q.sql.includes("SET status = 'claimed'"));
     expect(claim!.params[1]).toBe('annotated_unroutable');
+  });
+});
+
+describe('LateDelegationSubscriber — closing a review task once the waiting sender is answered (#1991)', () => {
+  const CONVERSATION = 'email:thread-1991';
+  const awaitingReply = {
+    name: 'Lena Okafor',
+    address: 'lena.okafor@example.test',
+    channel: 'email',
+    conversationId: CONVERSATION,
+  };
+
+  interface FakeTask {
+    id: string;
+    status: string;
+    tags: string[];
+    progress: Record<string, unknown>;
+    notes: string[];
+  }
+
+  /** An in-memory task table with just the calls the late-delegation path makes. */
+  function statefulTaskRepo(tasks: FakeTask[]) {
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const repo = {
+      getTask: vi.fn(async (id: string) => {
+        const t = byId.get(id);
+        return t ? { ...t, tags: [...t.tags] } : null;
+      }),
+      updateTask: vi.fn(async (id: string, updates: { tags?: string[]; progressNote?: string }) => {
+        const t = byId.get(id)!;
+        if (updates.tags) t.tags = updates.tags;
+        if (updates.progressNote) t.notes.push(updates.progressNote);
+        return null;
+      }),
+      completeTask: vi.fn(async (id: string, note?: string) => {
+        const t = byId.get(id)!;
+        if (t.status === 'done') throw new Error("Cannot complete task — it is already in terminal state 'done'.");
+        t.status = 'done';
+        if (note) t.notes.push(note);
+        return null;
+      }),
+      listAllTasks: vi.fn(async (filters: { tag?: string; statuses?: string[] }) => ({
+        tasks: [...byId.values()]
+          .filter((t) => (filters.tag === undefined || t.tags.includes(filters.tag)))
+          .filter((t) => (filters.statuses === undefined || filters.statuses.includes(t.status)))
+          .map((t) => ({ ...t, tags: [...t.tags] })),
+        truncated: false,
+      })),
+    };
+    return repo;
+  }
+
+  function reviewTask(overrides: Partial<FakeTask> = {}): FakeTask {
+    return {
+      id: 'review-1',
+      status: 'open',
+      tags: ['escalation', 'external-waiting', 'reply-pending'],
+      progress: { escalation: { awaitingReply } },
+      notes: [],
+      ...overrides,
+    };
+  }
+
+  function start(bus: EventBus, repo: ReturnType<typeof statefulTaskRepo>, pool?: pg.Pool) {
+    new LateDelegationSubscriber({
+      pool: pool ?? fakePool().pool,
+      bus,
+      logger,
+      taskRepo: repo as unknown as TaskRepo,
+      ttlMinutes: 60,
+      maxResultChars: 500,
+    }).start();
+  }
+
+  function delivered(conversationId: string | undefined) {
+    return createOutboundDelivered({
+      channel: 'email',
+      recipientId: 'lena.okafor@example.test',
+      content: 'Here is what I found.',
+      ...(conversationId !== undefined && { conversationId }),
+    });
+  }
+
+  it('closes a reply-pending review task when a reply is delivered on its conversation', async () => {
+    const task = reviewTask();
+    const repo = statefulTaskRepo([task]);
+    const bus = new EventBus(logger);
+    start(bus, repo);
+
+    await bus.publish('dispatch', delivered(CONVERSATION));
+
+    expect(task.status).toBe('done');
+    expect(task.notes.at(-1)).toMatch(/^Replied to Lena Okafor \(lena\.okafor@example\.test, email\) at /);
+  });
+
+  it('leaves the task open when the delivery is on a different conversation', async () => {
+    const task = reviewTask();
+    const repo = statefulTaskRepo([task]);
+    const bus = new EventBus(logger);
+    start(bus, repo);
+
+    await bus.publish('dispatch', delivered('email:some-other-thread'));
+    await bus.publish('dispatch', delivered(undefined));
+
+    expect(task.status).toBe('open');
+    expect(repo.completeTask).not.toHaveBeenCalled();
+  });
+
+  it('does not close a review task whose late result has not been delivered yet', async () => {
+    // The timed-out turn itself replies "I'll follow up" on this same conversation. That reply
+    // must not close the task, and it cannot: the reply-pending tag only goes on at delivery.
+    const task = reviewTask({ tags: ['escalation', 'external-waiting'] });
+    const repo = statefulTaskRepo([task]);
+    const bus = new EventBus(logger);
+    start(bus, repo);
+
+    await bus.publish('dispatch', delivered(CONVERSATION));
+
+    expect(task.status).toBe('open');
+  });
+
+  describe('end to end: a late result for a waiting sender', () => {
+    function handlePool() {
+      return fakePool({
+        existingHandle: {
+          delegate_event_id: 'delegate-evt-1',
+          status: 'pending',
+          resolution: null,
+          origin_channel_id: 'email',
+          origin_agent_id: 'coordinator',
+          origin_conversation_id: CONVERSATION,
+          origin_sender_id: 'lena.okafor@example.test',
+          review_task_id: 'review-1',
+          target_agent: 'calendar',
+          delegate_task: 'Find a slot',
+          originator: null,
+        },
+      }).pool;
+    }
+
+    function lateResponse() {
+      return createAgentResponse({
+        agentId: 'calendar',
+        conversationId: 'delegate-conv-1',
+        content: 'Thursday 2pm works.',
+        parentEventId: 'delegate-evt-1',
+      });
+    }
+
+    it('closes the task when the woken turn replies to the sender inside the wake', async () => {
+      const task = reviewTask({ tags: ['escalation', 'external-waiting'] });
+      const repo = statefulTaskRepo([task]);
+      const bus = new EventBus(logger);
+      // Stands in for the woken coordinator plus the dispatcher relay: the reply is delivered
+      // while publish() is still awaiting the wake.
+      bus.subscribe('agent.task', 'system', async () => {
+        await bus.publish('dispatch', delivered(CONVERSATION));
+      });
+      start(bus, repo, handlePool());
+
+      await bus.publish('agent', lateResponse());
+
+      expect(task.status).toBe('done');
+      expect(task.notes.some((n) => n.startsWith('Replied to Lena Okafor'))).toBe(true);
+    });
+
+    it('keeps the task open, waiting line first, when the woken turn sends nothing', async () => {
+      // NO_REPLY, an errored or exhausted turn, and a reply Gate C held all look the same from
+      // here: no outbound.delivered on the conversation.
+      const task = reviewTask({ tags: ['escalation', 'external-waiting'] });
+      const repo = statefulTaskRepo([task]);
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.task', 'system', () => {});
+      start(bus, repo, handlePool());
+
+      await bus.publish('agent', lateResponse());
+
+      expect(task.status).toBe('open');
+      expect(task.tags).toContain('reply-pending');
+      expect(task.notes.at(-1)!.startsWith('Lena Okafor (lena.okafor@example.test, email) is waiting on a reply. ')).toBe(true);
+
+      // A later reply, from any turn, is what closes it.
+      await bus.publish('dispatch', delivered(CONVERSATION));
+      expect(task.status).toBe('done');
+    });
+
+    it('closes a task with no waiting sender on delivery, as before', async () => {
+      const task = reviewTask({ tags: ['escalation'], progress: {} });
+      const repo = statefulTaskRepo([task]);
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.task', 'system', () => {});
+      start(bus, repo, handlePool());
+
+      await bus.publish('agent', lateResponse());
+
+      expect(task.status).toBe('done');
+      expect(task.tags).not.toContain('reply-pending');
+      expect(task.notes.at(-1)).toMatch(/Closing this review/);
+    });
   });
 });
