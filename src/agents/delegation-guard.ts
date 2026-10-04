@@ -309,10 +309,12 @@ export function parseDelegateFailureData(data: unknown, logger?: Logger): Delega
 
 /** Outcome of an escalation attempt. `reviewTaskId` is present only when task-create both
  *  succeeded and returned a parseable id — #1799 links the pending delegation handle to that
- *  row so the late result can close or annotate it. */
+ *  row so the late result can close or annotate it. `progressNote` is the note it seeded
+ *  (present whenever `escalated`), so a later note can re-state it (#1990). */
 export interface DelegationEscalationResult {
   escalated: boolean;
   reviewTaskId?: string;
+  progressNote?: string;
 }
 
 /** Read the created task id out of a task-create result payload (string or object data). */
@@ -400,12 +402,76 @@ export async function escalateDelegationFailure(
       { agent: failure.agent, reason: failure.reason, reviewTaskId },
       'Escalated delegation failure to principal backlog via task-create',
     );
-    return { escalated: true, ...(reviewTaskId !== undefined && { reviewTaskId }) };
+    return {
+      escalated: true,
+      ...(reviewTaskId !== undefined && { reviewTaskId }),
+      progressNote: rendered.progressNote,
+    };
   } catch (err) {
     logger.error(
       { err, agent: failure.agent, reason: failure.reason },
       'Unexpected error escalating delegation failure to principal backlog',
     );
     return { escalated: false };
+  }
+}
+
+// task-update rejects a progress note longer than this (checked as String.length).
+const MAX_PROGRESS_NOTE = 2000;
+const PRINCIPAL_NOTE_LABEL = ' Note for you from the reply to the sender: ';
+
+/** The longest prefix of `text` within `max` UTF-16 units that does not split a code point. */
+function boundUtf16(text: string, max: number): string {
+  let out = '';
+  for (const ch of text) {
+    if (out.length + ch.length > max) break;
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Add a sender reply's note for the principal to the review task logged for the same
+ * failure (#1990). The digest shows only a task's latest progress note, so a bare note
+ * would push out the escalation summary, including who is waiting on a reply. The new
+ * note re-states that summary and appends the note, shortening the note (never the
+ * summary) to stay within task-update's limit.
+ *
+ * Best-effort: the note is already recorded in the audit log, and the reply to the
+ * sender must not wait on this. A failure is logged and reported as false.
+ */
+export async function addPrincipalNoteToReviewTask(
+  executionLayer: ExecutionLayer,
+  caller: CallerContext | undefined,
+  options: InvokeOptions,
+  reviewTask: { id: string; progressNote: string },
+  note: string,
+  logger: Logger,
+): Promise<boolean> {
+  const head = `${reviewTask.progressNote}${PRINCIPAL_NOTE_LABEL}`;
+  // A summary that already fills the limit leaves no room; cut the whole thing then,
+  // since an over-long note is rejected outright and the task would get nothing.
+  const progressNote = boundUtf16(head.length < MAX_PROGRESS_NOTE ? `${head}${note}` : head, MAX_PROGRESS_NOTE);
+  try {
+    const result = await executionLayer.invoke(
+      'task-update',
+      { task_id: reviewTask.id, progress_note: progressNote },
+      caller,
+      options,
+    );
+    if (!result.success) {
+      logger.error(
+        { reviewTaskId: reviewTask.id, error: result.error },
+        'Failed to add the principal note to the delegation review task via task-update',
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    logger.error(
+      { err, reviewTaskId: reviewTask.id },
+      'Unexpected error adding the principal note to the delegation review task',
+    );
+    return false;
   }
 }

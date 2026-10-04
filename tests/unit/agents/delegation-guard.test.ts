@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
+import { addPrincipalNoteToReviewTask, ALREADY_DELIVERED_REASON, DelegationGuard, escalateDelegationFailure, delegationKey, findAlreadyDeliveredKey, MAX_RETRYABLE_IDENTICAL_DELEGATIONS, parseDelegateFailureData, seedAlreadyDelivered } from '../../../src/agents/delegation-guard.js';
 import { encodeResumeToken, MAX_RESUME_TASK_LENGTH } from '../../../src/agents/resume-token.js';
 import pino from 'pino';
 import { escalationRequester } from '../../../src/agents/task-escalation.js';
@@ -341,8 +341,9 @@ describe('escalateDelegationFailure — outside sender waiting (#1978)', () => {
     });
     const result = await escalateDelegationFailure(layer, undefined, {}, { ...failure, awaitingReply }, logger);
 
-    expect(result).toEqual({ escalated: true, reviewTaskId: 'review-1' });
     const input = (invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    // The progress note it wrote comes back, so a later note can re-state it (#1990).
+    expect(result).toEqual({ escalated: true, reviewTaskId: 'review-1', progressNote: input['progress_note'] });
     expect(input['tags']).toContain('external-waiting');
     expect(String(input['progress_note'])).toContain('Lena Okafor (lena.okafor@example.test, email) is waiting on a reply');
     expect(String(input['description'])).toContain('Waiting on a reply: Lena Okafor');
@@ -359,6 +360,47 @@ describe('escalateDelegationFailure — outside sender waiting (#1978)', () => {
     expect(input['tags']).not.toContain('external-waiting');
     expect(String(input['progress_note'])).not.toMatch(/waiting on a reply/);
     expect(JSON.parse(String(input['escalation_json'])).awaitingReply).toBeUndefined();
+  });
+});
+
+describe('addPrincipalNoteToReviewTask (#1990)', () => {
+  const logger = pino({ level: 'silent' });
+  const reviewTask = {
+    id: 'review-1',
+    progressNote: 'ceo-inbox could not finish the delegated work (timeout). Placeholder Sender (sender@example.test, email) is waiting on a reply.',
+  };
+
+  it('appends the note after the escalation summary, so the digest keeps who is waiting', async () => {
+    const invoke = vi.fn(async () => ({ success: true as const, data: { task_id: 'review-1' } }));
+    const layer = { invoke } as unknown as ExecutionLayer;
+    const added = await addPrincipalNoteToReviewTask(layer, undefined, {}, reviewTask, 'Thread not found.', logger);
+
+    expect(added).toBe(true);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [tool, input] = invoke.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(tool).toBe('task-update');
+    expect(input['task_id']).toBe('review-1');
+    const note = String(input['progress_note']);
+    expect(note.startsWith(reviewTask.progressNote)).toBe(true);
+    expect(note).toContain('is waiting on a reply');
+    expect(note.endsWith('Note for you from the reply to the sender: Thread not found.')).toBe(true);
+  });
+
+  it('keeps the update within the task-update limit by shortening the note, never the summary', async () => {
+    const invoke = vi.fn(async () => ({ success: true as const, data: {} }));
+    const layer = { invoke } as unknown as ExecutionLayer;
+    await addPrincipalNoteToReviewTask(layer, undefined, {}, reviewTask, 'n'.repeat(5000), logger);
+    const note = String((invoke.mock.calls[0] as unknown as [string, Record<string, unknown>])[1]['progress_note']);
+    // task-update checks .length (UTF-16 units), so that is the bound that matters.
+    expect(note.length).toBeLessThanOrEqual(2000);
+    expect(note.startsWith(reviewTask.progressNote)).toBe(true);
+  });
+
+  it('reports failure without throwing when the update fails or throws', async () => {
+    const failing = { invoke: vi.fn(async () => ({ success: false as const, error: 'nope' })) } as unknown as ExecutionLayer;
+    expect(await addPrincipalNoteToReviewTask(failing, undefined, {}, reviewTask, 'x', logger)).toBe(false);
+    const throwing = { invoke: vi.fn(async () => { throw new Error('boom'); }) } as unknown as ExecutionLayer;
+    expect(await addPrincipalNoteToReviewTask(throwing, undefined, {}, reviewTask, 'x', logger)).toBe(false);
   });
 });
 
