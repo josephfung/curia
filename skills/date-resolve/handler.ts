@@ -150,6 +150,13 @@ export class DateResolveHandler implements ToolHandler {
 
     const timezone = ctx.timezone ?? 'UTC';
     const now = DateTime.now().setZone(timezone);
+    // luxon returns an invalid DateTime for an unknown zone instead of throwing. Left
+    // unchecked, dates fail with a misleading "could not parse" and relative forms throw
+    // later from formatDisplayTimezone. Startup validates TIMEZONE, so this is a guard
+    // for callers outside the execution layer, and it names the real problem.
+    if (!now.isValid) {
+      return { success: false, error: `Invalid timezone: "${timezone}" (${now.invalidReason ?? 'unknown reason'})` };
+    }
 
     let resolved: DateTime | null = null;
 
