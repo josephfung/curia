@@ -105,6 +105,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`date-resolve`** — resolves "today", "tomorrow" and "yesterday" in the configured timezone instead of erroring. (#1986)
+- **`date-resolve`** — a bare weekday now errors as ambiguous, naming "this Friday" and "next Friday". (#1986)
+- **Calendar brief date check** — "yesterday" now requires a resolved date; shares date-resolve's word list. (#1986)
 - **Reply-shaped external email** — coordinator acknowledges instead of asking the sender; principal notes stay out. (#1978)
 - **Delegation-failure reply to external senders** — written for the sender; the review task records them as waiting. (#1978)
 - **Delegation-failure reply** — no longer leaks model reasoning, the narration prompt, the delegate brief or decline prose. (#1975, #1976)

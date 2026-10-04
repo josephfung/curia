@@ -10,6 +10,7 @@
 import { DateTime } from 'luxon';
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { formatDisplayTimezone } from '../../src/time/timestamp.js';
+import { RELATIVE_DAY_OFFSETS } from '../../src/time/relative-days.js';
 
 /** Canonical day names for matching against user input. */
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
@@ -50,16 +51,6 @@ function parseDate(raw: string, timezone: string): DateTime | null {
   return null;
 }
 
-/**
- * Day offsets for the bare relative words (#1986). A Map rather than an object literal
- * so an input like "constructor" can't hit an inherited property.
- */
-const DAY_OFFSET_WORDS = new Map<string, number>([
-  ['yesterday', -1],
-  ['today', 0],
-  ['tomorrow', 1],
-]);
-
 /** Every supported relative form, listed in the unsupported-expression error. */
 const SUPPORTED_RELATIVE_FORMS =
   '"today", "tomorrow", "yesterday", "next Monday", "this Friday", ' +
@@ -82,7 +73,8 @@ function resolveRelative(raw: string, now: DateTime, timezone: string): DateTime
   // calendar day is the local one even when the UTC date differs (near midnight), and
   // luxon's day arithmetic steps by calendar day across DST changes. Whole-input match
   // only, so "the day after tomorrow" is rejected rather than read as "tomorrow".
-  const dayOffset = DAY_OFFSET_WORDS.get(lower);
+  // The word list is shared with the calendar brief check (src/time/relative-days.ts).
+  const dayOffset = RELATIVE_DAY_OFFSETS.get(lower);
   if (dayOffset !== undefined) {
     return now.plus({ days: dayOffset }).startOf('day');
   }
@@ -169,6 +161,18 @@ export class DateResolveHandler implements ToolHandler {
     } else {
       resolved = resolveRelative(relativeInput, now, timezone);
       if (!resolved) {
+        // A bare weekday gets its own error rather than the generic one: the calendar
+        // brief check requires a resolved date for "Friday", so the model needs to know
+        // which explicit form to call with. Picking one here would hide the ambiguity.
+        const bareWeekday = canonicalDay(relativeInput);
+        if (bareWeekday) {
+          return {
+            success: false,
+            error:
+              `"${relativeInput}" on its own is ambiguous. Use "this ${bareWeekday}" (this week's, ` +
+              `may be today or already past) or "next ${bareWeekday}" (the coming one, never today).`,
+          };
+        }
         return {
           success: false,
           error: `Could not resolve relative expression: "${relativeInput}". Supported: ${SUPPORTED_RELATIVE_FORMS}.`,
