@@ -92,6 +92,11 @@ describe('buildPromptInputsSnapshot', () => {
     ['availableSpecialists', { availableSpecialists: undefined }],
     ['autonomyService', { autonomyService: undefined }],
     ['timezone', { timezone: '  ' }],
+    // Every-agent fields: absent must not read as "a principal with no identities".
+    ['principalIdentities', { principalIdentities: undefined }],
+    ['principalPrimaryEmail', { principalPrimaryEmail: undefined }],
+    ['channelAccounts', { channelAccounts: undefined }],
+    ['agentContactId', { agentContactId: undefined }],
   ] as const)('refuses to emit a snapshot when the coordinator has no %s', async (_field, overrides) => {
     await expect(
       buildPromptInputsSnapshot(stackWith(coordinatorConfig(overrides as Partial<AgentConfig>)), '0.44.0'),
