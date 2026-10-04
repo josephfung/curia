@@ -7461,8 +7461,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(agentResponses).toHaveLength(1);
     const content = agentResponses[0]!.payload.content;
-    expect(content).toBe("I couldn't get that done in time. I'll follow up with you on it.");
-    expect(content).not.toMatch(/logged|follow-up task|principal/i);
+    // Escalated, but the sender is told nothing about it, and nothing is promised (#1978).
+    expect(content).toBe("I couldn't get that done in time.");
+    expect(content).not.toMatch(/logged|follow-up|follow up|principal/i);
 
     // The narration prompt named the sender as the reader.
     const narration = vi.mocked(provider.chat).mock.calls[1]![0];
