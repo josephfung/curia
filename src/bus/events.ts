@@ -1411,6 +1411,33 @@ export interface DelegationRequesterContextEvent extends BaseEvent {
   payload: DelegationRequesterContextPayload;
 }
 
+// DelegationPrincipalNotePayload — published by the agent runtime when a delegation-failure
+// reply written for an outside sender also carried a note for the principal (#1990). The
+// note is cut out of the reply, so this row is its record whether or not a review task
+// was logged to carry it too. parentEventId is the coordinator's agent.task.
+interface DelegationPrincipalNotePayload {
+  agentId: string;
+  conversationId: string;
+  /** The agent the failed delegation went to. */
+  targetAgent: string;
+  /** The delegation failure reason ('timeout', 'blocked', …). */
+  reason: string;
+  /** The note, sanitized, on one line, bounded. Never shown to the sender. */
+  note: string;
+  /** Whether a review task was logged for this failure. */
+  followUpLogged: boolean;
+  /** The review task the note was also added to; null when none was logged. */
+  reviewTaskId: string | null;
+  /** Whether the sender got the model's reply or the deterministic fallback. */
+  replyVia: 'model' | 'fallback';
+}
+
+export interface DelegationPrincipalNoteEvent extends BaseEvent {
+  type: 'delegation.principal_note';
+  sourceLayer: 'agent';
+  payload: DelegationPrincipalNotePayload;
+}
+
 // SecretCapturedEvent — published by the capture endpoint (trusted system infra) when a
 // one-time link is redeemed (#972). sourceLayer 'system' because the capture endpoint
 // self-authorizes via the token and writes to the vault, like the scheduler emitting its
@@ -1650,6 +1677,7 @@ export type BusEvent =
   | DelegationTimedOutEvent     // #1799: delegate wait timed out, specialist possibly still running
   | DelegationLateResolvedEvent // #1799: a late specialist response was delivered, recorded, or lost
   | DelegationRequesterContextEvent // #1859: identity evidence rendered into a delegated specialist prompt
+  | DelegationPrincipalNoteEvent // #1990: a sender reply's note for the principal, kept out of the reply
   | AutonomyToolBlockedEvent  // Autonomy Phase 2: skill blocked by action_risk gate
   | AutonomySendBlockedEvent   // Autonomy Phase 2: outbound send blocked by score < 70 gate
   | EmbeddingCallEvent         // #654: embedding API call cost telemetry
@@ -2315,6 +2343,21 @@ export function createDelegationRequesterContext(
     id: randomUUID(),
     timestamp: new Date(),
     type: 'delegation.requester_context',
+    sourceLayer: 'agent',
+    payload: rest,
+    parentEventId,
+  };
+}
+
+export function createDelegationPrincipalNote(
+  // parentEventId is the coordinator's agent.task — the turn whose reply carried the note.
+  payload: DelegationPrincipalNotePayload & { parentEventId: string },
+): DelegationPrincipalNoteEvent {
+  const { parentEventId, ...rest } = payload;
+  return {
+    id: randomUUID(),
+    timestamp: new Date(),
+    type: 'delegation.principal_note',
     sourceLayer: 'agent',
     payload: rest,
     parentEventId,

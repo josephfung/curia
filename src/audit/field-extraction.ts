@@ -268,6 +268,17 @@ const EXTRACTORS: Readonly<Record<string, Extractor>> = {
     initiator_id: str(p, 'agentId', fail),
   }),
 
+  // A sender reply's note for the principal (#1990). Recorded against the conversation
+  // the reply belongs to; the note itself and the review task id stay in the payload.
+  'delegation.principal_note': (p, fail) => ({
+    action: 'record',
+    outcome: 'success',
+    target_type: 'conversation',
+    target_id: str(p, 'conversationId', fail),
+    initiator_type: 'agent',
+    initiator_id: str(p, 'agentId', fail),
+  }),
+
   // Spec lists message.held; the event type is reserved but not yet emitted.
   // Keep the mapping ready so structured columns populate the day it ships.
   'message.held': (p, fail) => ({
