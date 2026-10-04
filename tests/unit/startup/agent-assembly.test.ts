@@ -31,6 +31,7 @@ import {
   assembleAgents,
   registerAgentRoster,
   resolveAgentModelBinding,
+  resolveSystemPromptSources,
   type AgentAssemblyContext,
 } from '../../../src/startup/agent-assembly.js';
 
@@ -241,6 +242,59 @@ describe('assembleAgent', () => {
     const ctx = buildContext(textProvider(), configs);
     const [coordinator] = assembleAgents(configs, ctx);
     expect(coordinator!.runtimeConfig.errorBudget?.maxTurns).toBe(7);
+  });
+});
+
+// The eval harness in curia-deploy renders prompts from snapshot inputs by calling this
+// directly (curia-deploy#261). It must be the exact gating assembleAgent applies, or the
+// harness would score a prompt production never sends.
+describe('resolveSystemPromptSources', () => {
+  const SOURCE_FIELDS = [
+    'agentId', 'systemPrompt', 'officeIdentityService', 'securityContextBlock', 'availableSpecialists',
+    'autonomyService', 'timezone', 'channelAccounts', 'agentContactId', 'principalIdentities',
+    'principalPrimaryEmail', 'errorBudget',
+  ] as const;
+
+  it('is exactly the prompt half of the runtime config assembleAgent builds', () => {
+    const configs = [
+      coordinatorYaml({ error_budget: { max_turns: 9, max_errors: 3 } }),
+      specialistYaml(),
+      specialistYaml({ name: 'ceo-inbox' }),
+    ];
+    const ctx = buildContext(textProvider(), configs);
+    for (const config of configs) {
+      const assembled = assembleAgent(config, ctx);
+      const sources = resolveSystemPromptSources(config, assembled.systemPrompt, ctx);
+      for (const field of SOURCE_FIELDS) {
+        expect(assembled.runtimeConfig[field], `${config.name}.${field}`).toEqual(sources[field]);
+      }
+    }
+  });
+
+  it('gives autonomy to the coordinator and ceo-inbox only', () => {
+    const configs = [coordinatorYaml(), specialistYaml(), specialistYaml({ name: 'ceo-inbox' })];
+    const ctx = buildContext(textProvider(), configs);
+    const autonomyFor = (config: AgentYamlConfig) =>
+      resolveSystemPromptSources(config, 'body', ctx).autonomyService;
+    expect(autonomyFor(configs[0]!)).toBe(ctx.autonomyService);
+    expect(autonomyFor(configs[1]!)).toBeUndefined();
+    expect(autonomyFor(configs[2]!)).toBe(ctx.autonomyService);
+  });
+
+  it('reads the roster only through specialistSummary, so a snapshot adapter is enough', () => {
+    const ctx = buildContext(textProvider(), [coordinatorYaml()]);
+    const sources = resolveSystemPromptSources(coordinatorYaml(), 'body', {
+      ...ctx,
+      agentRegistry: { specialistSummary: () => '- @snap: from a snapshot' } as unknown as AgentRegistry,
+    });
+    expect(sources.availableSpecialists).toBe('- @snap: from a snapshot');
+  });
+
+  it('maps max_errors to maxConsecutiveErrors and defaults the rest', () => {
+    const ctx = buildContext(textProvider(), [coordinatorYaml()]);
+    const sources = resolveSystemPromptSources(coordinatorYaml({ error_budget: { max_errors: 2 } }), 'body', ctx);
+    expect(sources.errorBudget).toEqual({ maxTurns: 20, maxConsecutiveErrors: 2 });
+    expect(resolveSystemPromptSources(coordinatorYaml(), 'body', ctx).errorBudget).toBeUndefined();
   });
 });
 

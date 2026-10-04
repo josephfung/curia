@@ -17,6 +17,7 @@
 import type { Logger } from '../logger.js';
 import type { EventBus } from '../bus/bus.js';
 import type { AgentConfig } from '../agents/runtime.js';
+import type { SystemPromptSources } from '../agents/system-prompt.js';
 import type { AgentYamlConfig } from '../agents/loader.js';
 import { interpolateRuntimeContext } from '../agents/loader.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
@@ -183,6 +184,82 @@ export function interpolateAgentSystemPrompt(
   });
 }
 
+/**
+ * What resolveSystemPromptSources() reads: the deployment-wide prompt inputs, before
+ * they are narrowed to one agent. A full AgentAssemblyContext satisfies it.
+ */
+export type SystemPromptSourceContext = Pick<
+  AgentAssemblyContext,
+  | 'agentRegistry'
+  | 'autonomyService'
+  | 'officeIdentityService'
+  | 'securityContextBlock'
+  | 'timezone'
+  | 'channelAccounts'
+  | 'principalIdentities'
+  | 'principalPrimaryEmail'
+  | 'agentContactId'
+>;
+
+/**
+ * Decide which prompt inputs one agent receives: the half of its runtime config that
+ * buildBaseSystemPrompt() reads. `systemPrompt` is the bootstrap body —
+ * interpolateAgentSystemPrompt() plus the pinned SKILL.md appends.
+ *
+ * The per-agent rules live here so they are written once: identity, security, the
+ * specialist roster and the own contact ID are coordinator-only; autonomy follows
+ * AutonomyService.receivesInjection(); time and both contact-details blocks go to
+ * every agent. assembleAgent() spreads this into the runtime config, and the
+ * curia-deploy eval harness calls it with snapshot-backed inputs (curia-deploy#261),
+ * so a renderer outside this repo never re-derives who gets which block.
+ */
+export function resolveSystemPromptSources(
+  agentConfig: AgentYamlConfig,
+  systemPrompt: string,
+  ctx: SystemPromptSourceContext,
+): SystemPromptSources {
+  const isCoordinator = agentConfig.role === 'coordinator';
+  return {
+    agentId: agentConfig.name,
+    systemPrompt,
+    // Coordinator + ceo-inbox receive autonomyService for per-task band injection
+    // (spec 14 checklist / ADR-029). ceo-inbox's draft-vs-punt aggressiveness
+    // tracks the live band; it must never write the global score itself.
+    autonomyService: AutonomyService.receivesInjection(agentConfig) ? ctx.autonomyService : undefined,
+    // All agents receive the per-turn time block. Specialists need a reliable "now"
+    // too — scheduled agents make time-sensitive decisions (backoff gates, date math).
+    timezone: ctx.timezone,
+    // Coordinator-only: the identity block is prepended per turn, so identity
+    // hot-reloads (file watcher or API PUT) apply on the next turn without a restart.
+    officeIdentityService: isCoordinator ? ctx.officeIdentityService : undefined,
+    // Coordinator-only: specialists operate in a trust-elevated context (tasks arrive
+    // from the coordinator after the security layer has evaluated the sender). The
+    // runtime states that contract on delegated tasks (#1871); withholding this
+    // block is not itself the signal.
+    securityContextBlock: isCoordinator ? ctx.securityContextBlock : undefined,
+    // Curia's own contact details — injected into ALL agents (#387) so specialists
+    // like essay-editor don't hallucinate account identifiers.
+    channelAccounts: {
+      email: ctx.channelAccounts.email || undefined,
+      phone: ctx.channelAccounts.phone || undefined,
+    },
+    // Principal's verified channel identities — injected into ALL agents (#786, #1950).
+    principalIdentities: ctx.principalIdentities,
+    principalPrimaryEmail: ctx.principalPrimaryEmail,
+    // Coordinator-only roster block. Specialists that opt in via inject_specialists
+    // keep the bootstrap ${available_specialists} placeholder instead.
+    availableSpecialists: isCoordinator ? ctx.agentRegistry.specialistSummary() : undefined,
+    // Coordinator-only own contact ID in "## Your Contact Details". Specialists keep
+    // the ${agent_contact_id} bootstrap placeholder.
+    agentContactId: isCoordinator ? ctx.agentContactId : undefined,
+    // Map YAML snake_case to AgentConfig camelCase, defaulting omitted fields.
+    errorBudget: agentConfig.error_budget ? {
+      maxTurns: agentConfig.error_budget.max_turns ?? DEFAULT_ERROR_BUDGET.maxTurns,
+      maxConsecutiveErrors: agentConfig.error_budget.max_errors ?? DEFAULT_ERROR_BUDGET.maxConsecutiveErrors,
+    } : undefined,
+  };
+}
+
 /** Everything agent assembly reads. Optional services are simply not wired when absent. */
 export interface AgentAssemblyContext {
   logger: Logger;
@@ -285,8 +362,9 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
   const binding = resolveAgentModelBinding(agentConfig, ctx.models);
 
   const runtimeConfig: AgentConfig = {
-    agentId: agentConfig.name,
-    systemPrompt,
+    // agentId, systemPrompt, and every field buildBaseSystemPrompt() reads — including
+    // the coordinator-only gating. Decided in one place; see resolveSystemPromptSources.
+    ...resolveSystemPromptSources(agentConfig, systemPrompt, ctx),
     provider: binding.provider,
     resolvedModel: binding.resolvedModel,
     tier: binding.tier,
@@ -304,49 +382,14 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
     modelRegistry: ctx.models.modelRegistry,
     estimateCostUsd: ctx.estimateCostUsd,
-    // Coordinator + ceo-inbox receive autonomyService for per-task band injection
-    // (spec 14 checklist / ADR-029). ceo-inbox's draft-vs-punt aggressiveness
-    // tracks the live band; it must never write the global score itself.
-    autonomyService: AutonomyService.receivesInjection(agentConfig) ? ctx.autonomyService : undefined,
-    // All agents receive the per-turn time block. Specialists need a reliable "now"
-    // too — scheduled agents make time-sensitive decisions (backoff gates, date math).
-    timezone: ctx.timezone,
-    // Coordinator-only: the identity block is prepended per turn, so identity
-    // hot-reloads (file watcher or API PUT) apply on the next turn without a restart.
-    officeIdentityService: isCoordinator ? ctx.officeIdentityService : undefined,
-    // Coordinator-only: specialists operate in a trust-elevated context (tasks arrive
-    // from the coordinator after the security layer has evaluated the sender). The
-    // runtime states that contract on delegated tasks (#1871); withholding this
-    // block is not itself the signal.
-    securityContextBlock: isCoordinator ? ctx.securityContextBlock : undefined,
-    // Curia's own contact details — injected into ALL agents (#387) so specialists
-    // like essay-editor don't hallucinate account identifiers.
-    channelAccounts: {
-      email: ctx.channelAccounts.email || undefined,
-      phone: ctx.channelAccounts.phone || undefined,
-    },
     // Every owned mailbox. Email recall requires one of these on the thread
     // so a BCC (Curia absent from To/CC) cannot look like a 1:1 (#1599).
     selfEmails: ctx.selfEmails,
-    // Principal's verified channel identities — injected into ALL agents (#786, #1950).
-    principalIdentities: ctx.principalIdentities,
-    principalPrimaryEmail: ctx.principalPrimaryEmail,
-    // Coordinator-only roster block. Specialists that opt in via inject_specialists
-    // keep the bootstrap ${available_specialists} placeholder instead.
-    availableSpecialists: isCoordinator ? ctx.agentRegistry.specialistSummary() : undefined,
-    // Coordinator-only own contact ID in "## Your Contact Details". Specialists keep
-    // the ${agent_contact_id} bootstrap placeholder.
-    agentContactId: isCoordinator ? ctx.agentContactId : undefined,
     // Lets the runtime look up a delegate target's expected_duration_seconds (#387).
     agentRegistry: ctx.agentRegistry,
     defaultDelegateTimeoutMs: ctx.defaultDelegateTimeoutMs,
     lateDeliveryTtlMinutes: ctx.lateDelivery.ttlMinutes,
     lateDeliverySweepIntervalMinutes: ctx.lateDelivery.sweepIntervalMinutes,
-    // Map YAML snake_case to AgentConfig camelCase, defaulting omitted fields.
-    errorBudget: agentConfig.error_budget ? {
-      maxTurns: agentConfig.error_budget.max_turns ?? DEFAULT_ERROR_BUDGET.maxTurns,
-      maxConsecutiveErrors: agentConfig.error_budget.max_errors ?? DEFAULT_ERROR_BUDGET.maxConsecutiveErrors,
-    } : undefined,
     bullpenService: ctx.bullpenService,
     bullpenWindowMinutes: BULLPEN_PENDING_WINDOW_MINUTES,
     // Coordinator only (#1818). A specialist's delegate conversation has no stored
