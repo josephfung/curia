@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentConfig } from '../src/agents/runtime.js';
 import type { AssembledAgent } from '../src/startup/agent-assembly.js';
+import type { SkillRegistry } from '../src/skills/skill-registry.js';
 import { buildPromptInputsSnapshot } from './inspect-prompts.js';
 
 const AGENT_CONTACT_ID = '11111111-1111-4111-8111-111111111111';
@@ -32,9 +33,13 @@ function coordinatorConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   } as unknown as AgentConfig;
 }
 
+const ENABLED_SKILLS = new Set(['tasks', 'documents']);
+const DISCOVERED = ['documents', 'tasks', 'ceo-inbox', 'calendar'];
+
 function stackWith(rc: AgentConfig, opts: { noPrincipal?: boolean } = {}) {
   const principalContactId = opts.noPrincipal ? undefined : PRINCIPAL_CONTACT_ID;
   return {
+    skillRegistry: { get: (name: string) => (ENABLED_SKILLS.has(name) ? {} : undefined) } as unknown as SkillRegistry,
     agent: (name: string) => {
       if (name !== 'coordinator') throw new Error(`Agent '${name}' is not loaded in this stack`);
       return { runtimeConfig: rc } as AssembledAgent;
@@ -45,7 +50,7 @@ function stackWith(rc: AgentConfig, opts: { noPrincipal?: boolean } = {}) {
 
 describe('buildPromptInputsSnapshot', () => {
   it('emits every coordinator prompt input and the curia version', async () => {
-    const snapshot = await buildPromptInputsSnapshot(stackWith(coordinatorConfig()), '0.44.0');
+    const snapshot = await buildPromptInputsSnapshot(stackWith(coordinatorConfig()), '0.44.0', DISCOVERED);
     expect(snapshot).toMatchObject({
       curia: { version: '0.44.0' },
       timezone: 'America/Toronto',
@@ -61,17 +66,18 @@ describe('buildPromptInputsSnapshot', () => {
       ],
       principal_primary_email: 'p@example.com',
       channel_accounts: { email: 'curia@example.com', phone: null },
+      disabled_skills: ['calendar', 'ceo-inbox'],
     });
   });
 
   it('no longer emits executive_voice_block (its injection was removed in #957)', async () => {
-    const snapshot = await buildPromptInputsSnapshot(stackWith(coordinatorConfig()), '0.44.0');
+    const snapshot = await buildPromptInputsSnapshot(stackWith(coordinatorConfig()), '0.44.0', DISCOVERED);
     expect(snapshot).not.toHaveProperty('executive_voice_block');
     expect(snapshot).not.toHaveProperty('coordinator');
   });
 
   it('carries only the identity fields the principal block renders', async () => {
-    const snapshot = await buildPromptInputsSnapshot(stackWith(coordinatorConfig()), '0.44.0');
+    const snapshot = await buildPromptInputsSnapshot(stackWith(coordinatorConfig()), '0.44.0', DISCOVERED);
     for (const identity of snapshot.principal_identities) {
       expect(Object.keys(identity).sort()).toEqual(['channel', 'channel_identifier', 'label']);
     }
@@ -81,7 +87,7 @@ describe('buildPromptInputsSnapshot', () => {
     const rc = coordinatorConfig({
       autonomyService: { getConfig: async () => null } as unknown as AgentConfig['autonomyService'],
     });
-    const snapshot = await buildPromptInputsSnapshot(stackWith(rc, { noPrincipal: true }), '0.44.0');
+    const snapshot = await buildPromptInputsSnapshot(stackWith(rc, { noPrincipal: true }), '0.44.0', DISCOVERED);
     expect(snapshot.autonomy).toBeNull();
     expect(snapshot.principal_contact_id).toBeNull();
   });
@@ -99,12 +105,16 @@ describe('buildPromptInputsSnapshot', () => {
     ['agentContactId', { agentContactId: undefined }],
   ] as const)('refuses to emit a snapshot when the coordinator has no %s', async (_field, overrides) => {
     await expect(
-      buildPromptInputsSnapshot(stackWith(coordinatorConfig(overrides as Partial<AgentConfig>)), '0.44.0'),
+      buildPromptInputsSnapshot(stackWith(coordinatorConfig(overrides as Partial<AgentConfig>)), '0.44.0', DISCOVERED),
     ).rejects.toThrow(/coordinator runtime config has no/);
   });
 
   it('fails when the coordinator is not loaded', async () => {
-    const stack = { agent: () => { throw new Error("Agent 'coordinator' is not loaded in this stack"); }, principalContactId: undefined };
-    await expect(buildPromptInputsSnapshot(stack, '0.44.0')).rejects.toThrow(/not loaded/);
+    const stack = {
+      agent: () => { throw new Error("Agent 'coordinator' is not loaded in this stack"); },
+      principalContactId: undefined,
+      skillRegistry: {} as SkillRegistry,
+    };
+    await expect(buildPromptInputsSnapshot(stack, '0.44.0', DISCOVERED)).rejects.toThrow(/not loaded/);
   });
 });

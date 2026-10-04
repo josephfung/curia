@@ -41,6 +41,7 @@ import { inspect } from 'node:util';
 import pino from 'pino';
 import { createTestModeStack, type TestModeStack } from '../src/startup/test-mode-stack.js';
 import type { Logger } from '../src/logger.js';
+import { discoverSkillManifests } from '../src/skills/skill-loader.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 
@@ -65,12 +66,21 @@ export interface PromptInputsSnapshot {
   principal_identities: Array<{ channel: string; channel_identifier: string; label: string | null }>;
   principal_primary_email: string | null;
   channel_accounts: { email: string | null; phone: string | null };
+  /**
+   * SKILL.md bundles on disk that this deployment does not enable. Production never
+   * registers them, so a pin on one contributes no instructions; the harness omits them
+   * too. Listed as disabled rather than enabled so a skill the harness adds locally,
+   * which production has never seen, is not dropped.
+   */
+  disabled_skills: string[];
 }
 
 /** Read every input from the coordinator's runtime config, which is what production feeds the builder. */
 export async function buildPromptInputsSnapshot(
-  stack: Pick<TestModeStack, 'agent' | 'principalContactId'>,
+  stack: Pick<TestModeStack, 'agent' | 'principalContactId' | 'skillRegistry'>,
   curiaVersion: string,
+  /** Every SKILL.md bundle discovered on disk — the stack's skills dir. */
+  discoveredSkillNames: readonly string[],
 ): Promise<PromptInputsSnapshot> {
   const rc = stack.agent('coordinator').runtimeConfig;
 
@@ -118,6 +128,8 @@ export async function buildPromptInputsSnapshot(
       email: rc.channelAccounts.email ?? null,
       phone: rc.channelAccounts.phone ?? null,
     },
+    // The stack's SkillRegistry holds exactly what production's reconcile enables.
+    disabled_skills: discoveredSkillNames.filter((name) => !stack.skillRegistry.get(name)).sort(),
   };
 }
 
@@ -174,7 +186,9 @@ async function main(): Promise<void> {
     for (const warning of stack.warnings) {
       process.stderr.write(`inspect-prompts: warning: ${warning}\n`);
     }
-    const snapshot = await buildPromptInputsSnapshot(stack, readCuriaVersion());
+    // Same directory the stack loads skills from (its default, <repo>/skills).
+    const discovered = discoverSkillManifests(resolve(REPO_ROOT, 'skills')).map((d) => d.name);
+    const snapshot = await buildPromptInputsSnapshot(stack, readCuriaVersion(), discovered);
     // process.stdout.write, not console.log — the caller parses this as JSON.
     process.stdout.write(JSON.stringify(snapshot, null, 2) + '\n');
   } finally {
