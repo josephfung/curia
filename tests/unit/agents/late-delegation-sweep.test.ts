@@ -296,6 +296,48 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     expect(resolved[0]!.payload.lateResponseEventId).toBeUndefined();
   });
 
+  it('keeps a waiting outside sender in front of the note it writes on the review task (#1978)', async () => {
+    const { pool } = fakePool({
+      open: [handleRow({ expires_at: new Date('2026-09-14T12:00:00.000Z'), review_task_id: 'review-1' })],
+    });
+    const awaitingReply = {
+      name: 'Lena Okafor',
+      address: 'lena.okafor@example.test',
+      channel: 'email',
+      conversationId: 'email:thread-1978',
+    };
+    const updateTask = vi.fn(async () => null);
+    const taskRepo = {
+      getTask: vi.fn(async () => ({ id: 'review-1', status: 'open', progress: { escalation: { awaitingReply } } })),
+      updateTask,
+      completeTask: vi.fn(async () => null),
+    } as unknown as TaskRepo;
+
+    await makeSweep(pool, new EventBus(logger), taskRepo).tick(NOW);
+
+    // The digest shows only this last note, so the person waiting must stay in it.
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    const note = (updateTask.mock.calls[0] as unknown as [string, { progressNote: string }])[1].progressNote;
+    expect(note.startsWith('Lena Okafor (lena.okafor@example.test, email) is waiting on a reply. ')).toBe(true);
+  });
+
+  it('writes the note unchanged when no outside sender is waiting (#1978)', async () => {
+    const { pool } = fakePool({
+      open: [handleRow({ expires_at: new Date('2026-09-14T12:00:00.000Z'), review_task_id: 'review-1' })],
+    });
+    const updateTask = vi.fn(async () => null);
+    const taskRepo = {
+      getTask: vi.fn(async () => ({ id: 'review-1', status: 'open', progress: {} })),
+      updateTask,
+      completeTask: vi.fn(async () => null),
+    } as unknown as TaskRepo;
+
+    await makeSweep(pool, new EventBus(logger), taskRepo).tick(NOW);
+
+    const note = (updateTask.mock.calls[0] as unknown as [string, { progressNote: string }])[1].progressNote;
+    expect(note).not.toMatch(/waiting on a reply/);
+  });
+
   it('leaves an unexpired handle with no response alone', async () => {
     const { pool, claims } = fakePool({ open: [handleRow({ expires_at: new Date('2026-09-14T14:00:00.000Z') })] });
     const bus = new EventBus(logger);

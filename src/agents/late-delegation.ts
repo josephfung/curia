@@ -36,6 +36,7 @@ import {
 } from '../db/queries/pending-delegations.js';
 import { EXECUTION_PAUSED_PROTOCOL } from './resumable-task.js';
 import { toLocalIso } from '../time/timestamp.js';
+import { awaitingReplyLine, readAwaitingReply } from './task-escalation.js';
 import { LATE_SPECIALIST_RESULT_MARKER } from '../memory/synthetic-user-turn.js';
 
 /** Mirrors CLARIFICATION_PROTOCOL in skills/request-clarification/handler.ts. Duplicated as a
@@ -1113,7 +1114,13 @@ async function recordOnReviewTask(
       await taskRepo.completeTask(handle.reviewTaskId, note, 'late-delegation');
       return 'closed';
     }
-    await taskRepo.updateTask(handle.reviewTaskId, { progressNote: note }, 'late-delegation');
+    // The digest shows only the last progress note. When an outside sender is waiting
+    // on this review task, keep that line in front, or the note that matters most (the
+    // work was lost) is the one that hides them (#1978).
+    const waiting = readAwaitingReply(current.progress);
+    const waitingLine = waiting ? awaitingReplyLine(waiting) : undefined;
+    const annotated = waitingLine && !note.includes(waitingLine) ? `${waitingLine} ${note}` : note;
+    await taskRepo.updateTask(handle.reviewTaskId, { progressNote: annotated }, 'late-delegation');
     return 'annotated';
   } catch (err) {
     logger.error(

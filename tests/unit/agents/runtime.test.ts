@@ -7486,6 +7486,124 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(String(prompt.content)).not.toMatch(/for the principal failed/);
   });
 
+  /**
+   * One coordinator turn whose delegation times out, with the narration call unavailable
+   * so the deterministic fallback is what gets relayed (#1978). Returns the relayed reply
+   * and the task-create input of the review task, if one was attempted.
+   */
+  async function runFailedDelegation(opts: {
+    channelId: string;
+    metadata?: Record<string, unknown>;
+    taskCreateSucceeds: boolean;
+  }): Promise<{ content: string; taskCreateInput: Record<string, unknown> | undefined }> {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') {
+          return opts.taskCreateSucceeds
+            ? { success: true, data: { task_id: 'esc-1978' } }
+            : { success: false, error: 'insert failed' };
+        }
+        if (toolName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          options?.delegationGuard?.recordInvocation(delegationKey(delegateAgent, delegateTask));
+          return {
+            success: true,
+            data: { agent: delegateAgent, failed: true, reason: 'timeout', retryable: false, message: "Specialist 'ceo-inbox' did not respond" },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+    let calls = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-1978', name: 'delegate', input: { agent: 'ceo-inbox', task: 'Find the venue thread' } }],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'error' as const,
+          error: { type: 'RATE_LIMIT' as const, source: 'anthropic', message: '429', retryable: true, context: {}, timestamp: new Date() },
+        };
+      }),
+    };
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    }).register();
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-1978-helper',
+      channelId: opts.channelId,
+      senderId: 'someone@example.test',
+      content: 'Subject: Re: Venue options\n\nYes, go ahead.',
+      ...(opts.metadata !== undefined && { metadata: opts.metadata }),
+      parentEventId: 'inbound-1978-helper',
+    }));
+    expect(agentResponses).toHaveLength(1);
+    const call = vi.mocked(mockExecution.invoke).mock.calls.find(([name]) => name === 'task-create');
+    return {
+      content: agentResponses[0]!.payload.content,
+      taskCreateInput: call ? (call[1] as Record<string, unknown>) : undefined,
+    };
+  }
+
+  const originatorOf = (systemRole: 'principal' | null, tier: 'principal' | 'known') => ({
+    originator: { contactId: 'contact-1978', systemRole, channel: 'email', initiatedAt: '2026-10-02T10:00:00.000Z', tier },
+  });
+
+  it('promises the sender nothing when the review task could not be created (#1978)', async () => {
+    const { content, taskCreateInput } = await runFailedDelegation({
+      channelId: 'email',
+      metadata: originatorOf(null, 'known'),
+      taskCreateSucceeds: false,
+    });
+    // The record was attempted, with the sender on it, but nothing holds it now.
+    expect(JSON.parse(String(taskCreateInput!['escalation_json'])).awaitingReply).toBeDefined();
+    expect(content).not.toMatch(/follow up|follow-up|logged/i);
+  });
+
+  it('records no waiting sender on the principal\'s own turn (#1978)', async () => {
+    const { content, taskCreateInput } = await runFailedDelegation({
+      channelId: 'email',
+      metadata: originatorOf('principal', 'principal'),
+      taskCreateSucceeds: true,
+    });
+    expect(taskCreateInput!['tags']).not.toContain('external-waiting');
+    expect(JSON.parse(String(taskCreateInput!['escalation_json'])).awaitingReply).toBeUndefined();
+    expect(content).toContain("I've logged a follow-up task to review the outcome.");
+  });
+
+  it('records no waiting sender, and promises nothing, when the originator is missing (#1978)', async () => {
+    // Written for a sender to be safe, but this may be the principal's own turn: a
+    // "waiting" record could name the principal, and an unrecorded promise is unbacked.
+    const { content, taskCreateInput } = await runFailedDelegation({ channelId: 'email', taskCreateSucceeds: true });
+    expect(taskCreateInput!['tags']).not.toContain('external-waiting');
+    expect(JSON.parse(String(taskCreateInput!['escalation_json'])).awaitingReply).toBeUndefined();
+    expect(content).not.toMatch(/follow up|follow-up|logged|principal/i);
+  });
+
   it('drops a model draft that leaks the registry id (#1860)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);

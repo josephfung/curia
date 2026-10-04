@@ -121,9 +121,18 @@ export interface DelegationEscalationInput {
 const MAX_REQUESTER_NAME = 120;
 const MAX_REQUESTER_ADDRESS = 200;
 
-/** Sanitize one sender-supplied field and fold it onto a single bounded line. */
+// A UTF-16 surrogate with no partner. Postgres jsonb rejects one, so a single bad
+// character would make task-create fail and the review task vanish.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * Sanitize one sender-supplied field and fold it onto a single bounded line.
+ * Bounded by code point, not UTF-16 unit, so the cut never splits an emoji; any
+ * lone surrogate already in the input is replaced for the same reason.
+ */
 function requesterField(raw: string, max: number): string {
-  return sanitizeOutput(raw).replace(/\s+/g, ' ').trim().slice(0, max).trim();
+  const folded = sanitizeOutput(raw).replace(LONE_SURROGATE, '\uFFFD').replace(/\s+/g, ' ').trim();
+  return Array.from(folded).slice(0, max).join('').trim();
 }
 
 /**
@@ -153,6 +162,35 @@ export function escalationRequester(input: {
 /** "Lena Okafor (lena@example.test, email)", or "lena@example.test (email)" with no name. */
 function describeRequester(r: EscalationRequester): string {
   return r.name === r.address ? `${r.name} (${r.channel})` : `${r.name} (${r.address}, ${r.channel})`;
+}
+
+/** The digest line for a waiting sender: "Lena Okafor (lena@example.test, email) is waiting on a reply." */
+export function awaitingReplyLine(r: EscalationRequester): string {
+  return `${describeRequester(r)} is waiting on a reply.`;
+}
+
+/**
+ * The waiting sender stored on a review task (progress.escalation.awaitingReply), or
+ * undefined. Read back by later writers of the progress note, which the digest shows
+ * alone, so they can keep the waiting line in it (#1978).
+ */
+export function readAwaitingReply(progress: Record<string, unknown> | null | undefined): EscalationRequester | undefined {
+  const escalation = progress?.['escalation'];
+  if (!escalation || typeof escalation !== 'object' || Array.isArray(escalation)) return undefined;
+  const raw = (escalation as Record<string, unknown>)['awaitingReply'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r['name'] !== 'string' || typeof r['address'] !== 'string'
+    || typeof r['channel'] !== 'string' || typeof r['conversationId'] !== 'string') {
+    return undefined;
+  }
+  return {
+    name: r['name'],
+    address: r['address'],
+    channel: r['channel'],
+    ...(typeof r['contactId'] === 'string' && { contactId: r['contactId'] }),
+    conversationId: r['conversationId'],
+  };
 }
 
 function ceilingFailureMode(reason: CircuitBreachReason): EscalationFailureMode {
@@ -341,7 +379,7 @@ export function buildDelegationEscalation(input: DelegationEscalationInput): Tas
 export function renderEscalation(e: TaskEscalation): RenderedEscalation {
   const noteParts: string[] = [e.headline];
   // Right after the headline: the digest's one line should say a person is waiting.
-  if (e.awaitingReply) noteParts.push(`${describeRequester(e.awaitingReply)} is waiting on a reply.`);
+  if (e.awaitingReply) noteParts.push(awaitingReplyLine(e.awaitingReply));
   if (e.progress) noteParts.push(`Progress: ${formatProgress(e.progress)}.`);
   if (e.throughput?.estimateAvailable) noteParts.push(formatResumableThroughputForResume(e.throughput));
   if (typeof e.costUsd === 'number' && e.costUsd > 0) noteParts.push(`Cost so far: $${e.costUsd.toFixed(2)}.`);

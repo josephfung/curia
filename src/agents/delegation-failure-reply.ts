@@ -119,6 +119,7 @@ export type DraftRejection =
   | 'uuid'
   | 'internal_note'
   | 'lost_thread'
+  | 'unbacked_promise'
   | 'off_topic';
 
 // The instruction lines of the narration prompt. Kept apart from the situation lines
@@ -311,6 +312,7 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   if (UUID_IN_TEXT.test(reply)) return 'uuid';
   if (input.audience === 'sender' && SENDER_INTERNAL_TERMS.test(reply)) return 'internal_note';
   if (input.audience === 'sender' && LOST_THREAD_TERMS.test(reply)) return 'lost_thread';
+  if (input.audience === 'sender' && !input.escalated && FOLLOW_UP_PROMISE.test(reply)) return 'unbacked_promise';
   if (!sharesTopic(reply, input.request)) return 'off_topic';
   return { reply };
 }
@@ -320,6 +322,15 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
 // situation line describes (#1978). An outside reader knows the principal by name,
 // never as "the principal", and a failure reply has no reason to say "logged".
 const SENDER_INTERNAL_TERMS = /\bprincipal\b|\bfollow-up task\b|\blogged\b|\binternal note\b/i;
+
+// A promise to come back to the sender. Allowed only when the review task records
+// them as waiting (#1978); otherwise nothing tracks it, and the prompt's "do not
+// promise" line is all that stands between a model's habit and a broken promise.
+const FOLLOW_UP_PROMISE = new RegExp([
+  String.raw`\b(?:I['’]ll|I will|I['’]m going to|we['’]ll|we will)\s+(?:\w+\s+)?`
+    + String.raw`(?:follow up|get back to you|be in touch|circle back|come back to you|update you|let you know)\b`,
+  String.raw`\byou['’]ll hear (?:back )?from (?:me|us)\b`,
+].join('|'), 'i');
 
 // Telling an outside sender you have no record of their thread, or could not find
 // or place it, is the disclosure #1978 is about: it tells them you lost the thread.
