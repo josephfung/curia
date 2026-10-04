@@ -47,8 +47,9 @@ expected_behaviors:
   - id: principal_asked_on_own_channel
     weight: important
     description: >
-      Anything it asks or tells the principal goes in a separate send to the principal,
-      never in the reply to Lena. Asking the principal nothing also passes.
+      Nothing in this office places the thread, so it sends the principal a separate
+      message asking what Lena's reply refers to, naming Lena, the subject and what she
+      said. That question never appears in the reply to Lena.
 failure_modes:
   - Replies "I lost the thread — what are you replying to?" to an external sender
   - Tells the sender it has no record of the conversation
