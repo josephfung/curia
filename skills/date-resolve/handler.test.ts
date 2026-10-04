@@ -227,6 +227,137 @@ describe('DateResolveHandler', () => {
         expect(result.data).toMatchObject({ date: '2026-05-22', day_of_week: 'Friday' });
       }
     });
+
+    // #1986: the most common relative expressions used to fall through to an error,
+    // leaving the model to do the day-of-week arithmetic itself.
+    it('"today" → Thursday May 7', async () => {
+      const result = await handler.execute(makeCtx({ relative: 'today' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toMatchObject({
+          date: '2026-05-07',
+          day_of_week: 'Thursday',
+          formatted: 'Thursday, May 7, 2026',
+        });
+      }
+    });
+
+    it('"tomorrow" → Friday May 8', async () => {
+      const result = await handler.execute(makeCtx({ relative: 'tomorrow' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toMatchObject({ date: '2026-05-08', day_of_week: 'Friday' });
+      }
+    });
+
+    it('"yesterday" → Wednesday May 6', async () => {
+      const result = await handler.execute(makeCtx({ relative: 'yesterday' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toMatchObject({ date: '2026-05-06', day_of_week: 'Wednesday' });
+      }
+    });
+
+    it('matches "tomorrow" case-insensitively and ignores surrounding whitespace', async () => {
+      const result = await handler.execute(makeCtx({ relative: '  ToMoRRoW \n' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toMatchObject({ date: '2026-05-08', day_of_week: 'Friday' });
+      }
+    });
+
+    it('verifies "today" against expected_day', async () => {
+      const result = await handler.execute(makeCtx({ relative: 'today', expected_day: 'Thursday' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toMatchObject({ date: '2026-05-07', correct: true, expected_day: 'Thursday' });
+      }
+    });
+
+    it('verifies "tomorrow" against expected_day (catches a wrong day)', async () => {
+      const result = await handler.execute(makeCtx({ relative: 'tomorrow', expected_day: 'Saturday' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toMatchObject({
+          date: '2026-05-08',
+          day_of_week: 'Friday',
+          correct: false,
+          expected_day: 'Saturday',
+        });
+      }
+    });
+
+    it('verifies "yesterday" against expected_day', async () => {
+      const result = await handler.execute(makeCtx({ relative: 'yesterday', expected_day: 'wednesday' }));
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toMatchObject({ date: '2026-05-06', correct: true, expected_day: 'Wednesday' });
+      }
+    });
+
+    it('does not treat a longer phrase containing "tomorrow" as tomorrow', async () => {
+      // Whole-input match only: "the day after tomorrow" must not resolve to tomorrow.
+      const result = await handler.execute(makeCtx({ relative: 'the day after tomorrow' }));
+      expect(result.success).toBe(false);
+    });
+
+    it('lists today/tomorrow/yesterday in the unsupported-expression error', async () => {
+      const result = await handler.execute(makeCtx({ relative: 'sometime next week maybe' }));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('"today"');
+        expect(result.error).toContain('"tomorrow"');
+        expect(result.error).toContain('"yesterday"');
+      }
+    });
+  });
+
+  // ── today / tomorrow / yesterday near midnight (#1986) ───────────────────
+  //
+  // The calendar day must come from the configured timezone, not UTC. Each case pins
+  // `now` to an instant whose local date differs from its UTC date.
+
+  describe('today/tomorrow/yesterday near midnight', () => {
+    afterEach(() => {
+      Settings.now = () => Date.now();
+    });
+
+    it('uses the local day when local time is before midnight but UTC is past it (Toronto 23:30)', async () => {
+      // 2026-10-03 23:30 EDT is 2026-10-04 03:30 UTC — still Saturday Oct 3 locally.
+      const fixedMs = DateTime.fromISO('2026-10-03T23:30:00', { zone: 'America/Toronto' }).toMillis();
+      Settings.now = () => fixedMs;
+
+      const today = await handler.execute(makeCtx({ relative: 'today' }));
+      const tomorrow = await handler.execute(makeCtx({ relative: 'tomorrow' }));
+      const yesterday = await handler.execute(makeCtx({ relative: 'yesterday' }));
+
+      expect(today).toMatchObject({ success: true, data: { date: '2026-10-03', day_of_week: 'Saturday' } });
+      expect(tomorrow).toMatchObject({ success: true, data: { date: '2026-10-04', day_of_week: 'Sunday' } });
+      expect(yesterday).toMatchObject({ success: true, data: { date: '2026-10-02', day_of_week: 'Friday' } });
+    });
+
+    it('uses the local day when local time is past midnight but UTC is not (Tokyo 00:30)', async () => {
+      // 2026-10-04 00:30 JST is 2026-10-03 15:30 UTC — already Sunday Oct 4 locally.
+      const fixedMs = DateTime.fromISO('2026-10-04T00:30:00', { zone: 'Asia/Tokyo' }).toMillis();
+      Settings.now = () => fixedMs;
+
+      const today = await handler.execute(makeCtx({ relative: 'today' }, 'Asia/Tokyo'));
+      const tomorrow = await handler.execute(makeCtx({ relative: 'tomorrow' }, 'Asia/Tokyo'));
+      const yesterday = await handler.execute(makeCtx({ relative: 'yesterday' }, 'Asia/Tokyo'));
+
+      expect(today).toMatchObject({ success: true, data: { date: '2026-10-04', day_of_week: 'Sunday' } });
+      expect(tomorrow).toMatchObject({ success: true, data: { date: '2026-10-05', day_of_week: 'Monday' } });
+      expect(yesterday).toMatchObject({ success: true, data: { date: '2026-10-03', day_of_week: 'Saturday' } });
+    });
+
+    it('steps across a DST change by calendar day (Toronto, night before spring-forward)', async () => {
+      // Clocks jump 02:00 → 03:00 on 2026-03-08; "tomorrow" is still Sunday Mar 8.
+      const fixedMs = DateTime.fromISO('2026-03-07T23:30:00', { zone: 'America/Toronto' }).toMillis();
+      Settings.now = () => fixedMs;
+
+      const tomorrow = await handler.execute(makeCtx({ relative: 'tomorrow' }));
+      expect(tomorrow).toMatchObject({ success: true, data: { date: '2026-03-08', day_of_week: 'Sunday' } });
+    });
   });
 
   // ── Edge cases ───────────────────────────────────────────────────────────

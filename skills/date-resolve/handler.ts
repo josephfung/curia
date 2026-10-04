@@ -3,7 +3,7 @@
 // Deterministic date resolution and verification. LLMs are unreliable at
 // day-of-week arithmetic — this skill provides a tool they can call to
 // verify date + day-of-week pairings or resolve relative expressions
-// ("next Monday", "this Friday") to absolute dates.
+// ("tomorrow", "next Monday", "this Friday") to absolute dates.
 //
 // Pure computation using luxon. No external services, no side effects.
 
@@ -51,9 +51,25 @@ function parseDate(raw: string, timezone: string): DateTime | null {
 }
 
 /**
+ * Day offsets for the bare relative words (#1986). A Map rather than an object literal
+ * so an input like "constructor" can't hit an inherited property.
+ */
+const DAY_OFFSET_WORDS = new Map<string, number>([
+  ['yesterday', -1],
+  ['today', 0],
+  ['tomorrow', 1],
+]);
+
+/** Every supported relative form, listed in the unsupported-expression error. */
+const SUPPORTED_RELATIVE_FORMS =
+  '"today", "tomorrow", "yesterday", "next Monday", "this Friday", ' +
+  '"Monday of the week of May 18", "Monday after May 15"';
+
+/**
  * Resolve a relative date expression to an absolute date.
  *
  * Supported patterns:
+ *   - "today", "tomorrow", "yesterday"      → relative to today in the configured timezone
  *   - "next Monday", "next Friday"          → the coming occurrence (never today)
  *   - "this Monday", "this Friday"          → this week's occurrence (may be today or past)
  *   - "Monday of the week of May 18"        → the Monday of the week containing May 18
@@ -61,6 +77,15 @@ function parseDate(raw: string, timezone: string): DateTime | null {
  */
 function resolveRelative(raw: string, now: DateTime, timezone: string): DateTime | null {
   const lower = raw.trim().toLowerCase();
+
+  // "today" / "tomorrow" / "yesterday". `now` is already in the configured zone, so the
+  // calendar day is the local one even when the UTC date differs (near midnight), and
+  // luxon's day arithmetic steps by calendar day across DST changes. Whole-input match
+  // only, so "the day after tomorrow" is rejected rather than read as "tomorrow".
+  const dayOffset = DAY_OFFSET_WORDS.get(lower);
+  if (dayOffset !== undefined) {
+    return now.plus({ days: dayOffset }).startOf('day');
+  }
 
   // "next <day>" — the soonest future occurrence, never today
   const nextMatch = lower.match(/^next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/);
@@ -146,7 +171,7 @@ export class DateResolveHandler implements ToolHandler {
       if (!resolved) {
         return {
           success: false,
-          error: `Could not resolve relative expression: "${relativeInput}". Supported: "next Monday", "this Friday", "Monday of the week of May 18", "Monday after May 15".`,
+          error: `Could not resolve relative expression: "${relativeInput}". Supported: ${SUPPORTED_RELATIVE_FORMS}.`,
         };
       }
     }
