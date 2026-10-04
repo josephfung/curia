@@ -1426,8 +1426,10 @@ interface DelegationPrincipalNotePayload {
   note: string;
   /** Whether a review task was logged for this failure. */
   followUpLogged: boolean;
-  /** The review task the note was also added to; null when none was logged. */
+  /** The review task logged for this failure; null when none was logged (or its id was unreadable). */
   reviewTaskId: string | null;
+  /** True when the note was also added to that review task. False when there was none, or the update failed. */
+  addedToReviewTask: boolean;
   /** Whether the sender got the model's reply or the deterministic fallback. */
   replyVia: 'model' | 'fallback';
 }

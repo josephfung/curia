@@ -5,7 +5,7 @@ import {
   type StreamingTurnOpenStreamParams,
 } from './llm/streaming-turn.js';
 import type { EventBus } from '../bus/bus.js';
-import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
+import { createAgentResponse, createAgentError, createToolInvoke, createToolResult, createLlmCall, createLlmError, createContextBudget, createModelFallbackEngaged, createDelegationTimedOut, createDelegationRequesterContext, createDelegationPrincipalNote, type AgentResponseFailureReason, type AgentTaskEvent } from '../bus/events.js';
 import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
@@ -23,7 +23,7 @@ import {
   persistableContactId,
 } from '../memory/contact-recent-history.js';
 import type { EntityMemory } from '../memory/entity-memory.js';
-import type { ExecutionLayer } from '../skills/execution.js';
+import type { ExecutionLayer, InvokeOptions } from '../skills/execution.js';
 import type { CallerContext } from '../skills/types.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
@@ -85,6 +85,7 @@ import { buildRateLimitSourceKey } from '../memory/rate-limit-key.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { encodeResumeToken } from './resume-token.js';
 import {
+  addPrincipalNoteToReviewTask,
   DelegationGuard,
   delegationKey,
   escalateDelegationFailure,
@@ -295,6 +296,27 @@ export interface AgentConfig {
 
 // LLM retry backoff schedule (milliseconds). Three attempts with exponential backoff.
 const RETRY_BACKOFF_MS = [1000, 5000, 15000] as const;
+
+/**
+ * A non-retryable delegation failure waiting for its reply at the end of the turn.
+ * senderRecorded: the review task records an outside sender as waiting on a reply
+ * (#1978). Only then may the reply promise them a follow-up.
+ * reviewTask: the review task logged for it, with the progress note it was seeded
+ * with and the invoke context that created it, so a sender reply's note for the
+ * principal can be added to it later in the turn (#1990). Absent when no task was
+ * logged or its id could not be read.
+ */
+type PendingDelegationEscalation = DelegationFailureInfo & {
+  task: string;
+  escalated: boolean;
+  senderRecorded: boolean;
+  reviewTask?: {
+    id: string;
+    progressNote: string;
+    caller: CallerContext | undefined;
+    invokeOptions: InvokeOptions;
+  };
+};
 
 /**
  * AgentRuntime is the execution engine for a single agent.
@@ -1321,10 +1343,7 @@ export class AgentRuntime {
       }
     }
     const turnDateResolveTracker = new TurnDateResolveTracker();
-    // senderRecorded: the review task records an outside sender as waiting on a reply
-    // (#1978). Only then may the reply promise them a follow-up.
-    let pendingDelegationEscalation:
-      (DelegationFailureInfo & { task: string; escalated: boolean; senderRecorded: boolean }) | null = null;
+    let pendingDelegationEscalation: PendingDelegationEscalation | null = null;
     // Floor for a brief that did not dispatch (#1893). The handler uses this
     // same number when no duration hint is injected, including the unset
     // fallback (DEFAULT_DEFERRED_WAKE_MS, the handler's floor). A specialist
@@ -1583,14 +1602,22 @@ export class AgentRuntime {
                   'Delegation-failure reply: task has no originator — writing for an outside sender',
                 );
               }
-              const escalationContent = await this.composeDelegationFailureReply(
+              const composed = await this.composeDelegationFailureReply(
                 workingMessages,
                 esc,
                 taskEvent.payload.content,
                 audience,
                 provider,
                 budget,
+                taskEvent,
+                budgetHandoff.sliceCostTracker,
               );
+              const escalationContent = composed.content;
+              // Only a sender-audience reply carries one (#1990). Recorded before the
+              // reply goes out, so the audit log reads in the order things happened.
+              if (composed.principalNote !== undefined) {
+                await this.recordPrincipalNote(esc, composed.principalNote, composed.via, taskEvent, conversationId);
+              }
 
               if (memory) {
                 await memory.addTurn(conversationId, agentId, { role: 'assistant', content: escalationContent }, {
@@ -2180,6 +2207,16 @@ export class AgentRuntime {
                       task: delegateTask,
                       escalated: escalation.escalated,
                       senderRecorded: escalation.escalated && awaitingReply !== undefined,
+                      // Kept so a note for the principal can be added to it once the
+                      // reply is written (#1990), with the same caller and options.
+                      ...(escalation.reviewTaskId !== undefined && escalation.progressNote !== undefined && {
+                        reviewTask: {
+                          id: escalation.reviewTaskId,
+                          progressNote: escalation.progressNote,
+                          caller,
+                          invokeOptions,
+                        },
+                      }),
                     };
 
                     // Open a pending delegation handle (#1799). The specialist we just gave up
@@ -2646,16 +2683,22 @@ export class AgentRuntime {
    * names the specialist either; the display name is passed only so a draft
    * that names it can be rejected.
    * The call is direct (not chatWithRetry): a provider failure must not also
-   * publish a generic error response beside the fallback.
+   * publish a generic error response beside the fallback. It still publishes
+   * llm.call, so it is cost-tracked and its raw text archived (#1990).
+   *
+   * On a sender's turn the model may also write a note for the principal (#1990). It
+   * is cut out of the reply and returned as `principalNote` for the caller to record.
    */
   private async composeDelegationFailureReply(
     workingMessages: Message[],
-    esc: DelegationFailureInfo & { task: string; escalated: boolean; senderRecorded: boolean },
+    esc: PendingDelegationEscalation,
     userRequest: string,
     audience: ReplyAudience,
     provider: LLMProvider,
     budget: ErrorBudget,
-  ): Promise<string> {
+    taskEvent: AgentTaskEvent,
+    sliceCostTracker: { usd: number } | undefined,
+  ): Promise<{ content: string; via: 'model' | 'fallback'; principalNote?: string }> {
     const { agentId, logger } = this.config;
     const explicit = esc.agent ? this.config.agentRegistry?.get(esc.agent)?.displayName : undefined;
     // The label a draft would most likely use for the specialist, checked for and
@@ -2703,9 +2746,20 @@ export class AgentRuntime {
         // No tools. The transcript has had its tool blocks removed, so this
         // stays a plain completion. Passing the turn's tool list would make
         // the model eligible to delegate again instead of writing the reply.
+        const callStartMs = Date.now();
         const response = await provider.chat({
           messages,
           ...(modelForCall !== undefined ? { model: modelForCall } : {}),
+        });
+        // Recorded like any other call (#1990): the raw text, including a rejected
+        // draft and anything outside the reply block, is otherwise kept nowhere.
+        await this.publishLlmCall({
+          provider,
+          params: { messages },
+          response,
+          latencyMs: Date.now() - callStartMs,
+          taskEvent,
+          ...(sliceCostTracker !== undefined && { sliceCostTracker }),
         });
         if (response.type === 'text') {
           modelText = response.content;
@@ -2752,7 +2806,136 @@ export class AgentRuntime {
         'Delegation failure reply used the deterministic fallback',
       );
     }
-    return selected.content;
+    return {
+      content: selected.content,
+      via: selected.via,
+      ...(selected.principalNote !== undefined && { principalNote: selected.principalNote }),
+    };
+  }
+
+  /**
+   * Record a sender reply's note for the principal (#1990): always as an audit event,
+   * and also on the review task when one was logged for this failure. Outside senders
+   * are where the most care is due, so the record never depends on the escalation.
+   *
+   * Neither step can hold up the sender's reply. The task update reports failure in its
+   * own log line. A failed audit publish is logged without the note text (it may carry
+   * a sender's details, which stay out of application logs); the review task, when there
+   * is one, still holds the note.
+   */
+  private async recordPrincipalNote(
+    esc: PendingDelegationEscalation,
+    note: string,
+    replyVia: 'model' | 'fallback',
+    taskEvent: AgentTaskEvent,
+    conversationId: string,
+  ): Promise<void> {
+    const { agentId, bus, logger, executionLayer } = this.config;
+    let addedToReviewTask = false;
+    if (esc.reviewTask && executionLayer) {
+      addedToReviewTask = await addPrincipalNoteToReviewTask(
+        executionLayer,
+        esc.reviewTask.caller,
+        esc.reviewTask.invokeOptions,
+        esc.reviewTask,
+        note,
+        logger,
+      );
+    }
+    try {
+      await bus.publish('agent', createDelegationPrincipalNote({
+        agentId,
+        conversationId,
+        targetAgent: esc.agent,
+        reason: String(esc.reason),
+        note,
+        followUpLogged: esc.escalated,
+        reviewTaskId: esc.reviewTask?.id ?? null,
+        addedToReviewTask,
+        replyVia,
+        parentEventId: taskEvent.id,
+      }));
+    } catch (err) {
+      logger.error(
+        { err, agentId, conversationId, noteLength: note.length, addedToReviewTask },
+        'Failed to publish delegation.principal_note — the note is not in the audit log',
+      );
+    }
+  }
+
+  /**
+   * Publish a llm.call event (with its archive content) for a successful provider
+   * response. Used by chatWithRetry and by the delegation-failure narration call,
+   * which calls the provider directly (#1990).
+   *
+   * Error responses are skipped: there is no API body to extract provenance from.
+   * TODO: emit llm.call for error paths when spec 10 cost-on-failure policy is settled.
+   *
+   * The entire body is wrapped in try-catch because llm.call is telemetry — any
+   * failure here (audit DB write error from the bus onEvent hook, JSON.stringify on a
+   * circular tool input, etc.) must not abort a valid agent response. A token tracking
+   * gap is acceptable; losing the user's answer is not.
+   */
+  private async publishLlmCall(call: {
+    provider: LLMProvider;
+    params: { messages: Message[]; tools?: ToolDefinition[] };
+    response: LLMResponse;
+    latencyMs: number;
+    taskEvent: AgentTaskEvent;
+    sliceCostTracker?: { usd: number };
+    providerIdOverride?: string;
+  }): Promise<void> {
+    const { agentId, bus, logger } = this.config;
+    const { provider, params, response, taskEvent } = call;
+    if (response.type === 'error') return;
+    try {
+      // SHA-256 of the prompt input — stable fingerprint for deduplication and diffing.
+      // Includes messages and tools since both affect what the model sees.
+      const promptHash = createHash('sha256')
+        .update(JSON.stringify({ messages: params.messages, tools: params.tools ?? [] }))
+        .digest('hex');
+
+      // SHA-256 of the response output — fingerprint for the model's actual reply.
+      const responseHash = createHash('sha256')
+        .update(response.type === 'text' ? response.content : JSON.stringify(response.toolCalls))
+        .digest('hex');
+
+      const event = createLlmCall({
+        agentId,
+        conversationId: taskEvent.payload.conversationId,
+        requestedModel: response.provenance.requestedModel,
+        actualModel: response.provenance.actualModel,
+        provider: call.providerIdOverride ?? provider.id,
+        providerRequestId: response.provenance.providerRequestId,
+        inputTokens: response.usage.inputTokens,
+        outputTokens: response.usage.outputTokens,
+        cacheCreationInputTokens: response.usage.cacheCreationInputTokens,
+        cacheReadInputTokens: response.usage.cacheReadInputTokens,
+        // estimateCostUsd is optional; default to 0 when omitted (unit tests / unknown models).
+        estimatedCostUsd: this.config.estimateCostUsd?.(response.provenance.actualModel, response.usage, logger) ?? 0,
+        latencyMs: call.latencyMs,
+        promptHash,
+        responseHash,
+        parentEventId: taskEvent.id,
+        // Typed non-persisted archive — AuditLogger writes llm_call_archive atomically.
+        archive: {
+          prompt: { messages: params.messages },
+          response: response.type === 'text'
+            ? { type: 'text', content: response.content }
+            : { type: 'tool_use', toolCalls: response.toolCalls },
+          toolDefinitions: params.tools ?? [],
+        },
+      });
+      const estimatedCostUsd = event.payload.estimatedCostUsd;
+      if (call.sliceCostTracker && Number.isFinite(estimatedCostUsd) && estimatedCostUsd > 0) {
+        call.sliceCostTracker.usd += estimatedCostUsd;
+      }
+      await bus.publish('agent', event);
+    } catch (err) {
+      // Telemetry failure must not abort the agent task. Log at error so the gap
+      // is visible in production, but let the caller return the response.
+      logger.error({ err, agentId, eventId: taskEvent.id }, 'Failed to publish llm.call telemetry event — token tracking gap');
+    }
   }
 
   /**
@@ -2783,70 +2966,21 @@ export class AgentRuntime {
 
     // Helper: publish a llm.call event for a successful provider response.
     // Called after every successful provider.chat() — initial call and each retry.
-    // Error responses are skipped: there is no API body to extract provenance from.
-    // TODO: emit llm.call for error paths when spec 10 cost-on-failure policy is settled.
-    //
-    // The entire helper is wrapped in try-catch because llm.call is telemetry — any
-    // failure here (audit DB write error from the bus onEvent hook, JSON.stringify on a
-    // circular tool input, etc.) must not abort a valid agent response. A token tracking
-    // gap is acceptable; losing the user's answer is not.
-    const publishLlmCallEvent = async (
+    const publishLlmCallEvent = (
       response: LLMResponse,
       callLatencyMs: number,
       // Override the provider ID when the call was made with a different provider
       // than the one captured in the outer closure (e.g. fallback tier provider, #813).
       providerIdOverride?: string,
-    ): Promise<void> => {
-      if (response.type === 'error') return;
-      try {
-        // SHA-256 of the prompt input — stable fingerprint for deduplication and diffing.
-        // Includes messages and tools since both affect what the model sees.
-        const promptHash = createHash('sha256')
-          .update(JSON.stringify({ messages: params.messages, tools: params.tools ?? [] }))
-          .digest('hex');
-
-        // SHA-256 of the response output — fingerprint for the model's actual reply.
-        const responseHash = createHash('sha256')
-          .update(response.type === 'text' ? response.content : JSON.stringify(response.toolCalls))
-          .digest('hex');
-
-        const event = createLlmCall({
-          agentId,
-          conversationId: taskEvent.payload.conversationId,
-          requestedModel: response.provenance.requestedModel,
-          actualModel: response.provenance.actualModel,
-          provider: providerIdOverride ?? provider.id,
-          providerRequestId: response.provenance.providerRequestId,
-          inputTokens: response.usage.inputTokens,
-          outputTokens: response.usage.outputTokens,
-          cacheCreationInputTokens: response.usage.cacheCreationInputTokens,
-          cacheReadInputTokens: response.usage.cacheReadInputTokens,
-          // estimateCostUsd is optional; default to 0 when omitted (unit tests / unknown models).
-          estimatedCostUsd: this.config.estimateCostUsd?.(response.provenance.actualModel, response.usage, logger) ?? 0,
-          latencyMs: callLatencyMs,
-          promptHash,
-          responseHash,
-          parentEventId: taskEvent.id,
-          // Typed non-persisted archive — AuditLogger writes llm_call_archive atomically.
-          archive: {
-            prompt: { messages: params.messages },
-            response: response.type === 'text'
-              ? { type: 'text', content: response.content }
-              : { type: 'tool_use', toolCalls: response.toolCalls },
-            toolDefinitions: params.tools ?? [],
-          },
-        });
-        const estimatedCostUsd = event.payload.estimatedCostUsd;
-        if (budgetHandoff?.sliceCostTracker && Number.isFinite(estimatedCostUsd) && estimatedCostUsd > 0) {
-          budgetHandoff.sliceCostTracker.usd += estimatedCostUsd;
-        }
-        await bus.publish('agent', event);
-      } catch (err) {
-        // Telemetry failure must not abort the agent task. Log at error so the gap
-        // is visible in production, but allow chatWithRetry to return the response.
-        logger.error({ err, agentId, eventId: taskEvent.id }, 'Failed to publish llm.call telemetry event — token tracking gap');
-      }
-    };
+    ): Promise<void> => this.publishLlmCall({
+      provider,
+      params,
+      response,
+      latencyMs: callLatencyMs,
+      taskEvent,
+      ...(budgetHandoff?.sliceCostTracker !== undefined && { sliceCostTracker: budgetHandoff.sliceCostTracker }),
+      ...(providerIdOverride !== undefined && { providerIdOverride }),
+    });
 
     // Publish llm.error for failed provider calls — used by HealthService to track
     // tier health without making billed probes. Fire-and-forget with try-catch like

@@ -107,6 +107,7 @@ describe('extractStructuredFields', () => {
         note: 'Thread not found.',
         followUpLogged: true,
         reviewTaskId: 'task-1',
+        addedToReviewTask: true,
         replyVia: 'model',
       },
       'evt-note',
