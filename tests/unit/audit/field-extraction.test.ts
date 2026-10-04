@@ -96,6 +96,31 @@ describe('extractStructuredFields', () => {
     ).outcome).toBe('failure');
   });
 
+  it('maps delegation.principal_note onto the conversation it came from (#1990)', () => {
+    expect(extractStructuredFields(
+      'delegation.principal_note',
+      {
+        agentId: 'coordinator',
+        conversationId: 'email:thread-1',
+        targetAgent: 'ceo-inbox',
+        reason: 'timeout',
+        note: 'Thread not found.',
+        followUpLogged: true,
+        reviewTaskId: 'task-1',
+        replyVia: 'model',
+      },
+      'evt-note',
+      logger,
+    )).toEqual({
+      action: 'record',
+      outcome: 'success',
+      target_type: 'conversation',
+      target_id: 'email:thread-1',
+      initiator_type: 'agent',
+      initiator_id: 'coordinator',
+    });
+  });
+
   it('leaves structured columns NULL for unmapped event types', () => {
     const debug = vi.spyOn(logger, 'debug');
     expect(extractStructuredFields('llm.call', { agentId: 'a' }, 'evt-4', logger)).toEqual({

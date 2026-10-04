@@ -210,6 +210,19 @@ describe('Bus Permissions', () => {
     expect(canSubscribe('agent', 'delegation.requester_context')).toBe(false);
   });
 
+  it('allows the agent layer to publish delegation.principal_note (#1990)', () => {
+    expect(canPublish('agent', 'delegation.principal_note')).toBe(true);
+    expect(canPublish('system', 'delegation.principal_note')).toBe(true);
+    expect(canSubscribe('system', 'delegation.principal_note')).toBe(true);
+    expect(canPublish('dispatch', 'delegation.principal_note')).toBe(false);
+    expect(canPublish('execution', 'delegation.principal_note')).toBe(false);
+    expect(canPublish('channel', 'delegation.principal_note')).toBe(false);
+    // Nothing outside the system layer reads it: the note is never to reach a sender.
+    expect(canSubscribe('dispatch', 'delegation.principal_note')).toBe(false);
+    expect(canSubscribe('channel', 'delegation.principal_note')).toBe(false);
+    expect(canSubscribe('agent', 'delegation.principal_note')).toBe(false);
+  });
+
   it('allows system layer to publish and subscribe to system.restart', () => {
     expect(canPublish('system', 'system.restart')).toBe(true);
     expect(canSubscribe('system', 'system.restart')).toBe(true);
