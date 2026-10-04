@@ -162,12 +162,19 @@ const NARRATION_REQUEST_LINE: Record<ReplyAudience, string> = {
 };
 const NARRATION_FRESH = 'Write it as a fresh sentence about this request. Do not reuse a stock line.';
 const NARRATION_SENDER_ONLY = 'Write only to them, and say nothing about tasks, records or reviews kept on your side.';
-// The redirect (#1990). "Do not write a note" alone did not hold; "write it here" gives
-// the model somewhere to put what the principal should hear.
-const NARRATION_PRINCIPAL_NOTE = 'Anything you would say to the principal goes in '
-  + '<note_for_principal></note_for_principal> tags, outside the reply, never in it. '
-  + 'Only the principal sees that note.';
-const NARRATION_FORMAT = 'Do not call tools. Put only the message inside <reply></reply> tags.';
+// The closing format line. For a sender it also carries the redirect (#1990): "do not
+// write a note" alone did not hold, so the model is given a place to put what the
+// principal should hear. Both blocks are laid out in one line, in order. Probed on the
+// production standard-tier model, a separate note line mid-prompt had a third of drafts
+// come back with no usable reply block (often a bare closing tag); this layout matched
+// the reply-block rate of the principal-only format.
+const NARRATION_FORMAT: Record<ReplyAudience, string> = {
+  principal: 'Do not call tools. Put only the message inside <reply></reply> tags.',
+  sender: 'Do not call tools. Write the message to them inside <reply></reply> tags. '
+    + 'If there is something the principal should know, add it after the reply inside '
+    + '<note_for_principal></note_for_principal> tags. '
+    + 'Only the principal sees that note; nothing for the principal goes in the reply.',
+};
 
 function narrationInstructions(audience: ReplyAudience): string[] {
   return [
@@ -175,7 +182,7 @@ function narrationInstructions(audience: ReplyAudience): string[] {
     ...NARRATION_SHARED,
     NARRATION_REQUEST_LINE[audience],
     NARRATION_FRESH,
-    ...(audience === 'sender' ? [NARRATION_SENDER_ONLY, NARRATION_PRINCIPAL_NOTE] : []),
+    ...(audience === 'sender' ? [NARRATION_SENDER_ONLY] : []),
   ];
 }
 
@@ -187,8 +194,7 @@ const ALL_NARRATION_INSTRUCTIONS: readonly string[] = [
   ...Object.values(NARRATION_REQUEST_LINE),
   NARRATION_FRESH,
   NARRATION_SENDER_ONLY,
-  NARRATION_PRINCIPAL_NOTE,
-  NARRATION_FORMAT,
+  ...Object.values(NARRATION_FORMAT),
 ];
 
 // Every situation and follow-up line the prompt can carry. Listed in one place so
@@ -220,7 +226,7 @@ export function delegationFailureNarrationPrompt(input: {
     ? (input.escalated ? SITUATION.escalatedForSender : SITUATION.notEscalatedForSender)
     : (input.escalated ? SITUATION.escalated : SITUATION.notEscalated);
   // The situation sits just before the closing format line.
-  return [...narrationInstructions(input.audience), situation, followUp, NARRATION_FORMAT].join('\n');
+  return [...narrationInstructions(input.audience), situation, followUp, NARRATION_FORMAT[input.audience]].join('\n');
 }
 
 function describeFailure(reason: string, declined: boolean | undefined, possiblySucceeded: boolean | undefined): string {
