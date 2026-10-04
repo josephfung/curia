@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
-import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent, type ContextBudgetEvent, type DelegationRequesterContextEvent } from '../../../src/bus/events.js';
+import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent, type ContextBudgetEvent, type DelegationRequesterContextEvent, type DelegationPrincipalNoteEvent, type LlmCallEvent } from '../../../src/bus/events.js';
 import type { LLMProvider, ToolResult } from '../../../src/agents/llm/provider.js';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { createLogger } from '../../../src/logger.js';
@@ -7602,6 +7602,206 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(taskCreateInput!['tags']).not.toContain('external-waiting');
     expect(JSON.parse(String(taskCreateInput!['escalation_json'])).awaitingReply).toBeUndefined();
     expect(content).not.toMatch(/follow up|follow-up|logged|principal/i);
+  });
+
+  /**
+   * One coordinator turn whose delegation times out, with the narration call returning
+   * `narration` (#1990). Returns what the sender got, the principal-note audit events,
+   * the llm.call events, and every skill the runtime invoked.
+   */
+  async function runNarratedFailure(opts: {
+    metadata?: Record<string, unknown>;
+    narration: string;
+    taskCreateSucceeds: boolean;
+    taskUpdateSucceeds?: boolean;
+  }): Promise<{
+    content: string;
+    notes: DelegationPrincipalNoteEvent[];
+    llmCalls: LlmCallEvent[];
+    invokes: Array<[string, Record<string, unknown>]>;
+  }> {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const agentResponses: AgentResponseEvent[] = [];
+    const notes: DelegationPrincipalNoteEvent[] = [];
+    const llmCalls: LlmCallEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+    bus.subscribe('delegation.principal_note', 'system', (event) => {
+      if (event.type === 'delegation.principal_note') notes.push(event);
+    });
+    bus.subscribe('llm.call', 'system', (event) => {
+      if (event.type === 'llm.call') llmCalls.push(event);
+    });
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        if (toolName === 'task-create') {
+          return opts.taskCreateSucceeds
+            ? { success: true, data: { task_id: 'esc-1990' } }
+            : { success: false, error: 'insert failed' };
+        }
+        if (toolName === 'task-update') {
+          return opts.taskUpdateSucceeds === false
+            ? { success: false, error: 'update failed' }
+            : { success: true, data: { task_id: 'esc-1990' } };
+        }
+        if (toolName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          options?.delegationGuard?.recordInvocation(delegationKey(delegateAgent, delegateTask));
+          return {
+            success: true,
+            data: { agent: delegateAgent, failed: true, reason: 'timeout', retryable: false, message: "Specialist 'ceo-inbox' did not respond" },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+    let calls = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-1990', name: 'delegate', input: { agent: 'ceo-inbox', task: 'Find the venue thread' } }],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: opts.narration,
+          usage: { inputTokens: 20, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    }).register();
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-1990',
+      channelId: 'email',
+      senderId: 'sender@example.test',
+      content: 'Subject: Re: Venue options\n\nYes, go ahead.',
+      ...(opts.metadata !== undefined && { metadata: opts.metadata }),
+      parentEventId: 'inbound-1990',
+    }));
+    expect(agentResponses).toHaveLength(1);
+    return {
+      content: agentResponses[0]!.payload.content,
+      notes,
+      llmCalls,
+      invokes: vi.mocked(mockExecution.invoke).mock.calls.map(([name, input]) => [name, input as Record<string, unknown>]),
+    };
+  }
+
+  const cleanVenueReply = "Thanks for the go-ahead on the venue options. I couldn't get them settled just yet.";
+  const principalNote = 'P.S. Placeholder Principal: I could not find the original venue thread anywhere.';
+
+  it('sends the sender only the reply, and records the note for the principal (#1990)', async () => {
+    const { content, notes, invokes } = await runNarratedFailure({
+      metadata: originatorOf(null, 'known'),
+      // The #1990 shape: the note sits inside the reply block.
+      narration: `<reply>${cleanVenueReply} <note_for_principal>${principalNote}</note_for_principal></reply>`,
+      taskCreateSucceeds: true,
+    });
+
+    expect(content).toBe(cleanVenueReply);
+    expect(content).not.toMatch(/Placeholder|note_for_principal/);
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.parentEventId).toBeDefined();
+    expect(notes[0]!.payload).toEqual({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-1990',
+      targetAgent: 'ceo-inbox',
+      reason: 'timeout',
+      note: principalNote,
+      followUpLogged: true,
+      reviewTaskId: 'esc-1990',
+      addedToReviewTask: true,
+      replyVia: 'model',
+    });
+
+    // Added to the review task too, with the summary kept so the digest still says who waits.
+    const update = invokes.find(([name]) => name === 'task-update');
+    expect(update).toBeDefined();
+    expect(update![1]['task_id']).toBe('esc-1990');
+    const progressNote = String(update![1]['progress_note']);
+    expect(progressNote).toContain('sender@example.test (email) is waiting on a reply');
+    expect(progressNote.endsWith(`Note for you from the reply to the sender: ${principalNote}`)).toBe(true);
+  });
+
+  it('records the note even when no review task was logged (#1990)', async () => {
+    const { notes, invokes } = await runNarratedFailure({
+      metadata: originatorOf(null, 'known'),
+      narration: `<reply>${cleanVenueReply}</reply><note_for_principal>${principalNote}</note_for_principal>`,
+      taskCreateSucceeds: false,
+    });
+    expect(invokes.some(([name]) => name === 'task-update')).toBe(false);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.payload).toMatchObject({ note: principalNote, followUpLogged: false, reviewTaskId: null, addedToReviewTask: false });
+  });
+
+  it('records the note when the reply draft was rejected, and when the task update fails (#1990)', async () => {
+    const rejected = await runNarratedFailure({
+      metadata: originatorOf(null, 'known'),
+      narration: `<reply>I have no record of the venue options thread.</reply><note_for_principal>${principalNote}</note_for_principal>`,
+      taskCreateSucceeds: true,
+    });
+    expect(rejected.content).not.toMatch(/no record|Placeholder/);
+    expect(rejected.notes[0]!.payload).toMatchObject({ note: principalNote, replyVia: 'fallback', addedToReviewTask: true });
+
+    const updateFailed = await runNarratedFailure({
+      metadata: originatorOf(null, 'known'),
+      narration: `<reply>${cleanVenueReply}</reply><note_for_principal>${principalNote}</note_for_principal>`,
+      taskCreateSucceeds: true,
+      taskUpdateSucceeds: false,
+    });
+    expect(updateFailed.content).toBe(cleanVenueReply);
+    expect(updateFailed.notes[0]!.payload).toMatchObject({ reviewTaskId: 'esc-1990', addedToReviewTask: false });
+  });
+
+  it('reads no note on the principal\'s own turn (#1990)', async () => {
+    const { content, notes, invokes } = await runNarratedFailure({
+      metadata: originatorOf('principal', 'principal'),
+      narration: `<reply>${cleanVenueReply}</reply><note_for_principal>aside</note_for_principal>`,
+      taskCreateSucceeds: true,
+    });
+    expect(content).toBe(cleanVenueReply);
+    expect(notes).toHaveLength(0);
+    expect(invokes.some(([name]) => name === 'task-update')).toBe(false);
+  });
+
+  it('records the narration call as llm.call, with the raw model text archived (#1990)', async () => {
+    const narration = `Thinking first.\n<reply>${cleanVenueReply}</reply><note_for_principal>${principalNote}</note_for_principal>`;
+    const { llmCalls } = await runNarratedFailure({
+      metadata: originatorOf(null, 'known'),
+      narration,
+      taskCreateSucceeds: true,
+    });
+    // The delegate round, then the narration call.
+    expect(llmCalls).toHaveLength(2);
+    const narrationCall = llmCalls[1]!;
+    expect(narrationCall.payload.agentId).toBe('coordinator');
+    expect(narrationCall.payload.outputTokens).toBe(8);
+    expect(narrationCall.archive?.response).toEqual({ type: 'text', content: narration });
+    const promptMessages = (narrationCall.archive?.prompt as { messages: Array<{ role: string; content: unknown }> }).messages;
+    expect(String(promptMessages.at(-1)!.content)).toMatch(/note_for_principal/);
   });
 
   it('drops a model draft that leaks the registry id (#1860)', async () => {
