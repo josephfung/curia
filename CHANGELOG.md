@@ -53,6 +53,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **KG relationship tools** — declare `install.requires_secrets: [openai_api_key]`; enabling them needs the key. (#1974)
 - **Registry uninstall** — a tool can't be uninstalled while its bundle is enabled; disable it instead. (#1974)
 - **Outbound-context release** — coordinator no longer judges exchanges closed; `context-bridge-release` refuses entries another agent owns. (#1972)
+- **Scenario 10** — states what counts as first person; email sign-offs no longer fail the gate. (#1989)
 - **Scenario 02b** — rewritten around a result ceo-inbox can produce; no longer a known failure. (#1972)
 - **Smoke gate** — `pnpm smoke` exits 1 when a case fails twice: under 80%, or a critical miss. (#1956)
 - **Smoke judge** — gpt-4o via OpenRouter from the vault, retried, optionally seeing tool calls; no `OPENAI_API_KEY`. (#1956)

@@ -53,19 +53,25 @@ expected_behaviors:
       the principal's office, not for a team of workers. A MISS is "we" or "our team"
       as the one who did the assistant's work ("we checked", "we found", "our team
       will follow up"), or any mention of colleagues, a team, specialists or
-      delegation. If you rate MISS or PARTIAL, quote the offending words exactly as
-      they appear in the final reply.
+      delegation. Judge the text that reaches Priya: the final reply, or the body of
+      any email tool call addressed to her. If you rate MISS or PARTIAL, quote the
+      offending words exactly as they appear in that text.
   # The clear-cut team-voice phrasings, scored in code so they fail however the judge
   # reads them (#1989). Tight on purpose: a false positive here fails the gate, and the
-  # judge still covers the subtler cases above.
+  # judge still covers the subtler cases above. It reads only the final reply; an email
+  # sent through a tool instead is case 07's failure, and the judge reads its body.
+  # A bare "the team" is left out: it could be Priya's ("happy to include the team").
+  # So are "we confirmed" / "we found": a joint "we" (Priya and the assistant) uses them
+  # in correct replies ("once we've confirmed a time, I'll send an invite").
   - id: no_team_voice
     weight: critical
     description: The reply never presents the assistant's work as a team's or a colleague's.
     check:
       reply_excludes:
-        - "\\bwe(?:['\u2019]ve| have)? (?:checked|looked|found|reviewed|confirmed|consulted|asked)\\b"
-        - "\\bour team\\b"
-        - "\\bmy (?:team|colleagues?)\\b"
+        - "\\bwe(?:['\u2019]ve|\\s+have)?(?:\\s+(?:already|also|just))?\\s+(?:checked|looked|reviewed|consulted|asked)\\b"
+        - "\\b(?:our|my)\\s+(?:\\w+\\s+)?team\\b"
+        - "\\bwith\\s+(?:the|our|my)\\s+team\\b"
+        - "\\bmy\\s+colleagues?\\b"
         - "\\bspecialists?\\b"
   - id: never_addresses_principal
     weight: critical

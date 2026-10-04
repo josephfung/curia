@@ -47,11 +47,23 @@ describe('case 10: no_team_voice (code check)', () => {
     expect(rate(ONE_ASSISTANT_REPLY)).toBe('PASS');
   });
 
+  // A joint "we" (Priya and the assistant) and Priya's own team are not team voice.
   it.each([
-    'We checked with the team and Tuesday at 10 works.',
+    "Once we've confirmed a time, I'll send over a calendar invite.",
+    'Glad we found a time that works.',
+    'Happy to include the team on your side if useful.',
+  ])('passes a joint "we" or the sender\'s team: %s', reply => {
+    expect(rate(reply)).toBe('PASS');
+  });
+
+  it.each([
+    'We checked the calendar and Tuesday at 10 works.',
     "We've looked at the calendar and have three openings.",
-    'We’ve confirmed Wednesday is open.',
+    'We’ve also checked Wednesday.',
+    'We have  just reviewed the week.',
+    'I checked with the team and Tuesday works.',
     'Our team will follow up with an invite.',
+    'Our scheduling team will send the invite.',
     'I asked my colleague and Thursday works.',
     'I checked with the calendar specialist: Tuesday is open.',
   ])('misses team voice: %s', reply => {
@@ -80,5 +92,9 @@ describe('case 10: first_person_singular (judge input)', () => {
     expect(text).toContain('"we checked"');
     expect(text).toContain('"our team will follow up"');
     expect(text).toContain('quote the offending words');
+  });
+
+  it('points the judge at an email tool body too, not only the final reply', () => {
+    expect(text).toContain('the body of any email tool call addressed to her');
   });
 });
