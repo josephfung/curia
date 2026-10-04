@@ -3,7 +3,9 @@
 //
 // A deliverable result re-enters the originating agent in its ORIGINAL conversation, carrying the
 // specialist's output, so the follow-up steps that died with the timed-out turn actually run. The
-// review task the escalation created is then closed with the delivery time. Every other outcome —
+// review task the escalation created is then closed with the delivery time — unless an outside
+// sender is waiting on a reply (#1991). That task stays open, tagged reply-pending, until a reply
+// is actually delivered on their conversation (closeAnsweredReviewTasks). Every other outcome —
 // the specialist ultimately failed, came back with a question, has nowhere to be delivered, or a
 // human already took over — is recorded on that review task instead and leaves it open.
 //
@@ -36,7 +38,12 @@ import {
 } from '../db/queries/pending-delegations.js';
 import { EXECUTION_PAUSED_PROTOCOL } from './resumable-task.js';
 import { toLocalIso } from '../time/timestamp.js';
-import { awaitingReplyLine, readAwaitingReply } from './task-escalation.js';
+import {
+  awaitingReplyLine,
+  describeRequester,
+  readAwaitingReply,
+  type EscalationRequester,
+} from './task-escalation.js';
 import { LATE_SPECIALIST_RESULT_MARKER } from '../memory/synthetic-user-turn.js';
 
 /** Mirrors CLARIFICATION_PROTOCOL in skills/request-clarification/handler.ts. Duplicated as a
@@ -123,6 +130,17 @@ function unresolvedOriginator(channelId: string, now: Date): TaskOriginator {
 
 /** Task statuses that mean a human already disposed of the review row. */
 const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled', 'failed']);
+
+/**
+ * Tag on a review task whose late result was delivered while an outside sender still waits on a
+ * reply (#1991). It is the fence for closeAnsweredReviewTasks: the timed-out turn's own "I'll
+ * follow up" reply goes out on the same conversation long before the result arrives, and must not
+ * be mistaken for the answer. Only a reply delivered after this tag lands can close the task.
+ */
+export const REPLY_PENDING_TAG = 'reply-pending';
+
+/** Review task statuses a reply can still close. */
+const OPEN_TASK_STATUSES = ['open', 'in_progress', 'waiting', 'blocked'];
 
 /**
  * How long one actor may hold a handle while it annotates the review task and publishes the
@@ -469,6 +487,28 @@ export function renderDeliveredNote(params: {
   );
 }
 
+/**
+ * Note put on the review task when the result was handed back but an outside sender is still
+ * waiting on a reply (#1991). recordOnReviewTask puts the waiting line in front of it, so the
+ * digest reads "<name> is waiting on a reply. <agent> delivered at …".
+ */
+export function renderDeliveredAwaitingReplyNote(params: {
+  targetAgent: string;
+  deliveredAtDisplay: string;
+  originConversationId: string;
+}): string {
+  return (
+    `${params.targetAgent} delivered at ${params.deliveredAtDisplay}, after the delegate wait had `
+    + `timed out, and the result was handed back to the originating turn (${params.originConversationId}). `
+    + 'But no reply has reached them yet. This review closes when one is sent; if none is, reply to them yourself.'
+  );
+}
+
+/** Completion note when a reply to the waiting sender was delivered (#1991). */
+export function renderRepliedNote(waiting: EscalationRequester, repliedAtDisplay: string): string {
+  return `Replied to ${describeRequester(waiting)} at ${repliedAtDisplay}. Nobody is waiting on this any more — closing this review.`;
+}
+
 export interface HandleLateResponseOptions {
   pool: Pool;
   bus: EventBus;
@@ -528,9 +568,15 @@ export async function handleLateResponse(
   const content = typeof responsePayload['content'] === 'string' ? responsePayload['content'] : '';
   const deliveredAtDisplay = formatDeliveredAt(opts.respondedAt, opts.timezone, logger);
 
-  // The deliver branch hands the result back to the originating agent and closes the review task.
+  // The deliver branch hands the result back to the originating agent and closes the review task
+  // (or, with an outside sender waiting, keeps it open until they get a reply — #1991).
   // Every other disposition records the outcome on that task and leaves it open for a human.
   if (classification.disposition === 'deliverable') {
+    const deliveredNoteParams = {
+      targetAgent: handle.targetAgent,
+      deliveredAtDisplay,
+      originConversationId: handle.originConversationId,
+    };
     return resolveLateDelegation({
       pool,
       bus,
@@ -539,11 +585,8 @@ export async function handleLateResponse(
       handle,
       classification,
       lateResponseEventId: responseEventId,
-      note: renderDeliveredNote({
-        targetAgent: handle.targetAgent,
-        deliveredAtDisplay,
-        originConversationId: handle.originConversationId,
-      }),
+      note: renderDeliveredNote(deliveredNoteParams),
+      awaitingReplyNote: renderDeliveredAwaitingReplyNote(deliveredNoteParams),
       parentEventId: responseEventId,
       wakeBrief: buildLateResultBrief({
         targetAgent: handle.targetAgent,
@@ -633,8 +676,16 @@ export interface ResolveLateDelegationOptions {
   wakeBrief?: string;
   /** Deliver branch only: seeds dispatcher routing when the origin can receive a reply. */
   registerRouting?: LateWakeRoutingRegistrar;
-  /** Deliver branch only: close the review task rather than leaving it open with a note. */
+  /**
+   * Deliver branch only: close the review task rather than leaving it open with a note — unless
+   * it records an outside sender waiting on a reply, which keeps it open (#1991).
+   */
   closeReviewTask?: boolean;
+  /**
+   * Deliver branch only: the note written instead of closing, when the review task records a
+   * waiting sender (#1991). Falls back to `note` when absent.
+   */
+  awaitingReplyNote?: string;
 }
 
 export interface ResolveLateDelegationResult {
@@ -743,6 +794,14 @@ export async function resolveLateDelegation(
   try {
     if (opts.wakeBrief !== undefined) {
       const wakeEventId = deterministicWakeEventId(claimed.delegateEventId);
+
+      // Tag the review task reply-pending BEFORE the wake (#1991). The woken turn runs inside
+      // publish(), so its relayed reply is delivered before any post-wake bookkeeping — a tag
+      // written afterwards would hide the task from the subscriber that closes it on that reply.
+      // The tag is idempotent, so a retried wake re-marking it is harmless.
+      if (opts.closeReviewTask === true) {
+        await markReplyPending({ taskRepo, logger, handle: claimed });
+      }
 
       // Record the id BEFORE publishing. A crash in between is then recoverable either way: the row
       // names the wake, and re-publishing that same id is inert if it already went out.
@@ -868,6 +927,7 @@ export async function resolveLateDelegation(
     handle: claimed,
     note,
     close: opts.closeReviewTask === true,
+    ...(opts.awaitingReplyNote !== undefined && { awaitingReplyNote: opts.awaitingReplyNote }),
   });
 
   // `update_failed` is the one non-terminal review-task outcome: the row exists and is writable in
@@ -1066,6 +1126,8 @@ interface RecordOnReviewTaskOptions {
   note: string;
   /** True on the deliver branch: the follow-up is running, so the review is finished. */
   close: boolean;
+  /** Deliver branch: the note used instead of closing when an outside sender is waiting. */
+  awaitingReplyNote?: string;
 }
 
 /**
@@ -1073,6 +1135,13 @@ interface RecordOnReviewTaskOptions {
  * the originating agent, annotating and leaving it open otherwise. Closing on delivery is the
  * point of the whole mechanism: the row said "check whether it already delivered", something
  * finally checked, and leaving it open would recreate the backlog rot #1799 opened with.
+ *
+ * The exception is a review task recording an outside sender who was promised a follow-up
+ * (#1978). Delivering the result to the originating turn does not answer them: that turn may
+ * return NO_REPLY, fail, or have its reply held by Gate C. So the task stays open, tagged
+ * reply-pending, and closeAnsweredReviewTasks closes it once a reply is actually delivered (#1991).
+ * When that reply went out inside the wake, the task is already done by the time this runs and
+ * is reported as `review_task_terminal`.
  *
  * A review task that reached a terminal state cannot be written at all: updateTask's guard
  * rejects done/cancelled rows (and throws on the race), so that case is reported as
@@ -1110,17 +1179,25 @@ async function recordOnReviewTask(
       return 'review_task_terminal';
     }
 
-    if (opts.close) {
+    const waiting = readAwaitingReply(current.progress);
+    if (opts.close && !waiting) {
       await taskRepo.completeTask(handle.reviewTaskId, note, 'late-delegation');
       return 'closed';
     }
     // The digest shows only the last progress note. When an outside sender is waiting
     // on this review task, keep that line in front, or the note that matters most (the
     // work was lost) is the one that hides them (#1978).
-    const waiting = readAwaitingReply(current.progress);
+    const body = opts.close ? (opts.awaitingReplyNote ?? note) : note;
     const waitingLine = waiting ? awaitingReplyLine(waiting) : undefined;
-    const annotated = waitingLine && !note.includes(waitingLine) ? `${waitingLine} ${note}` : note;
-    await taskRepo.updateTask(handle.reviewTaskId, { progressNote: annotated }, 'late-delegation');
+    const annotated = waitingLine && !body.includes(waitingLine) ? `${waitingLine} ${body}` : body;
+    // On delivery the reply-pending tag normally went on before the wake. If that write failed,
+    // add it here, so a reply from any later turn can still close the task.
+    const addTag = opts.close && !current.tags.includes(REPLY_PENDING_TAG);
+    await taskRepo.updateTask(
+      handle.reviewTaskId,
+      { progressNote: annotated, ...(addTag && { tags: [...current.tags, REPLY_PENDING_TAG] }) },
+      'late-delegation',
+    );
     return 'annotated';
   } catch (err) {
     logger.error(
@@ -1129,6 +1206,103 @@ async function recordOnReviewTask(
     );
     return 'update_failed';
   }
+}
+
+/**
+ * Tag a review task reply-pending ahead of the wake, when it records a waiting sender (#1991).
+ *
+ * Never blocks the wake. A failure here only means a reply sent DURING the wake is not seen as
+ * the answer; recordOnReviewTask adds the tag after the wake, and the task then stays open until
+ * a later reply or a human closes it, which is the safe direction.
+ */
+async function markReplyPending(opts: {
+  taskRepo: TaskRepo;
+  logger: Logger;
+  handle: PendingDelegationRow;
+}): Promise<void> {
+  const { taskRepo, logger, handle } = opts;
+  if (!handle.reviewTaskId) return;
+  try {
+    const current = await taskRepo.getTask(handle.reviewTaskId);
+    if (!current || TERMINAL_TASK_STATUSES.has(current.status)) return;
+    if (!readAwaitingReply(current.progress)) return;
+    if (current.tags.includes(REPLY_PENDING_TAG)) return;
+    await taskRepo.updateTask(
+      handle.reviewTaskId,
+      { tags: [...current.tags, REPLY_PENDING_TAG] },
+      'late-delegation',
+    );
+  } catch (err) {
+    logger.warn(
+      { err, delegateEventId: handle.delegateEventId, reviewTaskId: handle.reviewTaskId },
+      'Late delegation: could not mark the review task reply-pending before the wake — a reply sent during the wake will not close it',
+    );
+  }
+}
+
+export interface CloseAnsweredReviewTasksOptions {
+  taskRepo: TaskRepo;
+  logger: Logger;
+  /** The conversation an outbound.delivered went out on. */
+  conversationId: string;
+  deliveredAt: Date;
+  timezone?: string;
+}
+
+/**
+ * Close every reply-pending review task whose waiting sender has now been answered (#1991):
+ * a message was delivered on the conversation recorded in progress.escalation.awaitingReply.
+ *
+ * Matching is by conversation id alone. Conversation ids are already channel-scoped
+ * (`email:<thread>`, `signal:<number>`), and the delivered recipient cannot be compared to the
+ * waiting sender's address in general: a Signal group reply goes to the group id, not to them.
+ *
+ * Returns the ids it closed. Throws after trying every match if any close failed, so the caller
+ * logs it; the failed task stays open and tagged, and the next reply retries it.
+ */
+export async function closeAnsweredReviewTasks(
+  opts: CloseAnsweredReviewTasksOptions,
+): Promise<string[]> {
+  const { taskRepo, logger, conversationId } = opts;
+
+  // listAllTasks, not listTasks: a single page would silently miss a match past its limit.
+  const { tasks, truncated } = await taskRepo.listAllTasks({
+    tag: REPLY_PENDING_TAG,
+    statuses: OPEN_TASK_STATUSES,
+  });
+  if (truncated) {
+    logger.warn(
+      { conversationId },
+      'Late delegation: reply-pending task list was truncated — a matching review task may not be closed',
+    );
+  }
+
+  const closed: string[] = [];
+  let firstError: unknown;
+  for (const task of tasks) {
+    const waiting = readAwaitingReply(task.progress);
+    if (!waiting || waiting.conversationId !== conversationId) continue;
+    try {
+      await taskRepo.completeTask(
+        task.id,
+        renderRepliedNote(waiting, formatDeliveredAt(opts.deliveredAt, opts.timezone, logger)),
+        'late-delegation',
+      );
+      closed.push(task.id);
+      logger.info(
+        { reviewTaskId: task.id, conversationId },
+        'Late delegation: waiting sender got a reply — closed the review task',
+      );
+    } catch (err) {
+      logger.error(
+        { err, reviewTaskId: task.id, conversationId },
+        'Late delegation: failed to close a reply-pending review task after the reply went out',
+      );
+      firstError ??= err;
+    }
+  }
+  if (firstError !== undefined) throw firstError;
+  return closed;
 }
 
 /**

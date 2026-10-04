@@ -465,7 +465,7 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     expect(result.recovered).toBe(1);
   });
 
-  it('closes the review task on delivery instead of leaving it open', async () => {
+  it('closes the review task on delivery when no outside sender is waiting', async () => {
     const { pool } = fakePool({
       open: [handleRow({ review_task_id: 'review-1' })],
       auditHits: {
@@ -489,6 +489,121 @@ describe('LateDelegationSweep.tick (#1799)', () => {
     expect(String(note)).toContain('calendar delivered at');
     expect(taskRepo.updateTask).not.toHaveBeenCalled();
     expect(resolved[0]!.payload.reviewTaskOutcome).toBe('closed');
+  });
+
+  describe('a review task with an outside sender waiting on a reply (#1991)', () => {
+    const awaitingReply = {
+      name: 'Lena Okafor',
+      address: 'lena.okafor@example.test',
+      channel: 'email',
+      conversationId: 'email:thread-1991',
+    };
+
+    /** A review task recording a waiting sender, with every write logged in order. */
+    function waitingReviewTaskRepo(log: string[]) {
+      const task = {
+        id: 'review-1',
+        status: 'open',
+        tags: ['escalation', 'external-waiting'],
+        progress: { escalation: { awaitingReply } },
+      };
+      const updateTask = vi.fn(async (_id: string, updates: { tags?: string[]; progressNote?: string }) => {
+        if (updates.tags) {
+          task.tags = updates.tags;
+          log.push(`tags:${updates.tags.join(',')}`);
+        }
+        if (updates.progressNote) log.push('note');
+        return null;
+      });
+      const completeTask = vi.fn(async () => {
+        task.status = 'done';
+        log.push('complete');
+        return null;
+      });
+      const taskRepo = {
+        getTask: vi.fn(async () => ({ ...task, tags: [...task.tags] })),
+        updateTask,
+        completeTask,
+      } as unknown as TaskRepo;
+      return { taskRepo, updateTask, completeTask };
+    }
+
+    function deliverableHandle() {
+      return fakePool({
+        open: [handleRow({
+          review_task_id: 'review-1',
+          origin_conversation_id: awaitingReply.conversationId,
+          origin_channel_id: 'email',
+          origin_sender_id: awaitingReply.address,
+          scheduler_job_id: null,
+        })],
+        auditHits: {
+          'delegate-evt-1': {
+            id: 'response-evt-1',
+            payload: { agentId: 'calendar', content: 'Travel detected: one trip.' },
+            timestamp: '2026-09-14T12:06:43.000Z',
+          },
+        },
+      });
+    }
+
+    it('keeps the task open on delivery, with the waiting line still leading its note', async () => {
+      const { pool } = deliverableHandle();
+      const bus = new EventBus(logger);
+      const resolved = collectResolved(bus);
+      const log: string[] = [];
+      // The woken turn here sends nothing: the same as NO_REPLY, an errored turn, or a reply
+      // Gate C held. None of those puts a message on the wire, so nothing closes the task.
+      bus.subscribe('agent.task', 'system', () => { log.push('wake'); });
+      const { taskRepo, updateTask, completeTask } = waitingReviewTaskRepo(log);
+
+      await makeSweep(pool, bus, taskRepo).tick(NOW);
+
+      expect(completeTask).not.toHaveBeenCalled();
+      const noteCall = updateTask.mock.calls.find((c) => c[1].progressNote !== undefined);
+      const note = noteCall![1].progressNote!;
+      // The digest shows only this last note, so the person waiting must stay in front of it.
+      expect(note.startsWith('Lena Okafor (lena.okafor@example.test, email) is waiting on a reply. ')).toBe(true);
+      expect(note).toContain('calendar delivered at');
+      expect(note).toMatch(/no reply has reached them yet/);
+      expect(note).not.toMatch(/Closing this review/);
+      expect(resolved[0]!.payload.reviewTaskOutcome).toBe('annotated');
+    });
+
+    it('marks the task reply-pending BEFORE the wake, so a reply sent inside it can close the task', async () => {
+      // The woken turn runs inside publish(), so its relayed reply is delivered before the
+      // post-wake note. Tagging afterwards would hide the task from the reply subscriber.
+      const { pool } = deliverableHandle();
+      const bus = new EventBus(logger);
+      const log: string[] = [];
+      bus.subscribe('agent.task', 'system', () => { log.push('wake'); });
+      const { taskRepo } = waitingReviewTaskRepo(log);
+
+      await makeSweep(pool, bus, taskRepo).tick(NOW);
+
+      expect(log[0]).toBe('tags:escalation,external-waiting,reply-pending');
+      expect(log[1]).toBe('wake');
+      // The post-wake note does not tag the task a second time.
+      expect(log.filter((l) => l.startsWith('tags:'))).toHaveLength(1);
+    });
+
+    it('still wakes the originator when the reply-pending mark cannot be written', async () => {
+      const { pool, finalized } = deliverableHandle();
+      const bus = new EventBus(logger);
+      const wakes = collectWakes(bus);
+      const log: string[] = [];
+      const { taskRepo, updateTask } = waitingReviewTaskRepo(log);
+      // First write (the mark) fails; the post-wake note lands, and carries the tag with it.
+      updateTask.mockImplementationOnce(async () => { throw new Error('connection terminated'); });
+
+      await makeSweep(pool, bus, taskRepo).tick(NOW);
+
+      // A missing mark costs the auto-close of a reply sent during the wake, never the delivery.
+      expect(wakes).toHaveLength(1);
+      expect(finalized).toHaveLength(1);
+      const noteCall = updateTask.mock.calls.find((c) => c[1].progressNote !== undefined);
+      expect(noteCall![1].tags).toEqual(['escalation', 'external-waiting', 'reply-pending']);
+    });
   });
 
   it('delivers no second wake when an earlier attempt already published one', async () => {

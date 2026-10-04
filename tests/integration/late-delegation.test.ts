@@ -20,6 +20,7 @@ import { LateDelegationSweep } from '../../src/agents/late-delegation-sweep.js';
 import {
   createAgentResponse,
   createDelegationTimedOut,
+  createOutboundDelivered,
   type AgentTaskEvent,
   type DelegationTimedOutEvent,
 } from '../../src/bus/events.js';
@@ -300,6 +301,75 @@ describeIf('Late delegation — delivery, records, audit (#1799)', () => {
     expect(audit?.payload['resolution']).toBe('delivered');
     expect(audit?.payload['reviewTaskOutcome']).toBe('closed');
     expect(audit?.payload['wakeTaskEventId']).toBe(wake.id);
+  });
+
+  it('keeps a waiting sender\'s review task open past delivery, and closes it on their reply (#1991)', async () => {
+    const conversationId = `email:late-deleg-test-thread-${process.pid}`;
+    const awaitingReply = {
+      name: 'Lena Okafor',
+      address: 'lena.okafor@example.test',
+      channel: 'email',
+      conversationId,
+    };
+    const review = await taskRepo.createTask({
+      agentId: 'coordinator',
+      title: `${PREFIX}: Review: calendar could not complete delegated work`,
+      owner: 'ceo',
+      source: 'coordinator',
+      tags: ['delegation-failure', 'calendar', 'external-waiting'],
+      progressNote: 'Lena Okafor (lena.okafor@example.test, email) is waiting on a reply.',
+      escalation: {
+        failureMode: 'agent_incomplete',
+        reason: 'timeout',
+        source: 'delegation',
+        headline: 'calendar timed out',
+        suggestedActions: [],
+        awaitingReply,
+      },
+    });
+    const event = timedOutEvent({
+      reviewTaskId: review.id,
+      conversationId,
+      channelId: 'email',
+      senderId: awaitingReply.address,
+    });
+    await bus.publish('agent', event);
+
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'calendar',
+      conversationId: 'delegate-conv-1',
+      content: 'Thursday 2pm works.',
+      parentEventId: event.payload.delegateEventId,
+    }));
+
+    // Delivered to the originating turn, but nothing has reached Lena: the task stays open,
+    // tagged, and the digest's note still leads with her.
+    expect(wakes).toHaveLength(1);
+    let task = await taskRepo.getTask(review.id);
+    expect(task?.status).toBe('open');
+    expect(task?.tags).toContain('reply-pending');
+    expect(await lastNote(review.id))
+      .toMatch(/^Lena Okafor \(lena\.okafor@example\.test, email\) is waiting on a reply\. calendar delivered at /);
+    expect((await lateResolvedAudit(event.payload.delegateEventId))?.payload['reviewTaskOutcome']).toBe('annotated');
+
+    // A reply on some other conversation answers someone else.
+    await bus.publish('dispatch', createOutboundDelivered({
+      channel: 'email',
+      recipientId: 'someone.else@example.test',
+      content: 'Unrelated.',
+      conversationId: 'email:late-deleg-test-other-thread',
+    }));
+    expect((await taskRepo.getTask(review.id))?.status).toBe('open');
+
+    await bus.publish('dispatch', createOutboundDelivered({
+      channel: 'email',
+      recipientId: awaitingReply.address,
+      content: 'Thursday 2pm works for us.',
+      conversationId,
+    }));
+    task = await taskRepo.getTask(review.id);
+    expect(task?.status).toBe('done');
+    expect(await lastNote(review.id)).toMatch(/^Replied to Lena Okafor \(lena\.okafor@example\.test, email\) at /);
   });
 
   it('acts on a late response at most once, however many times it is replayed', async () => {
