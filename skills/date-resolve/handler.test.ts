@@ -40,6 +40,19 @@ describe('DateResolveHandler', () => {
     if (!result.success) expect(result.error).toMatch(/could not resolve/i);
   });
 
+  // An invalid zone makes luxon return an invalid DateTime rather than throw, so
+  // without a guard it surfaces as a misleading "could not parse date" or worse.
+  // The startup TIMEZONE check normally prevents this; the handler states it plainly.
+  it.each([
+    ['relative "tomorrow"', { relative: 'tomorrow' }],
+    ['relative "next Monday"', { relative: 'next Monday' }],
+    ['ISO date', { date: '2026-05-19' }],
+  ])('returns an invalid-timezone error for %s', async (_label, input) => {
+    const result = await handler.execute(makeCtx(input, 'Not/AZone'));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/invalid timezone.*Not\/AZone/i);
+  });
+
   it('returns error for invalid expected_day name', async () => {
     const result = await handler.execute(makeCtx({ date: '2026-05-19', expected_day: 'Funday' }));
     expect(result.success).toBe(false);
