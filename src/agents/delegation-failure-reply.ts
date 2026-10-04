@@ -40,22 +40,43 @@ export type ReplyAudience = 'principal' | 'sender';
 // the principal-facing reply it had before #1978).
 const NON_SENDER_CHANNELS: ReadonlySet<string> = new Set(['scheduler', 'bullpen', 'internal']);
 
+/** Why delegationFailureAudience chose its reader. Logged with the reply. */
+export type ReplyAudienceBasis =
+  | 'delegated'
+  | 'non_sender_channel'
+  | 'principal_side_originator'
+  | 'non_principal_originator'
+  | 'originator_missing';
+
+// Roles whose turns are read on the principal's side: the principal, and work the
+// platform or Curia started (scheduled jobs, self-initiated tasks).
+const PRINCIPAL_SIDE_ROLES: ReadonlySet<string> = new Set(['principal', 'system', 'agent']);
+
 /**
  * The reader of this turn's delegation-failure reply.
  *
- * The dispatcher stamps an originator on every inbound, with `systemRole: null`
- * for anyone who is not the principal, an unresolved sender included (#1059). So a
- * null role on a human channel is an outside sender. A delegated specialist
- * answers the agent that delegated to it, and a missing originator keeps the
- * principal-facing reply from before #1978.
+ * A delegated specialist answers the agent that delegated to it, and the system
+ * channels never answer an outside sender. On a human channel the reply goes back
+ * to whoever is on that thread, so the principal is the reader only when the
+ * originator says so. Everything else is read as an outside sender: a null role
+ * (the dispatcher's stamp for anyone not the principal, unresolved senders
+ * included, #1059), an unrecognised role, and a missing originator. Some
+ * dispatcher-relayed tasks carry none, such as the content-block rewrite retry.
+ * Erring this way costs the principal a plainer reply. Erring the other way
+ * sends an outside sender a note meant for the principal.
  */
 export function delegationFailureAudience(turn: {
   originator: TaskOriginator | undefined;
   channelId: string;
   delegated: boolean;
-}): ReplyAudience {
-  if (turn.delegated || NON_SENDER_CHANNELS.has(turn.channelId)) return 'principal';
-  return turn.originator !== undefined && turn.originator.systemRole === null ? 'sender' : 'principal';
+}): { audience: ReplyAudience; basis: ReplyAudienceBasis } {
+  if (turn.delegated) return { audience: 'principal', basis: 'delegated' };
+  if (NON_SENDER_CHANNELS.has(turn.channelId)) return { audience: 'principal', basis: 'non_sender_channel' };
+  if (turn.originator === undefined) return { audience: 'sender', basis: 'originator_missing' };
+  const role = turn.originator.systemRole;
+  return typeof role === 'string' && PRINCIPAL_SIDE_ROLES.has(role)
+    ? { audience: 'principal', basis: 'principal_side_originator' }
+    : { audience: 'sender', basis: 'non_principal_originator' };
 }
 
 export interface DelegationFailureReplyInput {
