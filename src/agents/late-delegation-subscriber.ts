@@ -209,31 +209,36 @@ export class LateDelegationSubscriber {
   }
 
   /**
-   * Close the review task of a waiting sender once a reply reaches their conversation (#1991).
+   * Close the review task of a waiting sender once a message actually reaches them (#1991).
    *
    * outbound.delivered is published only after a real wire send. A NO_REPLY turn, a Gate C
    * hold, a content-filter block and a saved draft never produce one, so each leaves the task
-   * open. A reply sent later on the same conversation, by any turn, closes it then.
+   * open. A reply that reaches them later, from any turn (an approved held reply included),
+   * closes it then. Matching is on the recipient; see deliveryReachesWaitingSender.
    */
   private async handleDelivered(event: OutboundDeliveredEvent): Promise<void> {
-    const conversationId = event.payload.conversationId;
-    // Queue-flushed sends carry no conversation id. They leave the task open rather than
-    // guessing which conversation they answered.
-    if (!conversationId) return;
-
+    const p = event.payload;
     try {
       await closeAnsweredReviewTasks({
+        pool: this.opts.pool,
         taskRepo: this.opts.taskRepo,
         logger: this.opts.logger,
-        conversationId,
+        delivered: {
+          channel: p.channel,
+          recipientId: p.recipientId,
+          ...(p.recipientContactId !== undefined && { recipientContactId: p.recipientContactId }),
+          ...(p.taskEventId !== undefined && { taskEventId: p.taskEventId }),
+        },
+        deliveredEventId: event.id,
         deliveredAt: event.timestamp,
         ...(this.opts.timezone !== undefined && { timezone: this.opts.timezone }),
       });
     } catch (err) {
       // The task stays open and tagged reply-pending, so the principal still sees the sender
-      // waiting; a later reply on the conversation retries the close.
+      // waiting. Nothing retries this delivery: the close waits for the next message to them,
+      // or a human. TODO(#1991 follow-up): a sweep pass reconciling against audit_log.
       this.opts.logger.error(
-        { err, conversationId, deliveredEventId: event.id },
+        { err, deliveredEventId: event.id },
         'Late delegation: failed to close reply-pending review tasks after a delivered reply',
       );
       throw err;

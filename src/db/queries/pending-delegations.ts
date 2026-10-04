@@ -461,6 +461,27 @@ export async function getPendingDelegationByDelegateEventId(
   return row ? mapRow(row) : null;
 }
 
+/**
+ * The originating turns (agent.task event ids) behind every handle that escalated to this review
+ * task. A reply-pending review task must not be closed by one of these turns' own replies — the
+ * timed-out turn's "I'll follow up" can still be in flight when the late result arrives (#1991).
+ *
+ * Unindexed on review_task_id: it runs only after a delivery has already matched a reply-pending
+ * task's waiting sender, which is rare.
+ */
+export async function listOriginTaskEventIdsForReviewTask(
+  pool: Pool,
+  reviewTaskId: string,
+): Promise<string[]> {
+  const { rows } = await pool.query<{ origin_task_event_id: string | null }>(
+    `SELECT origin_task_event_id FROM pending_delegations WHERE review_task_id = $1`,
+    [reviewTaskId],
+  );
+  return rows
+    .map((r) => r.origin_task_event_id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
 export interface ClaimPendingDelegationParams {
   delegateEventId: string;
   resolution: LateDelegationResolution;
