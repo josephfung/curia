@@ -1,171 +1,146 @@
 // scripts/inspect-prompts.ts
-// Prints the resolved system prompt injection blocks as JSON to stdout.
+// Prints, as JSON on stdout, the deployment-specific inputs agent system prompts are
+// rendered from. curia-deploy's eval harness renders each agent's prompt locally from
+// this snapshot with curia's own builders (curia-deploy#261), so it can score a local
+// edit to an agent YAML or SKILL.md against this deployment's identity, roster,
+// autonomy and contact details.
 //
 // Usage:
 //   pnpm inspect-prompts
 //   (expands to: tsx --env-file=.env scripts/inspect-prompts.ts)
 //
-// On the server: pnpm --prefix /opt/curia tsx --env-file=.env scripts/inspect-prompts.ts
+// In production it is run inside the app container by curia-deploy's
+// scripts/fetch-prompt-blocks.sh, which validates the output and adds the image's
+// commit before writing tests/eval/prompt-blocks.json.
 //
-// Pipe the output into curia-deploy to update the eval harness mock blocks:
-//   pnpm inspect-prompts > /path/to/curia-deploy/tests/eval/prompt-blocks.json
+// The values come from the test-mode stack (createTestModeStack, llm: 'offline'),
+// the same assembly path production boots through. So the specialist roster honours
+// registry enablement, security.trust_thresholds are validated rather than defaulted
+// (#1729), and every value is the one the coordinator's runtime config holds — the
+// inputs buildBaseSystemPrompt() reads on a live turn. Nothing here re-derives them.
 //
-// When to re-run:
-//   - After applying identity changes via the wizard or PUT /api/identity
-//   - After editing config/executive-profile.yaml or applying profile changes via the API
-//   - After changing security.trust_thresholds in config/default.yaml
-//   - After adding or removing specialist agents (agents/*.yaml)
+// Re-run when any of these change:
+//   - Office identity (wizard / PUT /api/identity) or the autonomy score
+//   - security.trust_thresholds in config/default.yaml
+//   - Specialist agents (agents/*.yaml) or their registry enablement
+//   - The principal's verified channel identities, or Curia's own email / Signal number
 //
-// Requires: DATABASE_URL in .env (or environment) pointing at a bootstrapped Curia instance.
-// "Bootstrapped" means Curia has been started at least once (office_identity_current and
-// executive_profile_current are populated). On a fresh empty DB the services would seed those
-// tables from YAML — the same thing Curia startup does — so the output would still be correct,
-// but running inspect-prompts before any Curia startup is not the intended use case.
+// Requires: DATABASE_URL pointing at a migrated Curia instance. No LLM key is needed —
+// providers are offline and nothing is sent. SECRET_ENCRYPTION_KEY is optional; without
+// it the Signal number is missing (a stderr warning says so).
 //
-// This script connects to the database directly — it does NOT require Curia to be running.
-// It initializes only the services it needs, so it is safe to run alongside a live instance.
+// What it writes: only the idempotent bootstrap upserts every boot already performs
+// (office identity seed, agent self-contact). It does not write registry rows, and it
+// is safe to run beside a live instance.
 
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import pg from 'pg';
-import { loadYamlConfig } from '../src/config.js';
-import { loadAllAgentConfigs } from '../src/agents/loader.js';
-import { AgentRegistry } from '../src/agents/agent-registry.js';
-import { OfficeIdentityService } from '../src/identity/service.js';
-import { ExecutiveProfileService, compileWritingVoiceBlock } from '../src/executive/service.js';
-import { compileSecurityContextBlock } from '../src/security/security-context.js';
-import { EventBus } from '../src/bus/bus.js';
+import { pathToFileURL } from 'node:url';
+import { createTestModeStack, type TestModeStack } from '../src/startup/test-mode-stack.js';
 import { createSilentLogger } from '../src/logger.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
-const AGENTS_DIR = resolve(REPO_ROOT, 'agents');
-const CONFIG_DIR = resolve(REPO_ROOT, 'config');
+
+/**
+ * The snapshot. snake_case because it is a JSON file read by another repo. Every field
+ * is a deployment-wide input; which agent receives which block is decided at render
+ * time by resolveSystemPromptSources(), not here.
+ */
+export interface PromptInputsSnapshot {
+  _note: string;
+  /** The curia the inputs were taken from. The harness warns when its checkout differs. */
+  curia: { version: string };
+  timezone: string;
+  office_identity_block: string;
+  security_context_block: string;
+  available_specialists: string;
+  /** null when autonomy_config has no row (pre-migration) — production omits the block too. */
+  autonomy: { score: number; band: string } | null;
+  agent_contact_id: string | null;
+  principal_contact_id: string | null;
+  /** Verified + active only (readPrincipalIdentitySnapshot) — the fields the block renders. */
+  principal_identities: Array<{ channel: string; channel_identifier: string; label: string | null }>;
+  principal_primary_email: string | null;
+  channel_accounts: { email: string | null; phone: string | null };
+}
+
+/** Read every input from the coordinator's runtime config, which is what production feeds the builder. */
+export async function buildPromptInputsSnapshot(
+  stack: Pick<TestModeStack, 'agent' | 'principalContactId'>,
+  curiaVersion: string,
+): Promise<PromptInputsSnapshot> {
+  const rc = stack.agent('coordinator').runtimeConfig;
+
+  // The coordinator always receives these. A missing one means assembly changed shape,
+  // and a snapshot without it would silently render a coordinator with that block gone.
+  if (!rc.officeIdentityService) throw new Error('coordinator runtime config has no officeIdentityService');
+  if (!rc.securityContextBlock) throw new Error('coordinator runtime config has no securityContextBlock');
+  if (rc.availableSpecialists === undefined) throw new Error('coordinator runtime config has no availableSpecialists');
+  if (!rc.autonomyService) throw new Error('coordinator runtime config has no autonomyService');
+  const timezone = rc.timezone?.trim();
+  if (!timezone) throw new Error('coordinator runtime config has no timezone (TIMEZONE)');
+
+  const autonomy = await rc.autonomyService.getConfig();
+
+  return {
+    _note: [
+      'Generated by curia scripts/inspect-prompts.ts (via curia-deploy scripts/fetch-prompt-blocks.sh).',
+      'Inputs, not rendered prompts: the eval harness renders each agent with curia\'s own builders.',
+      'Holds instance-specific data (contact UUIDs, addresses, identity) — keep it out of git.',
+    ].join(' '),
+    curia: { version: curiaVersion },
+    timezone,
+    office_identity_block: rc.officeIdentityService.compileSystemPromptBlock(),
+    security_context_block: rc.securityContextBlock,
+    available_specialists: rc.availableSpecialists,
+    autonomy: autonomy ? { score: autonomy.score, band: autonomy.band } : null,
+    agent_contact_id: rc.agentContactId ?? null,
+    principal_contact_id: stack.principalContactId ?? null,
+    principal_identities: (rc.principalIdentities ?? []).map((id) => ({
+      channel: id.channel,
+      channel_identifier: id.channelIdentifier,
+      label: id.label ?? null,
+    })),
+    principal_primary_email: rc.principalPrimaryEmail?.current ?? null,
+    channel_accounts: {
+      email: rc.channelAccounts?.email ?? null,
+      phone: rc.channelAccounts?.phone ?? null,
+    },
+  };
+}
+
+function readCuriaVersion(): string {
+  const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, 'package.json'), 'utf-8')) as { version?: unknown };
+  if (typeof pkg.version !== 'string' || pkg.version.length === 0) {
+    throw new Error('package.json has no version');
+  }
+  return pkg.version;
+}
 
 async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL is required. Add it to .env or set it in the environment.');
-  }
-
-  const logger = createSilentLogger();
-  // No-op bus — this script only reads; the services use the bus only when writing
-  // (update/reload paths), which never happen here.
-  const bus = new EventBus(logger);
-
-  // Trust thresholds live in the YAML config (config/default.yaml), not in the
-  // env-derived Config that loadConfig() returns. This script read the wrong one and
-  // silently fell back to the hardcoded defaults below (#1729).
-  const yamlConfig = loadYamlConfig(CONFIG_DIR);
-  const pool = new pg.Pool({ connectionString: databaseUrl });
-
-  // Declared outside try so the finally block can call stop() on each service.
-  // (OfficeIdentityService.stop() is now a no-op but the call is retained for
-  // forward-compat — ExecutiveProfileService still owns a chokidar watcher.)
-  let identityService: OfficeIdentityService | null = null;
-  let profileService: ExecutiveProfileService | null = null;
-
+  const stack = await createTestModeStack({ llm: 'offline', logger: createSilentLogger() });
   try {
-    // ── Identity block ─────────────────────────────────────────────────────────
-    identityService = new OfficeIdentityService(pool, logger, bus);
-    await identityService.initialize();
-
-    // ── Executive voice block ──────────────────────────────────────────────────
-    profileService = new ExecutiveProfileService(
-      pool,
-      logger,
-      bus,
-      resolve(CONFIG_DIR, 'executive-profile.yaml'),
-    );
-    await profileService.initialize();
-
-    // Look up the principal's display name by system_role — the same source of truth
-    // index.ts uses (#1049). Falls back to 'the executive' if no principal contact
-    // exists yet (first-run case before onboarding has been completed).
-    let executiveDisplayName = 'the executive';
-    const nameResult = await pool.query<{ display_name: string }>(
-      `SELECT display_name FROM contacts WHERE system_role = 'principal' LIMIT 1`,
-    );
-    const principalRow = nameResult.rows[0];
-    if (principalRow?.display_name) {
-      executiveDisplayName = principalRow.display_name;
+    // The stack's logger is silent, so everything that makes these inputs differ from
+    // what production holds is surfaced on stderr instead.
+    for (const warning of stack.warnings) {
+      process.stderr.write(`inspect-prompts: warning: ${warning}\n`);
     }
-
-    // ── Agent contact ID ───────────────────────────────────────────────────────
-    // Read the existing agent contact — do NOT call bootstrapAgentIdentity here,
-    // as that would create the record if absent and produce unwanted side effects
-    // in a read-only inspection script.
-    const agentResult = await pool.query<{ id: string }>(
-      // ORDER BY id ASC ensures a deterministic result if multiple rows exist.
-      `SELECT id FROM contacts WHERE system_role = 'agent' ORDER BY id ASC LIMIT 1`,
-    );
-    const agentContactId = agentResult.rows[0]?.id ?? '';
-    if (!agentContactId) {
-      // Non-fatal: Curia may not have been bootstrapped yet. The eval harness
-      // doesn't use agent_contact_id for routing tests; leave it empty.
-      process.stderr.write(
-        'Warning: no agent contact found (system_role=agent). Has Curia been started at least once?\n' +
-        '         agent_contact_id will be empty in the output.\n',
-      );
-    }
-
-    // ── Available specialists ──────────────────────────────────────────────────
-    // Mirror the two-pass registration in index.ts: load all agent configs, then
-    // register non-coordinator agents so specialistSummary() produces the correct
-    // @name: description lines.
-    const agentConfigs = loadAllAgentConfigs(AGENTS_DIR);
-    const registry = new AgentRegistry();
-    for (const cfg of agentConfigs) {
-      if (cfg.role !== 'coordinator') {
-        registry.register(cfg.name, {
-          role: cfg.role ?? 'specialist',
-          description: cfg.description ?? cfg.name,
-        });
-      }
-    }
-
-    // ── Security context block ─────────────────────────────────────────────────
-    // Read from config the same way index.ts does. The defaults here match
-    // Curia's hardcoded fallbacks so the output is correct even without a
-    // config/default.yaml override.
-    const rawThresholds = yamlConfig.security?.trust_thresholds;
-    const thresholds = {
-      information_query: rawThresholds?.information_query ?? 0.30,
-      scheduling:        rawThresholds?.scheduling        ?? 0.50,
-      data_export:       rawThresholds?.data_export       ?? 0.60,
-      financial:         rawThresholds?.financial         ?? 0.70,
-    };
-    const securityContextBlock = compileSecurityContextBlock(thresholds);
-
-    // ── Output ─────────────────────────────────────────────────────────────────
-    const output = {
-      _note: [
-        'Generated by: pnpm inspect-prompts (scripts/inspect-prompts.ts).',
-        'Re-run after changing: wizard / PUT /api/identity, executive-profile.yaml,',
-        'security trust_thresholds, or agents/*.yaml.',
-        'Paste into: tests/eval/prompt-blocks.json in curia-deploy.',
-      ].join(' '),
-      coordinator: {
-        office_identity_block:   identityService.compileSystemPromptBlock(),
-        security_context_block:  securityContextBlock,
-        executive_voice_block:   compileWritingVoiceBlock(profileService.get(), executiveDisplayName),
-        agent_contact_id:        agentContactId,
-        available_specialists:   registry.specialistSummary(),
-      },
-    };
-
-    // Write to stdout — caller can pipe to a file.
-    // Use process.stdout.write to avoid the trailing newline console.log adds,
-    // which can confuse downstream JSON parsers when appended to.
-    process.stdout.write(JSON.stringify(output, null, 2) + '\n');
+    const snapshot = await buildPromptInputsSnapshot(stack, readCuriaVersion());
+    // process.stdout.write, not console.log — the caller parses this as JSON.
+    process.stdout.write(JSON.stringify(snapshot, null, 2) + '\n');
   } finally {
-    // Stop file watchers before closing the pool — initialize() starts chokidar
-    // watchers and without stop() the Node event loop stays alive indefinitely.
-    await identityService?.stop();
-    await profileService?.stop();
-    await pool.end();
+    try {
+      await stack.shutdown();
+    } catch (err: unknown) {
+      // Don't let teardown shadow a real error — the snapshot may already be written.
+      process.stderr.write(`inspect-prompts: warning: shutdown failed: ${String(err)}\n`);
+    }
   }
 }
 
-main().catch((err: unknown) => {
-  process.stderr.write(`inspect-prompts: fatal error\n${String(err)}\n`);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err: unknown) => {
+    process.stderr.write(`inspect-prompts: fatal error\n${String(err)}\n`);
+    process.exit(1);
+  });
+}

@@ -49,6 +49,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`inspect-prompts`** — emits prompt inputs from the test-mode stack; enabled roster, validated thresholds, no voice block. (curia-deploy#261)
+- **Agent assembly** — `resolveSystemPromptSources()` decides each agent's prompt blocks in one place for external renderers. (curia-deploy#261)
 - **Delegation-failure reply to a sender** — notes for the principal go in their own block, never to the sender. (#1990)
 - **Delegation-failure narration** — now emits `llm.call`, so it is cost-tracked and archived. (#1990)
 - **Delegation-failure reply** — Curia speaks for itself and no longer names the specialist. (#1975)
