@@ -3,7 +3,7 @@
 // Tests for the date-resolve skill. All tests are pure computation —
 // no mocks, no external services.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DateResolveHandler } from './handler.js';
 import type { ToolContext } from '../../src/skills/types.js';
 import { DateTime, Settings } from 'luxon';
@@ -453,6 +453,44 @@ describe('DateResolveHandler', () => {
       expect(typeof data.displayTimezone).toBe('string');
       expect(data.displayTimezone).toMatch(/UTC/);
     }
+  });
+
+  // The label must describe the resolved date, not the moment of the call: a December
+  // date asked about in May is EST, and "tomorrow" on the night before spring-forward
+  // is EDT. Fake the system clock (not just luxon's Settings.now) so a label taken from
+  // the real `Date` can't pass by matching whatever offset applies on the day CI runs.
+  describe('displayTimezone follows the resolved date', () => {
+    function pinClock(isoLocal: string): void {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(DateTime.fromISO(isoLocal, { zone: 'America/Toronto' }).toMillis());
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('labels a winter date EST when asked in summer', async () => {
+      pinClock('2026-05-07T12:00:00');
+      const result = await handler.execute(makeCtx({ date: '2026-12-15' }));
+      expect(result).toMatchObject({ success: true, data: { displayTimezone: 'EST (UTC-05:00)' } });
+    });
+
+    it('labels a summer date EDT when asked in winter', async () => {
+      pinClock('2026-12-01T12:00:00');
+      const result = await handler.execute(makeCtx({ date: '2027-07-01' }));
+      expect(result).toMatchObject({ success: true, data: { displayTimezone: 'EDT (UTC-04:00)' } });
+    });
+
+    it('labels "tomorrow" EDT on the night before spring-forward', async () => {
+      // 2026-03-07 23:30 is EST. Clocks change at 02:00 on Mar 8, so midnight Mar 8 is
+      // still EST but most of the day is EDT; the label should describe the day.
+      pinClock('2026-03-07T23:30:00');
+      const result = await handler.execute(makeCtx({ relative: 'tomorrow' }));
+      expect(result).toMatchObject({
+        success: true,
+        data: { date: '2026-03-08', displayTimezone: 'EDT (UTC-04:00)' },
+      });
+    });
   });
 
   it('sets displayTimezone to null when timezone is not configured', async () => {

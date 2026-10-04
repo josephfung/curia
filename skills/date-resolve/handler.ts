@@ -197,7 +197,12 @@ export class DateResolveHandler implements ToolHandler {
       formatted,
       // Included so the LLM can label timezone context in its response,
       // consistent with other skills that return formatted date/time output.
-      displayTimezone: ctx.timezone ? formatDisplayTimezone(ctx.timezone, new Date()) : null,
+      // Labelled from the resolved date, not the call time, so a December date asked
+      // about in May reads EST. Midday rather than midnight: DST changes happen in the
+      // small hours, so midday's offset is the one that covers most of the day.
+      displayTimezone: ctx.timezone
+        ? formatDisplayTimezone(ctx.timezone, resolved.set({ hour: 12 }).toJSDate())
+        : null,
     };
 
     // Verification mode: check expected day-of-week
