@@ -14,14 +14,53 @@
 // Curia, and "the calendar specialist declined" reads as a peek behind the
 // curtain. The display name is still passed in, so a draft that names the
 // specialist anyway can be caught.
+//
+// The reader is not always the principal (#1978). On an inbound from anyone else
+// (an external email, an unresolved sender) the dispatcher relays this reply to
+// that sender. Those turns get a prompt that names the sender as the reader, and a
+// fallback that promises to follow up rather than reporting the internal follow-up
+// task, which is a note for the principal.
 
+import type { TaskOriginator } from '../contacts/types.js';
 import type { Message } from './llm/provider.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { containsRawAgentId } from './agent-display-name.js';
 import { UUID_PATTERN } from '../util/uuid.js';
 import { escapeRegExp } from '../util/escape-regexp.js';
 
+/**
+ * Who reads the reply. `principal` is the principal (or an agent acting for them).
+ * `sender` is the person whose inbound started this turn when they are not the
+ * principal: the dispatcher relays the reply to them, so it must be written to them.
+ */
+export type ReplyAudience = 'principal' | 'sender';
+
+// Channels whose tasks are never answered to an outside sender: the scheduler,
+// Bullpen threads, and internal hand-offs (including the voice off-ramp, which keeps
+// the principal-facing reply it had before #1978).
+const NON_SENDER_CHANNELS: ReadonlySet<string> = new Set(['scheduler', 'bullpen', 'internal']);
+
+/**
+ * The reader of this turn's delegation-failure reply.
+ *
+ * The dispatcher stamps an originator on every inbound, with `systemRole: null`
+ * for anyone who is not the principal, an unresolved sender included (#1059). So a
+ * null role on a human channel is an outside sender. A delegated specialist
+ * answers the agent that delegated to it, and a missing originator keeps the
+ * principal-facing reply from before #1978.
+ */
+export function delegationFailureAudience(turn: {
+  originator: TaskOriginator | undefined;
+  channelId: string;
+  delegated: boolean;
+}): ReplyAudience {
+  if (turn.delegated || NON_SENDER_CHANNELS.has(turn.channelId)) return 'principal';
+  return turn.originator !== undefined && turn.originator.systemRole === null ? 'sender' : 'principal';
+}
+
 export interface DelegationFailureReplyInput {
+  /** Who reads the reply. Decides the prompt's reader and the fallback's follow-up line. */
+  audience: ReplyAudience;
   /** The specialist's principal-facing label. Never written into the reply; a draft containing it is rejected. */
   displayName: string;
   agentId: string;
@@ -48,6 +87,7 @@ export type DraftRejection =
   | 'protocol'
   | 'prompt_echo'
   | 'uuid'
+  | 'internal_note'
   | 'off_topic';
 
 // The instruction lines of the narration prompt. Kept apart from the situation lines
@@ -55,15 +95,42 @@ export type DraftRejection =
 // facts, while it never has a reason to repeat an instruction. The echo check runs
 // against these lines only. The situation lines avoid "specialist" and "delegated"
 // so the model is not handed the words it is told not to use.
-const NARRATION_INSTRUCTIONS = [
-  'Something you were doing for the principal failed. Write the one message they will read.',
+//
+// The opening names the reader, which depends on the audience (#1978). The lines
+// after it are shared, plus one line for a sender that rules out writing to the
+// principal in the same message.
+const NARRATION_OPENING: Record<ReplyAudience, string> = {
+  principal: 'Something you were doing for the principal failed. Write the one message they will read.',
+  sender: 'Something you were doing in reply to the person who sent this message failed. '
+    + 'They are not the principal. Write the one message they will read.',
+};
+const NARRATION_SHARED = [
   'Address them directly as "you", and speak for yourself as "I".',
   'Do not mention specialists, other agents, or handing the work off.',
   'Do not use internal agent ids, tool names, IDs, or protocol markers.',
   'Say briefly, in your own words, what you were trying to do for them.',
   'Write it as a fresh sentence about this request. Do not reuse a stock line.',
-  'Do not call tools. Put only the message inside <reply></reply> tags.',
 ] as const;
+const NARRATION_SENDER_ONLY = 'Write only to them. Add no note, aside or postscript for the principal, '
+  + 'and say nothing about tasks, records or reviews kept on your side.';
+const NARRATION_FORMAT = 'Do not call tools. Put only the message inside <reply></reply> tags.';
+
+function narrationInstructions(audience: ReplyAudience): string[] {
+  return [
+    NARRATION_OPENING[audience],
+    ...NARRATION_SHARED,
+    ...(audience === 'sender' ? [NARRATION_SENDER_ONLY] : []),
+  ];
+}
+
+// Every instruction line, for either audience. The echo and topic checks run on all
+// of them: a draft quoting the principal opening is an echo whoever it was for.
+const ALL_NARRATION_INSTRUCTIONS: readonly string[] = [
+  ...Object.values(NARRATION_OPENING),
+  ...NARRATION_SHARED,
+  NARRATION_SENDER_ONLY,
+  NARRATION_FORMAT,
+];
 
 // Every situation and follow-up line the prompt can carry. Listed in one place so
 // the topic check can discount their words (see PROMPT_VOCABULARY).
@@ -75,19 +142,25 @@ const SITUATION = {
   other: 'It could not be finished.',
   escalated: 'A follow-up task has already been logged.',
   notEscalated: 'A follow-up task could not be logged.',
+  // For a sender, the logged task is the principal's business. What the sender
+  // can be told is whether someone will come back to them.
+  escalatedForSender: 'Someone will look at it again, so you may say you will follow up.',
+  notEscalatedForSender: 'Nobody is set to look at it again, so do not promise to follow up.',
 } as const;
 
 export function delegationFailureNarrationPrompt(input: {
+  audience: ReplyAudience;
   reason: string;
   possiblySucceeded?: boolean;
   escalated: boolean;
   declined?: boolean;
 }): string {
   const situation = describeFailure(input.reason, input.declined, input.possiblySucceeded);
-  const followUp = input.escalated ? SITUATION.escalated : SITUATION.notEscalated;
+  const followUp = input.audience === 'sender'
+    ? (input.escalated ? SITUATION.escalatedForSender : SITUATION.notEscalatedForSender)
+    : (input.escalated ? SITUATION.escalated : SITUATION.notEscalated);
   // The situation sits just before the closing format line.
-  const format = NARRATION_INSTRUCTIONS.at(-1)!;
-  return [...NARRATION_INSTRUCTIONS.slice(0, -1), situation, followUp, format].join('\n');
+  return [...narrationInstructions(input.audience), situation, followUp, NARRATION_FORMAT].join('\n');
 }
 
 function describeFailure(reason: string, declined: boolean | undefined, possiblySucceeded: boolean | undefined): string {
@@ -103,6 +176,9 @@ function describeFailure(reason: string, declined: boolean | undefined, possibly
  * request text on hand is the brief (written for the specialist) or the turn
  * content (which may be a scheduler payload or carry a channel preamble).
  * Quoting either is how #1975 leaked. The model path is what names the request.
+ *
+ * For an outside sender the escalation line is a promise to follow up, not a
+ * report of the internal follow-up task, which is the principal's to know (#1978).
  */
 export function formatDelegationFailureFallback(
   input: Omit<DelegationFailureReplyInput, 'modelText'>,
@@ -119,7 +195,9 @@ export function formatDelegationFailureFallback(
     parts.push("I wasn't able to finish that.");
   }
   if (input.escalated) {
-    parts.push("I've logged a follow-up task to review the outcome.");
+    parts.push(input.audience === 'sender'
+      ? "I'll follow up with you on it."
+      : "I've logged a follow-up task to review the outcome.");
   } else if (retryMayHelp(input)) {
     parts.push('You can ask me to try again in a bit.');
   }
@@ -185,9 +263,16 @@ function checkDraft(raw: string, input: DelegationFailureReplyInput): DraftRejec
   // Scheduler payloads carry the principal's contact id (#1800), and the model
   // sees the payload as the user turn. No reply to the principal needs a UUID.
   if (UUID_IN_TEXT.test(reply)) return 'uuid';
+  if (input.audience === 'sender' && SENDER_INTERNAL_TERMS.test(reply)) return 'internal_note';
   if (!sharesTopic(reply, input.request)) return 'off_topic';
   return { reply };
 }
+
+// Words that show a draft meant for an outside sender is also talking to, or about,
+// the principal's side of things: the principal by role, or the follow-up task the
+// situation line describes (#1978). An outside reader knows the principal by name,
+// never as "the principal", and a failure reply has no reason to say "logged".
+const SENDER_INTERNAL_TERMS = /\bprincipal\b|\bfollow-up task\b|\blogged\b|\binternal note\b/i;
 
 // The words the prompt forbids: "specialist(s)" and any form of "delegate". Exact
 // terms, not phrasing, so this stays a structural check. Derived labels all end in
@@ -224,7 +309,7 @@ const UUID_IN_TEXT = new RegExp(UUID_PATTERN);
 const ECHO_SHINGLE_WORDS = 6;
 
 const INSTRUCTION_SHINGLES: ReadonlySet<string> = new Set(
-  NARRATION_INSTRUCTIONS.flatMap((line) => shingles(words(line), ECHO_SHINGLE_WORDS)),
+  ALL_NARRATION_INSTRUCTIONS.flatMap((line) => shingles(words(line), ECHO_SHINGLE_WORDS)),
 );
 
 function echoesInstructions(reply: string): boolean {
@@ -257,7 +342,7 @@ const NON_TOPIC_WORDS: ReadonlySet<string> = new Set([
 // "background"). A stock reply uses them whatever was asked, so a request that
 // happens to contain one ("add a task to follow up with Dana") must not count it.
 const PROMPT_VOCABULARY: ReadonlySet<string> = new Set(
-  [...NARRATION_INSTRUCTIONS, ...Object.values(SITUATION)].flatMap(words),
+  [...ALL_NARRATION_INSTRUCTIONS, ...Object.values(SITUATION)].flatMap(words),
 );
 
 // Words shorter than this are mostly function words; the list above covers the rest.

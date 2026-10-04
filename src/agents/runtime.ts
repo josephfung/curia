@@ -107,9 +107,11 @@ import {
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { principalAgentLabel } from './agent-display-name.js';
 import {
+  delegationFailureAudience,
   delegationFailureNarrationPrompt,
   selectDelegationFailureReply,
   transcriptForNarration,
+  type ReplyAudience,
 } from './delegation-failure-reply.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
 import {
@@ -1562,6 +1564,8 @@ export class AgentRuntime {
                 workingMessages,
                 esc,
                 taskEvent.payload.content,
+                // On an outside sender's inbound this reply is relayed to them (#1978).
+                delegationFailureAudience({ originator, channelId: turnChannelId, delegated: delegatedTask }),
                 provider,
                 budget,
               );
@@ -2592,7 +2596,9 @@ export class AgentRuntime {
   }
 
   /**
-   * Principal-facing reply after a non-retryable delegation failure (#1860).
+   * Reply after a non-retryable delegation failure (#1860), written for its
+   * reader: the principal, or the outside sender whose inbound this turn answers
+   * (#1978).
    *
    * One narration call, with the failed request in context. Tool blocks are
    * dropped so the call is plain text. The model's reply block is used only when
@@ -2609,6 +2615,7 @@ export class AgentRuntime {
     workingMessages: Message[],
     esc: DelegationFailureInfo & { task: string; escalated: boolean },
     userRequest: string,
+    audience: ReplyAudience,
     provider: LLMProvider,
     budget: ErrorBudget,
   ): Promise<string> {
@@ -2618,6 +2625,7 @@ export class AgentRuntime {
     // rejected in selectDelegationFailureReply. It is not written into the reply.
     const displayName = principalAgentLabel(esc.agent, explicit);
     const replyInput = {
+      audience,
       displayName,
       agentId: esc.agent,
       reason: esc.reason,
@@ -2642,6 +2650,7 @@ export class AgentRuntime {
           {
             role: 'system',
             content: delegationFailureNarrationPrompt({
+              audience,
               reason: esc.reason,
               possiblySucceeded: esc.possiblySucceeded,
               escalated: esc.escalated,
@@ -2690,15 +2699,15 @@ export class AgentRuntime {
     // `rejected` names the check a model draft failed. A draft that came back but
     // was discarded is a warning: it is the signal for a model or prompt regression.
     if (selected.via === 'model') {
-      logger.info({ agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via }, 'Delegation failure reply written by the model');
+      logger.info({ agentId, targetAgent: esc.agent, reason: esc.reason, audience, via: selected.via }, 'Delegation failure reply written by the model');
     } else if (modelText !== undefined) {
       logger.warn(
-        { agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via, rejected: selected.rejected },
+        { agentId, targetAgent: esc.agent, reason: esc.reason, audience, via: selected.via, rejected: selected.rejected },
         'Delegation failure reply: model draft rejected — using deterministic fallback',
       );
     } else {
       logger.info(
-        { agentId, targetAgent: esc.agent, reason: esc.reason, via: selected.via, rejected: selected.rejected },
+        { agentId, targetAgent: esc.agent, reason: esc.reason, audience, via: selected.via, rejected: selected.rejected },
         'Delegation failure reply used the deterministic fallback',
       );
     }

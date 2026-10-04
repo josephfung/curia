@@ -7368,6 +7368,99 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(provider.chat).toHaveBeenCalledTimes(2);
   });
 
+  it('writes the failure reply for an outside sender on their inbound, not for the principal (#1978)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const agentResponses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      agentResponses.push(event as AgentResponseEvent);
+    });
+
+    const mockExecution = {
+      invoke: vi.fn(async (toolName: string, input: Record<string, unknown>, _caller: unknown, options?: { delegationGuard?: import('../../../src/agents/delegation-guard.js').DelegationGuard }) => {
+        // The escalation is logged, so the principal-facing fallback would report it.
+        if (toolName === 'task-create') return { success: true, data: { task_id: 'esc-external' } };
+        if (toolName === 'delegate') {
+          const delegateAgent = typeof input['agent'] === 'string' ? input['agent'] : '';
+          const delegateTask = typeof input['task'] === 'string' ? input['task'] : '';
+          const guard = options?.delegationGuard;
+          if (guard) guard.recordInvocation(delegationKey(delegateAgent, delegateTask));
+          return {
+            success: true,
+            data: { agent: delegateAgent, failed: true, reason: 'timeout', retryable: false, message: "Specialist 'ceo-inbox' did not respond" },
+          };
+        }
+        return { success: true, data: {} };
+      }),
+      getToolDefinitions: vi.fn(() => [delegateToolDef]),
+    } as unknown as ExecutionLayer;
+
+    let calls = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [{ id: 'call-ext', name: 'delegate', input: { agent: 'ceo-inbox', task: 'Find the venue thread' } }],
+            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        // Narration unavailable, so the deterministic fallback is what the sender gets.
+        return {
+          type: 'error' as const,
+          error: { type: 'RATE_LIMIT' as const, source: 'anthropic', message: '429', retryable: true, context: {}, timestamp: new Date() },
+        };
+      }),
+    };
+
+    const agent = new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      pinnedTools: ['delegate'],
+      skillToolDefs: [delegateToolDef],
+    });
+    agent.register();
+
+    // The originator shape the dispatcher stamps for a known contact who is not the principal.
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-1978',
+      channelId: 'email',
+      senderId: 'lena@example.test',
+      content: 'Subject: Re: Venue options for the board dinner\n\nYes, go ahead.',
+      metadata: {
+        originator: {
+          contactId: 'contact-lena',
+          systemRole: null,
+          channel: 'email',
+          initiatedAt: '2026-10-02T10:00:00.000Z',
+          tier: 'known',
+        },
+      },
+      parentEventId: 'inbound-1978',
+    }));
+
+    expect(agentResponses).toHaveLength(1);
+    const content = agentResponses[0]!.payload.content;
+    expect(content).toBe("I couldn't get that done in time. I'll follow up with you on it.");
+    expect(content).not.toMatch(/logged|follow-up task|principal/i);
+
+    // The narration prompt named the sender as the reader.
+    const narration = vi.mocked(provider.chat).mock.calls[1]![0];
+    const prompt = narration.messages.at(-1)!;
+    expect(prompt.role).toBe('system');
+    expect(String(prompt.content)).toMatch(/They are not the principal/);
+    expect(String(prompt.content)).not.toMatch(/for the principal failed/);
+  });
+
   it('drops a model draft that leaks the registry id (#1860)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);
