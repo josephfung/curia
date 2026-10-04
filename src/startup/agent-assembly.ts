@@ -202,6 +202,33 @@ export type SystemPromptSourceContext = Pick<
 >;
 
 /**
+ * Every key of SystemPromptSourceContext, at runtime. An external renderer (curia-deploy's
+ * eval loader) asserts it supplies each one, so an input added here cannot reach it as
+ * `undefined` and silently drop its block — buildBaseSystemPrompt omits a block whose
+ * input is absent by design. The check below fails the build when a key is added to the
+ * type but not to this list.
+ */
+export const SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS = [
+  'agentRegistry',
+  'autonomyService',
+  'officeIdentityService',
+  'securityContextBlock',
+  'timezone',
+  'channelAccounts',
+  'principalIdentities',
+  'principalPrimaryEmail',
+  'agentContactId',
+] as const satisfies readonly (keyof SystemPromptSourceContext)[];
+
+type UnlistedSourceContextKey = Exclude<
+  keyof SystemPromptSourceContext,
+  (typeof SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS)[number]
+>;
+// A type error here names the key missing from SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS.
+const sourceContextKeysAreExhaustive: [UnlistedSourceContextKey] extends [never] ? true : UnlistedSourceContextKey = true;
+void sourceContextKeysAreExhaustive;
+
+/**
  * Decide which prompt inputs one agent receives: the half of its runtime config that
  * buildBaseSystemPrompt() reads. `systemPrompt` is the bootstrap body —
  * interpolateAgentSystemPrompt() plus the pinned SKILL.md appends.

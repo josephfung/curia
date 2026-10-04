@@ -32,6 +32,7 @@ import {
   registerAgentRoster,
   resolveAgentModelBinding,
   resolveSystemPromptSources,
+  SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS,
   type AgentAssemblyContext,
 } from '../../../src/startup/agent-assembly.js';
 
@@ -269,6 +270,23 @@ describe('resolveSystemPromptSources', () => {
         expect(assembled.runtimeConfig[field], `${config.name}.${field}`).toEqual(sources[field]);
       }
     }
+  });
+
+  it('SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS lists every context key the builder reads', () => {
+    // An external renderer asserts it supplies each listed key. Read through a Proxy so a
+    // key resolveSystemPromptSources reads but the list omits fails here.
+    const ctx = buildContext(textProvider(), [coordinatorYaml()]);
+    const read = new Set<string>();
+    const tracked = new Proxy(ctx, {
+      get(target, prop, receiver) {
+        if (typeof prop === 'string') read.add(prop);
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    for (const config of [coordinatorYaml(), specialistYaml({ name: 'ceo-inbox' })]) {
+      resolveSystemPromptSources(config, 'body', tracked);
+    }
+    expect([...read].sort()).toEqual([...SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS].sort());
   });
 
   it('gives autonomy to the coordinator and ceo-inbox only', () => {
