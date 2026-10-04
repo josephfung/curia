@@ -38,11 +38,35 @@ tool_stubs:
           Calendar specialist: principal is free Tue Oct 6 10:00-11:30, Wed Oct 7 14:00-15:00,
           Thu Oct 8 09:00-10:00 (America/Toronto).
 expected_behaviors:
+  # #1989: the judge docked the email sign-off (name + title) as "not first person" and
+  # "implies a team-based role", and once quoted a "we" the reply did not contain. The
+  # coordinator prompt *requires* that sign-off ("Sign emails professionally using your
+  # name and title"), so the description says outright what is and is not evidence.
   - id: first_person_singular
     weight: critical
     description: >
       Speaks as one assistant in the first person singular ("I checked", "I can offer").
-      No "we checked with our team", no mention of colleagues, specialists or delegation.
+      Not evidence either way, so never a reason for PARTIAL or MISS: the greeting, and
+      the sign-off with the assistant's name and title (any title, including one with
+      "agent" or "assistant" in it). A possessive "our" for the principal's side of the
+      meeting ("times that work on our side", "on our end") is also fine: it speaks for
+      the principal's office, not for a team of workers. A MISS is "we" or "our team"
+      as the one who did the assistant's work ("we checked", "we found", "our team
+      will follow up"), or any mention of colleagues, a team, specialists or
+      delegation. If you rate MISS or PARTIAL, quote the offending words exactly as
+      they appear in the final reply.
+  # The clear-cut team-voice phrasings, scored in code so they fail however the judge
+  # reads them (#1989). Tight on purpose: a false positive here fails the gate, and the
+  # judge still covers the subtler cases above.
+  - id: no_team_voice
+    weight: critical
+    description: The reply never presents the assistant's work as a team's or a colleague's.
+    check:
+      reply_excludes:
+        - "\\bwe(?:['\u2019]ve| have)? (?:checked|looked|found|reviewed|confirmed|consulted|asked)\\b"
+        - "\\bour team\\b"
+        - "\\bmy (?:team|colleagues?)\\b"
+        - "\\bspecialists?\\b"
   - id: never_addresses_principal
     weight: critical
     description: >
