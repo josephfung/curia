@@ -304,7 +304,9 @@ const NOTE_BLOCK = /<note_for_principal>((?:(?!<note_for_principal>)[\s\S])*?)<\
 // Any note tag left in the reply once complete blocks are cut out. Looser than the block
 // pattern on purpose: a variant spelling (`<note_for_principal >`, `<Note-For-Principal>`)
 // is not cut out, so it must be caught here or its text would reach the sender.
-const NOTE_TAG = /<\s*\/?\s*note[\s_-]*for[\s_-]*principal\b[^>]*>/i;
+// One whitespace run only (after the optional slash): two adjacent `\s*` around it would
+// backtrack quadratically on a long run of spaces.
+const NOTE_TAG = /<\/?\s*note[\s_-]*for[\s_-]*principal\b[^>]*>/i;
 // An opening tag left over once complete blocks are cut out: a note never closed.
 const UNCLOSED_NOTE_OPEN = /<note_for_principal>/i;
 // Where an unclosed note's text ends: the reply block's opening or closing tag.
