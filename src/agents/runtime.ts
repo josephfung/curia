@@ -1321,7 +1321,10 @@ export class AgentRuntime {
       }
     }
     const turnDateResolveTracker = new TurnDateResolveTracker();
-    let pendingDelegationEscalation: (DelegationFailureInfo & { task: string; escalated: boolean }) | null = null;
+    // senderRecorded: the review task records an outside sender as waiting on a reply
+    // (#1978). Only then may the reply promise them a follow-up.
+    let pendingDelegationEscalation:
+      (DelegationFailureInfo & { task: string; escalated: boolean; senderRecorded: boolean }) | null = null;
     // Floor for a brief that did not dispatch (#1893). The handler uses this
     // same number when no duration hint is injected, including the unset
     // fallback (DEFAULT_DEFERRED_WAKE_MS, the handler's floor). A specialist
@@ -2149,8 +2152,11 @@ export class AgentRuntime {
                   delegationGuard.recordFailure(dKey, delegateFailure);
                   if (delegationGuard.shouldEscalate(dKey)) {
                     // On an outside sender's inbound, record them on the review task so the
-                    // principal's digest shows someone is waiting on a reply (#1978).
-                    const awaitingReply = failureAudience.audience === 'sender'
+                    // principal's digest shows someone is waiting on a reply (#1978). Only when
+                    // the originator positively names a non-principal: a missing originator is
+                    // written for a sender to be safe, but may be the principal's own turn, and
+                    // a "waiting" record naming the principal would be false.
+                    const awaitingReply = failureAudience.basis === 'non_principal_originator'
                       ? escalationRequester({
                         ...(senderCtx?.resolved && { displayName: senderCtx.displayName }),
                         ...(attributedSenderContactId !== undefined && { contactId: attributedSenderContactId }),
@@ -2173,6 +2179,7 @@ export class AgentRuntime {
                       ...delegateFailure,
                       task: delegateTask,
                       escalated: escalation.escalated,
+                      senderRecorded: escalation.escalated && awaitingReply !== undefined,
                     };
 
                     // Open a pending delegation handle (#1799). The specialist we just gave up
@@ -2643,7 +2650,7 @@ export class AgentRuntime {
    */
   private async composeDelegationFailureReply(
     workingMessages: Message[],
-    esc: DelegationFailureInfo & { task: string; escalated: boolean },
+    esc: DelegationFailureInfo & { task: string; escalated: boolean; senderRecorded: boolean },
     userRequest: string,
     audience: ReplyAudience,
     provider: LLMProvider,
@@ -2661,7 +2668,9 @@ export class AgentRuntime {
       reason: esc.reason,
       declined: esc.declined,
       possiblySucceeded: esc.possiblySucceeded,
-      escalated: esc.escalated,
+      // For a sender, "escalated" licenses a follow-up promise, which holds only when the
+      // review task records them as waiting (#1978). For the principal it reports the task.
+      escalated: audience === 'sender' ? esc.senderRecorded : esc.escalated,
       // The turn's own content, which the narration model sees, not esc.task (the
       // brief written for the specialist). The outbound-context preamble is stripped
       // so its entry ids and previews cannot count as the request's topic.
@@ -2683,7 +2692,9 @@ export class AgentRuntime {
               audience,
               reason: esc.reason,
               possiblySucceeded: esc.possiblySucceeded,
-              escalated: esc.escalated,
+              // Same value the draft is checked against, so the prompt never licenses
+              // a promise that selection then rejects (or the reverse).
+              escalated: replyInput.escalated,
               declined: esc.declined,
             }),
           },

@@ -455,6 +455,21 @@ describe('delegation failure reply for a non-principal reader (#1978)', () => {
     }).via).toBe('model');
   });
 
+  it('rejects a follow-up promise in a draft when nothing records the sender as waiting', () => {
+    for (const text of [
+      "I couldn't confirm the board dinner venue yet. I'll follow up with you shortly.",
+      "I couldn't confirm the board dinner venue yet, but I will get back to you.",
+      'I couldn\u2019t confirm the board dinner venue yet. I\u2019ll definitely be in touch.',
+      "I couldn't confirm the board dinner venue yet. You'll hear back from me soon.",
+    ]) {
+      const unbacked = selectDelegationFailureReply({ ...sender, escalated: false, modelText: reply(text) });
+      expect(unbacked.rejected, text).toBe('unbacked_promise');
+      expect(unbacked.content).not.toMatch(/follow up|get back|in touch|hear back/i);
+      // Backed by the review task: the same promise is fine.
+      expect(selectDelegationFailureReply({ ...sender, escalated: true, modelText: reply(text) }).via, text).toBe('model');
+    }
+  });
+
   it('rejects an echo of the sender-only instruction', () => {
     const selected = selectDelegationFailureReply({
       ...sender,
