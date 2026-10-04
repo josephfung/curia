@@ -8,6 +8,7 @@ import {
   TurnDateResolveTracker,
   validateDelegateBriefDates,
 } from '../../../src/agents/delegate-brief-date-validation.js';
+import { RELATIVE_DAY_OFFSETS } from '../../../src/time/relative-days.js';
 
 describe('isCalendarDelegation', () => {
   it('detects calendar agent name', () => {
@@ -30,6 +31,19 @@ describe('calendarBriefNeedsResolvedDate', () => {
 
   it('requires a date for bare weekdays', () => {
     expect(calendarBriefNeedsResolvedDate("What's on my calendar Friday?")).toBe(true);
+  });
+
+  it('requires a date for "yesterday"', () => {
+    expect(calendarBriefNeedsResolvedDate('What was on my calendar yesterday?')).toBe(true);
+  });
+
+  // The brief check and date-resolve share one word list, so every word that makes a
+  // brief need a resolved date is a word date-resolve can resolve (#1986).
+  it('requires a date for every day word date-resolve resolves directly', () => {
+    expect(RELATIVE_DAY_OFFSETS.size).toBeGreaterThan(0);
+    for (const word of RELATIVE_DAY_OFFSETS.keys()) {
+      expect(calendarBriefNeedsResolvedDate(`Check my calendar ${word}.`), word).toBe(true);
+    }
   });
 
   it('does not require a date for move-without-day requests', () => {

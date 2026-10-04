@@ -7,6 +7,7 @@
 import { DateTime } from 'luxon';
 import type { ToolResult } from '../skills/types.js';
 import { escapeRegExp } from '../util/escape-regexp.js';
+import { RELATIVE_DAY_OFFSETS } from '../time/relative-days.js';
 
 /** One resolved date produced by date-resolve earlier in the same agent turn. */
 export interface TurnDateResolveResult {
@@ -30,12 +31,19 @@ const WEEKDAY =
   'monday|tuesday|wednesday|thursday|friday|saturday|sunday';
 
 /**
+ * Day words ("today", "tomorrow", "yesterday") from the list date-resolve shares, so
+ * this check never requires a resolution for a word the tool can't resolve (#1986).
+ */
+const RELATIVE_DAY_WORDS = [...RELATIVE_DAY_OFFSETS.keys()].join('|');
+
+/**
  * Genuine relative / day-of-week phrasing that requires a resolved date.
  * Deliberately excludes bare "next meeting" / "this call" / "schedule" —
- * those are not calendar dates to resolve.
+ * those are not calendar dates to resolve. A bare weekday ("Friday") counts:
+ * date-resolve rejects it as ambiguous and names "this Friday" / "next Friday".
  */
 const RELATIVE_DATE_IN_BRIEF = new RegExp(
-  String.raw`\b(tomorrow|today|${WEEKDAY}|next\s+(?:${WEEKDAY})|this\s+(?:${WEEKDAY}))\b`,
+  String.raw`\b(${RELATIVE_DAY_WORDS}|${WEEKDAY}|next\s+(?:${WEEKDAY})|this\s+(?:${WEEKDAY}))\b`,
   'i',
 );
 

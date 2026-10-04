@@ -301,6 +301,19 @@ describe('DateResolveHandler', () => {
       expect(result.success).toBe(false);
     });
 
+    it('rejects a bare weekday and points to "this <day>" / "next <day>"', async () => {
+      // "Friday" alone is ambiguous (this week's, possibly past, or the coming one).
+      // The calendar brief check still requires a resolved date for it, so the error
+      // has to tell the model which explicit forms resolve it.
+      const result = await handler.execute(makeCtx({ relative: ' Friday ' }));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/ambiguous/i);
+        expect(result.error).toContain('"this Friday"');
+        expect(result.error).toContain('"next Friday"');
+      }
+    });
+
     it('lists today/tomorrow/yesterday in the unsupported-expression error', async () => {
       const result = await handler.execute(makeCtx({ relative: 'sometime next week maybe' }));
       expect(result.success).toBe(false);
