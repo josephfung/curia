@@ -3,7 +3,7 @@
 # tool_stubs, so a case overrides any of it. The people named here are seeded as real
 # contacts (fixtures/people.yaml).
 #
-# Dates are relative to the day the suite runs (date-placeholders.ts), and list/search
+# Dates are relative to the day the suite runs (tests/shared/date-placeholders.ts), and list/search
 # results are narrowed to the call's time range or query (stub-filters.ts), so one
 # fixture answers "today", "Wednesday" and "mail from Priya" alike. Writes succeed and
 # echo their inputs ({{input:…}}). Without this office the specialists find every

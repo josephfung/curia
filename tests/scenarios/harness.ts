@@ -41,7 +41,8 @@ import {
   type TurnOutcome,
 } from '../shared/turn-capture.js';
 import { internalNamesFor } from './assertions.js';
-import { resolvePlaceholders } from './loader.js';
+import { resolvePlaceholders, type RunClock } from './loader.js';
+import { resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import {
   cleanupRun,
   createOutboundContextService,
@@ -312,10 +313,21 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     let cleanupError: string | undefined;
     // Filled by the try/catch, finished after cleanup so a cleanup failure can be attached.
     let result: ScenarioRun;
+    // One clock per run (#1958). The inbound, the stubs and the seeded rows must agree on
+    // what "next week" is, and rating re-resolves the behaviors against this same instant
+    // (resolveRunPlaceholders), even if it happens after midnight.
+    const clock: RunClock = { now: new Date().toISOString(), timezone: stack.config.timezone };
+    const resolveDates = <T>(value: T): T => resolveDatePlaceholders(value, clock.timezone, new Date(clock.now));
+    const dated: ScenarioCase = {
+      ...scenario,
+      seed: resolveDates(scenario.seed),
+      inbound: resolveDates(scenario.inbound),
+      toolStubs: resolveDates(scenario.toolStubs),
+    };
     try {
-      seeded = await seedRun(scenario, { stack, outboundContext, scope });
-      const stubTable = resolvePlaceholders(scenario.toolStubs, seeded.refs);
-      const inbound = resolvePlaceholders(scenario.inbound, seeded.refs);
+      seeded = await seedRun(dated, { stack, outboundContext, scope });
+      const stubTable = resolvePlaceholders(dated.toolStubs, seeded.refs);
+      const inbound = resolvePlaceholders(dated.inbound, seeded.refs);
       inboundContent = inbound.content;
 
       const sender = await resolveSender(scenario, stack);
@@ -390,6 +402,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         runIndex,
         inboundContent,
         refs: Object.fromEntries(seeded.refs),
+        clock,
         toolCalls: merged,
         reply: outcome.reply,
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
@@ -404,6 +417,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         runIndex,
         inboundContent,
         refs: seeded ? Object.fromEntries(seeded.refs) : {},
+        clock,
         toolCalls: [],
         reply: null,
         durationMs: Date.now() - started,
