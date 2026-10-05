@@ -14,6 +14,7 @@ describe('Report generator', () => {
     overallScore: 0.65,
     passed: false,
     concurrency: 4,
+    today: 'Wednesday, March 25, 2026 (America/Toronto)',
     usage: { ...emptyBreakdown(), total: { calls: 3, inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, estimatedCostUsd: 1.5 } },
     overheadUsage: emptyBreakdown(),
     cases: [
