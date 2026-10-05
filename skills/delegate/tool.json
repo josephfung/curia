@@ -1,7 +1,7 @@
 {
   "name": "delegate",
   "description": "Delegate a task to a specialist agent. Use this when the user's request requires specialized expertise (research, expense tracking, etc.). Provide the specialist's name and a clear task description. How long to wait for the specialist is set by the runtime — do not pass a timeout. If the result reason is already_in_flight, that specialist is still working in this conversation: tell the user the request is queued, and do not call delegate for them again.",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -35,6 +35,7 @@
     "open_handle_age_ms": "number? (ms since the already_in_flight row was written; a running claim starts at dispatch, a promoted pending handle keeps that time)",
     "handle_status": "string? (running or pending, on an already_in_flight result)",
     "handle_expires_at": "string? (ISO time the already_in_flight row stops blocking, before the sweep's lag)",
+    "next_step": "string? (on an already_in_flight result: what to do instead of delegating again. For you, not the requester — relay message, never this)",
     "outbound_entry": "object? ({ id, status, reason? } — what the platform did with the linked outbound-context entry: released, kept_open (the specialist still needs the principal on it), kept (the specialist could not take the reply; retry or tell the principal), already_released, release_failed, or not_linked with the reason)"
   },
   "permissions": [],
