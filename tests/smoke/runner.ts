@@ -1,77 +1,141 @@
 // tests/smoke/runner.ts
-import { conversationIdFor, RESPONSE_TIMEOUT_MS, type CuriaHarness, type TargetThread } from './harness.js';
+import { conversationIdFor, TurnError, type CuriaHarness, type TargetThread } from './harness.js';
 import { resolveDatePlaceholders } from './date-placeholders.js';
 import { resolvePrincipalPlaceholders, type PrincipalRef } from './fixtures.js';
-import { mergeStubs } from './stub-layer.js';
+import { mergeStubs, newSmokeCase } from './stub-layer.js';
+import {
+  PROVIDER_RETRIES,
+  providerFailure,
+  runConcurrently,
+  slowestModelCallMs,
+  type TurnErrorKind,
+} from '../shared/case-scope.js';
+import { sumBreakdowns, type UsageBreakdown } from '../shared/usage.js';
 import type { ToolStub } from '../scenarios/types.js';
 import type { CaseTarget, TestCase, CaseExecution, CapturedResponse } from './types.js';
 
 /**
- * Execute all test cases against a live Curia harness.
- * Sends a warm-up message first to absorb cold-start latency (DB pool warm-up,
- * first model API round-trip), then runs each case with a unique
- * conversationId to avoid cross-contamination.
- * Multi-turn cases send turns sequentially with configured delays.
+ * After a case times out and is cancelled, how long to wait for its turn to wind down
+ * before reading its spend. A cancelled turn ends at its next model call, so this is
+ * mostly the one call in flight; one that runs longer is left to shutdown.
+ */
+const CANCEL_SETTLE_MS = 30_000;
+
+export interface RunOptions {
+  /** Called as each case finishes, `index` counting completions (order varies with concurrency). */
+  onCaseComplete?: (exec: CaseExecution, index: number, total: number) => void;
+  /** Called when an attempt is thrown away for a provider failure and run again. */
+  onProviderRetry?: (testCase: TestCase, reason: string) => void;
+  onWarmUp?: () => void;
+  /** Who {{principal:…}} names in messages and fixtures. */
+  principal?: PrincipalRef;
+  /** Skip the warm-up turn (a retry pass runs on an already-warm stack). */
+  warmUp?: boolean;
+  /** The shared fixture world (stubs/office.yaml), tried after the case's own stubs. */
+  defaultStubs?: Record<string, ToolStub[]>;
+  /** Cases run at once (default 1). */
+  concurrency?: number;
+}
+
+/**
+ * Execute test cases against a live Curia harness, `concurrency` at a time; results keep
+ * the input order. Sends a warm-up message first to absorb cold-start latency (DB pool
+ * warm-up, first model API round-trip). Each case runs in its own case context with its
+ * own conversation (harness.ts), so concurrent cases cannot see each other's stubs, calls
+ * or turns. Multi-turn cases send turns sequentially with configured delays.
+ *
+ * Returns the executions and what the warm-up spent.
  */
 export async function runTestCases(
   harness: CuriaHarness,
   cases: TestCase[],
-  options?: {
-    onCaseComplete?: (exec: CaseExecution, index: number, total: number) => void;
-    onWarmUp?: () => void;
-    /** Who {{principal:…}} names in messages and fixtures. */
-    principal?: PrincipalRef;
-    /** Skip the warm-up turn (a retry pass runs on an already-warm stack). */
-    warmUp?: boolean;
-    /** The shared fixture world (stubs/office.yaml), tried after the case's own stubs. */
-    defaultStubs?: Record<string, ToolStub[]>;
-  },
-): Promise<CaseExecution[]> {
+  options: RunOptions = {},
+): Promise<{ executions: CaseExecution[]; warmUpUsage?: UsageBreakdown }> {
   // Prime the stack so the first real test case doesn't pay cold-start cost.
   // warmUp() reports its own failure — harness failures surface through cases.
-  if (options?.warmUp !== false) {
-    options?.onWarmUp?.();
-    await harness.warmUp();
+  let warmUpUsage: UsageBreakdown | undefined;
+  if (options.warmUp !== false) {
+    options.onWarmUp?.();
+    warmUpUsage = await harness.warmUp();
   }
 
-  const results: CaseExecution[] = [];
+  let completed = 0;
+  const executions = await runConcurrently(cases, options.concurrency ?? 1, async (tc) => {
+    const execution = await runWithProviderRetries(harness, tc, options);
+    options.onCaseComplete?.(execution, ++completed, cases.length);
+    return execution;
+  });
+  return { executions, ...(warmUpUsage ? { warmUpUsage } : {}) };
+}
 
-  for (let i = 0; i < cases.length; i++) {
-    const tc = cases[i]!;
+/**
+ * Run a case, re-running it up to PROVIDER_RETRIES times when an attempt fails for a
+ * provider reason (case-scope.ts: providerFailure). Those re-runs do not use the case's
+ * one gated retry (cli.ts): a stalled provider is not evidence about the model (#1980).
+ * The result is the last attempt's, with every attempt's spend and each retry's reason.
+ */
+async function runWithProviderRetries(harness: CuriaHarness, tc: TestCase, options: RunOptions): Promise<CaseExecution> {
+  const providerRetries: string[] = [];
+  const spent: UsageBreakdown[] = [];
+  for (;;) {
+    const { execution, providerReason } = await runAttempt(harness, tc, options);
+    spent.push(execution.usage);
+    if (providerReason && providerRetries.length < PROVIDER_RETRIES) {
+      providerRetries.push(providerReason);
+      options.onProviderRetry?.(tc, providerReason);
+      continue;
+    }
+    return { ...execution, usage: sumBreakdowns(spent), providerRetries };
+  }
+}
+
+/** One attempt at a case, in a fresh case context. */
+async function runAttempt(
+  harness: CuriaHarness,
+  tc: TestCase,
+  options: RunOptions,
+): Promise<{ execution: CaseExecution; providerReason?: string }> {
+  const state = newSmokeCase(tc.name);
+  return harness.runInCase(state, async () => {
     const responses: CapturedResponse[] = [];
     let error: string | undefined;
+    let errorKind: TurnErrorKind | undefined;
+    let errorType: string | undefined;
     // A targeted case's topic and opening, placeholders resolved: what the agent and the
     // judge both see. Dates resolve against the moment the case starts. Resolved inside
-    // the case's try below, so a bad placeholder fails this case, not the whole run.
+    // the try below, so a bad placeholder fails this case, not the whole run.
     let target: CaseTarget | undefined;
 
-    // A turn that outlived its timeout (an earlier case's, or the warm-up's) keeps calling
-    // tools; the stub layer would answer and record them as this case's, and its calendar
-    // writes would show up in this case's listings. Wait for it, then start clean.
-    const isolated = await harness.settle(RESPONSE_TIMEOUT_MS);
-    harness.stubs.clear();
-    harness.takeFallbacks();
-
-    if (!isolated) {
-      // Fail closed: running anyway could pass or fail this case on another case's activity.
-      error = 'an earlier turn was still running after the timeout, so this case could not run in isolation';
-    } else {
-      try {
-        target = tc.target
-          ? withPrincipalOf(options?.principal)(resolveDatePlaceholders(tc.target, harness.stack.config.timezone, new Date()))
-          : undefined;
-        await runSingleCase(harness, tc, target, responses, options?.defaultStubs ?? {}, options?.principal);
-      } catch (err) {
-        // Case-level failure (a turn timed out or errored). Turns that did complete are
-        // kept for the report.
-        error = err instanceof Error ? err.message : String(err);
+    try {
+      target = tc.target
+        ? withPrincipalOf(options.principal)(resolveDatePlaceholders(tc.target, harness.stack.config.timezone, new Date()))
+        : undefined;
+      await runSingleCase(harness, tc, target, responses, options.defaultStubs ?? {}, options.principal);
+    } catch (err) {
+      // Case-level failure (a turn timed out or errored). Turns that did complete are
+      // kept for the report.
+      error = err instanceof Error ? err.message : String(err);
+      if (err instanceof TurnError) {
+        errorKind = err.kind;
+        errorType = err.errorType;
       }
     }
-    // Also stops this case's stubs answering a later case's calls.
+    // Measured now, while a stalled call is still in flight.
+    const slowestCall = slowestModelCallMs(state);
+
+    if (error) {
+      // Whatever this case still has running must stop: it has its result, and its turn
+      // would otherwise go on spending (and calling tools) until it finished on its own.
+      state.cancelled = true;
+      await harness.settle(state, CANCEL_SETTLE_MS);
+    }
+    // Also stops this case's stubs answering anything later.
     const agentCalls = harness.stubs.clear();
     // A specialist that fell back ran on a model the results are not labelled with.
-    const fallbacks = harness.takeFallbacks();
-    if (fallbacks.length > 0) error ??= `model fallback: ${fallbacks.join('; ')}`;
+    if (state.fallbacks.length > 0) {
+      error ??= `model fallback: ${state.fallbacks.join('; ')}`;
+      errorKind = 'fallback';
+    }
 
     const execution: CaseExecution = {
       testCase: tc,
@@ -79,12 +143,14 @@ export async function runTestCases(
       agentCalls,
       ...(target ? { target } : {}),
       ...(error ? { error } : {}),
+      usage: state.usage.snapshot(),
+      providerRetries: [],
     };
-    results.push(execution);
-    options?.onCaseComplete?.(execution, i + 1, cases.length);
-  }
-
-  return results;
+    const providerReason = error
+      ? providerFailure({ ...(errorKind ? { kind: errorKind } : {}), ...(errorType ? { errorType } : {}), slowestModelCallMs: slowestCall })
+      : undefined;
+    return { execution, ...(providerReason ? { providerReason } : {}) };
+  });
 }
 
 /** Resolve {{principal:…}}. Without a principal contact, a placeholder stays visible rather than silently becoming "". */

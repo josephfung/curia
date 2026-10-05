@@ -13,6 +13,7 @@
 // Why both conditions: the weighted score alone lets one critical MISS hide behind
 // enough passes (five critical PASS and one critical MISS is 83%), and a critical
 // behavior is by definition one whose absence is a regression.
+import { sumBreakdowns, type UsageBreakdown } from '../shared/usage.js';
 import { CASE_PASS_THRESHOLD, type BehaviorScore, type TestCase } from './types.js';
 
 export interface GateInput {
@@ -60,16 +61,31 @@ export function staleKnownFailures<T extends { passed: boolean; testCase: TestCa
 /**
  * Fold a retry pass into the first pass's results. A retried case takes its retry's
  * result (passing if the retry passed) and keeps what the first attempt said, so the
- * report shows a case that needed a second chance. Order follows `first`.
+ * report shows a case that needed a second chance. Its spend and provider retries are
+ * both attempts' together: the first attempt was paid for too. Order follows `first`.
  */
-export function mergeRetries<T extends { testCase: TestCase; weightedScore: number; failures: string[]; firstAttempt?: { weightedScore: number; failures: string[] } }>(
+export function mergeRetries<T extends {
+  testCase: TestCase;
+  weightedScore: number;
+  failures: string[];
+  firstAttempt?: { weightedScore: number; failures: string[] };
+  usage: UsageBreakdown;
+  providerRetries: string[];
+}>(
   first: T[],
   retries: T[],
 ): T[] {
   const byName = new Map(retries.map(r => [r.testCase.name, r]));
   return first.map((c) => {
     const retry = byName.get(c.testCase.name);
-    return retry ? { ...retry, firstAttempt: { weightedScore: c.weightedScore, failures: c.failures } } : c;
+    return retry
+      ? {
+          ...retry,
+          firstAttempt: { weightedScore: c.weightedScore, failures: c.failures },
+          usage: sumBreakdowns([c.usage, retry.usage]),
+          providerRetries: [...c.providerRetries, ...retry.providerRetries],
+        }
+      : c;
   });
 }
 

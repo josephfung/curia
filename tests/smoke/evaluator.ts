@@ -4,7 +4,9 @@
 // judge as the scenario suite — tests/scenarios/judge.ts), so the key stays in the
 // vault (#911) and no OPENAI_API_KEY is needed.
 import type { Judge } from '../scenarios/judge.js';
-import { extractJsonObject } from '../scenarios/judge.js';
+import { extractJsonObject, judgeBackoffMs, JUDGE_RETRYABLE, meterJudgeResponse } from '../scenarios/judge.js';
+import { runConcurrently } from '../shared/case-scope.js';
+import { sumBreakdowns, UsageLedger } from '../shared/usage.js';
 import { caseFailures } from './gate.js';
 import type {
   CaseExecution,
@@ -17,8 +19,6 @@ import { WEIGHT_VALUES, RATING_VALUES } from './types.js';
 
 const RATINGS: readonly BehaviorRating[] = ['PASS', 'PARTIAL', 'MISS'];
 
-/** Transient provider failures worth another attempt; anything else fails the same way every case. */
-const RETRYABLE: ReadonlySet<string> = new Set(['PROVIDER_ERROR', 'TIMEOUT', 'UNKNOWN']);
 const JUDGE_ATTEMPTS = 3;
 
 const SYSTEM_PROMPT = `You are evaluating an AI executive assistant's conversation against expected behaviors.
@@ -38,8 +38,10 @@ Respond with ONLY a JSON object in this exact format:
 }`;
 
 /**
- * Judge every case, sequentially. Cases that did not complete are not judged: every
- * behavior scores MISS and the gate reports the execution error instead.
+ * Judge every case, `concurrency` at a time (default 1); results keep the input order.
+ * Cases that did not complete are not judged: every behavior scores MISS and the gate
+ * reports the execution error instead. Each result's `usage` is its execution's plus the
+ * judge's own calls.
  */
 export async function evaluateCases(
   executions: CaseExecution[],
@@ -48,16 +50,16 @@ export async function evaluateCases(
     onCaseEval?: (name: string, index: number, total: number) => void;
     /** "Today" as the agents saw it, so the judge can check relative dates. */
     today?: string;
+    concurrency?: number;
   },
 ): Promise<CaseResult[]> {
-  const results: CaseResult[] = [];
-
-  for (let i = 0; i < executions.length; i++) {
-    const exec = executions[i]!;
-    options?.onCaseEval?.(exec.testCase.name, i + 1, executions.length);
+  let started = 0;
+  return runConcurrently(executions, options?.concurrency ?? 1, async (exec) => {
+    options?.onCaseEval?.(exec.testCase.name, ++started, executions.length);
 
     let scores: BehaviorScore[];
     let judgeError: string | undefined;
+    const judgeUsage = new UsageLedger();
     if (exec.error) {
       scores = exec.testCase.expectedBehaviors.map(b => ({
         behaviorId: b.id,
@@ -65,7 +67,7 @@ export async function evaluateCases(
         justification: `Case execution failed: ${exec.error}`,
       }));
     } else {
-      ({ scores, error: judgeError } = await judgeCase(exec, judge, options?.today));
+      ({ scores, error: judgeError } = await judgeCase(exec, judge, options?.today, judgeUsage));
     }
 
     const weightedScore = exec.error ? 0 : computeWeightedScore(exec.testCase.expectedBehaviors, scores);
@@ -77,16 +79,17 @@ export async function evaluateCases(
       ...(judgeError ? { judgeError } : {}),
     };
     const failures = caseFailures(gateInput);
-    results.push({
+    const result: CaseResult = {
       ...gateInput,
       responses: exec.responses,
       agentCalls: exec.agentCalls,
       passed: failures.length === 0,
       failures,
-    });
-  }
-
-  return results;
+      usage: sumBreakdowns([exec.usage, judgeUsage.snapshot()]),
+      providerRetries: exec.providerRetries,
+    };
+    return result;
+  });
 }
 
 /** The transcript the judge reads: each turn's message, optionally its tool calls, and the reply. */
@@ -185,14 +188,17 @@ function formatToolCalls(calls: CaseExecution['responses'][number]['toolCalls'])
 
 /**
  * Judge one case.
- * - Auth, rate-limit, not-found (judge model retired) and validation errors throw: they
- *   would repeat on every case, and an all-MISS run would read as a broken Curia.
- * - Transient errors are retried, then reported as the case's judge error.
+ * - Auth, not-found (judge model retired) and validation errors throw: they would repeat
+ *   on every case, and an all-MISS run would read as a broken Curia.
+ * - Transient errors (rate limits included) are retried, then reported as the case's
+ *   judge error.
+ * Every attempt's spend goes to `usage`.
  */
 async function judgeCase(
   exec: CaseExecution,
   judge: Judge,
-  today?: string,
+  today: string | undefined,
+  usage: UsageLedger,
 ): Promise<{ scores: BehaviorScore[]; error?: string }> {
   let lastError = '';
   for (let attempt = 1; attempt <= JUDGE_ATTEMPTS; attempt++) {
@@ -209,9 +215,10 @@ async function judgeCase(
       // A provider that throws (network reset, SDK bug) rather than returning an error
       // result is treated as transient, not allowed to abort the run and lose every result.
       lastError = `provider threw: ${err instanceof Error ? err.message : String(err)}`;
-      await new Promise(resolve => setTimeout(resolve, 1_000 * attempt));
+      await new Promise(resolve => setTimeout(resolve, judgeBackoffMs(undefined, attempt)));
       continue;
     }
+    meterJudgeResponse(judge, response, usage);
 
     if (response.type === 'text') {
       return parseJudgeResponse(extractJsonObject(response.content), exec.testCase.expectedBehaviors);
@@ -221,12 +228,11 @@ async function judgeCase(
       continue;
     }
     const { type, message } = response.error;
-    if (!RETRYABLE.has(type)) {
+    if (!JUDGE_RETRYABLE.has(type)) {
       throw new Error(`Judge call failed (${type}): ${message}`);
     }
     lastError = `${type}: ${message}`;
-    // Brief backoff before the next attempt.
-    await new Promise(resolve => setTimeout(resolve, 1_000 * attempt));
+    await new Promise(resolve => setTimeout(resolve, judgeBackoffMs(type, attempt)));
   }
   return {
     scores: exec.testCase.expectedBehaviors.map(b => ({
