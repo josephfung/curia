@@ -77,21 +77,25 @@ describe('allowlistViolations rejects', () => {
     expect(allowlistViolations(server(ok))).toEqual([]);
   });
 
+  // Each case names the violation it must produce, so deleting any one rule fails here
+  // even when another rule would also have flagged the same config.
   it.each([
-    ['no --tools', ['workspace-mcp', '--tool-tier', 'complete']],
-    ['an empty --tools', ['workspace-mcp', '--tools', '--tool-tier', 'complete']],
-    ['calendar in --tools', [...ok, 'calendar']],
-    ['another service in --tools', [...ok, 'gmail']],
-    ['a subset of the allowlist', ['workspace-mcp', '--tools', 'drive', 'docs']],
-    ['--tools=<list>', ['workspace-mcp', '--tools=drive,docs,sheets']],
-    ['a repeated --tools (argparse keeps the last)', [...ok, '--tools', 'gmail']],
-    ['no args at all', undefined],
-  ])('%s', (_label, args) => {
-    expect(allowlistViolations(server(args))).not.toEqual([]);
+    ['no --tools', ['workspace-mcp', '--tool-tier', 'complete'], 'exactly one --tools'],
+    ['an empty --tools', ['workspace-mcp', '--tools', '--tool-tier', 'complete'], 'must be exactly'],
+    ['calendar in --tools', [...ok, 'calendar'], 'calendar'],
+    // Only the calendar rule catches this one: --tools itself is exactly right.
+    ['calendar outside --tools', ['workspace-mcp', '--tools', 'drive', 'docs', 'sheets', '--x', 'calendar'], 'calendar'],
+    ['another service in --tools', [...ok, 'gmail'], 'must be exactly'],
+    ['a subset of the allowlist', ['workspace-mcp', '--tools', 'drive', 'docs'], 'must be exactly'],
+    ['--tools=<list>', ['workspace-mcp', '--tools=drive,docs,sheets'], '--tools='],
+    ['a repeated --tools (argparse keeps the last)', [...ok, '--tools', 'gmail'], 'exactly one --tools'],
+    ['no args at all', undefined, 'exactly one --tools'],
+  ])('%s', (_label, args, expected) => {
+    expect(allowlistViolations(server(args))).toContainEqual(expect.stringContaining(expected));
   });
 
   it('a missing or duplicated server entry', () => {
-    expect(allowlistViolations([])).not.toEqual([]);
-    expect(allowlistViolations([...server(ok), ...server(ok)])).not.toEqual([]);
+    expect(allowlistViolations([])).toContainEqual(expect.stringContaining('found 0'));
+    expect(allowlistViolations([...server(ok), ...server(ok)])).toContainEqual(expect.stringContaining('found 2'));
   });
 });
