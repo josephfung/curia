@@ -59,13 +59,14 @@ servers:
   #   - Calendar must never be added (#1853). Those tools authenticate as Curia's
   #     own Google identity, so a principal calendar read through them "succeeds"
   #     with an empty calendar. Principal calendar work goes through the Nylas
-  #     `calendar` skill. Revisit only with #1330, which would also need to
-  #     restore the call-time identity guard deleted in #1957.
+  #     `calendar` skill. Revisit only with #1330, which would also need the
+  #     call-time identity guard (guardMcpCalendarIdentity) kept or restored.
   # There is no in-process holdback behind this list any more: what is listed
   # here is what agents get. tests/unit/config.google-workspace-allowlist.test.ts
   # pins the exact set, so changing it means editing that test too.
   #
-  # The allowlist also sets the OAuth scopes requested on a fresh consent.
+  # The allowlist also sets the OAuth scopes requested on a fresh consent
+  # (scripts/gdrive-auth.py passes the same --tools for that reason).
   # Existing tokens keep any broader scopes they were granted until revoked (see
   # docs/dev/google-drive.md); workspace-mcp only needs a subset.
   #
