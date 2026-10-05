@@ -678,3 +678,55 @@ Each case runs once, and a case that fails the gate gets one retry.
   not an image. That description had also caused this case's weak first attempts in the
   baseline. Fixed in `a4b81cdd`; the case then passed 3 of 3 runs (92% each).
 - **The full-suite result for the PR's final commit** is recorded on #1979.
+
+### 2026-10-05 — behavior gate cost and duration (#1980)
+
+The first full run of both suites with per-case cost reporting and concurrency. Same
+model, judge and database as the 2026-10-02 baseline. Commit `4a22ceca`, both suites
+started together at `--concurrency 4` (scenarios began once smoke had copied the database).
+
+**Duration.** Both suites together: **12 min 21 s** (02:03:56–02:16:17 UTC). Smoke alone
+740 s, scenarios alone 529 s. The 2026-10-02 runs took 39–66 min (smoke) and 31 min
+(scenarios), one after the other.
+
+**Outcome.** Scenarios: gate passed, 18 of 18 cases. Smoke: 42 of 44; five cases needed
+the gated retry and two failed it on score ("Pre-Meeting Prep Brief" 78%, "Triage Batch
+of Mixed Emails" 75%). No provider retries, no timeouts, no isolation problems.
+
+**Cost split (estimate from registry prices).** OpenRouter cache reads are reported as
+zero (#1962), so all input is priced as uncached and these figures are an upper bound.
+
+| | Smoke | Scenarios |
+|---|---:|---:|
+| Total | **$2.84** (591 calls) | **$1.55** (305 calls) |
+| coordinator | $1.29 — 220 calls, 7.8M in | $1.38 — 250 calls, 8.4M in |
+| contacts | $0.40 — 139 calls | — |
+| ceo-inbox | $0.36 — 74 calls | — |
+| research-analyst | $0.27 — 29 calls | — |
+| calendar | $0.24 — 78 calls | — |
+| judge (`openai/gpt-4o`) | $0.28 — 51 calls | $0.17 — 55 calls |
+| Most expensive case | Reschedule Board Chair Meeting $0.17 | external reply first person $0.19 |
+
+Mean input per agent call: 26k tokens (smoke), 34k (scenario coordinator). Input tokens
+are 97% of the estimate. Scenario delegations are stubbed, so all its spend is the
+coordinator's.
+
+**What the measurements say about the cost cuts #1980 listed**
+
+- **Judge model: not changed.** The judge is 10% (smoke) and 11% (scenarios) of the
+  estimate. Even a free judge saves under $0.50 per release run, less than one smoke
+  retry pass costs. `pnpm rejudge` is in place to test a candidate if that changes.
+- **Prompt caching: cannot be checked yet.** Every call shows 0 cache reads, which is
+  #1962 (the OpenRouter provider hard-codes them to zero), not evidence of misses. Input
+  is the bulk of the spend, so caching is the lever worth pulling: at the registry's
+  cache-read rate ($0.003/M vs $0.15/M) a cached coordinator prefix is nearly free. Fix
+  #1962 first, then re-measure.
+- **Waste on timeouts: adopted.** A case that ends (timed out or not) is cancelled and its
+  later model calls fail at once. No case timed out in this run, so the saving did not
+  show here; in the 8-second-timeout check it ended an abandoned turn within its settle
+  wait instead of letting it run on.
+- **Concurrency: adopted** (time, not money): 4 cases at once took the gate from 70–97
+  min to 12 min.
+
+**Estimate vs. OpenRouter's bill.** TODO: compare against OpenRouter's activity for
+02:03:56–02:16:17 UTC on 2026-10-05 (the estimate for that window is $4.39).
