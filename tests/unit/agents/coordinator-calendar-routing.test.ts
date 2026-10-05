@@ -10,6 +10,7 @@ import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { resolvePinnedSkills } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
+import { resolveSkillActivation, unifiedToolSearch } from '../../../src/skills/skill-activation.js';
 import {
   GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME,
   registerMcpProjectedSkills,
@@ -68,7 +69,6 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     expect(section).toMatch(/never\s+read or mutate the principal's calendar myself/i);
     expect(section).toMatch(/never present the brief/i);
     expect(section).toMatch(/could not be read/i);
-    expect(section).toMatch(/do not search\s+tool-registry/i);
   });
 
   it('drops calendar from handle-directly (no Curia calendar path)', () => {
@@ -88,21 +88,34 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     expect(outside).not.toMatch(/@calendar/);
   });
 
-  it('calendar tools are not callable by the coordinator, so discovery cannot surface them', () => {
-    // The prompt's "do not search tool-registry for calendar" sentence guards the
-    // calendar *bundle* (search returns bundles without an allowed_callers check, and
-    // activation then injects its instructions with zero tools). The tools themselves
-    // are filtered by allowed_callers, which this pins.
+  it('the coordinator can neither discover nor activate the calendar bundle (#1958)', () => {
+    // This replaced a prompt sentence ("do not search tool-registry or skill-activate for
+    // calendar"). The calendar tools exclude the coordinator by allowed_callers, and a
+    // bundle every one of whose tools is withheld is neither offered by search nor
+    // activatable (skillReservedForOtherAgents). Loaded from disk, so a calendar tool that
+    // drops its allowed_callers, or a shared tool added to the bundle, fails here.
+    const tools = new ToolRegistry();
+    const skills = new SkillRegistry();
     const toolsDir = resolve(skillsDir, 'calendar', 'tools');
-    const names = readdirSync(toolsDir);
-    expect(names.length).toBeGreaterThan(0);
-    for (const name of names) {
-      const manifest = JSON.parse(
-        readFileSync(resolve(toolsDir, name, 'tool.json'), 'utf-8'),
-      ) as { allowed_callers?: string[] };
-      expect(manifest.allowed_callers, `${name} must restrict its callers`).toBeDefined();
-      expect(manifest.allowed_callers).not.toContain('coordinator');
+    for (const name of readdirSync(toolsDir)) {
+      const manifest = JSON.parse(readFileSync(resolve(toolsDir, name, 'tool.json'), 'utf-8')) as ToolManifest;
+      tools.register(manifest, noopHandler);
     }
+    const parsed = parseSkillMd(readFileSync(resolve(skillsDir, 'calendar', 'SKILL.md'), 'utf-8'));
+    skills.register(
+      { name: parsed.name, description: parsed.description, version: parsed.version, tools: parsed.tools ?? [], instructions: parsed.instructions },
+      resolve(skillsDir, 'calendar'),
+    );
+
+    for (const query of ['calendar', 'free time', 'calendar-list-events', 'events']) {
+      const hits = unifiedToolSearch({ query, toolRegistry: tools, skillRegistry: skills, agentId: 'coordinator' });
+      expect(hits, `search '${query}'`).toEqual([]);
+    }
+    expect(resolveSkillActivation({ skillName: 'calendar', skillRegistry: skills, toolRegistry: tools, agentId: 'coordinator' }))
+      .toEqual({ error: expect.stringContaining('reserved for other agents') });
+    // The owner is unaffected.
+    expect(resolveSkillActivation({ skillName: 'calendar', skillRegistry: skills, toolRegistry: tools, agentId: 'calendar' }))
+      .not.toHaveProperty('error');
   });
 
   it('does not pin principal-scoped calendar tools or the calendar bundle', () => {

@@ -48,6 +48,7 @@ describe('loadAgentConfig', () => {
     ['in-flight refusal handling', /already_in_flight/, "delegate result's next_step"],
     ['Message ID stamping detail', /drops any other `Message ID:`/, 'delegate handler identifier stamp'],
     ['principal [primary] email rule', /\[primary\]/, '## Principal Contact Details block'],
+    ['calendar discovery ban', /tool-registry or skill-activate for calendar/, 'skillReservedForOtherAgents'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);
