@@ -2,7 +2,7 @@
 // Asserted at the tool-selection / config layer — no LLM.
 
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
 import { parseSkillMd } from '../../../src/skills/skill-md.js';
@@ -77,6 +77,32 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     expect(handleDirectly).toMatch(/@calendar/);
     expect(handleDirectly).not.toMatch(/my own email\/calendar\/workspace/);
     expect(handleDirectly).not.toMatch(/Curia's identity only/);
+  });
+
+  it('states the @calendar route only in the routing section and the calendar section (#1958)', () => {
+    // It was once repeated in nine places. Each copy is rule density with no added protection.
+    const prompt = loadCoordinator().system_prompt;
+    const outside = prompt
+      .replace(extractHandleDirectlySection(prompt), '')
+      .replace(extractPrincipalCalendarSection(prompt), '');
+    expect(outside).not.toMatch(/@calendar/);
+  });
+
+  it('calendar tools are not callable by the coordinator, so discovery cannot surface them', () => {
+    // The prompt's "do not search tool-registry for calendar" sentence guards the
+    // calendar *bundle* (search returns bundles without an allowed_callers check, and
+    // activation then injects its instructions with zero tools). The tools themselves
+    // are filtered by allowed_callers, which this pins.
+    const toolsDir = resolve(skillsDir, 'calendar', 'tools');
+    const names = readdirSync(toolsDir);
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      const manifest = JSON.parse(
+        readFileSync(resolve(toolsDir, name, 'tool.json'), 'utf-8'),
+      ) as { allowed_callers?: string[] };
+      expect(manifest.allowed_callers, `${name} must restrict its callers`).toBeDefined();
+      expect(manifest.allowed_callers).not.toContain('coordinator');
+    }
   });
 
   it('does not pin principal-scoped calendar tools or the calendar bundle', () => {
