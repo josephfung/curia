@@ -244,6 +244,17 @@ describe('runConcurrently', () => {
     expect(finished.sort()).toEqual([2, 3]);
   });
 
+  it('settles when a worker throws synchronously, on the first pump or a later one', async () => {
+    const worker = (n: number): Promise<number> => {
+      if (n === 3) throw new Error('sync boom'); // not async: throws before returning a promise
+      return tick(5).then(() => n);
+    };
+    // Item 3 starts from a later pump (inside a finally callback), where a stray throw
+    // would once have left the run pending forever.
+    await expect(runConcurrently([1, 2, 3], 1, worker)).rejects.toThrow('sync boom');
+    await expect(runConcurrently([3], 1, worker)).rejects.toThrow('sync boom');
+  });
+
   it('rejects a bad concurrency', async () => {
     await expect(runConcurrently([1], 0, async () => 1)).rejects.toThrow(/positive integer/);
   });

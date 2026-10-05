@@ -258,7 +258,10 @@ export async function runConcurrently<T, R>(
         if (next === -1) break;
         const entry = waiting.splice(next, 1)[0]!;
         running.add(entry);
-        worker(entry.item, entry.index).then(
+        // Through a promise, so a worker that throws synchronously (not every caller is
+        // async) still reaches the handlers below; otherwise its entry would stay in
+        // `running` forever and the run would never settle. Still starts synchronously.
+        new Promise<R>((resolve) => { resolve(worker(entry.item, entry.index)); }).then(
           (result) => { results[entry.index] = result; },
           (error: unknown) => {
             if (failure) {
