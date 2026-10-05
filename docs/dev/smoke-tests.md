@@ -89,7 +89,7 @@ The run **passes** when every case passes, apart from cases marked `known_failur
 
 To see the real figure, note OpenRouter's credit balance (or the activity page) before and after a full run.
 
-**Estimate vs. bill.** TODO(#1980): one full run of both suites (2026-10-05, 02:03:56–02:16:17 UTC) was estimated at $4.39; record OpenRouter's billed cost for that window and the difference here.
+**Estimate vs. bill.** One full run of both suites (2026-10-05, 02:03:56–02:16:17 UTC) was estimated at **$4.39**; OpenRouter billed **$2.10** for that window. The estimate ran about 2.1× the bill, which is what pricing every input token as uncached would do (#1962): the registry's cache-read rate for the standard tier is 2% of its input rate, and input is ~97% of the estimate. Read the printed figure as an upper bound until #1962 is fixed. (The window also fell in DeepSeek's weekday 01:00–04:00 UTC peak, which the registry does not price; if it was billed at peak rates, caching saved even more than the gap shows.)
 
 **Changing the judge.** The judge (`openai/gpt-4o`) costs more per token than the production standard tier. A cheaper one can be tried on transcripts a run already saved, without running any model:
 
