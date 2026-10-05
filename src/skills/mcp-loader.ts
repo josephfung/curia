@@ -26,52 +26,11 @@ import type {
   McpStdioServerEntry,
   SkillsConfig,
 } from './mcp-config-types.js';
-import {
-  GOOGLE_WORKSPACE_CALENDAR_TOOLS,
-  GOOGLE_WORKSPACE_CALENDARISH_TOOL,
-  guardMcpCalendarIdentity,
-} from './_shared/calendar-identity-guard.js';
+import { guardMcpCalendarIdentity } from './_shared/calendar-identity-guard.js';
 
-/**
- * google-workspace MCP calendar tools held back from registration / projection (#1853).
- *
- * Re-exports the shared list from calendar-identity-guard (#1854). Primary gate:
- * `config/skills.yaml` omits `calendar` from `--tools`. This list is the in-process
- * backstop if a calendar tool still appears. Re-enable only when #1330 lands and
- * tools are renamed/scoped — the identity guard still fail-closes principal-scoped
- * reads even after re-registration.
- */
-export const GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK = GOOGLE_WORKSPACE_CALENDAR_TOOLS;
-
-const HELD_BACK_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['google-workspace', new Set(GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK)],
-]);
-
-/** True when an MCP tool must not be registered or projected for this server (#1853). */
-export function isMcpToolHeldBack(serverName: string, toolName: string): boolean {
-  return HELD_BACK_BY_SERVER.get(serverName)?.has(toolName) === true;
-}
-
-/** Drop held-back tools from a live MCP membership list (defense in depth for projection). */
-export function filterHeldBackMcpTools(serverName: string, tools: readonly string[]): string[] {
-  return tools.filter((t) => !isMcpToolHeldBack(serverName, t));
-}
-
-/**
- * Warn when google-workspace advertises a calendar-looking tool that is not on the
- * holdback list — silent denylist drift when upstream adds an eighth calendar tool.
- */
-export function warnIfUnexpectedGoogleWorkspaceCalendarTool(
-  toolName: string,
-  logger: Logger,
-): void {
-  if (isMcpToolHeldBack('google-workspace', toolName)) return;
-  if (!GOOGLE_WORKSPACE_CALENDARISH_TOOL.test(toolName)) return;
-  logger.warn(
-    { server: 'google-workspace', tool: toolName },
-    'google-workspace advertised a calendar-shaped tool not on the #1853 holdback list — add it to GOOGLE_WORKSPACE_CALENDAR_TOOLS (calendar-identity-guard) and omit calendar from --tools in config/skills.yaml',
-  );
-}
+// No per-tool holdback at registration (#1957). Which google-workspace services load is
+// decided by the server's `--tools` allowlist in config/skills.yaml, guarded by
+// tests/unit/config.google-workspace-allowlist.test.ts. Calendar is never on it (#1853).
 
 /** Result of loading MCP servers: live sessions + tools registered per server. */
 export type McpServerLoadStatus =
@@ -685,17 +644,6 @@ export async function loadMcpServers(
     let registered = 0;
     const registeredNames: string[] = [];
     for (const tool of tools) {
-      if (serverEntry.name === 'google-workspace') {
-        warnIfUnexpectedGoogleWorkspaceCalendarTool(tool.name, logger);
-      }
-      if (isMcpToolHeldBack(serverEntry.name, tool.name)) {
-        logger.info(
-          { server: serverEntry.name, tool: tool.name },
-          'MCP tool held back from registration — never enters ToolRegistry; principal calendar belongs to @calendar (#1853)',
-        );
-        continue;
-      }
-
       // Build a minimal ToolManifest from the tool's metadata.
       // inputs is left empty ({}) because toToolDefinitions() uses mcpInputSchema
       // instead of the shorthand inputs notation for MCP-sourced tools.
@@ -808,7 +756,7 @@ export function registerMcpProjectedSkills(
       );
       continue;
     }
-    const membership = filterHeldBackMcpTools(serverName, tools);
+    const membership = tools;
     skillRegistry.register(
       {
         name: serverName,
