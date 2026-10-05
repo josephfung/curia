@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { emptyBreakdown } from '../../shared/usage.js';
 import { createJudge, extractJsonObject, formatJudgeInput, judgeRun, parseJudgeResponse } from '../../scenarios/judge.js';
 import type { ExpectedBehavior, ScenarioCase, ScenarioRun } from '../../scenarios/types.js';
 
@@ -42,7 +43,7 @@ describe('formatJudgeInput', () => {
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
   };
   const run: ScenarioRun = {
-    runIndex: 0, inboundContent: 'How is the research going?', refs: {}, durationMs: 1, unstubbedCalls: 0,
+    runIndex: 0, inboundContent: 'How is the research going?', refs: {}, durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [],
     reply: 'Still working — 3 of 8 done.',
     toolCalls: [
       { name: 'delegate', input: { agent: 'research-analyst' }, disposition: 'stubbed', result: { success: true, data: { paused: true, done: 3, total: 8 } } },
@@ -77,7 +78,7 @@ describe('judgeRun', () => {
     inbound: { from: 'principal', content: 'hi' },
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   } as ScenarioCase;
-  const run: ScenarioRun = { runIndex: 0, inboundContent: 'hi', refs: {}, toolCalls: [], reply: 'ok', durationMs: 1, unstubbedCalls: 0 };
+  const run: ScenarioRun = { runIndex: 0, inboundContent: 'hi', refs: {}, toolCalls: [], reply: 'ok', durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [] };
   const error = (type: string) => ({ type: 'error' as const, error: { type, source: 'openrouter', message: 'x', retryable: false, context: {}, timestamp: new Date() } });
 
   it('throws on an error that would repeat every run', async () => {

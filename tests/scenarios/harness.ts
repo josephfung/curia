@@ -10,12 +10,28 @@
 // Capture (tests/shared/turn-capture.ts) listens as the `system` layer, so a NO_REPLY
 // turn, or a reply Gate C holds for a non-principal sender, still ends the run instead
 // of timing out.
+//
+// Runs of different cases overlap (#1980). Each attempt runs inside its own case context
+// (tests/shared/case-scope.ts): the seeded-state views, the model-call guard and the cost
+// meter all find the calling run through it. A run that times out is cancelled, so its
+// abandoned turn stops calling the model.
 import { randomUUID } from 'node:crypto';
 import { createAgentDiscuss, createInboundMessage } from '../../src/bus/events.js';
 import { loadConfig } from '../../src/config.js';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import {
+  createCaseContext,
+  guardProvider,
+  meterAgentCalls,
+  newAttempt,
+  PROVIDER_RETRIES,
+  providerFailure,
+  slowestModelCallMs,
+  type CaseAttempt,
+} from '../shared/case-scope.js';
+import { sumBreakdowns, UsageLedger, type UsageBreakdown } from '../shared/usage.js';
 import {
   cleanupConversation,
   createTurnCapture,
@@ -67,6 +83,18 @@ export function parseTimeout(raw: string | undefined): number {
 /** How long shutdown waits for turns that outlived their run's timeout. */
 const LATE_TURN_GRACE_MS = 60_000;
 
+/**
+ * After a run errors and is cancelled, how long to wait for its turn to wind down before
+ * removing its rows and reading its spend. A cancelled turn ends at its next model call.
+ */
+const CANCEL_SETTLE_MS = 30_000;
+
+/** One attempt at a run: what the case context carries. */
+interface ScenarioRunState extends CaseAttempt {
+  /** The rows this attempt seeded, which are all its views show. */
+  scope: SeedScope;
+}
+
 export interface ScenarioHarness {
   stack: TestModeStack;
   stubs: StubController;
@@ -76,7 +104,13 @@ export interface ScenarioHarness {
   coordinatorTools: Set<string>;
   /** Tools test mode cannot serve; the stub layer refuses them unless a case stubs them. */
   unavailableTools: ReadonlySet<string>;
-  runOnce(scenario: ScenarioCase, runIndex: number): Promise<ScenarioRun>;
+  /**
+   * One run of a case. An attempt that fails for a provider reason is run again, up to
+   * PROVIDER_RETRIES times, and the run records why (#1980).
+   */
+  runOnce(scenario: ScenarioCase, runIndex: number, options?: { onProviderRetry?: (reason: string) => void }): Promise<ScenarioRun>;
+  /** Model spend outside every run. */
+  unattributedUsage(): UsageBreakdown;
   /** Remove rows an interrupted run left behind (by the suite's own markers). */
   sweep(): Promise<Record<string, number>>;
   shutdown(): Promise<void>;
@@ -141,7 +175,8 @@ export async function acquireSuiteLock(stack: TestModeStack): Promise<(() => Pro
 }
 
 export async function createScenarioHarness(options: { model?: string } = {}): Promise<ScenarioHarness> {
-  const scope = new SeedScope();
+  const context = createCaseContext<ScenarioRunState>();
+  const currentScope = (): SeedScope | undefined => context.current()?.scope;
   const config = loadConfig();
   // The registry exists only once the stack is built; the stub layer reads it lazily.
   let booted: TestModeStack | undefined;
@@ -158,7 +193,9 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     config: { ...config, databaseUrl: withApplicationName(config.databaseUrl) },
     model: options.model,
     wrapExecutionLayer: (layer) => controller.wrap(layer),
-    wrapBullpenService: (bullpen) => scopedBullpen(bullpen, scope),
+    wrapBullpenService: (bullpen) => scopedBullpen(bullpen, currentScope),
+    // Times each model call against its run, and refuses a cancelled run's calls.
+    wrapLlmProvider: (provider) => guardProvider(provider, context.current),
     // No contact recent history: every case starts from a clean slate.
     wrapWorkingMemory: withoutRecentHistory,
   });
@@ -176,12 +213,15 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     logger,
     contactResolver: stack.contactResolver,
     channelPolicies: undefined,
-    outboundContextService: scopedOutboundContext(outboundContext, scope),
+    outboundContextService: scopedOutboundContext(outboundContext, currentScope),
   }).register();
   // Bullpen mentions reach the coordinator the way they do in production.
   new BullpenDispatcher(bus, logger, stack.bullpenService, stack.agentRegistry).register();
 
   const capture = createTurnCapture(bus);
+  // Every model call billed to the run it was made in (#1980).
+  const unattributed = new UsageLedger();
+  meterAgentCalls(bus, context.current, unattributed);
   const coordinator = stack.agent(COORDINATOR);
   const coordinatorTools = new Set(coordinator.toolDefs.map(t => t.name));
   const internalNames = internalNamesFor({
@@ -197,10 +237,10 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
    * conversation rows are cleaned again (it wrote turns after the run's cleanup), and
    * shutdown waits for them before closing the pool.
    */
-  const lateTurns = new Set<Promise<void>>();
+  const lateTurns = new Map<Promise<void>, ScenarioRunState | undefined>();
 
   function trackDelivery(delivery: Promise<void>, conversationId: string): void {
-    const settled = delivery
+    const settled: Promise<void> = delivery
       .catch((err: unknown) => {
         // The run has its outcome already (via capture.fail or its timeout); this only
         // records that the late turn ended in an error.
@@ -212,11 +252,54 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         process.stderr.write(`  [WARN] late cleanup failed for ${conversationId}: ${err instanceof Error ? err.message : String(err)}\n`);
       })
       .finally(() => { lateTurns.delete(settled); });
-    lateTurns.add(settled);
+    lateTurns.set(settled, context.current());
   }
 
-  async function runOnce(scenario: ScenarioCase, runIndex: number): Promise<ScenarioRun> {
+  /** Wait (up to `maxMs`) for `state`'s turns still running. */
+  async function settle(state: ScenarioRunState, maxMs: number): Promise<void> {
+    const own = [...lateTurns].filter(([, s]) => s === state).map(([p]) => p);
+    if (own.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(own),
+      new Promise(resolve => { timer = setTimeout(resolve, maxMs); timer.unref(); }),
+    ]);
+    clearTimeout(timer);
+  }
+
+  async function runOnce(
+    scenario: ScenarioCase,
+    runIndex: number,
+    options: { onProviderRetry?: (reason: string) => void } = {},
+  ): Promise<ScenarioRun> {
+    const providerRetries: string[] = [];
+    const spent: UsageBreakdown[] = [];
+    for (;;) {
+      const { run, providerReason } = await attempt(scenario, runIndex);
+      spent.push(run.usage);
+      if (providerReason && providerRetries.length < PROVIDER_RETRIES) {
+        providerRetries.push(providerReason);
+        options.onProviderRetry?.(providerReason);
+        continue;
+      }
+      return { ...run, usage: sumBreakdowns(spent), providerRetries };
+    }
+  }
+
+  /** One attempt at a run, in a fresh case context with its own seeded rows. */
+  async function attempt(scenario: ScenarioCase, runIndex: number): Promise<{ run: ScenarioRun; providerReason?: string }> {
+    const state: ScenarioRunState = { ...newAttempt(`${scenario.name} run ${runIndex + 1}`), scope: new SeedScope() };
+    return context.run(state, () => attemptInContext(scenario, runIndex, state));
+  }
+
+  async function attemptInContext(
+    scenario: ScenarioCase,
+    runIndex: number,
+    state: ScenarioRunState,
+  ): Promise<{ run: ScenarioRun; providerReason?: string }> {
+    const { scope } = state;
     const started = Date.now();
+    let providerReason: string | undefined;
     // Set once seeding succeeds. seedRun removes its own partial rows when it throws, so
     // a failed seed becomes this run's error instead of aborting the suite.
     let seeded: SeededRun | undefined;
@@ -280,7 +363,19 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         trackDelivery(delivery, runConversationId);
         outcome = await waiter;
       } finally {
-        stubbedCalls = controller.endRun();
+        stubbedCalls = controller.endRun(runConversationId);
+      }
+      if (outcome.error) {
+        // Measured before cancelling, while a stalled call is still in flight.
+        providerReason = providerFailure({
+          ...(outcome.errorKind ? { kind: outcome.errorKind } : {}),
+          ...(outcome.errorType ? { errorType: outcome.errorType } : {}),
+          slowestModelCallMs: slowestModelCallMs(state),
+        });
+        // The run has its outcome; whatever it still has running must stop spending.
+        // Waited for (bounded) so the turn is not still acting while its rows are removed.
+        state.cancelled = true;
+        await settle(state, CANCEL_SETTLE_MS);
       }
 
       const merged = mergeCalls(outcome.calls, stubbedCalls);
@@ -296,6 +391,8 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         durationMs: Date.now() - started,
         unstubbedCalls: countHoles(merged),
         ...(outcome.error ?? premiseError ? { error: outcome.error ?? premiseError } : {}),
+        usage: state.usage.snapshot(),
+        providerRetries: [],
       };
     } catch (err) {
       result = {
@@ -307,6 +404,8 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         durationMs: Date.now() - started,
         unstubbedCalls: stubbedCalls.filter(c => c.disposition === 'refused' && c.agentId === COORDINATOR).length,
         error: describeError(err),
+        usage: state.usage.snapshot(),
+        providerRetries: [],
       };
     } finally {
       if (seeded) {
@@ -320,7 +419,8 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         }
       }
     }
-    return cleanupError ? { ...result, cleanupError } : result;
+    const run = cleanupError ? { ...result, cleanupError } : result;
+    return { run, ...(providerReason ? { providerReason } : {}) };
   }
 
   return {
@@ -330,13 +430,14 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     coordinatorTools,
     unavailableTools: unavailable,
     runOnce,
+    unattributedUsage: () => unattributed.snapshot(),
     sweep: () => sweepLeftovers(stack),
     shutdown: async () => {
       // Late turns still hold the pool; wait (bounded) so their writes and cleanup land.
       if (lateTurns.size > 0) {
         process.stderr.write(`  waiting up to ${LATE_TURN_GRACE_MS / 1000}s for ${lateTurns.size} timed-out turn(s) to finish...\n`);
         await Promise.race([
-          Promise.allSettled([...lateTurns]),
+          Promise.allSettled([...lateTurns.keys()]),
           new Promise(resolve => setTimeout(resolve, LATE_TURN_GRACE_MS)),
         ]);
       }

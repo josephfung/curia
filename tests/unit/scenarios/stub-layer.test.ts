@@ -82,7 +82,31 @@ describe('stale conversations', () => {
     expect(stalePassthrough.success).toBe(false);
     expect(executed).toEqual([]);
     expect(controller.staleCalls).toBe(2);
-    expect(controller.endRun()).toEqual([]);
+    expect(controller.endRun('scenario-2')).toEqual([]);
+  });
+});
+
+describe('concurrent runs (#1980)', () => {
+  it('answer and record each call from its own conversation\'s run', async () => {
+    const { layer, controller } = setup();
+    controller.beginRun({ 'email-send': [{ match: {}, return: { from: 'run-a' } }] }, 'scenario-a');
+    controller.beginRun({ 'email-send': [{ match: {}, return: { from: 'run-b' } }] }, 'scenario-b');
+    const send = (conversationId: string) => layer.invoke('email-send', {}, undefined, { agentId: 'coordinator', conversationId });
+
+    const [a1, b1, a2] = await Promise.all([send('scenario-a'), send('scenario-b'), send('scenario-a')]);
+    expect([a1, a2]).toEqual([{ success: true, data: { from: 'run-a' } }, { success: true, data: { from: 'run-a' } }]);
+    expect(b1).toEqual({ success: true, data: { from: 'run-b' } });
+    expect(controller.endRun('scenario-a')).toHaveLength(2);
+    // Closing one run leaves the other answering.
+    expect(await send('scenario-b')).toEqual({ success: true, data: { from: 'run-b' } });
+    expect(await send('scenario-a')).toMatchObject({ success: false });
+    expect(controller.endRun('scenario-b')).toHaveLength(2);
+  });
+
+  it('refuses to open a second run on the same conversation', () => {
+    const { controller } = setup();
+    controller.beginRun({}, 'scenario-a');
+    expect(() => controller.beginRun({}, 'scenario-a')).toThrow(/already has an open run/);
   });
 });
 
@@ -112,7 +136,7 @@ describe('scenario stub layer', () => {
       if (!result.success) expect(result.error).toMatch(/^<skill_error>.*no stub/);
     }
     expect(executed).toEqual([]);
-    expect(controller.endRun().map(c => c.disposition)).toEqual(Array(5).fill('refused'));
+    expect(controller.endRun('scenario-1').map(c => c.disposition)).toEqual(Array(5).fill('refused'));
   });
 
   it('answers a stubbed send itself and never reaches the real tool', async () => {
@@ -136,7 +160,7 @@ describe('scenario stub layer', () => {
     const result = await layer.invoke('memory-query', {}, undefined, coordinatorCall);
     expect(result).toMatchObject({ success: true, data: 'real memory-query' });
     expect(executed).toEqual(['memory-query']);
-    expect(controller.endRun()).toEqual([
+    expect(controller.endRun('scenario-1')).toEqual([
       { agentId: 'coordinator', invokeEventId: undefined, toolName: 'memory-query', input: {}, disposition: 'passthrough' },
     ]);
   });

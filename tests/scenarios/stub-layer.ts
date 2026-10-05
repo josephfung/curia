@@ -2,8 +2,11 @@
 // hands to createTestModeStack (#1956).
 //
 // The stack is booted once and reused across every case and run, so the stubs live
-// on a controller: beginRun(stubs) installs a case's stubs, endRun() returns how each
-// call was answered and clears them.
+// on a controller: beginRun(stubs, conversationId) installs a run's stubs, endRun()
+// returns how each call was answered and clears them. Several runs can be open at once
+// (#1980): each call is answered by the run whose conversation made it. A run's calls all
+// come from its own conversation, because `delegate` is always stubbed — no specialist
+// ever works on a run's behalf in another one.
 //
 // Policy for a call:
 //   1. A matching stub answers it. The real tool never runs.
@@ -76,15 +79,15 @@ export interface StubController {
   /** Wrap the real layer. Pass the result as createTestModeStack's wrapExecutionLayer. */
   wrap(layer: ExecutionLayer): ExecutionLayer;
   /**
-   * Install a run's stubs for one conversation. Throws if a run is already open (runs
-   * are sequential). A call from any other conversation — a timed-out turn from an
-   * earlier run still going — is refused and not recorded: it must never be answered
-   * by this run's stubs.
+   * Install a run's stubs for its conversation. Throws if that conversation already has
+   * an open run. A call from a conversation with no open run — a timed-out turn from a
+   * run already closed — is refused and not recorded: it must never be answered by
+   * another run's stubs.
    */
   beginRun(stubs: Record<string, ToolStub[]>, conversationId: string): void;
-  /** Close the run and return its calls in order. */
-  endRun(): StubbedCall[];
-  /** Calls refused because they came from a conversation other than the open run's. */
+  /** Close the conversation's run and return its calls in order. */
+  endRun(conversationId: string): StubbedCall[];
+  /** Calls refused because they came from a conversation with no open run. */
   readonly staleCalls: number;
 }
 
@@ -102,9 +105,7 @@ export function createStubController(
   registry: () => ToolRegistry,
   unavailable: () => ReadonlySet<string> = () => new Set(),
 ): StubController {
-  let stubs: Record<string, ToolStub[]> | null = null;
-  let runConversationId: string | null = null;
-  let calls: StubbedCall[] = [];
+  const runs = new Map<string, { stubs: Record<string, ToolStub[]>; calls: StubbedCall[] }>();
   let staleCalls = 0;
 
   const invokeStubbed = async (
@@ -112,17 +113,19 @@ export function createStubController(
     args: Parameters<ExecutionLayer['invoke']>,
   ): Promise<ToolResult> => {
     const [toolName, input, , options] = args;
+    const run = options?.conversationId !== undefined ? runs.get(options.conversationId) : undefined;
 
-    if (stubs !== null && options?.conversationId !== undefined && options.conversationId !== runConversationId) {
+    if (!run && runs.size > 0) {
       staleCalls++;
       return {
         success: false,
-        error: skillError(`Tool '${toolName}' was called from a conversation outside the current scenario run; refused.`),
+        error: skillError(`Tool '${toolName}' was called from a conversation outside every open scenario run; refused.`),
       };
     }
+    const stubs = run?.stubs ?? null;
 
     const record = (disposition: StubbedCall['disposition']): void => {
-      calls.push({
+      run?.calls.push({
         agentId: options?.agentId,
         invokeEventId: options?.parentEventId,
         toolName,
@@ -171,17 +174,13 @@ export function createStubController(
       });
     },
     beginRun(next, conversationId) {
-      if (stubs !== null) throw new Error('StubController.beginRun: a run is already open');
-      stubs = next;
-      runConversationId = conversationId;
-      calls = [];
+      if (runs.has(conversationId)) throw new Error(`StubController.beginRun: conversation ${conversationId} already has an open run`);
+      runs.set(conversationId, { stubs: next, calls: [] });
     },
-    endRun() {
-      const done = calls;
-      stubs = null;
-      runConversationId = null;
-      calls = [];
-      return done;
+    endRun(conversationId) {
+      const run = runs.get(conversationId);
+      runs.delete(conversationId);
+      return run?.calls ?? [];
     },
     get staleCalls() {
       return staleCalls;

@@ -4,6 +4,7 @@
 // stubbed tools, run N times on the production prompt. Behaviors are scored per
 // run, either in code (`check`) or by the LLM judge (no `check`).
 import type { ObservedToolCall } from '../shared/turn-capture.js';
+import type { UsageBreakdown } from '../shared/usage.js';
 
 // ── Case definition (loaded from YAML) ─────────────────────────────────────
 
@@ -184,6 +185,16 @@ export interface ScenarioRun {
   error?: string;
   /** Set when removing the run's rows failed; leftovers may be in the database. */
   cleanupError?: string;
+  /**
+   * Model spend on this run (#1980): the agents' calls, from every attempt (provider
+   * retries included); the judge's are added when the run is rated.
+   */
+  usage: UsageBreakdown;
+  /**
+   * Attempts thrown away for a provider failure (stall, provider error, model fallback)
+   * and run again, one reason each. The run above is the last attempt.
+   */
+  providerRetries: string[];
 }
 
 // ── Scoring ───────────────────────────────────────────────────────────────
@@ -227,6 +238,8 @@ export interface CaseResult {
   knownFailure?: { issue: string; reason: string };
   /** Runs where the judge itself failed (not the model) — reported as a gate failure. */
   judgeErrors: number;
+  /** Model spend on the case: its runs' agents and judge calls. */
+  usage: UsageBreakdown;
 }
 
 export interface SuiteResult {
@@ -249,6 +262,12 @@ export interface SuiteResult {
   /** Non-behavioral reasons the suite failed (coverage gate, errored runs). */
   gateFailures: string[];
   durationMs: number;
+  /** Cases run at once (--concurrency). A case's own runs are always one at a time. */
+  concurrency: number;
+  /** Estimated model spend: every case's plus `overheadUsage` (tests/shared/usage.ts). */
+  usage: UsageBreakdown;
+  /** Spend outside every run (should be ~0). */
+  overheadUsage: UsageBreakdown;
 }
 
 /**

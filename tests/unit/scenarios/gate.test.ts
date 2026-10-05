@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { emptyBreakdown } from '../../shared/usage.js';
 import { gateFailures, knownFailureLines, passRate, scoreCase, staleKnownFailures } from '../../scenarios/gate.js';
 import type { ExpectedBehavior, RunRating, ScenarioRun } from '../../scenarios/types.js';
 
@@ -8,7 +9,7 @@ const M: RunRating = { rating: 'MISS', justification: '' };
 
 function runs(n: number, error?: string): ScenarioRun[] {
   return Array.from({ length: n }, (_, i) => ({
-    runIndex: i, inboundContent: '', refs: {}, toolCalls: [], reply: 'x', durationMs: 1, unstubbedCalls: 0,
+    runIndex: i, inboundContent: '', refs: {}, toolCalls: [], reply: 'x', durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [],
     ...(error && i === 0 ? { error } : {}),
   }));
 }
