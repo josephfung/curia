@@ -26,14 +26,19 @@ import type {
   McpStdioServerEntry,
   SkillsConfig,
 } from './mcp-config-types.js';
-import {
-  guardMcpCalendarIdentity,
-  isGoogleWorkspaceCalendarTool,
-} from './_shared/calendar-identity-guard.js';
 
 // No per-tool holdback at registration (#1957). Which google-workspace services load is
 // decided by the server's `--tools` allowlist in config/skills.yaml, guarded by
 // tests/unit/config.google-workspace-allowlist.test.ts. Calendar is never on it (#1853).
+
+/**
+ * Calendar-shaped google-workspace tool names, matched by underscore segment so it
+ * covers upstream's whole calendar module (list_calendars, get_events, manage_event,
+ * query_freebusy, manage_out_of_office, ...) and renamed tools, without matching
+ * Drive/Docs/Sheets names. Used only to raise the drift alarm in loadMcpServers.
+ */
+export const GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME =
+  /(^|_)(events?|calendars?|freebusy|out_of_office|focus_time)($|_)/;
 
 /** Result of loading MCP servers: live sessions + tools registered per server. */
 export type McpServerLoadStatus =
@@ -330,17 +335,9 @@ export function buildMcpToolHandler(params: {
   const { session, toolName, resolvedFixedInputs, timeoutMs, logger } = params;
   return {
     async execute(ctx: ToolContext): Promise<ToolResult> {
-      // Principal-scoped calendar reads via google-workspace always resolve to
-      // Curia's identity — fail closed before the MCP call (#1854). Calendar
-      // tools reach here only if the `--tools` allowlist in config/skills.yaml
-      // is widened to include calendar (#1957, #1330).
-      const identityGuard = guardMcpCalendarIdentity({
-        serverId: session.serverId,
-        toolName,
-        ctx,
-        resolvedOwnerEmail: resolvedFixedInputs.user_google_email,
-      });
-      if (identityGuard) return identityGuard;
+      // No call-time calendar identity guard here (#1957): Calendar is never on the
+      // google-workspace --tools allowlist, so its tools are never registered. If #1330
+      // ever puts them back on purpose, restore guardMcpCalendarIdentity from history.
 
       // Abort the MCP request if it outlives the execution-layer timeout (#1666).
       const controller = new AbortController();
@@ -650,9 +647,9 @@ export async function loadMcpServers(
       // The `--tools` allowlist keeps Calendar out (#1957); nothing here filters it.
       // If a calendar tool appears anyway, the config has drifted. Say so at error
       // level: the old holdback corrected this at info, which is how a deployment
-      // ran with no allowlist for months unnoticed. The call-time identity guard
-      // in buildMcpToolHandler still covers principal-scoped calls.
-      if (serverEntry.name === 'google-workspace' && isGoogleWorkspaceCalendarTool(tool.name)) {
+      // ran with no allowlist for months unnoticed. Nothing else stands between such
+      // a tool and an agent (#1957), so this must stay loud.
+      if (serverEntry.name === 'google-workspace' && GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(tool.name)) {
         logger.error(
           { server: serverEntry.name, tool: tool.name },
           'google-workspace advertised a Calendar tool — the --tools allowlist in config/skills.yaml has drifted; remove calendar from it (#1853, #1957)',

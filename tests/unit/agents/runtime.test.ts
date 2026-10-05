@@ -1778,7 +1778,7 @@ describe('AgentRuntime tool-use loop', () => {
         if (chatCallCount === 1) {
           return {
             type: 'tool_use' as const,
-            toolCalls: [{ id: 'call-1', name: 'get_events', input: { calendar_id: 'primary' } }],
+            toolCalls: [{ id: 'call-1', name: 'calendar-list-events', input: { calendarId: 'cal-agent' } }],
             usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
             provenance: MOCK_PROVENANCE,
           };
@@ -1818,7 +1818,7 @@ describe('AgentRuntime tool-use loop', () => {
       logger,
       executionLayer: mockExecution,
       skillToolDefs: [{
-        name: 'get_events',
+        name: 'calendar-list-events',
         description: 'MCP calendar',
         input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
       }],
@@ -1843,7 +1843,7 @@ describe('AgentRuntime tool-use loop', () => {
     expect(responses[0]!.payload.isError).toBe(true);
     expect(responses[0]!.payload.errorType).toBe('IDENTITY_MISMATCH');
     expect(responses[0]!.payload.failedSkills).toEqual([
-      expect.objectContaining({ name: 'get_events' }),
+      expect.objectContaining({ name: 'calendar-list-events' }),
     ]);
   });
 
@@ -1860,7 +1860,7 @@ describe('AgentRuntime tool-use loop', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [
-              { id: 'call-1', name: 'get_events', input: { calendar_id: 'primary' } },
+              { id: 'call-1', name: 'calendar-list-events', input: { calendarId: 'cal-agent' } },
               { id: 'call-2', name: 'email-send', input: { to: 'ceo@example.com' } },
             ],
             usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
@@ -1877,7 +1877,7 @@ describe('AgentRuntime tool-use loop', () => {
     };
 
     const invokeMock = vi.fn().mockImplementation(async (name: string) => {
-      if (name === 'get_events') {
+      if (name === 'calendar-list-events') {
         return {
           success: false,
           error: 'IDENTITY_MISMATCH (calendar_identity_mismatch) — wrong identity',
@@ -1907,7 +1907,7 @@ describe('AgentRuntime tool-use loop', () => {
       executionLayer: mockExecution,
       skillToolDefs: [
         {
-          name: 'get_events',
+          name: 'calendar-list-events',
           description: 'MCP calendar',
           input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
         },
@@ -1931,7 +1931,7 @@ describe('AgentRuntime tool-use loop', () => {
     }));
 
     expect(invokeMock).toHaveBeenCalledTimes(1);
-    expect(invokeMock.mock.calls[0]![0]).toBe('get_events');
+    expect(invokeMock.mock.calls[0]![0]).toBe('calendar-list-events');
     expect(chatCallCount).toBe(1);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.payload.errorType).toBe('IDENTITY_MISMATCH');

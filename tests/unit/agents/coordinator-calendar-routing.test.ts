@@ -10,8 +10,10 @@ import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { resolvePinnedSkills } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
-import { registerMcpProjectedSkills } from '../../../src/skills/mcp-loader.js';
-import { GOOGLE_WORKSPACE_CALENDAR_TOOLS } from '../../../src/skills/_shared/calendar-identity-guard.js';
+import {
+  GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME,
+  registerMcpProjectedSkills,
+} from '../../../src/skills/mcp-loader.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
 import type { Logger } from '../../../src/logger.js';
 
@@ -83,9 +85,7 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     expect(pins).not.toContain('calendar');
     expect(pins).not.toContain('calendar-list-events');
     expect(pins).not.toContain('calendar-check-conflicts');
-    for (const calendarTool of GOOGLE_WORKSPACE_CALENDAR_TOOLS) {
-      expect(pins).not.toContain(calendarTool);
-    }
+    expect(pins.filter((p) => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(p))).toEqual([]);
   });
 
   it('projected google-workspace membership resolves cleanly, with no calendar tools', () => {
@@ -180,9 +180,7 @@ describe('coordinator principal-calendar routing (#1853)', () => {
 
     const resolution = resolvePinnedSkills(config.pinned_skills ?? [], skills, tools);
     expect(resolution.unresolvedPins).toEqual([]);
-    for (const calendarTool of GOOGLE_WORKSPACE_CALENDAR_TOOLS) {
-      expect(resolution.toolNames).not.toContain(calendarTool);
-    }
+    expect(resolution.toolNames.filter((t) => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(t))).toEqual([]);
     expect(resolution.toolNames).not.toContain('calendar-list-events');
     expect(resolution.toolNames).toContain('delegate');
     expect(resolution.toolNames).toContain('create_doc');

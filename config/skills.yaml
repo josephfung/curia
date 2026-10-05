@@ -59,10 +59,12 @@ servers:
   #   - Calendar must never be added (#1853). Those tools authenticate as Curia's
   #     own Google identity, so a principal calendar read through them "succeeds"
   #     with an empty calendar. Principal calendar work goes through the Nylas
-  #     `calendar` skill. Revisit only with #1330, which would also need the
-  #     call-time identity guard (guardMcpCalendarIdentity) kept or restored.
-  # There is no in-process holdback behind this list any more: what is listed
-  # here is what agents get. tests/unit/config.google-workspace-allowlist.test.ts
+  #     `calendar` skill. Revisit only with #1330, which would also need to
+  #     restore the call-time identity guard (guardMcpCalendarIdentity) that
+  #     #1957 removed.
+  # There is no in-process holdback or call-time guard behind this list any
+  # more: what is listed here is what agents get. mcp-loader logs an error if a
+  # Calendar tool is ever advertised. tests/unit/config.google-workspace-allowlist.test.ts
   # pins the exact set, so changing it means editing that test too.
   #
   # The allowlist also sets the OAuth scopes requested on a fresh consent
