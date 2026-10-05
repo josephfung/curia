@@ -174,12 +174,13 @@ describe('email account inputs cite console provenance', () => {
       return typeof (inputs as { account?: unknown }).account === 'string';
     });
 
-    // All twelve email tools that take `account`. A new one must cite the same path.
+    // All thirteen email tools that take `account`. A new one must cite the same path.
     expect(withAccount.map(m => m.relative).sort()).toEqual([
       'email/tools/email-archive/tool.json',
       'email/tools/email-create-folder/tool.json',
       'email/tools/email-download-attachment/tool.json',
       'email/tools/email-draft-save/tool.json',
+      'email/tools/email-get-thread/tool.json',
       'email/tools/email-get/tool.json',
       'email/tools/email-label/tool.json',
       'email/tools/email-list-folders/tool.json',

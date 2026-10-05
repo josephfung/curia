@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`email-get-thread`** — reads every message in an email thread, full bodies, in one call. (#1957)
 - **Behavior-suite concurrency** — `--concurrency` (default 4) runs smoke and scenario cases at once, isolated per case. (#1980)
 - **Behavior-suite cost report** — both suites print and save estimated model spend per case, by agent and judge. (#1980)
 - **`pnpm rejudge`** — re-judges saved suite transcripts with a candidate judge and reports verdict agreement. (#1980)
