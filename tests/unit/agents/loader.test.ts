@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { loadAgentConfig, loadAllAgentConfigs, interpolateRuntimeContext } from '../../../src/agents/loader.js';
+import { findTemplateTokens } from '../../../src/skills/_shared/placeholder-guard.js';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
@@ -182,5 +183,40 @@ describe('interpolateRuntimeContext', () => {
       principalContactId: VALID_UUID,
     });
     expect(out).toBe('id=');
+  });
+});
+
+describe('agent system prompts carry only placeholders the runtime resolves (#1997)', () => {
+  it('no agents/*.yaml system_prompt keeps a ${...} token after full interpolation', () => {
+    // Run the real interpolation chain with every context field populated, then look for
+    // leftovers. Deriving "resolvable" from interpolateRuntimeContext itself (rather than
+    // a hand-kept allowlist) means a new placeholder only passes once the runtime
+    // actually substitutes it. meeting-debrief shipped ${current_datetime}/${timezone}
+    // for months because the docstring claimed support that never existed.
+    //
+    // loadAllAgentConfigs has already applied persona interpolation, so an unknown
+    // ${persona.*} field is caught here too. Scheduled-job payloads (`schedule[].task`)
+    // are interpolated by the scheduler and covered in
+    // tests/unit/scheduler/scheduler-placeholder-interpolation.test.ts.
+    const violations: string[] = [];
+    for (const config of loadAllAgentConfigs(agentsDir)) {
+      const resolved = interpolateRuntimeContext(config.system_prompt, {
+        availableSpecialists: 'specialists',
+        agentContactId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        principalContactId: '11111111-2222-4333-8444-555555555555',
+        officeIdentityBlock: 'identity',
+      });
+      for (const token of findTemplateTokens(resolved)) {
+        violations.push(`${config.name}: ${token}`);
+      }
+    }
+
+    expect(
+      violations,
+      `\nUnresolved placeholders in agent system prompts:\n` +
+        violations.map(v => `  - ${v}`).join('\n') +
+        `\n\nThe model would read these literally. For the current date/time and timezone, ` +
+        `point at the per-turn "## Current Date & Time" block instead of a placeholder.\n`,
+    ).toHaveLength(0);
   });
 });

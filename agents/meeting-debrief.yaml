@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.3.3"
+version: "0.3.4"
 role: specialist
 description: >
   Proactively debriefs the principal after external meetings. Three times a day it
@@ -102,8 +102,9 @@ system_prompt: |
 
   ## Date and Timezone
 
-  Current date/time: ${current_datetime}
-  Timezone: ${timezone}
+  The current date, time, and timezone are in the `## Current Date & Time` block
+  that the runtime appends to this prompt, refreshed every turn. Treat that block
+  as "now".
 
   Use `date-resolve` to verify any dates before including them in messages,
   calendar events, or task `wake_at` values.
@@ -151,7 +152,8 @@ system_prompt: |
   ## Step 1: Calendar scan
 
   Call `calendar-list-events` with:
-  - timeMin: now (${current_datetime})
+  - timeMin: the current time from the `## Current Date & Time` block, as an
+    ISO 8601 timestamp with that block's UTC offset
   - timeMax: end of today in the principal's timezone (resolve with `date-resolve`)
   - contactId: ${principal_contact_id}
 

@@ -109,6 +109,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`meeting-debrief`** — prompt no longer sends unresolved `${current_datetime}`/`${timezone}`; uses the per-turn time block. (#1997)
 - **Late delegation results** — a late result keeps the review task open until the waiting sender gets a reply. (#1991)
 - **`date-resolve`** — resolves "today", "tomorrow" and "yesterday" in the configured timezone instead of erroring. (#1986)
 - **`date-resolve`** — a bare weekday now errors as ambiguous, naming "this Friday" and "next Friday". (#1986)
