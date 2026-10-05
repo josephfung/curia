@@ -1,6 +1,7 @@
 // Smoke's command line is parsed strictly (#1956).
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONCURRENCY, parseSmokeArgs } from '../../smoke/args.js';
+import { DEFAULT_CONCURRENCY } from '../../shared/case-scope.js';
+import { parseSmokeArgs } from '../../smoke/args.js';
 
 describe('parseSmokeArgs', () => {
   it('reads every flag', () => {

@@ -4,6 +4,7 @@
 // `--tag calendar` ignored would run the suite on the dev config's routing, or the whole
 // suite, and still print "Gate passed". Unknown flags, `--flag=value` and missing values
 // are errors.
+import { DEFAULT_CONCURRENCY, parseConcurrency } from '../shared/case-scope.js';
 
 export interface SmokeArgs {
   /** Route every agent to this model (the release gate passes the production standard tier). */
@@ -18,19 +19,6 @@ export interface SmokeArgs {
   allowRemoteDb: boolean;
   /** Cases run at once (#1980). 1 runs them one after another. */
   concurrency: number;
-}
-
-/**
- * Cases run at once unless --concurrency says otherwise: enough to cut a release run's
- * wall-clock several-fold, few enough to stay under OpenRouter's rate limits (#1980).
- */
-export const DEFAULT_CONCURRENCY = 4;
-
-/** A positive integer, or an error naming the flag. Shared by both suites' CLIs. */
-export function parseConcurrency(value: string, flag = '--concurrency'): number {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1) throw new Error(`${flag} must be a positive integer (got '${value}')`);
-  return n;
 }
 
 const VALUE_FLAGS = new Set(['--model', '--tags', '--case', '--concurrency']);
