@@ -1277,7 +1277,7 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
 
   // #1958: the refusal does not end the turn, so it has to say what to do next. That
   // guidance used to live only in the coordinator prompt. It sits in its own field
-  // because `message` is the principal-safe sentence and must stay free of directives.
+  // so `message` stays a status sentence free of directives.
   it('says what to do next in next_step, apart from the relayable message', async () => {
     const { bus } = listeningBus();
     const result = await handler.execute(makeCtx(
@@ -1296,7 +1296,14 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
     expect(data.next_step).toContain("Do not delegate to 'social-media' again this turn");
     expect(data.next_step).toMatch(/reworded brief .* refused/i);
     expect(data.next_step).toMatch(/still in progress/);
-    expect(data.next_step).toMatch(/message.* safe to relay/);
+    // The runtime queues the refused brief, and the manifest tells the model to say so.
+    expect(data.next_step).toMatch(/queued to run after it/);
+    // On a scheduled or system turn there is no requester; the principal is told.
+    expect(data.next_step).toMatch(/the principal, on a scheduled or system turn/);
+    // `message` names the agent id, and a non-principal reply goes out unreviewed.
+    expect(data.message).toContain('social-media');
+    expect(data.next_step).toMatch(/without naming who is doing the work/);
+    expect(data.next_step).toMatch(/do not relay `message`/);
     expect(data.next_step).toMatch(/delegate_event_id/);
     expect(data.next_step).toMatch(/how long/);
     expect(data.next_step).toMatch(/second copy/);

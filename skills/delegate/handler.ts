@@ -135,8 +135,9 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
       open_handle_age_ms: openHandleAgeMs(hit.createdAt),
       ...(hit.status !== undefined && { handle_status: hit.status }),
       ...(hit.expiresAt !== undefined && { handle_expires_at: hit.expiresAt.toISOString() }),
-      // Principal-safe: next_step tells the model this sentence may be relayed, so it
-      // must never carry a directive.
+      // Neutral status, free of directives. It names the agent id, so next_step tells
+      // the model to paraphrase it rather than relay it: on a non-principal turn the
+      // reply goes to an outside sender unreviewed.
       message: `Specialist '${agent}' is already working on an open request in this conversation.`,
       // Directives for the calling agent. This refusal is not a failure, so the turn
       // keeps going and the model needs to know what to do instead of retrying. The
@@ -150,8 +151,11 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
 function inFlightNextStep(agent: string): string {
   return [
     `Do not delegate to '${agent}' again this turn: a reworded brief is the same open request and will be refused too.`,
-    'Tell the requester the earlier request is still in progress. The `message` field is neutral and safe to relay.',
-    'Do not quote delegate_event_id, and do not say how long the work has been running: open_handle_age_ms starts when the wait expired, not when the work began.',
+    // The runtime queues this refused brief for a later wake (queueUndispatchedDelegation),
+    // which is why the requester is told it is queued, matching the manifest description.
+    'Tell the requester (the principal, on a scheduled or system turn) that the earlier request is still in progress and this one is queued to run after it.',
+    'Say it in your own words, without naming who is doing the work; do not relay `message`, which names an internal agent.',
+    'Do not quote delegate_event_id, and do not say how long the work has been running or when it will finish: open_handle_age_ms is the age of a tracking record, not a progress measure.',
     'Do not send a second copy of a draft that request already produced.',
   ].join(' ');
 }
