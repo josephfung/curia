@@ -294,7 +294,9 @@ async function main(): Promise<void> {
     }
 
     out('\n-- Running --\n');
-    // Set when a client connects mid-suite: cases not yet started are skipped.
+    // Set when a client connects mid-suite, or a case fails in a way that would repeat (a
+    // judge auth error): cases not yet started are skipped, and running ones stop at
+    // their next run instead of paying for runs nobody will see scored.
     let stopReason: string | undefined;
     const keysOf = new Map(cases.map(c => [c, seedConflictKeys(c)]));
     const caseResults = await runConcurrently(cases, args.concurrency, async (scenario): Promise<CaseResult | undefined> => {
@@ -312,6 +314,7 @@ async function main(): Promise<void> {
       const runs: ScenarioRun[] = [];
       // A case's runs stay one at a time: each seeds the same contacts (seed.ts).
       for (let i = 0; i < n; i++) {
+        if (stopReason) return undefined;
         const run = await harness.runOnce(scenario, i, {
           onProviderRetry: (reason) => out(`   ${scenario.name} [${i + 1}/${n}] provider failure: ${reason} — running it again (not counted)`),
         });
@@ -324,7 +327,13 @@ async function main(): Promise<void> {
               : c.name).join(', ') || 'no tools';
         out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `ERROR ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}`}`);
       }
-      const rated = await rateRuns(scenario, runs, harness, judge);
+      let rated: Awaited<ReturnType<typeof rateRuns>>;
+      try {
+        rated = await rateRuns(scenario, runs, harness, judge);
+      } catch (e) {
+        stopReason ??= `Rating '${scenario.name}' failed: ${describeError(e)}`;
+        throw e;
+      }
       const result = scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure);
       // One block per case, printed at once, so concurrent cases do not interleave inside it.
       const lines = [`   == ${scenario.name}: ${formatUsd(result.usage.total.estimatedCostUsd)}`];
@@ -412,6 +421,9 @@ async function main(): Promise<void> {
     out(`   Time:    ${Math.round(suite.durationMs / 1000)}s (concurrency ${args.concurrency})`);
     out('\n   Model spend (estimated from registry prices; tests/shared/usage.ts):');
     for (const line of formatUsageLines(suite.usage)) out(`     ${line}`);
+    if (overheadUsage.total.calls > 0) {
+      out(`     (includes ${formatUsd(overheadUsage.total.estimatedCostUsd)} over ${overheadUsage.total.calls} call(s) made outside a run or after it ended)`);
+    }
     const providerRetries = results.flatMap(r => r.runs.flatMap(run => run.providerRetries.map(reason => `${r.name} run ${run.runIndex + 1}: ${reason}`)));
     if (providerRetries.length > 0) {
       out('\n   Provider failures, re-run without counting against the case:');

@@ -7,7 +7,7 @@ import {
   PROVIDER_RETRIES,
   providerFailure,
   runConcurrently,
-  slowestModelCallMs,
+  stalledCallMs,
   type TurnErrorKind,
 } from '../shared/case-scope.js';
 import { sumBreakdowns, type UsageBreakdown } from '../shared/usage.js';
@@ -15,9 +15,10 @@ import type { ToolStub } from '../scenarios/types.js';
 import type { CaseTarget, TestCase, CaseExecution, CapturedResponse } from './types.js';
 
 /**
- * After a case times out and is cancelled, how long to wait for its turn to wind down
- * before reading its spend. A cancelled turn ends at its next model call, so this is
- * mostly the one call in flight; one that runs longer is left to shutdown.
+ * After an attempt ends and is cancelled, how long to wait for its leftover work to wind
+ * down before reading its spend. A cancelled turn ends at its next model call, so this is
+ * mostly the one call in flight; one that runs longer is left to shutdown, and its spend
+ * is reported as outside any case.
  */
 const CANCEL_SETTLE_MS = 30_000;
 
@@ -121,21 +122,27 @@ async function runAttempt(
       }
     }
     // Measured now, while a stalled call is still in flight.
-    const slowestCall = slowestModelCallMs(state);
+    const stalled = stalledCallMs(state);
 
-    if (error) {
-      // Whatever this case still has running must stop: it has its result, and its turn
-      // would otherwise go on spending (and calling tools) until it finished on its own.
-      state.cancelled = true;
-      await harness.settle(state, CANCEL_SETTLE_MS);
+    // Whatever this case still has running must stop, whether it passed or failed: it has
+    // its result, and leftover work (a timed-out turn, a specialist past its delegate
+    // timeout) would otherwise go on spending and calling tools — for real, once the
+    // stubs below are cleared — beside the cases still running.
+    state.cancelled = true;
+    if (!(await harness.settle(state, CANCEL_SETTLE_MS))) {
+      process.stderr.write(`  [WARN] '${tc.name}': a turn was still running ${CANCEL_SETTLE_MS / 1000}s after the case ended; its later spend is counted outside any case\n`);
     }
     // Also stops this case's stubs answering anything later.
     const agentCalls = harness.stubs.clear();
-    // A specialist that fell back ran on a model the results are not labelled with.
-    if (state.fallbacks.length > 0) {
-      error ??= `model fallback: ${state.fallbacks.join('; ')}`;
+    // A specialist that fell back ran on a model the results are not labelled with. Only
+    // the failure when nothing else failed first: a model failure must not be re-run as a
+    // provider one because some specialist also fell back.
+    if (state.fallbacks.length > 0 && error === undefined) {
+      error = `model fallback: ${state.fallbacks.join('; ')}`;
       errorKind = 'fallback';
     }
+    const usage = state.usage.snapshot();
+    state.closed = true;
 
     const execution: CaseExecution = {
       testCase: tc,
@@ -143,11 +150,11 @@ async function runAttempt(
       agentCalls,
       ...(target ? { target } : {}),
       ...(error ? { error } : {}),
-      usage: state.usage.snapshot(),
+      usage,
       providerRetries: [],
     };
     const providerReason = error
-      ? providerFailure({ ...(errorKind ? { kind: errorKind } : {}), ...(errorType ? { errorType } : {}), slowestModelCallMs: slowestCall })
+      ? providerFailure({ ...(errorKind ? { kind: errorKind } : {}), ...(errorType ? { errorType } : {}), stalledCallMs: stalled })
       : undefined;
     return { execution, ...(providerReason ? { providerReason } : {}) };
   });
