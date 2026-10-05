@@ -23,7 +23,7 @@ import {
   type ScenarioHarness,
 } from './harness.js';
 import { createJudge, judgeRun, type Judge } from './judge.js';
-import { loadScenarioCases, resolvePlaceholders } from './loader.js';
+import { loadScenarioCases, resolveRunPlaceholders } from './loader.js';
 import { describeError, seedConflictKeys } from './seed.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from '../shared/case-scope.js';
 import { formatUsageLines, formatUsd, sumBreakdowns, UsageLedger } from '../shared/usage.js';
@@ -168,8 +168,9 @@ async function rateRuns(
       rated.push(run);
       continue;
     }
-    // Each run seeded its own rows, so {{entry:x}} in a check means this run's id.
-    const behaviors = resolvePlaceholders(scenario.expectedBehaviors, new Map(Object.entries(run.refs)));
+    // Each run seeded its own rows, so {{entry:x}} in a check means this run's id, and
+    // resolved its dates against its own clock, so {{day:…}} means that run's day.
+    const behaviors = resolveRunPlaceholders(scenario.expectedBehaviors, run);
     const judged = behaviors.filter(b => !b.check);
     const judgeUsage = new UsageLedger();
     const judgeScores = await judgeRun(scenario, run, judged, judge, judgeUsage);

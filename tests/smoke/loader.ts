@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { parseStubs } from '../scenarios/loader.js';
 import type { ToolStub } from '../scenarios/types.js';
-import { resolveDatePlaceholders } from './date-placeholders.js';
+import { resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import { resolvePrincipalPlaceholders } from './fixtures.js';
 import {
   SMOKE_SENDERS,

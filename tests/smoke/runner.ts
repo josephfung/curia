@@ -1,6 +1,6 @@
 // tests/smoke/runner.ts
 import { conversationIdFor, TurnError, type CuriaHarness, type TargetThread } from './harness.js';
-import { resolveDatePlaceholders } from './date-placeholders.js';
+import { resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import { resolvePrincipalPlaceholders, type PrincipalRef } from './fixtures.js';
 import { mergeStubs, newSmokeCase } from './stub-layer.js';
 import {

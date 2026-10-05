@@ -51,7 +51,6 @@ tests/smoke/
   stub-layer.ts   — answers stubbed tool calls for any agent; the rest run for real
   stub-filters.ts — narrows stubbed list/search results to the call's range or query
   fixtures.ts     — seeds the fixture office's people; principal placeholders
-  date-placeholders.ts — dates relative to the run day, in the principal's timezone
   evaluator.ts    — sends transcripts to the GPT-4o judge and parses judgment
   gate.ts         — the pass/fail rule for a case, known failures, retries
   report.ts       — generates self-contained HTML reports with trend charts
@@ -62,6 +61,9 @@ tests/smoke/
   results/        — JSON run results, one file per run (historical tracking)
   reports/        — HTML reports, one file per run
 ```
+
+Dates relative to the run day, in the principal's timezone, come from
+`tests/shared/date-placeholders.ts`, which the scenario suite also uses.
 
 The pipeline is linear:
 

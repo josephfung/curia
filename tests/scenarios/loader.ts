@@ -6,6 +6,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
+import { hasDatePlaceholders, resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import type {
   BehaviorCheck,
   BehaviorWeight,
@@ -25,6 +26,14 @@ const CONTACT_KINDS = ['person', 'organization', 'automated'] as const;
 
 /** `{{kind:key}}` or `{{principal_contact_id}}`. */
 const PLACEHOLDER = /\{\{\s*([a-z_]+)(?::([A-Za-z0-9_-]+))?\s*\}\}/g;
+
+/**
+ * Relative-date kinds (tests/shared/date-placeholders.ts, shared with smoke). They are
+ * resolved per run against that run's clock, before seeded-row placeholders, so the
+ * seeded-row check skips them. Some forms (`{{date:today}}`, `{{timezone}}`) also match
+ * PLACEHOLDER's shape and would otherwise read as unknown kinds.
+ */
+const DATE_KINDS = new Set(['date', 'time', 'weekday', 'day', 'at', 'timezone']);
 
 type Raw = Record<string, unknown>;
 
@@ -343,6 +352,36 @@ export function resolvePlaceholders<T>(value: T, refs: ReadonlyMap<string, strin
   return walk(value) as T;
 }
 
+/** The instant and timezone a run resolved its date placeholders against. */
+export interface RunClock {
+  /** ISO timestamp. */
+  now: string;
+  timezone: string;
+}
+
+/**
+ * Resolve a case value for one finished run: dates against the run's own clock, then
+ * the rows it seeded. Rating happens after the run, possibly past midnight, so "today"
+ * must be the run's, not the rater's.
+ *
+ * Throws when the value has date placeholders and the run has no clock (a transcript
+ * saved before #1958). Resolving against "now" would rate it against the wrong days,
+ * and passing the placeholder through would hand the judge raw template text.
+ */
+export function resolveRunPlaceholders<T>(
+  value: T,
+  run: { refs: Record<string, string>; clock?: RunClock },
+): T {
+  let dated = value;
+  if (hasDatePlaceholders(value)) {
+    if (!run.clock) {
+      throw new Error('value has date placeholders but the run has no clock to resolve them against');
+    }
+    dated = resolveDatePlaceholders(value, run.clock.timezone, new Date(run.clock.now));
+  }
+  return resolvePlaceholders(dated, new Map(Object.entries(run.refs)));
+}
+
 /** Where shared stub sets live: tests/scenarios/stubs/<name>.yaml. */
 export const DEFAULT_STUBS_DIR = path.join(import.meta.dirname, 'stubs');
 
@@ -454,8 +493,23 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   scenario.seed.bullpen.forEach(t => add('thread', t.key));
 
   // failure_modes go to the judge as written; a placeholder there would reach it raw.
-  if (placeholdersIn(scenario.failureModes).length > 0) {
+  if (placeholdersIn(scenario.failureModes).length > 0 || hasDatePlaceholders(scenario.failureModes)) {
     throw new CaseError(file, `failure_modes cannot contain {{…}} placeholders`);
+  }
+  // The description reaches the judge as written too. Say "next week", not a date.
+  if (hasDatePlaceholders(scenario.description)) {
+    throw new CaseError(file, `description cannot contain date placeholders`);
+  }
+  // A malformed date placeholder throws at resolution. Resolve once now, against an
+  // arbitrary clock, so that is a load error and not a mid-run one.
+  try {
+    resolveDatePlaceholders(
+      { seed: scenario.seed, inbound: scenario.inbound, toolStubs: scenario.toolStubs, behaviors: scenario.expectedBehaviors },
+      'UTC',
+      new Date(0),
+    );
+  } catch (err) {
+    throw new CaseError(file, `date placeholder: ${err instanceof Error ? err.message : String(err)}`);
   }
   // Fixture contacts must never collide with a real person's address.
   for (const c of scenario.seed.contacts) {
@@ -472,6 +526,7 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   })) {
     if (ref === 'principal_contact_id') continue;
     const [kind, key] = ref.split(':');
+    if (DATE_KINDS.has(kind!)) continue;
     if (!key || !keys.has(kind!)) throw new CaseError(file, `unknown placeholder {{${ref}}}`);
     if (!keys.get(kind!)!.has(key)) throw new CaseError(file, `placeholder {{${ref}}} names no seeded ${kind}`);
   }

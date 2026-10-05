@@ -1,4 +1,4 @@
-// tests/smoke/date-placeholders.ts — relative dates in smoke stub fixtures (#1956).
+// tests/shared/date-placeholders.ts — relative dates in smoke and scenario fixtures (#1956, #1958).
 //
 // A case like "How does my Wednesday look?" needs calendar events on the coming
 // Wednesday whenever the suite runs, so fixtures name dates relative to today, in the
@@ -54,6 +54,17 @@ function resolveOne(kind: string, arg: string, today: DateTime, now: DateTime): 
   const minute = Number(m[3]);
   if (hour > 23 || minute > 59) throw new Error(`time placeholder '${arg}' has an invalid time`);
   return resolveDay(m[1]!, today).set({ hour, minute, second: 0, millisecond: 0 }).toISO()!;
+}
+
+/** Whether any string in `value` (at any depth) holds a date placeholder. */
+export function hasDatePlaceholders(value: unknown): boolean {
+  if (typeof value === 'string') {
+    // Fresh regexes: the module-level ones are /g, and .test() on them is stateful.
+    return /\{\{\s*(date|time|weekday|day|at):[^}]+?\s*\}\}/.test(value) || /\{\{\s*timezone\s*\}\}/.test(value);
+  }
+  if (Array.isArray(value)) return value.some(hasDatePlaceholders);
+  if (value !== null && typeof value === 'object') return Object.values(value).some(hasDatePlaceholders);
+  return false;
 }
 
 /**

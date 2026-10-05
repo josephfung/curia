@@ -173,6 +173,11 @@ export interface ScenarioRun {
    * name a seeded row ({{entry:x}}) are resolved against it at rating time.
    */
   refs: Record<string, string>;
+  /**
+   * The instant and timezone this run resolved its date placeholders against (#1958).
+   * Absent on transcripts saved before it existed.
+   */
+  clock?: { now: string; timezone: string };
   toolCalls: CapturedToolCall[];
   /** The coordinator's agent.response content (NO_REPLY included verbatim). */
   reply: string | null;

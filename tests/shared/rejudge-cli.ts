@@ -15,7 +15,7 @@ import { createTestModeStack } from '../../src/startup/test-mode-stack.js';
 import { createJudge, type Judge } from '../scenarios/judge.js';
 import { judgeRun } from '../scenarios/judge.js';
 import { scoreCase, JUDGE_ERROR_PREFIX } from '../scenarios/gate.js';
-import { loadScenarioCases, resolvePlaceholders } from '../scenarios/loader.js';
+import { loadScenarioCases, resolveRunPlaceholders } from '../scenarios/loader.js';
 import type { RunRating, SuiteResult } from '../scenarios/types.js';
 import { evaluateCases } from '../smoke/evaluator.js';
 import type { RunResult } from '../smoke/types.js';
@@ -111,6 +111,7 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
   const usage = new UsageLedger();
   const byName = new Map(loadScenarioCases(SCENARIO_CASES_DIR).map(c => [c.name, c]));
   let skippedRuns = 0;
+  let undatedRuns = 0;
   const comparisons = await runConcurrently(suite.cases, concurrency, async (saved): Promise<CaseComparison | undefined> => {
     // Files saved before #1980 have no per-run spend; scoreCase sums it.
     const result = { ...saved, runs: saved.runs.map(r => ({ ...r, usage: r.usage ?? emptyBreakdown(), providerRetries: r.providerRetries ?? [] })) };
@@ -125,7 +126,16 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
     const ratings: RatingPair[] = [];
     for (const [i, run] of result.runs.entries()) {
       if (run.error) continue;
-      const resolved = resolvePlaceholders(behaviors, new Map(Object.entries(run.refs)));
+      let resolved: typeof behaviors;
+      try {
+        resolved = resolveRunPlaceholders(behaviors, run);
+      } catch (e) {
+        // A date placeholder in a run saved before runs carried a clock (#1958). Rating it
+        // against today's dates would compare the wrong days, so the run is left out.
+        err(`  [WARN] ${result.name} run ${i + 1}: ${e instanceof Error ? e.message : String(e)}; skipped`);
+        undatedRuns++;
+        continue;
+      }
       const judged = resolved.filter(b => !b.check);
       const before = (id: string): RunRating => result.behaviors.find(b => b.behavior.id === id)!.ratings[i]!;
       if (judged.length === 0) continue;
@@ -149,6 +159,7 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
     };
   });
   if (skippedRuns > 0) out(`   Skipped ${skippedRuns} run(s) the baseline judge errored on`);
+  if (undatedRuns > 0) out(`   Skipped ${undatedRuns} run(s) saved without a clock for their date placeholders`);
   return { comparisons: comparisons.filter((c): c is CaseComparison => c !== undefined), spend: usage.snapshot() };
 }
 
