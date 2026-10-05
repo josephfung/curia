@@ -16,6 +16,7 @@
 // Stub a write only where the case is about what Curia does next, not whether it may.
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolResult } from '../../src/skills/types.js';
+import { newAttempt, type CaseAttempt, type CaseContext } from '../shared/case-scope.js';
 import { matchToolStub } from '../scenarios/stub-matcher.js';
 import { CalendarState, shapeStubResult } from './stub-filters.js';
 import type { ToolStub } from '../scenarios/types.js';
@@ -36,21 +37,57 @@ export interface AgentToolCall {
   success?: boolean;
 }
 
+/**
+ * Everything one case attempt owns (#1980). Cases run concurrently, so none of this can be
+ * shared: each tool call is answered from the state of the case it was made in, found
+ * through the case context (tests/shared/case-scope.ts) — a delegated specialist's calls
+ * included, though they come from another conversation.
+ */
+export interface SmokeCaseState extends CaseAttempt {
+  stubs: Record<string, ToolStub[]>;
+  answers: Map<string, CallAnswer[]>;
+  calls: AgentToolCall[];
+  /** What this case has written to the (stubbed) calendar, replayed onto its later reads. */
+  calendar: CalendarState;
+  /** Bullpen threads this case opened: the only ones its agents are shown as pending. */
+  threads: Set<string>;
+  /** Model fallbacks (any agent) during the case. */
+  fallbacks: string[];
+}
+
+export function newSmokeCase(label: string): SmokeCaseState {
+  return {
+    ...newAttempt(label),
+    stubs: {},
+    answers: new Map(),
+    calls: [],
+    calendar: new CalendarState(),
+    threads: new Set(),
+    fallbacks: [],
+  };
+}
+
 export interface SmokeStubs {
   /** Wrap the real layer. Pass the result as createTestModeStack's wrapExecutionLayer. */
   wrap(layer: ExecutionLayer): ExecutionLayer;
   /**
-   * Answer matching calls with these stubs until the next set() or clear(). Set before
-   * each turn, so a multi-turn case can change what a tool returns between turns.
+   * Answer the current case's matching calls with these stubs until the next set() or
+   * clear(). Set before each turn, so a multi-turn case can change what a tool returns
+   * between turns. Must be called inside a case.
    */
   set(stubs: Record<string, ToolStub[]>): void;
   /**
-   * Answer `toolName` calls with `answer` until the next clear(), before any stub. Kept
-   * across set(), so it holds for every turn of the case.
+   * Answer the current case's `toolName` calls with `answer` until the next clear(), before
+   * any stub. Kept across set(), so it holds for every turn of the case.
    */
   answer(toolName: string, answer: CallAnswer): void;
-  /** Stop stubbing and return every call made since the previous clear(). */
+  /** Stop stubbing the current case and return every call it made since the previous clear(). */
   clear(): AgentToolCall[];
+  /**
+   * Calls made outside every case (the stack's own background work, if any). They run for
+   * real and are no case's; the CLI warns when there are any.
+   */
+  readonly orphanCalls: number;
 }
 
 function skillError(message: string): string {
@@ -73,24 +110,37 @@ export function mergeStubs(
   return merged;
 }
 
-export function createSmokeStubs(): SmokeStubs {
-  let stubs: Record<string, ToolStub[]> = {};
-  let answers = new Map<string, CallAnswer[]>();
-  let calls: AgentToolCall[] = [];
-  // What this case has written to the (stubbed) calendar, replayed onto its later reads.
-  let calendar = new CalendarState();
+export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStubs {
+  let orphanCalls = 0;
+
+  const inCase = (method: string): SmokeCaseState => {
+    const state = context.current();
+    // A harness bug, not a case failure: stubs set outside a case would answer nobody.
+    if (!state) throw new Error(`SmokeStubs.${method}() called outside a case`);
+    return state;
+  };
 
   const invoke = async (real: ExecutionLayer, args: Parameters<ExecutionLayer['invoke']>): Promise<ToolResult> => {
     const [toolName, input, , options] = args;
+    const state = context.current();
+    if (!state) {
+      orphanCalls++;
+      return real.invoke(...args);
+    }
+    if (state.cancelled) {
+      // The case passed its timeout and has its result; a write now would land in nothing
+      // anyone reads, and a real call would only spend. Refuse, unrecorded.
+      return { success: false, error: skillError(`The test case '${state.label}' passed its timeout; this turn was stopped.`) };
+    }
     const record: AgentToolCall = {
       agentId: options?.agentId,
       toolName,
       input: structuredClone(input),
       disposition: 'real',
     };
-    calls.push(record);
+    state.calls.push(record);
 
-    for (const answer of answers.get(toolName) ?? []) {
+    for (const answer of state.answers.get(toolName) ?? []) {
       const result = await answer(structuredClone(input), options?.agentId);
       if (result) {
         record.disposition = 'stubbed';
@@ -99,14 +149,14 @@ export function createSmokeStubs(): SmokeStubs {
       }
     }
 
-    const stub = matchToolStub(toolName, input, stubs);
+    const stub = matchToolStub(toolName, input, state.stubs);
     if (stub) {
       record.disposition = 'stubbed';
       record.success = stub.error === undefined;
       if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
       // Clone so a handler-side mutation cannot change the fixture for a later call, then
       // answer the question asked (time range, search query, echoed inputs).
-      return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input, calendar) };
+      return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input, state.calendar) };
     }
     const result = await real.invoke(...args);
     record.success = result.success;
@@ -128,18 +178,23 @@ export function createSmokeStubs(): SmokeStubs {
       });
     },
     set(next) {
-      stubs = next;
+      inCase('set').stubs = next;
     },
     answer(toolName, answer) {
-      answers.set(toolName, [...(answers.get(toolName) ?? []), answer]);
+      const state = inCase('answer');
+      state.answers.set(toolName, [...(state.answers.get(toolName) ?? []), answer]);
     },
     clear() {
-      const done = calls;
-      stubs = {};
-      answers = new Map();
-      calls = [];
-      calendar = new CalendarState();
+      const state = inCase('clear');
+      const done = state.calls;
+      state.stubs = {};
+      state.answers = new Map();
+      state.calls = [];
+      state.calendar = new CalendarState();
       return done;
+    },
+    get orphanCalls() {
+      return orphanCalls;
     },
   };
 }

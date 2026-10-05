@@ -8,6 +8,7 @@ import {
   parseJudgeResponse,
 } from '../../smoke/evaluator.js';
 import type { BehaviorScore, CaseExecution, ExpectedBehavior, TestCase } from '../../smoke/types.js';
+import { emptyBreakdown } from '../../shared/usage.js';
 
 function testCase(overrides: Partial<TestCase> = {}): TestCase {
   return {
@@ -35,6 +36,8 @@ function execution(overrides: Partial<CaseExecution> = {}): CaseExecution {
       toolCalls: [{ name: 'calendar-create-event', input: { title: 'Lunch' }, result: { success: false, error: 'no calendar' } }],
     }],
     agentCalls: [],
+    usage: emptyBreakdown(),
+    providerRetries: [],
     ...overrides,
   };
 }
