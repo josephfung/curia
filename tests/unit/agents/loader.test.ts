@@ -198,8 +198,12 @@ describe('agent system prompts carry only placeholders the runtime resolves (#19
     // ${persona.*} field is caught here too. Scheduled-job payloads (`schedule[].task`)
     // are interpolated by the scheduler and covered in
     // tests/unit/scheduler/scheduler-placeholder-interpolation.test.ts.
+    const configs = loadAllAgentConfigs(agentsDir);
+    // Guard against a vacuous pass: the agent this test was written for must be scanned.
+    expect(configs.map(c => c.name)).toContain('meeting-debrief');
+
     const violations: string[] = [];
-    for (const config of loadAllAgentConfigs(agentsDir)) {
+    for (const config of configs) {
       const resolved = interpolateRuntimeContext(config.system_prompt, {
         availableSpecialists: 'specialists',
         agentContactId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
