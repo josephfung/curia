@@ -110,9 +110,12 @@ GOOGLE_OAUTH_CLIENT_ID=<...> GOOGLE_OAUTH_CLIENT_SECRET=<...> CURIA_GOOGLE_EMAIL
 
 The script connects to a single persistent `workspace-mcp` process (important — each
 service auth call must happen in the same process so the OAuth state survives the
-callback), opens your browser once per service, and waits for you to complete the login.
+callback) with the same `--tools drive docs sheets` allowlist as runtime, opens your
+browser once, and waits for you to complete the login. The allowlist is what keeps
+Calendar and Gmail scopes out of the consent: workspace-mcp requests the scopes of
+every service it has enabled.
 
-Log in as **Curia's Gmail account** each time.
+Log in as **Curia's Gmail account**.
 
 After all services in the auth script are authenticated (Drive, Sheets and Docs;
 #1957), tokens are saved to:
