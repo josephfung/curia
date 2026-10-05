@@ -184,8 +184,6 @@ export function discoverAgentManifests(dirPath: string): AgentDiscovery[] {
  * Currently supports:
  * - ${office_identity_block} — compiled identity block from OfficeIdentityService
  * - ${available_specialists} — list of specialist agents from the agent registry
- * - ${current_date} — today's date in the configured timezone (YYYY-MM-DD, Day)
- * - ${timezone} — the configured IANA timezone name
  * - ${agent_contact_id} — the agent's own contact ID (seeded at bootstrap)
  * - ${principal_contact_id} — the principal's contact ID (loaded at bootstrap from
  *   contactService.findContactBySystemRole('principal')). Agents that need to act
@@ -195,6 +193,12 @@ export function discoverAgentManifests(dirPath: string): AgentDiscovery[] {
  *
  * This runs at bootstrap time (after all agents are registered) and is separate
  * from persona interpolation which runs at config load time.
+ *
+ * There is deliberately no date/time or timezone placeholder: a value substituted
+ * here would be frozen at boot. The runtime appends a fresh `## Current Date & Time`
+ * block every turn instead (src/time/time-context.ts), and prompts should point
+ * at that. Any other `${...}` token reaches the model literally;
+ * tests/unit/agents/loader.test.ts fails the build if an agent YAML has one (#1997).
  */
 export function interpolateRuntimeContext(
   systemPrompt: string,
