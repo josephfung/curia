@@ -15,6 +15,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Behavior-suite concurrency** — `--concurrency` (default 4) runs smoke and scenario cases at once, isolated per case. (#1980)
+- **Behavior-suite cost report** — both suites print and save estimated model spend per case, by agent and judge. (#1980)
+- **`pnpm rejudge`** — re-judges saved suite transcripts with a candidate judge and reports verdict agreement. (#1980)
+- **Test-mode stack** — `wrapLlmProvider` hook wraps each live LLM provider. (#1980)
 - **`delegation.principal_note` (public API)** — records a sender reply's note for the principal, kept out of the reply. (#1990)
 - **`context-bridge-keep-open`** — a delegated specialist keeps its exchange's outbound-context entry active past its return. (#1972)
 - **`delegate` (public API)** — optional `outbound_entry_id`; the platform releases that entry when the specialist handles the reply. (#1972)
@@ -49,6 +53,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Behavior suites** — provider stalls, errors and fallbacks are re-run without using a case's gated retry. (#1980)
+- **Behavior suites** — a timed-out case is cancelled, so its abandoned turn stops calling the model. (#1980)
+- **Suite judge** — retries rate limits with backoff instead of aborting the run. (#1980)
 - **`inspect-prompts`** — emits prompt inputs from the test-mode stack; enabled roster, validated thresholds, no voice block. (curia-deploy#261)
 - **Agent assembly** — `resolveSystemPromptSources()` decides each agent's prompt blocks in one place for external renderers. (curia-deploy#261)
 - **Delegation-failure reply to a sender** — notes for the principal go in their own block, never to the sender. (#1990)

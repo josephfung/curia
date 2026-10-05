@@ -27,12 +27,21 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
 | `--case <text>` | Only cases whose name contains this text (case-insensitive). |
 | `--tags a,b` | Only cases with one of these tags. |
 | `--runs <n>` | Runs per case, overriding the case's `runs` and the default of 5. |
+| `--concurrency <n>` | Cases run at once (default 4). A case's own runs are always one at a time. |
 | `--allow-other-connections` | Run even though another client is connected to the database (see below). |
 
 `SCENARIO_TIMEOUT_MS` sets the default per-run wait (180s). A case can set its own
 `timeout_seconds`. The wait is a hard bound: a turn that outlives it is scored as an
-errored run, its later tool calls are refused (never answered by the next run's stubs),
-and its conversation rows are cleaned when it finally ends.
+errored run and cancelled. Its later model calls fail at once, so it stops spending; its
+later tool calls are refused (never answered by another run's stubs); and its
+conversation rows are cleaned when it finally ends.
+
+**Provider failures** are re-run, not scored. A run that errors with a model fallback, a
+provider-type agent error (`PROVIDER_ERROR`, `TIMEOUT`, `RATE_LIMIT`), or a timeout during
+which one model call ran 60 seconds or more is thrown away and run again, up to twice
+(`tests/shared/case-scope.ts`: `providerFailure`). Each re-run is printed, listed in the
+summary, and recorded on the run (`providerRetries`). A failure that is still there after
+two re-runs is scored as an errored run, as before.
 
 A run narrowed with `--case`, `--tags` or `--runs` can exit 0, but it says it is **not**
 a release-gate result, and the results JSON records the filters.
@@ -71,7 +80,12 @@ a release-gate result, and the results JSON records the filters.
 - A line per run, listing the tools called. `name!` means the stub layer refused the call.
   `name?` means a real read-only tool failed — a real outcome production would also
   return (e.g. `date-resolve` rejecting an expression), not a harness gap.
-- Per behavior: its pass rate, and an example justification when it is under 100%.
+- Per case, once its runs are rated: its estimated spend, then per behavior its pass rate
+  and an example justification when it is under 100%.
+- In the summary, each case's spend and the run's total, split by agent and judge. The
+  results JSON holds the split per run, per case and for the suite (`usage`). These are
+  estimates from registry prices, and OpenRouter cache reads show as 0 (#1962); see
+  [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
 - `tests/scenarios/results/<timestamp>.json` (gitignored), with the commit, the model and
   every run's tool calls, reply and ratings.
 - `tests/scenarios/stub-coverage.json` (committed). See [Stub coverage](#stub-coverage).
@@ -110,6 +124,13 @@ CLI warns that the marker may be stale. Remove the marker in the PR that fixes t
 
 ## How a run works
 
+Cases run `--concurrency` at a time; each case's runs are one after another. Two cases
+that seed the same contact identity or display name never run at once: seeding deletes a
+fixture already on that identity, and a run's coordinator could find another case's
+fixture by name with a real contact read (`seed.ts`: `seedConflictKeys`). Each run's
+seeded rows, stubs, model calls and spend are found through its own case context
+(`tests/shared/case-scope.ts`), so overlapping runs never see each other's state.
+
 1. **Seed** the case's rows through the real services (see the next section).
 2. **Send** the inbound through production's Dispatcher, which resolves the sender,
    injects `[ACTIVE OUTBOUND CONTEXT]` and builds the `agent.task`. Bullpen cases instead
@@ -121,7 +142,8 @@ CLI warns that the marker may be stale. Remove the marker in the PR that fixes t
    `suppressDelivery` (#1732), so capture restores the sentinel.
 4. **Clean up** every seeded row and the run's own conversation rows.
 5. **Rate:** apply each `check` in code and send the other behaviors to the judge, one run
-   at a time.
+   at a time. To try a cheaper judge on saved runs, see `pnpm rejudge` in
+   [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
 
 ### Seeded state and the shared database
 
