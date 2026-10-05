@@ -299,6 +299,7 @@ async function main(): Promise<void> {
       passed: failing.length === 0,
       durationMs: Date.now() - startTime,
       concurrency,
+      today,
       usage: sumBreakdowns([...caseResults.map(c => c.usage), overheadUsage]),
       overheadUsage,
     };

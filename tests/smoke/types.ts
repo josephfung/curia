@@ -117,6 +117,8 @@ export interface BehaviorScore {
 
 export interface CaseResult {
   testCase: TestCase;
+  /** A targeted case's target with its placeholders resolved, as the agent and judge saw it. */
+  target?: CaseTarget;
   responses: CapturedResponse[];
   scores: BehaviorScore[];
   /** Weighted score 0-1 for this case */
@@ -158,6 +160,8 @@ export interface RunResult {
   durationMs: number;
   /** Cases run at once (--concurrency). */
   concurrency: number;
+  /** "Today" as the agents and the judge were told it (re-judging needs the same). */
+  today: string;
   /**
    * The run's estimated model spend: every case's plus `overheadUsage`. An estimate from
    * registry prices — see tests/shared/usage.ts.

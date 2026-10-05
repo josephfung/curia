@@ -81,6 +81,7 @@ export async function evaluateCases(
     const failures = caseFailures(gateInput);
     const result: CaseResult = {
       ...gateInput,
+      ...(exec.target ? { target: exec.target } : {}),
       responses: exec.responses,
       agentCalls: exec.agentCalls,
       passed: failures.length === 0,
