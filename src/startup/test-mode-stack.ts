@@ -176,6 +176,13 @@ export interface TestModeStackOptions {
    * principal's) and score on a premise it did not set up.
    */
   wrapWorkingMemory?: (memory: WorkingMemory) => WorkingMemory;
+  /**
+   * Wrap each live LLM provider before agents (and `llmProviders`) receive it. The
+   * behavior suites (#1980) use it to see which case a call belongs to and to refuse
+   * further calls from a case that has timed out, so an abandoned turn stops spending.
+   * Not applied to offline providers, which never make a call.
+   */
+  wrapLlmProvider?: (provider: LLMProvider) => LLMProvider;
   /** Override for fixtures. Default <repo>/agents and <repo>/skills. */
   agentsDir?: string;
   skillsDir?: string;
@@ -526,11 +533,12 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       providerRegistry.set('anthropic', offlineProvider('anthropic'));
       providerRegistry.set('openrouter', offlineProvider('openrouter'));
     } else {
+      const wrapProvider = options.wrapLlmProvider ?? ((p: LLMProvider) => p);
       if (anthropicApiKey) {
-        providerRegistry.set('anthropic', new AnthropicProvider(anthropicApiKey, logger, modelRegistry));
+        providerRegistry.set('anthropic', wrapProvider(new AnthropicProvider(anthropicApiKey, logger, modelRegistry)));
       }
       if (openrouterApiKey) {
-        providerRegistry.set('openrouter', new OpenRouterProvider(openrouterApiKey, logger, modelRegistry));
+        providerRegistry.set('openrouter', wrapProvider(new OpenRouterProvider(openrouterApiKey, logger, modelRegistry)));
       }
     }
 
