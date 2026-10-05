@@ -1,7 +1,7 @@
 // handler.test.ts — unit tests for email-get-thread skill.
 
 import { describe, it, expect, vi } from 'vitest';
-import { EmailGetThreadHandler, THREAD_MESSAGE_LIMIT } from './handler.js';
+import { EmailGetThreadHandler, THREAD_BODY_BUDGET_CHARS, THREAD_MESSAGE_LIMIT } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
@@ -99,7 +99,7 @@ describe('EmailGetThreadHandler — successful fetch', () => {
     expect(result.success).toBe(true);
     // The thread id is trimmed, and only threadId + limit are sent. A folder or
     // unread filter would hide part of the thread.
-    expect(list).toHaveBeenCalledWith({ threadId: 'thread-1', limit: THREAD_MESSAGE_LIMIT }, undefined);
+    expect(list).toHaveBeenCalledWith({ threadId: 'thread-1', limit: THREAD_MESSAGE_LIMIT + 1 }, undefined);
 
     const data = (result as { data: ThreadData }).data;
     expect(data.threadId).toBe('thread-1');
@@ -144,16 +144,91 @@ describe('EmailGetThreadHandler — successful fetch', () => {
     });
   });
 
-  it('flags truncated when the thread fills the cap, so dropped older messages are not silent', async () => {
-    const full = Array.from({ length: THREAD_MESSAGE_LIMIT }, (_, i) =>
+  it('asks for one more than the cap and flags truncated when it comes back, dropping the oldest', async () => {
+    // Nylas returns newest-first, so the extra (+1) message is the oldest.
+    const page = Array.from({ length: THREAD_MESSAGE_LIMIT + 1 }, (_, i) =>
+      makeMessage({ id: `msg-${i}`, date: THREAD_MESSAGE_LIMIT + 1 - i }),
+    );
+    const list = vi.fn().mockResolvedValue(page);
+    const result = await new EmailGetThreadHandler().execute(makeCtx({ outboundGateway: makeMockGateway(list) }));
+    const data = (result as { data: ThreadData & { omittedOldest: number } }).data;
+    expect(list).toHaveBeenCalledWith({ threadId: 'thread-1', limit: THREAD_MESSAGE_LIMIT + 1 }, undefined);
+    expect(data.count).toBe(THREAD_MESSAGE_LIMIT);
+    expect(data.truncated).toBe(true);
+    expect(data.messages.map((m) => m['id'])).not.toContain(`msg-${THREAD_MESSAGE_LIMIT}`);
+    expect(data.messages.at(-1)!['id']).toBe('msg-0');
+  });
+
+  it('does not flag truncated for a thread of exactly the cap', async () => {
+    const page = Array.from({ length: THREAD_MESSAGE_LIMIT }, (_, i) =>
       makeMessage({ id: `msg-${i}`, date: THREAD_MESSAGE_LIMIT - i }),
     );
     const result = await new EmailGetThreadHandler().execute(
-      makeCtx({ outboundGateway: makeMockGateway(vi.fn().mockResolvedValue(full)) }),
+      makeCtx({ outboundGateway: makeMockGateway(vi.fn().mockResolvedValue(page)) }),
     );
     const data = (result as { data: ThreadData }).data;
     expect(data.count).toBe(THREAD_MESSAGE_LIMIT);
+    expect(data.truncated).toBe(false);
+  });
+
+  it('drops the oldest bodies past the size budget and keeps the newest', async () => {
+    // Execution cuts oversized output from the END of the JSON, which would drop the
+    // newest messages (and the truncated flag). The handler must trim first, from the oldest.
+    const big = 'x'.repeat(Math.ceil(THREAD_BODY_BUDGET_CHARS / 3));
+    const page = [
+      makeMessage({ id: 'newest', date: 400, body: big }),
+      makeMessage({ id: 'third', date: 300, body: big }),
+      makeMessage({ id: 'second', date: 200, body: big }),
+      makeMessage({ id: 'oldest', date: 100, body: big }),
+    ];
+    const result = await new EmailGetThreadHandler().execute(
+      makeCtx({ outboundGateway: makeMockGateway(vi.fn().mockResolvedValue(page)) }),
+    );
+    const data = (result as { data: ThreadData & { omittedOldest: number } }).data;
+    expect(data.messages.map((m) => m['id'])).toEqual(['second', 'third', 'newest']);
     expect(data.truncated).toBe(true);
+    expect(data.omittedOldest).toBe(1);
+  });
+
+  it('always returns the newest message, even when its body alone exceeds the budget', async () => {
+    const page = [
+      makeMessage({ id: 'newest', date: 200, body: 'x'.repeat(THREAD_BODY_BUDGET_CHARS + 1) }),
+      makeMessage({ id: 'oldest', date: 100 }),
+    ];
+    const result = await new EmailGetThreadHandler().execute(
+      makeCtx({ outboundGateway: makeMockGateway(vi.fn().mockResolvedValue(page)) }),
+    );
+    const data = (result as { data: ThreadData & { omittedOldest: number } }).data;
+    expect(data.messages.map((m) => m['id'])).toEqual(['newest']);
+    expect(data.omittedOldest).toBe(1);
+  });
+
+  it('puts count and truncated ahead of messages, so they survive an output cut', async () => {
+    const result = await new EmailGetThreadHandler().execute(makeCtx());
+    const keys = Object.keys((result as { data: Record<string, unknown> }).data);
+    expect(keys.indexOf('truncated')).toBeLessThan(keys.indexOf('messages'));
+    expect(keys.indexOf('count')).toBeLessThan(keys.indexOf('messages'));
+  });
+
+  it('drops messages from another thread if the provider ignores the filter', async () => {
+    const page = [
+      makeMessage({ id: 'mine', threadId: 'thread-1' }),
+      makeMessage({ id: 'stray', threadId: 'thread-9' }),
+    ];
+    const result = await new EmailGetThreadHandler().execute(
+      makeCtx({ outboundGateway: makeMockGateway(vi.fn().mockResolvedValue(page)) }),
+    );
+    const data = (result as { data: ThreadData }).data;
+    expect(data.messages.map((m) => m['id'])).toEqual(['mine']);
+  });
+
+  it('fails when the provider returns only messages from other threads', async () => {
+    const result = await new EmailGetThreadHandler().execute(
+      makeCtx({
+        outboundGateway: makeMockGateway(vi.fn().mockResolvedValue([makeMessage({ threadId: 'thread-9' })])),
+      }),
+    );
+    expect(result.success).toBe(false);
   });
 });
 
@@ -196,11 +271,11 @@ describe('EmailGetThreadHandler — failures', () => {
     expect((result as { error: string }).error).toContain('account');
   });
 
-  it('returns a generic error when the gateway throws', async () => {
+  it('includes the provider error when the gateway throws, so the model can tell retryable from not', async () => {
     const result = await new EmailGetThreadHandler().execute(
-      makeCtx({ outboundGateway: makeMockGateway(vi.fn().mockRejectedValue(new Error('Nylas 500'))) }),
+      makeCtx({ outboundGateway: makeMockGateway(vi.fn().mockRejectedValue(new Error('Too many requests'))) }),
     );
     expect(result.success).toBe(false);
-    expect((result as { error: string }).error).toBe('Failed to fetch thread');
+    expect((result as { error: string }).error).toBe('Failed to fetch thread: Too many requests');
   });
 });
