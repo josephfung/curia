@@ -5,115 +5,115 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "direct email reply as text": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "external reply first person": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "no-reply automated notification": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "no-reply calendar decline": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "paused delegate no redelegate": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "principal reply no internals": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "pronoun your calendar": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "relayed follow-up routes to owner": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "reply-shaped non-principal": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "reply-shaped principal no context": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "scheduler additive create": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "scheduler ambiguous asks": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "scheduler edit in place": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "sweep-on-close closing result": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "sweep-on-close interim result": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "transfer-ownership sounds good": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "transfer-ownership trivial yes": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     },
     "transfer-ownership yes thursday": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-05T20:15:30.698Z"
+      "recordedAt": "2026-10-05T20:46:46.859Z"
     }
   }
 }
