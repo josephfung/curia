@@ -34,8 +34,9 @@ const SCENARIO_ENTRY_ORIGIN = 'scenario-origin-';
 const PRINCIPAL_LOCAL_CHANNELS = new Set(['cli', 'smoke-test', 'web']);
 
 /**
- * The ids the current run seeded. The scoped views read it on every call, so one view
- * built at boot serves every run.
+ * The ids one run seeded. Each run has its own (#1980: runs of different cases overlap),
+ * and the scoped views find the calling run's through the case context
+ * (tests/shared/case-scope.ts), so one view built at boot serves every run.
  */
 export class SeedScope {
   readonly entryIds = new Set<string>();
@@ -54,15 +55,20 @@ export class SeedScope {
   }
 }
 
+/** The calling run's scope; undefined outside every run, which then sees nothing. */
+export type CurrentScope = () => SeedScope | undefined;
+
 /**
- * The Dispatcher's outbound-context service, narrowed to this run's entries.
+ * The Dispatcher's outbound-context service, narrowed to the calling run's entries.
  * `getActive()` keeps production's contract (active only, newest first, limit) but
  * reads each seeded entry through the real `getEntry` SQL, so a released or expired
  * entry drops out exactly as it would in production.
  */
-export function scopedOutboundContext(real: OutboundContextService, scope: SeedScope): OutboundContextService {
+export function scopedOutboundContext(real: OutboundContextService, currentScope: CurrentScope): OutboundContextService {
   return Object.assign(Object.create(real) as OutboundContextService, {
     getActive: async (limit = 10): Promise<OutboundContextRow[]> => {
+      const scope = currentScope();
+      if (!scope) return [];
       try {
         const rows = await Promise.all([...scope.entryIds].map(id => real.getEntry(id)));
         return rows
@@ -77,10 +83,12 @@ export function scopedOutboundContext(real: OutboundContextService, scope: SeedS
   });
 }
 
-/** The bullpen as runtimes see it, narrowed to this run's threads (real SQL underneath). */
-export function scopedBullpen(real: BullpenService, scope: SeedScope): BullpenService {
+/** The bullpen as runtimes see it, narrowed to the calling run's threads (real SQL underneath). */
+export function scopedBullpen(real: BullpenService, currentScope: CurrentScope): BullpenService {
   return Object.assign(Object.create(real) as BullpenService, {
     getPendingThreadsForAgent: async (agentId: string, windowMinutes: number) => {
+      const scope = currentScope();
+      if (!scope) return [];
       try {
         return (await real.getPendingThreadsForAgent(agentId, windowMinutes))
           .filter(t => scope.threadIds.has(t.threadId));
@@ -300,6 +308,19 @@ export async function sweepLeftovers(stack: TestModeStack): Promise<Record<strin
     if (rows > 0) removed[table] = rows;
   }
   return removed;
+}
+
+/**
+ * What two concurrently running cases must not share (#1980). seedContact deletes a
+ * fixture contact already on its identity, which would pull another run's contact out
+ * from under it; and a run's coordinator can find another case's fixture by name with a
+ * real contact read. Cases with a key in common never run at the same time.
+ */
+export function seedConflictKeys(scenario: ScenarioCase): string[] {
+  return scenario.seed.contacts.flatMap(c => [
+    `identity:${c.channel}:${c.identifier.toLowerCase()}`,
+    `name:${c.displayName.trim().toLowerCase()}`,
+  ]);
 }
 
 /** Conversation ids a run uses (harness.ts); the sweep finds leftovers by them. */
