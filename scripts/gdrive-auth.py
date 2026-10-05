@@ -21,9 +21,10 @@ import webbrowser
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Authenticate Workspace services Curia actually loads (calendar omitted — #1853;
-# principal calendar is Nylas). Keep in sync with --tools in config/skills.yaml.
-SERVICES = ["gmail", "drive", "docs", "sheets"]
+# Authenticate only the Workspace services Curia loads (#1957). Keep in sync with
+# --tools in config/skills.yaml. Calendar is never on it (#1853; principal calendar
+# is Nylas), and Gmail goes through Curia's own email tools.
+SERVICES = ["drive", "docs", "sheets"]
 
 
 async def auth_service(session: ClientSession, service: str, email: str) -> None:

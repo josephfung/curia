@@ -54,6 +54,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Google Workspace MCP** — limited to Drive, Docs and Sheets; a config test now guards the allowlist. (#1957)
 - **Behavior suites** — provider stalls, errors and fallbacks are re-run without using a case's gated retry. (#1980)
 - **Behavior suites** — a timed-out case is cancelled, so its abandoned turn stops calling the model. (#1980)
 - **Suite judge** — retries rate limits with backoff instead of aborting the run. (#1980)
@@ -112,6 +113,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
+- **MCP calendar holdback** — registration-time filter removed; the `--tools` allowlist keeps Calendar out instead. (#1957)
 - **`no_reply_principal` email** — a deliberate decline stays in audit and logs, not the inbox. (#1908)
 - **Google Workspace calendar tools** — held back from MCP registration; principal calendar belongs to `@calendar`. (#1853)
 
