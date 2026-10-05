@@ -728,5 +728,7 @@ coordinator's.
 - **Concurrency: adopted** (time, not money): 4 cases at once took the gate from 70–97
   min to 12 min.
 
-**Estimate vs. OpenRouter's bill.** TODO: compare against OpenRouter's activity for
-02:03:56–02:16:17 UTC on 2026-10-05 (the estimate for that window is $4.39).
+**Estimate vs. OpenRouter's bill.** OpenRouter billed **$2.10** for 02:03:56–02:16:17 UTC
+on 2026-10-05, against the $4.39 estimate: the estimate is about 2.1× the bill. That
+matches cached input being priced as uncached (#1962), so the provider is caching the
+prefix; the real per-release cost is about $2.
