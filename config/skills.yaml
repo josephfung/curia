@@ -44,25 +44,33 @@
 
 servers:
   # Community Google Workspace MCP server (taylorwilsdon/google_workspace_mcp).
-  # Covers Drive, Sheets, Docs, Gmail, and more via OAuth 2.0 as Curia's Gmail
-  # user. The "complete" tier is required for load-bearing Sheets tools:
+  # Serves Drive, Docs and Sheets (see the allowlist below) via OAuth 2.0 as
+  # Curia's Gmail user. The "complete" tier is required for load-bearing Sheets tools:
   # create_sheet (new tab) and append_table_rows are both in the complete tier —
   # they were not promoted to extended in workspace-mcp's tool_tiers.yaml.
   #
-  # Calendar is intentionally omitted from `--tools` (#1853): those tools
-  # authenticate as Curia's Google identity and must not shadow the principal-bound
-  # Nylas `calendar` skill. Omitting the service also keeps Calendar out of the
-  # OAuth scope set (fresh installs only — existing tokens keep any previously
-  # granted Calendar scope until revoked; see docs/dev/google-drive.md).
-  # In-process backstop (never registered in ToolRegistry, so no agent can call
-  # them regardless of pins): GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK in
-  # src/skills/mcp-loader.ts — keep that list in sync if upstream adds tools.
-  # Revisit with #1330.
+  # `--tools` is an allowlist, and it is the ONLY gate on which Google services
+  # Curia gets (#1957):
+  #   - Drive, Docs and Sheets only. Gmail overlaps the Nylas `email` bundle
+  #     (whole-thread reads: email-get-thread), Tasks overlaps task-create, and
+  #     Contacts belongs to the contacts specialist. Forms, Slides, Chat, Apps
+  #     Script and Search saw no use. Every extra service is tool definitions on
+  #     every coordinator call.
+  #   - Calendar must never be added (#1853). Those tools authenticate as Curia's
+  #     own Google identity, so a principal calendar read through them "succeeds"
+  #     with an empty calendar. Principal calendar work goes through the Nylas
+  #     `calendar` skill. Revisit only with #1330, which would also need to
+  #     restore the call-time identity guard deleted in #1957.
+  # There is no in-process holdback behind this list any more: what is listed
+  # here is what agents get. tests/unit/config.google-workspace-allowlist.test.ts
+  # pins the exact set, so changing it means editing that test too.
   #
-  # `--tools` is an allowlist: a new upstream service (e.g. a future `gchat`
-  # module) will not load until it is added here. That is intentional — safer
-  # than auto-adopting every new service. Check upstream core/tool_tiers.yaml
-  # when something expected is missing.
+  # The allowlist also sets the OAuth scopes requested on a fresh consent.
+  # Existing tokens keep any broader scopes they were granted until revoked (see
+  # docs/dev/google-drive.md); workspace-mcp only needs a subset.
+  #
+  # deploy overlays (e.g. curia-deploy's custom/config/skills.yaml) replace this
+  # file wholesale, so they must carry the same allowlist.
   #
   # Secrets are declared in the `secrets:` block and resolved from the encrypted
   # vault at spawn time. The `secrets:` list defines which credentials are required,
@@ -86,19 +94,11 @@ servers:
       - workspace-mcp
       - --tool-tier
       - complete
-      # All upstream services except calendar (#1853 / #1330).
+      # Allowlist, not a filter: see the comment above (#1957, #1853).
       - --tools
-      - gmail
       - drive
       - docs
       - sheets
-      - chat
-      - forms
-      - slides
-      - tasks
-      - contacts
-      - search
-      - appscript
     secrets:
       - key: google_oauth_client_id
         label: "Google OAuth client ID"
