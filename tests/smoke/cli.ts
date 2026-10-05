@@ -284,6 +284,9 @@ async function main(): Promise<void> {
       ? caseResults.reduce((sum, c) => sum + c.weightedScore, 0) / caseResults.length
       : 0;
     const failing = gatingFailures(caseResults);
+    // Work that lost its case could have been answered unstubbed or on another model, so
+    // no result in this run can be vouched for (harness.ts: isolationProblems).
+    const isolation = harness.isolationProblems();
     const knownFailing = caseResults.filter(c => !c.passed && !failing.includes(c));
     const stale = staleKnownFailures(caseResults);
     // The warm-up and anything no case made: real spend, but no case's.
@@ -296,7 +299,7 @@ async function main(): Promise<void> {
       filtered,
       cases: caseResults,
       overallScore,
-      passed: failing.length === 0,
+      passed: failing.length === 0 && isolation.length === 0,
       durationMs: Date.now() - startTime,
       concurrency,
       today,
@@ -339,10 +342,9 @@ async function main(): Promise<void> {
     out('   Model spend (estimated from registry prices; tests/shared/usage.ts):');
     for (const line of formatUsageLines(runResult.usage)) out(`     ${line}`);
     if (overheadUsage.total.calls > 0) {
-      out(`     (includes ${formatUsd(overheadUsage.total.estimatedCostUsd)} outside any case: the warm-up${harness.unattributedUsage().total.calls > 0 ? ' and unattributed calls' : ''})`);
-    }
-    if (harness.stubs.orphanCalls > 0) {
-      out(`   [WARN] ${harness.stubs.orphanCalls} tool call(s) ran outside any case (answered for real, not stubbed)`);
+      const late = harness.unattributedUsage().total;
+      out(`     (includes ${formatUsd(overheadUsage.total.estimatedCostUsd)} outside any case: the warm-up` +
+        `${late.calls > 0 ? `, and ${formatUsd(late.estimatedCostUsd)} over ${late.calls} call(s) made outside a case or after it ended` : ''})`);
     }
     out('');
 
@@ -371,8 +373,11 @@ async function main(): Promise<void> {
         'if that issue is fixed, remove the marker.');
     }
 
+    for (const problem of isolation) err(`   [ISOLATION] ${problem}`);
     if (!runResult.passed) {
-      err(`GATE FAILED: ${failing.length} case(s) below the gate.`);
+      err(failing.length > 0
+        ? `GATE FAILED: ${failing.length} case(s) below the gate.`
+        : 'GATE FAILED: work escaped its case (above), so no case result can be trusted.');
       exitCode = 1;
     } else if (filtered) {
       out('Gate passed for the selected cases only (--case/--tags): not a full-suite result.');

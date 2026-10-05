@@ -24,21 +24,35 @@ export interface CaseAttempt {
   /** For warnings: the case name and attempt. */
   readonly label: string;
   /**
-   * Set once the harness gives up on the attempt (its timeout fired). Its later model calls
-   * fail at once and its tool calls are refused, so an abandoned turn stops spending and
-   * cannot touch anything — the runtime has no way to cancel a turn itself.
+   * Set once the harness is done with the attempt: its timeout fired, or it ended and its
+   * result is being read. Its later model calls fail at once and its tool calls are
+   * refused, so leftover work stops spending and cannot touch anything — the runtime has
+   * no way to cancel a turn itself.
    */
   cancelled: boolean;
+  /**
+   * Set when the attempt's spend has been read (closeAttempt). A call billed after that
+   * would land in a ledger nobody reads again, so the meter sends it to the run's
+   * "outside any case" ledger instead, which the CLIs print.
+   */
+  closed: boolean;
   /** Model calls made inside this attempt, by agent. The judge adds its own. */
   readonly usage: UsageLedger;
-  /** Start time of each of this attempt's model calls still in flight. */
+  /**
+   * Each of this attempt's model calls still in flight, and when it last made progress:
+   * its start, or a streamed call's latest event.
+   */
   readonly inFlight: Map<number, number>;
-  /** The longest single model call this attempt has made so far, in ms. */
-  slowestCallMs: number;
 }
 
 export function newAttempt(label: string): CaseAttempt {
-  return { label, cancelled: false, usage: new UsageLedger(), inFlight: new Map(), slowestCallMs: 0 };
+  return { label, cancelled: false, closed: false, usage: new UsageLedger(), inFlight: new Map() };
+}
+
+/** Done with the attempt: stop whatever it still has running, and route later spend elsewhere. */
+export function closeAttempt(attempt: CaseAttempt): void {
+  attempt.cancelled = true;
+  attempt.closed = true;
 }
 
 export interface CaseContext<S extends CaseAttempt> {
@@ -57,18 +71,23 @@ export function createCaseContext<S extends CaseAttempt>(): CaseContext<S> {
 }
 
 /**
- * How long one model call may run before a timeout is blamed on the provider rather than
- * the model. Calls on the production standard tier normally finish in seconds even with the
- * coordinator's full prompt; a minute-long call is the provider stalling (#1980 saw 180s
- * timeouts that finished in well under the limit on retry).
+ * How long a model call in flight may go without progress before a timeout is blamed on
+ * the provider rather than the model. Calls on the production standard tier normally
+ * finish in seconds even with the coordinator's full prompt (#1980 saw 180s timeouts that
+ * finished well inside the limit on retry). Set well above a slow-but-working call, so a
+ * model that is merely slow — long outputs, long reasoning — keeps its timeout.
  */
-export const PROVIDER_STALL_MS = 60_000;
+export const PROVIDER_STALL_MS = 90_000;
 
-/** The longest model call the attempt made, counting one still in flight. */
-export function slowestModelCallMs(attempt: CaseAttempt, now = Date.now()): number {
-  let slowest = attempt.slowestCallMs;
-  for (const started of attempt.inFlight.values()) slowest = Math.max(slowest, now - started);
-  return slowest;
+/**
+ * How long the attempt's most stalled model call has gone without progress, counting only
+ * calls still in flight. Measured when the timeout fires: a slow call that already
+ * finished, earlier in the attempt, says nothing about why this turn ran out of time.
+ */
+export function stalledCallMs(attempt: CaseAttempt, now = Date.now()): number {
+  let stalled = 0;
+  for (const progress of attempt.inFlight.values()) stalled = Math.max(stalled, now - progress);
+  return stalled;
 }
 
 /** The answer a cancelled attempt's model calls get: non-retryable, so the turn ends now. */
@@ -79,7 +98,7 @@ function cancelledResponse(providerId: string, label: string): Extract<LLMRespon
       // BUDGET_EXCEEDED: never retried by the runtime, and not NOT_FOUND, so no model fallback.
       type: 'BUDGET_EXCEEDED',
       source: providerId,
-      message: `test harness: '${label}' passed its timeout, so its turn was stopped`,
+      message: `test harness: '${label}' is over (it timed out or ended), so its turn was stopped`,
       retryable: false,
       context: {},
       timestamp: new Date(),
@@ -87,21 +106,23 @@ function cancelledResponse(providerId: string, label: string): Extract<LLMRespon
   };
 }
 
+/** In-flight call ids, shared by every wrapped provider so two providers' calls never collide. */
+let callSeq = 0;
+
 /**
- * Wrap a provider (createTestModeStack's wrapLlmProvider) so each call is timed against
+ * Wrap a provider (createTestModeStack's wrapLlmProvider) so each call is tracked against
  * the attempt that made it, and a cancelled attempt's calls are refused before they cost
  * anything. The judge's calls run outside any attempt and pass straight through.
  */
 export function guardProvider(provider: LLMProvider, current: () => CaseAttempt | undefined): LLMProvider {
-  let seq = 0;
-  const begin = (attempt: CaseAttempt | undefined): (() => void) => {
-    if (!attempt) return () => {};
-    const id = ++seq;
-    const started = Date.now();
-    attempt.inFlight.set(id, started);
-    return () => {
-      attempt.inFlight.delete(id);
-      attempt.slowestCallMs = Math.max(attempt.slowestCallMs, Date.now() - started);
+  /** Track a call; returns progress() for a streamed event and end() for when it finishes. */
+  const begin = (attempt: CaseAttempt | undefined): { progress: () => void; end: () => void } => {
+    if (!attempt) return { progress: () => {}, end: () => {} };
+    const id = ++callSeq;
+    attempt.inFlight.set(id, Date.now());
+    return {
+      progress: () => { if (attempt.inFlight.has(id)) attempt.inFlight.set(id, Date.now()); },
+      end: () => { attempt.inFlight.delete(id); },
     };
   };
 
@@ -110,11 +131,11 @@ export function guardProvider(provider: LLMProvider, current: () => CaseAttempt 
     async chat(params) {
       const attempt = current();
       if (attempt?.cancelled) return cancelledResponse(provider.id, attempt.label);
-      const end = begin(attempt);
+      const call = begin(attempt);
       try {
         return await provider.chat(params);
       } finally {
-        end();
+        call.end();
       }
     },
   };
@@ -126,11 +147,14 @@ export function guardProvider(provider: LLMProvider, current: () => CaseAttempt 
         yield cancelledResponse(provider.id, attempt.label);
         return;
       }
-      const end = begin(attempt);
+      const call = begin(attempt);
       try {
-        yield* stream(params);
+        for await (const event of stream(params)) {
+          call.progress();
+          yield event;
+        }
       } finally {
-        end();
+        call.end();
       }
     };
   }
@@ -139,12 +163,16 @@ export function guardProvider(provider: LLMProvider, current: () => CaseAttempt 
 
 /**
  * Bill every agent's llm.call to the attempt it was made in. A call made outside any
- * attempt goes to `unattributed`, which the CLI reports if it is ever non-zero.
+ * attempt, or billed after its attempt was closed (a call already in flight when the
+ * attempt ended), goes to `outside`, which the CLIs print whenever it is non-zero: it is
+ * real spend that no case's figure includes.
  */
-export function meterAgentCalls(bus: EventBus, current: () => CaseAttempt | undefined, unattributed: UsageLedger): void {
+export function meterAgentCalls(bus: EventBus, current: () => CaseAttempt | undefined, outside: UsageLedger): void {
   bus.subscribe('llm.call', 'system', async (event) => {
     const { payload } = event as LlmCallEvent;
-    (current()?.usage ?? unattributed).addAgentCall(payload.agentId, payload, payload.estimatedCostUsd);
+    const attempt = current();
+    const ledger = attempt && !attempt.closed ? attempt.usage : outside;
+    ledger.addAgentCall(payload.agentId, payload, payload.estimatedCostUsd);
   });
 }
 
@@ -161,20 +189,21 @@ const PROVIDER_ERROR_TYPES: ReadonlySet<string> = new Set(['PROVIDER_ERROR', 'TI
  *
  * - A model fallback ran the case on a different model than the run is labelled with.
  * - An agent error of a provider type (5xx, provider timeout, rate limit).
- * - A timeout during which one model call ran for PROVIDER_STALL_MS or more. A model that
- *   loops makes many quick calls instead; that timeout stays the model's.
+ * - A timeout that fired while a model call had made no progress for PROVIDER_STALL_MS
+ *   (stalledCallMs). A model that loops makes many quick calls instead, and a slow call
+ *   that finished earlier does not count; those timeouts stay the model's.
  */
 export function providerFailure(failure: {
   kind?: TurnErrorKind;
   errorType?: string;
-  slowestModelCallMs: number;
+  stalledCallMs: number;
 }): string | undefined {
   if (failure.kind === 'fallback') return 'model fallback';
   if ((failure.kind === 'agent_error' || failure.kind === 'error_response') && failure.errorType && PROVIDER_ERROR_TYPES.has(failure.errorType)) {
     return `provider error (${failure.errorType})`;
   }
-  if (failure.kind === 'timeout' && failure.slowestModelCallMs >= PROVIDER_STALL_MS) {
-    return `provider stall (one model call ran ${Math.round(failure.slowestModelCallMs / 1000)}s)`;
+  if (failure.kind === 'timeout' && failure.stalledCallMs >= PROVIDER_STALL_MS) {
+    return `provider stall (a model call had made no progress for ${Math.round(failure.stalledCallMs / 1000)}s)`;
   }
   return undefined;
 }
@@ -231,7 +260,13 @@ export async function runConcurrently<T, R>(
         running.add(entry);
         worker(entry.item, entry.index).then(
           (result) => { results[entry.index] = result; },
-          (error: unknown) => { failure ??= { error }; },
+          (error: unknown) => {
+            if (failure) {
+              // Only the first is rethrown; say what the others were rather than drop them.
+              process.stderr.write(`  [WARN] another worker also failed: ${error instanceof Error ? error.message : String(error)}\n`);
+            }
+            failure ??= { error };
+          },
         ).finally(() => {
           running.delete(entry);
           pump();

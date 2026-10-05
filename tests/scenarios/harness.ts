@@ -22,13 +22,14 @@ import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import {
+  closeAttempt,
   createCaseContext,
   guardProvider,
   meterAgentCalls,
   newAttempt,
   PROVIDER_RETRIES,
   providerFailure,
-  slowestModelCallMs,
+  stalledCallMs,
   type CaseAttempt,
 } from '../shared/case-scope.js';
 import { sumBreakdowns, UsageLedger, type UsageBreakdown } from '../shared/usage.js';
@@ -84,8 +85,9 @@ export function parseTimeout(raw: string | undefined): number {
 const LATE_TURN_GRACE_MS = 60_000;
 
 /**
- * After a run errors and is cancelled, how long to wait for its turn to wind down before
- * removing its rows and reading its spend. A cancelled turn ends at its next model call.
+ * After a run ends and is cancelled, how long to wait for its leftover work to wind down
+ * before removing its rows and reading its spend. A cancelled turn ends at its next model
+ * call; one that runs longer is left to shutdown, its spend counted outside any run.
  */
 const CANCEL_SETTLE_MS = 30_000;
 
@@ -109,7 +111,7 @@ export interface ScenarioHarness {
    * PROVIDER_RETRIES times, and the run records why (#1980).
    */
   runOnce(scenario: ScenarioCase, runIndex: number, options?: { onProviderRetry?: (reason: string) => void }): Promise<ScenarioRun>;
-  /** Model spend outside every run. */
+  /** Model spend no run's figure includes: outside every run, or billed after its run ended. */
   unattributedUsage(): UsageBreakdown;
   /** Remove rows an interrupted run left behind (by the suite's own markers). */
   sweep(): Promise<Record<string, number>>;
@@ -255,16 +257,17 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     lateTurns.set(settled, context.current());
   }
 
-  /** Wait (up to `maxMs`) for `state`'s turns still running. */
-  async function settle(state: ScenarioRunState, maxMs: number): Promise<void> {
-    const own = [...lateTurns].filter(([, s]) => s === state).map(([p]) => p);
-    if (own.length === 0) return;
+  /** Wait (up to `maxMs`) for `state`'s turns still running; false if some still are. */
+  async function settle(state: ScenarioRunState, maxMs: number): Promise<boolean> {
+    const own = (): Array<Promise<void>> => [...lateTurns].filter(([, s]) => s === state).map(([p]) => p);
+    if (own().length === 0) return true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      Promise.allSettled(own),
+      Promise.allSettled(own()),
       new Promise(resolve => { timer = setTimeout(resolve, maxMs); timer.unref(); }),
     ]);
     clearTimeout(timer);
+    return own().length === 0;
   }
 
   async function runOnce(
@@ -370,12 +373,14 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         providerReason = providerFailure({
           ...(outcome.errorKind ? { kind: outcome.errorKind } : {}),
           ...(outcome.errorType ? { errorType: outcome.errorType } : {}),
-          slowestModelCallMs: slowestModelCallMs(state),
+          stalledCallMs: stalledCallMs(state),
         });
-        // The run has its outcome; whatever it still has running must stop spending.
-        // Waited for (bounded) so the turn is not still acting while its rows are removed.
-        state.cancelled = true;
-        await settle(state, CANCEL_SETTLE_MS);
+      }
+      // The run has its outcome, passed or not; whatever it still has running must stop
+      // spending. Waited for (bounded) so nothing is still acting while its rows are removed.
+      state.cancelled = true;
+      if (!(await settle(state, CANCEL_SETTLE_MS))) {
+        process.stderr.write(`  [WARN] ${state.label}: a turn was still running ${CANCEL_SETTLE_MS / 1000}s after the run ended; its later spend is counted outside any run\n`);
       }
 
       const merged = mergeCalls(outcome.calls, stubbedCalls);
@@ -419,6 +424,8 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         }
       }
     }
+    // Spend billed from here on is no longer this run's figure (case-scope.ts: closeAttempt).
+    closeAttempt(state);
     const run = cleanupError ? { ...result, cleanupError } : result;
     return { run, ...(providerReason ? { providerReason } : {}) };
   }

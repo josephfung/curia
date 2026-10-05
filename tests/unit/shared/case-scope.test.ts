@@ -2,9 +2,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask, createLlmCall, type AgentTaskEvent } from '../../../src/bus/events.js';
-import type { LLMProvider, LLMResponse } from '../../../src/agents/llm/provider.js';
+import type { LLMProvider, LLMResponse, LLMStreamEvent } from '../../../src/agents/llm/provider.js';
 import { createLogger } from '../../../src/logger.js';
 import {
+  closeAttempt,
   createCaseContext,
   guardProvider,
   meterAgentCalls,
@@ -12,7 +13,7 @@ import {
   PROVIDER_STALL_MS,
   providerFailure,
   runConcurrently,
-  slowestModelCallMs,
+  stalledCallMs,
   type CaseAttempt,
 } from '../../shared/case-scope.js';
 import { UsageLedger } from '../../shared/usage.js';
@@ -74,6 +75,23 @@ describe('case context through the bus', () => {
     expect(unattributed.snapshot().total.calls).toBe(0);
   });
 
+  it('bills a call that lands after its case closed outside every case, not to a ledger already read', async () => {
+    const bus = new EventBus(createLogger('error'));
+    const context = createCaseContext<CaseAttempt>();
+    const outside = new UsageLedger();
+    meterAgentCalls(bus, context.current, outside);
+    const attempt = newAttempt('A');
+    await context.run(attempt, async () => {
+      await bus.publish('agent', llmCall('coordinator', 'conv-a', 1));
+      closeAttempt(attempt);
+      // A call that was in flight when the case ended, billed afterwards.
+      await bus.publish('agent', llmCall('coordinator', 'conv-a', 2));
+    });
+    expect(attempt.usage.snapshot().total.estimatedCostUsd).toBe(1);
+    expect(outside.snapshot().total.estimatedCostUsd).toBe(2);
+    expect(attempt.cancelled).toBe(true);
+  });
+
   it('bills a call made outside every case to nobody\'s case', async () => {
     const bus = new EventBus(createLogger('error'));
     const context = createCaseContext<CaseAttempt>();
@@ -104,7 +122,7 @@ describe('guardProvider', () => {
     expect(chat).not.toHaveBeenCalled();
   });
 
-  it('times each call against its attempt, counting one still in flight', async () => {
+  it('measures how long a call in flight has gone without progress, and forgets it once done', async () => {
     let release!: () => void;
     const chat = vi.fn(() => new Promise<LLMResponse>(resolve => { release = () => resolve(ok); }));
     const context = createCaseContext<CaseAttempt>();
@@ -112,9 +130,52 @@ describe('guardProvider', () => {
     const attempt = newAttempt('Case A');
     const pending = context.run(attempt, () => provider.chat({ messages: [] }));
     const started = [...attempt.inFlight.values()][0]!;
-    expect(slowestModelCallMs(attempt, started + 70_000)).toBe(70_000);
+    expect(stalledCallMs(attempt, started + 95_000)).toBe(95_000);
     release();
     await pending;
+    // A slow call that finished says nothing about a later timeout.
+    expect(stalledCallMs(attempt, started + 200_000)).toBe(0);
+  });
+
+  it('counts a streamed call\'s events as progress', async () => {
+    let next!: () => void;
+    async function* stream(): AsyncIterable<LLMStreamEvent> {
+      yield { type: 'text_delta', text: 'a' };
+      await new Promise<void>(resolve => { next = resolve; });
+      yield { type: 'text_delta', text: 'b' };
+    }
+    const context = createCaseContext<CaseAttempt>();
+    const provider = guardProvider({ id: 'openrouter', chat: vi.fn(), stream } as unknown as LLMProvider, context.current);
+    const attempt = newAttempt('Case A');
+    await context.run(attempt, async () => {
+      const it = provider.stream!({ messages: [] })[Symbol.asyncIterator]();
+      await it.next();
+      const progressed = [...attempt.inFlight.values()][0]!;
+      expect(stalledCallMs(attempt, progressed + 10)).toBe(10);
+      // The generator reaches its pause only once asked for the next event.
+      const second = it.next();
+      await tick();
+      next();
+      await second;
+      await it.next();
+    });
+    expect(attempt.inFlight.size).toBe(0);
+  });
+
+  it('keeps two providers\' calls in one attempt apart', async () => {
+    const releases: Array<() => void> = [];
+    const slow = (): LLMProvider => ({ id: 'p', chat: () => new Promise<LLMResponse>(resolve => { releases.push(() => resolve(ok)); }) } as LLMProvider);
+    const context = createCaseContext<CaseAttempt>();
+    const a = guardProvider(slow(), context.current);
+    const b = guardProvider(slow(), context.current);
+    const attempt = newAttempt('Case A');
+    const calls = context.run(attempt, () => Promise.all([a.chat({ messages: [] }), b.chat({ messages: [] })]));
+    expect(attempt.inFlight.size).toBe(2);
+    releases[0]!();
+    await tick();
+    expect(attempt.inFlight.size).toBe(1);
+    releases[1]!();
+    await calls;
     expect(attempt.inFlight.size).toBe(0);
   });
 
@@ -128,18 +189,20 @@ describe('guardProvider', () => {
 
 describe('providerFailure', () => {
   it('blames the provider for a fallback, a provider error type, or a stalled call', () => {
-    expect(providerFailure({ kind: 'fallback', slowestModelCallMs: 0 })).toBe('model fallback');
-    expect(providerFailure({ kind: 'agent_error', errorType: 'PROVIDER_ERROR', slowestModelCallMs: 0 })).toBe('provider error (PROVIDER_ERROR)');
-    expect(providerFailure({ kind: 'error_response', errorType: 'RATE_LIMIT', slowestModelCallMs: 0 })).toBe('provider error (RATE_LIMIT)');
-    expect(providerFailure({ kind: 'timeout', slowestModelCallMs: PROVIDER_STALL_MS + 5_000 })).toMatch(/^provider stall \(one model call ran 65s\)/);
+    expect(providerFailure({ kind: 'fallback', stalledCallMs: 0 })).toBe('model fallback');
+    expect(providerFailure({ kind: 'agent_error', errorType: 'PROVIDER_ERROR', stalledCallMs: 0 })).toBe('provider error (PROVIDER_ERROR)');
+    expect(providerFailure({ kind: 'error_response', errorType: 'RATE_LIMIT', stalledCallMs: 0 })).toBe('provider error (RATE_LIMIT)');
+    expect(providerFailure({ kind: 'timeout', stalledCallMs: PROVIDER_STALL_MS + 5_000 }))
+      .toBe('provider stall (a model call had made no progress for 95s)');
   });
 
   it('leaves the model\'s failures to the model', () => {
     // Many quick calls until the timeout: the model looping, not the provider stalling.
-    expect(providerFailure({ kind: 'timeout', slowestModelCallMs: 12_000 })).toBeUndefined();
-    expect(providerFailure({ kind: 'agent_error', errorType: 'BUDGET_EXCEEDED', slowestModelCallMs: 0 })).toBeUndefined();
-    expect(providerFailure({ kind: 'delivery', slowestModelCallMs: 0 })).toBeUndefined();
-    expect(providerFailure({ slowestModelCallMs: 0 })).toBeUndefined();
+    expect(providerFailure({ kind: 'timeout', stalledCallMs: 12_000 })).toBeUndefined();
+    expect(providerFailure({ kind: 'timeout', stalledCallMs: PROVIDER_STALL_MS - 1 })).toBeUndefined();
+    expect(providerFailure({ kind: 'agent_error', errorType: 'BUDGET_EXCEEDED', stalledCallMs: 0 })).toBeUndefined();
+    expect(providerFailure({ kind: 'delivery', stalledCallMs: 0 })).toBeUndefined();
+    expect(providerFailure({ stalledCallMs: 0 })).toBeUndefined();
   });
 });
 

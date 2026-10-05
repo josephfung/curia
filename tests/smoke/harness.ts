@@ -32,7 +32,7 @@ import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
-import { createCaseContext, guardProvider, meterAgentCalls, type TurnErrorKind } from '../shared/case-scope.js';
+import { closeAttempt, createCaseContext, guardProvider, meterAgentCalls, type TurnErrorKind } from '../shared/case-scope.js';
 import { createTurnCapture, withoutRecentHistory, type ObservedToolCall } from '../shared/turn-capture.js';
 import { UsageLedger, type UsageBreakdown } from '../shared/usage.js';
 import { createSmokeStubs, newSmokeCase, type SmokeCaseState, type SmokeStubs } from './stub-layer.js';
@@ -55,6 +55,9 @@ export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout >
 
 /** How long shutdown waits for turns that outlived their timeout. */
 const LATE_TURN_GRACE_MS = 60_000;
+
+/** How long a cancelled warm-up turn gets to wind down before the cases start. */
+const WARM_UP_SETTLE_MS = 30_000;
 
 /**
  * A turn that did not complete, and how (turn-capture's errorKind), so the runner can tell
@@ -159,8 +162,17 @@ export interface CuriaHarness {
    * next model call. Returns false if some are still running (shutdown waits for those).
    */
   settle(state: SmokeCaseState, maxMs: number): Promise<boolean>;
-  /** Model spend outside every case (the stack's own background work, if any). */
+  /**
+   * Model spend no case's figure includes: calls made outside every case, or billed after
+   * their case ended (a call still in flight past the settle wait).
+   */
   unattributedUsage(): UsageBreakdown;
+  /**
+   * Work that lost its case: tool calls and model fallbacks with no case context. Test
+   * mode runs no scheduler, so each one is a case's work the harness could not keep
+   * isolated — answered unstubbed, or on another model. The CLI fails the gate on any.
+   */
+  isolationProblems(): string[];
   shutdown(): Promise<void>;
 }
 
@@ -220,12 +232,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   // A fallback means some agent ran on a different model than the one the run is labelled
   // with. The shared capture only sees the awaited agent's; specialists work in their own
   // conversations, so collect every agent's here, on the case it happened in.
+  const orphanFallbacks: string[] = [];
   bus.subscribe('model.fallback', 'system', async (event) => {
     const { payload } = event as ModelFallbackEngagedEvent;
     const line = `${payload.agentId}: ${payload.failedModel} → ${payload.fallbackModel} (${payload.reason})`;
     const state = context.current();
     if (state) state.fallbacks.push(line);
-    else process.stderr.write(`  [WARN] model fallback outside any case: ${line}\n`);
+    else orphanFallbacks.push(line);
   });
 
   // Every agent's model spend, billed to the case it was made in (#1980).
@@ -444,7 +457,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
         process.stderr.write(`  [WARN] warm-up turn failed: ${err instanceof Error ? err.message : String(err)}\n`);
       }
     });
-    return state.usage.snapshot();
+    // Stop anything it left running (a timed-out warm-up turn especially) before the
+    // cases start beside it, then read what it spent.
+    state.cancelled = true;
+    await settle(state, WARM_UP_SETTLE_MS);
+    const usage = state.usage.snapshot();
+    closeAttempt(state);
+    return usage;
   }
 
   async function shutdown(): Promise<void> {
@@ -471,6 +490,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     warmUp,
     settle,
     unattributedUsage: () => unattributed.snapshot(),
+    isolationProblems: () => [
+      ...(stubs.orphanCalls > 0 ? [`${stubs.orphanCalls} tool call(s) ran outside any case (answered for real, not from a case's stubs)`] : []),
+      ...orphanFallbacks.map(f => `model fallback outside any case: ${f}`),
+    ],
     shutdown,
   };
 }
