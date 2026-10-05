@@ -179,6 +179,19 @@ export function providerFailure(failure: {
   return undefined;
 }
 
+/**
+ * Cases run at once unless --concurrency says otherwise: enough to cut a release run's
+ * wall-clock several-fold, few enough to stay under OpenRouter's rate limits (#1980).
+ */
+export const DEFAULT_CONCURRENCY = 4;
+
+/** A --concurrency value: a positive integer, or an error naming the flag. */
+export function parseConcurrency(value: string, flag = '--concurrency'): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`${flag} must be a positive integer (got '${value}')`);
+  return n;
+}
+
 /** Provider failures retried per attempt before the failure stands (and the gated retry applies). */
 export const PROVIDER_RETRIES = 2;
 
