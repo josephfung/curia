@@ -135,11 +135,25 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
       open_handle_age_ms: openHandleAgeMs(hit.createdAt),
       ...(hit.status !== undefined && { handle_status: hit.status }),
       ...(hit.expiresAt !== undefined && { handle_expires_at: hit.expiresAt.toISOString() }),
-      // Principal-safe. Directives to the coordinator live in its prompt, not here —
-      // the prompt tells the model this sentence is safe to relay.
+      // Principal-safe: next_step tells the model this sentence may be relayed, so it
+      // must never carry a directive.
       message: `Specialist '${agent}' is already working on an open request in this conversation.`,
+      // Directives for the calling agent. This refusal is not a failure, so the turn
+      // keeps going and the model needs to know what to do instead of retrying. The
+      // guidance used to live only in the coordinator prompt (#1958); here it arrives
+      // exactly when it applies, for any agent that delegates.
+      next_step: inFlightNextStep(agent),
     },
   };
+}
+
+function inFlightNextStep(agent: string): string {
+  return [
+    `Do not delegate to '${agent}' again this turn: a reworded brief is the same open request and will be refused too.`,
+    'Tell the requester the earlier request is still in progress. The `message` field is neutral and safe to relay.',
+    'Do not quote delegate_event_id, and do not say how long the work has been running: open_handle_age_ms starts when the wait expired, not when the work began.',
+    'Do not send a second copy of a draft that request already produced.',
+  ].join(' ');
 }
 
 /**

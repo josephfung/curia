@@ -1191,6 +1191,7 @@ describe('delegate manifest', () => {
     expect(outputs['handle_expires_at']).toContain('already_in_flight');
     expect(outputs['elapsed_wait_ms']).toBeUndefined();
     expect(outputs['delegate_event_id']).toBeDefined();
+    expect(outputs['next_step']).toContain('already_in_flight');
   });
 });
 
@@ -1272,6 +1273,35 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
     );
     expect(published).toEqual([]);
     expect(open.findInFlight).toHaveBeenCalledWith('social-media', 'signal:+15551212');
+  });
+
+  // #1958: the refusal does not end the turn, so it has to say what to do next. That
+  // guidance used to live only in the coordinator prompt. It sits in its own field
+  // because `message` is the principal-safe sentence and must stay free of directives.
+  it('says what to do next in next_step, apart from the relayable message', async () => {
+    const { bus } = listeningBus();
+    const result = await handler.execute(makeCtx(
+      { agent: 'social-media', task: 'Draft the launch post' },
+      {
+        bus,
+        agentRegistry: registry(),
+        conversationId: 'signal:+15551212',
+        openDelegationLookup: lookup({ agent: 'social-media', conversationId: 'signal:+15551212' }),
+      },
+    ));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as { message: string; next_step: string };
+    expect(data.next_step).toContain("Do not delegate to 'social-media' again this turn");
+    expect(data.next_step).toMatch(/reworded brief .* refused/i);
+    expect(data.next_step).toMatch(/still in progress/);
+    expect(data.next_step).toMatch(/message.* safe to relay/);
+    expect(data.next_step).toMatch(/delegate_event_id/);
+    expect(data.next_step).toMatch(/how long/);
+    expect(data.next_step).toMatch(/second copy/);
+    // The relayable sentence carries no instruction to the coordinator.
+    expect(data.message).not.toMatch(/do not|don't/i);
   });
 
   it('refuses a reworded task for the same agent and conversation', async () => {
