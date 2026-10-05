@@ -3555,7 +3555,7 @@ describe('toolSearch unified skill discovery (#1495)', () => {
     expect(searchResults.some((r) => r.name === 'task-create')).toBe(false);
   });
 
-  it('resolveSkillActivationForAgent skips disallowed member tools', async () => {
+  it('resolveSkillActivationForAgent refuses a bundle whose tools are all reserved (#1958)', async () => {
     const { SkillRegistry } = await import('../../../src/skills/skill-registry.js');
     const registry = new ToolRegistry();
     const skillRegistry = new SkillRegistry();
@@ -3575,10 +3575,10 @@ describe('toolSearch unified skill discovery (#1495)', () => {
 
     const layer = new ExecutionLayer(registry, logger, { skillRegistry });
     const result = layer.resolveSkillActivationForAgent('admin-bundle', 'research-analyst');
-    expect('error' in result).toBe(false);
-    if ('error' in result) return;
-    expect(result.tools).toEqual([]);
-    expect(result.skippedTools).toEqual(['secret-admin']);
+    expect(result).toEqual({ error: expect.stringContaining('reserved for other agents') });
+    // The owner still activates it.
+    const owner = layer.resolveSkillActivationForAgent('admin-bundle', 'coordinator');
+    expect('error' in owner).toBe(false);
   });
 });
 
