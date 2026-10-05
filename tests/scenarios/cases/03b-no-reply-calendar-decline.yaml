@@ -1,5 +1,6 @@
 # Case 3 (#1956): a non-principal calendar decline that needs no acknowledgement gets
-# exactly NO_REPLY.
+# exactly NO_REPLY. The meeting date is relative (#1958): a decline for a meeting that
+# has already happened is a different message.
 name: no-reply calendar decline
 description: >
   An external attendee declines a meeting invitation the coordinator sent on the
@@ -16,12 +17,12 @@ seed:
 inbound:
   from: marcus
   content: |
-    Subject: Declined: Q4 planning sync @ Thu Oct 8, 2pm - 3pm (EDT)
+    Subject: Declined: Q4 planning sync @ {{day:next-thursday}}, 2pm - 3pm (Eastern Time)
 
     Marcus Lindqvist has declined this invitation.
 
     Q4 planning sync
-    When: Thursday Oct 8, 2026 2pm – 3pm (Eastern Time)
+    When: {{day:next-thursday}}, 2pm – 3pm (Eastern Time)
 tool_stubs:
   delegate:
     - match: {}

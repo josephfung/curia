@@ -25,7 +25,7 @@ tool_stubs:
             status: active
             cronExpr: "0 9 * * 1"
             timezone: America/Toronto
-            nextRunAt: "2026-10-05T09:00:00-04:00"
+            nextRunAt: "{{time:next-monday 09:00}}"
             taskTitle: Weekly pipeline review
             intentAnchor: Weekly pipeline review — summarize open deals and stalled stages for the principal
             createdBy: coordinator
