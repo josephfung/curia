@@ -11,6 +11,9 @@ email-list:
 email-get:
   - match: {}
     error: Message not found in this mailbox.
+email-get-thread:
+  - match: {}
+    error: No messages found for this thread in this mailbox.
 email-list-folders:
   - match: {}
     return: { folders: [{ id: INBOX, name: Inbox }], count: 1 }
