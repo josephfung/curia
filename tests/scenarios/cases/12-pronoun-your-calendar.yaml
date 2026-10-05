@@ -1,0 +1,65 @@
+# Case 12 (#1958): "your calendar" from the principal. Curia has no calendar of its own,
+# so the ask is either about the principal's schedule (route to @calendar) or a category
+# error worth one short question. Ported from the voice-brain-parity spike's
+# `pronoun-your-calendar` fixture (ADR-038), where the full coordinator prompt solved it
+# 5/5 and both thin prompts 0/5. #1958 removed "Resolving pronouns before delegating"
+# only after this case passed without it. Rules: agents/coordinator.yaml, The Routing
+# Decision → "Handle directly" (no Curia/agent calendar) and "Principal calendar requests".
+#
+# The spike's own pronoun check read the delegate's `brief` argument, which does not
+# exist (it is `task`), so it always passed; what it really measured was whether the
+# model delegated. This case checks the routing in code and the wording with the judge.
+name: pronoun your calendar
+description: >
+  The principal asks "What's on your calendar tomorrow?". Curia keeps no calendar of its
+  own. The coordinator should treat it as the principal's schedule and get it from the
+  calendar specialist, or ask one short question about whose calendar they mean. It must
+  not claim or imply a calendar of its own.
+tags: [routing, calendar]
+inbound:
+  from: principal
+  content: What's on your calendar tomorrow?
+tool_stubs:
+  delegate:
+    # Matching is exact, so both spellings of the calendar specialist are stubbed.
+    - match: { agent: calendar }
+      return: &schedule
+        agent: calendar
+        response: >
+          Tomorrow: 09:00–09:30 Leadership sync; 12:30–13:30 Lunch with Priya Shah
+          (Cafe Belga); 15:30–16:30 Board prep with Dana. No conflicts.
+    - match: { agent: "@calendar" }
+      return: *schedule
+    - match: {}
+      return:
+        agent: contacts
+        response: Resolved the principal. No further detail needed for this request.
+expected_behaviors:
+  - id: no_own_calendar
+    weight: critical
+    description: >
+      The reply never claims or implies that the assistant has a calendar of its own
+      (for example "my calendar is clear", "I have nothing scheduled", "on my calendar
+      tomorrow"). Describing the principal's schedule, or saying the assistant keeps no
+      calendar, is fine.
+  - id: routes_or_clarifies
+    weight: critical
+    description: >
+      Either the assistant got tomorrow's schedule from the calendar specialist and
+      presents it as the principal's (leadership sync, lunch with Priya, board prep), or
+      it asks one short question about whose calendar the principal means. Answering
+      with an invented schedule, or saying it cannot help, is a miss.
+  - id: no_direct_calendar_hunt
+    weight: important
+    description: Does not search for or activate calendar tools itself.
+    check:
+      not_called: [tool-registry, skill-activate]
+  - id: no_identifiers
+    weight: important
+    description: The reply names no tool, agent or system.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - '"My calendar is clear tomorrow"'
+  - Searches tool-registry for a calendar tool and reports it can't find one
+  - Relays "my calendar specialist says..."
