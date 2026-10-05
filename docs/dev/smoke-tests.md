@@ -89,6 +89,8 @@ The run **passes** when every case passes, apart from cases marked `known_failur
 
 To see the real figure, note OpenRouter's credit balance (or the activity page) before and after a full run.
 
+**Estimate vs. bill.** TODO(#1980): one full run of both suites (2026-10-05, 02:03:56–02:16:17 UTC) was estimated at $4.39; record OpenRouter's billed cost for that window and the difference here.
+
 **Changing the judge.** The judge (`openai/gpt-4o`) costs more per token than the production standard tier. A cheaper one can be tried on transcripts a run already saved, without running any model:
 
 ```bash

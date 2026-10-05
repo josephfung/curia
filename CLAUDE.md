@@ -386,9 +386,11 @@ Run both behavior suites against the **same `main` commit as the security gate**
 
 ```bash
 docker stop curia-curia-1                       # scenarios refuses to run beside a live instance
-pnpm smoke --model <standard-tier model>        # ~40 min; docs/dev/smoke-tests.md
-pnpm scenarios --model <standard-tier model>    # ~25 min; tests/scenarios/README.md
+pnpm smoke --model <standard-tier model>        # terminal 1; docs/dev/smoke-tests.md
+pnpm scenarios --model <standard-tier model>    # terminal 2, once smoke prints "Database: throwaway copy"; tests/scenarios/README.md
 ```
+
+Run them side by side, smoke first: smoke copies the dev database, and Postgres copies a database only while nothing else is connected to it, so scenarios must start after the copy. Each suite runs 4 cases at a time (`--concurrency`). Measured on 2026-10-05 (#1980): **both suites together took 12 min and an estimated $4.40** in model spend (smoke $2.84, scenarios $1.55; the judge is about 10% of that). Each summary prints the run's own spend by agent and judge. The estimate prices all input as uncached (#1962), so OpenRouter's bill can be lower; the comparison is in `docs/dev/smoke-tests.md`.
 
 - **Block the release** if either command exits non-zero: any smoke case fails its gate, or any critical scenario behavior is below threshold. Judge errors and errored runs also fail the gate; re-run those rather than waving them through. A case marked `known_failure` (smoke shows it as `KNOWN`; scenarios list it under known failures) is reported but not gated: confirm each one's issue is still open, because a marker on a closed issue would wave a regression through.
 - **Record the results with the gate SHA.** Each suite prints the `Commit:` it ran on, and it must equal `<gate-sha>` exactly — a `-dirty` suffix means uncommitted changes were tested, so the run does not count. Note both suites' outcomes next to the security gate's (smoke: cases passed, any `PASS*` retries and `KNOWN` known failures; scenarios: gate passed, plus any known failures).
