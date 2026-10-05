@@ -26,7 +26,10 @@ import type {
   McpStdioServerEntry,
   SkillsConfig,
 } from './mcp-config-types.js';
-import { guardMcpCalendarIdentity } from './_shared/calendar-identity-guard.js';
+import {
+  guardMcpCalendarIdentity,
+  isGoogleWorkspaceCalendarTool,
+} from './_shared/calendar-identity-guard.js';
 
 // No per-tool holdback at registration (#1957). Which google-workspace services load is
 // decided by the server's `--tools` allowlist in config/skills.yaml, guarded by
@@ -328,9 +331,9 @@ export function buildMcpToolHandler(params: {
   return {
     async execute(ctx: ToolContext): Promise<ToolResult> {
       // Principal-scoped calendar reads via google-workspace always resolve to
-      // Curia's identity — fail closed before the MCP call (#1854). Held-back
-      // tools never reach here in normal boots (#1853); this is the backstop
-      // for re-registration (#1330) or holdback bypass.
+      // Curia's identity — fail closed before the MCP call (#1854). Calendar
+      // tools reach here only if the `--tools` allowlist in config/skills.yaml
+      // is widened to include calendar (#1957, #1330).
       const identityGuard = guardMcpCalendarIdentity({
         serverId: session.serverId,
         toolName,
@@ -644,6 +647,18 @@ export async function loadMcpServers(
     let registered = 0;
     const registeredNames: string[] = [];
     for (const tool of tools) {
+      // The `--tools` allowlist keeps Calendar out (#1957); nothing here filters it.
+      // If a calendar tool appears anyway, the config has drifted. Say so at error
+      // level: the old holdback corrected this at info, which is how a deployment
+      // ran with no allowlist for months unnoticed. The call-time identity guard
+      // in buildMcpToolHandler still covers principal-scoped calls.
+      if (serverEntry.name === 'google-workspace' && isGoogleWorkspaceCalendarTool(tool.name)) {
+        logger.error(
+          { server: serverEntry.name, tool: tool.name },
+          'google-workspace advertised a Calendar tool — the --tools allowlist in config/skills.yaml has drifted; remove calendar from it (#1853, #1957)',
+        );
+      }
+
       // Build a minimal ToolManifest from the tool's metadata.
       // inputs is left empty ({}) because toToolDefinitions() uses mcpInputSchema
       // instead of the shorthand inputs notation for MCP-sourced tools.
@@ -756,6 +771,8 @@ export function registerMcpProjectedSkills(
       );
       continue;
     }
+    // Membership is exactly what registered; the server's --tools allowlist is the
+    // only gate on it (#1957).
     const membership = tools;
     skillRegistry.register(
       {

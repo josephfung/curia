@@ -306,27 +306,26 @@ servers:
     expect(registry.get('tool-t')!.manifest.timeout).toBe(30000);
   });
 
-  it('registers and projects every tool google-workspace advertises (#1957)', async () => {
-    // No in-process filtering: the server's --tools allowlist is the only gate on which
-    // Workspace tools agents get (config.google-workspace-allowlist.test.ts guards it).
-    const gwSession = makeMockSession([
-      { name: 'create_doc', inputSchema: { type: 'object', properties: {}, required: [] } },
-      { name: 'search_drive_files', inputSchema: { type: 'object', properties: {}, required: [] } },
-      { name: 'read_sheet_values', inputSchema: { type: 'object', properties: {}, required: [] } },
-    ]);
-    gwSession.serverId = 'google-workspace';
-    mockConnectStdio.mockResolvedValueOnce(gwSession);
-
-    const dir = writeSkillsYaml(`
+  const gwYaml = `
 servers:
   - name: google-workspace
     transport: stdio
     command: uvx
     args: ["workspace-mcp", "--tools", "drive", "docs", "sheets"]
     action_risk: low
-`);
+`;
+  const toolDef = (name: string) => ({ name, inputSchema: { type: 'object', properties: {}, required: [] } });
+
+  it('registers and projects every tool google-workspace advertises, with no alarm (#1957)', async () => {
+    // No in-process filtering: the server's --tools allowlist is the only gate on which
+    // Workspace tools agents get (config.google-workspace-allowlist.test.ts guards it).
+    const gwSession = makeMockSession(['create_doc', 'search_drive_files', 'read_sheet_values'].map(toolDef));
+    gwSession.serverId = 'google-workspace';
+    mockConnectStdio.mockResolvedValueOnce(gwSession);
+    const error = vi.spyOn(logger, 'error');
+
     const registry = new ToolRegistry();
-    const { projectedTools } = await loadMcpServers(dir, registry, logger, secrets);
+    const { projectedTools } = await loadMcpServers(writeSkillsYaml(gwYaml), registry, logger, secrets);
 
     for (const name of ['create_doc', 'search_drive_files', 'read_sheet_values']) {
       expect(registry.get(name)).toBeDefined();
@@ -336,6 +335,29 @@ servers:
       'search_drive_files',
       'read_sheet_values',
     ]);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('logs an error, but does not filter, when google-workspace advertises a Calendar tool (#1957)', async () => {
+    // A Calendar tool here means the allowlist drifted. The old holdback dropped it at
+    // info, which hid a missing allowlist for months; now it is an error naming the fix.
+    // Principal-scoped calls are still stopped at call time by guardMcpCalendarIdentity.
+    const gwSession = makeMockSession(['create_doc', 'get_events'].map(toolDef));
+    gwSession.serverId = 'google-workspace';
+    mockConnectStdio.mockResolvedValueOnce(gwSession);
+    const error = vi.spyOn(logger, 'error');
+
+    const registry = new ToolRegistry();
+    await loadMcpServers(writeSkillsYaml(gwYaml), registry, logger, secrets);
+
+    expect(registry.get('get_events')).toBeDefined();
+    expect(error).toHaveBeenCalledWith(
+      { server: 'google-workspace', tool: 'get_events' },
+      expect.stringContaining('--tools allowlist'),
+    );
+    expect(error).toHaveBeenCalledOnce();
+    error.mockRestore();
   });
 
   it('uses connectSse for sse transport', async () => {
