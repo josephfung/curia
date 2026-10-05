@@ -10,9 +10,10 @@
   },
   "outputs": {
     "threadId": "string",
-    "messages": "object[] (oldest first; each { id, threadId, subject, from, to, cc, body, date, unread, folders, attachments: [{ id, filename, contentType, size }] })",
     "count": "number",
-    "truncated": "boolean (true when the thread hit the 50-message cap; the oldest messages were left out)"
+    "truncated": "boolean (true when the thread exceeded the 50-message cap or the size budget; the oldest messages were left out, the newest are always included)",
+    "omittedOldest": "number (how many of the oldest messages were left out)",
+    "messages": "object[] (oldest first; each { id, threadId, subject, from, to, cc, body, date, unread, folders, attachments: [{ id, filename, contentType, size }] })"
   },
   "permissions": [],
   "secrets": [],
