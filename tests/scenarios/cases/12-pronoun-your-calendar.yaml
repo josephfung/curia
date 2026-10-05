@@ -34,6 +34,14 @@ tool_stubs:
       return:
         agent: contacts
         response: Resolved the principal. No further detail needed for this request.
+  # The wrong path has to be available: production activation of the calendar bundle
+  # succeeds for the coordinator, with every member tool skipped (allowed_callers).
+  skill-activate:
+    - match: {}
+      return:
+        skill: calendar
+        tools: []
+        skippedTools: [calendar-list-events, calendar-check-conflicts]
 expected_behaviors:
   - id: no_own_calendar
     weight: critical
