@@ -732,3 +732,33 @@ coordinator's.
 on 2026-10-05, against the $4.39 estimate: the estimate is about 2.1× the bill. That
 matches cached input being priced as uncached (#1962), so the provider is caching the
 prefix; the real per-release cost is about $2.
+
+### 2026-10-05 — google-workspace allowlist to Drive, Docs and Sheets (#1957)
+
+**Capture conditions**
+
+- Production change: curia-deploy#264 added `--tools drive docs sheets` to the instance
+  overlay, which had passed no `--tools` at all (so workspace-mcp loaded every service and
+  only core's runtime holdback removed Calendar). Core image `ad5fb6c8` (main with #2008,
+  `email-get-thread`). The app container was created at 2026-10-05T16:00:20Z.
+- Before: `--since 2026-09-28T16:00:00Z --until 2026-10-05T16:00:00Z` (1,008 archive rows).
+- After: `--since 2026-10-05T16:01:00Z`, run at 2026-10-05T16:51:27Z (2 archive rows).
+  Every call in both windows used its window's modal tool list (180 before, 117 after),
+  so the tool-definition figures are fixed per configuration and two samples are enough
+  for them. Provider input tokens depend on conversation length and are not comparable at
+  n=2; they are listed only for completeness.
+
+| Metric (p50) | Before | After | Change |
+|---|---:|---:|---:|
+| tool count | 180 | 117 | −63 |
+| tool-definition bytes | 226,910 | 160,942 | **−65,968 (−29%)** |
+| mcp:google-workspace tools | 114 | 49 | −65 |
+| mcp:google-workspace bytes | 158,797 | 89,693 | **−69,104 (−44%)** |
+| local tools | 66 | 68 | +2 |
+| local bytes | 67,753 | 71,015 | +3,262 |
+| provider input tokens (n=1,008 / n=2) | 76,882 | 74,166 | not comparable |
+
+The Workspace cut matches the server-side probe of workspace-mcp 1.22.0 with the same
+args (121 → 49 tools). Local tools grew by two between the windows, one of them
+`email-get-thread` (#2008), which replaces the Gmail thread read. google-workspace is now
+56% of tool-definition bytes, down from 70%; `batch_update_doc` alone is 23,180 bytes.
