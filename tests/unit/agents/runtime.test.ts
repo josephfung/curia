@@ -1819,7 +1819,7 @@ describe('AgentRuntime tool-use loop', () => {
       executionLayer: mockExecution,
       skillToolDefs: [{
         name: 'calendar-list-events',
-        description: 'MCP calendar',
+        description: 'Nylas calendar',
         input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
       }],
       errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
@@ -1908,7 +1908,7 @@ describe('AgentRuntime tool-use loop', () => {
       skillToolDefs: [
         {
           name: 'calendar-list-events',
-          description: 'MCP calendar',
+          description: 'Nylas calendar',
           input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
         },
         {

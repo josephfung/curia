@@ -40,7 +40,9 @@ vi.mock('../../../src/skills/mcp-client.js', () => ({
 }));
 
 // Import the loader AFTER setting up mocks.
-const { loadMcpServers, buildMcpToolHandler } = await import('../../../src/skills/mcp-loader.js');
+const { loadMcpServers, buildMcpToolHandler, GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME } = await import(
+  '../../../src/skills/mcp-loader.js'
+);
 type BuildHandlerParams = Parameters<typeof buildMcpToolHandler>[0];
 
 // ---------------------------------------------------------------------------
@@ -638,5 +640,37 @@ describe('buildMcpToolHandler — request cancellation (#1666)', () => {
     // Guard: the raw message must not appear anywhere in the logged metadata.
     const [logMeta] = warn.mock.calls[0]!;
     expect(JSON.stringify(logMeta)).not.toContain('boom');
+  });
+});
+
+describe('GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME (drift alarm matcher, #1957)', () => {
+  // The registration alarm is the only runtime signal if Calendar tools ever load, so
+  // pin what it must catch and what it must leave alone.
+  it.each([
+    // upstream workspace-mcp's whole calendar module
+    'list_calendars',
+    'get_events',
+    'manage_event',
+    'create_calendar',
+    'query_freebusy',
+    'manage_out_of_office',
+    'manage_focus_time',
+  ])('matches %s', (name) => {
+    expect(GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(name)).toBe(true);
+  });
+
+  it.each([
+    // real Drive/Docs/Sheets names, including the look-alikes most at risk
+    'search_drive_files',
+    'create_doc',
+    'update_doc_headers_footers',
+    'manage_conditional_formatting',
+    'import_to_google_slides',
+    'list_spreadsheet_comments',
+    'resize_sheet_dimensions',
+    // Curia's own kebab-case calendar skill is not a google-workspace tool
+    'calendar-list-events',
+  ])('does not match %s', (name) => {
+    expect(GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(name)).toBe(false);
   });
 });
