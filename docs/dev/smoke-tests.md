@@ -68,7 +68,7 @@ A **provider failure** is not a model failure, so it does not use that retry. An
 
 - a model fallback (some agent ran on another model than the run is labelled with);
 - an agent error of a provider type (`PROVIDER_ERROR`, `TIMEOUT`, `RATE_LIMIT`);
-- a timeout during which a single model call ran for 60 seconds or more. Calls on the standard tier normally take seconds, so a minute-long call means the provider stalled. A model that loops until the timeout makes many quick calls instead, and that timeout stays the model's.
+- a timeout that fired while a model call had made no progress for 90 seconds (no response, or no streamed event). Calls on the standard tier normally take seconds, so that means the provider stalled. A model that loops until the timeout makes many quick calls instead, and a slow call that finished earlier in the case does not count: those timeouts stay the model's.
 
 Each re-run is printed as it happens (`[provider] …`) and listed under the case in the summary and in the results JSON (`providerRetries`), so a provider having a bad day is visible rather than hidden.
 
@@ -78,7 +78,9 @@ The run **passes** when every case passes, apart from cases marked `known_failur
 
 **Concurrency.** `--concurrency N` (default 4) sets how many cases run at once. A case's turns still run in order. Everything a case owns is kept per case, not per run: its stubs, the calendar writes it has made, the bullpen threads its agents are shown, model fallbacks and spend. The harness finds which case a tool call or model call belongs to through an `AsyncLocalStorage` context that follows the case's work across the bus, so a specialist the coordinator delegates to (in its own conversation) is still that case's (`tests/shared/case-scope.ts`). What concurrency cannot separate is real database writes from unstubbed tools: cases share the throwaway copy, as they already did one after another, but a write can now show up mid-case rather than only between cases. Higher concurrency also risks OpenRouter rate limits; the judge retries a 429 with a longer backoff.
 
-**Timeouts stop the work.** When a case times out it is cancelled: its later model calls fail at once and its tool calls are refused. The runtime has no way to cancel a turn, so before this an abandoned turn kept spending until it finished on its own, and its retry paid again.
+**Finished cases stop their work.** When a case ends, passed or timed out, it is cancelled: its later model calls fail at once and its tool calls are refused. The runtime has no way to cancel a turn, so before this an abandoned turn kept spending until it finished on its own, and its retry paid again. The harness waits up to 30 seconds for the case's leftover work to wind down before reading its spend; anything billed after that is printed as spend outside any case.
+
+**Work that escapes its case fails the run.** Test mode runs no scheduler, so every tool call and model fallback should belong to some case. One that does not was answered without that case's stubs, or ran on another model, so the CLI lists it under `[ISOLATION]` and exits `1` even when every case passed.
 
 **Cost.** The summary prints the run's estimated spend, split by agent and judge, and each case's total. The results JSON holds the same split per case (`usage`), for the run (`usage`), and for work outside every case such as the warm-up (`overheadUsage`). Agents' figures come from the runtime's `llm.call` events (token counts priced by the model registry). The judge publishes no event, so it prices its own responses. The figures are **estimates**, not OpenRouter's bill:
 
