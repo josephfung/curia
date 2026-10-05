@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { OutboundGateway, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
+import { OutboundGateway, UnknownEmailAccountError, hasTransientErrorSignal } from '../../../src/skills/outbound-gateway.js';
 import { createLogger } from '../../../src/logger.js';
 import type { NylasClient } from '../../../src/channels/email/nylas-client.js';
 import type { ContactService } from '../../../src/contacts/contact-service.js';
@@ -1067,6 +1067,23 @@ describe('OutboundGateway.createEmailDraft', () => {
     const { gateway } = makeGateway({ nylasClients: new Map() });
 
     await expect(gateway.getEmailMessage('msg-1')).rejects.toThrow(/no nylasClient is configured/);
+  });
+
+  it('names an unknown account from listEmailMessages (#1957)', async () => {
+    const listMessages = vi.fn();
+    const { gateway } = makeGateway({
+      nylasClients: new Map([['curia', { listMessages } as unknown as NylasClient]]),
+    });
+
+    await expect(gateway.listEmailMessages({ threadId: 't-1' }, 'typo')).rejects.toThrow(UnknownEmailAccountError);
+    await expect(gateway.listEmailMessages({ threadId: 't-1' }, 'typo')).rejects.toThrow(/curia/);
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it('keeps the unconfigured error when listEmailMessages has no clients', async () => {
+    const { gateway } = makeGateway({ nylasClients: new Map() });
+
+    await expect(gateway.listEmailMessages()).rejects.toThrow(/no nylasClient is configured/);
   });
 
   it('returns generic error when no email clients are configured at all', async () => {

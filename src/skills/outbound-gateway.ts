@@ -1995,6 +1995,11 @@ export class OutboundGateway {
   async listEmailMessages(options?: ListMessagesOptions, accountId?: string): Promise<NylasMessage[]> {
     const client = this.getNylasClient(accountId);
     if (!client) {
+      // Same split as getEmailMessage: a misspelled mailbox name is named, with the
+      // configured ones, so email-get-thread can tell the model what to fix (#1957).
+      if (accountId && this.nylasClients.size > 0) {
+        throw new UnknownEmailAccountError(accountId, this.listAccountIds());
+      }
       throw new Error('outbound-gateway: listEmailMessages called but no nylasClient is configured');
     }
     return client.listMessages(options);
