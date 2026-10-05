@@ -27,14 +27,6 @@ const CONTACT_KINDS = ['person', 'organization', 'automated'] as const;
 /** `{{kind:key}}` or `{{principal_contact_id}}`. */
 const PLACEHOLDER = /\{\{\s*([a-z_]+)(?::([A-Za-z0-9_-]+))?\s*\}\}/g;
 
-/**
- * Relative-date kinds (tests/shared/date-placeholders.ts, shared with smoke). They are
- * resolved per run against that run's clock, before seeded-row placeholders, so the
- * seeded-row check skips them. Some forms (`{{date:today}}`, `{{timezone}}`) also match
- * PLACEHOLDER's shape and would otherwise read as unknown kinds.
- */
-const DATE_KINDS = new Set(['date', 'time', 'weekday', 'day', 'at', 'timezone']);
-
 type Raw = Record<string, unknown>;
 
 class CaseError extends Error {
@@ -500,10 +492,14 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   if (hasDatePlaceholders(scenario.description)) {
     throw new CaseError(file, `description cannot contain date placeholders`);
   }
-  // A malformed date placeholder throws at resolution. Resolve once now, against an
-  // arbitrary clock, so that is a load error and not a mid-run one.
+  // Date placeholders resolve per run, before seeded-row ones (tests/shared/
+  // date-placeholders.ts, shared with smoke). Resolve them once now, against an arbitrary
+  // clock: a malformed one throws here instead of mid-run, and the seeded-row check below
+  // then sees exactly what a run would. Anything date-shaped the resolver does not handle
+  // (`{{date}}`, `{{timezone:x}}`) is left in place and fails that check as unknown.
+  let dated: Raw;
   try {
-    resolveDatePlaceholders(
+    dated = resolveDatePlaceholders(
       { seed: scenario.seed, inbound: scenario.inbound, toolStubs: scenario.toolStubs, behaviors: scenario.expectedBehaviors },
       'UTC',
       new Date(0),
@@ -518,15 +514,9 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
     }
   }
 
-  for (const ref of placeholdersIn({
-    seed: scenario.seed,
-    inbound: scenario.inbound,
-    toolStubs: scenario.toolStubs,
-    behaviors: scenario.expectedBehaviors,
-  })) {
+  for (const ref of placeholdersIn(dated)) {
     if (ref === 'principal_contact_id') continue;
     const [kind, key] = ref.split(':');
-    if (DATE_KINDS.has(kind!)) continue;
     if (!key || !keys.has(kind!)) throw new CaseError(file, `unknown placeholder {{${ref}}}`);
     if (!keys.get(kind!)!.has(key)) throw new CaseError(file, `placeholder {{${ref}}} names no seeded ${kind}`);
   }
