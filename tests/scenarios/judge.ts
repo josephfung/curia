@@ -8,7 +8,7 @@
 import { ModelRegistry } from '../../src/agents/llm/model-registry.js';
 import { createEstimateCostUsd } from '../../src/agents/llm/pricing.js';
 import type { LLMProvider, LLMResponse } from '../../src/agents/llm/provider.js';
-import type { Logger } from '../../src/logger.js';
+import { createLogger, type Logger } from '../../src/logger.js';
 import type { UsageLedger } from '../shared/usage.js';
 import { JUDGE_ERROR_PREFIX } from './gate.js';
 import type { BehaviorRating, ExpectedBehavior, RunRating, ScenarioCase, ScenarioRun } from './types.js';
@@ -135,7 +135,15 @@ export interface Judge {
 export function meterJudgeResponse(judge: Judge, response: LLMResponse, usage: UsageLedger | undefined): void {
   if (!usage || !response.usage) return;
   const model = response.type === 'error' ? judge.model : response.provenance.actualModel;
-  usage.addJudgeCall(response.usage, judge.estimateCostUsd?.(model, response.usage) ?? 0);
+  let cost = 0;
+  try {
+    cost = judge.estimateCostUsd?.(model, response.usage) ?? 0;
+  } catch (err) {
+    // Pricing must never abort judging (the call is already paid for). Say so, though:
+    // a $0 here understates the run.
+    process.stderr.write(`  [WARN] could not price a judge call on ${model}: ${err instanceof Error ? err.message : String(err)} — counted as $0\n`);
+  }
+  usage.addJudgeCall(response.usage, cost);
 }
 
 /** Transient judge failures worth another attempt; anything else would fail the same way every time. */
@@ -169,12 +177,23 @@ export function createJudge(
       'Seed it (see tests/scenarios/README.md).',
     );
   }
-  const estimate = options.logger ? createEstimateCostUsd(new ModelRegistry(options.logger), model) : undefined;
+  const logger = options.logger ?? createLogger('error');
+  const registry = new ModelRegistry(logger);
+  // An exact entry, not a prefix match: 'openai/gpt-4o-mini' would otherwise be priced as
+  // 'openai/gpt-4o', and a model with no entry at all would throw on its first response —
+  // after paying for it. Fail here instead, before any call (#1980).
+  if (!Object.hasOwn(registry.getAllModels(), model)) {
+    throw new Error(
+      `The judge model '${model}' has no entry in src/agents/llm/model-registry.ts, so its spend cannot be priced. ` +
+      'Add it (with its OpenRouter pricing) first.',
+    );
+  }
+  const estimate = createEstimateCostUsd(registry, model);
   return {
     provider,
     model,
     ...(principalName ? { principalName } : {}),
-    ...(estimate ? { estimateCostUsd: (actual: string, usage: NonNullable<LLMResponse['usage']>) => estimate(actual, usage, options.logger) } : {}),
+    estimateCostUsd: (actual: string, usage: NonNullable<LLMResponse['usage']>) => estimate(actual, usage, logger),
   };
 }
 

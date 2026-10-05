@@ -67,7 +67,13 @@ async function rejudgeSmoke(run: RunResult, judge: Judge, concurrency: number): 
   // An errored case was never judged, and a judge error has placeholder scores: neither
   // says anything about how the baseline judge rated the transcript.
   const judged = run.cases.filter(c => !c.error && !c.judgeError);
+  const skipped = run.cases.length - judged.length;
+  if (skipped > 0) out(`   Skipped ${skipped} case(s) the baseline never judged (errored, or a judge error)`);
   if (!run.today) err('  [WARN] this results file predates `today`; the candidate judges relative dates without it');
+  const untargeted = judged.filter(c => c.testCase.target && !c.target);
+  if (untargeted.length > 0) {
+    err(`  [WARN] ${untargeted.length} targeted case(s) predate the saved target; the candidate sees unresolved placeholders in their thread`);
+  }
   const results = await evaluateCases(
     judged.map(c => ({
       testCase: c.testCase,
@@ -104,7 +110,10 @@ async function rejudgeSmoke(run: RunResult, judge: Judge, concurrency: number): 
 async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: number): Promise<Rejudged> {
   const usage = new UsageLedger();
   const byName = new Map(loadScenarioCases(SCENARIO_CASES_DIR).map(c => [c.name, c]));
-  const comparisons = await runConcurrently(suite.cases, concurrency, async (result): Promise<CaseComparison | undefined> => {
+  let skippedRuns = 0;
+  const comparisons = await runConcurrently(suite.cases, concurrency, async (saved): Promise<CaseComparison | undefined> => {
+    // Files saved before #1980 have no per-run spend; scoreCase sums it.
+    const result = { ...saved, runs: saved.runs.map(r => ({ ...r, usage: r.usage ?? emptyBreakdown(), providerRetries: r.providerRetries ?? [] })) };
     const scenario = byName.get(result.name);
     if (!scenario) {
       err(`  [WARN] ${result.name}: no such case in ${SCENARIO_CASES_DIR} any more; skipped`);
@@ -119,7 +128,11 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
       const resolved = resolvePlaceholders(behaviors, new Map(Object.entries(run.refs)));
       const judged = resolved.filter(b => !b.check);
       const before = (id: string): RunRating => result.behaviors.find(b => b.behavior.id === id)!.ratings[i]!;
-      if (judged.length === 0 || judged.some(b => before(b.id).justification.startsWith(JUDGE_ERROR_PREFIX))) continue;
+      if (judged.length === 0) continue;
+      if (judged.some(b => before(b.id).justification.startsWith(JUDGE_ERROR_PREFIX))) {
+        skippedRuns++;
+        continue;
+      }
       const rerated = await judgeRun(scenario, run, judged, judge, usage);
       for (const b of judged) {
         const next = rerated.get(b.id)!;
@@ -135,6 +148,7 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
       ratings,
     };
   });
+  if (skippedRuns > 0) out(`   Skipped ${skippedRuns} run(s) the baseline judge errored on`);
   return { comparisons: comparisons.filter((c): c is CaseComparison => c !== undefined), spend: usage.snapshot() };
 }
 
