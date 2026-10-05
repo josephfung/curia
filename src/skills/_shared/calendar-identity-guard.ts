@@ -78,8 +78,8 @@ export const GOOGLE_WORKSPACE_CALENDARISH_TOOL =
 
 /**
  * True when a google-workspace MCP tool is calendar-shaped.
- * Exact holdback list plus the calendarish heuristic — so a renamed upstream
- * tool still gets the identity guard even before the denylist is updated.
+ * Exact list plus the calendarish heuristic — so a renamed upstream tool still
+ * gets the identity guard (and mcp-loader's drift alarm) before the list is updated.
  */
 export function isGoogleWorkspaceCalendarTool(toolName: string): boolean {
   if (GOOGLE_WORKSPACE_CALENDAR_TOOL_SET.has(toolName)) return true;

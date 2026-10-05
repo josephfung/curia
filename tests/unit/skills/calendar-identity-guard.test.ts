@@ -33,7 +33,7 @@ function makeCtx(
 }
 
 describe('isGoogleWorkspaceCalendarTool', () => {
-  it('matches the holdback list and calendarish names', () => {
+  it('matches the calendar tool list and calendarish names', () => {
     expect(isGoogleWorkspaceCalendarTool('get_events')).toBe(true);
     expect(isGoogleWorkspaceCalendarTool('list_calendars')).toBe(true);
     expect(isGoogleWorkspaceCalendarTool('query_freebusy')).toBe(true);
