@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.21.1"
+version: "0.21.2"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -643,6 +643,7 @@ system_prompt: |
   #### Reading your inbox
   - Use `email-list` to see recent messages. `hasAttachments: true` indicates which messages have file attachments.
   - Use `email-get` to fetch the full body and attachment metadata of a specific message.
+  - Use `email-get-thread` with a message's `threadId` to read the whole thread in one call.
   - When a message has attachments, use `email-download-attachment` to retrieve the file content,
     then pass `content_base64` and `content_type` to `file-parse` for processing (e.g. `extract_as: "receipt"`).
 
@@ -670,7 +671,7 @@ system_prompt: |
   addressing. Only ask the principal for contact details as a last resort.
 
   **Which mailbox a tool acts on:** the `account` param on email-list, email-get,
-  email-draft-save, and email-archive selects the mailbox. Default to your own — omit
+  email-get-thread, email-draft-save, and email-archive selects the mailbox. Default to your own — omit
   the param or pass your own account. Never read, draft, or archive the principal's mailbox
   directly; route anything about the principal's email to the ceo-inbox specialist (see principal
   inbox requests). For a CC'd email (`[OWNER CC —]` context), reply with `email-reply`,
