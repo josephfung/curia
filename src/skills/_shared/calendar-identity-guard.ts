@@ -45,9 +45,10 @@ export function isPrincipalScopedCalendarTask(
 }
 
 /**
- * google-workspace MCP calendar tools — single source of truth for the #1853
- * holdback denylist and the #1854 identity guard. Keep in sync with the comment
- * block on the google-workspace entry in `config/skills.yaml`.
+ * google-workspace MCP calendar tools, for the #1854 identity guard. The
+ * registration-time holdback that also used this list was removed in #1957: the
+ * server's `--tools` allowlist in `config/skills.yaml` keeps Calendar out, so
+ * this guard only fires if that allowlist is ever widened to include it.
  *
  * Full upstream calendar module (`core/tool_tiers.yaml`): list_calendars, get_events,
  * manage_event (core); create_calendar, query_freebusy, manage_out_of_office,

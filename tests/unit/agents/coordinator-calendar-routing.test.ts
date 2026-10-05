@@ -10,10 +10,8 @@ import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { resolvePinnedSkills } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
-import {
-  GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK,
-  registerMcpProjectedSkills,
-} from '../../../src/skills/mcp-loader.js';
+import { registerMcpProjectedSkills } from '../../../src/skills/mcp-loader.js';
+import { GOOGLE_WORKSPACE_CALENDAR_TOOLS } from '../../../src/skills/_shared/calendar-identity-guard.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
 import type { Logger } from '../../../src/logger.js';
 
@@ -85,16 +83,15 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     expect(pins).not.toContain('calendar');
     expect(pins).not.toContain('calendar-list-events');
     expect(pins).not.toContain('calendar-check-conflicts');
-    for (const heldBack of GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK) {
-      expect(pins).not.toContain(heldBack);
+    for (const calendarTool of GOOGLE_WORKSPACE_CALENDAR_TOOLS) {
+      expect(pins).not.toContain(calendarTool);
     }
   });
 
-  it('projected google-workspace membership leaves no unresolved calendar pins', () => {
-    // Simulates post-holdback projection: ToolRegistry has Drive tools but not the
-    // held-back calendar names. If projection still listed held-back members,
-    // resolvePinnedSkills would record member_tools_missing and
-    // reportScheduledPinGaps would error-log every coordinator boot.
+  it('projected google-workspace membership resolves cleanly, with no calendar tools', () => {
+    // The server's --tools allowlist (drive, docs, sheets) is the only gate on its
+    // membership (#1957); projection passes the advertised set through unfiltered.
+    // A clean resolution here means reportScheduledPinGaps stays quiet on boot.
     const config = loadCoordinator();
     const tools = new ToolRegistry();
     const skills = new SkillRegistry();
@@ -162,8 +159,7 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       if (!tools.get(name)) tools.register(toolManifest(name), noopHandler);
     }
 
-    // Pass the RAW advertised set (including held-back names). registerMcpProjectedSkills
-    // must filter them — that is what this assertion guards.
+    // What an allowlisted server advertises: Drive/Docs/Sheets tools only.
     const logger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -174,7 +170,7 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       new Map([
         [
           'google-workspace',
-          ['create_doc', 'search_drive_files', ...GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK],
+          ['create_doc', 'search_drive_files'],
         ],
       ]),
       skills,
@@ -184,8 +180,8 @@ describe('coordinator principal-calendar routing (#1853)', () => {
 
     const resolution = resolvePinnedSkills(config.pinned_skills ?? [], skills, tools);
     expect(resolution.unresolvedPins).toEqual([]);
-    for (const heldBack of GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK) {
-      expect(resolution.toolNames).not.toContain(heldBack);
+    for (const calendarTool of GOOGLE_WORKSPACE_CALENDAR_TOOLS) {
+      expect(resolution.toolNames).not.toContain(calendarTool);
     }
     expect(resolution.toolNames).not.toContain('calendar-list-events');
     expect(resolution.toolNames).toContain('delegate');
