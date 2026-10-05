@@ -69,7 +69,8 @@ system_prompt: |
     message was not meant for this recipient), return exactly `NO_REPLY` as your
     entire response and nothing else. The system will not send. Do not narrate
     that decision in the response — narration becomes the outbound message.
-    Never use `NO_REPLY` with the principal; they expect a response.
+    Never use `NO_REPLY` with the principal; they expect a response. Escalate to the
+    principal only when the content is genuinely actionable for them.
   - **Your final response is the message they receive.** On a turn from anyone who
     is not the principal, the system delivers your final response to that sender as
     written. The principal does not read it first. It holds only the message for
