@@ -806,3 +806,25 @@ branch runs had called `scheduler-report` (refused, unstubbed) in 2 of 15 runs.
   critical behaviors cleared the gate (80–100%).
 - Smoke `Natural Language Deadlines` depends on the weekday: `date-resolve` reads "next
   Friday" as the soonest Friday, so on a Monday the judge can disagree with it.
+
+**Second round (same PR): harness and discovery fixes.** Scenario cases now use relative
+dates, and a skill whose tools are all reserved for other agents is neither offered nor
+activatable, which retired the prompt's calendar discovery ban. Commit `6c0d11e8`,
+coordinator YAML 45,644 bytes.
+
+- **Scenarios: gate passed, 19 of 19 cases, every case 100% weighted** (371 s, estimated
+  $1.46). `external reply first person` now has next week's slots to offer: every
+  critical 5/5 and `offers_times` 100%, against 10% with the stale Oct 6–8 stub.
+- **Smoke: 42 of 44.** Two cases failed both attempts:
+  - *Coordinator routes long-running task with synchronous acknowledgment.* Tavily answered
+    every `web-search` in this run with HTTP 432 (11 of 11; the first round's 5 were
+    fine), so the research specialist fell back to scraping until the turn timed out.
+    Environmental. Re-run once the search quota resets.
+  - *Reschedule Board Chair Meeting* timed out (180 s) on both attempts. Interleaved
+    single-case runs the same evening, first attempts only: branch 6 timeouts in 9,
+    `origin/main`'s prompt 1 in 6. Completed attempts took 90–157 s on both prompts, and
+    the calendar specialist made 11–34 calls either way, so the case sits near the
+    timeout on both. Smoke keeps only the final attempt, so the timed-out runs' calls are
+    not recorded. **Unresolved:** a real shift (the branch splits the calendar work into
+    more delegations) or load on a near-ceiling case. Telling them apart needs a larger
+    sample or a section-by-section bisect.
