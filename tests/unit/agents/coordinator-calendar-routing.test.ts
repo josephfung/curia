@@ -93,7 +93,8 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     // calendar"). The calendar tools exclude the coordinator by allowed_callers, and a
     // bundle every one of whose tools is withheld is neither offered by search nor
     // activatable (skillReservedForOtherAgents). Loaded from disk, so a calendar tool that
-    // drops its allowed_callers, or a shared tool added to the bundle, fails here.
+    // drops its allowed_callers, or a new tool under skills/calendar/tools the coordinator
+    // may call, fails here. (A SKILL.md entry for a tool living elsewhere is not loaded.)
     const tools = new ToolRegistry();
     const skills = new SkillRegistry();
     const toolsDir = resolve(skillsDir, 'calendar', 'tools');

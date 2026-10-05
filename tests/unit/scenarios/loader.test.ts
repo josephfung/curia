@@ -199,6 +199,9 @@ describe('date placeholders', () => {
   it.each([
     ['an unknown day', 'content: "{{day:nxt-monday}}"', /date placeholder.*unknown day/],
     ['a bad time', 'content: "{{time:today 25:00}}"', /date placeholder.*invalid time/],
+    // Keyless date kinds match neither resolver: they must fail here, not at rating time.
+    ['a keyless date kind', 'content: "{{date}}"', /unknown placeholder \{\{date\}\}/],
+    ['a keyed timezone', 'content: "{{timezone:x}}"', /unknown placeholder \{\{timezone:x\}\}/],
   ])('rejects %s', (_label, content, error) => {
     expect(() => loadScenarioCase(write('d3.yaml', VALID.replace('content: "Yes"', content)))).toThrow(error);
   });

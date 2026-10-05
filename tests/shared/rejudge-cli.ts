@@ -16,6 +16,7 @@ import { createJudge, type Judge } from '../scenarios/judge.js';
 import { judgeRun } from '../scenarios/judge.js';
 import { scoreCase, JUDGE_ERROR_PREFIX } from '../scenarios/gate.js';
 import { loadScenarioCases, resolveRunPlaceholders } from '../scenarios/loader.js';
+import { hasDatePlaceholders } from './date-placeholders.js';
 import type { RunRating, SuiteResult } from '../scenarios/types.js';
 import { evaluateCases } from '../smoke/evaluator.js';
 import type { RunResult } from '../smoke/types.js';
@@ -126,16 +127,15 @@ async function rejudgeScenarios(suite: SuiteResult, judge: Judge, concurrency: n
     const ratings: RatingPair[] = [];
     for (const [i, run] of result.runs.entries()) {
       if (run.error) continue;
-      let resolved: typeof behaviors;
-      try {
-        resolved = resolveRunPlaceholders(behaviors, run);
-      } catch (e) {
-        // A date placeholder in a run saved before runs carried a clock (#1958). Rating it
-        // against today's dates would compare the wrong days, so the run is left out.
-        err(`  [WARN] ${result.name} run ${i + 1}: ${e instanceof Error ? e.message : String(e)}; skipped`);
+      // A run saved before runs carried a clock (#1958) cannot resolve date placeholders.
+      // Rating it against today's dates would compare the wrong days, so it is left out.
+      // Any other resolution error is a real problem and still throws.
+      if (!run.clock && hasDatePlaceholders(behaviors)) {
+        err(`  [WARN] ${result.name} run ${i + 1}: saved without a clock for its date placeholders; skipped`);
         undatedRuns++;
         continue;
       }
+      const resolved = resolveRunPlaceholders(behaviors, run);
       const judged = resolved.filter(b => !b.check);
       const before = (id: string): RunRating => result.behaviors.find(b => b.behavior.id === id)!.ratings[i]!;
       if (judged.length === 0) continue;
