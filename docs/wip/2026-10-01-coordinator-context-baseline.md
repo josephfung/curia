@@ -762,3 +762,47 @@ The Workspace cut matches the server-side probe of workspace-mcp 1.22.0 with the
 args (121 → 49 tools). Local tools grew by two between the windows, one of them
 `email-get-thread` (#2008), which replaces the Gmail thread read. google-workspace is now
 56% of tool-definition bytes, down from 70%; `batch_update_doc` alone is 23,180 bytes.
+
+### 2026-10-05 — restatements and duplicates removed from the prompt (#1958)
+
+**Size.** Measured on the file, before deploy: `origin/main` (`eed77036`, coordinator
+0.21.3) against the PR's final commit `a91d64bf` (0.21.4). Tokens are estimated at four
+characters each.
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `agents/coordinator.yaml` bytes | 58,275 | 45,749 | −12,526 (−21%) |
+| `agents/coordinator.yaml` lines | 896 | 722 | −174 |
+| `system_prompt` block bytes | 56,160 | 43,634 | **−12,526 (−22%)** |
+| `system_prompt` est. tokens | ~14.0k | ~10.9k | ~−3.1k |
+
+Per-call production figures (`report-agent-context`) need a deploy and belong in the
+next capture.
+
+**Behavior, on the final commit.** Same model, judge and database as the 2026-10-02
+baseline. Run on a Monday, which matters for two date-bound cases (below).
+
+- **Scenarios: gate passed, 19 of 19 cases** (596 s, estimated $1.54). New case 12,
+  `pronoun your calendar`, passed 5/5 on every critical behavior with "Resolving
+  pronouns before delegating" removed, so the section stays out.
+- **Smoke:** the full run (commit `8cc6ea77`) passed 41 of 44. The three cases that
+  failed both attempts each passed first time on the final commit: Pre-Meeting Prep Brief
+  89%, Schedule External Meeting 100%, Natural Language Deadlines 100%.
+
+**What the runs in between showed.** An earlier commit dropped the auto-generated-mail
+passage whole, including the "escalate only when actionable" judgment the issue said to
+keep. On `external reply first person` that branch timed out in 2 of 5 runs and emailed
+the principal in most completed runs, while `origin/main`'s prompt on the same day passed
+5/5. Restoring the judgment as one line fixed the timeouts. An A/B on `origin/main`'s
+prompt also passed the two smoke cases above and `scheduler additive create`, whose
+branch runs had called `scheduler-report` (refused, unstubbed) in 2 of 15 runs.
+
+**Date-bound cases.** Read these before comparing a later run:
+
+- `external reply first person` stubs open slots on Tue–Thu Oct 6–8 and asks for "next
+  week". From Monday Oct 5 that is the wrong week. `offers_times` (important) fell to 10%
+  on the final commit because the coordinator declined to offer those slots as next week;
+  `origin/main`'s prompt offered them in 4 of 5 runs, which is the factual error. The
+  critical behaviors cleared the gate (80–100%).
+- Smoke `Natural Language Deadlines` depends on the weekday: `date-resolve` reads "next
+  Friday" as the soonest Friday, so on a Monday the judge can disagree with it.
