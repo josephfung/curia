@@ -32,13 +32,14 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
 
 `SCENARIO_TIMEOUT_MS` sets the default per-run wait (180s). A case can set its own
 `timeout_seconds`. The wait is a hard bound: a turn that outlives it is scored as an
-errored run and cancelled. Its later model calls fail at once, so it stops spending; its
+errored run and cancelled (every run is cancelled when it ends, so leftover work never
+outlives it). Its later model calls fail at once, so it stops spending; its
 later tool calls are refused (never answered by another run's stubs); and its
 conversation rows are cleaned when it finally ends.
 
 **Provider failures** are re-run, not scored. A run that errors with a model fallback, a
-provider-type agent error (`PROVIDER_ERROR`, `TIMEOUT`, `RATE_LIMIT`), or a timeout during
-which one model call ran 60 seconds or more is thrown away and run again, up to twice
+provider-type agent error (`PROVIDER_ERROR`, `TIMEOUT`, `RATE_LIMIT`), or a timeout that
+fired while a model call had made no progress for 90 seconds is thrown away and run again, up to twice
 (`tests/shared/case-scope.ts`: `providerFailure`). Each re-run is printed, listed in the
 summary, and recorded on the run (`providerRetries`). A failure that is still there after
 two re-runs is scored as an errored run, as before.
