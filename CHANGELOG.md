@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`delegate` (public API)** — `next_step` on an `already_in_flight` refusal says what to do instead of retrying. (#1958)
+- **Scenario case 12** — "your calendar" from the principal routes to the calendar specialist or asks whose. (#1958)
 - **`email-get-thread`** — reads every message in an email thread, full bodies, in one call. (#1957)
 - **Behavior-suite concurrency** — `--concurrency` (default 4) runs smoke and scenario cases at once, isolated per case. (#1980)
 - **Behavior-suite cost report** — both suites print and save estimated model spend per case, by agent and judge. (#1980)
@@ -54,6 +56,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Coordinator prompt** — drops rules the platform already enforces and duplicate passages; 58 KB → 46 KB. (#1958)
 - **Google Workspace MCP** — limited to Drive, Docs and Sheets; a config test now guards the allowlist. (#1957)
 - **Behavior suites** — provider stalls, errors and fallbacks are re-run without using a case's gated retry. (#1980)
 - **Behavior suites** — a timed-out case is cancelled, so its abandoned turn stops calling the model. (#1980)
@@ -119,6 +122,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Coordinator prompt** — no longer says paused specialist work needs a manual restart; the platform resumes it. (#1958)
 - **`meeting-debrief`** — prompt no longer sends unresolved `${current_datetime}`/`${timezone}`; uses the per-turn time block. (#1997)
 - **Late delegation results** — a late result keeps the review task open until the waiting sender gets a reply. (#1991)
 - **`date-resolve`** — resolves "today", "tomorrow" and "yesterday" in the configured timezone instead of erroring. (#1986)
