@@ -291,5 +291,26 @@ failure_modes:
 `{{principal_contact_id}}` resolves too. A placeholder that names nothing the case seeds is
 a load error.
 
+**Dates are relative to the run.** Never write an absolute date the model reasons about
+(a meeting, a free slot, a job's next run): it goes stale, and the case starts testing
+the calendar instead of the coordinator. Use the date placeholders smoke uses
+(`tests/shared/date-placeholders.ts`), in the principal's timezone:
+
+| Placeholder | Example on Mon 2026-10-05 |
+|---|---|
+| `{{day:next-monday+1}}` | Tuesday, October 13 (Tuesday of next week) |
+| `{{date:today+1}}` | 2026-10-06 |
+| `{{time:next-monday 09:00}}` | 2026-10-12T09:00:00.000-04:00 |
+| `{{weekday:today}}` | Monday |
+| `{{at:now+60m}}` | an hour from now, same format as `time` |
+| `{{timezone}}` | America/Toronto |
+
+A day is `today`, `today±N` or `next-<weekday>[+N]`, where `next-<weekday>` is the first
+one strictly after today. They work in `seed`, `inbound`, `tool_stubs` and
+`expected_behaviors`, and resolve once per run against that run's clock, which the run
+records (`clock`) so rating uses the same days. A malformed one is a load error. They are
+refused in `description` and `failure_modes`, which reach the judge as written: say
+"next week" there. Past timestamps (a fact's `last_confirmed_at`) can stay absolute.
+
 After adding a case, run it (`--case`, a few runs) so the CLI records its stub coverage,
 and commit the updated `stub-coverage.json`.
