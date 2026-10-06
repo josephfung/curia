@@ -4,14 +4,17 @@
 // real (they read the database), so those people are seeded as real contacts into the
 // run's throwaway database copy (clone-db.ts) before any case runs. Calendar and mailbox
 // contents come from stubs/office.yaml instead. Fixture addresses use the reserved
-// `.example` TLD (RFC 2606), so none can ever be a real mailbox.
+// `.example` TLD (RFC 2606), so none can ever be a real mailbox. A person may have no
+// email at all: someone the principal knows of, whose address is only in their mail
+// history (the cold-compose resolution cases, #2014).
 import { readFileSync } from 'node:fs';
 import * as yaml from 'js-yaml';
 import type { TestModeStack } from '../../src/startup/test-mode-stack.js';
 
 export interface FixturePerson {
   displayName: string;
-  email: string;
+  /** Absent for a contact with no email identity on file. */
+  email?: string;
   title?: string;
   organization?: string;
   role?: string;
@@ -35,8 +38,8 @@ export function loadPeople(filePath: string): FixturePerson[] {
     };
     const displayName = str('display_name');
     const email = str('email');
-    if (!displayName || !email) throw new Error(`${filePath}: entry ${i} needs display_name and email`);
-    if (!/^[^@\s,;]+@[a-z0-9.-]+\.example$/i.test(email)) {
+    if (!displayName) throw new Error(`${filePath}: entry ${i} needs display_name`);
+    if (email !== undefined && !/^[^@\s,;]+@[a-z0-9.-]+\.example$/i.test(email)) {
       throw new Error(`${filePath}: '${email}' must be under the reserved .example TLD`);
     }
     const title = str('title');
@@ -45,7 +48,7 @@ export function loadPeople(filePath: string): FixturePerson[] {
     const notes = str('notes');
     return {
       displayName,
-      email,
+      ...(email ? { email } : {}),
       ...(title ? { title } : {}),
       ...(organization ? { organization } : {}),
       ...(role ? { role } : {}),
@@ -55,31 +58,40 @@ export function loadPeople(filePath: string): FixturePerson[] {
 }
 
 /**
- * Create each person as a known contact with a verified email identity. Someone already
- * on that address (an earlier seeding of the same copy) is left as is. Returns how many
- * were created.
+ * Create each person as a known contact, with a verified email identity when they have an
+ * address. Someone already seeded (an earlier seeding of the same copy) is left as is:
+ * matched on the address, or for a person with no address, on their exact display name.
+ * Returns how many were created.
  */
 export async function seedPeople(stack: TestModeStack, people: FixturePerson[]): Promise<number> {
   let created = 0;
   for (const p of people) {
-    if (await stack.contactService.resolveByChannelIdentity('email', p.email)) continue;
+    if (p.email) {
+      if (await stack.contactService.resolveByChannelIdentity('email', p.email)) continue;
+    } else {
+      // findContactByName is a substring match; only an exact name means "already seeded".
+      const named = await stack.contactService.findContactByName(p.displayName);
+      if (named.some(c => c.displayName.toLowerCase() === p.displayName.toLowerCase())) continue;
+    }
     const contact = await stack.contactService.createContact({
       displayName: p.displayName,
       tier: 'known',
       source: 'smoke-fixture',
-      primaryEmail: p.email,
+      ...(p.email ? { primaryEmail: p.email } : {}),
       ...(p.title ? { title: p.title } : {}),
       ...(p.organization ? { organization: p.organization } : {}),
       ...(p.role ? { role: p.role } : {}),
       ...(p.notes ? { notes: p.notes } : {}),
     });
-    await stack.contactService.linkIdentity({
-      contactId: contact.id,
-      channel: 'email',
-      channelIdentifier: p.email,
-      source: 'ceo_stated',
-      verified: true,
-    });
+    if (p.email) {
+      await stack.contactService.linkIdentity({
+        contactId: contact.id,
+        channel: 'email',
+        channelIdentifier: p.email,
+        source: 'ceo_stated',
+        verified: true,
+      });
+    }
     created++;
   }
   return created;
