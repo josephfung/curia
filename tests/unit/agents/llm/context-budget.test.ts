@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { ContextBudget } from '../../../../src/agents/llm/context-budget.js';
-import type { Message } from '../../../../src/agents/llm/provider.js';
+import { ContextBudget, TOOL_DEFINITIONS_TIER } from '../../../../src/agents/llm/context-budget.js';
+import type { Message, ToolDefinition } from '../../../../src/agents/llm/provider.js';
+import { estimateToolDefinitionsTokens } from '../../../../src/agents/llm/token-estimator.js';
 
 describe('ContextBudget', () => {
   describe('construction', () => {
@@ -57,6 +58,40 @@ describe('ContextBudget', () => {
       // 700 / 3.5 = 200 + 4 = 204
       budget.allocateRequired('system_prompt', messages);
       expect(budget.remaining).toBe(90 - 204);
+    });
+  });
+
+  describe('allocateToolDefinitions (#1961)', () => {
+    const tools: ToolDefinition[] = [
+      { name: 'notes-add', description: 'd'.repeat(300), input_schema: { type: 'object', properties: {} } },
+    ];
+
+    it('always includes the tools, deducts their estimate and counts them in totalUsed', () => {
+      const budget = new ContextBudget({ model: 'm', contextWindow: 1000, responseReserve: 100, safetyMargin: 0 });
+      budget.allocateRequired('system_prompt', [{ role: 'system', content: 'x'.repeat(350) }]);
+      budget.allocateToolDefinitions(tools);
+      const toolTokens = estimateToolDefinitionsTokens(tools);
+      expect(toolTokens).toBeGreaterThan(0);
+      expect(budget.remaining).toBe(900 - 104 - toolTokens);
+      const report = budget.getReport();
+      expect(report.tiers[1]).toEqual({ name: TOOL_DEFINITIONS_TIER, estimatedTokens: toolTokens, included: true });
+      expect(report.totalUsed).toBe(104 + toolTokens);
+    });
+
+    it('is included even when it overflows the budget', () => {
+      const budget = new ContextBudget({ model: 'm', contextWindow: 50, responseReserve: 10, safetyMargin: 0 });
+      budget.allocateToolDefinitions(tools);
+      expect(budget.remaining).toBe(40 - estimateToolDefinitionsTokens(tools));
+      expect(budget.getReport().tiers[0]!.included).toBe(true);
+    });
+
+    it('records an empty tier for an agent with no tools', () => {
+      const budget = new ContextBudget({ model: 'm', contextWindow: 1000, responseReserve: 100, safetyMargin: 0 });
+      budget.allocateToolDefinitions([]);
+      expect(budget.remaining).toBe(900);
+      expect(budget.getReport().tiers).toEqual([
+        { name: TOOL_DEFINITIONS_TIER, estimatedTokens: 0, included: false, droppedReason: 'empty' },
+      ]);
     });
   });
 

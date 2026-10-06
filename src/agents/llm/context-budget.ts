@@ -7,8 +7,11 @@
 //
 // See: docs/specs/01-memory-system.md § Context Budget
 
-import type { Message } from './provider.js';
-import { estimateMessagesTokens } from './token-estimator.js';
+import type { Message, ToolDefinition } from './provider.js';
+import { estimateMessagesTokens, estimateToolDefinitionsTokens } from './token-estimator.js';
+
+/** context.budget tier name for the tool definitions sent with the call. */
+export const TOOL_DEFINITIONS_TIER = 'tool_definitions';
 
 export interface ContextBudgetConfig {
   model: string;
@@ -92,6 +95,20 @@ export class ContextBudget {
     const tokens = estimateMessagesTokens(messages);
     this._remaining -= tokens;
     this.tiers.push({ name: tierName, estimatedTokens: tokens, included: true });
+  }
+
+  // Charge the tool definitions sent with the call (#1961). They are part of
+  // every request and usually its largest fixed component, so like the system
+  // prompt they are always included and can drive remaining negative. An agent
+  // with no tools records an empty tier so the event still shows the zero.
+  allocateToolDefinitions(tools: readonly ToolDefinition[]): void {
+    const tokens = estimateToolDefinitionsTokens(tools);
+    if (tokens === 0) {
+      this.tiers.push({ name: TOOL_DEFINITIONS_TIER, estimatedTokens: 0, included: false, droppedReason: 'empty' });
+      return;
+    }
+    this._remaining -= tokens;
+    this.tiers.push({ name: TOOL_DEFINITIONS_TIER, estimatedTokens: tokens, included: true });
   }
 
   // Include as many of the most-recent history turns as fit within the

@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **ADR-046** — agent behavior fixes go on the highest rung that works; the always-on prompt is last. (#1961)
+- **Agent context budget test** — CI fails when the coordinator's always-on prompt or local tool definitions exceed budget. (#1961)
+- **`context.budget` `tool_definitions` tier** — tool definitions are now estimated, charged and recorded in `audit_log`. (#1961)
 - **`google-workspace` reference** — `drive-files.md` holds Drive move, upload and export mechanics, loaded via `skill-activate`. (#1960)
 - **MCP-projected skills** — load `references/` from `skills/<server>/`, so upstream tools can carry how-to notes. (#1960)
 - **`scheduler-list`** — returns `taskPreview`, the start of each job's task. (#1960)

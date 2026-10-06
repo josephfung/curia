@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { estimateTokens } from '../../../../src/agents/llm/token-estimator.js';
-import { estimateMessagesTokens, DEFAULT_SAFETY_MARGIN } from '../../../../src/agents/llm/token-estimator.js';
+import { estimateMessagesTokens, estimateToolDefinitionsTokens, DEFAULT_SAFETY_MARGIN } from '../../../../src/agents/llm/token-estimator.js';
 import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
-import type { ContentBlock } from '../../../../src/agents/llm/provider.js';
+import type { ContentBlock, ToolDefinition } from '../../../../src/agents/llm/provider.js';
 import type { Message } from '../../../../src/agents/llm/provider.js';
 import type { Logger } from '../../../../src/logger.js';
 
@@ -123,5 +123,18 @@ describe('ModelRegistry.getContextWindow', () => {
 describe('DEFAULT_SAFETY_MARGIN', () => {
   it('is 0.05 (5%)', () => {
     expect(DEFAULT_SAFETY_MARGIN).toBe(0.05);
+  });
+});
+
+describe('estimateToolDefinitionsTokens', () => {
+  it('returns 0 for no tools', () => {
+    expect(estimateToolDefinitionsTokens([])).toBe(0);
+  });
+
+  it('estimates from the serialised definitions at 3.5 chars/token', () => {
+    const tools: ToolDefinition[] = [
+      { name: 'notes-add', description: 'Add a note.', input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
+    ];
+    expect(estimateToolDefinitionsTokens(tools)).toBe(Math.ceil(JSON.stringify(tools).length / 3.5));
   });
 });
