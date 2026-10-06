@@ -6,7 +6,8 @@
 //
 // Duplicate check (#1960): a request to change an existing routine that lands here
 // instead of scheduler-update makes the task fire twice. An exact copy of an active
-// job (same agent, task and schedule) is refused. An active job with the same task on
+// job (same agent, task and schedule, where a cron schedule includes its timezone)
+// is refused. An active job with the same task on
 // a different schedule may be a legitimate additional run, so the job is created and
 // the others come back in similar_active_jobs for the agent to check.
 
@@ -23,6 +24,7 @@ interface SimilarJob {
   status: string;
   cronExpr: string | null;
   runAt: string | null;
+  timezone: string;
 }
 
 /** Case- and whitespace-insensitive form of a task or cron string, for comparison. */
@@ -43,8 +45,22 @@ async function listActiveJobs(service: SchedulerService, agentId: string): Promi
   return pages.flat();
 }
 
-function sameSchedule(job: JobRow, cronExpr: string | undefined, runAt: Date | undefined): boolean {
-  if (cronExpr) return job.cronExpr !== null && normalize(job.cronExpr) === normalize(cronExpr);
+/**
+ * Whether an existing job fires on the schedule being requested. The same cron in
+ * another timezone fires at a different instant, so a cron match also needs the
+ * timezone createJob will give the new job. A one-shot run_at is an instant already.
+ */
+function sameSchedule(
+  job: JobRow,
+  cronExpr: string | undefined,
+  runAt: Date | undefined,
+  timezone: string,
+): boolean {
+  if (cronExpr) {
+    return job.cronExpr !== null
+      && normalize(job.cronExpr) === normalize(cronExpr)
+      && job.timezone === timezone;
+  }
   if (runAt && job.runAt) return new Date(job.runAt).getTime() === runAt.getTime();
   return false;
 }
@@ -95,6 +111,10 @@ export class SchedulerCreateHandler implements ToolHandler {
     // at fire time because the scheduler task would have no originator.
     const originator = ctx.taskMetadata?.originator as TaskOriginator | undefined;
     const runAt = run_at ? new Date(run_at) : undefined;
+    // Optional per-job timezone — overrides the service default for cron wall-clock interpretation.
+    // run_at is already normalized to UTC by the execution layer, so timezone only affects cron jobs.
+    // Normalize to undefined if blank so createJob() falls back to the service default.
+    const jobTimezone = typeof timezone === 'string' && timezone.trim() !== '' ? timezone.trim() : undefined;
 
     // The check is advisory: if the lookup fails, log it and create the job anyway
     // rather than block every scheduler-create on a read error.
@@ -106,7 +126,8 @@ export class SchedulerCreateHandler implements ToolHandler {
           const t = jobTask(job);
           return t !== null && normalize(t) === wanted;
         });
-      const exact = sameTask.find((job) => sameSchedule(job, cron_expr, runAt));
+      const effectiveTimezone = jobTimezone ?? ctx.schedulerService.defaultTimezone;
+      const exact = sameTask.find((job) => sameSchedule(job, cron_expr, runAt, effectiveTimezone));
       if (exact) {
         ctx.log.info({ agentId, existingJobId: exact.id }, 'scheduler-create refused an exact duplicate of an active job');
         return {
@@ -122,6 +143,7 @@ export class SchedulerCreateHandler implements ToolHandler {
         status: job.status,
         cronExpr: job.cronExpr,
         runAt: job.runAt,
+        timezone: job.timezone,
       }));
     } catch (err) {
       ctx.log.warn({ err, agentId }, 'scheduler-create: duplicate check failed — creating the job without it');
@@ -136,10 +158,7 @@ export class SchedulerCreateHandler implements ToolHandler {
         createdBy: agentId,
         intentAnchor: intent_anchor,
         errorBudget: error_budget,
-        // Optional per-job timezone — overrides the service default for cron wall-clock interpretation.
-        // run_at is already normalized to UTC by the execution layer, so timezone only affects cron jobs.
-        // Normalize to undefined if blank so createJob() falls back to the service default.
-        timezone: typeof timezone === 'string' && timezone.trim() !== '' ? timezone.trim() : undefined,
+        timezone: jobTimezone,
         originator,
       });
 
