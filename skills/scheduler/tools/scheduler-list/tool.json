@@ -1,7 +1,7 @@
 {
   "name": "scheduler-list",
-  "description": "List scheduled jobs (most recent first, trimmed summary view). Optionally filter by status (pending, running, completed, failed, suspended, cancelled, paused) or agent_id, and cap results with limit (default 50, max 200). For full detail on a single job, use scheduler-report.",
-  "version": "1.2.0",
+  "description": "List scheduled jobs (most recent first, trimmed summary view). Optionally filter by status (pending, running, completed, failed, suspended, cancelled, paused) or agent_id, and cap results with limit (default 50, max 200). status takes a single value. To find an existing routine before changing it or creating one like it, list without a status filter and look for an active job (pending, running, suspended or paused) with the same agent and task; taskPreview shows the start of each job's task. Include running jobs: a routine that happens to be mid-run is still the same routine. For full detail on a single job, use scheduler-report.",
+  "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -10,7 +10,7 @@
     "limit": "number?"
   },
   "outputs": {
-    "jobs": "array",
+    "jobs": "array (summary per job: id, agentId, status, cronExpr, runAt, nextRunAt, taskTitle, taskPreview — the first 160 characters of the job's task — and similar fields)",
     "count": "number",
     "truncated": "boolean",
     "limit": "number",
