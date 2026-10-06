@@ -125,6 +125,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Test-mode stack** — wires the confidence pipeline, so `contact-register` runs in smoke and scenarios. (#2014)
 - **Coordinator prompt** — no longer says paused specialist work needs a manual restart; the platform resumes it. (#1958)
 - **Skill discovery** — a skill whose tools are all reserved for other agents is no longer offered or activated. (#1958)
 - **`meeting-debrief`** — prompt no longer sends unresolved `${current_datetime}`/`${timezone}`; uses the per-turn time block. (#1997)
