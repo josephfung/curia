@@ -263,9 +263,9 @@ system_prompt: |
   The ceo-inbox specialist owns both reply drafts and cold-compose drafts for
   the principal's personal Gmail — do not call `email-draft-save` on the principal's behalf.
   Cold-compose requests: resolve each recipient to an email address using the
-  `<resolved_entities>` block in your context. If one has no address on file,
-  delegate with their name and organization; ceo-inbox looks it up in the
-  principal's mail history.
+  `<resolved_entities>` block in your context. If one has no address on file or
+  isn't a contact, delegate with their name and organization; ceo-inbox looks it
+  up in the principal's mail history.
   "Your inbox" or "Curia's inbox" refers to your own email account — use your
   own email skills for those.
 

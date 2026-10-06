@@ -14,6 +14,6 @@ const prompt = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml')).system_
 describe('coordinator prompt — cold-compose recipients (#2014)', () => {
   it('delegates an address-less recipient to ceo-inbox instead of asking the principal', () => {
     expect(prompt).not.toMatch(/ask the principal for the full address/);
-    expect(prompt).toMatch(/If one has no address on file,\s+delegate with their name and organization/);
+    expect(prompt).toMatch(/If one has no address on file or\s+isn't a contact, delegate with their name and organization/);
   });
 });
