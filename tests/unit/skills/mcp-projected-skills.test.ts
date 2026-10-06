@@ -134,6 +134,39 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
       expect(data.referenceContent?.content).toContain('export_items');
     });
 
+    // References are optional: discovery that throws must not abort boot (review on
+    // #2019). An unreadable references/ makes readdirSync throw EACCES; root ignores
+    // the mode, so the case is skipped there.
+    it.skipIf(process.getuid?.() === 0)('registers without references and warns when discovery throws', () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-refs-'));
+      const refs = path.join(tmp, 'google-workspace', 'references');
+      fs.mkdirSync(refs, { recursive: true });
+      fs.writeFileSync(path.join(refs, 'notes.md'), 'x');
+      fs.chmodSync(refs, 0o000);
+      try {
+        const skills = new SkillRegistry();
+        const logger = silentLogger();
+        const added = registerMcpProjectedSkills(
+          new Map([['google-workspace', ['update_drive_file']]]),
+          skills,
+          logger,
+          tmp,
+        );
+        expect(added).toBe(1);
+        const gw = skills.get('google-workspace');
+        expect(gw?.dir).toBe('');
+        expect(gw?.manifest.references).toBeUndefined();
+        expect(gw?.manifest.tools).toEqual(['update_drive_file']);
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ server: 'google-workspace' }),
+          expect.stringContaining('resource discovery failed'),
+        );
+      } finally {
+        fs.chmodSync(refs, 0o755);
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
     it('registers with no directory when the server has none on disk', () => {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-refs-'));
       try {

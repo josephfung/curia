@@ -780,9 +780,23 @@ export function registerMcpProjectedSkills(
     // only gate on it (#1957).
     const membership = tools;
     const resourceDir = skillsDir ? path.join(skillsDir, serverName) : '';
-    const hasResourceDir = resourceDir !== '' && fs.existsSync(resourceDir)
-      && fs.statSync(resourceDir).isDirectory();
-    const resources = hasResourceDir ? discoverSkillResources(resourceDir) : null;
+    // References are optional, so an unreadable directory must not abort boot:
+    // register the skill without them and say why.
+    let hasResourceDir = false;
+    let resources: ReturnType<typeof discoverSkillResources> | null = null;
+    if (resourceDir !== '') {
+      try {
+        hasResourceDir = fs.statSync(resourceDir, { throwIfNoEntry: false })?.isDirectory() === true;
+        resources = hasResourceDir ? discoverSkillResources(resourceDir) : null;
+      } catch (err) {
+        logger.warn(
+          { err, server: serverName, resourceDir },
+          'MCP skill resource discovery failed — projecting without references',
+        );
+        hasResourceDir = false;
+        resources = null;
+      }
+    }
     skillRegistry.register(
       {
         name: serverName,
