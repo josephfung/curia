@@ -44,9 +44,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Tiers the runtime emits today, in assembly order. Unknown names sort after these. */
 const TIER_ORDER = [
   'system_prompt',
-  'tool_definitions',
   'user_message',
   'sender_context',
+  'tool_definitions',
   'bullpen',
   'resolved_entities',
   'contact_recent_history',

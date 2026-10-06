@@ -101,6 +101,8 @@ interface Measurement {
   localToolDefinitionBytes: number;
   localToolCount: number;
   unresolvedPins: string[];
+  allowDiscovery: boolean;
+  localToolNames: string[];
 }
 
 function measure(agentName: string): Measurement {
@@ -157,12 +159,15 @@ function measure(agentName: string): Measurement {
     ),
     localToolCount: assembled.toolDefs.length,
     unresolvedPins: assembled.pinResolution.unresolvedPins.map(p => p.pin),
+    allowDiscovery: agentConfig.allow_discovery === true,
+    localToolNames: assembled.toolDefs.map(d => d.name),
   };
 }
 
 describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
   const m = measure(budget.agent);
-  const detail = JSON.stringify({ ...m, unresolvedPins: undefined });
+  const { yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount } = m;
+  const detail = JSON.stringify({ yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount });
 
   it('measures the whole local pin set', () => {
     // A pin that silently failed to load would shrink both numbers and pass the
@@ -170,6 +175,10 @@ describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
     const mcp = mcpServerNames();
     expect(m.unresolvedPins.filter(p => !mcp.has(p))).toEqual([]);
     expect(m.localToolCount).toBeGreaterThan(0);
+    // Discovery tools are not pins, so a missing one is only logged by assembleAgent.
+    if (m.allowDiscovery) {
+      expect(m.localToolNames).toEqual(expect.arrayContaining(['tool-registry', 'skill-activate']));
+    }
   });
 
   it('always-on prompt (YAML system_prompt + pinned SKILL.md) is within budget', () => {

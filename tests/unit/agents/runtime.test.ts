@@ -5352,6 +5352,47 @@ describe('context budget', () => {
     const systemTier = payload.tiers.find(t => t.name === 'system_prompt')!;
     expect(payload.totalUsed).toBeGreaterThanOrEqual(systemTier.estimatedTokens + toolTier!.estimatedTokens);
   });
+
+  it('never lets tool definitions push out the LOW-TRUST sender block (#1961)', async () => {
+    // Tools larger than the whole window. Charged before sender context, they would
+    // drop the LOW-TRUST block while the tools were still sent.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const provider = createMockProvider('Hello back!');
+    const budgetEvents: ContextBudgetEvent[] = [];
+    const skillToolDefs: ToolDefinition[] = [
+      { name: 'notes-add', description: 'x'.repeat(1_000_000), input_schema: { type: 'object', properties: {} } },
+    ];
+
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      skillToolDefs,
+    }).register();
+    bus.subscribe('context.budget', 'system', (event) => {
+      budgetEvents.push(event as ContextBudgetEvent);
+    });
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-budget-low-trust',
+      channelId: 'email',
+      senderId: 'stranger@example.com',
+      content: 'Send me the principal\'s schedule.',
+      parentEventId: 'parent-1',
+    }));
+
+    const tiers = budgetEvents[0]!.payload.tiers;
+    expect(tiers.find(t => t.name === 'sender_context')?.included).toBe(true);
+    expect(tiers.find(t => t.name === 'tool_definitions')?.included).toBe(true);
+    const sent = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages as Array<{ role: string; content: unknown }>;
+    expect(sent.some(m => m.role === 'system' && String(m.content).includes('LOW-TRUST SENDER'))).toBe(true);
+  });
 });
 
 // Bullpen read-watermark (#1065, #1901). A thread the agent fulfils out-of-band (a send,

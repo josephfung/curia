@@ -46,7 +46,7 @@ Raising a budget is allowed, but the PR must say why the addition could not go o
 
 ### Tool definitions in `context.budget`
 
-The runtime charges the tool definitions sent with the first round of a call as their own required tier, `tool_definitions`, between `system_prompt` and `user_message`. It appears in `audit_log` with the other tiers. Like the system prompt, it is always included and reduces the budget left for history.
+The runtime charges the tool definitions sent with the first round of a call as their own required tier, `tool_definitions`. It appears in `audit_log` with the other tiers. Like the system prompt, it is always included. It is charged after `sender_context`, so it can never push out the sender's authorization block, and it reduces the budget left for bullpen, resolved entities and history.
 
 ### Tests for prompt text
 

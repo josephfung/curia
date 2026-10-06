@@ -787,19 +787,17 @@ export class AgentRuntime {
     });
 
     // Budget allocation order: reserve non-negotiable tiers first (system prompt,
-    // tool definitions, user message), then allocate in priority order (sender
-    // context, bullpen), and let history — which supports partial inclusion — take
-    // whatever's left. This matches the design spec priority order and ensures
+    // user message), then allocate in priority order (sender context, tool
+    // definitions, bullpen), and let history — which supports partial inclusion —
+    // take whatever's left. This matches the design spec priority order and ensures
     // higher-priority tiers (especially security-relevant sender context) aren't
-    // starved by greedy history. Tool definitions are the first-round set; tools
-    // discovered mid-turn are not re-charged.
+    // starved by greedy history.
     ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
-    ctxBudget.allocateToolDefinitions(workingToolDefs ?? []);
     ctxBudget.allocateRequired('user_message', [{ role: 'user', content: promptContent }]);
     if (ctxBudget.remaining < 0) {
       logger.error(
         { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
-        'System prompt + tool definitions + user message exceed context budget — proceeding without enforcement',
+        'System prompt + user message exceed context budget — proceeding without enforcement',
       );
     }
 
@@ -1053,6 +1051,19 @@ export class AgentRuntime {
           );
         }
       }
+    }
+
+    // Tool definitions (#1961). Always sent, so always charged — but only after the
+    // sender block, so a long tool list can never push out the sender's
+    // authorization or the LOW-TRUST constraints while the tools still go out.
+    // This is the first-round set; tools discovered mid-turn are not re-charged.
+    const remainingBeforeTools = ctxBudget.remaining;
+    ctxBudget.allocateToolDefinitions(workingToolDefs ?? []);
+    if (remainingBeforeTools >= 0 && ctxBudget.remaining < 0) {
+      logger.error(
+        { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
+        'Tool definitions exceed the remaining context budget — lower-priority tiers will be dropped',
+      );
     }
 
     // Bullpen read-watermark (#1065, #1901). Ambient threads actually shown this task,
