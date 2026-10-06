@@ -53,6 +53,7 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
+import { CLARIFICATION_NEXT_STEP, PAUSED_NEXT_STEP } from '../../src/agents/prompts/delegate-result-guidance.js';
 import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
 import {
   parseSpecialistDeclineMarker,
@@ -833,6 +834,9 @@ export class DelegateHandler implements ToolHandler {
                 question,
                 context: ctxValue,
                 resume_token: resumeToken,
+                // What to do with it, delivered with the result rather than kept in the
+                // always-on coordinator prompt (#1959).
+                next_step: CLARIFICATION_NEXT_STEP,
               },
             };
           }
@@ -868,6 +872,8 @@ export class DelegateHandler implements ToolHandler {
                 next,
                 message,
                 ...(typeof parsed.task_id === 'string' && { task_id: parsed.task_id }),
+                // Not a failure: tells the caller not to re-delegate (#1959).
+                next_step: PAUSED_NEXT_STEP,
               },
             };
           }
