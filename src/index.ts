@@ -96,6 +96,7 @@ import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { extractPromptExfiltrationMarkers } from './dispatch/prompt-exfiltration-markers.js';
+import { TRIGGER_GUIDANCE_MARKER_SOURCES } from './agents/prompts/trigger-guidance-sources.js';
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
 import { EscalationJudge } from './autonomy/escalation-judge.js';
@@ -1344,9 +1345,12 @@ async function main(): Promise<void> {
     // instructions — the highest-value exfiltration target). Deriving from the live
     // prompt means the markers track any operator customization instead of drifting
     // from a hardcoded guess.
+    // Trigger guidance moved out of the prompt into injected blocks and tool results is
+    // scanned too (#1959), so a rule does not lose coverage by moving to its trigger.
     const systemPromptMarkers = extractPromptExfiltrationMarkers(
       officeIdentity,
       coordinatorConfig.system_prompt,
+      TRIGGER_GUIDANCE_MARKER_SOURCES,
     );
     // The principal's email — used to allow their address in outbound content without
     // triggering the contact-data-leak rule. Resolved from the principal contact (#1049),
