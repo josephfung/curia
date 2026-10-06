@@ -29,6 +29,7 @@ import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/type
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { stripOutboundContextPreamble } from '../dispatch/outbound-context.js';
+import { parseTurnGuidanceKeys, renderTurnGuidance } from './prompts/turn-guidance.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
@@ -435,7 +436,12 @@ export class AgentRuntime {
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
     const { agentId, provider, bus, logger, memory, executionLayer, skillToolDefs } = this.config;
     const originalContent = taskEvent.payload.content;
-    let promptContent = originalContent;
+    // Trigger guidance (#1959) heads this turn's user message, next to the preambles it
+    // explains. Only promptContent carries it: working memory stores originalContent, so
+    // history never holds one copy per earlier turn, and the system string never varies
+    // by trigger. The keys are re-validated: the payload crossed the bus.
+    const turnGuidance = renderTurnGuidance(parseTurnGuidanceKeys(taskEvent.payload.turnGuidance));
+    let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     const { conversationId } = taskEvent.payload;
 
     // Manifest-only workspace injection at the message tail — keeps document bodies out
