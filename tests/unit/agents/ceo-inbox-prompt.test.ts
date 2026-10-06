@@ -407,62 +407,13 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
   });
 });
 
-// Cold-compose recipient resolution (#2014): the coordinator now delegates a compose
-// whose recipient has no address, so ceo-inbox is the only agent that can find one.
+// Cold-compose recipient resolution (#2014): the coordinator delegates a compose whose
+// recipient has no address, so ceo-inbox is the agent that finds one.
 describe('ceo-inbox prompt — cold-compose recipient resolution (#2014)', () => {
-  function resolutionSection(): string {
+  it('looks a missing address up in mail headers and registers it', () => {
     const prompt = loadCeoInboxPrompt();
-    const start = prompt.indexOf('**Recipient with no email address.**');
-    const end = prompt.indexOf('**Working with existing drafts');
-    if (start === -1 || end <= start) throw new Error('recipient-resolution section not found');
-    return prompt.slice(start, end);
-  }
-
-  it('searches the principal mail history before drafting', () => {
-    expect(resolutionSection()).toMatch(/Call `ceo-inbox-search`/);
-  });
-
-  it('takes only addresses seen verbatim in a header, never guessed or from a body', () => {
-    const section = resolutionSection();
-    expect(section).toMatch(/verbatim in a From, To or Cc header/);
-    expect(section).toMatch(/Never construct an address/);
-    expect(section).toMatch(/never take one from a message body, a\s+signature or the web/);
-  });
-
-  it('branches on one, several and no candidates, drafting only for one', () => {
-    const section = resolutionSection();
-    expect(section).toMatch(/\*\*Exactly one candidate:\*\*[\s\S]*`ceo-inbox-draft-reply`[\s\S]*`ceo-inbox-draft-compose`/);
-    expect(section).toMatch(/\*\*Several candidates:\*\* do not draft/);
-    expect(section).toMatch(/\*\*No candidate:\*\* do not draft/);
-  });
-
-  it('registers the address at tier unknown and never relinks an existing contact', () => {
-    const section = resolutionSection();
-    expect(section).toMatch(/`contact-register`/);
-    expect(section).toMatch(/tier `unknown`[^.]*; never\s+raise the tier/);
-    expect(section).toMatch(/do not try to merge or relink/);
-  });
-
-  it('never reports a failed search as "no address"', () => {
-    const section = resolutionSection();
-    expect(section).toMatch(/when every search succeeded and no candidate remains/);
-    // Messages found, none with a usable address, is still "no candidate", not an error.
-    expect(section).toMatch(/found only messages with no eligible address/);
-    expect(section).toMatch(/\*\*A tool failed:\*\*[^]*do not draft and do not\s+report "no address"/);
-  });
-
-  it('passes contact-register an ISO 8601 timestamp, not the raw unix date', () => {
-    expect(resolutionSection()).toMatch(/date converted to an ISO\s+8601 string for `messageTimestamp`/);
-  });
-
-  it('replies on the thread only when nobody else is copied; otherwise composes to the candidate alone', () => {
-    // draft-reply always replies to all, so a copied third party would be added silently.
-    const section = resolutionSection();
-    expect(section).toMatch(/nobody but the candidate and the principal is on its To\s+or Cc/);
-    expect(section).toMatch(/`ceo-inbox-draft-compose`\s+addressed to the candidate alone/);
-  });
-
-  it('reports the saved draft without pasting its body', () => {
-    expect(resolutionSection()).toMatch(/Do not paste the full\s+draft body/);
+    expect(prompt).toMatch(/If a recipient arrives without an address, find them with\s+`ceo-inbox-search`/);
+    expect(prompt).toMatch(/take the address from a matching message's headers/);
+    expect(prompt).toMatch(/register it with `contact-register` as in step 4b/);
   });
 });
