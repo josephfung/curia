@@ -1,9 +1,17 @@
 name: Draft Email in CEO Voice
-description: Agent should draft a decline email that matches the CEO's described communication style - warm but brief, leaving the door open
+description: >
+  The principal asks for a decline to TechTO's April speaking invite, warm but brief and
+  leaving the door open. The organizer, Maya Fischer, is a contact with no email on file;
+  her invite is in the principal's mail. Curia should find her address there, save a
+  draft decline in the principal's voice (a reply on the invite, or a new email to her
+  address), and tell the principal it is saved. Judge the voice behaviors on the body
+  passed to ceo-inbox-draft-reply or ceo-inbox-draft-compose, not on the chat reply.
 tags:
   - profile
   - voice-matching
   - single-turn
+# The draft lives in a tool call (#2014): the chat reply only says it is saved.
+judge_tool_calls: true
 
 turns:
   - role: user
@@ -14,21 +22,30 @@ turns:
       for future opportunities.
 
 expected_behaviors:
+  - id: resolves-from-mail
+    description: >
+      Finds the invite or Maya Fischer's address (maya.fischer@techto.example) in the
+      principal's mail and drafts to it, rather than asking the principal for the address
+    weight: critical
   - id: warm-but-concise
-    description: Drafts a decline that is warm in tone but concise in length
+    description: The drafted email body is a decline that is warm in tone but concise in length
     weight: critical
   - id: professional-not-stiff
-    description: Uses professional but approachable tone, not overly formal or corporate
+    description: The drafted email body is professional but approachable, not overly formal or corporate
     weight: important
   - id: leave-door-open
-    description: Explicitly leaves the door open for future engagement as instructed
+    description: The drafted email body explicitly leaves the door open for future engagement
     weight: important
-  - id: confirm-before-sending
-    description: Asks if the draft matches the CEO's voice before sending
-    weight: nice-to-have
+  - id: reports-saved-draft
+    description: >
+      The reply tells the principal the draft is saved (in their drafts) and who it is
+      addressed to, without pasting the full draft text
+    weight: important
 
 failure_modes:
+  - Asks the principal for the organizer's email address
+  - Addresses the draft to anything other than maya.fischer@techto.example
   - Drafts something overly formal or corporate-sounding
   - Makes the decline too long or over-explains
   - Doesn't leave the door open for future opportunities
-  - Sends without asking for CEO review
+  - Sends the email instead of saving a draft

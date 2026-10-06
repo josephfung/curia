@@ -134,7 +134,10 @@ ceo-inbox-list:
         - { id: 18f0c8e3a6d2b154, threadId: 18f0c8e3a6d2b154, from: [{ name: Acme Logistics Billing, email: billing@acmelogistics.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Invoice 4471 — due in 30 days, date: "{{time:today-2 09:12}}", snippet: "Please find attached invoice 4471 for September services.", unread: true, folders: [INBOX], attachments: [{ id: ANGjdJ9k1V0aW52b2lj, filename: invoice-4471.pdf, contentType: application/pdf, size: 88211 }] }
         - { id: 18f0d4a7c2e9b386, threadId: 18f0d4a7c2e9b386, from: [{ name: Sarah Johnson, email: sarah.johnson@lumen.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Follow-up after the demo?, date: "{{time:today-2 11:30}}", snippet: "Could we find 30 minutes next week to go through pricing?", unread: true, folders: [INBOX], attachments: [] }
         - { id: 18f1a9e5d3c7b042, threadId: 18f1a9e5d3c7b042, from: [{ name: SaaS Weekly, email: newsletter@saasweekly.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "SaaS Weekly: pricing pages that convert", date: "{{time:today-1 06:00}}", snippet: "This week: five pricing page teardowns.", unread: true, folders: [INBOX], attachments: [] }
-      count: 7
+        # Already read, so triage never lists it; search finds it. The only place Maya
+        # Fischer's address appears (her contact has none, fixtures/people.yaml) (#2014).
+        - { id: 18eff2b6a1d8c530, threadId: 18eff2b6a1d8c530, from: [{ name: Maya Fischer, email: maya.fischer@techto.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Speaking at TechTO in April?", date: "{{time:today-8 14:05}}", snippet: "We'd love to have you on the main stage at our April event: a 20-minute talk on building AI products in Toronto.", unread: false, folders: [INBOX], attachments: [] }
+      count: 8
 ceo-inbox-search:
   - match: { folder: DRAFTS }
     return: { folder: DRAFTS, drafts: [], count: 0 }
@@ -146,10 +149,15 @@ ceo-inbox-read:
     return: { id: 18f2d9e40b6c1a73, threadId: 18f2d9e40b6c1a73, from: [{ name: Elena Ruiz, email: elena.ruiz@northstar.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Need to talk today — board matter, body_plain: "Hi {{principal:first}},\n\nSomething came up on the board side that I'd rather not put in writing. Can you get on a call with me today? Any time after 1pm works.\n\nElena", date: 0, labels: [INBOX, UNREAD], attachments: [] }
   - match: { message_id: 18f2a1c7d93e5b08 }
     return: { id: 18f2a1c7d93e5b08, threadId: 18f2a1c7d93e5b08, from: [{ name: Priya Sharma, email: priya.sharma@curiatech.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Q2 board deck — final for your review, body_plain: "Hi {{principal:first}},\n\nAttached is the final Q2 board deck. Pages 4 (ARR bridge) and 9 (hiring plan) changed since the draft.\n\nPriya", date: 0, labels: [INBOX, UNREAD], attachments: [{ id: ANGjdJ8x2Q4fQ2RlY2s, filename: Q2-board-deck-final.pdf, contentType: application/pdf, size: 2481152 }] }
+  - match: { message_id: 18eff2b6a1d8c530 }
+    return: { id: 18eff2b6a1d8c530, threadId: 18eff2b6a1d8c530, from: [{ name: Maya Fischer, email: maya.fischer@techto.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Speaking at TechTO in April?", body_plain: "Hi {{principal:first}},\n\nWe'd love to have you on the main stage at our April event: a 20-minute talk on building AI products in Toronto, followed by a short Q&A. About 400 founders and engineers attend.\n\nWould you be up for it? Happy to jump on a call if that's easier.\n\nMaya Fischer\nProgramming Lead, TechTO", date: 0, labels: [INBOX], attachments: [] }
   - match: {}
     error: Message not found in this mailbox.
 
 ceo-inbox-draft-reply:
+  # The real skill reports the reply-all recipients; a bare `to: []` reads as "addressed to nobody".
+  - match: { reply_to_message_id: 18eff2b6a1d8c530 }
+    return: { draft_id: draft-0001, subject: "Re: Speaking at TechTO in April?", to: [{ name: Maya Fischer, email: maya.fischer@techto.example }], cc: [] }
   - match: {}
     return: { draft_id: draft-0001, subject: Re, to: [], cc: [] }
 ceo-inbox-draft-compose:
