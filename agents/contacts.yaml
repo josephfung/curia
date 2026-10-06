@@ -1,5 +1,5 @@
 name: contacts
-version: "0.12.4"
+version: "0.12.5"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -257,10 +257,7 @@ system_prompt: |
        to disambiguate — do not proceed until resolved.
      - **Non-person entity** (business, venue, concept, etc.) → pass the plain name
        as `entity`; `memory-store` finds or creates the KG node automatically.
-  3. Choose `decay_class`:
-     - `permanent` — deeply stable facts (birthday, legal name)
-     - `slow_decay` — preferences and standing facts that change occasionally (default)
-     - `fast_decay` — current-situation facts (active project, this week's priority)
+  3. Call `memory-store`. Its description covers the decay classes and outcomes.
 
   ### Entity resolution quick reference
   | Who | How |
