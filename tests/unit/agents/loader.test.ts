@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { PAUSED_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import { loadAgentConfig, loadAllAgentConfigs, interpolateRuntimeContext } from '../../../src/agents/loader.js';
 import { findTemplateTokens } from '../../../src/skills/_shared/placeholder-guard.js';
 import * as path from 'node:path';
@@ -67,10 +68,32 @@ describe('loadAgentConfig', () => {
   });
 
   it('coordinator prompt does not claim continuation is manual (#1958)', () => {
-    // ResumableContinuationSubscriber schedules the next slice on execution_paused.
+    // ResumableContinuationSubscriber schedules the next slice on execution_paused. The
+    // statement now arrives with the paused result (#1959), not in the prompt.
     const prompt = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml')).system_prompt;
     expect(prompt).not.toMatch(/Continuation is not automatic/);
-    expect(prompt).toMatch(/platform schedules the next slice itself/);
+    expect(PAUSED_NEXT_STEP).toMatch(/platform\s+schedules the next slice itself/);
+  });
+
+  // #1959: guidance that applies only when a trigger is present is injected with that
+  // trigger. Each row names its new home, so a failure points at the right place.
+  it.each([
+    ['delegate needs_clarification handling', /needs_clarification/, "delegate result's next_step"],
+    ['delegate paused handling', /paused: true/, "delegate result's next_step"],
+    ['[ACTIVE OUTBOUND CONTEXT] three-way decision', /### Active outbound context/, 'turn guidance: outbound-context'],
+    ['task-wake bind_reply', /bind_reply/, 'turn guidance: outbound-context-task-wake'],
+    ['clearing debrief items', /context-bridge-clear/, 'turn guidance: outbound-context-debrief'],
+    ['self-contained vs reply-shaped', /reply-shaped/, 'turn guidance: principal / non-principal'],
+    ['[OWNER CC] handling', /OWNER CC/, 'turn guidance: email-cc-principal / email-cc-reply'],
+    ['bullpen reply rule', /Bullpen threads are internal/, 'BULLPEN_REPLY_RULE in the [Bullpen] block and mention wake'],
+    ['email reply mechanics', /#### Sending and replying/, 'turn guidance: email-direct-reply'],
+    ['To / CC etiquette', /#### To \/ CC etiquette/, 'turn guidance: email-etiquette'],
+    ['which mailbox', /Which mailbox a tool acts on/, 'turn guidance: email-etiquette'],
+    ['end-of-day debrief recap', /activity-log/, "debrief job's task content"],
+    ['contact.duplicate_detected handling', /duplicate_detected/, 'no notification reaches the coordinator'],
+  ])('coordinator prompt does not carry the %s', (_rule, pattern) => {
+    const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
+    expect(config.system_prompt).not.toMatch(pattern);
   });
 
   it('throws on nonexistent file', () => {

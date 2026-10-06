@@ -1,6 +1,6 @@
 # Case 4 (#1956): a reply-shaped message from the principal with no [ACTIVE OUTBOUND
-# CONTEXT] block → ask what it refers to. Rule: agents/coordinator.yaml, "Self-contained
-# vs reply-shaped".
+# CONTEXT] block → ask what it refers to. Rule: turn guidance `principal-reply-shaped`
+# (src/agents/prompts/turn-guidance.ts), injected by the dispatcher (#1959).
 name: reply-shaped principal no context
 description: >
   The principal sends "Yes, go ahead." with no active outbound context. The message only

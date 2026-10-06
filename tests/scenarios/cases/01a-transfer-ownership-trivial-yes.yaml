@@ -2,7 +2,7 @@
 # delegation_hint is ALWAYS transfer-ownership — the coordinator routes it to the named
 # specialist with the entry id and does not answer it, even when the reply is a bare
 # "yes" it could trivially handle. Rule: agents/coordinator.yaml, "The transfer-ownership
-# reply rule" and "Active outbound context".
+# reply rule", and turn guidance `outbound-context` (src/agents/prompts/turn-guidance.ts).
 name: transfer-ownership trivial yes
 description: >
   ceo-inbox sent the principal a draft reply for approval. The principal answers with a

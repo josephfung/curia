@@ -221,7 +221,9 @@ every case loads and has a well-formed entry.
 ## Writing a case
 
 Cases are `cases/NN<letter>-<slug>.yaml`, numbered by #1956's list. Start the file with a
-comment that cites the rule it tests (section of `agents/coordinator.yaml`). Two
+comment that cites the rule it tests: a section of `agents/coordinator.yaml`, or the
+trigger guidance in `src/agents/prompts/` that now carries it (#1959). A stub that stands
+in for a tool whose real result carries `next_step` must carry it too. Two
 principles:
 
 - **Make the wrong answer available and attractive.** Stub the wrong channel so it

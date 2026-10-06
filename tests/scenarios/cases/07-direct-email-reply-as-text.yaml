@@ -1,6 +1,6 @@
 # Case 7 (#1956): replying to a direct inbound email is returning the text — the system
-# threads it. Calling email-reply or email-send starts a new thread. Rule:
-# agents/coordinator.yaml, Email → "Sending and replying".
+# threads it. Calling email-reply or email-send starts a new thread. Rule: turn guidance
+# `email-direct-reply` (src/agents/prompts/turn-guidance.ts), on email turns (#1959).
 name: direct email reply as text
 description: >
   An external contact emails the coordinator's own inbox with a simple logistics question
