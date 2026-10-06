@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`google-workspace` reference** — `drive-files.md` holds Drive move, upload and export mechanics, loaded via `skill-activate`. (#1960)
+- **MCP-projected skills** — load `references/` from `skills/<server>/`, so upstream tools can carry how-to notes. (#1960)
+- **`scheduler-list`** — returns `taskPreview`, the start of each job's task. (#1960)
 - **`agent.task` (public API)** — optional `turnGuidance` names trigger guidance the runtime adds to that turn's user message. (#1959)
 - **`delegate` (public API)** — `next_step` now also comes on clarification and paused results. (#1959)
 - **`delegate` (public API)** — `next_step` and `queued` on an `already_in_flight` refusal say what to do and whether it's saved. (#1958)
@@ -59,6 +62,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Coordinator prompt** — tool how-to moves into tool descriptions and a skill reference; 33 KB → 24 KB. (#1960)
+- **Specialist prompts** — research-analyst, ceo-inbox and contacts drop memory how-to the tool descriptions now carry. (#1960)
+- **Coordinator pins** — `image-generate` and `drive-download-file`, unused for 30 days, are now reached through discovery. (#1960)
+- **`scheduler-create`** — refuses an exact copy of an active job and lists same-task jobs on other schedules. (#1960)
 - **Cold-compose recipients** — ceo-inbox finds a missing address in the principal's mail before asking. (#2014)
 - **Draft Email in CEO Voice smoke case** — judges the saved draft; new no-address and two-candidate cases. (#2014)
 - **Coordinator prompt** — conditional guidance arrives with its trigger instead of every turn; 46 KB → 33 KB. (#1959)

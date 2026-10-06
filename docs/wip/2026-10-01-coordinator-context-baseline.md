@@ -900,3 +900,34 @@ The branch scored 100% weighted in seven rounds and 92% in one; `origin/main` sc
 in all eight. With the recipient resolvable, the case passes on both prompts, so the
 earlier gap came from the case design and cold-compose routing, not from moving the
 guidance.
+
+### 2026-10-06 — tool mechanics moved into tools, zero-call pins pruned (#1960)
+
+**Size.** Measured on the files, before deploy, against this branch's base
+`23ed757d` (coordinator 0.22.0, #2012's final commit). Tokens are estimated at four
+characters each. Manifest bytes are each `tool.json` minified, which tracks but is
+not identical to the tool-definition bytes the report measures.
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `agents/coordinator.yaml` bytes | 33,117 | 24,506 | −8,611 (−26%) |
+| `system_prompt` block bytes | 30,174 | 21,186 | **−8,988 (−30%)** |
+| `system_prompt` est. tokens | ~7.5k | ~5.3k | ~−2.2k |
+| pinned entries | 29 | 27 | −2 |
+| manifest bytes of the 9 tools whose descriptions grew | 16,577 | 21,594 | +5,017 |
+| manifest bytes of the 2 unpinned tools | 2,266 | 0 | −2,266 |
+
+Moving text into a description doesn't shrink the per-call total, as #1960 said.
+The prompt's −9.0 KB is offset by +5.0 KB of descriptions and a ~0.3 KB
+reference index that pin resolution adds for `google-workspace`. The net per-call
+change is about −6 KB, and roughly a third of that comes from the two unpinned
+tools. The Drive mechanics (2.2 KB) now load only when the coordinator asks for
+`drive-files.md`.
+
+**Zero-call pins.** From the 2026-10-01 list, `image-generate` and
+`drive-download-file` are unpinned (discovery). The rest stay, with the reason in
+the YAML: bundle members can't be excluded one at a time; `sms-send` and
+`slack-send` reach the principal where Signal isn't set up; `contact-update` and
+`context-bridge-clear` serve rare principal requests. `approval-expiry-sweep`
+(713 calls) is used only by the hourly cron. Taking that run off the LLM needs a
+system-invoked sweep, which is follow-up work.
