@@ -276,6 +276,7 @@ describe('SchedulerCreateHandler', () => {
         runAt: null,
         taskPayload: { task: 'Send the weekly pipeline review' },
         status: 'pending',
+        timezone: 'America/Toronto',
         ...overrides,
       };
     }
@@ -283,6 +284,7 @@ describe('SchedulerCreateHandler', () => {
     /** listJobs returns `jobs` for the given status and nothing for the others. */
     function serviceWith(jobs: Array<Record<string, unknown>>) {
       return {
+        defaultTimezone: 'America/Toronto',
         createJob: vi.fn().mockResolvedValue({ jobId: 'new-1' }),
         listJobs: vi.fn(async (filters: { status?: string }) =>
           jobs.filter((j) => j.status === filters.status)),
@@ -343,10 +345,41 @@ describe('SchedulerCreateHandler', () => {
         const data = result.data as Record<string, unknown>;
         expect(data.jobId).toBe('new-1');
         expect(data.similar_active_jobs).toEqual([
-          { jobId: 'existing-1', status: 'pending', cronExpr: '0 9 * * 1', runAt: null },
+          {
+            jobId: 'existing-1',
+            status: 'pending',
+            cronExpr: '0 9 * * 1',
+            runAt: null,
+            timezone: 'America/Toronto',
+          },
         ]);
         expect(data.warning).toContain('scheduler-update');
       }
+    });
+
+    // The same cron in another zone fires at a different instant (review on #2019).
+    it('treats the same cron in another timezone as a different schedule', async () => {
+      const schedulerService = serviceWith([job({ timezone: 'Europe/London' })]);
+      const result = await handler.execute(makeCtx(
+        { task: 'Send the weekly pipeline review', cron_expr: '0 9 * * 1' },
+        { schedulerService: schedulerService as never },
+      ));
+      expect(result.success).toBe(true);
+      expect(schedulerService.createJob).toHaveBeenCalledOnce();
+      if (result.success) {
+        const data = result.data as { similar_active_jobs?: Array<{ timezone: string }> };
+        expect(data.similar_active_jobs?.[0]?.timezone).toBe('Europe/London');
+      }
+    });
+
+    it('matches an explicit timezone input against the job timezone', async () => {
+      const schedulerService = serviceWith([job({ timezone: 'Europe/London' })]);
+      const result = await handler.execute(makeCtx(
+        { task: 'Send the weekly pipeline review', cron_expr: '0 9 * * 1', timezone: ' Europe/London ' },
+        { schedulerService: schedulerService as never },
+      ));
+      expect(result.success).toBe(false);
+      expect(schedulerService.createJob).not.toHaveBeenCalled();
     });
 
     it('ignores active jobs with a different task', async () => {

@@ -135,6 +135,11 @@ export class SchedulerService {
     this.timezone = timezone;
   }
 
+  /** The timezone createJob gives a job when the caller passes none. */
+  get defaultTimezone(): string {
+    return this.timezone;
+  }
+
   // -- Cron helpers --
 
   /**
