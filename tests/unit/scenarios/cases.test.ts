@@ -2,6 +2,7 @@
 // Runs in CI with no database or model: the live suite is `pnpm scenarios`.
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { PAUSED_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import { loadScenarioCases } from '../../scenarios/loader.js';
 import { coverageViolations, readCoverage } from '../../scenarios/stub-coverage.js';
 
@@ -25,6 +26,15 @@ describe('coordinator scenario cases', () => {
     for (const c of cases) {
       expect(c.expectedBehaviors.some(b => b.check), c.name).toBe(true);
     }
+  });
+
+  it('stub a paused delegate result with the next_step the real handler adds (#1959)', () => {
+    // A stub replaces the delegate handler. Without next_step the case would test a
+    // result production never sends; with a stale copy it would test old guidance.
+    const paused = cases.flatMap(c => (c.toolStubs['delegate'] ?? []).map(stub => stub.return))
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && (r as Record<string, unknown>)['paused'] === true);
+    expect(paused.length).toBeGreaterThan(0);
+    for (const r of paused) expect(r['next_step']).toBe(PAUSED_NEXT_STEP);
   });
 
   it('have a well-formed stub-coverage record', () => {

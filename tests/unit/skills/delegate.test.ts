@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Writable } from 'node:stream';
 import { DelegateHandler } from '../../../skills/delegate/handler.js';
+import { CLARIFICATION_NEXT_STEP, PAUSED_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { DelegationGuard, delegationKey } from '../../../src/agents/delegation-guard.js';
@@ -1708,6 +1709,34 @@ describe('DelegateHandler dispatch claim (#1893)', () => {
     expect(published).toEqual(['calendar']);
     expect(claim.acquireRunning).toHaveBeenCalledOnce();
     expect(claim.releaseRunning).toHaveBeenCalledWith('delegate-claim');
+  });
+
+  // #1959: what to do with these shapes arrives with the result, not from the always-on
+  // coordinator prompt. A plain answer gets no next_step.
+  it.each([
+    ['clarification', JSON.stringify({
+      _curia_protocol: 'clarification_request',
+      question: 'Which day?',
+      context: 'booking the room',
+      resume_token: 'token-1',
+    }), CLARIFICATION_NEXT_STEP],
+    ['pause', JSON.stringify({
+      _curia_protocol: 'execution_paused',
+      done: 1,
+      total: 4,
+      next: 'book the rest',
+      message: 'Paused after 1 of 4.',
+    }), PAUSED_NEXT_STEP],
+    ['plain answer', 'Booked for Tuesday.', undefined],
+  ])('a %s result carries the matching next_step', async (_label, content, nextStep) => {
+    const { bus } = respondingBus(content);
+    const result = await handler.execute(makeCtx(
+      { agent: 'calendar', task: 'Book the room' },
+      { bus, agentRegistry: registry(), ...origin() },
+    ));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { next_step?: string }).next_step).toBe(nextStep);
   });
 
   it('retains the claim on the timeout path', async () => {
