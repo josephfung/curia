@@ -15,6 +15,11 @@ judge_tool_calls: true
 # Two Lakeshore senders, on top of the fixture office's inbox. Search narrows the list
 # to the query (stub-filters.ts), so "Lakeshore" or "Sam" finds both.
 tool_stubs:
+  # The contacts specialist sometimes creates a name-only contact ("Sam") while briefing.
+  # Stubbed so a gated retry doesn't inherit it from the first attempt's database writes.
+  contact-create:
+    - match: {}
+      return: { contact_id: 3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f, display_name: "{{input:name}}", identities_added: 0 }
   ceo-inbox-search:
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, drafts: [], count: 0 }
