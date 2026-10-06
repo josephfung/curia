@@ -52,3 +52,10 @@
   title: Director of Operations
   organization: Apex Dynamics
   notes: Ran the Apex side of last year's logistics pilot.
+
+# No email on file: her address is only in the principal's mail history (her invite in
+# stubs/office.yaml), so drafting to her means finding it there (#2014).
+- display_name: Maya Fischer
+  title: Programming Lead
+  organization: TechTO
+  notes: Runs speaker programming for TechTO's events.
