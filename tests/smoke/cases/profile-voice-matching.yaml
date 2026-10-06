@@ -27,6 +27,11 @@ expected_behaviors:
       Finds the invite or Maya Fischer's address (maya.fischer@techto.example) in the
       principal's mail and drafts to it, rather than asking the principal for the address
     weight: critical
+  - id: registers-address
+    description: >
+      Records the address it found with contact-register (maya.fischer@techto.example), so
+      the next request to Maya needs no search
+    weight: important
   - id: warm-but-concise
     description: The drafted email body is a decline that is warm in tone but concise in length
     weight: critical
