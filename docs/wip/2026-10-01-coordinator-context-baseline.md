@@ -883,7 +883,20 @@ database as the #1958 runs. Both suites side by side at concurrency 4. **Both ex
     invite, and the always-on cold-compose rule says to ask for an address it cannot
     resolve, so a model that reads "draft" as "save a Gmail draft" fails the case by
     following its prompt. A plausible branch-side push is that the mailbox rule ("never
-    draft the principal's mailbox directly") now appears on email turns only. A likely
-    fix covers both: when a recipient's address can't be resolved, write the draft inline
-    and ask for the address only to save it, and seed TechTO so the case tests voice
-    rather than routing.
+    draft the principal's mailbox directly") now appears on email turns only. Filed as
+    #2014, fixed by #2015: ceo-inbox looks up a missing address in the principal's mail
+    history, and the case now seeds the TechTO organizer and the invite.
+
+**Draft Email A/B after #2015.** The branch was rebased onto `0e8a4765` (#2015 merged)
+and re-run against `origin/main` at that commit: 8 alternating single-case rounds per side,
+both trees clean.
+
+| | Case failed (after retry) | First attempts missed |
+|---|---:|---:|
+| Branch (`502009f0`) | 0 of 8 | 0 of 8 |
+| `origin/main` (`0e8a4765`) | 0 of 8 | 0 of 8 |
+
+The branch scored 100% weighted in seven rounds and 92% in one; `origin/main` scored 100%
+in all eight. With the recipient resolvable, the case passes on both prompts, so the
+earlier gap came from the case design and cold-compose routing, not from moving the
+guidance.
