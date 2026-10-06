@@ -15,7 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
-- **`delegate` (public API)** — `next_step` on an `already_in_flight` refusal says what to do instead of retrying. (#1958)
+- **`delegate` (public API)** — `next_step` and `queued` on an `already_in_flight` refusal say what to do and whether it's saved. (#1958)
 - **Scenario case 12** — "your calendar" from the principal routes to the calendar specialist or asks whose. (#1958)
 - **Scenario date placeholders** — cases use relative dates, resolved once per run; date-bound cases no longer go stale. (#1958)
 - **`email-get-thread`** — reads every message in an email thread, full bodies, in one call. (#1957)
