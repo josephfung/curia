@@ -85,7 +85,7 @@ a release-gate result, and the results JSON records the filters.
   and an example justification when it is under 100%.
 - In the summary, each case's spend and the run's total, split by agent and judge. The
   results JSON holds the split per run, per case and for the suite (`usage`). These are
-  estimates from registry prices, and OpenRouter cache reads show as 0 (#1962); see
+  estimates from registry prices; see
   [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
 - `tests/scenarios/results/<timestamp>.json` (gitignored), with the commit, the model and
   every run's tool calls, reply and ratings.

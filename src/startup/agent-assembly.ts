@@ -388,6 +388,18 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
 
   const binding = resolveAgentModelBinding(agentConfig, ctx.models);
 
+  // context_budget.response_reserve sizes the runtime's ContextBudget (the runtime
+  // defaults it to 8192 when absent). Reject a value that would mis-size it rather
+  // than letting it silently shrink or inflate the history allowance.
+  const responseReserve = agentConfig.context_budget?.response_reserve;
+  if (responseReserve !== undefined && !(Number.isInteger(responseReserve) && responseReserve > 0)) {
+    throw new AgentAssemblyError(
+      `context_budget.response_reserve must be a positive integer (agent '${agentConfig.name}')`,
+      agentConfig.name,
+      { responseReserve },
+    );
+  }
+
   const runtimeConfig: AgentConfig = {
     // agentId, systemPrompt, and every field buildBaseSystemPrompt() reads — including
     // the coordinator-only gating. Decided in one place; see resolveSystemPromptSources.
@@ -409,6 +421,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
     modelRegistry: ctx.models.modelRegistry,
     estimateCostUsd: ctx.estimateCostUsd,
+    contextBudget: responseReserve !== undefined ? { responseReserve } : undefined,
     // Every owned mailbox. Email recall requires one of these on the thread
     // so a BCC (Curia absent from To/CC) cannot look like a 1:1 (#1599).
     selfEmails: ctx.selfEmails,

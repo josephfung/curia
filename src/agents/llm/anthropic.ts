@@ -159,9 +159,9 @@ export class AnthropicProvider implements LLMProvider {
         input_schema: t.input_schema as Anthropic.Messages.Tool['input_schema'],
       }));
       // Mark the last tool with a cache_control breakpoint so the entire tool
-      // list is captured in a single cache slot. The coordinator's tool list is
-      // stable (48 pinned skills), so this achieves near-100% hit rate within
-      // the 5-minute TTL and saves ~10K tokens per call.
+      // list is captured in a single cache slot. An agent's pinned tool list is
+      // stable between turns, so it is served from cache within the 5-minute
+      // TTL. No size is quoted here: it grows with every pinned skill.
       // Mutate in place rather than spread-reassign — the spread pattern widens
       // the inferred type and makes required fields optional, breaking assignability.
       mappedTools[mappedTools.length - 1]!.cache_control = { type: 'ephemeral' as const };

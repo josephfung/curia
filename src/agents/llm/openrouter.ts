@@ -8,14 +8,16 @@
 //      chat format. Multiple system messages are joined with double newlines.
 //   2. Curia's ContentBlock types are mapped to OpenAI SDK shapes (text,
 //      image_url, tool messages). Images use data URIs for base64 sources.
-//   3. Cache tokens are always 0 — OpenRouter doesn't support Anthropic-style
-//      prompt caching.
+//   3. Usage is normalized to Anthropic semantics: OpenRouter's prompt_tokens
+//      includes cache reads and writes, so they are split out of inputTokens
+//      (see usageFromOpenRouter).
 //   4. Errors are caught and returned as LLMResponse { type: 'error' } so
 //      callers never need try/catch around chat().
 //   5. Streaming uses OpenRouter's OpenAI-compatible chunk protocol.
 
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool, ChatCompletion } from 'openai/resources/chat/completions/completions.js';
+import type { CompletionUsage } from 'openai/resources/completions.js';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvenance, Message, ContentBlock, ToolCall, ToolDefinition, ToolResult } from './provider.js';
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
@@ -91,6 +93,34 @@ function extractOpenRouterProviderError(
   }
 
   return { providerName, detail };
+}
+
+/** Non-negative integer count, or 0 for anything else (absent, null, malformed). */
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
+ * Map an OpenRouter usage object onto LLMUsage, which follows Anthropic's
+ * semantics: inputTokens counts only uncached input, and cache reads/writes are
+ * reported separately. OpenRouter follows OpenAI instead — prompt_tokens is the
+ * whole prompt, with the cached share broken out in prompt_tokens_details:
+ *   cached_tokens      — read from the cache (OpenAI's own field)
+ *   cache_write_tokens — written to the cache (OpenRouter addition, absent from
+ *                        the SDK type, so read defensively)
+ * Subtracting both keeps pricing.ts from charging cached tokens twice.
+ */
+export function usageFromOpenRouter(usage: CompletionUsage | null | undefined): LLMUsage {
+  const promptTokens = tokenCount(usage?.prompt_tokens);
+  const details: Record<string, unknown> = { ...usage?.prompt_tokens_details };
+  const cacheReadInputTokens = tokenCount(details.cached_tokens);
+  const cacheCreationInputTokens = tokenCount(details.cache_write_tokens);
+  return {
+    inputTokens: Math.max(0, promptTokens - cacheReadInputTokens - cacheCreationInputTokens),
+    outputTokens: tokenCount(usage?.completion_tokens),
+    cacheCreationInputTokens,
+    cacheReadInputTokens,
+  };
 }
 
 export class OpenRouterProvider implements LLMProvider {
@@ -304,12 +334,7 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   private usageFromCompletion(response: ChatCompletion): LLMUsage {
-    return {
-      inputTokens: response.usage?.prompt_tokens ?? 0,
-      outputTokens: response.usage?.completion_tokens ?? 0,
-      cacheCreationInputTokens: 0,
-      cacheReadInputTokens: 0,
-    };
+    return usageFromOpenRouter(response.usage);
   }
 
   private provenanceFromCompletion(response: ChatCompletion, requestedModel: string): LLMCallProvenance {
@@ -515,12 +540,7 @@ export class OpenRouterProvider implements LLMProvider {
         actualModel = chunk.model || actualModel;
 
         if (chunk.usage) {
-          usage = {
-            inputTokens: chunk.usage.prompt_tokens ?? 0,
-            outputTokens: chunk.usage.completion_tokens ?? 0,
-            cacheCreationInputTokens: 0,
-            cacheReadInputTokens: 0,
-          };
+          usage = usageFromOpenRouter(chunk.usage);
         }
 
         for (const choice of chunk.choices) {

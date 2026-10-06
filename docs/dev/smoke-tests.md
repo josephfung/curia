@@ -84,12 +84,12 @@ The run **passes** when every case passes, apart from cases marked `known_failur
 
 **Cost.** The summary prints the run's estimated spend, split by agent and judge, and each case's total. The results JSON holds the same split per case (`usage`), for the run (`usage`), and for work outside every case such as the warm-up (`overheadUsage`). Agents' figures come from the runtime's `llm.call` events (token counts priced by the model registry). The judge publishes no event, so it prices its own responses. The figures are **estimates**, not OpenRouter's bill:
 
-- OpenRouter cache reads are reported as zero (#1962), so cached input is priced as uncached. On a provider that caches, the estimate runs high, and the `(N cached)` column reads 0 whether or not the prefix was cached.
+- Cache reads and writes come from OpenRouter's `prompt_tokens_details` (#1962) and are priced at the registry's cache rates. A model with no cache rate recorded is charged its input rate for those tokens, so its estimate runs high.
 - A call that fails after the provider billed it publishes no `llm.call`, so it is missing.
 
 To see the real figure, note OpenRouter's credit balance (or the activity page) before and after a full run.
 
-**Estimate vs. bill.** One full run of both suites (2026-10-05, 02:03:56–02:16:17 UTC) was estimated at **$4.39**; OpenRouter billed **$2.10** for that window. The estimate ran about 2.1× the bill, which is what pricing every input token as uncached would do (#1962): the registry's cache-read rate for the standard tier is 2% of its input rate, and input is ~97% of the estimate. Read the printed figure as an upper bound until #1962 is fixed. (The window also fell in DeepSeek's weekday 01:00–04:00 UTC peak, which the registry does not price; if it was billed at peak rates, caching saved even more than the gap shows.)
+**Estimate vs. bill.** One full run of both suites (2026-10-05, 02:03:56–02:16:17 UTC) was estimated at **$4.39**; OpenRouter billed **$2.10** for that window. The estimate ran about 2.1× the bill, which is what pricing every input token as uncached would do (#1962): the registry's cache-read rate for the standard tier is 2% of its input rate, and input is ~97% of the estimate. That run predates #1962, which reports OpenRouter's cache reads; the estimate has not been compared with a bill since. (The window also fell in DeepSeek's weekday 01:00–04:00 UTC peak, which the registry does not price; if it was billed at peak rates, caching saved even more than the gap shows.)
 
 **Changing the judge.** The judge (`openai/gpt-4o`) costs more per token than the production standard tier. A cheaper one can be tried on transcripts a run already saved, without running any model:
 

@@ -140,6 +140,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **OpenRouter usage** — reports cache-read and cache-write tokens; `inputTokens` now counts only uncached input. (#1962)
+- **Cost estimates** — cache tokens on a model with no registry cache rate are charged the input rate, not $0. (#1962)
+- **`context_budget.response_reserve`** — agent YAML value now reaches the runtime; invalid values fail at startup. (#1962)
 - **Test-mode stack** — wires the confidence pipeline, so `contact-register` runs in smoke and scenarios. (#2014)
 - **Coordinator prompt** — no longer says paused specialist work needs a manual restart; the platform resumes it. (#1958)
 - **Skill discovery** — a skill whose tools are all reserved for other agents is no longer offered or activated. (#1958)

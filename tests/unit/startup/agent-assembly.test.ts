@@ -22,7 +22,7 @@ import { renderTurnGuidance, type TurnGuidanceKey } from '../../../src/agents/pr
 import { inboundTurnGuidance } from '../../../src/dispatch/turn-guidance-triggers.js';
 import type { AutonomyService } from '../../../src/autonomy/autonomy-service.js';
 import { EventBus } from '../../../src/bus/bus.js';
-import { createAgentTask } from '../../../src/bus/events.js';
+import { createAgentTask, type ContextBudgetEvent } from '../../../src/bus/events.js';
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 import type { OfficeIdentityService } from '../../../src/identity/service.js';
 import { createLogger } from '../../../src/logger.js';
@@ -248,6 +248,46 @@ describe('assembleAgent', () => {
     const ctx = buildContext(textProvider(), configs);
     const [coordinator] = assembleAgents(configs, ctx);
     expect(coordinator!.runtimeConfig.errorBudget?.maxTurns).toBe(7);
+  });
+
+  // #1962: response_reserve was parsed but never reached the runtime.
+  it('maps context_budget.response_reserve to the runtime contextBudget', () => {
+    const configs = [coordinatorYaml({ context_budget: { response_reserve: 16_000 } }), specialistYaml()];
+    const ctx = buildContext(textProvider(), configs);
+    const [coordinator, specialist] = assembleAgents(configs, ctx);
+    expect(coordinator!.runtimeConfig.contextBudget).toEqual({ responseReserve: 16_000 });
+    // Omitted → undefined, so the runtime applies its own default.
+    expect(specialist!.runtimeConfig.contextBudget).toBeUndefined();
+  });
+
+  it.each([0, -1, 1.5, '8192'])('rejects context_budget.response_reserve = %j', (value) => {
+    const configs = [coordinatorYaml({ context_budget: { response_reserve: value as number } })];
+    const ctx = buildContext(textProvider(), configs);
+    expect(() => assembleAgent(configs[0]!, ctx)).toThrow(AgentAssemblyError);
+  });
+
+  it('sizes the runtime context budget from response_reserve', async () => {
+    const provider = textProvider();
+    const configs = [coordinatorYaml({ context_budget: { response_reserve: 12_345 } })];
+    const ctx = buildContext(provider, configs);
+    const [coordinator] = assembleAgents(configs, ctx);
+    new AgentRuntime(coordinator!.runtimeConfig).register();
+
+    const budgetReports: number[] = [];
+    ctx.bus.subscribe('context.budget', 'system', (event) => {
+      budgetReports.push((event as ContextBudgetEvent).payload.responseReserve);
+    });
+    ctx.bus.subscribe('agent.response', 'dispatch', () => {});
+    await ctx.bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-budget',
+      channelId: 'cli',
+      senderId: 'principal',
+      content: 'hello',
+      parentEventId: 'evt-parent',
+    }));
+
+    expect(budgetReports).toEqual([12_345]);
   });
 });
 

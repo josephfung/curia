@@ -5,7 +5,7 @@
 // vi.mock to stub the SDK, and createSilentLogger for silent logging.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OpenRouterProvider } from '../../../../src/agents/llm/openrouter.js';
+import { OpenRouterProvider, usageFromOpenRouter } from '../../../../src/agents/llm/openrouter.js';
 import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import type { LLMStreamEvent } from '../../../../src/agents/llm/provider.js';
@@ -87,7 +87,7 @@ describe('OpenRouterProvider', () => {
     // Content
     expect(result.content).toBe('hello from openrouter');
 
-    // Usage — cache tokens always 0 for OpenRouter
+    // Usage — no prompt_tokens_details, so no cache tokens
     expect(result.usage).toEqual({
       inputTokens: 10,
       outputTokens: 5,
@@ -470,6 +470,158 @@ describe('OpenRouterProvider', () => {
 
     // No warn should fire for a clean stop
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+// Usage payloads in OpenRouter's documented shape (openrouter.ai/docs: prompt
+// caching and usage accounting). prompt_tokens is the whole prompt; the cached
+// share is broken out in prompt_tokens_details (#1962).
+const CACHE_HIT_USAGE = {
+  prompt_tokens: 10339,
+  completion_tokens: 60,
+  total_tokens: 10399,
+  prompt_tokens_details: { cached_tokens: 10318, cache_write_tokens: 0 },
+};
+const CACHE_WRITE_USAGE = {
+  prompt_tokens: 194,
+  completion_tokens: 2,
+  total_tokens: 196,
+  completion_tokens_details: { reasoning_tokens: 0 },
+  prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 100, audio_tokens: 0 },
+  cost: 0.95,
+};
+
+describe('usageFromOpenRouter', () => {
+  it('splits cache reads out of prompt_tokens on a cached completion', () => {
+    expect(usageFromOpenRouter(CACHE_HIT_USAGE)).toEqual({
+      inputTokens: 21,
+      outputTokens: 60,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 10318,
+    });
+  });
+
+  it('splits cache writes out of prompt_tokens', () => {
+    expect(usageFromOpenRouter(CACHE_WRITE_USAGE)).toEqual({
+      inputTokens: 94,
+      outputTokens: 2,
+      cacheCreationInputTokens: 100,
+      cacheReadInputTokens: 0,
+    });
+  });
+
+  it('reports all input as uncached when prompt_tokens_details is absent', () => {
+    expect(usageFromOpenRouter({ prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 })).toEqual({
+      inputTokens: 12,
+      outputTokens: 5,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+    });
+  });
+
+  it('never reports negative input when cached counts exceed prompt_tokens', () => {
+    const usage = usageFromOpenRouter({
+      prompt_tokens: 10,
+      completion_tokens: 1,
+      total_tokens: 11,
+      prompt_tokens_details: { cached_tokens: 8, cache_write_tokens: 8 } as { cached_tokens: number },
+    });
+    expect(usage.inputTokens).toBe(0);
+    expect(usage.cacheReadInputTokens).toBe(8);
+    expect(usage.cacheCreationInputTokens).toBe(8);
+  });
+
+  it('returns zeros for missing usage', () => {
+    expect(usageFromOpenRouter(undefined)).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+    });
+  });
+});
+
+describe('OpenRouterProvider — cache usage', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  it('reports cache reads from chat() on a text response', async () => {
+    mockCreate.mockResolvedValue({ ...makeTextResponse(), usage: CACHE_HIT_USAGE });
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'google/gemini-2.0-flash-001',
+    });
+    expect(result.type).toBe('text');
+    if (result.type !== 'text') return;
+    expect(result.usage.cacheReadInputTokens).toBe(10318);
+    expect(result.usage.inputTokens).toBe(21);
+  });
+
+  it('reports cache reads from chat() on a tool_use response', async () => {
+    const response = makeTextResponse();
+    mockCreate.mockResolvedValue({
+      ...response,
+      choices: [{
+        ...response.choices[0]!,
+        finish_reason: 'tool_calls' as const,
+        message: {
+          ...response.choices[0]!.message,
+          content: null,
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+        },
+      }],
+      usage: CACHE_HIT_USAGE,
+    });
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'google/gemini-2.0-flash-001',
+    });
+    expect(result.type).toBe('tool_use');
+    if (result.type !== 'tool_use') return;
+    expect(result.usage.cacheReadInputTokens).toBe(10318);
+  });
+
+  it('reports cache reads and writes from stream()', async () => {
+    mockCreate.mockResolvedValue(makeStream([
+      {
+        id: 'chatcmpl-stream-cache',
+        model: 'deepseek/deepseek-v4.1-flash',
+        choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop', logprobs: null }],
+        usage: null,
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+      {
+        id: 'chatcmpl-stream-cache',
+        model: 'deepseek/deepseek-v4.1-flash',
+        choices: [],
+        usage: {
+          prompt_tokens: 5000,
+          completion_tokens: 40,
+          total_tokens: 5040,
+          prompt_tokens_details: { cached_tokens: 4000, cache_write_tokens: 600 },
+        },
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+    ]));
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'deepseek/deepseek-v4.1-flash',
+    }));
+    const end = events.at(-1);
+    expect(end?.type).toBe('message_end');
+    if (end?.type !== 'message_end') return;
+    expect(end.usage).toEqual({
+      inputTokens: 400,
+      outputTokens: 40,
+      cacheCreationInputTokens: 600,
+      cacheReadInputTokens: 4000,
+    });
   });
 });
 
