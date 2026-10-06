@@ -154,7 +154,7 @@ Each LLM call has a context budget (model's max tokens minus a reserve for the r
 
 If the total exceeds the budget, items are trimmed from the bottom of the priority list. Within each tier, older/less-relevant items are dropped first.
 
-The tool definitions sent with the call are charged as a required tier, `tool_definitions`, right after the system prompt. They are often the largest fixed component of a call, so they are counted in `context.budget` and reduce what is left for history. Only the first round's tool list is charged; tools discovered mid-turn are not.
+The tool definitions sent with the call are charged as a required tier, `tool_definitions`, right after sender context. They are often the largest fixed component of a call, so they are counted in `context.budget` and reduce what is left for bullpen, resolved entities and history. They are charged after sender context so a long tool list can never push out the sender's authorization block. Only the first round's tool list is charged; tools discovered mid-turn are not.
 
 Contacts resolved during a conversation are not part of working-memory history (tool results are not persisted). Their contact IDs are stored on the conversation and re-read from the contact row at the start of each later turn. That block is its own context-budget tier, `resolved_entities`, capped in size and charged before history so a long transcript cannot crowd the identities out. An outbound message to someone other than the principal is blocked when it carries an unconfirmed-name hedge, or an unresolved name next to an invitation or attendance cue. Other names are not blocked. `filter.identityGate` selects `enforce` (default), `shadow` (log only), or `off`.
 
