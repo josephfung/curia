@@ -4,6 +4,7 @@ import { createAgentTask } from '../bus/events.js';
 import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { Logger } from '../logger.js';
 import type { BullpenService } from '../memory/bullpen.js';
+import { BULLPEN_REPLY_RULE } from '../agents/prompts/bullpen-reply-rule.js';
 import { THREAD_CREATOR_AGENT_ID_KEY } from './delegation-hint.js';
 import {
   ORIGIN_TURN_OWNS_REPLY_KEY,
@@ -117,7 +118,10 @@ export class BullpenDispatcher {
           : `FYI: New activity in Bullpen thread "${topic}" (thread_id: ${threadId}) from ${senderAgentId}. No response required, but reply if you have something to add.`)
         + (owner
           ? ' The turn that delegated this work is still open and will answer the principal. Do not send them a confirmation.'
-          : '');
+          : '')
+        // An open thread may be replied to, so the wake carries the reply rule (#1959). A
+        // closed thread takes no reply, and acting on its conclusion may rightly mean a send.
+        + (threadClosed ? '' : `\n\n${BULLPEN_REPLY_RULE}`);
 
       try {
         const task = createAgentTask({

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BULLPEN_REPLY_RULE } from '../../../src/agents/prompts/bullpen-reply-rule.js';
 import { BullpenDispatcher } from '../../../src/dispatch/bullpen-dispatcher.js';
 import { BullpenService } from '../../../src/memory/bullpen.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
@@ -104,6 +105,40 @@ describe('BullpenDispatcher', () => {
     for (const t of tasks) {
       expect(t.payload.metadata?.threadCreatorAgentId).toBe('agent-b');
     }
+  });
+
+  // #1959: the reply rule left the coordinator's always-on prompt for the wake itself.
+  it('carries the bullpen reply rule on open-thread wakes, mentioned and FYI alike', async () => {
+    const { thread } = await bullpenService.openThread(
+      'Rule test', 'coordinator', ['coordinator', 'agent-b', 'agent-c'], 'Hi', ['agent-b'],
+    );
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-1', topic: 'Rule test',
+      senderAgentId: 'coordinator', participants: ['coordinator', 'agent-b', 'agent-c'],
+      mentionedAgentIds: ['agent-b'], content: 'Hi', parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const tasks = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([_l, e]) => (e as { type: string }).type === 'agent.task')
+      .map(([_l, e]) => e as { payload: { content: string } });
+    expect(tasks).toHaveLength(2);
+    for (const t of tasks) expect(t.payload.content).toContain(BULLPEN_REPLY_RULE);
+  });
+
+  it('leaves the reply rule off a closed-thread wake, which takes no reply', async () => {
+    const { thread } = await bullpenService.openThread(
+      'Closed rule test', 'coordinator', ['coordinator', 'agent-b'], 'Start', [],
+    );
+    await bullpenService.postMessage(thread.id, 'agent-b', 'Done', [], true);
+    const event = createAgentDiscuss({
+      threadId: thread.id, messageId: 'msg-closed', topic: 'Closed rule test',
+      senderAgentId: 'agent-b', participants: ['coordinator', 'agent-b'],
+      mentionedAgentIds: ['coordinator'], content: 'Done', threadClosed: true, parentEventId: 'task-1',
+    });
+    await bus._trigger('agent.discuss', event);
+    const task = (bus.publish as ReturnType<typeof vi.fn>).mock.calls
+      .find(([_l, e]) => (e as { type: string }).type === 'agent.task')?.[1] as { payload: { content: string } };
+    expect(task.payload.content).not.toContain(BULLPEN_REPLY_RULE);
   });
 
   it('marks mentioned agents with mentioned: true in metadata', async () => {
