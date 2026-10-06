@@ -266,6 +266,17 @@ describe('assembleAgent', () => {
     expect(() => assembleAgent(configs[0]!, ctx)).toThrow(AgentAssemblyError);
   });
 
+  // claude-sonnet-4-6 (the standard tier here): 200_000 window, 5% safety margin = 10_000.
+  it('rejects a response_reserve that leaves no input budget in the model window', () => {
+    const tooBig = [coordinatorYaml({ context_budget: { response_reserve: 190_000 } })];
+    expect(() => assembleAgent(tooBig[0]!, buildContext(textProvider(), tooBig)))
+      .toThrow(/leaves no input budget in claude-sonnet-4-6/);
+
+    const fits = [coordinatorYaml({ context_budget: { response_reserve: 189_999 } })];
+    expect(assembleAgent(fits[0]!, buildContext(textProvider(), fits)).runtimeConfig.contextBudget)
+      .toEqual({ responseReserve: 189_999 });
+  });
+
   it('sizes the runtime context budget from response_reserve', async () => {
     const provider = textProvider();
     const configs = [coordinatorYaml({ context_budget: { response_reserve: 12_345 } })];
