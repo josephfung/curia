@@ -17,6 +17,7 @@ import type { ToolManifest, ToolHandler, ToolContext, ToolResult } from './types
 import type { ToolRegistry } from './registry.js';
 import type { SkillRegistry } from './skill-registry.js';
 import { connectStdio, connectSse } from './mcp-client.js';
+import { discoverSkillResources } from './skill-resources.js';
 import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
@@ -752,12 +753,19 @@ export async function loadMcpServers(
  * between restarts). Pinning the server name (e.g. `google-workspace`) expands
  * to those tools. Individual MCP tool pins remain first-class via polymorphic pins.
  *
+ * An upstream server's tool descriptions are not ours to edit, so how-to notes for
+ * its tools live on disk instead: when `skillsDir` has a directory named after the
+ * server, its `references/` and `assets/` files attach to the projected skill and
+ * load on demand through skill-activate (#1960). The directory holds no SKILL.md —
+ * that would make it a native bundle, and this projection would then be skipped.
+ *
  * Returns the number of skills registered.
  */
 export function registerMcpProjectedSkills(
   projectedTools: Map<string, string[]>,
   skillRegistry: SkillRegistry,
   logger: Logger,
+  skillsDir?: string,
 ): number {
   let added = 0;
   for (const [serverName, tools] of projectedTools) {
@@ -771,6 +779,10 @@ export function registerMcpProjectedSkills(
     // Membership is exactly what registered; the server's --tools allowlist is the
     // only gate on it (#1957).
     const membership = tools;
+    const resourceDir = skillsDir ? path.join(skillsDir, serverName) : '';
+    const hasResourceDir = resourceDir !== '' && fs.existsSync(resourceDir)
+      && fs.statSync(resourceDir).isDirectory();
+    const resources = hasResourceDir ? discoverSkillResources(resourceDir) : null;
     skillRegistry.register(
       {
         name: serverName,
@@ -778,11 +790,20 @@ export function registerMcpProjectedSkills(
         version: '1.0.0',
         tools: membership,
         instructions: '',
+        references: resources && resources.references.length > 0 ? resources.references : undefined,
+        assets: resources && resources.assets.length > 0 ? resources.assets : undefined,
       },
-      '', // no on-disk SKILL.md — membership is live from tools/list
+      // Membership is live from tools/list; the directory only carries references.
+      hasResourceDir ? resourceDir : '',
     );
     logger.info(
-      { skill: serverName, tools: membership, kind: 'mcp' },
+      {
+        skill: serverName,
+        tools: membership,
+        kind: 'mcp',
+        references: resources?.references.length ?? 0,
+        assets: resources?.assets.length ?? 0,
+      },
       'MCP server projected as skill',
     );
     added++;
