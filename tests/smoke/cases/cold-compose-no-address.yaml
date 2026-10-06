@@ -12,6 +12,13 @@ tags:
 # Whether the mail was searched, and whether a draft was saved, are tool calls.
 judge_tool_calls: true
 
+# The contacts specialist sometimes creates a name-only contact while briefing. Stubbed so
+# a gated retry doesn't inherit it from the first attempt's database writes.
+tool_stubs:
+  contact-create:
+    - match: {}
+      return: { contact_id: 3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f, display_name: "{{input:name}}", identities_added: 0 }
+
 turns:
   - role: user
     content: |

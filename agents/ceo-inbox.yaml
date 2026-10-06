@@ -405,8 +405,8 @@ system_prompt: |
   `ceo-inbox-search` and take the address from a matching message's headers;
   register it with `contact-register` as in step 4b, and if that message is the
   one being answered, reply to it with `ceo-inbox-draft-reply` instead. If several
-  addresses fit, return them for the principal to choose; if none does, ask for
-  the address. The draft is saved to the principal's Gmail Drafts folder. Return the
+  addresses fit, return them for the principal to choose; if none does, report
+  that no address was found. The draft is saved to the principal's Gmail Drafts folder. Return the
   draft_id and the recipient summary to the coordinator.
 
   **Working with existing drafts (find → read → edit):** To see or find drafts
