@@ -828,3 +828,62 @@ coordinator YAML 45,644 bytes.
     not recorded. **Unresolved:** a real shift (the branch splits the calendar work into
     more delegations) or load on a near-ceiling case. Telling them apart needs a larger
     sample or a section-by-section bisect.
+
+### 2026-10-06 — trigger-only guidance moved out of the prompt (#1959)
+
+**Size.** Measured on the parsed YAML: `origin/main` (`42d41cea`, coordinator 0.21.4)
+against the PR's head commit `23ed757d` (0.22.0). This parses `system_prompt` rather than
+measuring the raw block, so its byte counts differ slightly from the #1958 table's.
+Tokens are estimated at four characters each.
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `agents/coordinator.yaml` bytes | 45,644 | 33,117 | −12,527 (−27%) |
+| `agents/coordinator.yaml` lines | 721 | 540 | −181 |
+| `system_prompt` chars | 42,129 | 29,978 | **−12,151 (−29%)** |
+| `system_prompt` est. tokens | ~10.5k | ~7.5k | ~−3.0k |
+
+Most of the moved text now comes back as turn guidance on the turns it applies to, so the
+per-turn saving is smaller than this on email and principal turns. Per-call production
+figures need a deploy.
+
+**Behavior, on `23ed757d`.** Same model (`deepseek/deepseek-v4.1-flash`), judge and
+database as the #1958 runs. Both suites side by side at concurrency 4. **Both exited 1.**
+
+- **Scenarios: every case passed on behavior; the gate failed on a stub hole** (344 s,
+  estimated $1.38). 17 cases at 100% weighted, `no-reply calendar decline` 93%, `paused
+  delegate no redelegate` 96%. The high-risk cases (01a–c, 11, 08, 04a/b, 06, 07, 10)
+  were all 100% apart from 08. The failure was `scheduler ambiguous asks`: in 1 of 5 runs
+  the coordinator called `scheduler-report` twice (refused, unstubbed) before asking the
+  right question, and the case allows 0. Interleaved `--case` A/B, 10 runs per side: 0
+  refused calls on the branch, 0 on `origin/main`, every run 100%. That is 1 run in 15 on
+  the branch, and the PR does not touch scheduler text. Treated as noise; no allowance
+  added. (The committed `stub-coverage.json` records the last A/B run, so it shows 0.)
+- **Smoke: 42 of 44** (998 s, estimated $2.84). Six cases passed on retry
+  (`PASS*`): Triage Batch, Recruiter Not Urgent, Forwarded Receipt, Reschedule Board
+  Chair (65% first attempt, not a timeout this time), Schedule External Meeting and Vague
+  Follow Up (first attempt timed out). Two failed both attempts:
+  - *Speaking Engagement Intake* timed out (180 s) on both. **Environmental.** The Tavily
+    plan was at 1,000 of 1,000 searches and all 34 `web-search` calls in the run failed,
+    so the research specialist scraped until timeout. After a credit top-up, a re-run on
+    the same commit passed it and Vague Follow Up at 100% each.
+  - *Draft Email in CEO Voice* rated `warm-but-concise` (critical) MISS on both attempts.
+    The coordinator searched for TechTO's address and the invite, found neither, and asked
+    the principal for one instead of writing the decline. **Leaning branch-worse, not
+    proven.** Interleaved single-case runs, 8 per side, plus the gate run:
+
+    | | Case failed (after retry) | Attempts missed |
+    |---|---:|---:|
+    | Branch | 3 of 9 | 7 of 13 |
+    | `origin/main` | 0 of 8 | 2 of 10 |
+
+    First attempts alone are close (branch 3 of 8, `origin/main` 2 of 8). The difference
+    is the retries: a branch miss usually missed its retry too, and `origin/main` never
+    did. The failure mode exists on both prompts. The case seeds no TechTO contact or
+    invite, and the always-on cold-compose rule says to ask for an address it cannot
+    resolve, so a model that reads "draft" as "save a Gmail draft" fails the case by
+    following its prompt. A plausible branch-side push is that the mailbox rule ("never
+    draft the principal's mailbox directly") now appears on email turns only. A likely
+    fix covers both: when a recipient's address can't be resolved, write the draft inline
+    and ask for the address only to save it, and seed TechTO so the case tests voice
+    rather than routing.
