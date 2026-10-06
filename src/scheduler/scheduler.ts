@@ -36,6 +36,7 @@ import {
   isUndisposedWake,
   progressNotesSnapshot,
 } from './wake-disposition.js';
+import { debriefRecapInstruction } from './debrief-recap.js';
 
 // Poll every 30 seconds for due jobs.
 export const POLL_INTERVAL_MS = 30_000;
@@ -1013,6 +1014,8 @@ export class Scheduler {
     // derives job_id from conversationId (`scheduler:<uuid>:<runId>`) server-side.
     // For task-bound jobs, include task_id, title, and progress. For non-task-bound
     // jobs the payload fields are spread at the top level.
+    // A debrief job carries its recap steps here rather than in the always-on prompt (#1959).
+    const recapInstruction = debriefRecapInstruction(job);
     let content: string;
     if (job.agentTaskId) {
       content = JSON.stringify({
@@ -1023,9 +1026,13 @@ export class Scheduler {
         // Ordinary task wakes only. Delegation-retry content replaces this
         // string below; a non-wake payload has no disposition contract.
         ...(isTaskWakePayload(job.taskPayload) && { instruction: WAKE_DISPOSITION_INSTRUCTION }),
+        ...(recapInstruction !== undefined && { instruction: recapInstruction }),
       });
     } else {
-      content = JSON.stringify({ ...job.taskPayload });
+      content = JSON.stringify({
+        ...job.taskPayload,
+        ...(recapInstruction !== undefined && { instruction: recapInstruction }),
+      });
     }
 
     // Resolve runtime placeholders before the payload is ever visible to a model. Runs on
