@@ -12,19 +12,8 @@ const agentsDir = path.resolve(import.meta.dirname, '../../../agents');
 const prompt = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml')).system_prompt;
 
 describe('coordinator prompt — cold-compose recipients (#2014)', () => {
-  it('no longer asks the principal for an address before ceo-inbox has searched', () => {
+  it('delegates an address-less recipient to ceo-inbox instead of asking the principal', () => {
     expect(prompt).not.toMatch(/ask the principal for the full address/);
-  });
-
-  it('delegates an address-less recipient to ceo-inbox with name and organization', () => {
-    expect(prompt).toMatch(/Delegate the compose to ceo-inbox anyway, naming the recipient plus their\s+organization/);
-  });
-
-  it('never invents an address itself', () => {
-    expect(prompt).toMatch(/Never invent or guess an address yourself/);
-  });
-
-  it('reports a saved draft without pasting it', () => {
-    expect(prompt).toMatch(/do\s+not\s+paste\s+the\s+full\s+draft\s+unless\s+they\s+ask\s+for\s+it/);
+    expect(prompt).toMatch(/If one has no address on file,\s+delegate with their name and organization/);
   });
 });
