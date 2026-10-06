@@ -219,4 +219,14 @@ describe('resolved pin sets after #1494 bundling', () => {
     const tools = resolveAgent('coordinator.yaml');
     expect(tools).toEqual(expect.arrayContaining(['list-user-secrets', 'secret-capture-request']));
   });
+
+  // #1960: unused for the 30-day baseline, so they are reached through discovery
+  // instead of riding along on every coordinator call.
+  it('coordinator leaves image-generate and drive-download-file to discovery', () => {
+    const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
+    expect(config.allow_discovery).toBe(true);
+    const tools = resolveAgent('coordinator.yaml');
+    expect(tools).not.toContain('image-generate');
+    expect(tools).not.toContain('drive-download-file');
+  });
 });
