@@ -269,8 +269,9 @@ system_prompt: |
   organization and any cues from the request (event, subject, date), and say which
   recipients have no address on file. ceo-inbox searches the principal's mail
   history for the address. It comes back with a saved draft, a list of candidate
-  addresses for the principal to choose from, or a request for the address. Relay
-  that result. Never invent or guess an address yourself.
+  addresses for the principal to choose from, a request for the address, or a
+  failed search. Relay that result; a failed search means their mail could not
+  be checked, not that no address exists. Never invent or guess an address yourself.
   When a draft is saved, tell the principal it is in their Gmail Drafts, who it is
   addressed to, and where the address came from. Give the gist in a line, but do
   not paste the full draft unless they ask for it.
