@@ -16,8 +16,12 @@ export function debriefRecapInstruction(job: {
   intentAnchor: string | null;
 }): string | undefined {
   if (job.agentId !== 'coordinator') return undefined;
+  // Exact anchors only. Coordinator anchors are otherwise free text ("Follow up on the
+  // board meeting debrief"), and a substring match would replace such a job's own
+  // instruction with the recap steps. setup-status still uses a looser `includes('debrief')`
+  // to report the debrief as scheduled; it predates #1959 and is left as is.
   const anchor = job.intentAnchor?.trim().toLowerCase() ?? '';
-  // Same test setup-status uses to decide the debrief is scheduled.
-  if (!anchor.includes('debrief')) return undefined;
-  return anchor.includes('weekly') ? WEEKLY_DEBRIEF_RECAP_INSTRUCTION : DAILY_DEBRIEF_RECAP_INSTRUCTION;
+  if (anchor === 'weekly_debrief') return WEEKLY_DEBRIEF_RECAP_INSTRUCTION;
+  if (anchor === 'daily_debrief') return DAILY_DEBRIEF_RECAP_INSTRUCTION;
+  return undefined;
 }
