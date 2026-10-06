@@ -170,6 +170,10 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)
 2. Optionally add `handler: ./<name>.handler.ts` for custom logic
 
+### Fixing agent behavior
+
+Don't append a paragraph to `system_prompt`. Put the rule on the highest rung that works: code enforcement → injection with its trigger → tool description → lazy playbook → always-on prompt. See [ADR-046](docs/adr/046-agent-behavior-fix-placement.md). `tests/unit/agents/prompt-budget.test.ts` fails CI when the coordinator's always-on prompt or local tool definitions grow past budget. Prefer a behavioral test (scenario, smoke, or a unit test of the code) over one that pins prompt text.
+
 ### Setup wizard — keep the catalog current
 
 When adding a **significant new capability** — a new channel adapter, a new

@@ -787,16 +787,19 @@ export class AgentRuntime {
     });
 
     // Budget allocation order: reserve non-negotiable tiers first (system prompt,
-    // user message), then allocate in priority order (sender context, bullpen),
-    // and let history — which supports partial inclusion — take whatever's left.
-    // This matches the design spec priority order and ensures higher-priority tiers
-    // (especially security-relevant sender context) aren't starved by greedy history.
+    // tool definitions, user message), then allocate in priority order (sender
+    // context, bullpen), and let history — which supports partial inclusion — take
+    // whatever's left. This matches the design spec priority order and ensures
+    // higher-priority tiers (especially security-relevant sender context) aren't
+    // starved by greedy history. Tool definitions are the first-round set; tools
+    // discovered mid-turn are not re-charged.
     ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
+    ctxBudget.allocateToolDefinitions(workingToolDefs ?? []);
     ctxBudget.allocateRequired('user_message', [{ role: 'user', content: promptContent }]);
     if (ctxBudget.remaining < 0) {
       logger.error(
         { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
-        'System prompt + user message exceed context budget — proceeding without enforcement',
+        'System prompt + tool definitions + user message exceed context budget — proceeding without enforcement',
       );
     }
 

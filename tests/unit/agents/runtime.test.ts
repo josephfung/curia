@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent, type ContextBudgetEvent, type DelegationRequesterContextEvent, type DelegationPrincipalNoteEvent, type LlmCallEvent } from '../../../src/bus/events.js';
-import type { LLMProvider, ToolResult } from '../../../src/agents/llm/provider.js';
+import type { LLMProvider, ToolDefinition, ToolResult } from '../../../src/agents/llm/provider.js';
+import { estimateToolDefinitionsTokens } from '../../../src/agents/llm/token-estimator.js';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
@@ -5307,6 +5308,49 @@ describe('context budget', () => {
     expect(payload.tiers.length).toBeGreaterThanOrEqual(1);
     expect(payload.tiers[0]!.name).toBe('system_prompt');
     expect(payload.tiers[0]!.included).toBe(true);
+  });
+
+  it('charges the tool definitions sent with the call as their own tier (#1961)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const budgetEvents: ContextBudgetEvent[] = [];
+    const skillToolDefs: ToolDefinition[] = [
+      { name: 'notes-add', description: 'Add a note.', input_schema: { type: 'object', properties: { text: { type: 'string' } } } },
+      { name: 'notes-list', description: 'List notes.', input_schema: { type: 'object', properties: {} } },
+    ];
+
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: createMockProvider('Hello back!'),
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      skillToolDefs,
+    }).register();
+    bus.subscribe('context.budget', 'system', (event) => {
+      budgetEvents.push(event as ContextBudgetEvent);
+    });
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-budget-tools',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-1',
+    }));
+
+    const payload = budgetEvents[0]!.payload;
+    const toolTier = payload.tiers.find(t => t.name === 'tool_definitions');
+    expect(toolTier).toEqual({
+      name: 'tool_definitions',
+      estimatedTokens: estimateToolDefinitionsTokens(skillToolDefs),
+      included: true,
+    });
+    const systemTier = payload.tiers.find(t => t.name === 'system_prompt')!;
+    expect(payload.totalUsed).toBeGreaterThanOrEqual(systemTier.estimatedTokens + toolTier!.estimatedTokens);
   });
 });
 

@@ -67,6 +67,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [043](043-bullpen-pending-window.md) | Bullpen pending-thread injection looks back seven days, in minutes end to end (#1899) | Accepted |
 | [044](044-delegate-wait-clamp-ceiling.md) | Delegate wait clamp stays at 895s; runs past it are late-delivery-only (#1857) | Accepted |
 | [045](045-delegated-specialist-trust.md) | Delegated specialist trust is decided upstream; requester identity is not a permission input (#1859) | Accepted |
+| [046](046-agent-behavior-fix-placement.md) | Agent behavior fixes go on the highest rung that works (code → trigger injection → tool description → playbook → always-on prompt); CI budgets the always-on prompt and local tool definitions (#1961) | Accepted |
 
 ## Adding new ADRs
 

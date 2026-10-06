@@ -3,7 +3,7 @@
 // Read-only per-call context and tool-usage report (#1955).
 //
 // The coordinator diet (#1954) needs before/after numbers. `context.budget`
-// estimates the system prompt and injected tiers and never counts tool
+// estimates the system prompt and injected tiers, and only since #1961 the tool
 // definitions, which are most of the payload. This script reads the exact
 // per-call payload already stored in `llm_call_archive` (system messages and
 // `tool_definitions`) plus provider-reported input tokens and `context.budget`
@@ -44,6 +44,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Tiers the runtime emits today, in assembly order. Unknown names sort after these. */
 const TIER_ORDER = [
   'system_prompt',
+  'tool_definitions',
   'user_message',
   'sender_context',
   'bullpen',
