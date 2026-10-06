@@ -445,12 +445,21 @@ describe('ceo-inbox prompt — cold-compose recipient resolution (#2014)', () =>
 
   it('never reports a failed search as "no address"', () => {
     const section = resolutionSection();
-    expect(section).toMatch(/Only report\s+this when every search succeeded and came back empty/);
+    expect(section).toMatch(/when every search succeeded and no candidate remains/);
+    // Messages found, none with a usable address, is still "no candidate", not an error.
+    expect(section).toMatch(/found only messages with no eligible address/);
     expect(section).toMatch(/\*\*A tool failed:\*\*[^]*do not draft and do not\s+report "no address"/);
   });
 
   it('passes contact-register an ISO 8601 timestamp, not the raw unix date', () => {
     expect(resolutionSection()).toMatch(/date converted to an ISO\s+8601 string for `messageTimestamp`/);
+  });
+
+  it('replies on the thread only when nobody else is copied; otherwise composes to the candidate alone', () => {
+    // draft-reply always replies to all, so a copied third party would be added silently.
+    const section = resolutionSection();
+    expect(section).toMatch(/nobody but the candidate and the principal is on its To\s+or Cc/);
+    expect(section).toMatch(/`ceo-inbox-draft-compose`\s+addressed to the candidate alone/);
   });
 
   it('reports the saved draft without pasting its body', () => {

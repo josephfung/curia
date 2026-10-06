@@ -439,17 +439,20 @@ system_prompt: |
         If `contact-register` fails, still draft, and report
         `Contact register: FAILED — <error>` so the principal knows the address
         was not saved.
-     b. Draft. If the match is a message the candidate sent that the request
-        answers (for example the invitation the principal wants to decline),
-        reply on it with `ceo-inbox-draft-reply` and that `reply_to_message_id`.
-        The reply goes to everyone on that message, so report every recipient
-        the skill returns. Otherwise use `ceo-inbox-draft-compose` to the address.
+     b. Draft. `ceo-inbox-draft-reply` replies to everyone on the message, so
+        use it only when the match is a message the candidate sent that the
+        request answers (for example the invitation the principal wants to
+        decline) and nobody but the candidate and the principal is on its To
+        or Cc. Then reply on it with that `reply_to_message_id`. Otherwise,
+        including when others are copied, use `ceo-inbox-draft-compose`
+        addressed to the candidate alone.
   4. **Several candidates:** do not draft. Return each one (name, address, and
      the subject and date of the message it came from) so the coordinator can
      ask the principal to choose.
   5. **No candidate:** do not draft. Return that the principal's mail has no
-     address for this recipient, and say what you searched for. Only report
-     this when every search succeeded and came back empty.
+     address for this recipient, and say what you searched for. This applies
+     when every search succeeded and no candidate remains, whether the
+     searches found nothing or found only messages with no eligible address.
   6. **A tool failed:** if a search or read call errors, do not draft and do not
      report "no address". Return that the mailbox search failed, with the error.
      If the draft call itself fails, say the draft was not saved.
