@@ -65,6 +65,25 @@ describe('estimateCostUsd', () => {
     expect(warnFn.mock.calls[0]![0]).toMatchObject({ actualModel: 'mystery-model', fallback: 'claude-sonnet-4-6' });
   });
 
+  // #1962: OpenRouter now reports cache tokens apart from inputTokens. A model
+  // with no cache rate in the registry must not price those tokens at $0.
+  it('charges unpriced cache tokens at the input rate', () => {
+    // deepseek/deepseek-v4.1-flash: input $0.15/MTok, cache read $0.003/MTok, no cache-write rate.
+    // 1000 cache-write @ $0.15 (fallback) + 1000 cache-read @ $0.003 = 0.00015 + 0.000003
+    const flash = estimateCostUsd(
+      'deepseek/deepseek-v4.1-flash',
+      makeUsage({ cacheCreationInputTokens: 1000, cacheReadInputTokens: 1000 }),
+    );
+    expect(flash).toBeCloseTo(0.000153, 10);
+
+    // deepseek/deepseek-chat-v3-0324 has neither cache rate: both fall back to $0.27/MTok.
+    const v3 = estimateCostUsd(
+      'deepseek/deepseek-chat-v3-0324',
+      makeUsage({ cacheCreationInputTokens: 1000, cacheReadInputTokens: 1000 }),
+    );
+    expect(v3).toBeCloseTo(estimateCostUsd('deepseek/deepseek-chat-v3-0324', makeUsage({ inputTokens: 2000 })), 10);
+  });
+
   it('returns 0 when all token counts are 0', () => {
     const cost = estimateCostUsd('claude-sonnet-4-6', makeUsage());
     expect(cost).toBe(0);

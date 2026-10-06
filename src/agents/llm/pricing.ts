@@ -44,12 +44,14 @@ export function createEstimateCostUsd(
     }
 
     // Divide by 1_000_000 to convert from per-million-token rate to per-token rate.
-    // Cache fields default to 0 when the model doesn't support caching.
+    // Cache tokens with no registry rate are charged at the input rate, never $0:
+    // providers report them as part of the prompt (#1962), and most OpenRouter
+    // entries record no cache-write rate.
     return (
       (usage.inputTokens * pricing.inputPerMToken +
        usage.outputTokens * pricing.outputPerMToken +
-       usage.cacheCreationInputTokens * (pricing.cacheCreationPerMToken ?? 0) +
-       usage.cacheReadInputTokens * (pricing.cacheReadPerMToken ?? 0)) /
+       usage.cacheCreationInputTokens * (pricing.cacheCreationPerMToken ?? pricing.inputPerMToken) +
+       usage.cacheReadInputTokens * (pricing.cacheReadPerMToken ?? pricing.inputPerMToken)) /
       1_000_000
     );
   };
