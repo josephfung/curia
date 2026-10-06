@@ -15,6 +15,7 @@ import type { ContactResolver } from '../../../src/contacts/contact-resolver.js'
 import type { ContactTier } from '../../../src/contacts/types.js';
 import { createLogger } from '../../../src/logger.js';
 import * as stampOriginatorMod from '../../../src/contacts/stamp-originator.js';
+import { TURN_GUIDANCE_HEADER } from '../../../src/agents/prompts/turn-guidance.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -269,5 +270,66 @@ describe('Dispatcher outbound-context liveTurn gate (#1848)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  describe('turn guidance (#1959)', () => {
+    it('names the block guidance, and the sub-rule its entry needs, when the block is injected', async () => {
+      const { bus, tasks } = buildHarness(makeResolver({ systemRole: 'principal', tier: 'principal' }));
+      await bus.publish('channel', createInboundMessage({
+        conversationId: 'signal:+15551234567',
+        channelId: 'signal',
+        senderId: '+15551234567',
+        content: 'Yes, Thursday works',
+      }));
+      expect(tasks[0]!.payload.turnGuidance).toEqual(['outbound-context', 'outbound-context-task-wake']);
+      // The guidance travels beside the content, never inside it: working memory keeps
+      // `content`, and a copy per earlier turn would pile up in history.
+      expect(tasks[0]!.payload.content).not.toContain(TURN_GUIDANCE_HEADER);
+    });
+
+    it('names the reply-shaped note when a principal turn has no block', async () => {
+      const { bus, tasks, getActive } = buildHarness(makeResolver({ systemRole: 'principal', tier: 'principal' }));
+      getActive.mockResolvedValueOnce([]);
+      await bus.publish('channel', createInboundMessage({
+        conversationId: 'signal:+15551234567',
+        channelId: 'signal',
+        senderId: '+15551234567',
+        content: 'Go ahead',
+      }));
+      expect(tasks[0]!.payload.turnGuidance).toEqual(['principal-reply-shaped']);
+    });
+
+    it('names the non-principal and email guidance for an outside sender\'s email', async () => {
+      const { bus, tasks } = buildHarness(makeResolver({ systemRole: null, tier: 'known' }));
+      await bus.publish('channel', createInboundMessage({
+        conversationId: 'email:thread-third-party',
+        channelId: 'email',
+        senderId: 'external@example.com',
+        content: 'Can we meet Thursday?',
+      }));
+      expect(tasks[0]!.payload.turnGuidance).toEqual([
+        'non-principal-reply-shaped',
+        'email-direct-reply',
+        'email-etiquette',
+      ]);
+    });
+
+    it('names the CC guidance when the principal CCs Curia', async () => {
+      const { bus, tasks } = buildHarness(makeResolver({ systemRole: 'principal', tier: 'principal' }));
+      await bus.publish('channel', createInboundMessage({
+        conversationId: 'email:thread-cc',
+        channelId: 'email',
+        senderId: 'ceo@example.com',
+        content: 'Looping in my assistant.',
+        metadata: { curiaRole: 'cc', primaryRecipientEmails: ['nik@example.com'] },
+      }));
+      expect(tasks[0]!.payload.turnGuidance).toEqual([
+        'outbound-context',
+        'outbound-context-task-wake',
+        'email-cc-principal',
+        'email-cc-reply',
+        'email-etiquette',
+      ]);
+    });
   });
 });

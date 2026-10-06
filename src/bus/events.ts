@@ -99,6 +99,15 @@ interface AgentTaskPayload {
    * Absent means the agent's normal tool set.
    */
   toolAllowlist?: string[];
+  /**
+   * Trigger guidance for this turn (#1959): which blocks of
+   * src/agents/prompts/turn-guidance.ts apply, set by the dispatcher from what it already
+   * knows about the inbound (principal or not, outbound context injected, email, CC'd).
+   * The runtime renders them at the head of the user message for this turn only. They are
+   * never part of `content`, so working memory and every other reader of the content stay
+   * free of them. Absent means none.
+   */
+  turnGuidance?: import('../agents/prompts/turn-guidance.js').TurnGuidanceKey[];
 }
 
 /** Coarse failure reason propagated on agent.response when isError is true.
