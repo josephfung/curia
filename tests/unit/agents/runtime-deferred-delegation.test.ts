@@ -108,7 +108,11 @@ async function runTurn(opts: {
   agentRegistry?: AgentRegistry;
   /** Make the task insert throw, as a database outage would. */
   createTaskFails?: boolean;
-}): Promise<{ createTask: ReturnType<typeof vi.fn>; toolResultData: () => Record<string, unknown> }> {
+}): Promise<{
+  createTask: ReturnType<typeof vi.fn>;
+  toolResultData: () => Record<string, unknown>;
+  auditedDelegateData: () => Record<string, unknown>;
+}> {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
   const createTask = vi.fn(async () => {
@@ -116,6 +120,11 @@ async function runTurn(opts: {
     return { id: 'task-queued' };
   });
   const seen: unknown[][] = [];
+  // The tool.result audit events, as the audit logger would record them.
+  const audited: Array<{ toolName: string; result: { success: boolean; data?: unknown } }> = [];
+  bus.subscribe('tool.result', 'system', async (event) => {
+    audited.push((event as unknown as { payload: (typeof audited)[number] }).payload);
+  });
   const taskRepo = { createTask } as unknown as TaskRepo;
   const execution = { invoke: vi.fn(opts.invoke) } as unknown as ExecutionLayer;
   const runtime = new AgentRuntime({
@@ -156,7 +165,12 @@ async function runTurn(opts: {
     if (!m) throw new Error(`no in-flight tool result in the follow-up call: ${followUp.slice(0, 500)}`);
     return JSON.parse(JSON.parse(`"${m[0]}"`)) as Record<string, unknown>;
   };
-  return { createTask, toolResultData };
+  const auditedDelegateData = (): Record<string, unknown> => {
+    const delegate = audited.find(a => a.toolName === 'delegate');
+    if (!delegate) throw new Error('no tool.result audit event for delegate');
+    return delegate.result.data as Record<string, unknown>;
+  };
+  return { createTask, toolResultData, auditedDelegateData };
 }
 
 describe('runtime deferred delegation (#1893)', () => {
@@ -199,6 +213,20 @@ describe('runtime deferred delegation (#1893)', () => {
       invoke: async () => inFlightData('calendar'),
     });
     expect(toolResultData()['queued']).toBe(true);
+  });
+
+  // #1958 review: the audit trail records the result the model acted on, not an earlier copy.
+  it.each([
+    ['queued', {}, true],
+    ['not queued', { createTaskFails: true }, false],
+  ])('records the same queued outcome on the tool.result audit event (%s)', async (_label, extra, expected) => {
+    const { toolResultData, auditedDelegateData } = await runTurn({
+      toolCalls: [{ id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Book Tuesday' } }],
+      invoke: async () => inFlightData('calendar'),
+      ...extra,
+    });
+    expect(auditedDelegateData()['queued']).toBe(expected);
+    expect(toolResultData()['queued']).toBe(expected);
   });
 
   it.each([

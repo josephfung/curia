@@ -1933,6 +1933,42 @@ export class AgentRuntime {
             result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
           }
           const durationMs = Date.now() - startTime;
+
+          // An already_in_flight refusal (#1858) did not dispatch: queue its brief for a later
+          // wake and stamp whether that worked as `queued`, which the refusal's next_step
+          // branches on, so the model never promises a run that was not saved. Done here,
+          // before the result is recorded anywhere, so the bullpen touch, the tool.result
+          // audit event and the model all see the same result (#1958 review). A timeout never
+          // matches: it has failed: true and no in_flight flag, and late delivery wakes it.
+          if (
+            result.success &&
+            toolCall.name === 'delegate' &&
+            !delegateBlocked &&
+            typeof skillInput === 'object' &&
+            skillInput !== null &&
+            !Array.isArray(skillInput)
+          ) {
+            const inFlight = parseDelegateInFlightData(result.data, logger);
+            if (inFlight) {
+              const delegateInput = skillInput as Record<string, unknown>;
+              const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+              // A running claim ends with the wait. A pending handle does not:
+              // waking on the wait burns the retry cap while the row is still open.
+              const wakeDelayMs = inFlight.handleStatus === 'pending'
+                ? pendingHandleWakeDelayMs({
+                  now: Date.now(),
+                  ...(inFlight.handleExpiresAt !== undefined && { expiresAt: inFlight.handleExpiresAt }),
+                  ttlMinutes: lateDeliveryTtlMinutes,
+                  sweepIntervalMs: lateDeliverySweepMs,
+                })
+                : undefined;
+              const queued = await queueUndispatchedDelegation(inFlight.agent, delegateTask, wakeDelayMs);
+              if (result.data !== null && typeof result.data === 'object' && !Array.isArray(result.data)) {
+                result = { ...result, data: { ...(result.data as Record<string, unknown>), queued } };
+              }
+            }
+          }
+
           bullpenToolTouches.push(toBullpenToolTouch(toolCall.name, skillInput, result));
 
           // Publish tool.result for audit trail
@@ -2156,30 +2192,8 @@ export class AgentRuntime {
             ) {
               const delegatePaused = parseDelegatePausedData(result.data, logger);
               if (!delegatePaused) {
-                const inFlight = parseDelegateInFlightData(result.data, logger);
-                if (inFlight) {
-                  // The call did not dispatch. A timeout must not reach this branch:
-                  // that result has failed: true and no in_flight flag, and late
-                  // delivery already wakes it.
-                  const delegateInput = skillInput as Record<string, unknown>;
-                  const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
-                  // A running claim ends with the wait. A pending handle does not:
-                  // waking on the wait burns the retry cap while the row is still open.
-                  const wakeDelayMs = inFlight.handleStatus === 'pending'
-                    ? pendingHandleWakeDelayMs({
-                      now: Date.now(),
-                      ...(inFlight.handleExpiresAt !== undefined && { expiresAt: inFlight.handleExpiresAt }),
-                      ttlMinutes: lateDeliveryTtlMinutes,
-                      sweepIntervalMs: lateDeliverySweepMs,
-                    })
-                    : undefined;
-                  const queued = await queueUndispatchedDelegation(inFlight.agent, delegateTask, wakeDelayMs);
-                  // The refusal's next_step branches on this (#1958 review): the model may
-                  // tell the requester the brief is queued only when it really was saved.
-                  if (result.data !== null && typeof result.data === 'object' && !Array.isArray(result.data)) {
-                    result = { ...result, data: { ...(result.data as Record<string, unknown>), queued } };
-                  }
-                }
+                // An already_in_flight refusal was queued before the result was recorded,
+                // above, so the audit event carries the same `queued` the model sees.
                 const delegateFailure = parseDelegateFailureData(result.data, logger);
                 if (delegateFailure) {
                   const delegateInput = skillInput as Record<string, unknown>;
