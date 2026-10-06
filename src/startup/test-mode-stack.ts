@@ -69,6 +69,7 @@ import { resolveEmailAccounts } from '../channels/email/resolve-email-accounts.j
 import { resolvePrincipalCalendarGrant } from '../channels/calendar/resolve-calendar-grant.js';
 import { ContactService } from '../contacts/contact-service.js';
 import { ContactResolver } from '../contacts/contact-resolver.js';
+import { ConfidencePipeline } from '../contacts/confidence-pipeline.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
 import { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import { bootstrapAgentIdentity } from '../entity-context/bootstrap.js';
@@ -650,6 +651,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       secretsService: createTestModeSecrets(),
       officeIdentityService: agentOfficeIdentity,
       auditLogRepo: new AuditLogRepo(pool, logger),
+      // A synchronous write to the contact row, like contact-create, not deferred work.
+      // Without it contact-register (which declares the capability) fails closed, so
+      // ceo-inbox could never record a sender or a resolved recipient in a test (#2014).
+      confidencePipeline: new ConfidencePipeline(contactService, logger),
       timezone: config.timezone,
       selfEmail: selfEmails[0],
       selfEmails,
