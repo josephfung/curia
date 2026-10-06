@@ -1356,19 +1356,23 @@ export class AgentRuntime {
       ? configuredWait
       : DEFAULT_DEFERRED_WAKE_MS;
     const waitByAgent = new Map<string, number>();
-    const queuedUndispatchedBriefs = new Set<string>();
+    // Per brief, whether it was saved for a later wake. Kept per outcome, not as a seen-set:
+    // a repeat call reports the first attempt's result, never a queue that was capped.
+    const queuedUndispatchedBriefs = new Map<string, boolean>();
     // Match DEFAULT_LATE_DELIVERY_CONFIG when a caller did not pass the deployment values.
     const lateDeliveryTtlMinutes = this.config.lateDeliveryTtlMinutes ?? 60;
     const lateDeliverySweepMs = (this.config.lateDeliverySweepIntervalMinutes ?? 5) * 60_000;
+    /** Save a brief that did not dispatch for a later wake. Resolves to whether it was saved. */
     const queueUndispatchedDelegation = async (
       targetAgent: string,
       brief: string,
       wakeDelayMs?: number,
-    ): Promise<void> => {
-      if (targetAgent === '' || brief === '') return;
+    ): Promise<boolean> => {
+      if (targetAgent === '' || brief === '') return false;
       const key = `${targetAgent}\0${brief}`;
-      if (queuedUndispatchedBriefs.has(key)) return;
-      queuedUndispatchedBriefs.add(key);
+      const earlier = queuedUndispatchedBriefs.get(key);
+      if (earlier !== undefined) return earlier;
+      queuedUndispatchedBriefs.set(key, false);
       const prior = readDelegationRetryAttempt(taskEvent.payload.metadata);
       // A retry wake continues the chain for its specialist. A different specialist
       // on that turn starts at 1 — the cap is per busy specialist, not per turn.
@@ -1377,7 +1381,7 @@ export class AgentRuntime {
         ? wakeDelayMs
         : (waitByAgent.get(targetAgent) ?? deferredWakeFloor);
       try {
-        await enqueueUndispatchedDelegation({
+        const outcome = await enqueueUndispatchedDelegation({
           taskRepo: this.config.taskRepo,
           logger,
           originAgentId: agentId,
@@ -1390,12 +1394,18 @@ export class AgentRuntime {
           ...(originator !== undefined && { originator }),
           attempt,
         });
+        // 'capped' and 'unavailable' are logged inside enqueueUndispatchedDelegation.
+        const saved = outcome === 'enqueued';
+        queuedUndispatchedBriefs.set(key, saved);
+        return saved;
       } catch (err) {
+        // Not remembered: a later identical call in this turn may try again.
         queuedUndispatchedBriefs.delete(key);
         logger.error(
           { err, agentId, conversationId, targetAgent },
           'Failed to queue an undispatched delegation — the brief was not saved',
         );
+        return false;
       }
     };
 
@@ -2163,7 +2173,12 @@ export class AgentRuntime {
                       sweepIntervalMs: lateDeliverySweepMs,
                     })
                     : undefined;
-                  await queueUndispatchedDelegation(inFlight.agent, delegateTask, wakeDelayMs);
+                  const queued = await queueUndispatchedDelegation(inFlight.agent, delegateTask, wakeDelayMs);
+                  // The refusal's next_step branches on this (#1958 review): the model may
+                  // tell the requester the brief is queued only when it really was saved.
+                  if (result.data !== null && typeof result.data === 'object' && !Array.isArray(result.data)) {
+                    result = { ...result, data: { ...(result.data as Record<string, unknown>), queued } };
+                  }
                 }
                 const delegateFailure = parseDelegateFailureData(result.data, logger);
                 if (delegateFailure) {

@@ -1296,8 +1296,9 @@ describe('DelegateHandler in-flight guard (#1858)', () => {
     expect(data.next_step).toContain("Do not delegate to 'social-media' again this turn");
     expect(data.next_step).toMatch(/reworded brief .* refused/i);
     expect(data.next_step).toMatch(/still in progress/);
-    // The runtime queues the refused brief, and the manifest tells the model to say so.
-    expect(data.next_step).toMatch(/queued to run after it/);
+    // The runtime stamps `queued` (saving can be capped or fail), so the promise is conditional.
+    expect(data.next_step).toMatch(/If `queued` is true, add that this one will run after it/);
+    expect(data.next_step).toMatch(/false or absent, do not promise/);
     // On a scheduled or system turn there is no requester; the principal is told.
     expect(data.next_step).toMatch(/the principal, on a scheduled or system turn/);
     // `message` names the agent id, and a non-principal reply goes out unreviewed.
