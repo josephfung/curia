@@ -57,6 +57,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Cold-compose recipients** — ceo-inbox finds a missing address in the principal's mail before asking. (#2014)
+- **Draft Email in CEO Voice smoke case** — judges the saved draft; new no-address and two-candidate cases. (#2014)
 - **Coordinator prompt** — drops rules the platform already enforces and duplicate passages; 58 KB → 46 KB. (#1958)
 - **Google Workspace MCP** — limited to Drive, Docs and Sheets; a config test now guards the allowlist. (#1957)
 - **Behavior suites** — provider stalls, errors and fallbacks are re-run without using a case's gated retry. (#1980)

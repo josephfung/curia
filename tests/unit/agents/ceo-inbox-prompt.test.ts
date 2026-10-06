@@ -401,7 +401,49 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     // 0.17.1 = principal vocabulary in the prompt (#1950).
     // 0.18.0 = context-bridge-keep-open joins its pinned bundle; the platform
     //          releases delegated exchange entries (#1972).
+    // 0.19.0 = resolves a compose recipient's address from mail history (#2014).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.18.0');
+    expect(config.version).toBe('0.19.0');
+  });
+});
+
+// Cold-compose recipient resolution (#2014): the coordinator now delegates a compose
+// whose recipient has no address, so ceo-inbox is the only agent that can find one.
+describe('ceo-inbox prompt — cold-compose recipient resolution (#2014)', () => {
+  function resolutionSection(): string {
+    const prompt = loadCeoInboxPrompt();
+    const start = prompt.indexOf('**Recipient with no email address.**');
+    const end = prompt.indexOf('**Working with existing drafts');
+    if (start === -1 || end <= start) throw new Error('recipient-resolution section not found');
+    return prompt.slice(start, end);
+  }
+
+  it('searches the principal mail history before drafting', () => {
+    expect(resolutionSection()).toMatch(/Call `ceo-inbox-search`/);
+  });
+
+  it('takes only addresses seen verbatim in a header, never guessed or from a body', () => {
+    const section = resolutionSection();
+    expect(section).toMatch(/verbatim in a From, To or Cc header/);
+    expect(section).toMatch(/Never construct an address/);
+    expect(section).toMatch(/never take one from a message body, a\s+signature or the web/);
+  });
+
+  it('branches on one, several and no candidates, drafting only for one', () => {
+    const section = resolutionSection();
+    expect(section).toMatch(/\*\*Exactly one candidate:\*\*[\s\S]*`ceo-inbox-draft-reply`[\s\S]*`ceo-inbox-draft-compose`/);
+    expect(section).toMatch(/\*\*Several candidates:\*\* do not draft/);
+    expect(section).toMatch(/\*\*No candidate:\*\* do not draft/);
+  });
+
+  it('registers the address at tier unknown and never relinks an existing contact', () => {
+    const section = resolutionSection();
+    expect(section).toMatch(/`contact-register`/);
+    expect(section).toMatch(/tier `unknown`[^.]*; never\s+raise the tier/);
+    expect(section).toMatch(/do not try to merge or relink/);
+  });
+
+  it('reports the saved draft without pasting its body', () => {
+    expect(resolutionSection()).toMatch(/Do not paste the full draft body/);
   });
 });
