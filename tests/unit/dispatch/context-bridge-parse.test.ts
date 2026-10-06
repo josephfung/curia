@@ -5,6 +5,8 @@ import { OutboundContextService, ScopedOutboundContext } from '../../../src/disp
 import type { OutboundContextCapability } from '../../../src/dispatch/outbound-context.js';
 import type { DbPool } from '../../../src/db/connection.js';
 import pino from 'pino';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const logger = pino({ level: 'silent' });
 
@@ -436,5 +438,40 @@ describe('documented TTL tiers per channel', () => {
     const cap = capFor('email');
     await registerOutboundContext(cap, 'not json {{{', { ...baseOpts, channelId: 'email' });
     expect(registeredTtl(cap)).toBe(72);
+  });
+
+  // An invalid optional field is a different path (#1958 review): parseContextBridge drops
+  // only that field and keeps the bridge, so the send keeps the explicit tier and its hint.
+  // The send-tool manifests distinguish the two paths, so pin this one as well.
+  it.each([
+    ['zero', 0],
+    ['negative', -3],
+    ['a string', '48'],
+  ])('signal: an invalid expires_in_hours (%s) drops only that field and keeps the 24h tier', async (_label, value) => {
+    const cap = capFor('signal');
+    await registerOutboundContext(
+      cap,
+      JSON.stringify({ agent_id: 'coordinator', delegation_hint: 'calendar', expires_in_hours: value }),
+      { ...baseOpts, channelId: 'signal' },
+    );
+    expect(registeredTtl(cap)).toBe(24);
+    const call = (cap.register as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { delegationHint?: string };
+    expect(call.delegationHint).toBe('calendar');
+  });
+
+  it.each([
+    'skills/signal-send/tool.json',
+    'skills/sms-send/tool.json',
+    'skills/slack-send/tool.json',
+    'skills/email/tools/email-send/tool.json',
+    'skills/email/tools/email-reply/tool.json',
+  ])('%s tells the two drop paths apart', (rel) => {
+    const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../..', rel), 'utf-8')) as {
+      inputs: { context_bridge: string };
+    };
+    const text = manifest.inputs.context_bridge;
+    expect(text).toMatch(/whole bridge/);
+    expect(text).toMatch(/dropped on its own/);
+    expect(text).toMatch(/task-wake turn, about 7 days/);
   });
 });
