@@ -443,7 +443,17 @@ describe('ceo-inbox prompt — cold-compose recipient resolution (#2014)', () =>
     expect(section).toMatch(/do not try to merge or relink/);
   });
 
+  it('never reports a failed search as "no address"', () => {
+    const section = resolutionSection();
+    expect(section).toMatch(/Only report\s+this when every search succeeded and came back empty/);
+    expect(section).toMatch(/\*\*A tool failed:\*\*[^]*do not draft and do not\s+report "no address"/);
+  });
+
+  it('passes contact-register an ISO 8601 timestamp, not the raw unix date', () => {
+    expect(resolutionSection()).toMatch(/date converted to an ISO\s+8601 string for `messageTimestamp`/);
+  });
+
   it('reports the saved draft without pasting its body', () => {
-    expect(resolutionSection()).toMatch(/Do not paste the full draft body/);
+    expect(resolutionSection()).toMatch(/Do not paste the full\s+draft body/);
   });
 });

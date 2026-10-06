@@ -13,6 +13,17 @@ tags:
 # The draft lives in a tool call (#2014): the chat reply only says it is saved.
 judge_tool_calls: true
 
+# Contact writes are stubbed so a gated retry starts clean: a real contact-register would
+# leave Maya's address in the run's database, and the retry would then find it on file and
+# skip the search this case is testing. The judge still sees the calls.
+tool_stubs:
+  contact-register:
+    - match: {}
+      return: { contact_id: 7d1c2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f, display_name: "{{input:displayName}}", contact_confidence: 0.1, created: true }
+  contact-update:
+    - match: {}
+      return: { contact_id: "{{input:contact_id}}", updated_fields: [] }
+
 turns:
   - role: user
     content: |
