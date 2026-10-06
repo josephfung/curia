@@ -24,6 +24,7 @@ import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { LLMProvider, LLMUsage, ToolDefinition } from '../agents/llm/provider.js';
 import type { ModelRouter, Tier } from '../agents/llm/model-router.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
+import { DEFAULT_SAFETY_MARGIN } from '../agents/llm/token-estimator.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
@@ -398,6 +399,20 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
       agentConfig.name,
       { responseReserve },
     );
+  }
+  // ContextBudget subtracts the reserve and a safety margin from the resolved model's
+  // window with no floor, so a reserve that leaves nothing would yield a negative
+  // input budget on every turn. The model is registry-validated by the binding above.
+  const contextWindow = ctx.models.modelRegistry.getContextWindow(binding.resolvedModel);
+  if (responseReserve !== undefined && contextWindow !== undefined) {
+    const inputBudget = contextWindow - responseReserve - Math.ceil(contextWindow * DEFAULT_SAFETY_MARGIN);
+    if (inputBudget <= 0) {
+      throw new AgentAssemblyError(
+        `context_budget.response_reserve ${responseReserve} leaves no input budget in ${binding.resolvedModel}'s ${contextWindow}-token window (agent '${agentConfig.name}')`,
+        agentConfig.name,
+        { responseReserve, model: binding.resolvedModel, contextWindow },
+      );
+    }
   }
 
   const runtimeConfig: AgentConfig = {

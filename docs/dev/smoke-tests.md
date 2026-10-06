@@ -84,7 +84,7 @@ The run **passes** when every case passes, apart from cases marked `known_failur
 
 **Cost.** The summary prints the run's estimated spend, split by agent and judge, and each case's total. The results JSON holds the same split per case (`usage`), for the run (`usage`), and for work outside every case such as the warm-up (`overheadUsage`). Agents' figures come from the runtime's `llm.call` events (token counts priced by the model registry). The judge publishes no event, so it prices its own responses. The figures are **estimates**, not OpenRouter's bill:
 
-- Cache reads and writes come from OpenRouter's `prompt_tokens_details` (#1962) and are priced at the registry's cache rates. A model with no cache rate recorded is charged its input rate for those tokens, so its estimate runs high.
+- Cache reads and writes come from OpenRouter's `prompt_tokens_details` (#1962) and are priced at the registry's cache rates. When the registry records no cache rate for a model, those tokens are priced at its input rate.
 - A call that fails after the provider billed it publishes no `llm.call`, so it is missing.
 
 To see the real figure, note OpenRouter's credit balance (or the activity page) before and after a full run.
