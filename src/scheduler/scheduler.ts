@@ -1015,7 +1015,11 @@ export class Scheduler {
     // For task-bound jobs, include task_id, title, and progress. For non-task-bound
     // jobs the payload fields are spread at the top level.
     // A debrief job carries its recap steps here rather than in the always-on prompt (#1959).
-    const recapInstruction = debriefRecapInstruction(job);
+    // Not on a task wake: a debrief run that parks its task with wake_at gets a wake job on
+    // the same task, so it carries the debrief anchor too. That wake advances the parked
+    // task under WAKE_DISPOSITION_INSTRUCTION; the recap steps would overwrite it and send
+    // the agent back through the whole recap.
+    const recapInstruction = isTaskWakePayload(job.taskPayload) ? undefined : debriefRecapInstruction(job);
     let content: string;
     if (job.agentTaskId) {
       content = JSON.stringify({
