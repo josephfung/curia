@@ -151,9 +151,11 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
 function inFlightNextStep(agent: string): string {
   return [
     `Do not delegate to '${agent}' again this turn: a reworded brief is the same open request and will be refused too.`,
-    // The runtime queues this refused brief for a later wake (queueUndispatchedDelegation),
-    // which is why the requester is told it is queued, matching the manifest description.
-    'Tell the requester (the principal, on a scheduled or system turn) that the earlier request is still in progress and this one is queued to run after it.',
+    // The runtime tries to save this refused brief for a later wake and stamps `queued` on
+    // this result before the model sees it. Saving can be capped or fail, so the model
+    // promises a later run only when `queued` says it was saved (#1958 review).
+    'Tell the requester (the principal, on a scheduled or system turn) that the earlier request is still in progress.',
+    'If `queued` is true, add that this one will run after it. If `queued` is false or absent, do not promise that it will run; offer to try again later.',
     'Say it in your own words, without naming who is doing the work; do not relay `message`, which names an internal agent.',
     'Do not quote delegate_event_id, and do not say how long the work has been running or when it will finish: open_handle_age_ms is the age of a tracking record, not a progress measure.',
     'Do not send a second copy of a draft that request already produced.',
