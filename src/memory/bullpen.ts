@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import type { Logger } from '../logger.js';
 import type { TaskOriginator } from '../contacts/types.js';
 import { toLocalIso } from '../time/timestamp.js';
+import { BULLPEN_REPLY_RULE } from '../agents/prompts/bullpen-reply-rule.js';
 
 // Postgres error code for unique_violation — used to detect concurrent duplicate
 // INSERT on source_message_id and recover into the dedup path instead of failing.
@@ -1138,7 +1139,10 @@ export function formatBullpenContext(pending: PendingThreadContext[], timezone?:
   // older internal threads on human-channel turns, and channel suppression only
   // covers scheduler runs.
   lines.push('');
+  // The full reply rule rides with the block (#1959): it names the human send tools a
+  // thread reply must never go through, which the always-on prompt used to carry.
   lines.push('These are ambient internal threads. Reply only via the bullpen tools, never in your response to the user.');
+  lines.push(BULLPEN_REPLY_RULE);
   lines.push('When your bullpen reply concludes a thread, pass close_after: true so it is closed atomically. Leave it off (or false) if the discussion is still going.');
   if (hasPendingPeerRequest(pending)) lines.push(...PEER_REQUEST_PROTOCOL_LINES);
   return lines.join('\n');
