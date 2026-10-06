@@ -1,6 +1,7 @@
 # Case 4 (#1956): the same reply-shaped message from someone who is NOT the principal.
 # The outbound-context block is withheld on non-principal turns by design, so its
 # absence means nothing — the coordinator must not ask "what are you referring to".
+# Rule: turn guidance `non-principal-reply-shaped` (src/agents/prompts/turn-guidance.ts).
 name: reply-shaped non-principal
 description: >
   An external contact emails "Yes, go ahead." with no other content. The block is

@@ -1,7 +1,8 @@
 # Case 6 (#1956): a bullpen mention is other agents talking — the reply goes on the
 # thread with the bullpen tool, never to a human channel. This is the plain mention path,
 # outside the scheduler (#1609) and open-delegation (#1917) special cases. Rule:
-# agents/coordinator.yaml, "Bullpen threads are internal agent-to-agent discussions".
+# BULLPEN_REPLY_RULE (src/agents/prompts/bullpen-reply-rule.ts), on the mention wake and
+# the [Bullpen] block (#1959).
 #
 # Every human-channel send is stubbed to succeed, so the wrong path is available and
 # the case tests the choice rather than a refusal.

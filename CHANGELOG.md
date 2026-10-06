@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`agent.task` (public API)** — optional `turnGuidance` names trigger guidance the runtime adds to that turn's user message. (#1959)
+- **`delegate` (public API)** — `next_step` now also comes on clarification and paused results. (#1959)
 - **`delegate` (public API)** — `next_step` and `queued` on an `already_in_flight` refusal say what to do and whether it's saved. (#1958)
 - **Scenario case 12** — "your calendar" from the principal routes to the calendar specialist or asks whose. (#1958)
 - **Scenario date placeholders** — cases use relative dates, resolved once per run; date-bound cases no longer go stale. (#1958)
@@ -59,6 +61,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Cold-compose recipients** — ceo-inbox finds a missing address in the principal's mail before asking. (#2014)
 - **Draft Email in CEO Voice smoke case** — judges the saved draft; new no-address and two-candidate cases. (#2014)
+- **Coordinator prompt** — conditional guidance arrives with its trigger instead of every turn; 46 KB → 33 KB. (#1959)
+- **Bullpen** — the thread reply rule now rides on the `[Bullpen]` block and open-thread wakes. (#1959)
+- **Scheduled debriefs** — the job carries its recap steps; weekly debriefs cover seven days, not 24 hours. (#1959)
 - **Coordinator prompt** — drops rules the platform already enforces and duplicate passages; 58 KB → 46 KB. (#1958)
 - **Google Workspace MCP** — limited to Drive, Docs and Sheets; a config test now guards the allowlist. (#1957)
 - **Behavior suites** — provider stalls, errors and fallbacks are re-run without using a case's gated retry. (#1980)
