@@ -15,7 +15,7 @@ judge_tool_calls: true
 
 # Contact writes are stubbed so a gated retry starts clean: a real contact-register would
 # leave Maya's address in the run's database, and the retry would then find it on file and
-# skip the search this case is testing. The judge still sees the calls.
+# skip the search this case is testing.
 tool_stubs:
   contact-register:
     - match: {}
@@ -38,11 +38,6 @@ expected_behaviors:
       Finds the invite or Maya Fischer's address (maya.fischer@techto.example) in the
       principal's mail and drafts to it, rather than asking the principal for the address
     weight: critical
-  - id: registers-address
-    description: >
-      Records the address it found with contact-register (maya.fischer@techto.example), so
-      the next request to Maya needs no search
-    weight: important
   - id: warm-but-concise
     description: The drafted email body is a decline that is warm in tone but concise in length
     weight: critical
@@ -53,9 +48,7 @@ expected_behaviors:
     description: The drafted email body explicitly leaves the door open for future engagement
     weight: important
   - id: reports-saved-draft
-    description: >
-      The reply tells the principal the draft is saved (in their drafts) and who it is
-      addressed to, without pasting the full draft text
+    description: The reply tells the principal the draft is saved (in their drafts) and who it is addressed to
     weight: important
 
 failure_modes:
