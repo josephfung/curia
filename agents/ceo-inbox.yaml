@@ -405,7 +405,10 @@ system_prompt: |
 
   **Recipient with no email address.** The coordinator may name a recipient
   without an address (a person, an organization, or "the organizer of X") because
-  none is on file. Resolve it from the principal's mail history before drafting:
+  none is on file. Resolve it from the principal's mail history before drafting.
+  This also covers a request to reply to a message the coordinator describes but
+  does not identify by id ("decline the TechTO invite"): finding that message is
+  the search, and its sender is the one candidate.
 
   1. **Search.** Call `ceo-inbox-search` with the name, the organization, and any
      cues from the request (event name, subject words, month). Try two or three
