@@ -903,15 +903,15 @@ guidance.
 
 ### 2026-10-06 — tool mechanics moved into tools, zero-call pins pruned (#1960)
 
-**Size.** Measured on the files, before deploy, against this branch's base
-`23ed757d` (coordinator 0.22.0, #2012's final commit). Tokens are estimated at four
+**Size.** Measured on the files, before deploy, against `844af2df` on `main`
+(coordinator 0.22.0, #2012 merged). Tokens are estimated at four
 characters each. Manifest bytes are each `tool.json` minified, which tracks but is
 not identical to the tool-definition bytes the report measures.
 
 | | Before | After | Change |
 |---|---:|---:|---:|
-| `agents/coordinator.yaml` bytes | 33,117 | 24,506 | −8,611 (−26%) |
-| `system_prompt` block bytes | 30,174 | 21,186 | **−8,988 (−30%)** |
+| `agents/coordinator.yaml` bytes | 33,004 | 24,393 | −8,611 (−26%) |
+| `system_prompt` block bytes | 30,063 | 21,075 | **−8,988 (−30%)** |
 | `system_prompt` est. tokens | ~7.5k | ~5.3k | ~−2.2k |
 | pinned entries | 29 | 27 | −2 |
 | manifest bytes of the 9 tools whose descriptions grew | 16,577 | 21,594 | +5,017 |
