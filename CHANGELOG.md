@@ -154,7 +154,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **`ceo-inbox-draft-reply` outputs (public API)** — adds `already_exists` and returns the existing same-thread draft. (#2035)
+- **`ceo-inbox-draft-reply` outputs (public API)** — `already_exists` returns that draft's `snippet` and `date`. (#2035)
+- **`ceo-inbox-draft-reply`** — refuses to draft a reply to a message in Spam or Trash. (#2035)
+- **`ceo-inbox-list` outputs (public API)** — `scan_incomplete` when the page cap hides older unread mail. (#2035)
 - **`ceo-inbox-search` input (public API)** — `include_spam_and_trash` opts into Spam and Trash; otherwise they are omitted. (#2035)
 - **`ceo-inbox-list`** — keeps paging past Curia-self mail so an empty page cannot report `has_more`. (#2035)
 - **`ceo-inbox-read`** — returns Gmail label display names, so earlier triage labels are visible. (#2035)

@@ -63,6 +63,8 @@ describe('CeoInboxReadHandler', () => {
       // hit /messages, not /drafts
       const url = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(url.pathname.endsWith('/messages/m1')).toBe(true);
+      // System labels only — no /folders lookup.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('maps a Label_N id to its folder display name (#2035)', async () => {

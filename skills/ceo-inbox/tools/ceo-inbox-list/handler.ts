@@ -1,5 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { CeoNylasClient, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, NYLAS_MAX_LIST_LIMIT, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
@@ -10,10 +10,10 @@ const DEFAULT_LIMIT = 20;
 // Both the Gmail UI name ("DRAFTS") and the API label ("DRAFT") map here.
 const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
 
-// How many Nylas pages to walk when Curia-self mail empties a page. Each page
-// is at most the client's list cap (20), so this bounds a scan at a few hundred
-// messages — enough to skip a block of the agent's own mail without looping
-// forever if a cursor never ends.
+// How many Nylas pages to walk when Curia-self mail empties a page. The first
+// page asks for limit+1 so has_more can be decided in one round-trip. Later
+// pages ask for the Nylas list cap. 25 pages therefore cover about 500
+// messages, and a cursor that never ends cannot loop forever.
 const LIST_PAGE_CAP = 25;
 
 export class CeoInboxListHandler implements ToolHandler {
@@ -90,10 +90,14 @@ export class CeoInboxListHandler implements ToolHandler {
       let droppedSelf = 0;
       let pageToken: string | undefined;
       let hasMore = false;
+      let scanIncomplete = false;
 
       for (let page = 0; page < LIST_PAGE_CAP; page++) {
         const { messages: raw, nextCursor } = await client.listMessagesPage({
-          limit: limit + 1,
+          // Follow-up pages use the full list cap. limit+1 (often 6) would
+          // leave real mail past ~150 messages under-reported on every run,
+          // because Curia-self mail is never marked read.
+          limit: pageToken ? NYLAS_MAX_LIST_LIMIT : limit + 1,
           folder,
           unread: unreadOnly || undefined,
           ...(pageToken ? { pageToken } : {}),
@@ -120,8 +124,10 @@ export class CeoInboxListHandler implements ToolHandler {
             'ceo-inbox-list: paging cap reached before the mailbox was exhausted',
           );
           // count 0 + has_more true spins the agent: an empty page archives
-          // nothing, so the next run repeats it. Stop instead.
+          // nothing, so the next run repeats it. Stop instead, and say the
+          // scan stopped early so older mail is not silently abandoned.
           hasMore = collected.length > 0;
+          scanIncomplete = true;
           break;
         }
         pageToken = nextCursor;
@@ -138,7 +144,12 @@ export class CeoInboxListHandler implements ToolHandler {
 
       return {
         success: true,
-        data: { messages, count: messages.length, has_more: hasMore },
+        data: {
+          messages,
+          count: messages.length,
+          has_more: hasMore,
+          ...(scanIncomplete ? { scan_incomplete: true } : {}),
+        },
       };
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-list: failed to list messages');

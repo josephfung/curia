@@ -5,6 +5,7 @@ import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../../../src/skills/_shared/read-attachments.js';
 import { captureDraftSnapshot } from '../../../_shared/voice-learning-capture.js';
+import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
 
 // Same ceiling ceo-inbox-search uses when it scans drafts. A match stops the
 // scan early; hitting the ceiling without a match means we cannot prove the
@@ -84,10 +85,21 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         return { success: false, error: 'Original message has no sender address; cannot create a reply draft' };
       }
 
+      // Spam and Trash are not triage. Search omits them by default; this
+      // refuses a draft when an id arrives another way (a SPAM folder list,
+      // an explicit opt-in, task notes, or a retry) (#2035).
+      if (isSpamOrTrash(original.folders)) {
+        ctx.log.warn(
+          { replyToMessageId, folders: original.folders },
+          'ceo-inbox-draft-reply: refusing to draft a reply to a message in Spam or Trash',
+        );
+        return { success: false, error: 'Message is in Spam or Trash; not drafting a reply' };
+      }
+
       // One draft per thread. A later run, a retry, or the model repeating the
       // same call must not create another (#2035). Draft summaries carry
-      // threadId but not the message they reply to. A stale draft is updated
-      // with ceo-inbox-draft-edit, not replaced.
+      // threadId but not the message they reply to. The returned snippet and
+      // date let the caller see whether that draft is the one it meant to send.
       if (original.threadId) {
         const { drafts, truncated } = await client.listAllDrafts({
           maxScan: DRAFT_SCAN_LIMIT,
@@ -106,6 +118,8 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
               subject: existing.subject,
               to: existing.to,
               cc: existing.cc,
+              snippet: existing.snippet,
+              date: existing.date,
               already_exists: true,
             },
           };

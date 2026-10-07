@@ -6,7 +6,7 @@
 const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
 
 // Nylas guidance: requests with limit > 20 on list endpoints trigger concurrent-user 429s.
-const NYLAS_MAX_LIST_LIMIT = 20;
+export const NYLAS_MAX_LIST_LIMIT = 20;
 // Maximum number of retry attempts for 429 / 5xx responses before giving up.
 const NYLAS_MAX_RETRIES = 3;
 // Base backoff delay in ms — doubles each attempt (plus ±25% jitter).
