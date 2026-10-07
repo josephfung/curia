@@ -171,7 +171,11 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
 
     expect(expireRows).toHaveBeenCalledWith([1]);
     expect(sendNotification).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalled();
+    // Expired rows are never retried, so the skip log must name them for manual follow-up.
+    expect(logger.warn).toHaveBeenCalledWith(
+      { notifiableCount: 1, ids: [1], shortRefs: ['high-ref'] },
+      expect.stringContaining('no principal email'),
+    );
     expect(result).toEqual({ expired: 1, notified: 0 });
   });
 
@@ -208,17 +212,44 @@ describe('ApprovalExpirySweep.tick (#2013)', () => {
 // --- start() / stop() ---
 
 describe('ApprovalExpirySweep interval (#2013)', () => {
+  // The boot tick fires FIRST_TICK_DELAY_MS (60s) after start(), then every interval.
+  const BOOT_MS = 60_000;
+  const HOUR_MS = 60 * 60_000;
+
+  it('sweeps shortly after boot, without waiting a full interval', async () => {
+    vi.useFakeTimers();
+    const { sweep, findExpired } = makeSweep();
+
+    sweep.start();
+    await vi.advanceTimersByTimeAsync(BOOT_MS - 1);
+    expect(findExpired).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(findExpired).toHaveBeenCalledTimes(1);
+
+    sweep.stop();
+  });
+
   it('ticks on the configured interval and stops cleanly', async () => {
     vi.useFakeTimers();
     const { sweep, findExpired } = makeSweep();
 
     sweep.start();
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    expect(findExpired).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(HOUR_MS);
+    expect(findExpired).toHaveBeenCalledTimes(2); // boot tick + first interval
 
     sweep.stop();
-    await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
-    expect(findExpired).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3 * HOUR_MS);
+    expect(findExpired).toHaveBeenCalledTimes(2);
+  });
+
+  it('stop() before the boot tick cancels it', async () => {
+    vi.useFakeTimers();
+    const { sweep, findExpired } = makeSweep();
+
+    sweep.start();
+    sweep.stop();
+    await vi.advanceTimersByTimeAsync(HOUR_MS);
+    expect(findExpired).not.toHaveBeenCalled();
   });
 
   it('logs a failing tick at error and still runs the next interval', async () => {
@@ -227,14 +258,32 @@ describe('ApprovalExpirySweep interval (#2013)', () => {
     findExpired.mockRejectedValueOnce(new Error('DB down'));
 
     sweep.start();
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(BOOT_MS);
     expect(logger.error).toHaveBeenCalledTimes(1);
-    expect(logger.error.mock.calls[0]![0]).toMatchObject({ err: expect.any(Error) });
+    expect(logger.error.mock.calls[0]![0]).toMatchObject({ err: expect.any(Error), consecutiveFailures: 1 });
 
     // The guard is released after a failure, so the next interval runs normally.
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(HOUR_MS);
     expect(findExpired).toHaveBeenCalledTimes(2);
     expect(logger.error).toHaveBeenCalledTimes(1);
+
+    sweep.stop();
+  });
+
+  it('counts consecutive failures and resets the count after a success', async () => {
+    vi.useFakeTimers();
+    const { sweep, findExpired, logger } = makeSweep();
+    findExpired
+      .mockRejectedValueOnce(new Error('DB down'))
+      .mockRejectedValueOnce(new Error('DB down'))
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('DB down'));
+
+    sweep.start();
+    await vi.advanceTimersByTimeAsync(BOOT_MS + 3 * HOUR_MS);
+
+    const streaks = logger.error.mock.calls.map((c) => (c[0] as { consecutiveFailures: number }).consecutiveFailures);
+    expect(streaks).toEqual([1, 2, 1]);
 
     sweep.stop();
   });
@@ -251,13 +300,13 @@ describe('ApprovalExpirySweep interval (#2013)', () => {
     });
 
     sweep.start();
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(BOOT_MS); // boot tick starts and hangs
+    await vi.advanceTimersByTimeAsync(HOUR_MS); // interval fires while it is still running
     expect(tickSpy).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('still in flight'));
 
     release!();
-    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.advanceTimersByTimeAsync(HOUR_MS);
     expect(tickSpy).toHaveBeenCalledTimes(2);
 
     sweep.stop();
