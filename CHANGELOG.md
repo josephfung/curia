@@ -69,6 +69,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Coordinator prompt** — one section each for voice and contact resolution; calendar text trimmed; 18.6k → 15.5k chars. (#1954)
 - **Coordinator prompt** — drops code-enforced restatements and sections naming tools it doesn't pin; 20.5k → 18.6k chars. (#1954)
 - **Approval expiry** — runs as an hourly system interval, not a coordinator LLM turn. (#2013)
 - **Coordinator pins** — google-workspace is activated on demand, not pinned; 85–98 KB off most calls. (#2024)
