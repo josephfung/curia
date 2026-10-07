@@ -36,10 +36,11 @@ Alternatives considered:
 
 `email-send` (`to`, `cc`), `signal-send`, `sms-send` and `slack-send` (`recipient`) take a contact reference: a contact UUID, or the reserved alias `principal`. The model chooses the person, and the gateway reads the address from that contact's identities. The resolver is `src/skills/_shared/recipient-reference.ts`, exposed as `OutboundGateway.resolveRecipientReference`.
 
-- **Only verified, active identities on the skill's channel count.** `sms` matches `sms` identities only, not the CRM `phone` channel, which is the same rule the gateway uses to recognise the principal on SMS.
+- **Only verified, active identities on the skill's channel count,** and only in a shape that channel can send to. A Signal ACI UUID or an Enterprise Grid `W…` Slack id is skipped rather than chosen. `sms` matches `sms` identities only, not the CRM `phone` channel, which is the same rule the gateway uses to recognise the principal on SMS.
+- **A blocked contact is refused.** The gateway checks the To recipient's tier, not each cc, so the resolver refuses first.
 - **The contact's primary is used when it is one of those identities** (`primary_email` for email, `primary_phone` for Signal and SMS). Otherwise the oldest usable identity. A primary that is unverified or inactive is ignored. Sending to another verified address of the right person is a far smaller error than pushing the model back to typing one.
 - **Every failure is closed and says what is missing:** a mistyped alias, a UUID that matches no contact, a contact with no verified identity on the channel. An unverified address is never echoed back, so the model is not handed something to retype.
-- **`principal` resolves to the principal's contact ID from the hot-reloaded identity snapshot,** which holds verified, active rows only. A UUID that happens to be the principal's resolves the same way and unlocks nothing more. The prompts name only the alias.
+- **`principal` resolves to the principal's contact ID from the hot-reloaded identity snapshot,** which holds verified, active rows only. A UUID that happens to be the principal's resolves the same way and unlocks nothing more. The prompts name only the alias, and a send by alias does not return the contact ID in its result (only a UUID the agent passed is echoed back as `contact_id`).
 
 The important property is how errors fail. A corrupted reference finds no contact and sends nothing. A corrupted address sends to whoever owns it.
 
@@ -47,13 +48,17 @@ The important property is how errors fail. A corrupted reference finds no contac
 
 Raw addresses move to new fields, for someone with no contact record: `to_address` and `cc_addresses` on `email-send`, `recipient_number` on `signal-send` and `sms-send`, and `recipient_user_id` on `slack-send`. A skill refuses an address in a reference field, and a reference field together with its raw field, and points the model at the right field.
 
-### Gate C resolves references the same way
+### References are checked before any gate, and Gate C uses the result
 
-Gate C's carve-out parsers read both fields, and the gate resolves references with the same resolver before comparing (`resolveGateCRecipientReferences` in `src/skills/execution.ts`). The principal-sole carve-out and the known-tier reply-to-sender check therefore judge the address the skill will send to. A reference that matches no contact returns the resolver's error instead of creating an escalation. A reference shape cannot collide with an address on any send channel: email has `@`, E.164 starts with `+`, and a Slack user id has no hyphens.
+For the four send skills, the execution layer checks and resolves recipients before the autonomy gates (`resolveSendSkillReferences` in `src/skills/execution.ts`), with the same resolver the skill uses. It refuses an address or template token in a reference field, a reference in a raw field, a reference that does not resolve, and more than 25 references, each with the skill's own message. So no gate files an approval for a send that cannot run. A contact-store outage is classified `DATABASE_UNAVAILABLE`.
+
+Gate C's carve-out parsers read both fields, and the gate substitutes the resolved addresses before comparing. The principal-sole carve-out and the known-tier reply-to-sender check therefore judge the address the skill will send to. A reference shape cannot collide with an address on any send channel: email has `@`, E.164 starts with `+`, and a Slack user id has no hyphens.
+
+Approvals show what will be sent: each reference as its address followed by the contact name (sanitized, since names come from inbound headers), every cc recipient, and the raw address on the raw path. The stored payload stays the agent's input, so an approval re-resolves the reference when it runs.
 
 ### Block errors name unmatched recipients
 
-When a filter blocks a send (identity gate, export block, PII redactor error, content filter, in `send()` and `sendEmailDraft()`), the skill error lists each recipient that matches no contact and tells the agent to check the recipient before rewriting the message. The principal's FYI marks the same recipients. The lookup runs only on a block, so ordinary sends pay nothing. A lookup error leaves that recipient out rather than claim a mismatch.
+When a filter blocks a send (identity gate, export block, PII redactor error, content filter, in `send()` and `sendEmailDraft()`), the skill error lists each recipient that matches no contact, or matches only an unverified identity, and tells the agent to check the recipient before rewriting the message. The unverified case covers a typo that was delivered once before and so now has an unverified `outbound_recipient` contact. The principal's FYI marks the same recipients. The lookup runs only on a block, so ordinary sends pay nothing. A lookup error leaves that recipient out rather than claim a mismatch.
 
 ### Gateway-created contacts get honest provenance
 
@@ -70,7 +75,9 @@ Option A is not added. What send-by-reference does not cover:
 
 - An address the model already has is never retyped on the reference path, for the principal and every other contact, on every channel.
 - **Breaking change to four `tool.json` input surfaces.** `to`, `cc` and `recipient` no longer accept addresses. A pending approval stored before the deploy with an address in `to` fails when approved, and the error points at `to_address`. That window is 48 hours.
-- Success payloads are unchanged (`to`, `delivered_to` carry the resolved address, which reply-lock and the activity log read) and gain `contact_id` on the reference path.
+- Success payloads are unchanged (`to`, `delivered_to` carry the resolved address, which reply-lock and the activity log read) and gain `contact_id` when the agent passed a contact UUID.
 - A contact the gateway created after a cold send has an unverified identity, so a later send to it by reference fails closed. The agent uses the raw field again, or the principal verifies the address. #2040 covers whether an inbound reply should verify it.
 - Raw-address paths remain: the four raw fields, and `email-draft-save` with `send-draft`. #2041 decides whether to retire them.
-- A send by reference costs one contact read in the skill, and one more in Gate C for externally initiated tasks.
+- A send by reference costs a contact read before the gates and another in the skill, plus one more if an approval is filed.
+- An approval resolves the reference again when it runs, up to 48 hours later. If the contact's primary changed in between, the send goes to the contact's new address, which is another verified address of the same person.
+- Contacts the gateway created before this change still carry `ceo_stated` and verified identities. Relabelling them is a data change, left to the operator.
