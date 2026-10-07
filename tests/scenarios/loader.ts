@@ -526,9 +526,14 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
     if (!thread || !keys.get('thread')!.has(thread)) {
       throw new CaseError(file, `inbound from bullpen needs 'thread' naming a seeded thread`);
     }
+  } else if (from === 'scheduler') {
+    // A scheduled job has no sender, channel choice, thread or email envelope.
+    if (channel || thread || scenario.inbound.email) {
+      throw new CaseError(file, `inbound from scheduler takes only 'content' (the job's task)`);
+    }
   } else if (from !== 'principal') {
     const contact = scenario.seed.contacts.find(c => c.key === from);
-    if (!contact) throw new CaseError(file, `inbound.from '${from}' is not principal, bullpen or a seeded contact`);
+    if (!contact) throw new CaseError(file, `inbound.from '${from}' is not principal, bullpen, scheduler or a seeded contact`);
     if (channel && channel !== contact.channel) {
       throw new CaseError(file, `inbound.channel '${channel}' differs from contact '${from}' channel '${contact.channel}'`);
     }

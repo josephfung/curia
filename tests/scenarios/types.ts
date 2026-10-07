@@ -101,6 +101,8 @@ export interface SeedBullpenThread {
  * any other channel uses the principal's own identity on it). `from: <contact key>`
  * uses that seeded contact's channel identity. `from: bullpen` wakes the coordinator
  * on a seeded thread the way BullpenDispatcher does, with `content` as the new message.
+ * `from: scheduler` fires a recurring job with no linked task the way the scheduler
+ * does: an agent.task on the `scheduler` channel whose content is `{"task": content}`.
  */
 export interface ScenarioInbound {
   from: string;

@@ -42,7 +42,9 @@ export function formatJudgeInput(
     ? `${principal} (the executive the coordinator works for)`
     : scenario.inbound.from === 'bullpen'
       ? 'another internal agent, on the bullpen (internal agent-to-agent thread)'
-      : (() => {
+      : scenario.inbound.from === 'scheduler'
+        ? 'the scheduler: a recurring scheduled job firing, with no human sender'
+        : (() => {
           const c = scenario.seed.contacts.find(x => x.key === scenario.inbound.from)!;
           return `${c.displayName}, an external contact (not ${principal}), via ${c.channel}`;
         })();

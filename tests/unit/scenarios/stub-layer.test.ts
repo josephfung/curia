@@ -72,6 +72,29 @@ describe('tools test mode cannot serve', () => {
   });
 });
 
+describe('inert tools (#2024)', () => {
+  it('run unstubbed whatever their action_risk, but never override delegate or an unavailable tool', () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest('update_drive_file', 'low'), { execute: async () => ({ success: true, data: null }) });
+    registry.register(manifest('delegate', 'none'), { execute: async () => ({ success: true, data: null }) });
+    expect(mustStub('update_drive_file', registry)).toBe(true);
+    expect(mustStub('update_drive_file', registry, new Set(), new Set(['update_drive_file']))).toBe(false);
+    expect(mustStub('delegate', registry, new Set(), new Set(['delegate']))).toBe(true);
+    expect(mustStub('update_drive_file', registry, new Set(['update_drive_file']), new Set(['update_drive_file']))).toBe(true);
+  });
+
+  it('pass through to the real layer when a run has no stub for them', async () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest('update_drive_file', 'low'), { execute: async () => ({ success: true, data: 'canned' }) });
+    const controller = createStubController(() => registry, () => new Set(), () => new Set(['update_drive_file']));
+    const layer = controller.wrap(new ExecutionLayer(registry, logger));
+    controller.beginRun({}, 'scenario-1');
+    const result = await layer.invoke('update_drive_file', {}, undefined, coordinatorCall);
+    expect(result).toEqual({ success: true, data: 'canned' });
+    expect(controller.endRun('scenario-1').map(c => c.disposition)).toEqual(['passthrough']);
+  });
+});
+
 describe('stale conversations', () => {
   it('refuses, and does not record, a call from a conversation other than the run\'s', async () => {
     const { layer, controller, executed } = setup();

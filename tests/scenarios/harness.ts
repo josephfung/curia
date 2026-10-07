@@ -16,7 +16,7 @@
 // meter all find the calling run through it. A run that times out is cancelled, so its
 // abandoned turn stops calling the model.
 import { randomUUID } from 'node:crypto';
-import { createAgentDiscuss, createInboundMessage } from '../../src/bus/events.js';
+import { createAgentDiscuss, createAgentTask, createInboundMessage } from '../../src/bus/events.js';
 import { loadConfig } from '../../src/config.js';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
@@ -105,8 +105,16 @@ export interface ScenarioHarness {
   internalNames: string[];
   /** Tool names the coordinator is offered (for stub validation). */
   coordinatorTools: Set<string>;
+  /**
+   * What the coordinator is offered plus what it can load mid-turn with skill-activate
+   * (#2024): a case may stub and check those too, since activation is the behavior
+   * under test.
+   */
+  reachableTools: Set<string>;
   /** Tools test mode cannot serve; the stub layer refuses them unless a case stubs them. */
   unavailableTools: ReadonlySet<string>;
+  /** Tools served from an MCP snapshot; the stub layer runs them unstubbed (#2024). */
+  inertTools: ReadonlySet<string>;
   /**
    * One run of a case. An attempt that fails for a provider reason is run again, up to
    * PROVIDER_RETRIES times, and the run records why (#1980).
@@ -190,6 +198,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       return booted.toolRegistry;
     },
     () => unavailable,
+    () => booted?.snapshotMcpTools ?? new Set(),
   );
 
   const stack = await createTestModeStack({
@@ -227,6 +236,15 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   meterAgentCalls(bus, context.current, unattributed);
   const coordinator = stack.agent(COORDINATOR);
   const coordinatorTools = new Set(coordinator.toolDefs.map(t => t.name));
+  // Production's own activation check, per skill: what skill-activate would hand the
+  // coordinator. Only with discovery on — without it the coordinator has no skill-activate.
+  const reachableTools = new Set(coordinatorTools);
+  if (coordinator.agentConfig.allow_discovery) {
+    for (const skill of stack.skillRegistry.list()) {
+      const activation = stack.executionLayer.resolveSkillActivationForAgent(skill.manifest.name, COORDINATOR);
+      if (!('error' in activation)) for (const tool of activation.tools) reachableTools.add(tool);
+    }
+  }
   const internalNames = internalNamesFor({
     tools: [...stack.toolRegistry.list().map(t => t.manifest.name)],
     agents: stack.agentRegistry.list().map(a => a.name),
@@ -335,9 +353,11 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       const thread = sender === 'bullpen' ? seeded.threads.get(inbound.thread!)! : undefined;
       const runConversationId = thread
         ? thread.threadId // BullpenDispatcher uses the thread id as the conversation
-        : sender !== 'bullpen' && sender.channelId === 'email'
-          ? `email:scenario-${randomUUID()}`
-          : `scenario-${randomUUID()}`;
+        : sender === 'scheduler'
+          ? `scheduler:scenario-${randomUUID()}:${randomUUID()}` // scheduler:<job>:<run>
+          : sender !== 'bullpen' && sender.channelId === 'email'
+            ? `email:scenario-${randomUUID()}`
+            : `scenario-${randomUUID()}`;
       conversationId = runConversationId;
 
       controller.beginRun(stubTable, runConversationId);
@@ -359,6 +379,17 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
             participants: thread.participants,
             mentionedAgentIds: [COORDINATOR],
             content: inbound.content,
+            parentEventId: randomUUID(),
+          }));
+        } else if (sender === 'scheduler') {
+          // What Scheduler.fireJob publishes for a recurring job with no linked task: an
+          // agent.task straight to the agent, no Dispatcher, content = the payload JSON.
+          delivery = bus.publish('system', createAgentTask({
+            agentId: COORDINATOR,
+            conversationId: runConversationId,
+            channelId: 'scheduler',
+            senderId: 'scheduler',
+            content: JSON.stringify({ task: inbound.content }),
             parentEventId: randomUUID(),
           }));
         } else if (sender !== 'bullpen') {
@@ -449,7 +480,9 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     stubs: controller,
     internalNames,
     coordinatorTools,
+    reachableTools,
     unavailableTools: unavailable,
+    inertTools: stack.snapshotMcpTools,
     runOnce,
     unattributedUsage: () => unattributed.snapshot(),
     sweep: () => sweepLeftovers(stack),
