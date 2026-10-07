@@ -108,10 +108,13 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [{ email: 'charlie@example.com' }],
     });
 
-    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
       if (urlStr.includes('/drafts')) {
         return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -126,7 +129,9 @@ describe('CeoInboxDraftReplyHandler', () => {
 
     // Verify the draft creation call
     const draftCall = mockFetch.mock.calls.find(
-      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
     );
     expect(draftCall).toBeDefined();
 
@@ -158,10 +163,13 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [{ email: 'bob@example.com' }],
     });
 
-    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
       if (urlStr.includes('/drafts')) {
         return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -175,7 +183,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
     );
     expect(draftCall).toBeDefined();
 
@@ -196,10 +206,13 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [{ email: 'bob@example.com' }],
     });
 
-    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
       if (urlStr.includes('/drafts')) {
         return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -213,7 +226,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
     );
     expect(draftCall).toBeDefined();
 
@@ -232,10 +247,13 @@ describe('CeoInboxDraftReplyHandler', () => {
       cc: [],
     });
 
-    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
       if (urlStr.includes('/drafts')) {
         return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -249,7 +267,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
     );
     expect(draftCall).toBeDefined();
 
@@ -282,10 +302,13 @@ describe('CeoInboxDraftReplyHandler', () => {
       },
     };
 
-    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
       if (urlStr.includes('/drafts')) {
         return new Response(JSON.stringify(draftResponse), { status: 200 });
@@ -299,7 +322,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
     );
     expect(draftCall).toBeDefined();
 
@@ -383,10 +408,13 @@ describe('CeoInboxDraftReplyHandler', () => {
     // Override body with rich HTML
     messageResponse.data.body = '<p>Hello <b>world</b></p>';
 
-    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
       if (urlStr.includes('/drafts')) {
         return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -399,7 +427,9 @@ describe('CeoInboxDraftReplyHandler', () => {
     expect(result.success).toBe(true);
 
     const draftCall = mockFetch.mock.calls.find(
-      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
     );
     expect(draftCall).toBeDefined();
 
@@ -448,7 +478,9 @@ describe('CeoInboxDraftReplyHandler', () => {
 
     // The drafts endpoint must NOT have been called
     const draftCall = mockFetch.mock.calls.find(
-      (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+      (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
     );
     expect(draftCall).toBeUndefined();
   });
@@ -463,10 +495,13 @@ describe('CeoInboxDraftReplyHandler', () => {
         cc: [],
       });
 
-      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
         const urlStr = String(url);
         if (urlStr.includes('/messages/msg-001')) {
           return new Response(JSON.stringify(messageResponse), { status: 200 });
+        }
+        if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+          return new Response(JSON.stringify({ data: [] }), { status: 200 });
         }
         if (urlStr.includes('/drafts')) {
           return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -483,7 +518,9 @@ describe('CeoInboxDraftReplyHandler', () => {
 
       expect(result.success).toBe(true);
       const draftCall = mockFetch.mock.calls.find(
-        (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+        (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
       );
       expect(draftCall).toBeDefined();
       // Body must be FormData (not a JSON string) when attachments are present
@@ -497,10 +534,13 @@ describe('CeoInboxDraftReplyHandler', () => {
         cc: [],
       });
 
-      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
         const urlStr = String(url);
         if (urlStr.includes('/messages/msg-001')) {
           return new Response(JSON.stringify(messageResponse), { status: 200 });
+        }
+        if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+          return new Response(JSON.stringify({ data: [] }), { status: 200 });
         }
         if (urlStr.includes('/drafts')) {
           return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -512,7 +552,9 @@ describe('CeoInboxDraftReplyHandler', () => {
       await handler.execute(ctx);
 
       const draftCall = mockFetch.mock.calls.find(
-        (call: Parameters<typeof fetch>) => String(call[0]).includes('/drafts'),
+        (call: Parameters<typeof fetch>) =>
+        String(call[0]).includes('/drafts') &&
+        ((call[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST',
       );
       expect(draftCall).toBeDefined();
       // Without attachments, body is a JSON string (not FormData)
@@ -550,10 +592,13 @@ describe('CeoInboxDraftReplyHandler', () => {
       from: [{ email: 'alice@external.com', name: 'Alice' }],
       to: [{ email: 'bob@example.com' }],
     });
-    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const urlStr = String(url);
       if (urlStr.includes('/messages/msg-001')) {
         return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && (init?.method ?? 'GET').toUpperCase() === 'GET') {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
       if (urlStr.includes('/drafts')) {
         return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
@@ -574,5 +619,94 @@ describe('CeoInboxDraftReplyHandler', () => {
     // The voice snapshot is now fire-and-forget so it can't add latency to draft creation;
     // its failure is logged asynchronously after the handler returns. Wait for that log.
     await vi.waitFor(() => expect(ctx.log.error).toHaveBeenCalled());
+  });
+
+  it('returns the existing draft when called twice for the same message (#2035)', async () => {
+    const messageResponse = buildNylasMessage({
+      from: [{ email: 'alice@external.com', name: 'Alice' }],
+      to: [{ email: 'ceo@example.com' }],
+    });
+    const drafts: Array<Record<string, unknown>> = [];
+    let creates = 0;
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const urlStr = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (urlStr.includes('/messages/msg-001')) {
+        return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && method === 'GET') {
+        return new Response(JSON.stringify({ data: drafts }), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && method === 'POST') {
+        creates += 1;
+        const created = {
+          id: 'draft-1',
+          thread_id: 'thread-001',
+          subject: 'Re: Test Subject',
+          to: [{ email: 'alice@external.com', name: 'Alice' }],
+          cc: [],
+          snippet: '',
+          date: 1,
+        };
+        drafts.push(created);
+        return new Response(JSON.stringify({ data: created }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${method} ${urlStr}`);
+    });
+
+    const first = await handler.execute(buildCtx());
+    const second = await handler.execute(buildCtx({ body: 'A second, different reply.' }));
+
+    expect(creates).toBe(1);
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+    if (!first.success || !second.success) return;
+    const firstData = first.data as { draft_id: string; already_exists: boolean };
+    const secondData = second.data as { draft_id: string; already_exists: boolean };
+    expect(firstData.draft_id).toBe('draft-1');
+    expect(firstData.already_exists).toBe(false);
+    expect(secondData).toMatchObject({ draft_id: 'draft-1', already_exists: true });
+  });
+
+  it('still creates a draft when the only existing draft is on another thread', async () => {
+    const messageResponse = buildNylasMessage({
+      from: [{ email: 'alice@external.com', name: 'Alice' }],
+      to: [{ email: 'ceo@example.com' }],
+    });
+    let creates = 0;
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const urlStr = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (urlStr.includes('/messages/msg-001')) {
+        return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && method === 'GET') {
+        return new Response(JSON.stringify({
+          data: [{
+            id: 'draft-other',
+            thread_id: 'thread-other',
+            subject: 'Re: Something else',
+            to: [{ email: 'bob@example.com' }],
+            cc: [],
+            snippet: '',
+            date: 1,
+          }],
+        }), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && method === 'POST') {
+        creates += 1;
+        return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${method} ${urlStr}`);
+    });
+
+    const result = await handler.execute(buildCtx());
+
+    expect(creates).toBe(1);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect((result.data as { already_exists: boolean }).already_exists).toBe(false);
   });
 });

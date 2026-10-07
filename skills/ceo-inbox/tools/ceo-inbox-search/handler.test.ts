@@ -105,6 +105,76 @@ describe('CeoInboxSearchHandler — query parameter', () => {
     expect(extractQueryParam(fetchSpy, 'limit')).toBe('5');
   });
 
+  function message(partial: { id: string; folders: string[]; from?: string }): Record<string, unknown> {
+    return {
+      id: partial.id,
+      thread_id: `t-${partial.id}`,
+      subject: '',
+      snippet: '',
+      date: 0,
+      unread: true,
+      from: [{ email: partial.from ?? 'someone@example.com', name: 'Someone' }],
+      folders: partial.folders,
+    };
+  }
+
+  it('omits Spam and Trash from is:unread unless the caller opts in (#2035)', async () => {
+    const rows = [
+      message({ id: 'pitch', folders: ['SPAM'] }),
+      message({ id: 'gone', folders: ['TRASH'] }),
+      message({ id: 'mixed', folders: ['INBOX', 'spam'] }),
+      message({ id: 'real', folders: ['INBOX'] }),
+    ];
+
+    // Two cron-style runs. The spam pitch never surfaces, so triage has nothing to draft.
+    for (let run = 0; run < 2; run++) {
+      const fetchSpy = mockFetchReturning(rows);
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await handler.execute(makeCtx({ query: 'is:unread' }));
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const data = result.data as { messages: Array<{ id: string }>; count: number };
+      expect(data.messages.map((m) => m.id)).toEqual(['real']);
+      expect(data.count).toBe(1);
+      vi.unstubAllGlobals();
+    }
+
+    const opted = mockFetchReturning(rows);
+    vi.stubGlobal('fetch', opted);
+    const optedResult = await handler.execute(makeCtx({
+      query: 'is:unread',
+      include_spam_and_trash: true,
+    }));
+    expect(optedResult.success).toBe(true);
+    if (!optedResult.success) return;
+    const optedData = optedResult.data as { messages: Array<{ id: string }> };
+    expect(optedData.messages.map((m) => m.id)).toEqual(['pitch', 'gone', 'mixed', 'real']);
+  });
+
+  it('pages past a Spam-only result to the next inbox message (#2035)', async () => {
+    const spamPage = Array.from({ length: 10 }, (_, i) => message({ id: `spam-${i}`, folders: ['SPAM'] }));
+    const inbox = message({ id: 'real', folders: ['INBOX'] });
+    const fetchSpy = vi.fn().mockImplementation(async (url: string) => {
+      const page = new URL(url).searchParams.get('page_token');
+      if (!page) {
+        return { ok: true, json: async () => ({ data: spamPage, next_cursor: 'p2' }) };
+      }
+      return { ok: true, json: async () => ({ data: [inbox] }) };
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(makeCtx({ query: 'is:unread', limit: 10 }));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const data = result.data as { messages: Array<{ id: string }>; count: number };
+    expect(data.messages.map((m) => m.id)).toEqual(['real']);
+    expect(data.count).toBe(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const second = new URL(fetchSpy.mock.calls[1]![0] as string);
+    expect(second.searchParams.get('page_token')).toBe('p2');
+    expect(second.searchParams.get('search_query_native')).toBeNull();
+  });
+
   it('filters out messages from the Curia self email', async () => {
     const curiaEmail = 'curia@example.com';
     const ctx = makeCtx({ query: 'test' }, { selfEmail: curiaEmail });
