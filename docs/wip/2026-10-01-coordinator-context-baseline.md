@@ -1096,3 +1096,10 @@ narrowed from PR 1's catch-all. It is a catch-all again, with the one exception 
 facts uses: a profile field the principal states goes through `contact-update`. The
 calendar-routing unit test now also pins "I compose the reply". Smoke's contact cases ran
 once on the result, the full suites did not run again; see below.
+
+Smoke contact cases on `5b8ca4bb`, one run each: all 4 passed (Ambiguous Contact Reference
+96%, Contact Briefing Delegation 100%, Conflicting Contact Info Update 90%, Role/Person
+Mismatch 96% after a retry; its first attempt missed `ask-clarification`). A 3-round A/B of
+Role/Person Mismatch against PR 1's prompt: PR 2 passed 2 of 3 rounds (96% / 67% / 92%),
+PR 1 passed 1 of 3 (92% / 54% / 54%). The case is unsteady on both prompts, and no worse on
+PR 2.
