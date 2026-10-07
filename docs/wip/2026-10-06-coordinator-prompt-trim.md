@@ -253,6 +253,14 @@ Added 2026-10-07, measured on that day's prod prompt (llm.call
   the coordinator does not. #2033's handle for the principal is the alias `principal`. It
   resolves only to the verified identities every agent already sees, so it stays inside
   spec 09's split.
+- **Sampling temperature is an experiment, not a blanket change.** Agent calls send no
+  temperature, so they sample at the provider default.
+  - A lower value might reduce copying errors, but it changes every behavior at once.
+  - Reasoning models can loop when run cold. DeepSeek's guidance for its earlier reasoning
+    model was 0.5–0.7.
+  - It reduces the error rather than removing it, and #2033 removes it by construction.
+  - PR 11's probe gets a temperature arm. If that arm helps, add a per-tier sampling setting
+    and put it through the behavior gate before enabling it.
 
 ## PR sequence
 
@@ -422,14 +430,42 @@ Then:
       one that produced the invented address and the one that didn't. Don't replay from
       `llm_call_archive`, which is PII-scrubbed. Assert that no `[EMAIL]` or `[PHONE]` tokens
       remain.
-    - **Three arms:** `origin/main`, PR 11 without the name sentence, and PR 11 with it. Run
-      each request 50 times per arm on `deepseek/deepseek-v4.1-flash`: 300 calls, about $3.
+    - **Four arms:**
+      - `origin/main`;
+      - PR 11 without the name sentence;
+      - PR 11 with the name sentence;
+      - `origin/main` at `temperature: 0.5`. It keeps main's layout so the temperature
+        effect isn't mixed with the layout effect.
+
+      Run each request 50 times per arm on `deepseek/deepseek-v4.1-flash`: 400 calls, about
+      $4.
+    - **Why a temperature arm.** Agent calls send no `temperature`; the OpenRouter provider
+      sends only `model`, `max_tokens`, `messages` and `tools`. OpenRouter publishes no
+      default for this model, so the provider default applies (DeepSeek's own API defaults to
+      1.0). Copying an address is the kind of task where sampling at 1.0 can pick a
+      low-probability token, like the stray dot in #2033.
+    - **Request `logprobs`** (with `top_logprobs`) on every arm. The probability the model put
+      on each token of the `to` argument is a far more sensitive signal than a failure count
+      over 50 runs, and it shows where along the address the model wavered. First check that
+      the provider returns logprobs for tool-call arguments, not only for content. If it
+      doesn't, rely on the counts alone.
     - **Report four counts per arm:** sends to the exact primary (normalized as
       `isPrincipalIdentity` does), sends to another address, runs with no send, and errors.
       Classify the wrong addresses, including name-derived ones.
     - **Read it honestly.** 50 runs per request per arm can show a drop from about 20% to
       about 5%; it cannot prove zero.
     - Record the numbers in the baseline log and on #2033.
+- **Capture reasoning in the archive.** A small code change that can land before PR 11, and
+  should, so the probe can read the reasoning behind each wrong address.
+  - Today it can't be recovered: Curia never requests `include_reasoning`, and OpenRouter
+    keeps no content on a paid account. So the reasoning behind #2033's invented address
+    (3,909 output tokens) is gone.
+  - Request it in `buildCreateParams` (`src/agents/llm/openrouter.ts`), carry it on the
+    provider response, and store it with the response in `llm_call_archive`.
+  - The archive already redacts secrets and PII from every string it stores
+    (`src/audit/llm-call-archive.ts`), so reasoning gets the same treatment as prompts.
+  - Reasoning tokens are already billed. The cost is archive size, so check the archive's
+    retention before turning it on for every call.
 - **Risk:** medium. The order changes for every agent. Content changes in the principal
   block's wording and the new name sentence. Specialists are covered only by smoke.
 
