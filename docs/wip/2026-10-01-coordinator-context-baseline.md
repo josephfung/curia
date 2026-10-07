@@ -1050,3 +1050,42 @@ export-scope sentence moved to `drive-files.md`. Full suites on that commit:
 
 No A/B was run, because the commit's only prompt change is one removed heading line. The
 committed stub-coverage record stays the clean one from `ddd9a537`.
+
+### 2026-10-07 — prompt trim PR 2: one home each for voice and contact resolution
+
+Stacked on PR 1 (`cc42b17a`). Measured through `assembleAgent()` on `620b89f1`.
+
+| | PR 1 | PR 2 | Change |
+|---|---:|---:|---:|
+| `system_prompt` chars | 18,561 | 15,602 | **−2,959 (−16%)** |
+| `system_prompt` est. tokens | ~4,640 | ~3,901 | under #1954's 4k target |
+| always-on (YAML + SKILL.md 6,157), est. tokens | ~6,180 | ~5,440 | ~−740 |
+| CI budget, always-on tokens | 6,400 | 5,600 | lowered |
+
+**Full suites on `ec116f47`** (before the fix below). Model `deepseek/deepseek-v4.1-flash`,
+gpt-4o judge, concurrency 4.
+
+- **Scenarios:** 24 of 25 cases at 100%. `external reply first person` failed its gate:
+  `no_team_voice` and `no_identifiers` were at 60%. Both misses were runs that returned
+  `NO_REPLY`, so there was no reply to check. In those 2 of 5 runs the coordinator
+  delegated the request to `@calendar` "end-to-end (reply + booking)" as transfer-ownership
+  and sent Priya nothing. The rewrite had dropped "I compose the reply" from the calendar
+  section, and PR 1's prompt had passed this case in every run.
+- **Smoke:** 44 of 46.
+  - Natural Language Deadlines missed `parse-monday-after`, the weekday-dependent date
+    reading.
+  - Reschedule Board Chair timed out on both attempts.
+  - Four cases passed on retry.
+
+**Fix (`620b89f1`): "I compose the reply" restored.**
+
+- Scenario 10, 10 runs: every critical behavior 10/10, no `NO_REPLY`.
+- Reschedule Board Chair, 3 alternating smoke rounds against PR 1's prompt:
+
+| | Passed (after retry) | First attempt passed | Scores |
+|---|---:|---:|---|
+| PR 2 | 3 of 3 | 1 of 3 | 85% / 80% / 90% |
+| PR 1 | 3 of 3 | 2 of 3 | 90% / 100% / 85% |
+
+Neither side timed out. Both were marked down on the same judgment-heavy behaviors
+(`mark-sensitivity`, `draft-apologetic-email`, `propose-new-times`).

@@ -18,7 +18,8 @@ log.
 |---|---|---:|---:|
 | Start (`3155f290`) | — | 20,532 | ~6,673 / 7,000 |
 | 1: restatements and stale sections | In review (2026-10-07) | 18,561 | ~6,180 / 6,400 |
-| 2–10, final phase | Not started | — | — |
+| 2: one home each for voice and contact resolution | In progress (2026-10-07), stacked on PR 1 | 15,602 | ~5,440 / 5,600 |
+| 3–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
@@ -38,6 +39,22 @@ Behavior held:
   happens on main's prompt. PR 1 also closes that hole: case 13a now stubs every read-only
   Drive and Docs tool that can touch its Doc.
 - **Smoke:** 44 of 46. Both failures passed 4 of 4 rounds on each side in the A/B.
+
+**PR 2 (2026-10-07, branch `chore/coordinator-prompt-consolidate`).** Who I am absorbs the
+outbound-voice, no-internals and signing bullets as one positive paragraph with no quoted
+anti-examples. People replaces My identity, Contact intelligence, Email with Before
+composing, and the person-resolution part of Storing facts. The calendar section drops
+what `allowed_callers` enforces. The Email section's "concise and professional" style line
+went with it. The YAML is now under the epic's 4k-token target.
+
+Behavior: the full scenario run caught a real regression. Scenario 10 replied `NO_REPLY`
+in 2 of 5 runs: the coordinator handed Priya's scheduling request to `@calendar` as
+transfer-ownership. The rewrite had dropped "I compose the reply" from the calendar
+section; restoring it gave 10 of 10. Smoke: 44 of 46. Natural Language Deadlines is the
+known weekday-dependent date reading. Reschedule Board Chair timed out. In a 3-round A/B against PR 1's prompt it passed all 3
+rounds on both sides, with no timeouts. First attempts passed 1 of 3 here and 2 of 3 on
+PR 1, marked down on the same behaviors on both sides (marking sensitivity, the apology
+draft, proposing new times).
 
 ### Lessons so far
 
@@ -69,6 +86,14 @@ curia-deploy#276.
    done, not repeated 10× rounds. Commit a stub-coverage record only from a clean run, and
    keep the committed one when a later run is noisier. Stub a case's whole read surface
    for the object it works on at once, rather than one tool per failed run.
+8. **Check a prompt's examples against the behavior checks.** "I'll check with my research
+   team" was given as the right way to talk, and scenario 10's `no_team_voice` check fails
+   exactly that phrase. Examples are instructions too.
+9. **A clause that reads as redundant can be the anchor at its trigger.** "I compose the
+   reply" restated the borrow-then-answer definition, but it sat where scheduling requests
+   land. Without it, 2 of 5 external scheduling requests went to `@calendar` as
+   transfer-ownership. Delete a restatement only when the general rule reaches that
+   trigger, and let the A/B decide.
 
 ## Goal
 
@@ -255,8 +280,8 @@ Changes:
 
 - **Negatives:** every remaining negative becomes a positive instruction. Capitals and
   emphasis labels go.
-- **Style text:** delete "Be professional and competent", "Keep email responses concise and
-  professional" and "Ask clarifying questions freely". "Be candid…" becomes a disclosure
+- **Style text:** delete "Be professional and competent" and "Ask clarifying questions
+  freely" (PR 2 already removed "Keep email responses concise and professional"). "Be candid…" becomes a disclosure
   rule: the principal gets everything I know and the current state of things.
 - **Tighten these sections:**
   - Tasks and routines (draft C).
