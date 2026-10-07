@@ -15,6 +15,7 @@ import { createLlmCall, createLlmError } from '../../bus/events.js';
 import { createEstimateCostUsd } from './pricing.js';
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
+import { resolveTemperature } from './sampling-options.js';
 
 export class TelemetryLlmProvider implements LLMProvider {
   readonly id: string;
@@ -37,6 +38,7 @@ export class TelemetryLlmProvider implements LLMProvider {
     tools?: ToolDefinition[];
     toolResults?: ToolResult[];
     model?: string;
+    options?: Record<string, unknown>;
   }, response: Exclude<LLMResponse, { type: 'error' }> | Extract<LLMStreamEvent, { type: 'message_end' | 'tool_use' }>, latencyMs: number): Promise<void> {
     try {
       const promptHash = createHash('sha256')
@@ -50,6 +52,8 @@ export class TelemetryLlmProvider implements LLMProvider {
         ? JSON.stringify(response.toolCalls)
         : response.content;
       const responseHash = createHash('sha256').update(responseText).digest('hex');
+      // Same resolver the providers use — null means the request omitted temperature.
+      const temperature = resolveTemperature(params.options, this.logger) ?? null;
 
       const event = createLlmCall({
         agentId: `system:${this.serviceId}`,
@@ -66,6 +70,7 @@ export class TelemetryLlmProvider implements LLMProvider {
         providerRequestId: response.provenance.providerRequestId,
         promptHash,
         responseHash,
+        temperature,
         parentEventId: 'system',
         archive: {
           prompt: {

@@ -310,6 +310,84 @@ describe('AnthropicProvider — prompt caching', () => {
   });
 });
 
+describe('AnthropicProvider — temperature', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+    mockStream.mockReset();
+    mockCreate.mockResolvedValue(makeTextResponse());
+  });
+
+  it('sends temperature on chat when options.temperature is a finite number', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { temperature: 0 },
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params.temperature).toBe(0);
+  });
+
+  it('omits temperature on chat when options.temperature is unset', async () => {
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'Hello' }],
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params).not.toHaveProperty('temperature');
+  });
+
+  it('warns and omits temperature when options.temperature is non-numeric', async () => {
+    const logger = createSilentLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    const provider = new AnthropicProvider('test-key', logger, new ModelRegistry(createSilentLogger()));
+    await provider.chat({
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { temperature: 'hot' },
+    });
+
+    const params = mockCreate.mock.calls[0]![0];
+    expect(params).not.toHaveProperty('temperature');
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ temperature: 'hot' }),
+      expect.stringContaining('non-numeric options.temperature'),
+    );
+  });
+
+  it('sends temperature on the streaming path when set', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } },
+    ], makeTextResponse()));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await collectStream(provider.stream({
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'Hello' }],
+      options: { temperature: 0 },
+    }));
+
+    const params = mockStream.mock.calls[0]![0];
+    expect(params.temperature).toBe(0);
+  });
+
+  it('omits temperature on the streaming path when unset', async () => {
+    mockStream.mockReturnValue(makeStream([
+      { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } },
+    ], makeTextResponse()));
+    const provider = new AnthropicProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    await collectStream(provider.stream({
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'Hello' }],
+    }));
+
+    const params = mockStream.mock.calls[0]![0];
+    expect(params).not.toHaveProperty('temperature');
+  });
+});
+
 describe('AnthropicProvider — stream', () => {
   beforeEach(() => {
     mockCreate.mockReset();

@@ -176,8 +176,20 @@ describe('OutboundLlmJudge', () => {
   it('publishes one llm.call telemetry event on a successful verdict', async () => {
     const { judge, bus } = makeJudge(providerReturning(textResponse('{"leak": false, "reason": ""}')));
     await judge.review(MIXED_INPUT);
-    const calls = (bus as unknown as { published: Array<{ type: string }> }).published.filter((e) => e.type === 'llm.call');
+    const calls = (bus as unknown as { published: Array<{ type: string; payload?: { temperature?: number | null } }> }).published.filter((e) => e.type === 'llm.call');
     expect(calls).toHaveLength(1);
+    expect(calls[0]?.payload?.temperature).toBe(0);
+  });
+
+  it('requests temperature 0 so the provider builds a deterministic verdict call (#2038)', async () => {
+    const provider = providerReturning(textResponse('{"leak": false, "reason": ""}'));
+    const { judge } = makeJudge(provider);
+    await judge.review(MIXED_INPUT);
+    expect(provider.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ temperature: 0 }),
+      }),
+    );
   });
 
   it('does NOT publish telemetry when unreachable (no model response)', async () => {

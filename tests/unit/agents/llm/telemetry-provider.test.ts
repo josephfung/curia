@@ -13,6 +13,43 @@ import { createSilentLogger } from '../../../../src/logger.js';
 import type { LLMProvider, LLMStreamEvent } from '../../../../src/agents/llm/provider.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
 
+describe('TelemetryLlmProvider — llm.call temperature', () => {
+  it('records temperature 0 when the caller set it, and null when unset (#2038)', async () => {
+    const inner: LLMProvider = {
+      id: 'anthropic',
+      chat: vi.fn(async () => ({
+        type: 'text' as const,
+        content: 'ok',
+        usage: { inputTokens: 1, outputTokens: 1, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'm', actualModel: 'm', providerRequestId: 'r' },
+      })),
+    };
+    const publish = vi.fn();
+    const bus = { publish } as unknown as EventBus;
+    const provider = new TelemetryLlmProvider(
+      inner,
+      bus,
+      createSilentLogger(),
+      'drift-detector',
+      new ModelRegistry(createSilentLogger()),
+    );
+
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'm',
+      options: { temperature: 0 },
+    });
+    expect(publish.mock.calls[0]![1].payload.temperature).toBe(0);
+
+    publish.mockClear();
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'm',
+    });
+    expect(publish.mock.calls[0]![1].payload.temperature).toBeNull();
+  });
+});
+
 describe('TelemetryLlmProvider — stream cleanup propagation', () => {
   it('runs the inner stream finally when the consumer stops iterating early (#1651)', async () => {
     let innerCleanedUp = false;

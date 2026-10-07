@@ -290,6 +290,8 @@ export class EscalationJudge {
         providerRequestId: result.provenance.providerRequestId,
         promptHash: createHash('sha256').update(userPrompt).digest('hex'),
         responseHash: createHash('sha256').update(result.content).digest('hex'),
+        // Matches options.temperature on the chat() call above (deterministic verdict).
+        temperature: 0,
         parentEventId: 'system',
         archive: {
           prompt: {

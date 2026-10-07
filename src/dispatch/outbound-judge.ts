@@ -266,6 +266,8 @@ export class OutboundLlmJudge implements OutboundJudge {
         providerRequestId: provenance.providerRequestId,
         promptHash,
         responseHash,
+        // Matches options.temperature on the chat() call above (deterministic verdict).
+        temperature: 0,
         parentEventId: 'system',
         archive: {
           prompt: {

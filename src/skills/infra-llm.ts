@@ -205,6 +205,8 @@ export class InfraLlmService {
         providerRequestId: provenance.providerRequestId,
         promptHash,
         responseHash,
+        // Infra extract calls do not set temperature — record the omission.
+        temperature: null,
         parentEventId: scope.taskEventId ?? 'system',
         archive: {
           prompt: image

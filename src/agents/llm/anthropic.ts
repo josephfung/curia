@@ -18,6 +18,7 @@ import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvena
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
+import { resolveTemperature } from './sampling-options.js';
 
 export class AnthropicProvider implements LLMProvider {
   id = 'anthropic';
@@ -144,6 +145,13 @@ export class AnthropicProvider implements LLMProvider {
         : undefined,
       messages: conversationMessages,
     };
+
+    // Forward a finite caller temperature; omit the key otherwise so the
+    // upstream model keeps its default (judges pass 0 for stable verdicts).
+    const temperature = resolveTemperature(options, this.logger);
+    if (temperature !== undefined) {
+      createParams.temperature = temperature;
+    }
 
     // Only attach the tools array when tools are provided — the API rejects
     // an empty tools array, so we omit the key entirely when there are none.
