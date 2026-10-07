@@ -1663,7 +1663,9 @@ export class OutboundGateway {
   /**
    * Resolve a send skill's recipient reference — a contact UUID or the alias
    * `principal` — to the address on that contact's verified, active identity
-   * for `channel` (#2033, ADR-047). Fails closed with an agent-facing error.
+   * for `channel` (#2033, ADR-047). `value` may carry a `#label` hint
+   * (`principal#personal`); it is part of the string, so every caller resolves
+   * the same identity (#2047). Fails closed with an agent-facing error.
    *
    * The principal's contact ID comes from the hot-reloaded identity snapshot
    * (verified + active rows only), so the alias has no target when the

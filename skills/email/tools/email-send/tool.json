@@ -1,13 +1,13 @@
 {
   "name": "email-send",
-  "description": "Send a new email. to and cc take a contact ID, or \"principal\" for the principal; you choose the person and the address comes from their verified identities. Emails are sent from the agent's configured email address. Pass account only together with reply_to_message_id, to read and send a threaded reply from that mailbox. A new email always goes from the primary account.",
-  "version": "1.4.0",
+  "description": "Send a new email. to and cc take a contact ID, or \"principal\" for the principal; you choose the person and the address comes from their verified identities. A #label (principal#personal, or on each cc entry) is a hint for which labelled identity, not an address. Emails are sent from the agent's configured email address. Pass account only together with reply_to_message_id, to read and send a threaded reply from that mailbox. A new email always goes from the primary account.",
+  "version": "1.5.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
-    "to": "string? (contact ID, or \"principal\". Pass to or to_address, not both)",
+    "to": "string? (contact ID or \"principal\", optional #label hint such as principal#personal — a hint, not an address. Pass to or to_address, not both)",
     "to_address": "string? (email address, only for someone with no contact record)",
-    "cc": "string? (comma-separated contact IDs or \"principal\")",
+    "cc": "string? (comma-separated contact IDs or \"principal\", each with an optional #label hint such as the contact ID plus #work — a hint, not an address)",
     "cc_addresses": "string? (comma-separated addresses of people with no contact record)",
     "subject": "string",
     "body": "string",
@@ -20,6 +20,8 @@
   "outputs": {
     "message_id": "string",
     "to": "string",
+    "to_identity": "string? (label of the address used for a reference to, or \"primary\" or \"unlabelled\")",
+    "cc_identities": "string[]? (same, one per cc reference, in order; cc_addresses are not included)",
     "subject": "string"
   },
   "permissions": [],

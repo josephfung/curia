@@ -1,11 +1,11 @@
 {
   "name": "signal-send",
-  "description": "Send a Signal message to a person or a group (by group ID). recipient takes a contact ID, or \"principal\" for the principal; you choose the person and the number comes from their verified Signal identity. For group sends, all group members must be verified contacts; unverified groups are refused with a list of which members need verification.",
-  "version": "1.2.0",
+  "description": "Send a Signal message to a person or a group (by group ID). recipient takes a contact ID, or \"principal\" for the principal; you choose the person and the number comes from their verified Signal identity. A #label (principal#personal) is a hint for which labelled identity, not a phone number. For group sends, all group members must be verified contacts; unverified groups are refused with a list of which members need verification.",
+  "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
-    "recipient": "string? (contact ID, or \"principal\")",
+    "recipient": "string? (contact ID or \"principal\", optional #label hint such as principal#personal — a hint, not a phone number)",
     "recipient_number": "string? (E.164 number, only for someone with no contact record)",
     "group_id": "string?",
     "message": "string",
@@ -13,6 +13,7 @@
   },
   "outputs": {
     "delivered_to": "string",
+    "recipient_identity": "string? (label of the number used for a reference, or \"primary\" or \"unlabelled\")",
     "channel": "string"
   },
   "permissions": [],

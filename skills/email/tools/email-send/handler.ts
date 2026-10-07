@@ -6,8 +6,9 @@
 //
 // Recipients are references by default (#2033, ADR-047): `to` and `cc` take a
 // contact ID or "principal", and the gateway looks the address up from that
-// contact's verified identities. `to_address` and `cc_addresses` are the
-// deliberate raw path, for people with no contact record.
+// contact's verified identities. A `#label` hint (`principal#personal`, or on
+// each cc entry) asks for that labelled identity (#2047). `to_address` and
+// `cc_addresses` are the deliberate raw path, for people with no contact record.
 //
 // sensitivity: "elevated" — enforced by the gateway's security pipeline.
 
@@ -62,11 +63,13 @@ async function resolveReferenceList(
   field: string,
   rawField: string,
   log: ToolContext['log'],
-): Promise<{ addresses: string[]; contactIds: Array<string | undefined> } | { error: string }> {
+): Promise<{ addresses: string[]; contactIds: Array<string | undefined>; identityNames: string[] } | { error: string }> {
   const addresses: string[] = [];
   // Undefined for the alias: the principal's contact ID stays out of the model's
   // context (spec 09). Only a UUID the agent passed is echoed back.
   const contactIds: Array<string | undefined> = [];
+  // Parallel to addresses: the label, or "primary" / "unlabelled". Never an address.
+  const identityNames: string[] = [];
   for (const entry of new Set(splitList(raw))) {
     const resolved = await gateway.resolveRecipientReference('email', entry, { field, rawField });
     if (!resolved.ok) return { error: resolved.error };
@@ -81,8 +84,9 @@ async function resolveReferenceList(
     if (addresses.includes(resolved.identifier)) continue;
     addresses.push(resolved.identifier);
     contactIds.push(resolved.kind === 'contact' ? resolved.contactId : undefined);
+    if (resolved.identityName) identityNames.push(resolved.identityName);
   }
-  return { addresses, contactIds };
+  return { addresses, contactIds, identityNames };
 }
 
 export class EmailSendHandler implements ToolHandler {
@@ -183,17 +187,21 @@ export class EmailSendHandler implements ToolHandler {
     // Resolve references to addresses (#2033). Every failure is closed: no send.
     let toAddresses = rawToAddresses;
     let toContactId: string | undefined;
+    let toIdentity: string | undefined;
     if (to) {
       const resolved = await resolveReferenceList(ctx.outboundGateway, to, 'to', 'to_address', ctx.log);
       if ('error' in resolved) return { success: false, error: resolved.error };
       toAddresses = resolved.addresses;
       toContactId = resolved.contactIds[0];
+      toIdentity = resolved.identityNames[0];
     }
     let ccAddresses: string[] = [...rawCcAddresses];
+    let ccIdentities: string[] = [];
     if (cc) {
       const resolved = await resolveReferenceList(ctx.outboundGateway, cc, 'cc', 'cc_addresses', ctx.log);
       if ('error' in resolved) return { success: false, error: resolved.error };
       ccAddresses = [...resolved.addresses, ...ccAddresses];
+      ccIdentities = resolved.identityNames;
     }
 
     // When replying, fetch the original message and append a quoted copy below
@@ -291,6 +299,8 @@ export class EmailSendHandler implements ToolHandler {
           // The resolved address. Reply-lock and the activity log read this field.
           to: toAddresses.join(', '),
           ...(toContactId ? { contact_id: toContactId } : {}),
+          ...(toIdentity ? { to_identity: toIdentity } : {}),
+          ...(ccIdentities.length > 0 ? { cc_identities: ccIdentities } : {}),
           subject,
         },
       };

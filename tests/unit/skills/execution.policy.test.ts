@@ -3432,6 +3432,7 @@ describe('approval trigger on gate block', () => {
       ['an address in to', 'email-send', { to: 'bob@example.com', subject: 'x', body: 'y' }, /to takes a contact ID or "principal"/],
       ['a template token in to', 'email-send', { to: '${principal_contact_id}', subject: 'x', body: 'y' }, /Unresolved template placeholder/],
       ['a reference in to_address', 'email-send', { to_address: 'principal', subject: 'x', body: 'y' }, /to_address takes an address/],
+      ['a labelled reference in to_address', 'email-send', { to_address: 'principal#personal', subject: 'x', body: 'y' }, /to_address takes an address/],
       ['a reference in recipient_number', 'signal-send', { recipient_number: 'principal', message: 'm' }, /recipient_number takes an address/],
       ['a UUID matching no contact', 'email-send', { to: '00000000-0000-4000-8000-000000000000', subject: 'x', body: 'y' }, /No contact has ID/],
     ])('refuses %s without filing an approval', async (_label, tool, input, message) => {
@@ -3450,6 +3451,50 @@ describe('approval trigger on gate block', () => {
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toMatch(/Too many recipients/);
       expect(trigger.request).not.toHaveBeenCalled();
+    });
+
+    it('refuses an ambiguous label hint without filing an approval (#2047)', async () => {
+      const id = '55555555-5555-4555-8555-555555555555';
+      const identity = (address: string, label: string, createdAt: string): ChannelIdentity => ({
+        id: `id-${address}`,
+        contactId: id,
+        channel: 'email',
+        channelIdentifier: address,
+        label,
+        verified: true,
+        verifiedAt: new Date(),
+        status: 'active',
+        source: 'ceo_stated',
+        createdAt: new Date(createdAt),
+        updatedAt: new Date(createdAt),
+      });
+      const contactService = {
+        getContactWithIdentities: vi.fn(async (cid: string) => (cid === id
+          ? {
+            contact: { id, displayName: 'Pat Vendor', primaryEmail: 'pat.work@hint.test', primaryPhone: null, tier: 'known' },
+            identities: [
+              identity('pat.home@hint.test', 'personal', '2020-01-01T00:00:00.000Z'),
+              identity('pat.work@hint.test', 'work', '2020-06-01T00:00:00.000Z'),
+            ],
+          }
+          : undefined)),
+      } as unknown as ContactService;
+      const { layer, handler, trigger } = layerWithTrigger(contactService);
+      const result = await layer.invoke(
+        'email-send',
+        { to: `${id}#office`, subject: 'x', body: 'y' },
+        undefined,
+        { taskEventId: 'task-1' },
+      );
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/does not identify exactly one/);
+        expect(result.error).toMatch(/omit the label to use the primary/);
+        expect(result.error).not.toContain('pat.home@hint.test');
+        expect(result.error).not.toContain('pat.work@hint.test');
+      }
+      expect(trigger.request).not.toHaveBeenCalled();
+      expect(handler.execute).not.toHaveBeenCalled();
     });
 
     it('classifies a contact-store outage as DATABASE_UNAVAILABLE', async () => {

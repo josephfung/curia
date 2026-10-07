@@ -39,10 +39,29 @@ Alternatives considered:
 - **Only verified, active identities on the skill's channel count,** and only in a shape that channel can send to. A Signal ACI UUID or an Enterprise Grid `W…` Slack id is skipped rather than chosen. `sms` matches `sms` identities only, not the CRM `phone` channel, which is the same rule the gateway uses to recognise the principal on SMS.
 - **A blocked contact is refused.** The gateway checks the To recipient's tier, not each cc, so the resolver refuses first.
 - **The contact's primary is used when it is one of those identities** (`primary_email` for email, `primary_phone` for Signal and SMS). Otherwise the oldest usable identity. A primary that is unverified or inactive is ignored. Sending to another verified address of the right person is a far smaller error than pushing the model back to typing one.
+- **A label hint names one of them** (`principal#personal`, or `<contact-id>#work`, including each entry of `cc`). See below.
 - **Every failure is closed and says what is missing:** a mistyped alias, a UUID that matches no contact, a contact with no verified identity on the channel. An unverified address is never echoed back, so the model is not handed something to retype.
 - **`principal` resolves to the principal's contact ID from the hot-reloaded identity snapshot,** which holds verified, active rows only. A UUID that happens to be the principal's resolves the same way and unlocks nothing more. The prompts name only the alias, and a send by alias does not return the contact ID in its result (only a UUID the agent passed is echoed back as `contact_id`).
 
 The important property is how errors fail. A corrupted reference finds no contact and sends nothing. A corrupted address sends to whoever owns it.
+
+### A label hint selects one address (#2047)
+
+Without a hint there is no way to reach a secondary address except the raw field, which is the transcription path this ADR removes. The hint is the text after the first `#` on a reference. A blank hint is no hint. A separate `to_label` field was rejected: `cc` is a list, and a side field can be applied to the wrong entry or dropped by one of the callers. The hint travels inside the string the skill, the pre-gate check, Gate C and the approval display already pass to the resolver, so they cannot choose different addresses.
+
+The hint is matched only against labels an agent can see. That is the principal block's rule (`visibleIdentityLabel`): trimmed, newlines removed, at most 40 characters, and a label containing `@` or a run of 7 digits is not a label. A hidden label cannot be selected, and it is not quoted in an error, so the model is not handed an address to retype.
+
+Matching is case-insensitive. Exact matches win. If none is exact, a label matches when every token of the hint is a token of the label, where a token is a run of letters or numbers. `work` matches `work email` and not `homework`.
+
+| Situation | Result |
+|---|---|
+| No hint | Unchanged: the primary, otherwise the oldest |
+| One match | That identity |
+| No candidate has a visible label | The default pick. Not an error, including a single unlabelled address |
+| Any visible label, and the hint matches none — including when some addresses are unlabelled | Nothing is sent |
+| More than one match | Nothing is sent |
+
+An unlabelled address next to labelled ones is a conflict rather than the default. It might have been the address meant, and the error lists it as unlabelled so the agent can retry with no hint. The error lists every candidate by visible label, flags the primary, and says to retry with one listed label or omit the label to use the primary (or the oldest, when none of the candidates is the primary). It contains no address. The success result names the identity used: its visible label, or `primary`, or `unlabelled`.
 
 ### The raw path is separate and deliberate
 
@@ -77,7 +96,7 @@ Option A is not added. What send-by-reference does not cover:
 - **Breaking change to four `tool.json` input surfaces.** `to`, `cc` and `recipient` no longer accept addresses. A pending approval stored before the deploy with an address in `to` fails when approved, and the error points at `to_address`. That window is 48 hours.
 - Success payloads are unchanged (`to`, `delivered_to` carry the resolved address, which reply-lock and the activity log read) and gain `contact_id` when the agent passed a contact UUID.
 - A contact the gateway created after a cold send has an unverified identity, so a later send to it by reference fails closed. The agent uses the raw field again, or the principal verifies the address. #2040 covers whether an inbound reply should verify it.
-- Raw-address paths remain: the four raw fields, and `email-draft-save` with `send-draft`. #2041 decides whether to retire them.
+- Raw-address paths remain: the four raw fields, and `email-draft-save` with `send-draft`. #2041 decides whether to retire them. A secondary address of a known contact can be reached with a label hint, so retiring the raw fields no longer removes that ability.
 - A send by reference costs a contact read before the gates and another in the skill, plus one more if an approval is filed.
 - An approval resolves the reference again when it runs, up to 48 hours later. If the contact's primary changed in between, the send goes to the contact's new address, which is another verified address of the same person.
 - Contacts the gateway created before this change still carry `ceo_stated` and verified identities. Relabelling them is a data change, left to the operator.

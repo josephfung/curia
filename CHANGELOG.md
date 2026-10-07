@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Send skills** — a label hint selects a contact's secondary address; an ambiguous hint sends nothing. (#2047)
 - **LLM call archive** — `includeReasoning` drops reasoning text without disabling the archive. (#2042)
 - **ADR-047** — send skills address recipients by contact reference; a near-miss principal check is rejected. (#2033)
 - **`tool.json` (public API)** — optional `optional_capabilities`: injected when configured, never a reason to refuse. (#2024)
