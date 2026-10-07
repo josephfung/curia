@@ -169,13 +169,13 @@ describeIf('test-mode stack', () => {
       const opts = { agentId: 'coordinator', channelId: 'cli', conversationId: 'test-mode-no-send' };
       const email = await stack.executionLayer.invoke(
         'email-send',
-        { to: 'someone@example.com', subject: 'Hi', body: 'Hello' },
+        { to: 'principal', subject: 'Hi', body: 'Hello' },
         undefined,
         opts,
       );
       const signal = await stack.executionLayer.invoke(
         'signal-send',
-        { recipient: '+15555550123', message: 'Hello' },
+        { recipient: 'principal', message: 'Hello' },
         undefined,
         opts,
       );
@@ -195,7 +195,7 @@ describeIf('test-mode stack', () => {
       // credentials, never through the gateway.
       const result = await stack.executionLayer.invoke(
         'ceo-inbox-draft-compose',
-        { to: 'someone@example.com', subject: 'Hi', body: 'Hello' },
+        { to: 'principal', subject: 'Hi', body: 'Hello' },
         undefined,
         { agentId: 'ceo-inbox', channelId: 'cli', conversationId: 'test-mode-no-send' },
       );

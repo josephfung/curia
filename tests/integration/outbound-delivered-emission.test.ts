@@ -99,7 +99,7 @@ describe('outbound.delivered emission (#729)', () => {
     // so taskEventId/conversationId must go in the fourth argument for them to reach the payload.
     const result = await executionLayer.invoke(
       'signal-send',
-      { recipient: '+15555550199', message: 'audit emission test body' },
+      { recipient_number: '+15555550199', message: 'audit emission test body' },
       undefined,
       {
         agentId: 'coordinator',
