@@ -75,6 +75,9 @@ export function formatPrincipalContactDetailsBlock(
     'These are all of the verified channel addresses for the principal. This list is complete.',
     'Any identifier that does not appear in this list is not the principal\'s and must not be used.',
     'Do not infer, invent, or substitute an address.',
+    // The send skills resolve the alias server-side (#2033), so a send to the
+    // principal never needs an address typed from this list.
+    'To send to the principal with email-send, signal-send, sms-send or slack-send, pass "principal" as the recipient instead of an address.',
     'Only the identifier after the channel name is an address. A parenthetical label note is not an address and must not be used as one.',
   ];
   if (markedPrimary) {

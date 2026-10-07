@@ -16,8 +16,8 @@
 // The async task deliberately does NOT forward liveTurn — crossing the async
 // boundary must not preserve the elevated self-approval signal (#1126).
 // channelId is 'internal' so agent.response is not auto-relayed to voice TTS;
-// the coordinator reaches the principal via signal-send / email-send using
-// the injected Principal Contact Details block.
+// the coordinator reaches the principal via signal-send / email-send with
+// "principal" as the recipient (#2033).
 //
 // Idempotent: a process-local map keyed by (conversation + brief + channel)
 // returns the prior task_event_id on retry instead of spawning duplicates.
@@ -97,7 +97,7 @@ function buildTaskContent(brief: string, followUpChannel: string, sourceConversa
   return [
     'Voice async off-ramp — the principal asked you during a live voice call to handle',
     'the following asynchronously. Complete the work, then reach the principal on',
-    `${followUpChannel} using ${channelSkill} and their Principal Contact Details.`,
+    `${followUpChannel} with ${channelSkill}, passing "principal" as the recipient.`,
     'Do not try to reply on the voice channel.',
     '',
     '## Brief',

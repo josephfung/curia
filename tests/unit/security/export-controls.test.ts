@@ -211,6 +211,9 @@ describe('extractDestinationFromInput', () => {
       .toEqual({ kind: 'email', address: 'principal' });
     expect(extractDestinationFromInput('signal-send', { recipient_number: '+15551234567' }))
       .toEqual({ kind: 'signal', address: '+15551234567' });
+    // A blank reference field does not hide the raw one.
+    expect(extractDestinationFromInput('email-send', { to: '  ', to_address: 'new@cold.example' }))
+      .toEqual({ kind: 'email', address: 'new@cold.example' });
   });
 });
 

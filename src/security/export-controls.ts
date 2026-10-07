@@ -380,6 +380,11 @@ export function extractExportItemsFromInput(
   return [];
 }
 
+/** The first value that is a non-blank string, else the second (#2033 field pairs). */
+function presentOr(reference: unknown, raw: unknown): unknown {
+  return typeof reference === 'string' && reference.trim() ? reference : raw;
+}
+
 /** Derive the export destination from skill input. */
 export function extractDestinationFromInput(
   toolName: string,
@@ -388,7 +393,9 @@ export function extractDestinationFromInput(
   if (GATEWAY_ATTACHMENT_TOOLS.has(toolName)) {
     // email-send: `to` is a contact reference (shown as written; the gateway's own
     // export gate sees the resolved address) and `to_address` the raw path (#2033).
-    const to = input['to'] ?? input['to_address'];
+    // Same presence rule as the skill and the Gate C parser: a blank `to` does not
+    // hide `to_address`. The skill refuses both at once, so either label is display-only.
+    const to = presentOr(input['to'], input['to_address']);
     if (typeof to === 'string' && to.trim()) {
       return { kind: 'email', address: to.trim() };
     }
@@ -400,7 +407,7 @@ export function extractDestinationFromInput(
   }
 
   if (toolName === 'signal-send') {
-    const recipient = input['recipient'] ?? input['recipient_number'];
+    const recipient = presentOr(input['recipient'], input['recipient_number']);
     if (typeof recipient === 'string' && recipient.trim()) {
       return { kind: 'signal', address: recipient.trim() };
     }
