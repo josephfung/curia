@@ -2,7 +2,8 @@
 
 Part of #1954. This plan closes the epic's last open acceptance criterion: the YAML
 `system_prompt` must be at most 4k tokens under the CI budget. It then keeps going as far as
-the behavior runs allow. The placement rule is [ADR-046](../adr/046-agent-behavior-fix-placement.md).
+the behavior runs allow. The final phase carries the same lessons to the specialist prompts in
+curia and curia-deploy. The placement rule is [ADR-046](../adr/046-agent-behavior-fix-placement.md).
 Sizes and behavior runs are recorded in the [baseline log](2026-10-01-coordinator-context-baseline.md).
 
 This document is planning only. Each PR below gets its own branch and is A/B'd against
@@ -59,16 +60,16 @@ Measured on `3155f290`. "Rung" is the destination under ADR-046.
 | Section (chars) | Finding | Evidence | Rung / action |
 |---|---|---|---|
 | My team: Channel ownership (387) | Partly enforced in code | The reply-lock suppresses the coordinator's final relay once a human-facing send has reached the sender, and files it on the bullpen (`src/dispatch/reply-lock.ts`, `dispatcher.ts` `handleAgentResponse`, #1860). An extra send the coordinator makes itself is not blocked. | Replace with one clause in the transfer-ownership item |
-| Data protection (329) | Enforced in code | `src/security/export-controls.ts` (item threshold, destination allowlist, restricted block); Stage 2.5 disclosure gating; the security block's data-export threshold | 1: delete |
+| Data protection (329) | Mostly enforced in code | `src/security/export-controls.ts` covers email attachments and Google Workspace MCP exports (item threshold, destination allowlist, restricted block). Stage 2.5 gates disclosure in prose, and the security block sets a data-export threshold. The "ask when the scope is unclear" judgment has no code behind it. | 1: delete; watch for it in the A/B |
 | Reporting, second paragraph (265) | Duplicate | Every `<task_error>` carries the same rule and both exceptions (`src/errors/classify.ts`, #1546) | 2: delete |
-| Scheduling: "Decide, don't drop" (155) | Duplicate | Word for word in `skills/tasks/SKILL.md` | Delete |
+| Scheduling: "Decide, don't drop" (155) | Duplicate | `skills/tasks/SKILL.md` states the same rule in different words | Delete |
 | NO_REPLY: "Do not narrate that decision…" | Partly enforced in code | A body containing a standalone NO_REPLY is treated as a decline (`src/dispatch/no-reply.ts`); auto-generated mail never relays. Narration without the token still sends. | 2: fold into the non-principal guidance (PR 4) |
-| Addresses and accounts (329) | Stale | See Decisions; `entity-context` belongs to the unpinned `contacts` bundle | Delete |
-| Low-trust senders (203) | Stale | `contact-register` is not pinned | Delete; put a promotion hint wherever the principal is told about the sender, if needed |
+| Addresses and accounts (329) | Stale | See Decisions. `entity-context` is a standalone tool the coordinator does not pin; it can reach it only through discovery. | Delete |
+| Low-trust senders (203) | Stale | `contact-register` is not pinned. `contact-update` is pinned, but neither tool can set a tier: `contact-update` has no tier or trust field, and `contact-register`'s description says elevation is not its job. The pin comment saying `contact-update` "promotes a confirmed low-trust sender" is stale too. | Delete and fix the pin comment. If the principal needs to be able to promote a sender, that is a missing feature to file separately |
 | Calendar (742, plus 184 in Handle directly) | Mostly enforced in code | Calendar tools are restricted to other agents with `allowed_callers` (#1958) | Keep the routing line and the failure line |
 | "Resolve people through the contacts specialist" | Stated five times (~2,530) | My identity, Contact intelligence, Before composing, Addresses, Storing facts | Merge into one People section |
 | "No internals" and voice | Stated four times (~2,090) | Who I am, Outbound voice, "NEVER expose…", the task-mechanics bullet | Merge into Who I am |
-| Non-principal rules (~1,760) | Apply only on non-principal turns | NO_REPLY, "final response is the message they receive", and the two separate sends. The dispatcher already adds `non-principal-reply-shaped` on every such turn (`src/dispatch/turn-guidance-triggers.ts`). | 2: turn guidance |
+| Non-principal rules (~1,760) | Apply only on non-principal turns | NO_REPLY, "final response is the message they receive", and the two separate sends. The dispatcher already adds `non-principal-reply-shaped` on every such turn except auto-generated mail, whose own preamble already covers NO_REPLY (`src/dispatch/turn-guidance-triggers.ts`). | 2: turn guidance |
 | How to determine the audience (505) | Teaches the model to parse a line that code could state directly | `Current sender: … (principal)` in `src/agents/runtime.ts` | 2: the sender line states the audience |
 | Lower-trust channel bullet (241) | Matters only when a permission is blocked by channel trust | The AUTHORIZATION "Blocked by channel trust" line | 2: move there |
 | Transfer-ownership reply rule (732) | Matters only when an [ACTIVE OUTBOUND CONTEXT] block is present, and only principal turns get one | The `outbound-context` turn guidance already cites the rule by name | 2: move into that guidance; keep a one-line anchor |
@@ -80,7 +81,7 @@ Measured on `3155f290`. "Rung" is the destination under ADR-046.
 | Memory, Configuration, Scheduling (~4,150) | Mostly restate tool descriptions | `config-store`, `scheduler-create` / `scheduler-update` and `memory-store` descriptions | 3: tighten; move the query, owner and task-list hints into descriptions |
 | What I proactively surface (1,075) | Teaches the model to go and look | — | 2: inject a backlog line on principal turns |
 | Per-specialist routing (inbox, calendar) | The roster descriptions are operational, not about routing | ceo-inbox's roster entry is 668 chars, mostly about its 15-minute triage | Add a routing field to the roster |
-| SKILL.md: `tasks` (3.8k), `documents` (3.0k) | Much of it applies only on wakes | The Placement paragraph is already injected on wakes (`src/agents/document-placement.ts`) | 2: inject at wake time |
+| SKILL.md bodies: `tasks` (3,474), `documents` (2,679) | Much of it applies only on wakes | The Placement paragraph is already injected on wakes (`src/agents/document-placement.ts`) | 2: inject at wake time |
 
 ## Decisions (2026-10-06)
 
@@ -122,15 +123,16 @@ PR's A/B decides whether its cuts stay.
 | PR | Scope | YAML after (est.) |
 |---|---|---:|
 | 1 | Delete restated code rules and stale sections | ~18.6k |
-| 2 | Consolidate the People, Who I am and calendar text | ~14.9k (meets the epic target) |
-| 3 | Rewrite pass: positive phrasing, style text out, tighter direct-capability sections | ~10.7k |
-| 4 | Audience in code: sender line, non-principal turn guidance, reply rule, provenance | ~7.1k |
-| 5 | Principal note block on the relay | ~7.1k (the turn guidance shrinks) |
-| 6 | Move prose-only rules into code | ~6.6k |
-| 7 | Backlog line for proactive surfacing | ~6.3k |
-| 8 | Routing-oriented roster | ~5.7k (roster −~1k) |
+| 2 | Consolidate the People, Who I am and calendar text | ~15.3k (meets the epic target) |
+| 3 | Rewrite pass: positive phrasing, style text out, tighter direct-capability sections | ~11.1k |
+| 4 | Audience in code: sender line, non-principal turn guidance, reply rule, provenance | ~7.6k |
+| 5 | Principal note block on the relay | ~7.6k (the turn guidance shrinks) |
+| 6 | Move prose-only rules into code | ~7.0k |
+| 7 | Backlog line for proactive surfacing | ~6.7k |
+| 8 | Routing-oriented roster | ~6.1k (roster −~1k) |
 | 9 | Wake-only SKILL.md content moves to wake-time injection | SKILL.md −~3k |
 | 10 | Negation pass on the injected blocks | — |
+| Final phase | The same lessons applied to the specialist prompts in curia and curia-deploy | — |
 
 ### PR 1: delete restated code rules and stale sections
 
@@ -143,6 +145,8 @@ YAML-only changes:
   unless detail is requested".
 - **Replace** the Channel ownership paragraph with one clause on the transfer-ownership
   item: "their send is the one message the person gets".
+- **Fix** the stale pin comment that says `contact-update` promotes a confirmed low-trust
+  sender.
 
 Then:
 
@@ -152,7 +156,7 @@ Then:
 - **Verify:** full scenarios and smoke, as an A/B. Watch 08 and the smoke case
   "Coordinator routes long-running task with synchronous acknowledgment".
 - **Risk:** low. Everything removed is either enforced in code, repeated elsewhere, or
-  names a tool the coordinator doesn't have.
+  names a tool the coordinator doesn't pin.
 
 ### PR 2: consolidate
 
@@ -163,7 +167,8 @@ Changes:
   contradiction "the ONLY contact ID I should EVER use directly" vs "use the ID from
   `<resolved_entities>`".
 - **Who I am:** merge the four voice and no-internals statements (draft B), with no
-  quoted anti-examples.
+  quoted anti-examples. Keep a one-line signing instruction until PR 6 applies the
+  configured signature in code.
 - **Calendar:** drop the Handle-directly clause and "I never read or mutate…", which code
   enforces. Keep the routing line and the failure line.
 
@@ -174,6 +179,8 @@ Then:
     Keep its `allowed_callers` and pin assertions; drop the text slices.
   - `coordinator-cold-compose.test.ts` pins the cold-compose sentence. Keep that sentence
     word for word, or move the test to the behavior.
+  - `loader.test.ts` (#1958 block) expects `NEVER name tools, systems` and "more than one
+    agent was involved" exactly once. Draft B drops both, so update or remove those counts.
 - **Verify:**
   - Scenarios 09, 10 and 12.
   - Smoke contact cases: Ambiguous Contact Reference, Contact Briefing Delegation, and
@@ -197,7 +204,8 @@ Changes:
   - Inbox: keep the sentence that `coordinator-cold-compose.test.ts` pins.
   - Google Workspace and Capability discovery.
 - **Move hints into tool descriptions (rung 3).** The local tool definitions have about
-  2 KB of headroom under the 77,000-byte budget, so these must fit:
+  2.3 KB of headroom under the 77,000-byte budget, so these must fit. The 74,856-byte
+  figure predates `approval-expiry-sweep` being unpinned; re-measure first.
   - `memory-query` `query`: use descriptive queries, not bare names.
   - `task-create` `owner`: what ceo, curia and external mean.
   - `task-list`: call it before answering "what's open".
@@ -216,7 +224,12 @@ Changes:
 
 - **The sender line states the audience.** `(principal)` stays. A non-principal sender gets
   something like "not the principal; your final response is sent to them". CLI resolves
-  to the principal as it does today. "How to determine the audience" is deleted.
+  to the principal as it does today. "How to determine the audience" is deleted. Two cases
+  need care in `src/agents/runtime.ts`:
+  - An unresolved sender gets no `Current sender` line; it gets the LOW-TRUST block.
+  - A non-principal's descriptive role renders in the same parentheses as `(principal)`.
+
+  The audience wording has to be unambiguous in both cases.
 - **Non-principal rules move into turn guidance.**
   - NO_REPLY (including the narration point, phrased as "exactly NO_REPLY and nothing
     else"), "final response is the message they receive" and the two-separate-sends rule
@@ -236,8 +249,15 @@ Then:
 
 - **Exfiltration markers:** turn guidance is covered automatically (`TURN_GUIDANCE_TEXTS`).
   New text in the sender line or the security block is not, so decide whether it needs to be.
-- **Tests:** `tests/unit/agents/prompts/trigger-guidance.test.ts`. Scenario 11's header
-  comment cites "The transfer-ownership reply rule".
+- **Tests:**
+  - `tests/unit/agents/prompts/trigger-guidance.test.ts` caps all turn guidance rendered
+    together at 6,000 chars. Today it is about 5.5k, and draft D plus the reply rule push
+    it over. Compress first. If the cap still has to move, restate it as the worst case of
+    one real turn: `non-principal-reply-shaped` and `outbound-context` never appear
+    together. Say why in the PR.
+  - `loader.test.ts` expects `return exactly \`NO_REPLY\`` and `is **always**
+    transfer-ownership` once each. Both move out of the YAML here.
+  - Scenario 11's header comment cites "The transfer-ownership reply rule".
 - **Verify:** scenarios 01a–c, 02a–b, 03a–b, 04a–b, 07, 10 and 11, plus
   `pnpm redteam:provenance:external` and `pnpm redteam:provenance:principal` (#900).
 - **Risk:** the highest in this plan, because this is the core routing contract.
@@ -325,17 +345,63 @@ These blocks sit outside the budget but are read on every turn they appear:
 
 Same principles as PR 3.
 
+### Final phase: specialist prompts in curia and curia-deploy
+
+The coordinator is where these lessons get proven, but the specialists grew the same way,
+and several are larger than the coordinator. Approximate `system_prompt` sizes today, YAML
+only:
+
+| Repo | Agent | Chars | Tracked in |
+|---|---|---:|---|
+| curia | ceo-inbox | ~57.7k | #2025 |
+| curia | calendar | ~27.7k | #2025 |
+| curia | meeting-debrief | ~18.5k | #2025 |
+| curia | contacts | ~15.3k | #2025 |
+| curia | diagnostics | ~7.3k | — |
+| curia | research-analyst | ~4.6k | — |
+| curia | setup-wizard | ~4.3k | — |
+| curia-deploy | social-media | ~46.6k | curia-deploy#276 |
+| curia-deploy | writing-scout | ~27.7k | curia-deploy#276 |
+| curia-deploy | t2125-expense-tracker | ~18.1k | curia-deploy#276 |
+| curia-deploy | essay-editor | ~15.8k | curia-deploy#276 |
+| curia-deploy | security-triage | ~10.4k | curia-deploy#276 |
+| curia-deploy | digest | ~1.7k | — |
+
+This plan does not list that work; scope it per agent when the phase starts. What carries
+over:
+
+- **The principles above, and the same search.** Look for restated code rules, rules stated
+  more than once, quoted anti-examples, style text that overrides settings, trigger-only
+  text, and references to tools the agent doesn't pin.
+- **Behavior coverage before cuts.** Coordinator cuts are gated by `pnpm scenarios` and
+  `pnpm smoke`. Specialists have smoke cases but no scenario suite, and custom-agent tests
+  live in curia-deploy's `tests/eval`. Each agent needs enough behavior checks to run an
+  A/B before its prompt shrinks.
+- **A budget for each agent.** In curia, add a row to `AGENT_BUDGETS` in
+  `prompt-budget.test.ts` once an agent is trimmed, and count its pinned SKILL.md bodies as
+  the test does. curia-deploy needs an equivalent guard for custom agents.
+- **The audience is different.** Specialists mostly read briefs from the coordinator, not
+  messages from the principal. Their voice and audience rules differ, and some coordinator
+  moves (such as the non-principal turn guidance) don't carry over as they are.
+- **Order.** Start after the coordinator PRs, because several of them change surfaces the
+  specialists also read: the `tasks` and `documents` SKILL.md, `tool.json` descriptions,
+  and the roster field. Do ceo-inbox first: it is the largest, and it pins both skills.
+
 ## What will break along the way
 
 - **Unit tests that pin prompt text:**
-  - `tests/unit/agents/loader.test.ts` checks for `**Channel ownership.**`.
+  - `tests/unit/agents/loader.test.ts` checks for `**Channel ownership.**` (PR 1). Its #1958
+    block also requires four phrases to appear exactly once: `return exactly \`NO_REPLY\``
+    (PR 4), `is **always** transfer-ownership` (PR 3 or 4), and `NEVER name tools,
+    systems` plus "more than one agent was involved" (PR 2).
   - `coordinator-calendar-routing.test.ts` slices the prompt by heading.
   - `coordinator-cold-compose.test.ts` pins one sentence.
-  - `prompts/trigger-guidance.test.ts` pins turn-guidance text.
+  - `prompts/trigger-guidance.test.ts` pins turn-guidance text, and caps all of it
+    together at 6,000 chars (PR 4).
 - **Exfiltration markers.** They are built from `system_prompt` lines
   (`src/dispatch/prompt-exfiltration-markers.ts`). Text moved to turn guidance stays
   covered; text moved to code-owned blocks or tool descriptions does not.
-- **Tool-definition headroom** is about 2 KB. Rung-3 moves must fit or be offset.
+- **Tool-definition headroom** is about 2.3 KB. Rung-3 moves must fit or be offset.
 - **Shared text.** The `tasks` and `documents` SKILL.md files and the `tool.json`
   descriptions are shared with other agents.
 - **Every PR** needs an agent `version` bump (patch for prompt changes) and a CHANGELOG
@@ -364,7 +430,7 @@ everyone I name, and ask the principal for details only as a last resort. If a b
 fails, I tell the principal and retry, and act once I have the ID.
 ```
 
-**B. Who I am** (~760 chars, replaces ~2,090; the signing line moves to code)
+**B. Who I am** (~790 chars, replaces ~2,090; PR 6 removes the last sentence once the signature is applied in code)
 
 ```
 ## Who I am
@@ -376,7 +442,7 @@ plain language ("I've split this into a few parts; I'll report back in about 15
 minutes"); tools, agents, systems, IDs, file paths and task mechanics stay out of them,
 the principal's included. Asked how I work, I say briefly that I'm an AI assistant with
 access to their contacts, email and a research team. When something fails, anyone but the
-principal simply hears that I'll follow up.
+principal simply hears that I'll follow up. I sign emails with my name and title.
 ```
 
 **C. Tasks and routines** (~500 chars, replaces 1,545)
