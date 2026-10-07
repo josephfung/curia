@@ -35,8 +35,8 @@ directives. `loader.test.ts` gained four "does not restate" rows instead of the
 Behavior held:
 - **Scenarios:** every case passed on behavior. The only gate failure was an unstubbed
   `inspect_doc_structure` call in `google file filing after delegation`, which also
-  happens on main's prompt. PR 1 also closes that hole. Case 13a now stubs every lookup
-  the coordinator reached for, and 10 runs then made no refused calls.
+  happens on main's prompt. PR 1 also closes that hole: case 13a now stubs every read-only
+  Drive and Docs tool that can touch its Doc.
 - **Smoke:** 44 of 46. Both failures passed 4 of 4 rounds on each side in the A/B.
 
 ### Lessons so far
@@ -64,6 +64,11 @@ curia-deploy#276.
    below-threshold results in PR 1's full runs either recurred on main's prompt or
    disappeared on rerun. That matches #1958–#2024. Budget a targeted A/B (about 30 minutes,
    under $2) into every PR rather than reading a single red run.
+7. **Size the verification to the change.** A full A/B is for prompt cuts. A moved heading
+   or a lazily loaded reference needs the unit tests and the one full-suite run already
+   done, not repeated 10× rounds. Commit a stub-coverage record only from a clean run, and
+   keep the committed one when a later run is noisier. Stub a case's whole read surface
+   for the object it works on at once, rather than one tool per failed run.
 
 ## Goal
 
