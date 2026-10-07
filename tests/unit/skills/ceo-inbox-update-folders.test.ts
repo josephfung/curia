@@ -40,7 +40,9 @@ function mockNylas(opts: {
     const url = String(input);
     const method = (init?.method ?? 'GET').toUpperCase();
 
-    if (url.endsWith('/folders') && method === 'GET') {
+    // listFolders pages with ?limit=&page_token=, so the path is not a suffix of the URL.
+    const folderPath = new URL(url).pathname;
+    if (folderPath.endsWith('/folders') && method === 'GET') {
       return jsonResponse(folders);
     }
     if (url.endsWith('/folders') && method === 'POST') {

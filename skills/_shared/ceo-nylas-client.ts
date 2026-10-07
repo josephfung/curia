@@ -7,6 +7,9 @@ const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
 
 // Nylas guidance: requests with limit > 20 on list endpoints trigger concurrent-user 429s.
 export const NYLAS_MAX_LIST_LIMIT = 20;
+// Ceiling for listFolders. Nylas pages folders (default 50); a cursor that never
+// ends must not loop. 500 is the same scan cap listAllDrafts uses.
+const FOLDER_SCAN_LIMIT = 500;
 // Maximum number of retry attempts for 429 / 5xx responses before giving up.
 const NYLAS_MAX_RETRIES = 3;
 // Base backoff delay in ms — doubles each attempt (plus ±25% jitter).
@@ -471,9 +474,30 @@ export class CeoNylasClient {
   // ── Folders ─────────────────────────────────────────────────────────────
 
   async listFolders(): Promise<NylasFolder[]> {
-    const url = `${this.baseUrl}/folders`;
-    const data = await this.request<NylasApiFolder[]>('GET', url, 'listFolders');
-    return data.map((f) => ({ id: f.id, name: f.name ?? '' }));
+    const folders: NylasFolder[] = [];
+    let pageToken: string | undefined;
+
+    for (;;) {
+      const params = new URLSearchParams();
+      params.set('limit', String(NYLAS_MAX_LIST_LIMIT));
+      if (pageToken) params.set('page_token', pageToken);
+      const url = `${this.baseUrl}/folders?${params}`;
+      const { data, nextCursor } = await this.requestWithCursor<NylasApiFolder[]>('GET', url, 'listFolders');
+      folders.push(...data.map((f) => ({ id: f.id, name: f.name ?? '' })));
+
+      // An empty page with a cursor would otherwise spin forever.
+      if (data.length === 0 || !nextCursor) break;
+      if (folders.length >= FOLDER_SCAN_LIMIT) {
+        this.log.warn(
+          { cap: FOLDER_SCAN_LIMIT },
+          'nylas: listFolders hit the scan cap with more pages remaining',
+        );
+        break;
+      }
+      pageToken = nextCursor;
+    }
+
+    return folders;
   }
 
   async createFolder(name: string): Promise<NylasFolder> {
