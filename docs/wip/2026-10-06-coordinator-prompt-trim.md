@@ -94,6 +94,10 @@ curia-deploy#276.
    land. Without it, 2 of 5 external scheduling requests went to `@calendar` as
    transfer-ownership. Delete a restatement only when the general rule reaches that
    trigger, and let the A/B decide.
+10. **When merging lists, keep catch-alls as catch-alls.** Folding "contacts CRUD belongs to
+    the contacts specialist" into a list of named operations left renames, identity links
+    and permissions without a route, and the contacts tools are discoverable. The PR 2
+    review caught it.
 
 ## Goal
 
