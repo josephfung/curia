@@ -136,7 +136,9 @@ seeded rows, stubs, model calls and spend are found through its own case context
 2. **Send** the inbound through production's Dispatcher, which resolves the sender,
    injects `[ACTIVE OUTBOUND CONTEXT]` and builds the `agent.task`. Bullpen cases instead
    post on the thread and publish `agent.discuss`, which production's `BullpenDispatcher`
-   turns into the coordinator's task.
+   turns into the coordinator's task. Scheduler cases publish the `agent.task` a
+   recurring job with no linked task fires: channel `scheduler`, content
+   `{"task": <content>}`, no Dispatcher.
 3. **Capture** `tool.invoke` / `tool.result` and the coordinator's `agent.response` as the
    `system` layer. A `NO_REPLY` turn, or a reply Gate C holds for a non-principal, still
    ends the run. The runtime publishes an exact `NO_REPLY` as empty content with
@@ -178,7 +180,11 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
 3. **No stub, read-only tool test mode can serve:** the real tool runs (memory reads,
    `date-resolve`, `web-fetch`). A read test mode cannot serve (missing capability) is
    refused instead.
-4. **A call from another conversation** (a timed-out earlier turn) is refused.
+4. **No stub, MCP tool:** it runs. The stack serves each configured MCP server from a
+   tools/list snapshot (`tests/fixtures/mcp/`, #2024) with a session that returns a
+   canned "nothing to return" result and reaches no account, so its `action_risk`
+   does not matter. Stub the calls a case is about with realistic data.
+5. **A call from another conversation** (a timed-out earlier turn) is refused.
 
 This sits on top of the test-mode stack's own guarantee: a gateway with no transport
 client (spec 16). So a run cannot send, and `tests/unit/scenarios/stub-layer.test.ts`
@@ -200,7 +206,9 @@ wrong path has to be available, or the case tests a refusal instead of the model
 
 Before any paid call the CLI also checks that every tool a check names is registered (a
 typo in `not_called` would otherwise pass forever), that `called`/`order` tools are
-offered to the coordinator, and that `with`/`contains` keys are real inputs of the tool.
+offered to the coordinator or loaded by a `skill-activate` it may call (the
+google-workspace tools, #2024), and that `with`/`contains` keys are real inputs of the
+tool (for an MCP tool, its JSON Schema properties).
 The loader rejects unknown keys anywhere in a case, so `weigth:` or `checks:` is an error,
 not a silently un-gated behavior. Reply-content checks (`reply_excludes*`) miss on a
 silent reply: saying nothing is not "naming no internals".
@@ -266,7 +274,7 @@ seed:
       content: Opening message.
       mentions: []
 inbound:
-  from: principal                         # principal | bullpen | <contact key>
+  from: principal                         # principal | bullpen | scheduler | <contact key>
   channel: cli                            # principal only; default cli
   thread: brief                           # bullpen only
   content: "Yes"

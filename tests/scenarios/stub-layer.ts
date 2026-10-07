@@ -16,6 +16,8 @@
 //      judged by action_risk and by dangerous capabilities; a tool that misdeclares
 //      both is still bounded by the test-mode stack (no transport, withheld services).
 //   3. No stub, read-only tool → the real layer runs it (memory reads, date-resolve…).
+//      So does a tool the stack serves from an MCP snapshot (#2024): its session returns
+//      a canned result and reaches no account, whatever its action_risk says.
 //
 // Everything other than invoke() goes to the real layer, so tool definitions, skill
 // activation and the runtime's <task_error> formatting are production's.
@@ -50,14 +52,17 @@ const DANGEROUS_CAPABILITIES: ReadonlySet<string> = new Set([
  * True when an unstubbed call to `toolName` must be refused rather than run.
  * `unavailable` names tools test mode cannot serve (missing capabilities): running one
  * only produces a failure production never shows, so it is refused — and counted as a
- * stub hole — instead.
+ * stub hole — instead. `inert` names tools whose real handler reaches nothing (the
+ * stack's snapshot-served MCP tools, #2024), so they run.
  */
 export function mustStub(
   toolName: string,
   registry: ToolRegistry,
   unavailable: ReadonlySet<string> = new Set(),
+  inert: ReadonlySet<string> = new Set(),
 ): boolean {
   if (ALWAYS_STUB.has(toolName) || unavailable.has(toolName)) return true;
+  if (inert.has(toolName)) return false;
   const tool = registry.get(toolName);
   // Not registered: the real layer answers "not found", which is what production does.
   if (!tool) return false;
@@ -105,6 +110,7 @@ function skillError(message: string): string {
 export function createStubController(
   registry: () => ToolRegistry,
   unavailable: () => ReadonlySet<string> = () => new Set(),
+  inert: () => ReadonlySet<string> = () => new Set(),
 ): StubController {
   const runs = new Map<string, { stubs: Record<string, ToolStub[]>; calls: StubbedCall[] }>();
   let staleCalls = 0;
@@ -143,7 +149,7 @@ export function createStubController(
       return { success: true, data: structuredClone(stub.return ?? null) };
     }
 
-    if (stubs === null || mustStub(toolName, registry(), unavailable())) {
+    if (stubs === null || mustStub(toolName, registry(), unavailable(), inert())) {
       record('refused');
       return {
         success: false,

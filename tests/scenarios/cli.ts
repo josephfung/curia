@@ -79,23 +79,26 @@ const err = (line: string): void => { process.stderr.write(`${line}\n`); };
 
 /**
  * Problems that would make a case measure the harness instead of the model, found
- * before any paid call: a stub for a tool the coordinator is not offered (a typo, or a
+ * before any paid call: a stub for a tool the coordinator can never reach (a typo, or a
  * tool the registry did not load), or a `called` check on a side-effecting tool with no
  * stub — that call would always be refused, so the check could never pass for the
- * right reason.
+ * right reason. "Reach" includes tools a skill-activate call would load (#2024).
  */
 function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string[] {
   const problems: string[] = [];
   const registry = harness.stack.toolRegistry;
+  const reachable = harness.reachableTools;
+  const mustStubHere = (tool: string): boolean =>
+    mustStub(tool, registry, harness.unavailableTools, harness.inertTools);
   for (const c of cases) {
     for (const tool of c.explicitStubTools) {
-      if (!harness.coordinatorTools.has(tool)) {
-        problems.push(`${c.name}: stubs '${tool}', which the coordinator is not offered in this stack`);
+      if (!reachable.has(tool)) {
+        problems.push(`${c.name}: stubs '${tool}', which the coordinator is neither offered nor can activate in this stack`);
       }
     }
     const hasSuccessStub = (tool: string): boolean => (c.toolStubs[tool] ?? []).some(st => st.error === undefined);
     const needsStub = (tool: string): boolean =>
-      harness.coordinatorTools.has(tool) && !c.toolStubs[tool] && mustStub(tool, registry, harness.unavailableTools);
+      reachable.has(tool) && !c.toolStubs[tool] && mustStubHere(tool);
 
     for (const b of c.expectedBehaviors) {
       if (!b.check) continue;
@@ -111,15 +114,19 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
           if (!registry.get(tool)) problems.push(`${where} names '${tool}', which is not a registered tool`);
         }
         if ((check.kind === 'called' || check.kind === 'order')) {
-          for (const tool of named.filter(t => registry.get(t) && !harness.coordinatorTools.has(t))) {
-            problems.push(`${where} expects '${tool}', which the coordinator is not offered, so it can never pass`);
+          for (const tool of named.filter(t => registry.get(t) && !reachable.has(t))) {
+            problems.push(`${where} expects '${tool}', which the coordinator is neither offered nor can activate, so it can never pass`);
           }
         }
         // Argument keys must exist on the tool, or `with`/`contains` silently never match.
+        // An MCP tool's inputs are its JSON Schema properties; its manifest `inputs` is empty.
         if ((check.kind === 'called' || check.kind === 'not_called')) {
           const keys = [...Object.keys(check.with ?? {}), ...Object.keys(check.contains ?? {})];
           for (const tool of named) {
-            const inputs = registry.get(tool)?.manifest.inputs;
+            const registered = registry.get(tool);
+            const inputs = registered?.mcpInputSchema
+              ? registered.mcpInputSchema.properties ?? {}
+              : registered?.manifest.inputs;
             if (!inputs) continue;
             for (const key of keys.filter(k => !(k in inputs))) {
               problems.push(`${where}: '${key}' is not an input of ${tool} (inputs: ${Object.keys(inputs).join(', ')})`);
@@ -134,7 +141,7 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
         // would also trip the coverage gate, blaming the harness for the model's mistake.
         if (check.kind === 'not_called') {
           for (const tool of check.tools) {
-            if (harness.coordinatorTools.has(tool) && mustStub(tool, registry, harness.unavailableTools) && !hasSuccessStub(tool)) {
+            if (reachable.has(tool) && mustStubHere(tool) && !hasSuccessStub(tool)) {
               problems.push(`${where} forbids ${tool}; give it a succeeding stub so the wrong path is available`);
             }
           }

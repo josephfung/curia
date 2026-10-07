@@ -73,11 +73,6 @@ email-mark-read:
 email-archive:
   - match: {}
     return: { archived: true }
-# Test mode cannot activate skills (skill-activate is disabled there). Say so plainly
-# rather than refusing it as a stub hole; the coordinator can still delegate.
-skill-activate:
-  - match: {}
-    error: No additional skills can be activated right now.
 # Updating the task task-create above returned (any task id): the pair goes together.
 task-update:
   - match: {}

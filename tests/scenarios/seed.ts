@@ -376,9 +376,12 @@ export interface ResolvedSender {
   senderId: string;
 }
 
-export async function resolveSender(scenario: ScenarioCase, stack: TestModeStack): Promise<ResolvedSender | 'bullpen'> {
+export async function resolveSender(
+  scenario: ScenarioCase,
+  stack: TestModeStack,
+): Promise<ResolvedSender | 'bullpen' | 'scheduler'> {
   const { from, channel } = scenario.inbound;
-  if (from === 'bullpen') return 'bullpen';
+  if (from === 'bullpen' || from === 'scheduler') return from;
 
   if (from === 'principal') {
     const channelId = channel ?? 'cli';

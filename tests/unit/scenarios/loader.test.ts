@@ -76,10 +76,16 @@ describe('loadScenarioCase', () => {
     expect(c.expectedBehaviors[1]).toEqual({ id: 'silent', description: 'does not answer directly', weight: 'important' });
   });
 
+  it('loads a scheduler inbound (#2024)', () => {
+    const c = loadScenarioCase(write('s.yaml', VALID.replace('from: principal', 'from: scheduler')));
+    expect(c.inbound).toMatchObject({ from: 'scheduler', content: 'Yes' });
+  });
+
   it.each([
     ['a placeholder for an unseeded entry', VALID.replace('{{entry:offsite}}', '{{entry:missing}}'), /names no seeded entry/],
     ['an unknown placeholder kind', VALID.replace('{{entry:offsite}}', '{{job:x}}'), /unknown placeholder/],
-    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen or a seeded contact/],
+    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen, scheduler or a seeded contact/],
+    ['a scheduler inbound with a channel', VALID.replace('from: principal', 'from: scheduler\n  channel: signal'), /takes only 'content'/],
     ['a stub with both return and error', VALID.replace("error: wrong specialist", "error: x\n      return: {}"), /exactly one of 'return' or 'error'/],
     ['a check with two kinds', VALID.replace('max: 1', 'max: 1\n      not_called: [email-send]'), /exactly one of/],
     ['an invalid weight', VALID.replace('weight: critical', 'weight: urgent'), /invalid weight/],
