@@ -108,6 +108,12 @@ export interface AgentPinCatalog {
   localPinnedTools: string[];
   /** MCP servers pinned by name. Membership is the live set in the archive. */
   mcpServers: string[];
+  /**
+   * Every MCP server in config/skills.yaml. An agent can load a server's tools with
+   * skill-activate without pinning it (the coordinator and google-workspace, #2024),
+   * so a non-local tool in the archive is charged to these when nothing is pinned.
+   */
+  configuredMcpServers: string[];
   /** Pins that matched neither a bundle, a local tool, nor an MCP server. */
   unresolvedPins: string[];
   /** Pinned bundle members with no on-disk tool.json. Still treated as local. */
@@ -157,6 +163,10 @@ export interface AgentContextReport {
   inputTokens: Distribution;
   tiers: TierSummary[];
   invocations: ToolUsage[];
+  /** agent.task events in the window: what "share of tasks" is a share of. */
+  tasks: number;
+  /** Per skill, the tasks that called skill-activate for it at least once (#2024). */
+  skillActivations: Array<{ skill: string; tasks: number }>;
   pinnedZeroCalls: Array<{ toolName: string; source: string }>;
   /**
    * Distinct non-local tool names seen in the archive or the invocation log.
@@ -209,6 +219,8 @@ interface BuildInput {
   budgetEvents: number;
   tierSamples: TierSample[];
   invocations: Array<{ toolName: string; calls: number }>;
+  tasks: number;
+  skillActivations: Array<{ skill: string; tasks: number }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +481,7 @@ export function loadAgentPinCatalog(repoRoot: string, agentName: string): AgentP
     mcpServers: expanded.mcpServers,
     unresolvedPins: expanded.unresolvedPins,
     missingPinnedTools: expanded.missingPinnedTools,
+    configuredMcpServers: [...mcpServerNames],
     localToolNames: classificationNames,
   };
 }
@@ -678,6 +691,26 @@ export function contextReportStatements(input: {
       sql: `SELECT l.payload->'tiers' AS tiers
         ${AUDIT_WINDOW}
         AND l.event_type = 'context.budget'`,
+      params: windowParams,
+    },
+    {
+      name: 'tasks',
+      sql: `SELECT count(*)::bigint AS tasks
+        ${AUDIT_WINDOW}
+        AND l.event_type = 'agent.task'`,
+      params: windowParams,
+    },
+    {
+      // A task is one agent.task; each skill-activate tool.invoke carries its id.
+      name: 'activations',
+      sql: `SELECT l.payload->'input'->>'skill' AS skill,
+          count(DISTINCT l.payload->>'taskEventId')::bigint AS tasks
+        ${AUDIT_WINDOW}
+        AND l.event_type = 'tool.invoke'
+        AND l.payload->>'toolName' = 'skill-activate'
+        AND COALESCE(l.payload->'input'->>'skill', '') <> ''
+        GROUP BY 1
+        ORDER BY tasks DESC, skill ASC`,
       params: windowParams,
     },
     {
@@ -893,7 +926,11 @@ function tierRank(name: string): number {
 }
 
 export function buildReport(input: BuildInput): AgentContextReport {
-  const otherLabel = otherSourceLabel(input.catalog.mcpServers);
+  // Non-local tools come from an MCP server the agent pinned or, failing that, one it
+  // activated mid-task (#2024). Either way it is a configured server.
+  const pinnedMcp = input.catalog.mcpServers;
+  const attribution = pinnedMcp.length > 0 ? pinnedMcp : input.catalog.configuredMcpServers;
+  const otherLabel = otherSourceLabel(attribution);
   const localNames = new Set(input.catalog.localToolNames);
   const calls = input.calls;
   const all = sliceMetrics(calls, otherLabel);
@@ -923,7 +960,7 @@ export function buildReport(input: BuildInput): AgentContextReport {
       const name = tool.name ?? '(unnamed)';
       return {
         name,
-        source: classifyToolSource(name, localNames, input.catalog.mcpServers),
+        source: classifyToolSource(name, localNames, attribution),
         bytes: tool.bytes,
       };
     });
@@ -975,9 +1012,10 @@ export function buildReport(input: BuildInput): AgentContextReport {
       const offeredMcp = offered.has(row.toolName) && !localNames.has(row.toolName);
       const source = row.toolName === '(unnamed)' || (!localNames.has(row.toolName) && !offeredMcp)
         ? 'unattributed'
-        : classifyToolSource(row.toolName, localNames, input.catalog.mcpServers);
+        : classifyToolSource(row.toolName, localNames, attribution);
+      // An activated server's tools are offered too, but only a pinned server's are pinned.
       const pinned = pinnedLocal.has(row.toolName)
-        || (source.startsWith('mcp:') && offered.has(row.toolName));
+        || (pinnedMcp.length > 0 && source.startsWith('mcp:') && offered.has(row.toolName));
       return { toolName: row.toolName, calls: row.calls, pinned, source };
     })
     .sort((a, b) => b.calls - a.calls || a.toolName.localeCompare(b.toolName));
@@ -990,12 +1028,16 @@ export function buildReport(input: BuildInput): AgentContextReport {
   const offeredNonLocal = [...offered]
     .filter(name => !localNames.has(name))
     .sort();
-  for (const name of offeredNonLocal) {
-    if (!invoked.has(name)) {
-      pinnedZeroCalls.push({
-        toolName: name,
-        source: classifyToolSource(name, localNames, input.catalog.mcpServers),
-      });
+  // Unused tools of an activated (unpinned) server cost nothing on other calls, so
+  // they are not "pinned tools with zero calls".
+  if (pinnedMcp.length > 0) {
+    for (const name of offeredNonLocal) {
+      if (!invoked.has(name)) {
+        pinnedZeroCalls.push({
+          toolName: name,
+          source: classifyToolSource(name, localNames, attribution),
+        });
+      }
     }
   }
   const mcpToolsObserved = new Set<string>(offeredNonLocal);
@@ -1051,6 +1093,8 @@ export function buildReport(input: BuildInput): AgentContextReport {
     inputTokens: distribution(input.inputTokens),
     tiers,
     invocations,
+    tasks: input.tasks,
+    skillActivations: [...input.skillActivations],
     pinnedZeroCalls,
     mcpToolsObserved: mcpToolsObserved.size,
   };
@@ -1114,6 +1158,12 @@ export async function runAgentContextReport(
       : '(unnamed)',
     calls: requireBigint(row['calls'], 'calls'),
   }));
+  const taskRows = results.get('tasks') ?? [];
+  const tasks = taskRows.length === 0 ? 0 : requireBigint(taskRows[0]!['tasks'], 'tasks');
+  const skillActivations = (results.get('activations') ?? []).map(row => ({
+    skill: requireText(row['skill'], 'skill'),
+    tasks: requireBigint(row['tasks'], 'tasks'),
+  }));
 
   return buildReport({
     agent: input.agent,
@@ -1126,6 +1176,8 @@ export async function runAgentContextReport(
     budgetEvents: budgetRows.length,
     tierSamples,
     invocations,
+    tasks,
+    skillActivations,
   });
 }
 
@@ -1183,6 +1235,12 @@ function payloadRows(report: {
   return rows;
 }
 
+/** "15 of 2,204 tasks (0.7%)". */
+function shareOfTasks(count: number, tasks: number): string {
+  const pct = tasks === 0 ? 'n/a' : `${((count / tasks) * 100).toFixed(1)}%`;
+  return `${count} of ${tasks} tasks (${pct})`;
+}
+
 export function formatReport(report: AgentContextReport): string {
   const lines: string[] = [
     `Agent context report — ${report.agent}`,
@@ -1191,9 +1249,9 @@ export function formatReport(report: AgentContextReport): string {
     'System-string chars count every role=system message in the archived prompt',
     '(the YAML prompt plus later injected blocks). Tool-definition bytes are',
     'octet_length of the stored jsonb. Source bytes sum each tool object;',
-    'json-framing is the array punctuation left over. When the agent pins one',
-    'MCP server, every tool that is not in the on-disk local catalog is charged',
-    'to that server.',
+    'json-framing is the array punctuation left over. Every tool that is not in',
+    'the on-disk local catalog is charged to the one MCP server the agent pins,',
+    'or, if it pins none, to the one configured (activated with skill-activate).',
     '',
     `MCP servers pinned: ${report.mcpServers.length === 0 ? '(none)' : report.mcpServers.join(', ')}`,
     `Unresolved pins: ${report.unresolvedPins.length === 0 ? '(none)' : report.unresolvedPins.join(', ')}`,
@@ -1276,6 +1334,14 @@ export function formatReport(report: AgentContextReport): string {
     );
   }
 
+  lines.push('', 'Skill activations (tasks that called skill-activate for the skill)');
+  if (report.skillActivations.length === 0) {
+    lines.push(`  (none in ${report.tasks} tasks)`);
+  }
+  for (const row of report.skillActivations) {
+    lines.push(`  ${row.skill.padEnd(30)} ${shareOfTasks(row.tasks, report.tasks)}`);
+  }
+
   lines.push('', 'Pinned tools with zero calls');
   if (report.pinnedZeroCalls.length === 0) {
     lines.push('  (none)');
@@ -1297,7 +1363,7 @@ export function formatReportMarkdown(report: AgentContextReport): string {
     '',
     `MCP servers pinned: ${report.mcpServers.length === 0 ? '(none)' : report.mcpServers.map(name => `\`${name}\``).join(', ')}. Unresolved pins: ${report.unresolvedPins.length === 0 ? '(none)' : report.unresolvedPins.map(name => `\`${name}\``).join(', ')}. Pinned tools missing on disk: ${report.missingPinnedTools.length === 0 ? '(none)' : report.missingPinnedTools.map(name => `\`${name}\``).join(', ')}.`,
     '',
-    'System-string chars count every `role=system` message in the archived prompt. Tool-definition bytes are `octet_length` of the stored jsonb. A single pinned MCP server owns every tool that is not in the on-disk local catalog. `json-framing` is array punctuation, so source bytes plus framing equal the total on a single call. Percentiles are `percentile_cont` and do not sum across rows.',
+    'System-string chars count every `role=system` message in the archived prompt. Tool-definition bytes are `octet_length` of the stored jsonb. Every tool that is not in the on-disk local catalog is charged to the one MCP server the agent pins or, if it pins none, the one configured (loaded with \`skill-activate\`). `json-framing` is array punctuation, so source bytes plus framing equal the total on a single call. Percentiles are `percentile_cont` and do not sum across rows.',
     '',
     '#### Per-call payload',
     '',
@@ -1380,6 +1446,22 @@ export function formatReportMarkdown(report: AgentContextReport): string {
   }
   for (const row of report.invocations) {
     lines.push(`| \`${row.toolName}\` | ${row.calls} | ${row.pinned ? 'yes' : 'no'} | ${row.source} |`);
+  }
+
+  lines.push(
+    '',
+    '#### Skill activations',
+    '',
+    `Tasks that called \`skill-activate\` for the skill, of ${report.tasks} \`agent.task\` events in the window.`,
+    '',
+    '| Skill | Tasks |',
+    '|---|---|',
+  );
+  if (report.skillActivations.length === 0) {
+    lines.push('| (none) | 0 |');
+  }
+  for (const row of report.skillActivations) {
+    lines.push(`| \`${row.skill}\` | ${shareOfTasks(row.tasks, report.tasks)} |`);
   }
 
   lines.push('', '#### Pinned tools with zero calls', '');
