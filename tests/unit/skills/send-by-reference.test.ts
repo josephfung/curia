@@ -42,7 +42,7 @@ interface Harness {
   busPublish: ReturnType<typeof vi.fn>;
 }
 
-async function harness(): Promise<Harness> {
+async function harness(extra?: Partial<ConstructorParameters<typeof OutboundGateway>[0]>): Promise<Harness> {
   const contacts = ContactService.createInMemory();
 
   const principal = await contacts.createContact({ displayName: 'Pat Principal', source: 'ceo_stated', tier: 'known' });
@@ -84,6 +84,7 @@ async function harness(): Promise<Harness> {
     bus: { publish: busPublish, subscribe: vi.fn() } as unknown as EventBus,
     principalIdentities,
     logger,
+    ...extra,
   });
 
   return { contacts, gateway, principalId: principal.id, spouseId: spouse.id, nylasSend, signalSend, smsSend, slackPost, filterCheck, busPublish };
@@ -277,5 +278,36 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/unverified or inactive/);
     expect(delivered(h)).toEqual([]);
+  });
+});
+
+describe('approvals show the resolved recipient (#2033)', () => {
+  it('the gateway autonomy gate shows the address of a send by reference, not the contact ID', async () => {
+    const insert = vi.fn().mockResolvedValue(7);
+    const h = await harness({
+      autonomyService: { getConfig: vi.fn().mockResolvedValue({ score: 50 }) } as never,
+      actionLogRepo: { insert, setNotificationSentAt: vi.fn().mockResolvedValue(undefined) } as never,
+    });
+
+    const result = await SKILLS.email.handler.execute({
+      ...ctx(h, {
+        to: h.spouseId,
+        subject: 'Deck',
+        body: 'Attached.',
+        attachments: [{ file_url: 'file:///tmp/deck.pdf', filename: 'deck.pdf', content_type: 'application/pdf' }],
+      }),
+      taskEventId: 'task-approve-1',
+    } as ToolContext);
+
+    expect(result.success).toBe(false);
+    // Nothing emailed. (The approval request itself is DM'd to the principal on Signal and Slack.)
+    expect(h.nylasSend).not.toHaveBeenCalled();
+    // The stored re-exec payload keeps the reference; approval re-resolves it.
+    expect(insert.mock.calls[0]![0].payload).toMatchObject({ to: h.spouseId });
+    const approval = h.busPublish.mock.calls
+      .map(([, event]) => event as { type: string; payload: { notificationType?: string; body?: string } })
+      .find((event) => event.type === 'outbound.notification' && event.payload.notificationType === 'approval_requested');
+    expect(approval?.payload.body).toContain('sam@home.example');
+    expect(approval?.payload.body).not.toContain(h.spouseId);
   });
 });
