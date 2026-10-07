@@ -591,7 +591,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       );
     } else {
       warnings.push(
-        'No principal contact (system_role=principal): the Principal Contact Details block is absent and ' +
+        'No principal contact (system_role=principal): the Who you serve section is absent and ' +
         '${principal_contact_id} renders empty. Production would not serve this prompt until onboarding.',
       );
     }

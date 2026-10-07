@@ -171,6 +171,7 @@ import {
   type AgentAssemblyContext,
   type AssembledAgent,
 } from './startup/agent-assembly.js';
+import { findPrimaryEmailIdentity } from './agents/principal-contact-block.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { LateDelegationSubscriber } from './agents/late-delegation-subscriber.js';
@@ -789,6 +790,15 @@ async function main(): Promise<void> {
     principalEmail.current =
       principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
     principalPrimaryEmail.current = snapshot.primaryEmail;
+    // A designated primary that matches no verified, active email identity is
+    // dropped from the prompt block (it must never render an unverified address),
+    // so every agent loses its primary email silently. Say so here instead.
+    if (snapshot.primaryEmail && !findPrimaryEmailIdentity(snapshot.identities, snapshot.primaryEmail)) {
+      logger.warn(
+        { contactId: principalContact.id, identityCount: principalIdentities.length },
+        'Principal primary_email matches no verified, active email identity — agents see no primary email until it is verified or changed',
+      );
+    }
     logger.info(
       {
         contactId: principalContact.id,

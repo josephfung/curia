@@ -1005,7 +1005,7 @@ describe('AgentRuntime', () => {
     expect(loggerErrorSpy).toHaveBeenCalled();
   });
 
-  it('injects ## Principal Contact Details block when principalIdentities is non-empty', async () => {
+  it('injects ## Who you serve with its contact details ahead of the body when principalIdentities is non-empty', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -1056,19 +1056,17 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).toContain('## Principal Contact Details');
+    expect(systemMsg).toContain('## Who you serve');
+    expect(systemMsg).toContain('### Principal Contact Details');
     expect(systemMsg).toContain('- email: ceo@example.com');
     expect(systemMsg).toContain('- signal: +15550001234');
-    expect(systemMsg).toContain('This list is complete.');
-    expect(systemMsg).toContain('is not the principal\'s and must not be used.');
-    expect(systemMsg).not.toContain('[primary]');
-    // Principal Contact Details block appended after the base prompt with a
-    // blank-line separator. For the coordinator the shared date-resolve
-    // guardrail (ADR-038 / #1595) is composed in between, so assert the
-    // separator + ordering rather than literal adjacency to the base prompt.
-    expect(systemMsg).toContain('\n\n## Principal Contact Details');
-    expect(systemMsg.indexOf('Base prompt.')).toBeLessThan(
-      systemMsg.indexOf('## Principal Contact Details'),
+    expect(systemMsg).toContain('the list is complete');
+    expect(systemMsg).not.toMatch(/primary email/i);
+    // The section opens the system string (no identity or security block is
+    // configured here) and comes before the YAML body (trim plan PR 11).
+    expect(systemMsg.startsWith('## Who you serve\n')).toBe(true);
+    expect(systemMsg.indexOf('### Principal Contact Details')).toBeLessThan(
+      systemMsg.indexOf('Base prompt.'),
     );
   });
 
@@ -1096,9 +1094,9 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).not.toContain('## Principal Contact Details');
-    expect(systemMsg).not.toContain('This list is complete.');
-    expect(systemMsg).not.toContain('[primary]');
+    expect(systemMsg).not.toContain('Principal Contact Details');
+    expect(systemMsg).not.toContain('## Who you serve');
+    expect(systemMsg).not.toContain('the list is complete');
   });
 
   it('omits ## Principal Contact Details block when principalIdentities is not provided', async () => {
@@ -1125,7 +1123,8 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).not.toContain('## Principal Contact Details');
+    expect(systemMsg).not.toContain('Principal Contact Details');
+    expect(systemMsg).not.toContain('## Who you serve');
   });
 
   it('injects ## Your Contact Details before ## Principal Contact Details when both are configured', async () => {
@@ -1169,15 +1168,17 @@ describe('AgentRuntime', () => {
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
     const ownDetailsPos = systemMsg.indexOf('## Your Contact Details');
-    const principalDetailsPos = systemMsg.indexOf('## Principal Contact Details');
+    const principalDetailsPos = systemMsg.indexOf('### Principal Contact Details');
     expect(ownDetailsPos).toBeGreaterThan(-1);
     expect(principalDetailsPos).toBeGreaterThan(-1);
     expect(ownDetailsPos).toBeLessThan(principalDetailsPos);
+    // Both precede the YAML body.
+    expect(principalDetailsPos).toBeLessThan(systemMsg.indexOf('Base prompt.'));
     expect(systemMsg).toContain('never substitute the principal\'s details.');
     expect(systemMsg).not.toContain('CEO');
   });
 
-  it('marks the primary email from principalPrimaryEmail inside the injected block', async () => {
+  it('sets the primary email from principalPrimaryEmail apart inside the injected block', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'research-analyst',
@@ -1229,9 +1230,8 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).toContain('- [primary] email: primary@example.ca (label: "work email")');
-    expect(systemMsg).toContain('- email: other@example.com (label: "personal")');
-    expect(systemMsg).not.toContain('[primary] email: other@example.com');
+    expect(systemMsg).toContain('Primary email:\n- email: primary@example.ca (label: "work email")');
+    expect(systemMsg).toContain('Other addresses:\n- email: other@example.com (label: "personal")');
   });
 
   it('injects ## Principal Contact Details block on scheduler-dispatched tasks', async () => {
@@ -1274,7 +1274,7 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).toContain('## Principal Contact Details');
+    expect(systemMsg).toContain('### Principal Contact Details');
     expect(systemMsg).toContain('- email: ceo@example.com');
     // The scheduler scope fence should also be present
     expect(systemMsg).toContain('## Scheduled Task — Scope Restriction');
