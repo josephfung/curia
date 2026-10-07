@@ -121,17 +121,17 @@ describe('coordinator principal-calendar routing (#1853)', () => {
 
   it('does not pin principal-scoped calendar tools or the calendar bundle', () => {
     const pins = loadCoordinator().pinned_skills ?? [];
-    expect(pins).toContain('google-workspace');
     expect(pins).not.toContain('calendar');
     expect(pins).not.toContain('calendar-list-events');
     expect(pins).not.toContain('calendar-check-conflicts');
     expect(pins.filter((p) => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(p))).toEqual([]);
   });
 
-  it('projected google-workspace membership resolves cleanly, with no calendar tools', () => {
+  it('pins resolve cleanly, and activating google-workspace brings no calendar tools', () => {
     // The server's --tools allowlist (drive, docs, sheets) is the only gate on its
     // membership (#1957); projection passes the advertised set through unfiltered.
-    // A clean resolution here means reportScheduledPinGaps stays quiet on boot.
+    // A clean resolution here means reportScheduledPinGaps stays quiet on boot. The
+    // coordinator no longer pins google-workspace; it activates it on demand (#2024).
     const config = loadCoordinator();
     const tools = new ToolRegistry();
     const skills = new SkillRegistry();
@@ -223,6 +223,15 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     expect(resolution.toolNames.filter((t) => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(t))).toEqual([]);
     expect(resolution.toolNames).not.toContain('calendar-list-events');
     expect(resolution.toolNames).toContain('delegate');
-    expect(resolution.toolNames).toContain('create_doc');
+    expect(resolution.toolNames).not.toContain('create_doc');
+
+    const activation = resolveSkillActivation({
+      skillName: 'google-workspace', skillRegistry: skills, toolRegistry: tools, agentId: 'coordinator',
+    });
+    expect(activation).not.toHaveProperty('error');
+    if (!('error' in activation)) {
+      expect(activation.tools).toContain('create_doc');
+      expect(activation.tools.filter((t) => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(t))).toEqual([]);
+    }
   });
 });

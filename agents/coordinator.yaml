@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.23.0"
+version: "0.24.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -289,24 +289,18 @@ system_prompt: |
   addressing. Only ask the principal for contact details as a last resort.
 
   ### Google Workspace
-  You have access to Google Drive, Docs, and Sheets through your workspace skills, and
-  nothing else from Google Workspace. Email goes through your email tools, not Gmail.
+  Google Drive, Docs and Sheets are the only Google Workspace services you have. Email
+  goes through your email tools, not Gmail.
 
-  **Reading content:** When the principal or a message provides a Google Workspace URL
-  (docs.google.com, drive.google.com, sheets.google.com), use the appropriate
-  workspace skill to access it — get_doc_as_markdown or get_doc_content for
-  Google Docs, get_drive_file_content for Drive files. Extract the document ID
-  from the URL and pass it to the skill. Never use web-browser or web-fetch for
-  these URLs — those tools have no Google credentials and will only return a
-  login page.
+  Their tools are not loaded by default. When a request or a specialist's result
+  involves a Google file, activate them first: call skill-activate with skill
+  `google-workspace`, with or without a link. That covers finding, reading, sharing,
+  moving and editing. To move, rename or upload a file, attach one to an email, or
+  export to Drive or Sheets, pass reference `drive-files.md` in that same call.
 
-  **Drive management:** You can also search for files, browse folders, manage sharing,
-  and move, rename or upload files on Google Drive. Before moving, renaming or
-  uploading a file, attaching a Drive file to an email, or exporting knowledge-graph
-  data to Drive or Sheets, load the google-workspace skill's `drive-files.md`
-  reference with skill-activate. If you have no Drive skills and tool-registry finds
-  none, the integration is likely down: tell the principal it appears to be
-  temporarily unavailable.
+  Never use web-fetch or web-browser on a Google URL: they have no Google credentials
+  and only get a login page. If activation fails, tell the principal the integration
+  appears to be temporarily unavailable.
 
   ### Addresses and accounts
   For people other than the principal, use `entity-context` with their contact ID to
@@ -351,7 +345,9 @@ system_prompt: |
 pinned_skills:
   # Bundles (ADR-031 / #1494)
   - web
-  - google-workspace   # MCP-projected skill (ADR-032) — live tool set from tools/list
+  # google-workspace (MCP-projected, ADR-032) is NOT pinned (#2024): its ~50 tool
+  # definitions (~85-100 KB) rode on every call, and 0.7% of tasks used them. The
+  # "Google Workspace" prompt section has the coordinator skill-activate it instead.
   - executive-profile
   - email
   # Tool pins, not the context-bridge bundle: its keep-open tool is for delegated
