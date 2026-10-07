@@ -55,7 +55,34 @@ tool_stubs:
       return: |
         Successfully updated file "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic).
         Parents: 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd
-  # Reading the Doc or fetching its link to pass on is reasonable; both answer as Drive would.
+  # Reading, searching for or inspecting the Doc, and fetching its link to pass on, are all
+  # reasonable; each answers as Drive would. inspect_doc_structure and search_docs were
+  # the case's unstubbed calls (about 1 run in 5, on main's prompt and trim PR 1's alike),
+  # which failed the gate on the harness rather than the model. Siblings 13c and 13d stub
+  # the same lookups.
+  search_docs:
+    - match: {}
+      return: |
+        Found 1 Google Doc:
+        - "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic)
+  check_drive_file_public_access:
+    - match: {}
+      return: '"CRM comparison: Northwind vs Contoso" is not shared publicly. Link sharing: restricted.'
+  inspect_doc_structure:
+    - match: {}
+      return: |
+        Document structure for 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic:
+        {
+          "title": "CRM comparison: Northwind vs Contoso",
+          "total_elements": 4,
+          "total_length": 312,
+          "tables": 1,
+          "table_details": [
+            { "index": 0, "start_index": 38, "end_index": 268, "rows": 4, "columns": 3 }
+          ],
+          "headers": {},
+          "footers": {}
+        }
   get_doc_as_markdown:
     - match: {}
       return: &comparison |
@@ -82,6 +109,24 @@ tool_stubs:
   manage_drive_access:
     - match: {}
       return: 'Permission granted on "CRM comparison: Northwind vs Contoso" (ID 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic).'
+  # Saving the comparison to the working-docs workspace as well is a reasonable side step
+  # (1 run in 10). Test mode has no workspace, so both calls were refused; they answer here.
+  doc-place:
+    - match: {}
+      return:
+        action: create_folder
+        slug: crm-evaluation
+        directory_prefix: /projects/crm-evaluation/
+        path: /projects/crm-evaluation/vendor-comparison.md
+        reason: No existing project folder covers the CRM decision.
+        catalog: []
+        displayTimezone: America/Toronto
+  doc-write:
+    - match: {}
+      return:
+        action: created
+        version: 1
+        displayTimezone: America/Toronto
 expected_behaviors:
   - id: activates_google_workspace
     weight: critical

@@ -33,7 +33,8 @@ deleted directives. `loader.test.ts` gained four "does not restate" rows instead
 Behavior held:
 - **Scenarios:** every case passed on behavior. The only gate failure was an unstubbed
   `inspect_doc_structure` call in `google file filing after delegation`, which also
-  happens on main's prompt.
+  happens on main's prompt. PR 1 also closes that hole. Case 13a now stubs every lookup
+  the coordinator reached for, and 10 runs then made no refused calls.
 - **Smoke:** 44 of 46. Both failures passed 4 of 4 rounds on each side in the A/B.
 
 ### Lessons so far
