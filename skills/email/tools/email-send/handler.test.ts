@@ -16,8 +16,8 @@ const ALICE_ID = '11111111-1111-4111-8111-111111111111';
  * the handler's use of the result matters.
  */
 const resolveRecipientReference = vi.fn(async (_channel: string, value: string) => {
-  if (value === 'principal') return { ok: true, contactId: 'principal-id', identifier: 'ceo@example.com', displayName: 'Principal' };
-  if (value === ALICE_ID) return { ok: true, contactId: ALICE_ID, identifier: 'alice@example.com', displayName: 'Alice' };
+  if (value === 'principal') return { ok: true, kind: 'principal', contactId: 'principal-id', identifier: 'ceo@example.com', displayName: 'Principal' };
+  if (value === ALICE_ID) return { ok: true, kind: 'contact', contactId: ALICE_ID, identifier: 'alice@example.com', displayName: 'Alice' };
   return { ok: false, error: `No contact for "${value}". Nothing was sent.` };
 });
 

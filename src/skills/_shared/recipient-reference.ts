@@ -48,7 +48,12 @@ export function parseRecipientReference(value: string): RecipientReference | nul
 }
 
 export type RecipientResolution =
-  | { ok: true; contactId: string; identifier: string; displayName: string }
+  /**
+   * `kind` says how the recipient was named. Callers echo `contactId` back to the
+   * model only for `contact`: for the alias it is the principal's contact ID,
+   * which spec 09 keeps opt-in.
+   */
+  | { ok: true; kind: RecipientReference['kind']; contactId: string; identifier: string; displayName: string }
   /**
    * `error` is agent-facing and complete. `cause` is set only when the contact
    * lookup itself threw, so the caller can log it; the result still fails closed.
@@ -84,9 +89,13 @@ export const SEND_SKILL_RECIPIENT_FIELDS: Readonly<Record<string, { channel: str
   'slack-send': { channel: 'slack', reference: 'recipient', raw: 'recipient_user_id' },
 };
 
-/** Stored display names come from inbound mail and are attacker-influenced. */
+/**
+ * Stored display names come from inbound mail and are attacker-influenced.
+ * Control characters and Unicode line/paragraph separators would open a new
+ * line wherever the name lands (a prompt, an approval).
+ */
 function safeName(name: string): string {
-  return name.replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
+  return name.replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]+/g, ' ').trim().slice(0, 80);
 }
 
 /**
@@ -103,6 +112,18 @@ export function formatResolvedRecipient(resolution: { identifier: string; displa
   const name = raw.replace(/[<>@"​-‏‪-‮⁦-⁩﻿]/g, '').trim();
   return name ? `${resolution.identifier} (contact "${name}")` : resolution.identifier;
 }
+
+/**
+ * Identifier shapes each channel's transport can address. A verified identity of
+ * another shape (a Signal ACI UUID stored when an inbound message had no number,
+ * an Enterprise Grid `W…` Slack id) is skipped, so it cannot shadow a sendable one.
+ */
+const SENDABLE: Readonly<Record<string, RegExp>> = {
+  email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+  signal: /^\+[1-9]\d{6,14}$/,
+  sms: /^\+[1-9]\d{6,14}$/,
+  slack: /^U[A-Z0-9]+$/,
+};
 
 /** The contact's designated primary for the channel, if it has one. */
 function primaryFor(contact: Contact, channel: string): string | null {
@@ -189,9 +210,22 @@ export async function resolveRecipientReference(
     };
   }
 
+  // Refuse here, not only at the gateway: the gateway checks the To recipient's
+  // tier but not each cc, so a blocked contact referenced in cc would be delivered.
+  if (found.contact.tier === 'blocked') {
+    return {
+      ok: false,
+      error: isPrincipal
+        ? 'The principal contact is marked blocked. Nothing was sent.'
+        : `Contact "${safeName(found.contact.displayName)}" (${contactId}) is blocked. Nothing was sent.`,
+    };
+  }
+
   const onChannel = found.identities.filter((identity) => identity.channel === channel);
+  const sendable = SENDABLE[channel];
   const usable = onChannel
     .filter((identity) => identity.verified && identity.status === 'active')
+    .filter((identity) => !sendable || sendable.test(identity.channelIdentifier))
     // Stable sort: rows with the same timestamp keep the backend's order.
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
@@ -202,7 +236,7 @@ export async function resolveRecipientReference(
     const who = isPrincipal
       ? 'The principal'
       : `Contact "${safeName(found.contact.displayName)}" (${contactId})`;
-    const why = onChannel.length > 0 ? ' (the ones on file are unverified or inactive)' : '';
+    const why = onChannel.length > 0 ? ' (the ones on file are unverified, inactive, or not sendable on this channel)' : '';
     const next = isPrincipal
       ? 'Use a channel listed in Principal Contact Details.'
       : 'Reach them on another channel, or ask the principal to verify an address.';
@@ -214,6 +248,7 @@ export async function resolveRecipientReference(
 
   return {
     ok: true,
+    kind: ref.kind,
     contactId: found.contact.id,
     identifier: chosen.channelIdentifier,
     displayName: found.contact.displayName,

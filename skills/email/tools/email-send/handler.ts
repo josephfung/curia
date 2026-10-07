@@ -61,14 +61,26 @@ async function resolveReferenceList(
   raw: string,
   field: string,
   rawField: string,
-): Promise<{ addresses: string[]; contactIds: string[] } | { error: string }> {
+  log: ToolContext['log'],
+): Promise<{ addresses: string[]; contactIds: Array<string | undefined> } | { error: string }> {
   const addresses: string[] = [];
-  const contactIds: string[] = [];
-  for (const entry of splitList(raw)) {
+  // Undefined for the alias: the principal's contact ID stays out of the model's
+  // context (spec 09). Only a UUID the agent passed is echoed back.
+  const contactIds: Array<string | undefined> = [];
+  for (const entry of new Set(splitList(raw))) {
     const resolved = await gateway.resolveRecipientReference('email', entry, { field, rawField });
     if (!resolved.ok) return { error: resolved.error };
+    if (!EMAIL_REGEX.test(resolved.identifier)) {
+      // A stored identity Nylas cannot address: a data defect. Refuse rather than guess,
+      // and log the contact for an operator (never echo the ID: it may be the principal's).
+      log.warn({ contactId: resolved.contactId, field }, 'email-send: verified email identity is not a valid address — refusing (#2033)');
+      return {
+        error: `The ${field} contact's verified email identity is not a valid address, so nothing was sent. It needs correcting in Contacts.`,
+      };
+    }
+    if (addresses.includes(resolved.identifier)) continue;
     addresses.push(resolved.identifier);
-    contactIds.push(resolved.contactId);
+    contactIds.push(resolved.kind === 'contact' ? resolved.contactId : undefined);
   }
   return { addresses, contactIds };
 }
@@ -172,14 +184,14 @@ export class EmailSendHandler implements ToolHandler {
     let toAddresses = rawToAddresses;
     let toContactId: string | undefined;
     if (to) {
-      const resolved = await resolveReferenceList(ctx.outboundGateway, to, 'to', 'to_address');
+      const resolved = await resolveReferenceList(ctx.outboundGateway, to, 'to', 'to_address', ctx.log);
       if ('error' in resolved) return { success: false, error: resolved.error };
       toAddresses = resolved.addresses;
       toContactId = resolved.contactIds[0];
     }
     let ccAddresses: string[] = [...rawCcAddresses];
     if (cc) {
-      const resolved = await resolveReferenceList(ctx.outboundGateway, cc, 'cc', 'cc_addresses');
+      const resolved = await resolveReferenceList(ctx.outboundGateway, cc, 'cc', 'cc_addresses', ctx.log);
       if ('error' in resolved) return { success: false, error: resolved.error };
       ccAddresses = [...resolved.addresses, ...ccAddresses];
     }

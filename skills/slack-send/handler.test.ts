@@ -74,8 +74,8 @@ describe('slack-send handler', () => {
 
   describe('send by reference (#2033)', () => {
     const resolveRecipientReference = vi.fn(async (_channel: string, value: string) => {
-      if (value === 'principal') return { ok: true, contactId: 'principal-id', identifier: 'U0PRINCIPAL', displayName: 'Principal' };
-      if (value === 'grid-user') return { ok: true, contactId: 'grid-id', identifier: 'W012ABCDEF', displayName: 'Grid' };
+      if (value === 'principal') return { ok: true, kind: 'principal', contactId: 'principal-id', identifier: 'U0PRINCIPAL', displayName: 'Principal' };
+      if (value === 'grid-user') return { ok: true, kind: 'contact', contactId: 'grid-id', identifier: 'W012ABCDEF', displayName: 'Grid' };
       return { ok: false, error: `No contact for "${value}". Nothing was sent.` };
     });
 
@@ -91,7 +91,10 @@ describe('slack-send handler', () => {
         { channel: 'slack', slackChannelId: 'U0PRINCIPAL', slackUserId: 'U0PRINCIPAL', message: 'Hello' },
         expect.any(Object),
       );
-      if (result.success) expect(result.data).toMatchObject({ delivered_to: 'U0PRINCIPAL', contact_id: 'principal-id' });
+      if (result.success) {
+        expect(result.data).toMatchObject({ delivered_to: 'U0PRINCIPAL' });
+        expect(result.data).not.toHaveProperty('contact_id');
+      }
     });
 
     it('keeps Enterprise Grid ids out of scope on the reference path', async () => {

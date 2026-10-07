@@ -41,7 +41,7 @@ describe('sms-send handler', () => {
   describe('send by reference (#2033)', () => {
     const resolveRecipientReference = vi.fn(async (_channel: string, value: string) =>
       value === 'principal'
-        ? { ok: true, contactId: 'principal-id', identifier: '+15195550100', displayName: 'Principal' }
+        ? { ok: true, kind: 'principal', contactId: 'principal-id', identifier: '+15195550100', displayName: 'Principal' }
         : { ok: false, error: `No contact for "${value}". Nothing was sent.` });
 
     it('resolves recipient through the gateway and sends to the looked-up number', async () => {
@@ -53,7 +53,10 @@ describe('sms-send handler', () => {
       expect(result.success).toBe(true);
       expect(resolveRecipientReference).toHaveBeenCalledWith('sms', 'principal', { field: 'recipient', rawField: 'recipient_number' });
       expect(send).toHaveBeenCalledWith({ channel: 'sms', recipient: '+15195550100', message: 'Hello' }, expect.any(Object));
-      if (result.success) expect(result.data).toMatchObject({ delivered_to: '+15195550100', contact_id: 'principal-id' });
+      if (result.success) {
+        expect(result.data).toMatchObject({ delivered_to: '+15195550100' });
+        expect(result.data).not.toHaveProperty('contact_id');
+      }
     });
 
     it('sends nothing when the reference does not resolve', async () => {

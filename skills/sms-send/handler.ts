@@ -75,14 +75,18 @@ export class SmsSendHandler implements ToolHandler {
       });
       if (!resolved.ok) return { success: false, error: resolved.error };
       if (!E164_REGEX.test(resolved.identifier)) {
-        // A stored identity Telnyx cannot address. Refuse rather than guess.
+        // A stored identity Telnyx cannot address: a data defect. Refuse rather than
+        // guess, and log the contact for an operator (the ID may be the principal's).
+        ctx.log.warn({ contactId: resolved.contactId }, 'sms-send: verified SMS identity is not E.164 — refusing (#2033)');
         return {
           success: false,
-          error: `The contact's verified SMS identity is not an E.164 number, so nothing was sent. Ask the principal to correct it.`,
+          error: `The contact's verified SMS identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
         };
       }
       destination = resolved.identifier;
-      contactId = resolved.contactId;
+      // Echo the contact ID only for a UUID the agent passed. For the alias it is the
+      // principal's, which spec 09 keeps out of the model's context.
+      contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
     } else {
       destination = recipientNumber as string;
     }

@@ -13,8 +13,8 @@ const ALICE_ID = '11111111-1111-4111-8111-111111111111';
 
 /** Stands in for the gateway's reference resolver (#2033); its rules are tested elsewhere. */
 const resolveRecipientReference = vi.fn(async (_channel: string, value: string) => {
-  if (value === 'principal') return { ok: true, contactId: 'principal-id', identifier: '+15195550100', displayName: 'Principal' };
-  if (value === ALICE_ID) return { ok: true, contactId: ALICE_ID, identifier: 'alice-not-e164', displayName: 'Alice' };
+  if (value === 'principal') return { ok: true, kind: 'principal', contactId: 'principal-id', identifier: '+15195550100', displayName: 'Principal' };
+  if (value === ALICE_ID) return { ok: true, kind: 'contact', contactId: ALICE_ID, identifier: 'alice-not-e164', displayName: 'Alice' };
   return { ok: false, error: `No contact for "${value}". Nothing was sent.` };
 });
 
@@ -94,7 +94,11 @@ describe('SignalSendHandler', () => {
         expect.objectContaining({ channel: 'signal', recipient: '+15195550100' }),
         expect.anything(),
       );
-      if (result.success) expect(result.data).toMatchObject({ delivered_to: '+15195550100', contact_id: 'principal-id' });
+      if (result.success) {
+        expect(result.data).toMatchObject({ delivered_to: '+15195550100' });
+        // Alias sends never echo the principal's contact ID (spec 09).
+        expect(result.data).not.toHaveProperty('contact_id');
+      }
     });
 
     it('sends nothing when the reference does not resolve', async () => {
