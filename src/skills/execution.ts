@@ -1862,9 +1862,14 @@ export class ExecutionLayer {
     // Skills declare which privileged services they need in manifest.capabilities.
     // The loader validates the names and freezes the manifest at startup.
     // We inject only the declared services — skills cannot escalate privilege.
-    const caps = manifest.capabilities ?? [];
-
     const capabilityServices = this.capabilityServiceMap(outboundGatewayForCtx);
+
+    // Optional capabilities (#2024) are injected when this layer has the service and
+    // skipped when it does not, so they never refuse the call. They join `caps` before
+    // the guards below, so every allowlist check applies to them as to required ones.
+    const optionalCaps = (manifest.optional_capabilities ?? [])
+      .filter(cap => this.missingCapabilities([cap], capabilityServices).length === 0);
+    const caps = [...(manifest.capabilities ?? []), ...optionalCaps];
 
     // Hard-restrict executionLayer to approve-action only.
     // executionLayer grants invoke() with humanApproved: true, which bypasses autonomy

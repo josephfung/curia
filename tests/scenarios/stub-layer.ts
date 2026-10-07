@@ -61,7 +61,8 @@ export function mustStub(
   const tool = registry.get(toolName);
   // Not registered: the real layer answers "not found", which is what production does.
   if (!tool) return false;
-  if ((tool.manifest.capabilities ?? []).some(c => DANGEROUS_CAPABILITIES.has(c))) return true;
+  const caps = [...(tool.manifest.capabilities ?? []), ...(tool.manifest.optional_capabilities ?? [])];
+  if (caps.some(c => DANGEROUS_CAPABILITIES.has(c))) return true;
   const risk = tool.manifest.action_risk;
   return typeof risk === 'number' ? risk > 0 : risk !== 'none';
 }

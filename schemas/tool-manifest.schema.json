@@ -46,6 +46,11 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "optional_capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Capabilities injected when the deployment has the service and skipped otherwise; their absence never refuses the call. A name may not also be in capabilities."
+    },
     "entity_enrichment": {
       "type": "object",
       "required": ["param", "default"],
