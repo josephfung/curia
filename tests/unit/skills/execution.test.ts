@@ -46,6 +46,49 @@ describe('ExecutionLayer', () => {
     }
   });
 
+  describe('optional_capabilities (#2024)', () => {
+    const seen: { bus?: unknown }[] = [];
+    const handler: ToolHandler = {
+      execute: async (ctx: ToolContext) => {
+        seen.push({ bus: ctx.bus });
+        return { success: true, data: 'ran' };
+      },
+    };
+    beforeEach(() => { seen.length = 0; });
+
+    it('runs without an optional capability the layer does not have', async () => {
+      registry.register(makeManifest({ optional_capabilities: ['bus'] }), handler);
+      const result = await execution.invoke('test-skill', { query: 'x' });
+      expect(result.success).toBe(true);
+      expect(seen[0]!.bus).toBeUndefined();
+    });
+
+    it('injects an optional capability the layer has', async () => {
+      const bus = new EventBus(logger);
+      const withBus = new ExecutionLayer(registry, logger, { bus });
+      registry.register(makeManifest({ optional_capabilities: ['bus'] }), handler);
+      const result = await withBus.invoke('test-skill', { query: 'x' });
+      expect(result.success).toBe(true);
+      expect(seen[0]!.bus).toBe(bus);
+    });
+
+    it('still refuses a missing required capability', async () => {
+      registry.register(makeManifest({ capabilities: ['bus'] }), handler);
+      const result = await execution.invoke('test-skill', { query: 'x' });
+      expect(result.success).toBe(false);
+      expect(seen).toHaveLength(0);
+    });
+
+    it('applies the capability allowlists to optional capabilities too', async () => {
+      // executionLayer is always available (it is the layer itself), so only the
+      // approve-action allowlist stands between an optional declaration and it.
+      registry.register(makeManifest({ optional_capabilities: ['executionLayer'] }), handler);
+      const result = await execution.invoke('test-skill', { query: 'x' });
+      expect(result.success).toBe(false);
+      expect(seen).toHaveLength(0);
+    });
+  });
+
   it('returns failure for unknown skill', async () => {
     const result = await execution.invoke('nonexistent', {});
     expect(result.success).toBe(false);

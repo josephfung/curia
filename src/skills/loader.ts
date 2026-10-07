@@ -210,15 +210,21 @@ export async function loadToolsFromDirectory(
       // Validate declared capabilities against the fixed allowlist.
       // Unknown names fail hard at startup — a typo in tool.json is a configuration
       // error that must surface at boot, not silently produce a skill with wrong privileges.
-      if (manifest.capabilities !== undefined) {
-        for (const cap of manifest.capabilities) {
-          if (!VALID_CAPABILITIES.has(cap)) {
-            throw new Error(
-              `Tool '${manifest.name}' declares unknown capability '${cap}'. ` +
-              `Valid capabilities: ${[...VALID_CAPABILITIES].join(', ')}`,
-            );
-          }
+      for (const cap of [...(manifest.capabilities ?? []), ...(manifest.optional_capabilities ?? [])]) {
+        if (!VALID_CAPABILITIES.has(cap)) {
+          throw new Error(
+            `Tool '${manifest.name}' declares unknown capability '${cap}'. ` +
+            `Valid capabilities: ${[...VALID_CAPABILITIES].join(', ')}`,
+          );
         }
+      }
+      // A capability is either required (refuse the call without it) or optional
+      // (#2024), never both: the two say opposite things about a missing service.
+      const both = (manifest.optional_capabilities ?? []).filter(cap => manifest.capabilities?.includes(cap));
+      if (both.length > 0) {
+        throw new Error(
+          `Tool '${manifest.name}' lists ${both.join(', ')} in both capabilities and optional_capabilities`,
+        );
       }
 
       // Dynamically import the handler.
@@ -255,6 +261,7 @@ export async function loadToolsFromDirectory(
       // any manifest field. Object.freeze is shallow, so we freeze array fields
       // separately before freezing the manifest itself.
       if (manifest.capabilities !== undefined) Object.freeze(manifest.capabilities);
+      if (manifest.optional_capabilities !== undefined) Object.freeze(manifest.optional_capabilities);
       if (manifest.allowed_callers !== undefined) Object.freeze(manifest.allowed_callers);
       Object.freeze(manifest);
 
