@@ -176,9 +176,22 @@ export class CeoNylasClient {
   // ── Messages ────────────────────────────────────────────────────────────
 
   async listMessages(options: ListMessagesOptions = {}): Promise<NylasMessageSummary[]> {
+    const { messages } = await this.listMessagesPage(options);
+    return messages;
+  }
+
+  // One page of listMessages, plus Nylas's `next_cursor` so callers can keep
+  // paging. A follow-up page sends only `page_token` (and limit): the cursor
+  // already encodes the original query, and re-sending filters is rejected
+  // when the first request used search_query_native.
+  async listMessagesPage(
+    options: ListMessagesOptions & { pageToken?: string } = {},
+  ): Promise<{ messages: NylasMessageSummary[]; nextCursor?: string }> {
     const params = new URLSearchParams();
     params.set('limit', String(Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT)));
-    if (options.query) {
+    if (options.pageToken) {
+      params.set('page_token', options.pageToken);
+    } else if (options.query) {
       // Nylas v3: search_query_native cannot be combined with any other filter
       // param except limit and page_token — sending in/unread/received_after
       // alongside it returns HTTP 400 "invalid_request_error".
@@ -206,9 +219,9 @@ export class CeoNylasClient {
     }
 
     const url = `${this.baseUrl}/messages?${params}`;
-    const data = await this.request<NylasApiMessage[]>('GET', url, 'listMessages');
+    const { data, nextCursor } = await this.requestWithCursor<NylasApiMessage[]>('GET', url, 'listMessages');
 
-    return data.map(normalizeMessageSummary);
+    return { messages: data.map(normalizeMessageSummary), nextCursor };
   }
 
   // Exhaustively list messages by following Nylas's `next_cursor`, up to `maxScan`
@@ -367,7 +380,12 @@ export class CeoNylasClient {
   // draft doesn't exist" failure this work is fixing (issue #1000). `truncated`
   // is true when the ceiling was hit with more pages still available.
   async listAllDrafts(
-    options: { maxScan?: number; pageSize?: number } = {},
+    options: {
+      maxScan?: number;
+      pageSize?: number;
+      /** Return after the page that contains a matching draft. The match is included. */
+      stopWhen?: (draft: NylasDraftSummary) => boolean;
+    } = {},
   ): Promise<{ drafts: NylasDraftSummary[]; truncated: boolean }> {
     const maxScan = options.maxScan ?? 500;
     const pageSize = Math.min(options.pageSize ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT);
@@ -383,7 +401,16 @@ export class CeoNylasClient {
       const url = `${this.baseUrl}/drafts?${params}`;
 
       const { data, nextCursor } = await this.requestWithCursor<NylasApiDraftFull[]>('GET', url, 'listAllDrafts');
+      const pageStart = drafts.length;
       drafts.push(...data.map(normalizeDraftSummary));
+
+      // Stop on the page that contains the caller's match so a thread lookup
+      // does not scan the rest of the mailbox. truncated stays false: the match
+      // was found, the unread remainder was not a ceiling hit.
+      const stopWhen = options.stopWhen;
+      if (stopWhen && drafts.slice(pageStart).some((draft) => stopWhen(draft))) {
+        return { drafts, truncated: false };
+      }
 
       // An empty page with a cursor would otherwise spin forever — bail out.
       if (data.length === 0) break;

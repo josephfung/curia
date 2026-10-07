@@ -1,5 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { CeoNylasClient, type NylasDraftSummary } from '../../../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 10;
@@ -13,6 +13,19 @@ const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
 // silently return an incomplete result.
 const DRAFT_SCAN_LIMIT = 500;
 const DRAFT_PAGE_SIZE = 100;
+
+// Gmail files these outside INBOX. A native query such as `is:unread` still
+// returns them, and triage must not draft a reply to Spam (#2035). Callers
+// opt in with `include_spam_and_trash`; the query string alone does not.
+const HIDDEN_FOLDERS = new Set(['SPAM', 'TRASH']);
+
+// Pages to walk when hidden or Curia-self mail would otherwise shrink a full
+// page to nothing and hide a later real message. Bounded like the list handler.
+const SEARCH_PAGE_CAP = 25;
+
+function isSpamOrTrash(folders: string[]): boolean {
+  return folders.some((folder) => HIDDEN_FOLDERS.has(folder.toUpperCase()));
+}
 
 /**
  * Case-insensitive substring match of `query` against a draft's subject and
@@ -62,6 +75,7 @@ export class CeoInboxSearchHandler implements ToolHandler {
     const limit = Math.max(1, Math.min(rawLimit, MAX_LIMIT));
 
     const folder = typeof input.folder === 'string' ? input.folder.trim() : '';
+    const includeSpamAndTrash = input.include_spam_and_trash === true;
 
     // ── Drafts branch (issue #1000) ──────────────────────────────────────────
     //
@@ -105,14 +119,51 @@ export class CeoInboxSearchHandler implements ToolHandler {
     );
 
     try {
-      const raw = await client.listMessages({ query, limit });
+      // Page until `limit` visible messages are collected. Dropping Spam, Trash,
+      // or Curia-self mail from a full page must not look like an empty mailbox
+      // when a later page still has something to triage.
+      const collected: NylasMessageSummary[] = [];
+      let pageToken: string | undefined;
+      let omittedHidden = 0;
 
-      const messages = curiaEmail
-        ? raw.filter(
-            (msg) => !msg.from.some((p) => p.email.toLowerCase() === curiaEmail),
-          )
-        : raw;
+      for (let page = 0; page < SEARCH_PAGE_CAP && collected.length < limit; page++) {
+        const { messages: raw, nextCursor } = await client.listMessagesPage({
+          query,
+          limit,
+          ...(pageToken ? { pageToken } : {}),
+        });
 
+        for (const msg of raw) {
+          if (curiaEmail && msg.from.some((p) => p.email.toLowerCase() === curiaEmail)) {
+            continue;
+          }
+          if (!includeSpamAndTrash && isSpamOrTrash(msg.folders)) {
+            omittedHidden++;
+            continue;
+          }
+          collected.push(msg);
+          if (collected.length >= limit) break;
+        }
+
+        if (collected.length >= limit || !nextCursor || raw.length === 0) break;
+        if (page === SEARCH_PAGE_CAP - 1) {
+          ctx.log.warn(
+            { pages: SEARCH_PAGE_CAP, kept: collected.length },
+            'ceo-inbox-search: paging cap reached before the result was filled',
+          );
+          break;
+        }
+        pageToken = nextCursor;
+      }
+
+      if (omittedHidden > 0) {
+        ctx.log.info(
+          { omitted: omittedHidden },
+          'ceo-inbox-search: omitted Spam and Trash',
+        );
+      }
+
+      const messages = collected.slice(0, limit);
       return {
         success: true,
         data: { messages, count: messages.length },

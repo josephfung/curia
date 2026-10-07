@@ -151,6 +151,32 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
     expect(url.searchParams.get('in')).toBe('DRAFT');
   });
 
+  it('sends only page_token on a follow-up page', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: [], next_cursor: 'CUR' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = new CeoNylasClient('key', 'grant', logger);
+
+    const page = await client.listMessagesPage({
+      pageToken: 'CUR',
+      folder: 'INBOX',
+      unread: true,
+      query: 'is:unread',
+      limit: 5,
+    });
+
+    expect(page.nextCursor).toBe('CUR');
+    const url = new URL(fetchSpy.mock.calls[0]![0] as string);
+    expect(url.searchParams.get('page_token')).toBe('CUR');
+    expect(url.searchParams.get('in')).toBeNull();
+    expect(url.searchParams.get('unread')).toBeNull();
+    expect(url.searchParams.get('search_query_native')).toBeNull();
+    expect(url.searchParams.get('limit')).toBe('5');
+  });
+
   it('passes custom label names through unmodified', async () => {
     const fetchSpy = mockFetchSuccess();
     const client = new CeoNylasClient('key', 'grant', logger);
@@ -254,6 +280,27 @@ describe('CeoNylasClient — drafts (issue #1000)', () => {
       expect(truncated).toBe(true);
       // 3 pages of 1 each — never runs away past the ceiling.
       expect(fetchSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('stops on the page that contains a stopWhen match', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(pageResponse([
+          { id: 'd1', thread_id: 't1', subject: 'a', to: [], cc: [] },
+          { id: 'd2', thread_id: 't2', subject: 'b', to: [], cc: [] },
+        ], 'CUR2'))
+        .mockResolvedValueOnce(pageResponse([
+          { id: 'd3', thread_id: 't3', subject: 'c', to: [], cc: [] },
+        ]));
+      const client = new CeoNylasClient('key', 'grant', logger);
+
+      const { drafts, truncated } = await client.listAllDrafts({
+        stopWhen: (draft) => draft.threadId === 't2',
+      });
+
+      expect(drafts.map((d) => d.id)).toEqual(['d1', 'd2']);
+      expect(truncated).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
 
     it('stops if a page returns no drafts (defends against an empty-page loop)', async () => {

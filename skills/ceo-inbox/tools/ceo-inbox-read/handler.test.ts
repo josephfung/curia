@@ -64,6 +64,60 @@ describe('CeoInboxReadHandler', () => {
       const url = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(url.pathname.endsWith('/messages/m1')).toBe(true);
     });
+
+    it('maps a Label_N id to its folder display name (#2035)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({
+          id: 'm1',
+          thread_id: 't1',
+          from: [{ email: 'alice@example.com' }],
+          to: [],
+          cc: [],
+          subject: 'Pitch',
+          body: '<p>Invest?</p>',
+          date: 1,
+          unread: true,
+          labels: ['UNREAD', 'Label_39'],
+          folders: ['SPAM', 'Label_39'],
+          attachments: [],
+        }))
+        .mockResolvedValueOnce(jsonResponse([
+          { id: 'SPAM', name: 'SPAM' },
+          { id: 'Label_39', name: '✍️ Drafted' },
+        ]));
+
+      const result = await handler.execute(buildCtx({ message_id: 'm1' }));
+
+      expect(result.success).toBe(true);
+      const data = (result as { data: { labels: string[] } }).data;
+      expect(data.labels).toEqual(['UNREAD', '✍️ Drafted']);
+      const folderUrl = new URL(mockFetch.mock.calls[1]![0] as string);
+      expect(folderUrl.pathname.endsWith('/folders')).toBe(true);
+    });
+
+    it('returns raw label ids when the folder lookup fails', async () => {
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({
+          id: 'm1',
+          thread_id: 't1',
+          from: [{ email: 'alice@example.com' }],
+          to: [],
+          cc: [],
+          subject: 'Pitch',
+          body: '<p>Invest?</p>',
+          date: 1,
+          labels: ['Label_39'],
+          folders: ['Label_39'],
+          attachments: [],
+        }))
+        .mockResolvedValueOnce(new Response('nope', { status: 404 }));
+
+      const result = await handler.execute(buildCtx({ message_id: 'm1' }));
+
+      expect(result.success).toBe(true);
+      const data = (result as { data: { labels: string[] } }).data;
+      expect(data.labels).toEqual(['Label_39']);
+    });
   });
 
   describe('draft path (#1000)', () => {

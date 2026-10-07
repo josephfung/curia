@@ -6,6 +6,11 @@ import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES } from '../../../../src/skills/_shared/read-attachments.js';
 import { captureDraftSnapshot } from '../../../_shared/voice-learning-capture.js';
 
+// Same ceiling ceo-inbox-search uses when it scans drafts. A match stops the
+// scan early; hitting the ceiling without a match means we cannot prove the
+// thread is draft-free, so we warn and still create.
+const DRAFT_SCAN_LIMIT = 500;
+
 export class CeoInboxDraftReplyHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     let apiKey: string;
@@ -61,7 +66,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
 
     ctx.log.info(
       { replyToMessageId, bodyLength: body.length, attachmentCount: attachments.length },
-      'ceo-inbox-draft-reply: creating reply-all draft',
+      'ceo-inbox-draft-reply: preparing reply-all draft',
     );
 
     try {
@@ -77,6 +82,40 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
           'ceo-inbox-draft-reply: original message has no sender address; cannot create reply draft',
         );
         return { success: false, error: 'Original message has no sender address; cannot create a reply draft' };
+      }
+
+      // One draft per thread. A later run, a retry, or the model repeating the
+      // same call must not create another (#2035). Draft summaries carry
+      // threadId but not the message they reply to. A stale draft is updated
+      // with ceo-inbox-draft-edit, not replaced.
+      if (original.threadId) {
+        const { drafts, truncated } = await client.listAllDrafts({
+          maxScan: DRAFT_SCAN_LIMIT,
+          stopWhen: (draft) => draft.threadId === original.threadId,
+        });
+        const existing = drafts.find((draft) => draft.threadId === original.threadId);
+        if (existing) {
+          ctx.log.info(
+            { draftId: existing.id, threadId: original.threadId, replyToMessageId },
+            'ceo-inbox-draft-reply: thread already has a draft',
+          );
+          return {
+            success: true,
+            data: {
+              draft_id: existing.id,
+              subject: existing.subject,
+              to: existing.to,
+              cc: existing.cc,
+              already_exists: true,
+            },
+          };
+        }
+        if (truncated) {
+          ctx.log.warn(
+            { threadId: original.threadId, cap: DRAFT_SCAN_LIMIT },
+            'ceo-inbox-draft-reply: draft scan hit the cap without finding this thread — creating a new draft',
+          );
+        }
       }
 
       // To: the original sender
@@ -165,6 +204,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
           subject: draft.subject,
           to: draft.to,
           cc: draft.cc,
+          already_exists: false,
         },
       };
     } catch (err) {
