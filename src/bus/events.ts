@@ -615,8 +615,10 @@ interface LlmCallPayload {
   responseHash: string;
   /**
    * Sampling temperature actually sent on the provider request.
-   * `null` means the caller left it unset (provider default). Optional so
-   * older emitters and test fixtures stay valid; instrumented paths set it.
+   * `null` means the caller left it unset (provider default). Optional for
+   * test fixtures; every `createLlmCall` site in `src/` sets it. Making this
+   * required (`temperature: number | null`) is a follow-up so absent vs. null
+   * cannot become ambiguous in audit_log.
    */
   temperature?: number | null;
 }

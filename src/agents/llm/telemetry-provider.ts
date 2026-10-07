@@ -15,7 +15,7 @@ import { createLlmCall, createLlmError } from '../../bus/events.js';
 import { createEstimateCostUsd } from './pricing.js';
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
-import { resolveTemperature } from './sampling-options.js';
+import { parseTemperature } from './sampling-options.js';
 
 export class TelemetryLlmProvider implements LLMProvider {
   readonly id: string;
@@ -52,8 +52,10 @@ export class TelemetryLlmProvider implements LLMProvider {
         ? JSON.stringify(response.toolCalls)
         : response.content;
       const responseHash = createHash('sha256').update(responseText).digest('hex');
-      // Same resolver the providers use — null means the request omitted temperature.
-      const temperature = resolveTemperature(params.options, this.logger) ?? null;
+      // Pure parse (no warn) — the inner provider already warned on invalid values.
+      // null means the request omitted temperature.
+      const parsed = parseTemperature(params.options);
+      const temperature = parsed.kind === 'set' ? parsed.value : null;
 
       const event = createLlmCall({
         agentId: `system:${this.serviceId}`,

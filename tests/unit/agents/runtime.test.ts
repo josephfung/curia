@@ -7884,6 +7884,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const narrationCall = llmCalls[1]!;
     expect(narrationCall.payload.agentId).toBe('coordinator');
     expect(narrationCall.payload.outputTokens).toBe(8);
+    // Agent calls send no temperature today — record the omission (#2038).
+    expect(narrationCall.payload.temperature).toBeNull();
+    expect(llmCalls[0]!.payload.temperature).toBeNull();
     expect(narrationCall.archive?.response).toEqual({ type: 'text', content: narration });
     const promptMessages = (narrationCall.archive?.prompt as { messages: Array<{ role: string; content: unknown }> }).messages;
     expect(String(promptMessages.at(-1)!.content)).toMatch(/note_for_principal/);

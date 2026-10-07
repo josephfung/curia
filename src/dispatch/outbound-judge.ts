@@ -33,6 +33,9 @@ import { JUDGE_SYSTEM_PROMPT, buildJudgeUserPrompt } from './outbound-judge-prom
 /** Cap free-text `reason` so unbounded provider messages don't bloat audit_log. */
 const REASON_MAX_LEN = 200;
 
+/** Deterministic verdict sampling — used for both the chat() call and llm.call audit. */
+const JUDGE_TEMPERATURE = 0;
+
 export interface JudgeConfig {
   /** When false, review() returns [] without calling the model. */
   enabled: boolean;
@@ -125,7 +128,7 @@ export class OutboundLlmJudge implements OutboundJudge {
         // If a model ever emits a verbose reason that gets truncated, parseVerdict treats
         // the cut-off JSON as malformed — which fails toward blocking (split/closed), the
         // safe direction for a security boundary.
-        options: { temperature: 0, max_tokens: 100, signal: controller.signal },
+        options: { temperature: JUDGE_TEMPERATURE, max_tokens: 100, signal: controller.signal },
       });
       // Once we stop awaiting chatPromise (on timeout/abort), a late rejection would be
       // unhandled. LLMProvider.chat() is non-throwing by contract, but guard anyway.
@@ -266,8 +269,7 @@ export class OutboundLlmJudge implements OutboundJudge {
         providerRequestId: provenance.providerRequestId,
         promptHash,
         responseHash,
-        // Matches options.temperature on the chat() call above (deterministic verdict).
-        temperature: 0,
+        temperature: JUDGE_TEMPERATURE,
         parentEventId: 'system',
         archive: {
           prompt: {

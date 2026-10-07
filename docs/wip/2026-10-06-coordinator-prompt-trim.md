@@ -261,14 +261,12 @@ Added 2026-10-07, measured on that day's prod prompt (llm.call
   - It reduces the error rather than removing it, and #2033 removes it by construction.
   - PR 11's probe gets a temperature arm. If that arm helps, add a per-tier sampling setting
     and put it through the behavior gate before enabling it.
-  - **Prerequisite, and a live bug:** neither provider sends a caller's `temperature`.
-    - `src/agents/llm/openrouter.ts` `buildCreateParams` reads only `model`, `max_tokens` and
-      `signal` from `options`, and `anthropic.ts` has no temperature handling at all.
-    - So the `temperature: 0` that the outbound judge, the escalation judge and the drift
-      detector pass has never been sent. Their "deterministic" verdicts run at the provider
-      default.
-    - Fix the plumbing before any temperature setting can mean anything. That fix is its own
-      issue, not part of this plan.
+  - **Prerequisite (fixed in #2038):** providers now forward a caller's `temperature`.
+    - OpenRouter and Anthropic `buildCreateParams` send a finite `options.temperature` and
+      omit it when unset. Judges' `temperature: 0` reaches the API.
+    - `llm.call` records the temperature sent (or `null` when omitted).
+    - Per-tier sampling can build on this plumbing; treat `{ temperature: undefined }` as
+      unset so a missing tier value does not warn on every agent call.
 
 ## PR sequence
 
@@ -447,15 +445,13 @@ Then:
 
       Run each request 50 times per arm on `deepseek/deepseek-v4.1-flash`: 400 calls, about
       $4.
-    - **Why a temperature arm.** Agent calls send no `temperature`. The OpenRouter provider
-      sends only `model`, `max_tokens`, `messages` and `tools`. OpenRouter publishes no
-      default for this model, so the provider default applies (DeepSeek's own API defaults to
-      1.0). Copying an address is the kind of task where sampling at 1.0 can pick a
-      low-probability token, like the stray dot in #2033.
-    - **Make the temperature arm actually send a temperature.** The providers drop
-      `options.temperature` (see Findings), so a probe that goes through them would measure
-      nothing. Call OpenRouter directly, or plumb the parameter through first. Assert from
-      the request or OpenRouter's generation record that the value was sent.
+    - **Why a temperature arm.** Agent calls send no `temperature` today, so they use the
+      provider default. OpenRouter publishes no default for this model (DeepSeek's own API
+      defaults to 1.0). Copying an address is the kind of task where sampling at 1.0 can pick
+      a low-probability token, like the stray dot in #2033.
+    - **Make the temperature arm actually send a temperature.** Providers forward
+      `options.temperature` as of #2038, so the probe can go through them. Assert from the
+      request or OpenRouter's generation record that the value was sent.
     - **Make unsupported parameters fail loudly.** Send `provider: { require_parameters: true }`,
       so a provider that can't honor `temperature` or `logprobs` errors instead of ignoring
       it.
