@@ -84,7 +84,9 @@ async function resolveReferenceList(
     if (addresses.includes(resolved.identifier)) continue;
     addresses.push(resolved.identifier);
     contactIds.push(resolved.kind === 'contact' ? resolved.contactId : undefined);
-    if (resolved.identityName) identityNames.push(resolved.identityName);
+    // Always set, so identityNames stays aligned with addresses. A resolved
+    // reference always names the identity (a label, "primary", or "unlabelled").
+    identityNames.push(resolved.identityName);
   }
   return { addresses, contactIds, identityNames };
 }

@@ -898,7 +898,7 @@ export class ExecutionLayer {
           skillLogger.warn({ err: resolved.cause, toolName }, 'approval display: recipient reference lookup failed — showing it unresolved');
           parts.push(`${entry} (contact lookup failed)`);
         } else {
-          parts.push(`${entry} (resolves to no verified address)`);
+          parts.push(`${entry} (could not be resolved)`);
         }
       }
       shown[field] = parts.join(', ');

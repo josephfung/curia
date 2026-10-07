@@ -49,19 +49,20 @@ The important property is how errors fail. A corrupted reference finds no contac
 
 Without a hint there is no way to reach a secondary address except the raw field, which is the transcription path this ADR removes. The hint is the text after the first `#` on a reference. A blank hint is no hint. A separate `to_label` field was rejected: `cc` is a list, and a side field can be applied to the wrong entry or dropped by one of the callers. The hint travels inside the string the skill, the pre-gate check, Gate C and the approval display already pass to the resolver, so they cannot choose different addresses.
 
-The hint is matched only against labels an agent can see. That is the principal block's rule (`visibleIdentityLabel`): trimmed, newlines removed, at most 40 characters, and a label containing `@` or a run of 7 digits is not a label. A hidden label cannot be selected, and it is not quoted in an error, so the model is not handed an address to retype.
+The hint is matched against the cleaned label: newlines removed, and a label containing `@` or a run of 7 digits is not a label (`cleanedIdentityLabel`). Matching uses that full note, and also accepts an exact match on the 40-character form the principal block shows, so a label copied from the block still works. A hidden label cannot be selected, and it is not quoted in an error, so the model is not handed an address to retype. A hint that itself looks like an address or a phone number is not a hint: the string is not a reference, so an address whose local part contains `#` stays on the raw path.
 
-Matching is case-insensitive. Exact matches win. If none is exact, a label matches when every token of the hint is a token of the label, where a token is a run of letters or numbers. `work` matches `work email` and not `homework`.
+Matching is case-insensitive. Exact matches win. If none is exact, a label matches when every token of the hint is a token of the cleaned label, where a token is a run of letters or numbers. `work` matches `work email` and not `homework`.
 
 | Situation | Result |
 |---|---|
 | No hint | Unchanged: the primary, otherwise the oldest |
 | One match | That identity |
-| No candidate has a visible label | The default pick. Not an error, including a single unlabelled address |
+| One address, and it has no visible label | The default pick. Not an error |
+| A hint, and more than one address has no visible label | Nothing is sent. Each candidate is listed as unlabelled |
 | Any visible label, and the hint matches none — including when some addresses are unlabelled | Nothing is sent |
 | More than one match | Nothing is sent |
 
-An unlabelled address next to labelled ones is a conflict rather than the default. It might have been the address meant, and the error lists it as unlabelled so the agent can retry with no hint. The error lists every candidate by visible label, flags the primary, and says to retry with one listed label or omit the label to use the primary (or the oldest, when none of the candidates is the primary). It contains no address. The success result names the identity used: its visible label, or `primary`, or `unlabelled`.
+An unlabelled address next to labelled ones is a conflict rather than the default. It might have been the address meant, and the error lists it as unlabelled so the agent can retry with no hint. Several unlabelled addresses are a conflict for the same reason: the hint named one of them and the send would otherwise pick the primary silently. The error lists every candidate by its cleaned label (not the 40-character cut), flags the primary, and says to retry with one listed label or omit the label to use the primary (or the oldest, when none of the candidates is the primary). It contains no address. The success result names the identity used: its cleaned label, or `primary`, or `unlabelled`.
 
 ### The raw path is separate and deliberate
 
@@ -71,9 +72,9 @@ Raw addresses move to new fields, for someone with no contact record: `to_addres
 
 For the four send skills, the execution layer checks and resolves recipients before the autonomy gates (`resolveSendSkillReferences` in `src/skills/execution.ts`), with the same resolver the skill uses. It refuses an address or template token in a reference field, a reference in a raw field, a reference that does not resolve, and more than 25 references, each with the skill's own message. So no gate files an approval for a send that cannot run. A contact-store outage is classified `DATABASE_UNAVAILABLE`.
 
-Gate C's carve-out parsers read both fields, and the gate substitutes the resolved addresses before comparing. The principal-sole carve-out and the known-tier reply-to-sender check therefore judge the address the skill will send to. A reference shape cannot collide with an address on any send channel: email has `@`, E.164 starts with `+`, and a Slack user id has no hyphens.
+Gate C's carve-out parsers read both fields, and the gate substitutes the resolved addresses before comparing. The principal-sole carve-out and the known-tier reply-to-sender check therefore judge the address the skill will send to. A reference shape cannot collide with an address on any send channel: email has `@`, E.164 starts with `+`, and a Slack user id has no hyphens. A hint containing `@` or a run of 7 digits is not a hint, so an address whose local part contains `#` stays an address.
 
-Approvals show what will be sent: each reference as its address followed by the contact name (sanitized, since names come from inbound headers), every cc recipient, and the raw address on the raw path. The stored payload stays the agent's input, so an approval re-resolves the reference when it runs.
+Approvals show what will be sent: each reference as its address followed by the contact name (sanitized, since names come from inbound headers), every cc recipient, and the raw address on the raw path. The stored payload stays the agent's input, so an approval re-resolves the reference when it runs. A reference that no longer resolves is shown as unresolved, rather than as a contact with no verified address: the cause may be a renamed label, not a missing identity.
 
 ### Block errors name unmatched recipients
 
@@ -98,5 +99,5 @@ Option A is not added. What send-by-reference does not cover:
 - A contact the gateway created after a cold send has an unverified identity, so a later send to it by reference fails closed. The agent uses the raw field again, or the principal verifies the address. #2040 covers whether an inbound reply should verify it.
 - Raw-address paths remain: the four raw fields, and `email-draft-save` with `send-draft`. #2041 decides whether to retire them. A secondary address of a known contact can be reached with a label hint, so retiring the raw fields no longer removes that ability.
 - A send by reference costs a contact read before the gates and another in the skill, plus one more if an approval is filed.
-- An approval resolves the reference again when it runs, up to 48 hours later. If the contact's primary changed in between, the send goes to the contact's new address, which is another verified address of the same person.
+- An approval resolves the reference again when it runs, up to 48 hours later. If the contact's primary changed in between, the send goes to the contact's new address, which is another verified address of the same person. A hinted reference is resolved again too. If that label was renamed or removed in the window, the approved send fails closed with a conflict rather than falling through to a different address.
 - Contacts the gateway created before this change still carry `ceo_stated` and verified identities. Relabelling them is a data change, left to the operator.

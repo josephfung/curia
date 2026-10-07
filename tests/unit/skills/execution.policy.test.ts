@@ -3433,6 +3433,7 @@ describe('approval trigger on gate block', () => {
       ['a template token in to', 'email-send', { to: '${principal_contact_id}', subject: 'x', body: 'y' }, /Unresolved template placeholder/],
       ['a reference in to_address', 'email-send', { to_address: 'principal', subject: 'x', body: 'y' }, /to_address takes an address/],
       ['a labelled reference in to_address', 'email-send', { to_address: 'principal#personal', subject: 'x', body: 'y' }, /to_address takes an address/],
+      ['an address whose local part contains # is not a reference', 'email-send', { to: 'principal#ops@vendor.example', subject: 'x', body: 'y' }, /to takes a contact ID or "principal"/],
       ['a reference in recipient_number', 'signal-send', { recipient_number: 'principal', message: 'm' }, /recipient_number takes an address/],
       ['a UUID matching no contact', 'email-send', { to: '00000000-0000-4000-8000-000000000000', subject: 'x', body: 'y' }, /No contact has ID/],
     ])('refuses %s without filing an approval', async (_label, tool, input, message) => {
@@ -3495,6 +3496,17 @@ describe('approval trigger on gate block', () => {
       }
       expect(trigger.request).not.toHaveBeenCalled();
       expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('does not refuse an address whose local part contains # in to_address (#2047)', async () => {
+      const { layer } = layerWithTrigger();
+      const result = await layer.invoke(
+        'email-send',
+        { to_address: 'principal#ops@vendor.example', subject: 'x', body: 'y' },
+        undefined,
+        { taskEventId: 'task-1' },
+      );
+      if (!result.success) expect(result.error).not.toMatch(/takes an address/);
     });
 
     it('classifies a contact-store outage as DATABASE_UNAVAILABLE', async () => {
