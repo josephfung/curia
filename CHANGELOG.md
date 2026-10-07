@@ -69,6 +69,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Approval expiry** — runs as an hourly system interval, not a coordinator LLM turn. (#2013)
 - **Coordinator pins** — google-workspace is activated on demand, not pinned; 85–98 KB off most calls. (#2024)
 - **`skill-activate`** — `taskRepo` is optional, so skills activate in the test-mode stack too. (#2024)
 - **Coordinator prompt** — tool how-to moves into tool descriptions and a skill reference; 33 KB → 24 KB. (#1960)
@@ -140,6 +141,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
+- **`approval-expiry-sweep` tool** — retired with the coordinator's hourly cron; `autonomy.approval_expiry` sets the interval. (#2013)
 - **`no_reply_principal` email** — a deliberate decline stays in audit and logs, not the inbox. (#1908)
 - **Google Workspace calendar tools** — no longer loaded; principal calendar belongs to `@calendar`. (#1853, #1957)
 - **MCP calendar holdback and identity guard** — removed; the `--tools` allowlist keeps Calendar tools out. (#1957)
