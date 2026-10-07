@@ -743,6 +743,93 @@ describe('OpenRouterProvider — stream', () => {
     });
   });
 
+  describe('temperature', () => {
+    it('sends temperature on chat when options.temperature is a finite number', async () => {
+      const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      await provider.chat({
+        model: 'google/gemini-2.0-flash-001',
+        messages: [{ role: 'user', content: 'Hello' }],
+        options: { temperature: 0 },
+      });
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params.temperature).toBe(0);
+    });
+
+    it('omits temperature on chat when options.temperature is unset', async () => {
+      const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      await provider.chat({
+        model: 'google/gemini-2.0-flash-001',
+        messages: [{ role: 'user', content: 'Hello' }],
+      });
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params).not.toHaveProperty('temperature');
+    });
+
+    it('warns and omits temperature when options.temperature is non-numeric', async () => {
+      const logger = createSilentLogger();
+      const warn = vi.spyOn(logger, 'warn');
+      const provider = new OpenRouterProvider('test-key', logger, new ModelRegistry(createSilentLogger()));
+      await provider.chat({
+        model: 'google/gemini-2.0-flash-001',
+        messages: [{ role: 'user', content: 'Hello' }],
+        options: { temperature: 'hot' },
+      });
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params).not.toHaveProperty('temperature');
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ temperature: 'hot' }),
+        expect.stringContaining('non-numeric options.temperature'),
+      );
+    });
+
+    it('sends temperature on the streaming path when set', async () => {
+      mockCreate.mockResolvedValue(makeStream([
+        {
+          id: 'chatcmpl-temp',
+          model: 'openai/gpt-4o',
+          choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop', logprobs: null }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          object: 'chat.completion.chunk',
+          created: 1700000000,
+        },
+      ]));
+      const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      await collectStream(provider.stream({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: 'openai/gpt-4o',
+        options: { temperature: 0 },
+      }));
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params.temperature).toBe(0);
+      expect(params.stream).toBe(true);
+    });
+
+    it('omits temperature on the streaming path when unset', async () => {
+      mockCreate.mockResolvedValue(makeStream([
+        {
+          id: 'chatcmpl-temp-unset',
+          model: 'openai/gpt-4o',
+          choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop', logprobs: null }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          object: 'chat.completion.chunk',
+          created: 1700000000,
+        },
+      ]));
+      const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      await collectStream(provider.stream({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: 'openai/gpt-4o',
+      }));
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params).not.toHaveProperty('temperature');
+    });
+  });
+
   it('passes AbortSignal through to chat.completions.create()', async () => {
     mockCreate.mockResolvedValue(makeStream([
       {

@@ -10,6 +10,7 @@ import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
 import type { ModelRegistry } from './llm/model-registry.js';
+import { resolveTemperature } from './llm/sampling-options.js';
 import { createHash } from 'node:crypto';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
@@ -2947,7 +2948,7 @@ export class AgentRuntime {
    */
   private async publishLlmCall(call: {
     provider: LLMProvider;
-    params: { messages: Message[]; tools?: ToolDefinition[] };
+    params: { messages: Message[]; tools?: ToolDefinition[]; options?: Record<string, unknown> };
     response: LLMResponse;
     latencyMs: number;
     taskEvent: AgentTaskEvent;
@@ -2969,6 +2970,9 @@ export class AgentRuntime {
         .update(response.type === 'text' ? response.content : JSON.stringify(response.toolCalls))
         .digest('hex');
 
+      // Same resolver the providers use — null means the request omitted temperature.
+      const temperature = resolveTemperature(params.options, logger) ?? null;
+
       const event = createLlmCall({
         agentId,
         conversationId: taskEvent.payload.conversationId,
@@ -2985,6 +2989,7 @@ export class AgentRuntime {
         latencyMs: call.latencyMs,
         promptHash,
         responseHash,
+        temperature,
         parentEventId: taskEvent.id,
         // Typed non-persisted archive — AuditLogger writes llm_call_archive atomically.
         archive: {

@@ -150,6 +150,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **LLM providers** — forward caller `temperature` (judges' `0` applies); `llm.call` records it. (#2038)
 - **Scenario case 13a** — stubs every lookup the coordinator reaches for, so the gate measures the model. (#1954)
 - **OpenRouter usage** — reports cache-read and cache-write tokens; `inputTokens` now counts only uncached input. (#1962)
 - **Cost estimates** — cache tokens on a model with no registry cache rate are charged the input rate, not $0. (#1962)

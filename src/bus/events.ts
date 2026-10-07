@@ -613,6 +613,12 @@ interface LlmCallPayload {
   // full prompts/responses go in llm_call_archive, see spec 10)
   promptHash: string;
   responseHash: string;
+  /**
+   * Sampling temperature actually sent on the provider request.
+   * `null` means the caller left it unset (provider default). Optional so
+   * older emitters and test fixtures stay valid; instrumented paths set it.
+   */
+  temperature?: number | null;
 }
 
 // ModelFallbackEngagedPayload — emitted by the agent runtime when the primary

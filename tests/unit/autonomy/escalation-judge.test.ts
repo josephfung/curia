@@ -406,8 +406,20 @@ describe('EscalationJudge.classifyDisclosure', () => {
       providerReturning(textResponse('{"class": "public", "reason": "fine"}')),
     );
     await judge.classifyDisclosure({ content: 'hello', recipientTier: 'unknown', conversationId: 'c1' });
-    const events = (bus as unknown as { published: Array<{ type: string }> }).published.filter((e) => e.type === 'llm.call');
+    const events = (bus as unknown as { published: Array<{ type: string; payload?: { temperature?: number | null } }> }).published.filter((e) => e.type === 'llm.call');
     expect(events).toHaveLength(1);
+    expect(events[0]?.payload?.temperature).toBe(0);
+  });
+
+  it('requests temperature 0 so the provider builds a deterministic verdict call (#2038)', async () => {
+    const provider = providerReturning(textResponse('{"class": "public", "reason": "fine"}'));
+    const { judge } = makeJudge(provider);
+    await judge.classifyDisclosure({ content: 'hello', recipientTier: 'unknown', conversationId: 'c1' });
+    expect(provider.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ temperature: 0 }),
+      }),
+    );
   });
 
   it('does not publish telemetry on timeout (no model response)', async () => {

@@ -22,6 +22,7 @@ import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvena
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
+import { resolveTemperature } from './sampling-options.js';
 
 /**
  * Best-effort message extraction, mirroring classify.ts's own logic so the
@@ -313,6 +314,13 @@ export class OpenRouterProvider implements LLMProvider {
       max_tokens: callerMaxTokens !== undefined ? Math.min(callerMaxTokens, modelMaxTokens) : modelMaxTokens,
       messages: conversationMessages,
     };
+
+    // Forward a finite caller temperature; omit the key otherwise so the
+    // upstream model keeps its default (judges pass 0 for stable verdicts).
+    const temperature = resolveTemperature(options, this.logger);
+    if (temperature !== undefined) {
+      createParams.temperature = temperature;
+    }
 
     // Only attach the tools array when tools are provided — the API rejects
     // an empty tools array, so we omit the key entirely when there are none.
