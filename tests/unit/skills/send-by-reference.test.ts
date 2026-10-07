@@ -139,7 +139,11 @@ describe('send to the principal by reference (#2033 regression)', () => {
     const result = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input('principal')));
     expect(result.success).toBe(true);
     expect(delivered(h)).toEqual(['pat@home.example']);
-    if (result.success) expect(result.data).toMatchObject({ to: 'pat@home.example', contact_id: h.principalId });
+    if (result.success) {
+      expect(result.data).toMatchObject({ to: 'pat@home.example' });
+      // The principal's contact ID stays out of the model's context (spec 09).
+      expect(result.data).not.toHaveProperty('contact_id');
+    }
   });
 
   it('email: cc by reference resolves too', async () => {
@@ -229,6 +233,17 @@ describe('recipient-aware block errors (#2033)', () => {
     }
   });
 
+  it('flags a recipient that matches only an unverified identity, e.g. a typo delivered once before', async () => {
+    // First send: the typo goes out and the gateway records an unverified outbound_recipient contact.
+    await SKILLS.email.handler.execute(ctx(h, { to_address: 'pat@home.exampl', subject: 'Hi', body: 'Hello.' }));
+    h.filterCheck.mockResolvedValue(AUDIENCE_LEAK);
+
+    const result = await SKILLS.email.handler.execute(ctx(h, { to_address: 'pat@home.exampl', subject: 'Drafts', body: 'Here.' }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toContain('pat@home.exampl matches only an unverified contact address');
+  });
+
   it('adds nothing when every recipient is a known contact', async () => {
     h.filterCheck.mockResolvedValue(AUDIENCE_LEAK);
     const result = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(h.spouseId)));
@@ -276,7 +291,7 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
 
     const result = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(resolved!.contactId)));
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/unverified or inactive/);
+    if (!result.success) expect(result.error).toMatch(/unverified, inactive/);
     expect(delivered(h)).toEqual([]);
   });
 });

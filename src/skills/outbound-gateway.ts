@@ -136,9 +136,9 @@ export interface OutboundSendResult {
    */
   blockedRules?: string[];
   /**
-   * Recipients of a blocked send that match no contact (#2033). Set only on
-   * filter blocks, and only for identifiers the contact lookup confirmed are
-   * unknown; `blockedReason` already carries the agent-facing note.
+   * Recipients of a blocked send that match no contact, or only an unverified
+   * identity (#2033). Set only on filter blocks, and only when the contact lookup
+   * succeeded; `blockedReason` already carries the agent-facing note.
    */
   unmatchedRecipients?: string[];
   /** True when the autonomy gate blocked this send */
@@ -349,6 +349,18 @@ function buildBlockReasonSummary(findings: Array<{ rule: string; detail: string 
 }
 
 /**
+ * A blocked send's recipient that the contact lookup could not tie to a confirmed
+ * address (#2033): no contact at all, or a match on an unverified identity only.
+ * The second covers a mistyped address that was delivered once before: the gateway
+ * recorded it as an unverified `outbound_recipient` contact, and it must not stop
+ * counting as suspect from then on.
+ */
+export interface UnmatchedRecipient {
+  identifier: string;
+  reason: 'no-contact' | 'unverified';
+}
+
+/**
  * Agent-facing note for a blocked send whose recipient matches no contact (#2033).
  *
  * Block reasons describe the content, so an agent with a mistyped address edits
@@ -356,14 +368,18 @@ function buildBlockReasonSummary(findings: Array<{ rule: string; detail: string 
  * content to an invented domain on the fifth try. Naming the recipient points the
  * agent at the address first.
  */
-export function formatUnmatchedRecipientNote(unmatched: readonly string[]): string {
-  const subject = unmatched.length === 1
-    ? `${unmatched[0]} matches no known contact.`
-    : `${unmatched.join(', ')} match no known contact.`;
+export function formatUnmatchedRecipientNote(unmatched: readonly UnmatchedRecipient[]): string {
+  const sentence = (ids: string[], verbOne: string, verbMany: string, rest: string) =>
+    ids.length === 0 ? '' : `${ids.join(', ')} ${ids.length === 1 ? verbOne : verbMany} ${rest} `;
+  const none = unmatched.filter((u) => u.reason === 'no-contact').map((u) => u.identifier);
+  const unverified = unmatched.filter((u) => u.reason === 'unverified').map((u) => u.identifier);
   return (
-    `Recipient check: ${subject} The block may be about who this is going to, not what it says. ` +
-    `Check the recipient before you rewrite the message. To reach a known person, send by their contact ID, ` +
-    `or "${PRINCIPAL_RECIPIENT_ALIAS}" for the principal, instead of typing an address.`
+    'Recipient check: ' +
+    sentence(none, 'matches', 'match', 'no known contact.') +
+    sentence(unverified, 'matches', 'match', 'only an unverified contact address, one nobody has confirmed.') +
+    `The block may be about who this is going to, not what it says. Check the recipient before you rewrite ` +
+    `the message. To reach a known person, send by their contact ID, or "${PRINCIPAL_RECIPIENT_ALIAS}" for ` +
+    'the principal, instead of typing an address.'
   );
 }
 
@@ -372,13 +388,16 @@ export function formatUnmatchedRecipientNote(unmatched: readonly string[]): stri
  * any recipient that matches no contact (#2033). The 2026-10-07 FYIs read as
  * content problems while the address was the problem.
  */
-function unmatchedRecipientNotificationLines(intended: string, unmatched: readonly string[]): string[] {
+function unmatchedRecipientNotificationLines(intended: string, unmatched: readonly UnmatchedRecipient[]): string[] {
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-  const intendedUnmatched = unmatched.some((u) => same(u, intended));
-  const others = unmatched.filter((u) => !same(u, intended));
+  const label = (u: UnmatchedRecipient) => (u.reason === 'no-contact' ? 'matches no known contact' : 'unverified contact address');
+  const forIntended = unmatched.find((u) => same(u.identifier, intended));
+  const others = unmatched.filter((u) => !same(u.identifier, intended));
   return [
-    `Intended recipient: ${intended}${intendedUnmatched ? ' (matches no known contact)' : ''}`,
-    ...(others.length > 0 ? [`Also matching no known contact: ${others.join(', ')}`] : []),
+    `Intended recipient: ${intended}${forIntended ? ` (${label(forIntended)})` : ''}`,
+    ...(others.length > 0
+      ? [`Other recipients to check: ${others.map((u) => `${u.identifier} (${label(u)})`).join(', ')}`]
+      : []),
   ];
 }
 
@@ -390,8 +409,13 @@ function unmatchedRecipientNotificationLines(intended: string, unmatched: readon
  */
 function withoutRecipientReferences(payload: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(payload).filter(([key, value]) =>
-      !((key === 'to' || key === 'recipient') && typeof value === 'string' && parseRecipientReference(value) !== null)),
+    Object.entries(payload).filter(([key, value]) => {
+      if (typeof value !== 'string') return true;
+      // to / recipient hold one reference; cc holds a list that may mix them in.
+      if (key === 'to' || key === 'recipient') return parseRecipientReference(value) === null;
+      if (key === 'cc') return !value.split(',').some((entry) => parseRecipientReference(entry) !== null);
+      return true;
+    }),
   );
 }
 
@@ -699,7 +723,7 @@ export class OutboundGateway {
             const notificationPayload = enrichGatewayApprovalPayload(
               withoutRecipientReferences(recipe.partialPayload ?? {}),
               request.channel === 'email'
-                ? { to: request.to, subject: request.subject, body: request.body }
+                ? { to: request.to, cc: request.cc?.join(', '), subject: request.subject, body: request.body }
                 : request.channel === 'slack'
                   // `recipient` is the field the approval renderer shows (#2033).
                   ? { slackChannelId: request.slackChannelId, recipient: request.slackUserId ?? request.slackChannelId, message: request.message }
@@ -1011,8 +1035,10 @@ export class OutboundGateway {
                   toolName: recipe.toolName,
                   payload: {
                     ...withoutRecipientReferences(recipe.partialPayload ?? {}),
-                    // The display shows the resolved address; the stored payload keeps the reference.
-                    ...(request.channel === 'email' ? { to: request.to } : {}),
+                    // The display shows the resolved addresses; the stored payload keeps the references.
+                    ...(request.channel === 'email'
+                      ? { to: request.to, ...(request.cc && request.cc.length > 0 ? { cc: request.cc.join(', ') } : {}) }
+                      : {}),
                     export_items: items.map((i) => ({
                       node_id: i.nodeId,
                       label: i.label,
@@ -1674,8 +1700,8 @@ export class OutboundGateway {
    * error leaves that identifier out: the note says "matches no contact" only
    * when the lookup confirmed it.
    */
-  private async findUnmatchedRecipients(channel: string, identifiers: readonly string[]): Promise<string[]> {
-    const unmatched: string[] = [];
+  private async findUnmatchedRecipients(channel: string, identifiers: readonly string[]): Promise<UnmatchedRecipient[]> {
+    const unmatched: UnmatchedRecipient[] = [];
     const seen = new Set<string>();
     for (const identifier of identifiers) {
       const key = identifier.toLowerCase();
@@ -1683,7 +1709,8 @@ export class OutboundGateway {
       seen.add(key);
       try {
         const contact = await this.contactService.resolveByChannelIdentity(channel, identifier);
-        if (contact === null) unmatched.push(identifier);
+        if (contact === null) unmatched.push({ identifier, reason: 'no-contact' });
+        else if (!contact.verified) unmatched.push({ identifier, reason: 'unverified' });
       } catch (err) {
         this.log.warn(
           { err, channel, recipientId: redactId(identifier) },
@@ -1697,13 +1724,13 @@ export class OutboundGateway {
   /** Append the unmatched-recipient note to a blocked result (#2033). */
   private withUnmatchedRecipientNote(
     result: OutboundSendResult,
-    unmatched: readonly string[],
+    unmatched: readonly UnmatchedRecipient[],
   ): OutboundSendResult {
     if (unmatched.length === 0) return result;
     return {
       ...result,
       blockedReason: `${result.blockedReason ?? 'Send blocked'}\n\n${formatUnmatchedRecipientNote(unmatched)}`,
-      unmatchedRecipients: [...unmatched],
+      unmatchedRecipients: unmatched.map((u) => u.identifier),
     };
   }
 

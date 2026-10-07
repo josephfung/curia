@@ -114,12 +114,17 @@ import {
 import { createExportDelivered } from '../bus/events.js';
 import { isDbUnavailableError } from '../db/resilience.js';
 import { USER_SECRET_PREFIX } from '../secrets/user-secret-name.js';
+import { splitCommaSeparatedAddresses } from '../contacts/principal-carveout-parse.js';
+import type { ErrorType } from '../errors/types.js';
 import {
   SEND_SKILL_RECIPIENT_FIELDS,
   formatResolvedRecipient,
   parseRecipientReference,
   resolveRecipientReference,
 } from './_shared/recipient-reference.js';
+
+/** Contact references one send may name across to/cc/recipient (#2033). */
+const MAX_SEND_REFERENCES = 25;
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -865,76 +870,161 @@ export class ExecutionLayer {
   ): Promise<Record<string, unknown>> {
     const fields = SEND_SKILL_RECIPIENT_FIELDS[toolName];
     if (!fields) return input;
+    const shown: Record<string, unknown> = { ...input };
+
+    // Each reference field the approval might render: email-send's to and cc,
+    // or the 1:1 recipient. References were checked before the gates, so a
+    // failure here is a lookup error or a change since then.
+    const referenceFields = fields.channel === 'email' ? ['to', 'cc'] : [fields.reference];
+    for (const field of referenceFields) {
+      const value = input[field];
+      if (typeof value !== 'string' || !value.trim() || !this.contactService) continue;
+      const entries = fields.channel === 'email' ? splitCommaSeparatedAddresses(value) : [value.trim()];
+      const parts: string[] = [];
+      for (const entry of entries) {
+        if (parseRecipientReference(entry) === null) {
+          parts.push(entry);
+          continue;
+        }
+        const resolved = await resolveRecipientReference(
+          entry,
+          fields.channel,
+          { field, rawField: fields.raw },
+          { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
+        );
+        if (resolved.ok) {
+          parts.push(formatResolvedRecipient(resolved));
+        } else if (resolved.cause !== undefined) {
+          skillLogger.warn({ err: resolved.cause, toolName }, 'approval display: recipient reference lookup failed — showing it unresolved');
+          parts.push(`${entry} (contact lookup failed)`);
+        } else {
+          parts.push(`${entry} (resolves to no verified address)`);
+        }
+      }
+      shown[field] = parts.join(', ');
+    }
+
+    // A raw-path send is shown under the reference field's name, which the
+    // approval renderer reads (to_address and recipient_number are new keys).
     const reference = input[fields.reference];
     const raw = input[fields.raw];
-    if (typeof reference === 'string' && reference.trim()) {
-      if (parseRecipientReference(reference) === null || !this.contactService) return input;
-      const resolved = await resolveRecipientReference(
-        reference,
-        fields.channel,
-        { field: fields.reference, rawField: fields.raw },
-        { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
-      );
-      if (!resolved.ok) {
-        if (resolved.cause !== undefined) {
-          skillLogger.warn({ err: resolved.cause, toolName }, 'approval display: recipient reference lookup failed — showing it unresolved');
-        }
-        return { ...input, [fields.reference]: `${reference.trim()} (resolves to no verified address)` };
-      }
-      return { ...input, [fields.reference]: formatResolvedRecipient(resolved) };
+    if (!(typeof reference === 'string' && reference.trim()) && typeof raw === 'string' && raw.trim()) {
+      shown[fields.reference] = raw.trim();
     }
-    if (typeof raw === 'string' && raw.trim()) {
-      return { ...input, [fields.reference]: raw.trim() };
+    // Every cc recipient, referenced or raw, so none is hidden from the approver.
+    const ccRaw = input['cc_addresses'];
+    if (fields.channel === 'email' && typeof ccRaw === 'string' && ccRaw.trim()) {
+      shown['cc'] = [shown['cc'], ccRaw.trim()].filter((v) => typeof v === 'string' && v.trim()).join(', ');
     }
-    return input;
+    return shown;
   }
 
   /**
-   * Replace recipient references (a contact UUID or "principal") with the
-   * address the send skill will resolve them to (#2033, ADR-047). Raw
-   * identifiers pass through: a reference shape cannot collide with an
-   * address on any send channel (see parseRecipientReference).
+   * Check and resolve a send skill's recipient references (#2033, ADR-047), before
+   * any gate runs. Every entry in a reference field (`to`, `cc`, `recipient`) must
+   * be a contact UUID or "principal"; an address or a template token there is
+   * refused with the resolver's message, no lookup needed. References resolve
+   * through the same resolver the skill uses.
    *
-   * Uses the same resolver as the skill, so the gate judges the real
-   * destination. A reference that does not resolve fails closed with the
-   * resolver's error, the one the skill would have returned.
+   * Returns reference → address. Without a contact service the map is empty: the
+   * skill still resolves (and fails closed) itself, and Gate C refuses any
+   * reference it cannot look up.
    */
-  private async resolveGateCRecipientReferences(
-    channel: string,
-    recipients: string[],
+  private async resolveSendSkillReferences(
+    toolName: string,
+    input: Record<string, unknown>,
     skillLogger: Logger,
-  ): Promise<{ ok: true; recipients: string[] } | { ok: false; error: string }> {
-    if (!recipients.some((r) => parseRecipientReference(r) !== null)) {
-      return { ok: true, recipients };
+  ): Promise<
+    | { ok: true; resolved: Map<string, string> }
+    | { ok: false; error: string; errorType?: ErrorType }
+  > {
+    const resolved = new Map<string, string>();
+    const fields = SEND_SKILL_RECIPIENT_FIELDS[toolName];
+    if (!fields) return { ok: true, resolved };
+    // email-send's cc is a reference field too, with cc_addresses as its raw sibling.
+    const referenceFields = fields.channel === 'email'
+      ? [{ field: 'to', rawField: 'to_address' }, { field: 'cc', rawField: 'cc_addresses' }]
+      : [{ field: fields.reference, rawField: fields.raw }];
+    const entriesOf = (value: unknown): string[] => {
+      if (typeof value !== 'string' || !value.trim()) return [];
+      return fields.channel === 'email' ? splitCommaSeparatedAddresses(value) : [value.trim()];
+    };
+
+    // A reference in a raw field would slip past the resolver: Gate C normalizes a
+    // flat recipient list by shape, so the field split has to hold here.
+    for (const { field, rawField } of referenceFields) {
+      if (entriesOf(input[rawField]).some((entry) => parseRecipientReference(entry) !== null)) {
+        skillLogger.info({ toolName, rawField }, 'send recipient refused: a reference in a raw-address field (#2033)');
+        return {
+          ok: false,
+          error: `${rawField} takes an address. Pass a contact ID or "principal" in ${field} instead. Nothing was sent.`,
+        };
+      }
     }
-    if (!this.contactService) {
-      // Without contacts the gate cannot see where the send goes. Do not guess.
-      skillLogger.warn({ channel }, 'autonomy gate: recipient reference without a contact service — refusing (fail-closed, #2033)');
-      return { ok: false, error: 'The recipient reference cannot be resolved here (no contact service). Nothing was sent.' };
+
+    // Each reference costs a contact read before any gate. Bound the fan-out from a
+    // long list; the handler's own length cap runs later.
+    const referenceCount = new Set(referenceFields.flatMap(({ field }) => entriesOf(input[field]))).size;
+    if (referenceCount > MAX_SEND_REFERENCES) {
+      return { ok: false, error: `Too many recipients (${referenceCount}); the limit is ${MAX_SEND_REFERENCES}. Nothing was sent.` };
     }
-    const resolved: string[] = [];
+
+    for (const { field, rawField } of referenceFields) {
+      for (const entry of entriesOf(input[field])) {
+        if (resolved.has(entry.trim())) continue;
+        const isReference = parseRecipientReference(entry) !== null;
+        if (isReference && !this.contactService) continue;
+        const result = await resolveRecipientReference(entry, fields.channel, { field, rawField }, {
+          // Never called for a reference without a contact service (skipped above);
+          // a non-reference returns its error before any lookup.
+          contactService: this.contactService ?? { getContactWithIdentities: async () => undefined },
+          principalContactId: this.principalIdentities[0]?.contactId,
+        });
+        if (!result.ok) {
+          if (result.cause !== undefined) {
+            skillLogger.warn(
+              { err: result.cause, toolName, field },
+              'send recipient reference lookup failed — refusing (fail-closed, #2033)',
+            );
+            return {
+              ok: false,
+              error: result.error,
+              ...(isDbUnavailableError(result.cause) ? { errorType: 'DATABASE_UNAVAILABLE' as const } : {}),
+            };
+          }
+          skillLogger.info({ toolName, field, isReference }, 'send recipient reference refused before the gates (#2033)');
+          return { ok: false, error: result.error };
+        }
+        resolved.set(entry.trim(), result.identifier);
+      }
+    }
+    return { ok: true, resolved };
+  }
+
+  /**
+   * Replace references in a Gate C recipient list with the addresses resolved
+   * before the gates. Raw identifiers pass through: a reference shape cannot
+   * collide with an address on any send channel (see parseRecipientReference).
+   * A reference with no resolved address fails closed — the gate cannot see
+   * where the send would go.
+   */
+  private substituteResolvedRecipients(
+    recipients: string[],
+    resolved: ReadonlyMap<string, string> | undefined,
+  ): { ok: true; recipients: string[] } | { ok: false; error: string } {
+    const out: string[] = [];
     for (const recipient of recipients) {
       if (parseRecipientReference(recipient) === null) {
-        resolved.push(recipient);
+        out.push(recipient);
         continue;
       }
-      const result = await resolveRecipientReference(
-        recipient,
-        channel,
-        // Only parsed references reach the resolver, so these names never appear
-        // in its errors (they are used for the not-a-reference message alone).
-        { field: 'recipient', rawField: 'the raw-address field' },
-        { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
-      );
-      if (!result.ok) {
-        if (result.cause !== undefined) {
-          skillLogger.warn({ err: result.cause, channel }, 'autonomy gate: recipient reference lookup failed — refusing (fail-closed, #2033)');
-        }
-        return { ok: false, error: result.error };
+      const address = resolved?.get(recipient.trim());
+      if (address === undefined) {
+        return { ok: false, error: 'The recipient reference cannot be resolved here (no contact service). Nothing was sent.' };
       }
-      resolved.push(result.identifier);
+      out.push(address);
     }
-    return { ok: true, recipients: resolved };
+    return { ok: true, recipients: out };
   }
 
   /**
@@ -1387,6 +1477,24 @@ export class ExecutionLayer {
       }
     }
 
+    // Send-skill recipient references (#2033): check and resolve them once, before
+    // any gate can file an approval. An address in a reference field, or a reference
+    // that does not resolve, is refused here with the skill's own message, so the
+    // principal is never asked to approve a send that cannot run. Gate C reuses the
+    // resolved addresses, so it judges exactly where the skill will send.
+    let sendRecipients: Map<string, string> | undefined;
+    if (SEND_SKILL_RECIPIENT_FIELDS[toolName]) {
+      const checked = await this.resolveSendSkillReferences(toolName, input, skillLogger);
+      if (!checked.ok) {
+        return {
+          success: false,
+          error: this.wrapSkillError(checked.error),
+          ...(checked.errorType ? { errorType: checked.errorType } : {}),
+        };
+      }
+      sendRecipients = checked.resolved;
+    }
+
     // Log every humanApproved invocation for operator traceability.
     // Both the caller gate (above) and the autonomy gates (below) are skipped
     // when this flag is set — emit a single entry that names both bypasses so
@@ -1561,11 +1669,9 @@ export class ExecutionLayer {
               // compare the address that will actually be sent to. One indexed
               // contact read per reference; raw addresses skip it.
               if (recipients !== null) {
-                const normalized = await this.resolveGateCRecipientReferences(
-                  foundCarveout.rules.channel, recipients, skillLogger,
-                );
+                const normalized = this.substituteResolvedRecipients(recipients, sendRecipients);
                 if (!normalized.ok) {
-                  // The skill would refuse the same input; say why instead of escalating.
+                  skillLogger.info({ toolName }, 'autonomy gate: Gate C refused an unresolved recipient reference (#2033)');
                   return { success: false, error: this.wrapSkillError(normalized.error) };
                 }
                 recipients = normalized.recipients;

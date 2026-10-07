@@ -111,6 +111,8 @@ const SKILL_DETAIL_FIELDS: Array<{ test: (name: string) => boolean; fields: Deta
       { key: 'folder_id', label: 'Drive folder' },
       { key: 'spreadsheet_id', label: 'Spreadsheet' },
       { key: 'to', label: 'To' },
+      // Every recipient the approver is agreeing to, not only To (#2033).
+      { key: 'cc', label: 'CC' },
     ],
   },
 ];
@@ -118,6 +120,7 @@ const SKILL_DETAIL_FIELDS: Array<{ test: (name: string) => boolean; fields: Deta
 const GENERIC_DETAIL_FIELDS: DetailFieldSpec[] = [
   { key: 'to', label: 'To' },
   { key: 'recipient', label: 'To' },
+  { key: 'cc', label: 'CC' },
   { key: 'phone', label: 'Phone' },
   { key: 'email', label: 'Email' },
   { key: 'subject', label: 'Subject' },
