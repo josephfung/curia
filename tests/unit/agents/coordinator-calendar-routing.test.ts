@@ -63,12 +63,16 @@ function extractPrincipalCalendarSection(prompt: string): string {
 }
 
 describe('coordinator principal-calendar routing (#1853)', () => {
-  it('has the prompt-only parts of the principal-calendar rule: the route and the failure line', () => {
+  it('has the prompt-only parts of the principal-calendar rule: route, who replies, failure line', () => {
     // "I never read or mutate the principal's calendar myself" is gone from the prompt
     // (prompt trim PR 2): allowed_callers enforces it, and the discovery and pin tests
-    // below assert that. The route and the failure handling have no code home yet.
+    // below assert that. The route, who composes the reply and the failure handling have
+    // no code home yet. "I compose the reply" is pinned because dropping it was a measured
+    // regression: scenario 10 handed external scheduling requests to @calendar as
+    // transfer-ownership and replied NO_REPLY in 2 of 5 runs (prompt trim PR 2).
     const section = extractPrincipalCalendarSection(loadCoordinator().system_prompt);
     expect(section).toMatch(/borrow-then-answer through `@calendar`/);
+    expect(section).toMatch(/I compose the reply/);
     expect(section).toMatch(/could not be read/i);
   });
 
