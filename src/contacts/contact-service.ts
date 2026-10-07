@@ -270,7 +270,9 @@ interface ContactServiceBackend {
 // sms_participant is NOT auto-verified — SMS From is spoofable (ADR-036); principal must verify.
 // agent_called is auto-verified — the agent extracted the identifier mechanically from the channel
 // (e.g. an email sender address), not from LLM-generated content. Same trust level as email_participant.
-// Only self_claimed starts unverified and cannot be force-verified.
+// outbound_recipient is NOT auto-verified — the address came from LLM-generated tool input on a
+// first-time send, the opposite of a mechanical extraction (#2033, ADR-047).
+// Only self_claimed cannot be force-verified.
 const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'ceo_stated',
   'email_participant',
