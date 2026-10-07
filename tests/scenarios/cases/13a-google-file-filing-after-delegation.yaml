@@ -98,6 +98,22 @@ tool_stubs:
   get_doc_content:
     - match: {}
       return: *comparison
+  # The rest of the read-only Drive and Docs surface that can touch this Doc, so every
+  # read path answers (the Sheets reads don't apply: the case has no spreadsheet).
+  get_drive_file_content:
+    - match: {}
+      return: *comparison
+  get_drive_file_download_url:
+    - match: {}
+      return: "https://drive.google.com/uc?id=1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic&export=download"
+  list_document_comments:
+    - match: {}
+      return: 'No comments on "CRM comparison: Northwind vs Contoso".'
+  debug_table_structure:
+    - match: {}
+      return: |
+        Table 0: 4 rows x 3 columns, start_index 38, end_index 268.
+        Header row: "", "Northwind", "Contoso"
   get_drive_shareable_link:
     - match: {}
       return: "https://docs.google.com/document/d/1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic/edit?usp=sharing"

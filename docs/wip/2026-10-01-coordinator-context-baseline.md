@@ -1034,3 +1034,19 @@ other lookups the coordinator reaches for about 1 run in 10: `search_docs` (sibl
 comparison to the working-docs workspace, which test mode lacks. With all of those plus
 `check_drive_file_public_access` stubbed, 10 runs made no refused calls (74 stubbed, 27
 passthrough), and the case passed the gate at 98%.
+
+**Review fixes (`8871c6cc`).** The "My team" heading went (YAML 18,561 chars), and the
+export-scope sentence moved to `drive-files.md`. Full suites on that commit:
+
+- **Scenarios:** every case passed on behavior. The gate flagged two refused calls:
+  - `scheduler edit in place` called `scheduler-report` on a non-scheduled turn, the model
+    quirk seen in #1959 and #2024. 10 re-runs were clean.
+  - 13a called `get_drive_file_content`, one more way to read the Doc. 13a now stubs
+    every read-only Drive and Docs tool that can touch its Doc. One 13a re-run also called
+    `task-complete` on a task id it invented. That refusal is correct, so it stays
+    unstubbed.
+- **Smoke:** 45 of 46. Schedule External Meeting timed out on both attempts, with the
+  calendar specialist at 39 calls. That is the near-timeout pattern seen in #1958.
+
+No A/B was run, because the commit's only prompt change is one removed heading line. The
+committed stub-coverage record stays the clean one from `ddd9a537`.
