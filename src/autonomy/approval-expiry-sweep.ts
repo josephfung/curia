@@ -47,38 +47,65 @@ export interface ApprovalExpirySweepResult {
 // actions the principal didn't need to weigh in on urgently.
 const NOTIFIABLE_TIERS = new Set(['high', 'critical']);
 
+// Delay before the first tick after start(). The cron this replaced fired on the wall clock, so
+// a restart never postponed it; a bare setInterval would push every sweep a full interval past
+// each boot, and a process restarting more often than the interval would never sweep at all.
+// Short enough to cover that, long enough to stay out of the boot-time burst.
+const FIRST_TICK_DELAY_MS = 60_000;
+
 export class ApprovalExpirySweep {
   private intervalHandle: NodeJS.Timeout | null = null;
+  private firstTickHandle: NodeJS.Timeout | null = null;
   private tickInFlight = false;
+  // Surfaced in the error log so a sweep broken on every tick (schema drift, permissions)
+  // reads as a streak rather than an identical line each hour.
+  private consecutiveFailures = 0;
 
   constructor(private readonly opts: ApprovalExpirySweepOptions) {}
 
   start(): void {
     if (this.intervalHandle) return;
-    const ms = this.opts.intervalMinutes * 60_000;
-    this.intervalHandle = setInterval(() => {
-      if (this.tickInFlight) {
-        this.opts.logger.warn('ApprovalExpirySweep: previous tick still in flight — skipping this interval');
-        return;
-      }
-      this.tickInFlight = true;
-      this.tick()
-        .catch((err: unknown) => {
-          this.opts.logger.error({ err }, 'ApprovalExpirySweep: tick failed — will retry next interval');
-        })
-        .finally(() => {
-          this.tickInFlight = false;
-        });
-    }, ms);
+    this.firstTickHandle = setTimeout(() => {
+      this.firstTickHandle = null;
+      this.runGuardedTick();
+    }, FIRST_TICK_DELAY_MS);
+    this.intervalHandle = setInterval(() => this.runGuardedTick(), this.opts.intervalMinutes * 60_000);
     this.opts.logger.info({ intervalMinutes: this.opts.intervalMinutes }, 'ApprovalExpirySweep started');
   }
 
   stop(): void {
+    if (this.firstTickHandle) {
+      clearTimeout(this.firstTickHandle);
+      this.firstTickHandle = null;
+    }
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
       this.intervalHandle = null;
     }
     this.opts.logger.info('ApprovalExpirySweep stopped');
+  }
+
+  /** Timer entry point: skips while a tick is running, and never lets a failure escape. */
+  private runGuardedTick(): void {
+    if (this.tickInFlight) {
+      this.opts.logger.warn('ApprovalExpirySweep: previous tick still in flight — skipping this interval');
+      return;
+    }
+    this.tickInFlight = true;
+    this.tick()
+      .then(() => {
+        this.consecutiveFailures = 0;
+      })
+      .catch((err: unknown) => {
+        this.consecutiveFailures += 1;
+        this.opts.logger.error(
+          { err, consecutiveFailures: this.consecutiveFailures },
+          'ApprovalExpirySweep: tick failed — will retry next interval',
+        );
+      })
+      .finally(() => {
+        this.tickInFlight = false;
+      });
   }
 
   /** One pass: expire stale approvals and notify about high/critical ones. */
@@ -117,9 +144,16 @@ export class ApprovalExpirySweep {
   /** Send the batched principal notification. Returns how many rows it covered (0 if skipped). */
   private async notify(rows: ActionLogRow[]): Promise<number> {
     const { outboundGateway, logger } = this.opts;
+    // Expiry has committed and findExpired() won't return these rows again, so a skipped alert
+    // is not retried. Name the rows in every skip log so an operator can follow up by hand.
+    const skipped = {
+      notifiableCount: rows.length,
+      ids: rows.map((r) => r.id),
+      shortRefs: rows.map((r) => r.shortRef),
+    };
     if (!outboundGateway) {
       logger.warn(
-        { notifiableCount: rows.length },
+        skipped,
         'ApprovalExpirySweep: outboundGateway not available — skipping expiry notification for high/critical rows',
       );
       return 0;
@@ -131,7 +165,7 @@ export class ApprovalExpirySweep {
     const ceoEmail = resolvePrincipalEmail(this.opts.ceoEmail);
     if (!ceoEmail) {
       logger.warn(
-        { notifiableCount: rows.length },
+        skipped,
         'ApprovalExpirySweep: no principal email on file — skipping expiry notification',
       );
       return 0;
@@ -151,7 +185,7 @@ export class ApprovalExpirySweep {
     if (!sent) {
       // The rows are already expired and logged above; only the alert is lost this cycle.
       logger.warn(
-        { notifiableCount: rows.length },
+        skipped,
         'ApprovalExpirySweep: sendNotification returned false — principal notification not delivered (expiry committed)',
       );
       return 0;
