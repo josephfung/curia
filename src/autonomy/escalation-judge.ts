@@ -85,6 +85,9 @@ export interface EscalationVerdict {
 
 const TIMEOUT = Symbol('escalation-judge-timeout');
 
+/** Deterministic verdict sampling — used for both the chat() call and llm.call audit. */
+const JUDGE_TEMPERATURE = 0;
+
 type LlmKind = 'disclosure' | 'action';
 
 interface LlmCallResult {
@@ -222,7 +225,7 @@ export class EscalationJudge {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        options: { temperature: 0, max_tokens: maxTokens, signal: controller.signal },
+        options: { temperature: JUDGE_TEMPERATURE, max_tokens: maxTokens, signal: controller.signal },
       });
       // Suppress unhandled-rejection for post-timeout orphaned provider calls.
       // The primary error path is the outer catch; this handles the late-rejection race edge case.
@@ -290,8 +293,7 @@ export class EscalationJudge {
         providerRequestId: result.provenance.providerRequestId,
         promptHash: createHash('sha256').update(userPrompt).digest('hex'),
         responseHash: createHash('sha256').update(result.content).digest('hex'),
-        // Matches options.temperature on the chat() call above (deterministic verdict).
-        temperature: 0,
+        temperature: JUDGE_TEMPERATURE,
         parentEventId: 'system',
         archive: {
           prompt: {

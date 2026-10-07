@@ -134,6 +134,8 @@ interface LlmCallPayload {
   // but enough to verify integrity
   promptHash: string;           // SHA-256 of the full prompt (system + messages + tools)
   responseHash: string;         // SHA-256 of the full response content
+  // Sampling — what was actually sent on the provider request (#2038)
+  temperature?: number | null;  // finite number when set; null when the request omitted it
 }
 ```
 
