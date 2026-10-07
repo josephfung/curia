@@ -180,6 +180,26 @@ describe('ApprovalTriggerService.request()', () => {
     expect(notifPayload.body).toContain('Message: Confirming Thursday at 3pm.');
   });
 
+  it('shows displayInput to the principal but stores the agent input for re-execution (#2033)', async () => {
+    const repo = makeMockRepo();
+    const gateway = makeMockGateway();
+    const service = makeService(repo, gateway, 'ceo@example.com', makeMockContactService('principal'));
+    const input = { recipient: '22222222-2222-4222-8222-222222222222', message: 'Confirming Thursday.' };
+
+    await service.request({
+      ...BASE_OPTS,
+      toolName: 'signal-send',
+      input,
+      displayInput: { ...input, recipient: 'Alex Vendor <+15550142>' },
+    });
+
+    const notifPayload = (gateway.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(notifPayload.body).toContain('To: Alex Vendor <+15550142>');
+    expect(notifPayload.body).not.toContain('22222222-2222');
+    // Approval re-runs the skill with the reference, which it re-resolves then.
+    expect((repo.insert as ReturnType<typeof vi.fn>).mock.calls[0]![0].payload).toEqual(input);
+  });
+
   it('omits action detail when notification recipient is below principal tier', async () => {
     const repo = makeMockRepo();
     const gateway = makeMockGateway();

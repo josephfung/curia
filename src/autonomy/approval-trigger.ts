@@ -149,8 +149,17 @@ export class ApprovalTriggerService {
      * calendar (etc.) approval.
      */
     dedupePendingSkillsOnTask?: readonly string[];
+    /**
+     * What the principal is shown: the description and the notification details.
+     * Defaults to `input`. The stored payload is always `input`, so an approval
+     * re-runs the skill exactly as the agent called it. Send skills pass a copy
+     * whose contact references are resolved to "Name <address>" (#2033) — a bare
+     * contact UUID tells the approver nothing about where the message goes.
+     */
+    displayInput?: Record<string, unknown>;
   }): Promise<ApprovalRequestResult> {
     const { taskId, conversationId, toolName, actionRisk, input, currentScore, requiredScore } = opts;
+    const shown = opts.displayInput ?? input;
 
     // Step 1: Dedup check
     if (opts.dedupePendingSkillsOnTask && opts.dedupePendingSkillsOnTask.length > 0) {
@@ -200,7 +209,7 @@ export class ApprovalTriggerService {
     let shortRef!: string;
     // Sanitize description before storing and sending — the input fields come from
     // LLM-generated skill arguments and may contain dangerous tags.
-    const description = sanitizeOutput(buildDescription(toolName, input));
+    const description = sanitizeOutput(buildDescription(toolName, shown));
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
 
     for (let attempt = 1; attempt <= MAX_INSERT_RETRIES; attempt++) {
@@ -271,7 +280,7 @@ export class ApprovalTriggerService {
         shortRef,
         expiresAt,
         toolName,
-        payload: input,
+        payload: shown,
         recipientTier,
         logger: this.logger,
         ceoEmail,
@@ -307,7 +316,7 @@ export class ApprovalTriggerService {
         shortRef,
         expiresAt,
         toolName,
-        payload: input,
+        payload: shown,
         recipientTier: 'principal',
         callToAction: 'React 👍 to approve or 👎 to deny this request.',
       });

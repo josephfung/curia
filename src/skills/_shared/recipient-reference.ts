@@ -72,9 +72,27 @@ export interface RecipientResolverDeps {
   principalContactId: string | undefined;
 }
 
+/**
+ * Each send skill's recipient inputs: the reference field and its raw-address
+ * sibling. Code that reads a send skill's input outside the handler (approval
+ * display, for one) uses this rather than hard-coding field names.
+ */
+export const SEND_SKILL_RECIPIENT_FIELDS: Readonly<Record<string, { channel: string; reference: string; raw: string }>> = {
+  'email-send': { channel: 'email', reference: 'to', raw: 'to_address' },
+  'signal-send': { channel: 'signal', reference: 'recipient', raw: 'recipient_number' },
+  'sms-send': { channel: 'sms', reference: 'recipient', raw: 'recipient_number' },
+  'slack-send': { channel: 'slack', reference: 'recipient', raw: 'recipient_user_id' },
+};
+
 /** Stored display names come from inbound mail and are attacker-influenced. */
 function safeName(name: string): string {
   return name.replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
+}
+
+/** "Name <address>" for a resolved recipient, for a person to read (an approval). */
+export function formatResolvedRecipient(resolution: { identifier: string; displayName: string }): string {
+  const name = safeName(resolution.displayName);
+  return name && name !== resolution.identifier ? `${name} <${resolution.identifier}>` : resolution.identifier;
 }
 
 /** The contact's designated primary for the channel, if it has one. */

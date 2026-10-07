@@ -75,6 +75,7 @@ import { describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/reso
 import type { IdentityGateMode } from '../config.js';
 import {
   PRINCIPAL_RECIPIENT_ALIAS,
+  parseRecipientReference,
   resolveRecipientReference,
   type RecipientReferenceFields,
   type RecipientResolution,
@@ -381,6 +382,19 @@ function unmatchedRecipientNotificationLines(intended: string, unmatched: readon
   ];
 }
 
+/**
+ * A pending-approval payload for display, minus recipient fields that hold a
+ * contact reference (#2033). The caller fills those from the resolved request,
+ * so the principal approves a send to an address, not to a bare contact UUID.
+ * The stored payload keeps the reference; approval re-resolves it.
+ */
+function withoutRecipientReferences(payload: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([key, value]) =>
+      !((key === 'to' || key === 'recipient') && typeof value === 'string' && parseRecipientReference(value) !== null)),
+  );
+}
+
 /** Node.js network-error `code` values that indicate a transient, retryable failure. */
 const TRANSIENT_ERROR_CODES = new Set([
   'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH',
@@ -683,11 +697,12 @@ export class OutboundGateway {
           const principalEmail = this.principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier;
           if (rowId !== undefined) {
             const notificationPayload = enrichGatewayApprovalPayload(
-              recipe.partialPayload ?? {},
+              withoutRecipientReferences(recipe.partialPayload ?? {}),
               request.channel === 'email'
                 ? { to: request.to, subject: request.subject, body: request.body }
                 : request.channel === 'slack'
-                  ? { slackChannelId: request.slackChannelId, message: request.message }
+                  // `recipient` is the field the approval renderer shows (#2033).
+                  ? { slackChannelId: request.slackChannelId, recipient: request.slackUserId ?? request.slackChannelId, message: request.message }
                   : { recipient: request.recipient, message: request.message },
             );
             const extraLines = [
@@ -995,7 +1010,9 @@ export class OutboundGateway {
                   expiresAt,
                   toolName: recipe.toolName,
                   payload: {
-                    ...(recipe.partialPayload ?? {}),
+                    ...withoutRecipientReferences(recipe.partialPayload ?? {}),
+                    // The display shows the resolved address; the stored payload keeps the reference.
+                    ...(request.channel === 'email' ? { to: request.to } : {}),
                     export_items: items.map((i) => ({
                       node_id: i.nodeId,
                       label: i.label,

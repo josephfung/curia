@@ -3345,6 +3345,45 @@ describe('approval trigger on gate block', () => {
     expect(trigger.request).toHaveBeenCalledOnce();
   });
 
+  it('shows the approver the resolved recipient of a send by reference, and stores the reference (#2033)', async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('no'));
+    const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-2', notificationSent: true });
+    const ref = '44444444-4444-4444-8444-444444444444';
+    const contactService = {
+      getContactWithIdentities: vi.fn(async (id: string) => (id === ref
+        ? {
+          contact: { id: ref, displayName: 'Dana Lee', primaryEmail: null, primaryPhone: null },
+          identities: [{
+            id: 'i1', contactId: ref, channel: 'email', channelIdentifier: 'dana@example.com', label: null,
+            verified: true, verifiedAt: new Date(), status: 'active', source: 'email_participant',
+            createdAt: new Date(), updatedAt: new Date(),
+          }],
+        }
+        : undefined)),
+    } as unknown as ContactService;
+
+    const layer = new ExecutionLayer(registry, logger, {
+      autonomyService: makeAutonomyService(65),
+      bus: { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus,
+      approvalTrigger: trigger,
+      contactService,
+    });
+
+    await layer.invoke('email-send', { to: ref, subject: 'Hi', body: 'Hello' }, undefined, { taskEventId: 'task-1' });
+    await layer.invoke('email-send', { to_address: 'new@cold.example', subject: 'Hi', body: 'Hello' }, undefined, { taskEventId: 'task-2' });
+
+    const calls = (trigger.request as ReturnType<typeof vi.fn>).mock.calls.map(([opts]) => opts as {
+      input: Record<string, unknown>;
+      displayInput: Record<string, unknown>;
+    });
+    expect(calls[0]!.input.to).toBe(ref);
+    expect(calls[0]!.displayInput.to).toBe('Dana Lee <dana@example.com>');
+    // The raw path is shown under `to`, the field the approval renderer reads.
+    expect(calls[1]!.input).not.toHaveProperty('to');
+    expect(calls[1]!.displayInput.to).toBe('new@cold.example');
+  });
+
   it('calendar-respond-to-invite is medium-risk and routes to pending approval below score 70', async () => {
     const registry = new ToolRegistry();
     const handler = makeHandler('should not run');

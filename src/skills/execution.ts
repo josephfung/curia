@@ -114,7 +114,12 @@ import {
 import { createExportDelivered } from '../bus/events.js';
 import { isDbUnavailableError } from '../db/resilience.js';
 import { USER_SECRET_PREFIX } from '../secrets/user-secret-name.js';
-import { parseRecipientReference, resolveRecipientReference } from './_shared/recipient-reference.js';
+import {
+  SEND_SKILL_RECIPIENT_FIELDS,
+  formatResolvedRecipient,
+  parseRecipientReference,
+  resolveRecipientReference,
+} from './_shared/recipient-reference.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -566,6 +571,7 @@ export class ExecutionLayer {
           toolName,
           actionRisk: String(actionRisk),
           input,
+          displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore,
         });
@@ -622,6 +628,7 @@ export class ExecutionLayer {
           toolName,
           actionRisk: String(actionRisk),
           input,
+          displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore: currentScore,
           reason:
@@ -737,16 +744,21 @@ export class ExecutionLayer {
 
     if (this.approvalTrigger && options?.taskEventId) {
       try {
+        const exportItems = items.map((i) => ({
+          node_id: i.nodeId,
+          label: i.label,
+          sensitivity: i.sensitivity,
+        }));
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: { ...input, export_items: items.map((i) => ({
-            node_id: i.nodeId,
-            label: i.label,
-            sensitivity: i.sensitivity,
-          })) },
+          input: { ...input, export_items: exportItems },
+          displayInput: {
+            ...(await this.approvalDisplayInput(toolName, input, skillLogger)),
+            export_items: exportItems,
+          },
           currentScore: 0,
           requiredScore: 0,
           reason: `${message}\n\n${itemSummary}`,
@@ -835,6 +847,46 @@ export class ExecutionLayer {
     }
 
     return { recipients: found.carveout.parseRecipients(input), resolutionFailed: false };
+  }
+
+  /**
+   * The copy of a send skill's input that an approval shows the principal (#2033).
+   *
+   * A reference is resolved to "Name <address>", and a raw-address field is shown
+   * under the reference field's name, which the approval renderer reads. The
+   * stored payload stays the agent's own input, so approval re-runs the skill as
+   * called (and re-resolves the reference then). Display only: a failed lookup
+   * shows the reference as written and never blocks the approval.
+   */
+  private async approvalDisplayInput(
+    toolName: string,
+    input: Record<string, unknown>,
+    skillLogger: Logger,
+  ): Promise<Record<string, unknown>> {
+    const fields = SEND_SKILL_RECIPIENT_FIELDS[toolName];
+    if (!fields) return input;
+    const reference = input[fields.reference];
+    const raw = input[fields.raw];
+    if (typeof reference === 'string' && reference.trim()) {
+      if (parseRecipientReference(reference) === null || !this.contactService) return input;
+      const resolved = await resolveRecipientReference(
+        reference,
+        fields.channel,
+        { field: fields.reference, rawField: fields.raw },
+        { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
+      );
+      if (!resolved.ok) {
+        if (resolved.cause !== undefined) {
+          skillLogger.warn({ err: resolved.cause, toolName }, 'approval display: recipient reference lookup failed — showing it unresolved');
+        }
+        return { ...input, [fields.reference]: `${reference.trim()} (resolves to no verified address)` };
+      }
+      return { ...input, [fields.reference]: formatResolvedRecipient(resolved) };
+    }
+    if (typeof raw === 'string' && raw.trim()) {
+      return { ...input, [fields.reference]: raw.trim() };
+    }
+    return input;
   }
 
   /**
