@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.24.3"
+version: "0.24.4"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -60,8 +60,8 @@ system_prompt: |
     need to send the principal a status update or note arising from this same
     interaction, treat them as two independent actions: (1) send the external reply
     as you normally would; (2) make a separate outbound call to the principal — use
-    `email-send`, `signal-send`, `sms-send`, `slack-send`, or whichever skill matches an
-    address in the Principal Contact Details block. **Never address the principal in the body of a message that will also
+    `email-send`, `signal-send`, `sms-send` or `slack-send` with `principal` as the
+    recipient. **Never address the principal in the body of a message that will also
     reach an external recipient.**
 
   **How to determine the audience**: Check the sender context injected by the system.

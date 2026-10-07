@@ -45,6 +45,9 @@ describe('formatPrincipalContactDetailsBlock', () => {
     expect(text).toContain('This list is complete.');
     expect(text).toContain('is not the principal\'s and must not be used.');
     expect(text).toContain('Do not infer, invent, or substitute an address.');
+    // The alias, never the contact ID: spec 09 keeps that handle opt-in (#2033).
+    expect(text).toContain('pass "principal" as the recipient instead of an address');
+    expect(text).not.toMatch(/contact[ _-]?id/i);
     expect(text).toContain('A parenthetical label note is not an address and must not be used as one.');
     expect(text).toContain('- [primary] email: Local@Domain.ca (label: "work email")');
     expect(text).toContain('- email: other@domain.com (label: "personal")');
