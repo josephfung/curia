@@ -37,9 +37,14 @@ describe('parseRecipientReference', () => {
     expect(parseRecipientReference('U012ABCDEF')).toBeNull();
     expect(parseRecipientReference('the principal')).toBeNull();
     expect(parseRecipientReference('')).toBeNull();
-    // A `#` does not make an address a reference. The left side has to be one.
+    // A `#` does not make an address a reference. The left side has to be one,
+    // and a hint shaped like an address or a phone number is not a hint: an
+    // email local-part may contain `#`.
     expect(parseRecipientReference('user#tag@example.com')).toBeNull();
     expect(parseRecipientReference('+1415555#2671')).toBeNull();
+    expect(parseRecipientReference('principal#ops@vendor.example')).toBeNull();
+    expect(parseRecipientReference('4fdfd02a-1466-46ca-b37b-13bb564fe3f0#someone.else@other.test')).toBeNull();
+    expect(parseRecipientReference('principal#15551234567')).toBeNull();
   });
 });
 
@@ -294,8 +299,39 @@ describe('label hint (#2047)', () => {
       [{ address: 'only@hint.test', label: 'alt: hidden@secret.test' }],
       { primaryEmail: 'only@hint.test' },
     );
-    const result = await resolveRecipientReference(`${pat.id}#hidden@secret.test`, 'email', FIELDS, deps());
+    const result = await resolveRecipientReference(`${pat.id}#personal`, 'email', FIELDS, deps());
     expect(result).toMatchObject({ ok: true, identifier: 'only@hint.test', identityName: 'primary' });
+  });
+
+  it('does not treat an address-shaped hint as a reference', async () => {
+    const pat = await addContact(
+      [{ address: 'only@hint.test' }],
+      { primaryEmail: 'only@hint.test' },
+    );
+    const typed = `${pat.id}#someone.else@other.test`;
+    const result = await resolveRecipientReference(typed, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/to_address/);
+      // The error quotes the model's own input. It does not reveal a stored address.
+      expect(result.error).toContain('someone.else@other.test');
+      expect(result.error).not.toContain('only@hint.test');
+    }
+  });
+
+  it('conflicts when a hint is given and more than one address is unlabelled', async () => {
+    const pat = await addContact(
+      [{ address: 'a@x.test' }, { address: 'b@x.test' }],
+      { primaryEmail: 'a@x.test' },
+    );
+    const result = await resolveRecipientReference(`${pat.id}#personal`, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/unlabelled \[primary\], unlabelled/);
+      expect(result.error).toMatch(/Omit the label to use the primary/);
+      expect(result.error).not.toContain('a@x.test');
+      expect(result.error).not.toContain('b@x.test');
+    }
   });
 
   it('conflicts when labelled addresses exist and the hint matches none, including an unlabelled one', async () => {
@@ -322,7 +358,7 @@ describe('label hint (#2047)', () => {
     }
   });
 
-  it('conflicts when more than one address matches, and does not echo an address-shaped hint', async () => {
+  it('conflicts when more than one address matches, and an address-shaped hint is not a reference', async () => {
     const pat = await addContact(
       [
         { address: 'pat.email@hint.test', label: 'work email' },
@@ -341,12 +377,53 @@ describe('label hint (#2047)', () => {
       expect(many.error).not.toContain('pat.email@hint.test');
     }
 
-    const hintedAddress = await resolveRecipientReference(`${pat.id}#pat.email@hint.test`, 'email', FIELDS, deps());
+    const typed = `${pat.id}#pat.email@hint.test`;
+    const hintedAddress = await resolveRecipientReference(typed, 'email', FIELDS, deps());
     expect(hintedAddress.ok).toBe(false);
     if (!hintedAddress.ok) {
-      expect(hintedAddress.error).toMatch(/the label hint does not identify exactly one/);
-      expect(hintedAddress.error).not.toContain('pat.email@hint.test');
+      expect(hintedAddress.error).toMatch(/to_address/);
+      // The typed string is the model's own input, so it may appear. A stored
+      // address-shaped label must not.
       expect(hintedAddress.error).not.toContain('hidden@secret.test');
+    }
+  });
+
+  it('matches the full label and the 40-character form the principal block shows', async () => {
+    const full = 'Personal Gmail used for family and school stuff';
+    const shown = full.slice(0, 40);
+    expect(shown.endsWith('schoo')).toBe(true);
+    const pat = await addContact(
+      [
+        { address: 'pat.home@hint.test', label: full },
+        { address: 'pat.work@hint.test', label: 'work' },
+      ],
+      { primaryEmail: 'pat.work@hint.test' },
+    );
+    const exact = await resolveRecipientReference(`${pat.id}#${full}`, 'email', FIELDS, deps());
+    expect(exact).toMatchObject({ ok: true, identifier: 'pat.home@hint.test', identityName: full });
+
+    const fromBlock = await resolveRecipientReference(`${pat.id}#${shown}`, 'email', FIELDS, deps());
+    expect(fromBlock).toMatchObject({ ok: true, identifier: 'pat.home@hint.test', identityName: full });
+
+    // "school" is past the 40-character cut, so a token match has to use the full label.
+    const token = await resolveRecipientReference(`${pat.id}#school`, 'email', FIELDS, deps());
+    expect(token).toMatchObject({ ok: true, identifier: 'pat.home@hint.test', identityName: full });
+  });
+
+  it('quotes the full label in a conflict, not the 40-character cut', async () => {
+    const full = 'Personal Gmail used for family and school stuff';
+    const pat = await addContact(
+      [
+        { address: 'pat.home@hint.test', label: full },
+        { address: 'pat.work@hint.test', label: 'work' },
+      ],
+      { primaryEmail: 'pat.work@hint.test' },
+    );
+    const result = await resolveRecipientReference(`${pat.id}#office`, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(`"${full}"`);
+      expect(result.error).not.toContain('"Personal Gmail used for family and schoo"');
     }
   });
 

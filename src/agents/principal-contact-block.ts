@@ -18,23 +18,36 @@ function stripNewlines(value: string): string {
   return value.replace(/[\r\n]/g, '');
 }
 
-/** A label is a short note. Longer than this, it stops being a label. */
+/** A label is a short note. Longer than this, the principal block cuts it. */
 const LABEL_MAX_CHARS = 40;
 
 /**
- * The label an agent may see, or null when it must not appear.
+ * The label with newlines stripped, or null when it must not be used.
  *
  * An `@` or a run of 7+ digits is an address or phone stuffed into the note.
- * Leaving it in the closed list would teach the model that the address is verified.
- * Send-by-reference uses this same rule for label hints (#2047): a hidden label
- * is not a hint target, and a conflict error must not quote it.
+ * No length cap: send-by-reference matches this form, so a label copied from
+ * contact-lookup still selects the address (#2047). The principal block shows
+ * the shorter `visibleIdentityLabel`.
  */
-export function visibleIdentityLabel(raw: string | null | undefined): string | null {
+export function cleanedIdentityLabel(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const cleaned = stripNewlines(raw).trim();
   if (!cleaned) return null;
   if (cleaned.includes('@') || /\d{7,}/.test(cleaned)) return null;
-  return cleaned.slice(0, LABEL_MAX_CHARS);
+  return cleaned;
+}
+
+/**
+ * The label the principal block shows, or null when it must not appear.
+ *
+ * Leaving an address-shaped note in the closed list would teach the model that
+ * the address is verified. Send-by-reference treats a hidden label as unlabelled
+ * and also accepts an exact match on this 40-character form, so a hint copied
+ * from the block still works (#2047).
+ */
+export function visibleIdentityLabel(raw: string | null | undefined): string | null {
+  const cleaned = cleanedIdentityLabel(raw);
+  return cleaned ? cleaned.slice(0, LABEL_MAX_CHARS) : null;
 }
 
 /** Render a parenthetical label, or '' when the label must not appear. */

@@ -21,7 +21,7 @@
     "message_id": "string",
     "to": "string",
     "to_identity": "string? (label of the address used for a reference to, or \"primary\" or \"unlabelled\")",
-    "cc_identities": "string[]? (same, one per cc reference, in order; cc_addresses are not included)",
+    "cc_identities": "string[]? (one per distinct cc address resolved from a reference, in that order; repeated references and cc_addresses are omitted)",
     "subject": "string"
   },
   "permissions": [],

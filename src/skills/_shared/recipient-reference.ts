@@ -23,7 +23,7 @@
 // is part of the string every caller already passes, so the skill, the pre-gate
 // check, Gate C and the approval display cannot choose different addresses.
 
-import { visibleIdentityLabel } from '../../agents/principal-contact-block.js';
+import { cleanedIdentityLabel, visibleIdentityLabel } from '../../agents/principal-contact-block.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { ChannelIdentity, Contact } from '../../contacts/types.js';
 import { findPrincipalChannelRules } from '../../contacts/principal-channel-registry.js';
@@ -38,11 +38,14 @@ export type RecipientReference =
   | { kind: 'contact'; contactId: string; label?: string };
 
 /**
- * A label hint longer than this is not a label an agent was shown (those are
- * capped at 40). Keep a bounded prefix so a huge tool argument cannot be
- * tokenised or copied into an error.
+ * A hint, a quoted candidate, and a reported identity name stop here. A label
+ * copied from contact-lookup is matched in full up to this bound; the principal
+ * block shows 40 characters, and that shorter form is also an exact match.
  */
 const LABEL_HINT_MAX_CHARS = 200;
+
+/** Tokenising a stored label stops here, so a huge note cannot be expanded. */
+const MATCH_LABEL_MAX_CHARS = 2000;
 
 /**
  * Parse a recipient reference, or null when the value is not one (an address,
@@ -55,13 +58,21 @@ const LABEL_HINT_MAX_CHARS = 200;
  *
  * The shapes cannot collide with an address on any send channel: an email
  * address has an `@`, E.164 starts with `+`, and a Slack user id has no hyphens.
- * Gate C relies on that to normalize a mixed recipient list by shape.
+ * An email local-part may contain `#`, so a hint that itself contains `@` or a
+ * run of 7 digits is not a hint — `principal#ops@vendor.example` stays an
+ * address. Gate C relies on that to normalize a mixed recipient list by shape.
  */
 export function parseRecipientReference(value: string): RecipientReference | null {
   const trimmed = value.trim();
   const hash = trimmed.indexOf('#');
   const refPart = (hash === -1 ? trimmed : trimmed.slice(0, hash)).trim();
-  const labelPart = hash === -1 ? '' : trimmed.slice(hash + 1).trim().slice(0, LABEL_HINT_MAX_CHARS);
+  const rawLabel = hash === -1 ? '' : trimmed.slice(hash + 1).trim();
+  // A label an agent can see never holds an address or a phone number
+  // (cleanedIdentityLabel), so a hint shaped like one is not a hint: the left
+  // side was typed into an address. Checked before the length cap, so a long
+  // prefix cannot hide the `@`.
+  if (rawLabel.includes('@') || /\d{7,}/.test(rawLabel)) return null;
+  const labelPart = rawLabel.slice(0, LABEL_HINT_MAX_CHARS);
   const label = labelPart.length > 0 ? labelPart : undefined;
 
   if (refPart.toLowerCase() === PRINCIPAL_RECIPIENT_ALIAS) {
@@ -214,12 +225,20 @@ function quoteForAgent(value: string): string {
 }
 
 /**
- * How to name the chosen identity back to the agent. The visible label wins;
- * otherwise `primary` when this row is the contact's primary, else `unlabelled`.
+ * How to name the chosen identity back to the agent. The cleaned label wins
+ * (bounded, so a long note is not cut mid-word at 40 characters); otherwise
+ * `primary` when this row is the contact's primary, else `unlabelled`.
  */
 function identityNameFor(contact: Contact, channel: string, identity: ChannelIdentity): string {
-  return visibleIdentityLabel(identity.label)
-    ?? (isPrimaryIdentity(contact, channel, identity) ? 'primary' : 'unlabelled');
+  const cleaned = cleanedIdentityLabel(identity.label);
+  if (cleaned) return cleaned.slice(0, LABEL_HINT_MAX_CHARS);
+  return isPrimaryIdentity(contact, channel, identity) ? 'primary' : 'unlabelled';
+}
+
+/** The label quoted in an error: the cleaned note, bounded so a retry still matches. */
+function quotedLabel(raw: string | null | undefined): string | null {
+  const cleaned = cleanedIdentityLabel(raw);
+  return cleaned ? cleaned.slice(0, LABEL_HINT_MAX_CHARS) : null;
 }
 
 /**
@@ -236,19 +255,16 @@ function labelConflictError(
 ): string {
   const candidates = usable
     .map((identity) => {
-      const visible = visibleIdentityLabel(identity.label);
+      const visible = quotedLabel(identity.label);
       const name = visible ? quoteForAgent(visible) : 'unlabelled';
       return isPrimaryIdentity(contact, channel, identity) ? `${name} [primary]` : name;
     })
     .join(', ');
-  // Quote the hint only when it would be safe as a label. An address-shaped
-  // hint must not be echoed back for the model to retype.
-  const shownHint = visibleIdentityLabel(hint);
-  const which = shownHint
-    ? `${quoteForAgent(shownHint)} does not identify exactly one`
-    : 'the label hint does not identify exactly one';
+  // The parser already rejected an address-shaped hint, so quoting this one
+  // cannot hand the model an address to retype.
+  const which = `${quoteForAgent(hint)} does not identify exactly one`;
   const exampleLabel = usable
-    .map((identity) => visibleIdentityLabel(identity.label))
+    .map((identity) => quotedLabel(identity.label))
     .find((label): label is string => label !== null);
   const example = exampleLabel
     ? (isPrincipal ? `${PRINCIPAL_RECIPIENT_ALIAS}#${exampleLabel}` : `${contact.id}#${exampleLabel}`)
@@ -277,13 +293,15 @@ type IdentityPick =
  * Choose the identity a reference sends to (#2047).
  *
  * No hint: the primary when it is usable, otherwise the oldest.
- * A hint matches case-insensitively. Exact matches win; if there are none, a
- * label matches when every token of the hint is a token of the label (`work`
- * matches `work email`). One match sends to it. Several matches, or a hint
- * that misses while any candidate has a visible label, send nothing — an
- * unlabelled address might have been the one meant, and the error lists it so
- * the agent can retry without a hint. No visible labels at all is not an
- * error: the default pick is used.
+ * A hint matches case-insensitively against the cleaned label. Exact matches
+ * win, on the full cleaned label, on its bounded prefix, or on the
+ * 40-character form the principal block shows. If none is exact, a label
+ * matches when every token of the hint is a token of the cleaned label
+ * (`work` matches `work email`). One match sends to it. Several matches, or
+ * a miss while any candidate has a cleaned label, send nothing — an
+ * unlabelled address might have been the one meant. Several unlabelled
+ * addresses and a hint also send nothing: the hint named an address and
+ * there is more than one. A single unlabelled address still uses the default.
  */
 function selectIdentity(
   contact: Contact,
@@ -297,26 +315,40 @@ function selectIdentity(
   const normalized = hint ? normalizeHint(hint) : '';
   if (!normalized) return { ok: true, identity: fallback };
 
-  const visibleOf = usable.map((identity) => ({
-    identity,
-    visible: visibleIdentityLabel(identity.label),
-  }));
-  const exact = visibleOf.filter((row) => row.visible !== null && row.visible.toLowerCase() === normalized.toLowerCase());
+  const needle = normalized.toLowerCase();
+  const rows = usable.map((identity) => {
+    const cleaned = cleanedIdentityLabel(identity.label);
+    const bounded = cleaned ? cleaned.slice(0, MATCH_LABEL_MAX_CHARS) : null;
+    return {
+      identity,
+      bounded,
+      // The 40-character form, so a hint copied from the principal block matches.
+      visible: visibleIdentityLabel(identity.label),
+    };
+  });
+  const exact = rows.filter((row) => {
+    if (row.bounded === null) return false;
+    const quoted = row.bounded.slice(0, LABEL_HINT_MAX_CHARS).toLowerCase();
+    return row.bounded.toLowerCase() === needle
+      || quoted === needle
+      || row.visible?.toLowerCase() === needle;
+  });
   const hintTokens = labelTokens(normalized);
   const token = exact.length > 0 || hintTokens.length === 0
     ? []
-    : visibleOf.filter((row) => {
-        if (row.visible === null) return false;
-        const tokens = new Set(labelTokens(row.visible));
-        return hintTokens.every((token) => tokens.has(token));
+    : rows.filter((row) => {
+        if (row.bounded === null) return false;
+        const tokens = new Set(labelTokens(row.bounded));
+        return hintTokens.every((part) => tokens.has(part));
       });
   const matches = exact.length > 0 ? exact : token;
 
   if (matches.length === 1) return { ok: true, identity: matches[0]!.identity };
   // A miss while any candidate is labelled is a conflict, including when some
-  // addresses have no label: the unlabelled one might have been the target,
-  // and the error lists it so the agent can retry with no hint.
-  if (visibleOf.some((row) => row.visible !== null)) {
+  // addresses have no label: the unlabelled one might have been the target.
+  // Several unlabelled addresses are a conflict too. One unlabelled address
+  // still sends: there is nothing else the hint could have meant.
+  if (rows.some((row) => row.bounded !== null) || usable.length > 1) {
     return { ok: false, error: labelConflictError(contact, channel, usable, normalized, isPrincipal) };
   }
   return { ok: true, identity: fallback };
