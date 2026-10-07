@@ -85,13 +85,16 @@ export class SlackSendHandler implements ToolHandler {
       if (!resolved.ok) return { success: false, error: resolved.error };
       if (!SLACK_USER_ID_REGEX.test(resolved.identifier)) {
         // W… Enterprise Grid ids stay out of scope on the reference path too.
+        ctx.log.warn({ contactId: resolved.contactId }, 'slack-send: verified Slack identity is not a U… user id — refusing (#2033)');
         return {
           success: false,
           error: `The contact's verified Slack identity is not a U… user id, so nothing was sent. Enterprise Grid (W…) ids are not supported.`,
         };
       }
       destination = resolved.identifier;
-      contactId = resolved.contactId;
+      // Echo the contact ID only for a UUID the agent passed. For the alias it is the
+      // principal's, which spec 09 keeps out of the model's context.
+      contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
     } else {
       destination = recipientUserId as string;
     }

@@ -53,7 +53,7 @@ describe('resolveRecipientReference', () => {
 
   it('resolves the principal alias to the primary email', async () => {
     const result = await resolveRecipientReference(PRINCIPAL_RECIPIENT_ALIAS, 'email', FIELDS, deps());
-    expect(result).toEqual({ ok: true, contactId: principalId, identifier: 'pat@home.example', displayName: 'Pat Principal' });
+    expect(result).toEqual({ ok: true, kind: 'principal', contactId: principalId, identifier: 'pat@home.example', displayName: 'Pat Principal' });
   });
 
   it('resolves the principal alias on another channel', async () => {
@@ -84,7 +84,7 @@ describe('resolveRecipientReference', () => {
     const alex = await contacts.createContact({ displayName: 'Alex Vendor', source: 'ceo_stated', tier: 'known' });
     await contacts.linkIdentity({ contactId: alex.id, channel: 'email', channelIdentifier: 'alex@vendor.example', source: 'email_participant' });
     const result = await resolveRecipientReference(alex.id, 'email', FIELDS, deps());
-    expect(result).toEqual({ ok: true, contactId: alex.id, identifier: 'alex@vendor.example', displayName: 'Alex Vendor' });
+    expect(result).toEqual({ ok: true, kind: 'contact', contactId: alex.id, identifier: 'alex@vendor.example', displayName: 'Alex Vendor' });
   });
 
   it('a mistyped UUID finds no contact and fails closed', async () => {
@@ -105,10 +105,27 @@ describe('resolveRecipientReference', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toMatch(/Sam Cold.*has no verified, active email address/);
-      expect(result.error).toMatch(/unverified or inactive/);
+      expect(result.error).toMatch(/unverified, inactive/);
       // The unverified address is not echoed back for the model to retype.
       expect(result.error).not.toContain('sam@cold.example');
     }
+  });
+
+  it('refuses a blocked contact, since the gateway checks only the To tier (cc would get through)', async () => {
+    const blocked = await contacts.createContact({ displayName: 'Blocked Person', source: 'ceo_stated', tier: 'blocked' });
+    await contacts.linkIdentity({ contactId: blocked.id, channel: 'email', channelIdentifier: 'blocked@x.example', source: 'ceo_stated' });
+    const result = await resolveRecipientReference(blocked.id, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/is blocked\. Nothing was sent/);
+  });
+
+  it('skips a verified identity the channel cannot send to, so it does not shadow a sendable one', async () => {
+    const sam = await contacts.createContact({ displayName: 'Sam Signal', source: 'ceo_stated', tier: 'known' });
+    // A Signal ACI UUID recorded when an inbound message carried no number, oldest first.
+    await contacts.linkIdentity({ contactId: sam.id, channel: 'signal', channelIdentifier: '9f1c2d3e-aaaa-4bbb-8ccc-123456789abc', source: 'signal_participant' });
+    await contacts.linkIdentity({ contactId: sam.id, channel: 'signal', channelIdentifier: '+15195550123', source: 'signal_participant' });
+    const result = await resolveRecipientReference(sam.id, 'signal', FIELDS, deps());
+    expect(result).toMatchObject({ ok: true, identifier: '+15195550123' });
   });
 
   it('ignores a primary email that is not a verified, active identity', async () => {
