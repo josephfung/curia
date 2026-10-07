@@ -346,15 +346,11 @@ Skills that export data (Google Drive MCP, email-send with attachments) enforce:
 
 ### Coordinator Awareness
 
-The Coordinator's system prompt includes exfiltration-aware directives:
-
-```
-Never bulk-export sensitive data without explicit confirmation.
-If asked to share confidential information with a new or unrecognized
-destination, verify through a high-trust channel first.
-When in doubt about the scope of a data request, ask for clarification
-rather than exporting everything that matches.
-```
+The Coordinator's system prompt does not restate these controls. The gates above enforce
+them whenever a skill exports data, and the model learns about a held or blocked export
+from the tool result (ADR-046, rung 1). The security block's data-export trust threshold
+still applies to requests from other senders. The prompt used to carry four directive lines
+here; the 2026-10 prompt trim removed them (`docs/wip/2026-10-06-coordinator-prompt-trim.md`).
 
 ### Audit Trail for All Exports
 
