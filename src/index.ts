@@ -20,7 +20,7 @@
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveIdentityGateMode } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveIdentityGateMode } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
@@ -181,6 +181,7 @@ import {
   releaseRunningDelegation,
 } from './db/queries/pending-delegations.js';
 import { LateDelegationSweep } from './agents/late-delegation-sweep.js';
+import { ApprovalExpirySweep } from './autonomy/approval-expiry-sweep.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
 import {
   DeliverableKgPromotionSubscriber,
@@ -2908,6 +2909,20 @@ async function main(): Promise<void> {
     );
   }
 
+  // Approval expiry — marks pending approvals past expires_at as expired and emails the
+  // principal about high/critical ones (#2013). Deterministic, so it runs as a system
+  // interval rather than the hourly coordinator turn it replaced. outboundGateway may be
+  // absent (setup-required mode, no outbound client): expiry still runs, the notification
+  // is skipped with a warning. ceoEmail is the live ref so a post-boot email bind applies.
+  const approvalExpirySweep = new ApprovalExpirySweep({
+    actionLogRepo,
+    outboundGateway,
+    ceoEmail: principalEmail,
+    logger,
+    intervalMinutes: resolveApprovalExpiryConfig(yamlConfig.autonomy).sweepIntervalMinutes,
+  });
+  approvalExpirySweep.start();
+
   // Conversation checkpoint processor — System Layer subscriber that runs background
   // memory skills (extract-relationships, etc.) at end of each conversation.
   const checkpointProcessor = new ConversationCheckpointProcessor(
@@ -3092,6 +3107,11 @@ async function main(): Promise<void> {
       } catch (err) {
         logger.error({ err }, 'Error stopping late delegation sweep during shutdown');
       }
+    }
+    try {
+      approvalExpirySweep.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping approval expiry sweep during shutdown');
     }
     if (browserService) {
       try {
