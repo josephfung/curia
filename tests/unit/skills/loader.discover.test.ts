@@ -216,6 +216,15 @@ describe('loader: capability validation', () => {
       discoveries = discoverToolManifests(tmpDir);
       await expect(loadToolsFromDirectory(discoveries, new ToolRegistry(), logger, new Set(['both-skill'])))
         .rejects.toThrow('both capabilities and optional_capabilities');
+
+      // Allowlist-gated capabilities must be required, so a misdeclaration fails everywhere.
+      for (const cap of ['executionLayer', 'secretResolver', 'userSecretIndex', 'secretCapture']) {
+        const name = `gated-${cap.toLowerCase()}`;
+        setupSkillDir(tmpDir, name, { ...base, name, optional_capabilities: [cap] });
+        discoveries = discoverToolManifests(tmpDir);
+        await expect(loadToolsFromDirectory(discoveries, new ToolRegistry(), logger, new Set([name])), cap)
+          .rejects.toThrow('must be required capabilities');
+      }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

@@ -34,6 +34,11 @@ tool_stubs:
   get_drive_file_content:
     - match: {}
       return: *offsite_doc
+  search_drive_files:
+    - match: {}
+      return: |
+        Found 1 file:
+        - Name: "Q3 leadership offsite: plan" (ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga, Type: application/vnd.google-apps.document)
   web-fetch:
     - match: {}
       return:

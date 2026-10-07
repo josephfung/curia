@@ -7,7 +7,7 @@ import pino from 'pino';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { resolveSkillActivation } from '../../../src/skills/skill-activation.js';
-import { GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME } from '../../../src/skills/mcp-loader.js';
+import { GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME, loadSkillsConfig } from '../../../src/skills/mcp-loader.js';
 import {
   cannedMcpResultText,
   loadMcpToolsSnapshot,
@@ -34,6 +34,17 @@ describe('google-workspace snapshot', () => {
 
   it('holds no Calendar tool (the allowlist excludes Calendar, #1853)', () => {
     expect(snapshot.tools.filter(t => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(t.name))).toEqual([]);
+  });
+
+  it('was captured with the flags config/skills.yaml runs the server with', () => {
+    // A changed --tool-tier or --tools allowlist changes the tool surface; the snapshot
+    // must be re-captured with it, or the suites test a server production no longer runs.
+    const entry = (loadSkillsConfig(CONFIG_DIR).servers ?? []).find(s => s.name === 'google-workspace');
+    const args = entry?.transport === 'stdio' ? (entry.args ?? []) : [];
+    const tier = args[args.indexOf('--tool-tier') + 1];
+    const services = args.slice(args.indexOf('--tools') + 1).filter(a => !a.startsWith('--'));
+    expect(snapshot.source).toContain(`--tool-tier ${tier}`);
+    expect(snapshot.source).toContain(`--tools ${services.join(' ')}`);
   });
 
   it('includes the tools the coordinator scenarios exercise', () => {
@@ -81,6 +92,32 @@ describe('registerSnapshotMcpServers', () => {
       input: { document_id: 'abc' },
     } as never);
     expect(result).toEqual({ success: true, data: cannedMcpResultText('google-workspace', 'get_doc_as_markdown') });
+  });
+
+  it('rejects a call missing a required argument, as the real server would', async () => {
+    const { toolRegistry } = register();
+    // document_id is required; user_google_email is a fixed input the handler fills in.
+    const result = await toolRegistry.get('get_doc_as_markdown')!.handler.execute({ input: {} } as never);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("'document_id'");
+      expect(result.error).not.toContain('user_google_email');
+    }
+  });
+
+  it('reports a snapshot tool whose name a local tool already holds', () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(
+      { name: 'search_drive_files', description: 'local', version: '1.0.0', sensitivity: 'normal', action_risk: 'none',
+        inputs: {}, outputs: {}, permissions: [], secrets: [], timeout: 1000 },
+      { execute: async () => ({ success: true, data: null }) },
+    );
+    const result = registerSnapshotMcpServers({
+      configDir: CONFIG_DIR, snapshotDir: SNAPSHOT_DIR, toolRegistry, skillRegistry: new SkillRegistry(),
+      skillsDir: SKILLS_DIR, logger,
+    });
+    expect(result.tools.has('search_drive_files')).toBe(false);
+    expect(result.problems).toEqual([expect.stringContaining('search_drive_files')]);
   });
 
   it('reports a configured server with no snapshot instead of registering it', () => {

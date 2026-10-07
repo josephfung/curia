@@ -128,7 +128,7 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
               ? registered.mcpInputSchema.properties ?? {}
               : registered?.manifest.inputs;
             if (!inputs) continue;
-            for (const key of keys.filter(k => !(k in inputs))) {
+            for (const key of keys.filter(k => !Object.hasOwn(inputs, k))) {
               problems.push(`${where}: '${key}' is not an input of ${tool} (inputs: ${Object.keys(inputs).join(', ')})`);
             }
           }
@@ -328,11 +328,13 @@ async function main(): Promise<void> {
         });
         runs.push(run);
         // `name!` = refused by the stub layer (a hole in the stub table);
+        // `name~` = an unstubbed snapshot MCP tool answered with a stand-in (also a hole);
         // `name?` = a real read-only tool that failed (e.g. no mail client in test mode).
         const calls = run.toolCalls.map(c =>
           c.disposition === 'refused' ? `${c.name}!`
-            : c.disposition === 'passthrough' && c.result?.success === false ? `${c.name}?`
-              : c.name).join(', ') || 'no tools';
+            : c.disposition === 'canned' ? `${c.name}~`
+              : c.disposition === 'passthrough' && c.result?.success === false ? `${c.name}?`
+                : c.name).join(', ') || 'no tools';
         out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `ERROR ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}`}`);
       }
       let rated: Awaited<ReturnType<typeof rateRuns>>;

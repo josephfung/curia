@@ -32,6 +32,15 @@ tool_stubs:
   get_drive_file_content:
     - match: {}
       return: *launch_doc
+  # Looking the ID up first is a fine path; it finds the one Doc.
+  search_drive_files:
+    - match: {}
+      return: &found |
+        Found 1 file:
+        - Name: "Atlas release: launch plan" (ID: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge, Type: application/vnd.google-apps.document)
+  search_docs:
+    - match: {}
+      return: *found
 expected_behaviors:
   - id: activates_google_workspace
     weight: critical

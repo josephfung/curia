@@ -237,9 +237,10 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   const coordinator = stack.agent(COORDINATOR);
   const coordinatorTools = new Set(coordinator.toolDefs.map(t => t.name));
   // Production's own activation check, per skill: what skill-activate would hand the
-  // coordinator. Only with discovery on — without it the coordinator has no skill-activate.
+  // coordinator. Only while the coordinator has a skill-activate test mode can run;
+  // otherwise a case could stub and check tools no run can ever load.
   const reachableTools = new Set(coordinatorTools);
-  if (coordinator.agentConfig.allow_discovery) {
+  if (coordinatorTools.has('skill-activate') && !unavailable.has('skill-activate')) {
     for (const skill of stack.skillRegistry.list()) {
       const activation = stack.executionLayer.resolveSkillActivationForAgent(skill.manifest.name, COORDINATOR);
       if (!('error' in activation)) for (const tool of activation.tools) reachableTools.add(tool);
@@ -452,7 +453,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         toolCalls: [],
         reply: null,
         durationMs: Date.now() - started,
-        unstubbedCalls: stubbedCalls.filter(c => c.disposition === 'refused' && c.agentId === COORDINATOR).length,
+        unstubbedCalls: stubbedCalls.filter(c => (c.disposition === 'refused' || c.disposition === 'canned') && c.agentId === COORDINATOR).length,
         error: describeError(err),
         usage: state.usage.snapshot(),
         providerRetries: [],
@@ -508,8 +509,9 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
 export function countHoles(calls: CapturedToolCall[]): number {
   // A passthrough read that fails is a real outcome (e.g. date-resolve rejecting
   // "next week"): production returns the same. Tools test mode cannot serve are refused
-  // up front (see mustStub's `unavailable`), so they land here as refusals.
-  return calls.filter(c => c.disposition === 'refused').length;
+  // up front (see mustStub's `unavailable`), so they land here as refusals. An
+  // unstubbed snapshot MCP call got an empty stand-in result the case never chose (#2024).
+  return calls.filter(c => c.disposition === 'refused' || c.disposition === 'canned').length;
 }
 
 /** The metadata the email adapter attaches, minus anything a scenario cannot know. */

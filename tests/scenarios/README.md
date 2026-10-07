@@ -79,6 +79,7 @@ a release-gate result, and the results JSON records the filters.
 ### Output
 
 - A line per run, listing the tools called. `name!` means the stub layer refused the call.
+  `name~` means an unstubbed MCP tool got the canned stand-in (also a stub hole).
   `name?` means a real read-only tool failed — a real outcome production would also
   return (e.g. `date-resolve` rejecting an expression), not a harness gap.
 - Per case, once its runs are rated: its estimated spend, then per behavior its pass rate
@@ -181,9 +182,11 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
    `date-resolve`, `web-fetch`). A read test mode cannot serve (missing capability) is
    refused instead.
 4. **No stub, MCP tool:** it runs. The stack serves each configured MCP server from a
-   tools/list snapshot (`tests/fixtures/mcp/`, #2024) with a session that returns a
-   canned "nothing to return" result and reaches no account, so its `action_risk`
-   does not matter. Stub the calls a case is about with realistic data.
+   tools/list snapshot (`tests/fixtures/mcp/`, #2024) with a session that reaches no
+   account, so its `action_risk` does not matter: a call missing a required argument
+   gets the server's validation error, any other a canned "nothing to return" result.
+   The call is recorded as `canned` and counts as a stub hole, like a refusal, so stub
+   every Drive/Docs/Sheets call a case's model makes with realistic data.
 5. **A call from another conversation** (a timed-out earlier turn) is refused.
 
 This sits on top of the test-mode stack's own guarantee: a gateway with no transport
@@ -217,7 +220,8 @@ silent reply: saying nothing is not "naming no internals".
 
 A refused call is the harness's gap — an unstubbed side-effecting tool, or a tool test
 mode cannot serve (missing capability; those are refused up front rather than allowed
-to fail in a way production never does). Whatever the model
+to fail in a way production never does). So is a `canned` call: an unstubbed MCP tool
+answered with an empty stand-in. Whatever the model
 does next is scored against it. The CLI records each case's worst run in
 `stub-coverage.json` (committed, so the gate can't pass vacuously on a clean clone).
 A case fails when its count exceeds its allowance.

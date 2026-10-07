@@ -30,6 +30,16 @@ import type { ManifestMetadata } from '../registry/types.js';
  * (ExecutionLayer special-case) so skill-activate can resolve member tools under
  * allowed_callers without a separate capability. `toolRegistry` is not listed here.
  */
+/**
+ * Capabilities that may not be optional (#2024). Each sits behind a per-tool
+ * allowlist or a startup gate; as an optional capability, a misdeclaration would
+ * pass silently wherever the service is absent and fail only where it is wired.
+ * None has a legitimate "use it if present" reading.
+ */
+export const REQUIRED_ONLY_CAPABILITIES: ReadonlySet<string> = new Set([
+  'executionLayer', 'secretResolver', 'userSecretIndex', 'secretCapture',
+]);
+
 export const VALID_CAPABILITIES: ReadonlySet<string> = new Set([
   'bus', 'agentRegistry', 'outboundGateway',
   'schedulerService', 'entityMemory', 'nylasCalendarClient',
@@ -224,6 +234,13 @@ export async function loadToolsFromDirectory(
       if (both.length > 0) {
         throw new Error(
           `Tool '${manifest.name}' lists ${both.join(', ')} in both capabilities and optional_capabilities`,
+        );
+      }
+      const requiredOnly = (manifest.optional_capabilities ?? []).filter(cap => REQUIRED_ONLY_CAPABILITIES.has(cap));
+      if (requiredOnly.length > 0) {
+        throw new Error(
+          `Tool '${manifest.name}' declares ${requiredOnly.join(', ')} in optional_capabilities; ` +
+          'these are allowlist-gated and must be required capabilities',
         );
       }
 

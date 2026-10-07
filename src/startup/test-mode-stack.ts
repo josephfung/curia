@@ -642,6 +642,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     for (const server of snapshotMcp.serversWithoutSnapshot) {
       warnings.push(`MCP server '${server}' has no tools/list snapshot in tests/fixtures/mcp, so its tools are absent here.`);
     }
+    warnings.push(...snapshotMcp.problems);
     registerSyntheticSingletonSkills(toolRegistry, skillRegistry, logger);
 
     const enabledAgents = enabled.agent;

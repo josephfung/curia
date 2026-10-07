@@ -10,8 +10,9 @@
 // tests/fixtures/mcp/<server>.tools.json is registered from that snapshot, through
 // production's own registration (registerMcpServerTools + registerMcpProjectedSkills):
 // same manifests, same action_risk, same fixed-input stripping, same projected skill
-// with its references. Only the session differs. It answers every call with a canned
-// result and holds no connection, so a call reaches nothing.
+// with its references. Only the session differs. It holds no connection, so a call
+// reaches nothing: a call missing a required argument gets the validation error the
+// real server would return, and any other call a canned "nothing to return" result.
 //
 // To refresh a snapshot, export the server's tools/list (curia-deploy keeps one current
 // for its eval harness: tests/eval/tool-schemas/_bundle-<server>.json, checked against
@@ -44,7 +45,12 @@ export interface McpToolsSnapshot {
 /** Read and check one snapshot. Throws on a malformed file: a silently empty server
  *  would let a suite pass for the wrong reason. */
 export function loadMcpToolsSnapshot(file: string, server: string): McpToolsSnapshot {
-  const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<McpToolsSnapshot>;
+  let parsed: Partial<McpToolsSnapshot>;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<McpToolsSnapshot>;
+  } catch (err) {
+    throw new Error(`MCP snapshot ${file} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+  }
   if (parsed.server !== server) {
     throw new Error(`MCP snapshot ${file} is for server '${String(parsed.server)}', expected '${server}'`);
   }
@@ -52,8 +58,9 @@ export function loadMcpToolsSnapshot(file: string, server: string): McpToolsSnap
     throw new Error(`MCP snapshot ${file} lists no tools`);
   }
   for (const tool of parsed.tools) {
-    if (typeof tool?.name !== 'string' || typeof tool.inputSchema !== 'object' || tool.inputSchema === null) {
-      throw new Error(`MCP snapshot ${file} has a tool without a name or inputSchema`);
+    const schema: unknown = tool?.inputSchema;
+    if (typeof tool?.name !== 'string' || typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+      throw new Error(`MCP snapshot ${file} has a tool without a name or an object inputSchema`);
     }
   }
   return parsed as McpToolsSnapshot;
@@ -69,11 +76,31 @@ export function cannedMcpResultText(server: string, toolName: string): string {
     'Nothing was read from or changed in any real account, and there is no data to return.';
 }
 
-/** A session that answers every tools/call with the canned text and reaches nothing. */
-export function cannedMcpSession(server: string): McpToolSession {
-  const callTool = async (params: { name: string }) => ({
-    content: [{ type: 'text' as const, text: cannedMcpResultText(server, params.name) }],
-  });
+/** The `required` list of a tool's JSON Schema, or none. */
+function requiredArguments(schema: unknown): string[] {
+  const required = (schema as { required?: unknown }).required;
+  return Array.isArray(required) ? required.filter((r): r is string => typeof r === 'string') : [];
+}
+
+/**
+ * A session that reaches nothing. A call missing a required argument gets an error
+ * result, as the real server's input validation would give it, so a malformed call
+ * cannot pass a check here that production would fail. Any other call gets the canned
+ * text. `tools` is the snapshot the server was registered from.
+ */
+export function cannedMcpSession(server: string, tools: readonly McpListedTool[]): McpToolSession {
+  const required = new Map(tools.map(t => [t.name, requiredArguments(t.inputSchema)]));
+  const callTool = async (params: { name: string; arguments?: Record<string, unknown> }) => {
+    const args = params.arguments ?? {};
+    const missing = (required.get(params.name) ?? []).filter(key => args[key] === undefined || args[key] === null);
+    if (missing.length > 0) {
+      return {
+        isError: true,
+        content: [{ type: 'text' as const, text: `Input validation error: missing required argument(s) ${missing.map(k => `'${k}'`).join(', ')}` }],
+      };
+    }
+    return { content: [{ type: 'text' as const, text: cannedMcpResultText(server, params.name) }] };
+  };
   return {
     serverId: server,
     // Cast: the SDK's callTool is overloaded on its result schema; the handler only
@@ -100,6 +127,13 @@ export interface SnapshotMcpResult {
   tools: Set<string>;
   /** Configured servers with no snapshot: absent from this stack, as before #2024. */
   serversWithoutSnapshot: string[];
+  /**
+   * Ways this differs from what the snapshots describe: tools that did not register
+   * (a name a local tool already holds) and servers not projected as a skill (a skill
+   * of that name exists). The registration code only logs these at warn, below the
+   * stack's usual log level, so the caller surfaces them.
+   */
+  problems: string[];
 }
 
 /**
@@ -124,6 +158,7 @@ export function registerSnapshotMcpServers(params: {
   const projected = new Map<string, string[]>();
   const tools = new Set<string>();
   const serversWithoutSnapshot: string[] = [];
+  const problems: string[] = [];
 
   for (const entry of loadSkillsConfig(configDir).servers ?? []) {
     const file = path.join(snapshotDir, `${entry.name}.tools.json`);
@@ -135,16 +170,25 @@ export function registerSnapshotMcpServers(params: {
     const resolvedFixedInputs = Object.fromEntries(fixedInputKeys(entry).map(k => [k, 'test-mode']));
     const names = registerMcpServerTools({
       serverEntry: entry,
-      session: cannedMcpSession(entry.name),
+      session: cannedMcpSession(entry.name, snapshot.tools),
       tools: snapshot.tools,
       resolvedFixedInputs,
       registry: toolRegistry,
       logger,
     });
+    const dropped = snapshot.tools.map(t => t.name).filter(name => !names.includes(name));
+    if (dropped.length > 0) {
+      problems.push(`MCP server '${entry.name}': snapshot tools not registered (name already taken): ${dropped.join(', ')}`);
+    }
     projected.set(entry.name, names);
     for (const name of names) tools.add(name);
   }
 
+  // A server whose name a skill already holds is skipped by the projection.
+  const shadowed = [...projected.keys()].filter(server => skillRegistry.get(server) !== undefined);
+  for (const server of shadowed) {
+    problems.push(`MCP server '${server}' was not projected as a skill: a skill of that name is already registered`);
+  }
   registerMcpProjectedSkills(projected, skillRegistry, logger, skillsDir);
-  return { tools, serversWithoutSnapshot };
+  return { tools, serversWithoutSnapshot, problems };
 }

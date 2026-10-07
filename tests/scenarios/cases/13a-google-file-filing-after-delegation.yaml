@@ -55,6 +55,30 @@ tool_stubs:
       return: |
         Successfully updated file "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic).
         Parents: 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd
+  # Reading the Doc or fetching its link to pass on is reasonable; both answer as Drive would.
+  get_doc_as_markdown:
+    - match: {}
+      return: &comparison |
+        # CRM comparison: Northwind vs Contoso
+
+        | | Northwind | Contoso |
+        |---|---|---|
+        | Price (25 seats) | $18k/yr | $24k/yr |
+        | Onboarding | 2 weeks | 6 weeks |
+        | Reporting | Basic | Strong |
+
+        **Recommendation:** Northwind, unless custom reporting is a must-have.
+  get_doc_content:
+    - match: {}
+      return: *comparison
+  get_drive_shareable_link:
+    - match: {}
+      return: "https://docs.google.com/document/d/1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic/edit?usp=sharing"
+  list_docs_in_folder:
+    - match: {}
+      return: |
+        Docs in folder 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd:
+        - "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic)
   manage_drive_access:
     - match: {}
       return: 'Permission granted on "CRM comparison: Northwind vs Contoso" (ID 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic).'

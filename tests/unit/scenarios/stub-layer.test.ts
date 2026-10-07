@@ -91,7 +91,8 @@ describe('inert tools (#2024)', () => {
     controller.beginRun({}, 'scenario-1');
     const result = await layer.invoke('update_drive_file', {}, undefined, coordinatorCall);
     expect(result).toEqual({ success: true, data: 'canned' });
-    expect(controller.endRun('scenario-1').map(c => c.disposition)).toEqual(['passthrough']);
+    // Recorded as canned, a stub hole: the model got a stand-in, not data the case chose.
+    expect(controller.endRun('scenario-1').map(c => c.disposition)).toEqual(['canned']);
   });
 });
 
