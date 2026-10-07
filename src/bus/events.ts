@@ -320,7 +320,7 @@ interface OutboundNoReplyPayload {
 //   - 'blocked_content': principal alert that an outbound message was blocked by the content filter
 //   - 'contact_rate_limited': principal alert that contact auto-creation was throttled due to rate limits
 //   - 'approval_requested':   principal alert that an autonomy gate blocked a skill and approval is needed
-//   - 'approval_expired':     principal alert that pending approvals expired without response (approval-expiry-sweep)
+//   - 'approval_expired':     principal alert that pending approvals expired without response (ApprovalExpirySweep, #2013)
 //   - 'schedule_suspended': principal alert that a scheduled job was auto-suspended after consecutive failures (#538)
 //   - 'schedule_recovered': principal alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
 //   - 'learning_proposal':  principal alert surfacing a learning-digest item (voice-guide proposal or sent-mail
@@ -332,7 +332,7 @@ export interface OutboundNotificationPayload {
     | 'blocked_content'
     | 'contact_rate_limited'
     | 'approval_requested'
-    | 'approval_expired'        // batched expiry notification (approval-expiry-sweep)
+    | 'approval_expired'        // batched expiry notification (ApprovalExpirySweep, #2013)
     | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
     | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
     | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
