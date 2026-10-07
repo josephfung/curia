@@ -986,3 +986,44 @@ on `202c912c`, swapping in `origin/main`'s `agents/coordinator.yaml` for the mai
 
 Every miss on both sides is the same misread: "next Friday" taken as the coming Friday.
 The failure mode is not this change; the case depends on the weekday it runs on.
+
+### 2026-10-07 — prompt trim PR 1: code-enforced restatements and stale sections
+
+First PR of `2026-10-06-coordinator-prompt-trim.md`. Measured through `assembleAgent()`
+(the budget test's path) on `dc7690d7` against `origin/main` (`01a1b523`, coordinator
+0.24.1).
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `system_prompt` chars | 20,532 | 18,573 | **−1,959 (−9.5%)** |
+| always-on (YAML + SKILL.md 6,157), est. tokens | ~6,673 | ~6,183 | ~−490 |
+| CI budget, always-on tokens | 7,000 | 6,400 | lowered |
+| local tool definitions | 74,651 B, 65 tools | unchanged | — |
+
+**Behavior on `dc7690d7`.** Model `deepseek/deepseek-v4.1-flash`, gpt-4o judge, local dev
+database; both suites side by side at concurrency 4.
+
+- **Scenarios: every case passed on behavior** (25 cases, 445 s, estimated $0.86). The gate
+  failed on a stub hole: `google file filing after delegation` called
+  `inspect_doc_structure` (unstubbed) in 1 of 5 runs. Two cases came in under 100%:
+  `scheduler ambiguous asks` 80% (assumed the job in 1 of 5 runs) and `paused delegate no
+  redelegate` 93% (`no_internals`, important, 3 of 5).
+- **Smoke: 44 of 46** (886 s, estimated $1.46). Urgent Escalation passed on retry. Two
+  cases failed both attempts: Pre-Meeting Prep Brief (67%; the judge wanted it to ask the
+  meeting's purpose) and "Coordinator edits an existing recurring job" (63%; it edited
+  the job but also re-listed and called `scheduler-create` once).
+
+**A/B against `origin/main`'s prompt.** Same commit's code on both sides (PR 1 changes no
+`src/`); the main side ran from a detached `origin/main` worktree. Interleaved, same evening.
+
+| Case | Branch | `origin/main` |
+|---|---|---|
+| scenarios `scheduler ambiguous asks`, 10 runs | 100% (both criticals 10/10) | 100% |
+| scenarios `paused delegate no redelegate`, 10 runs | 98%; `no_internals` 90% | 95%; `no_internals` 70% |
+| scenarios `google file filing after delegation`, 5 runs | 100%, no stub hole | 94%; the same unstubbed call in 1 run |
+| smoke "Coordinator edits an existing recurring job", 4 rounds | 4 of 4 at 100%, first attempt | 4 of 4 at 100%, first attempt |
+| smoke Pre-Meeting Prep Brief, 4 rounds | 4 of 4 (89%); 1 needed its retry (180 s timeout) | 4 of 4 (89%); 1 needed its retry (78%) |
+
+Every full-run miss either recurs on `origin/main`'s prompt or does not recur on the
+branch. The `google file filing` stub hole happens on both prompts, so it measures the
+harness: worth stubbing `inspect_doc_structure` in that case.
