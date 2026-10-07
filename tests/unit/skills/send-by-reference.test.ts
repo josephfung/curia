@@ -476,8 +476,13 @@ describe('label hint (#2047)', () => {
     });
     const held = await approval.invoke('email-send', input, undefined, { ...origin, taskEventId: 'task-hint-1' });
     expect(held.success).toBe(false);
-    const shown = (request.mock.calls[0]![0] as { displayInput: { to: string } }).displayInput.to;
+    const shown = (request.mock.calls[0]![0] as { displayInput: { to: string }; sendResolution?: Array<{ ref: string; identityName: string; identityId: string }> }).displayInput.to;
     expect(shown.startsWith(PERSONAL.email)).toBe(true);
     expect(shown).not.toContain(WORK.email);
+    const filed = await h.contacts.getContactWithIdentities(pat.id);
+    const personalId = filed?.identities.find((identity) => identity.channelIdentifier === PERSONAL.email)?.id;
+    expect(request.mock.calls[0]![0]).toMatchObject({
+      sendResolution: [{ ref: reference, identityId: personalId, identityName: 'personal' }],
+    });
   });
 });
