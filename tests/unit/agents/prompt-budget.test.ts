@@ -57,12 +57,19 @@ interface AgentBudget {
   alwaysOnPromptTokens: number;
   /** JSON bytes of the local tool definitions (MCP excluded). */
   localToolDefinitionBytes: number;
+  /**
+   * Whether the agent may pin an MCP server. Its tools cannot be measured here (they
+   * come from the upstream server), so an agent under budget must not pin one: the
+   * coordinator activates google-workspace on demand instead (#2024). Default true.
+   */
+  allowMcpPins?: boolean;
 }
 
 // Coordinator, measured 2026-10-06 after #1958, #1959 and #1960: ~6,777 tokens
-// (YAML 20,951 chars + SKILL.md 6,157) and 74,856 bytes over 66 local tools.
+// (YAML 20,951 chars + SKILL.md 6,157) and 74,856 bytes over 66 local tools. After
+// #2024 (google-workspace unpinned, its prompt section rewritten): YAML 20,532 chars.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 7_000, localToolDefinitionBytes: 77_000 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 7_000, localToolDefinitionBytes: 77_000, allowMcpPins: false },
 ];
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };
@@ -171,8 +178,9 @@ describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
 
   it('measures the whole local pin set', () => {
     // A pin that silently failed to load would shrink both numbers and pass the
-    // budget for the wrong reason. Only MCP servers may be absent here.
-    const mcp = mcpServerNames();
+    // budget for the wrong reason. Only MCP servers may be absent here, and only for
+    // an agent allowed to pin them.
+    const mcp = budget.allowMcpPins === false ? new Set<string>() : mcpServerNames();
     expect(m.unresolvedPins.filter(p => !mcp.has(p))).toEqual([]);
     expect(m.localToolCount).toBeGreaterThan(0);
     // Discovery tools are not pins, so a missing one is only logged by assembleAgent.

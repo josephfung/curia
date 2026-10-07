@@ -167,9 +167,9 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(tools).not.toContain('resolve-learning-digest');
   });
 
-  it('coordinator pins google-workspace skill instead of listing MCP tools', () => {
+  it('coordinator pins neither google-workspace nor its MCP tools (activated on demand, #2024)', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
-    expect(config.pinned_skills).toContain('google-workspace');
+    expect(config.pinned_skills).not.toContain('google-workspace');
     expect(config.pinned_skills).not.toContain('create_doc');
     expect(config.pinned_skills).toContain('contact-update');
     expect(config.pinned_skills).not.toContain('contact-lookup');
