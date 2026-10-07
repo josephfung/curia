@@ -5,7 +5,7 @@ import type {
   PrincipalChannelRules,
   ProjectedRecipient,
 } from '../../contacts/principal-channel-rules.js';
-import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
+import { hasPresentValue, parseOneRecipient } from '../../contacts/principal-carveout-parse.js';
 import { isSlackOutboundRequest } from './outbound-request.js';
 
 /**
@@ -27,11 +27,9 @@ function parseSlackSendRecipients(input: Record<string, unknown>): string[] | nu
     if (hasPresentValue(input[key])) return null;
   }
 
-  const recipient = input['recipient'];
-  if (recipient !== undefined && recipient !== null && typeof recipient !== 'string') return null;
-  if (!hasPresentValue(recipient)) return null;
-
-  return [(recipient as string).trim()];
+  // `recipient` holds a contact reference and `recipient_user_id` a raw U… id
+  // (#2033). Gate C resolves a reference to its user id before comparing.
+  return parseOneRecipient(input, 'recipient_user_id');
 }
 
 /**

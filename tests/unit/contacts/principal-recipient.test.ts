@@ -210,6 +210,49 @@ describe('principal-recipient', () => {
       )).toBe(true);
     });
 
+    // Raw-address fields (#2033). References in to/recipient are resolved by
+    // Gate C before this check; here the parsers only have to read both fields.
+    it('reads the raw-address fields of each send skill', () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['email-send', { to_address: 'ceo@example.com', subject: 'x', body: 'y' }],
+        ['signal-send', { recipient_number: '+15551234567', message: 'hi' }],
+        ['sms-send', { recipient_number: '+15559876543', message: 'hi' }],
+        ['slack-send', { recipient_user_id: 'U_CEO', message: 'hi' }],
+      ];
+      for (const [tool, input] of cases) {
+        expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(true);
+      }
+    });
+
+    it('fails closed when a reference field and its raw field are both set', () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['email-send', { to: 'ceo@example.com', to_address: 'ceo@example.com', subject: 'x', body: 'y' }],
+        ['signal-send', { recipient: '+15551234567', recipient_number: '+15551234567', message: 'hi' }],
+        ['sms-send', { recipient: '+15559876543', recipient_number: '+15559876543', message: 'hi' }],
+        ['slack-send', { recipient: 'U_CEO', recipient_user_id: 'U_CEO', message: 'hi' }],
+      ];
+      for (const [tool, input] of cases) {
+        expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(false);
+      }
+    });
+
+    it('counts cc_addresses toward the email-send recipient set', () => {
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
+        { to_address: 'ceo@example.com', cc_addresses: 'other@example.com', subject: 'x', body: 'y' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
+    it('does not treat an unresolved reference as the principal', () => {
+      // Gate C substitutes the resolved address first; a bare alias never matches.
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
+        { to: 'principal', subject: 'x', body: 'y' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
     it('rejects mixed principal + cc recipient set', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
         'email-send',

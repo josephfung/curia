@@ -38,6 +38,10 @@ const EMAIL_REPLY_UNPARSED_RECIPIENT_KEYS = [
 /**
  * Parse email-send recipients from skill input. Returns null when the input contains
  * recipient-shaped keys this parser does not model (fail closed).
+ *
+ * `to` / `cc` hold contact references (a contact UUID or "principal") and
+ * `to_address` / `cc_addresses` hold raw addresses (#2033). This parser returns
+ * both as written; Gate C resolves the references to addresses before comparing.
  */
 function parseEmailSendRecipients(input: Record<string, unknown>): string[] | null {
   const unparsedRecipientKeys = ['bcc', 'recipients', 'recipient', 'group_id', 'groupId'] as const;
@@ -45,15 +49,24 @@ function parseEmailSendRecipients(input: Record<string, unknown>): string[] | nu
     if (hasPresentValue(input[key])) return null;
   }
 
-  const to = input['to'];
-  const cc = input['cc'];
-  if (to !== undefined && to !== null && typeof to !== 'string') return null;
-  if (cc !== undefined && cc !== null && typeof cc !== 'string') return null;
-  if (!hasPresentValue(to) || typeof to !== 'string') return null;
+  const fields = ['to', 'to_address', 'cc', 'cc_addresses'] as const;
+  for (const key of fields) {
+    const value = input[key];
+    if (value !== undefined && value !== null && typeof value !== 'string') return null;
+  }
+  const to = input['to'] as string | undefined;
+  const toAddress = input['to_address'] as string | undefined;
+  // The skill refuses both at once; never guess which one it would have used.
+  if (hasPresentValue(to) && hasPresentValue(toAddress)) return null;
+  const primary = hasPresentValue(to) ? to : toAddress;
+  if (!hasPresentValue(primary) || typeof primary !== 'string') return null;
 
-  const emails = splitCommaSeparatedAddresses(to);
-  if (typeof cc === 'string' && cc.trim().length > 0) {
-    emails.push(...splitCommaSeparatedAddresses(cc));
+  const emails = splitCommaSeparatedAddresses(primary);
+  for (const key of ['cc', 'cc_addresses'] as const) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      emails.push(...splitCommaSeparatedAddresses(value));
+    }
   }
   return emails;
 }

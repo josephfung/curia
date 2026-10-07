@@ -203,6 +203,15 @@ describe('extractDestinationFromInput', () => {
     const dest = extractDestinationFromInput('create_sheet', { title: 'Budget' });
     expect(dest).toEqual({ kind: 'spreadsheet', spreadsheetId: '(new)' });
   });
+
+  it('reads the raw-address fields of email-send and signal-send (#2033)', () => {
+    expect(extractDestinationFromInput('email-send', { to_address: 'new@cold.example' }))
+      .toEqual({ kind: 'email', address: 'new@cold.example' });
+    expect(extractDestinationFromInput('email-send', { to: 'principal' }))
+      .toEqual({ kind: 'email', address: 'principal' });
+    expect(extractDestinationFromInput('signal-send', { recipient_number: '+15551234567' }))
+      .toEqual({ kind: 'signal', address: '+15551234567' });
+  });
 });
 
 describe('allowlist prefix boundaries', () => {

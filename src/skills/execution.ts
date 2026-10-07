@@ -114,6 +114,7 @@ import {
 import { createExportDelivered } from '../bus/events.js';
 import { isDbUnavailableError } from '../db/resilience.js';
 import { USER_SECRET_PREFIX } from '../secrets/user-secret-name.js';
+import { parseRecipientReference, resolveRecipientReference } from './_shared/recipient-reference.js';
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -837,6 +838,54 @@ export class ExecutionLayer {
   }
 
   /**
+   * Replace recipient references (a contact UUID or "principal") with the
+   * address the send skill will resolve them to (#2033, ADR-047). Raw
+   * identifiers pass through: a reference shape cannot collide with an
+   * address on any send channel (see parseRecipientReference).
+   *
+   * Uses the same resolver as the skill, so the gate judges the real
+   * destination. A reference that does not resolve fails closed with the
+   * resolver's error, the one the skill would have returned.
+   */
+  private async resolveGateCRecipientReferences(
+    channel: string,
+    recipients: string[],
+    skillLogger: Logger,
+  ): Promise<{ ok: true; recipients: string[] } | { ok: false; error: string }> {
+    if (!recipients.some((r) => parseRecipientReference(r) !== null)) {
+      return { ok: true, recipients };
+    }
+    if (!this.contactService) {
+      // Without contacts the gate cannot see where the send goes. Do not guess.
+      skillLogger.warn({ channel }, 'autonomy gate: recipient reference without a contact service — refusing (fail-closed, #2033)');
+      return { ok: false, error: 'The recipient reference cannot be resolved here (no contact service). Nothing was sent.' };
+    }
+    const resolved: string[] = [];
+    for (const recipient of recipients) {
+      if (parseRecipientReference(recipient) === null) {
+        resolved.push(recipient);
+        continue;
+      }
+      const result = await resolveRecipientReference(
+        recipient,
+        channel,
+        // Only parsed references reach the resolver, so these names never appear
+        // in its errors (they are used for the not-a-reference message alone).
+        { field: 'recipient', rawField: 'the raw-address field' },
+        { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
+      );
+      if (!result.ok) {
+        if (result.cause !== undefined) {
+          skillLogger.warn({ err: result.cause, channel }, 'autonomy gate: recipient reference lookup failed — refusing (fail-closed, #2033)');
+        }
+        return { ok: false, error: result.error };
+      }
+      resolved.push(result.identifier);
+    }
+    return { ok: true, recipients: resolved };
+  }
+
+  /**
    * Collect initiating-sender identifiers on `channel` only: the inbound senderId
    * when the originator arrived on this channel, plus verified active identities
    * on this channel. Never includes contactId, unverified, defunct, bounced, or
@@ -1455,6 +1504,20 @@ export class ExecutionLayer {
             let resolutionFailed = false;
             if (foundCarveout && !foundCarveout.carveout.resolveRecipients) {
               recipients = foundCarveout.carveout.parseRecipients(input);
+              // Send skills take contact references (#2033). Resolve them the way the
+              // skill will, so the principal carve-out and the reply-to-sender check
+              // compare the address that will actually be sent to. One indexed
+              // contact read per reference; raw addresses skip it.
+              if (recipients !== null) {
+                const normalized = await this.resolveGateCRecipientReferences(
+                  foundCarveout.rules.channel, recipients, skillLogger,
+                );
+                if (!normalized.ok) {
+                  // The skill would refuse the same input; say why instead of escalating.
+                  return { success: false, error: this.wrapSkillError(normalized.error) };
+                }
+                recipients = normalized.recipients;
+              }
             }
             let isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
               toolName,
