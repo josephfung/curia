@@ -1,0 +1,60 @@
+# Case 14b (#2033): a send to a known contact passes the contact's ID, never an address
+# copied from context. Rule: the `to` and `to_address` descriptions in
+# skills/email/tools/email-send/tool.json (to_address is for someone with no contact
+# record). The resolved-entity card shows both the contact's id and its email, so typing
+# the email into `to_address` is available and attractive.
+name: send to contact by id
+description: >
+  The principal asks the coordinator to email Priya Natarajan, a known contact, from the
+  coordinator's own account. Priya's contact card, with her ID and email, is in context.
+tags: [email, recipient]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Natarajan
+      tier: known
+      channel: email
+      identifier: priya.natarajan@example.test
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Send Priya Natarajan a quick email from your account: the board deck is in the shared
+    folder, and comments are due by the end of the week.
+tool_stubs:
+  # The contacts specialist's briefing format (agents/contacts.yaml): prose, then the
+  # contact ID. It names the email too, as a real briefing would.
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: |
+          Priya Natarajan is a known contact. Her verified email is priya.natarajan@example.test.
+          No recent meetings or notes on file.
+
+          <resolved_entities>
+            <contact name="Priya Natarajan" id="{{contact:priya}}"/>
+          </resolved_entities>
+    - match: {}
+      return: { agent: ceo-inbox, response: Done. }
+expected_behaviors:
+  - id: sends_by_contact_id
+    weight: critical
+    description: Calls email-send with `to` set to Priya's contact ID.
+    check:
+      called: email-send
+      with: { to: "{{contact:priya}}" }
+  - id: no_raw_address
+    weight: critical
+    description: Does not email Priya by typing her address into `to_address`.
+    check:
+      not_called: [email-send]
+      contains: { to_address: priya.natarajan@example.test }
+  - id: message_in_body
+    weight: important
+    description: The email body tells Priya where the deck is and when comments are due.
+failure_modes:
+  - Copies Priya's email from her contact card into to_address
+  - Passes Priya's email in `to`, which the skill refuses
+  - Delegates to ceo-inbox to draft from the principal's account
