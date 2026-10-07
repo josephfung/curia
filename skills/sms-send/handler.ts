@@ -3,6 +3,10 @@
 // Sends a 1:1 SMS via OutboundGateway → Telnyx. The gateway enforces content
 // filter, blocked-contact, and autonomy. Carrier STOP (Telnyx 40300) surfaces as
 // blockedReason so the agent can record a KG fact instead of retrying.
+//
+// The recipient is a reference by default (#2033, ADR-047): `recipient` takes a
+// contact ID or "principal", resolved to that contact's verified SMS number.
+// `recipient_number` is the deliberate raw path, for someone with no contact record.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
@@ -13,8 +17,9 @@ const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
 export class SmsSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, message, context_bridge: contextBridgeRaw } = ctx.input as {
-      recipient?: string;
+    const { recipient, recipient_number: recipientNumber, message, context_bridge: contextBridgeRaw } = ctx.input as {
+      recipient?: unknown;
+      recipient_number?: unknown;
       message?: string;
       context_bridge?: string;
     };
@@ -23,14 +28,26 @@ export class SmsSendHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message (string)' };
     }
 
-    if (!recipient || typeof recipient !== 'string') {
-      return { success: false, error: 'Missing required input: recipient (E.164 string)' };
+    if (recipient !== undefined && recipient !== null && typeof recipient !== 'string') {
+      return { success: false, error: 'recipient must be a string' };
     }
-
-    if (!E164_REGEX.test(recipient)) {
+    if (recipientNumber !== undefined && recipientNumber !== null && typeof recipientNumber !== 'string') {
+      return { success: false, error: 'recipient_number must be a string' };
+    }
+    if (!recipient && !recipientNumber) {
       return {
         success: false,
-        error: `recipient must be a valid E.164 phone number (e.g. +14155552671), got: ${recipient}`,
+        error: 'Missing recipient: pass recipient (a contact ID, or "principal" for the principal). Only for someone with no contact record, pass recipient_number.',
+      };
+    }
+    if (recipient && recipientNumber) {
+      return { success: false, error: 'Pass either recipient or recipient_number, not both.' };
+    }
+
+    if (recipientNumber && !E164_REGEX.test(recipientNumber)) {
+      return {
+        success: false,
+        error: `recipient_number must be a valid E.164 phone number (e.g. +14155552671), got: ${recipientNumber}`,
       };
     }
 
@@ -48,13 +65,35 @@ export class SmsSendHandler implements ToolHandler {
       };
     }
 
-    ctx.log.info({ destinationType: '1:1' }, 'sms-send: dispatching SMS via gateway');
+    // Resolve the reference (#2033). No contact, or no verified SMS number, means no send.
+    let destination: string;
+    let contactId: string | undefined;
+    if (recipient) {
+      const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient, {
+        field: 'recipient',
+        rawField: 'recipient_number',
+      });
+      if (!resolved.ok) return { success: false, error: resolved.error };
+      if (!E164_REGEX.test(resolved.identifier)) {
+        // A stored identity Telnyx cannot address. Refuse rather than guess.
+        return {
+          success: false,
+          error: `The contact's verified SMS identity is not an E.164 number, so nothing was sent. Ask the principal to correct it.`,
+        };
+      }
+      destination = resolved.identifier;
+      contactId = resolved.contactId;
+    } else {
+      destination = recipientNumber as string;
+    }
+
+    ctx.log.info({ destinationType: '1:1', byReference: !!recipient }, 'sms-send: dispatching SMS via gateway');
 
     try {
       const result = await ctx.outboundGateway.send(
         {
           channel: 'sms',
-          recipient,
+          recipient: destination,
           message,
         },
         {
@@ -81,7 +120,9 @@ export class SmsSendHandler implements ToolHandler {
       return {
         success: true,
         data: {
-          delivered_to: recipient,
+          // The resolved number. Reply-lock reads this field.
+          delivered_to: destination,
+          ...(contactId ? { contact_id: contactId } : {}),
           channel: 'sms',
         },
       };
