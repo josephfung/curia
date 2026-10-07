@@ -160,6 +160,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`ceo-inbox-search` input (public API)** — `include_spam_and_trash` opts into Spam and Trash; otherwise they are omitted. (#2035)
 - **`ceo-inbox-list`** — keeps paging past Curia-self mail so an empty page cannot report `has_more`. (#2035)
 - **`ceo-inbox-read`** — returns Gmail label display names, so earlier triage labels are visible. (#2035)
+- **`ceo-inbox-draft-reply`** — refuses a new draft when the existing-draft scan is incomplete. (#2035)
+- **`ceo-inbox` folder lookup** — follows later Nylas folder pages so labels past the first page resolve. (#2035)
 - **Outbound block errors** — name recipients that match no contact, so agents stop rewriting content to wrong addresses. (#2033)
 - **Outbound contact creation** — first-time recipients get unverified `outbound_recipient` provenance, not principal-stated `ceo_stated`. (#2033)
 - **LLM providers** — forward caller `temperature` (judges' `0` applies); `llm.call` records it. (#2038)

@@ -8,8 +8,8 @@ import { captureDraftSnapshot } from '../../../_shared/voice-learning-capture.js
 import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
 
 // Same ceiling ceo-inbox-search uses when it scans drafts. A match stops the
-// scan early; hitting the ceiling without a match means we cannot prove the
-// thread is draft-free, so we warn and still create.
+// scan early. Hitting the ceiling without a match means we cannot prove the
+// thread is draft-free, so we refuse to create rather than risk a duplicate.
 const DRAFT_SCAN_LIMIT = 500;
 
 export class CeoInboxDraftReplyHandler implements ToolHandler {
@@ -127,8 +127,12 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         if (truncated) {
           ctx.log.warn(
             { threadId: original.threadId, cap: DRAFT_SCAN_LIMIT },
-            'ceo-inbox-draft-reply: draft scan hit the cap without finding this thread — creating a new draft',
+            'ceo-inbox-draft-reply: draft scan hit the cap without finding this thread — refusing to create a draft',
           );
+          return {
+            success: false,
+            error: 'Unable to determine whether this thread already has a draft; draft scan incomplete',
+          };
         }
       }
 

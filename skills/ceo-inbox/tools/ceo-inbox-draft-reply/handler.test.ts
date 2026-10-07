@@ -748,4 +748,52 @@ describe('CeoInboxDraftReplyHandler', () => {
     if (!result.success) return;
     expect((result.data as { already_exists: boolean }).already_exists).toBe(false);
   });
+
+  it('refuses to create a draft when the existing-draft scan is truncated (#2035)', async () => {
+    const messageResponse = buildNylasMessage({
+      from: [{ email: 'alice@external.com', name: 'Alice' }],
+      to: [{ email: 'ceo@example.com' }],
+    });
+    let creates = 0;
+    let draftPages = 0;
+
+    mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const urlStr = String(url);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (urlStr.includes('/messages/msg-001')) {
+        return new Response(JSON.stringify(messageResponse), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && method === 'GET') {
+        draftPages += 1;
+        // A full page plus a cursor, none of them this thread. 25 pages of 20
+        // is the 500-draft ceiling, so the scan reports truncated.
+        const data = Array.from({ length: 20 }, (_, i) => ({
+          id: `draft-${draftPages}-${i}`,
+          thread_id: 'thread-other',
+          subject: 'Other',
+          to: [{ email: 'bob@example.com' }],
+          cc: [],
+          snippet: '',
+          date: 1,
+        }));
+        return new Response(JSON.stringify({ data, next_cursor: 'more' }), { status: 200 });
+      }
+      if (urlStr.includes('/drafts') && method === 'POST') {
+        creates += 1;
+        return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${method} ${urlStr}`);
+    });
+
+    const ctx = buildCtx();
+    const result = await handler.execute(ctx);
+
+    expect(creates).toBe(0);
+    expect(draftPages).toBe(25);
+    expect(result).toMatchObject({
+      success: false,
+      error: 'Unable to determine whether this thread already has a draft; draft scan incomplete',
+    });
+    expect(ctx.log.warn).toHaveBeenCalled();
+  });
 });
