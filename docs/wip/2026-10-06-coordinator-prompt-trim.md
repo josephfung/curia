@@ -436,11 +436,16 @@ Then:
       one that produced the invented address and the one that didn't. Don't replay from
       `llm_call_archive`, which is PII-scrubbed. Assert that no `[EMAIL]` or `[PHONE]` tokens
       remain.
+    - **Pin every arm to `e757c375`** (main on 2026-10-07, before #2033's send by reference).
+      After #2033 the coordinator sends to the principal by reference and never types the
+      address, so arms built on a later `main` would all score near 100% and measure
+      nothing. Render the prompts and tool schemas from curia at that commit; the PR 11 arms
+      apply PR 11's block changes on top of it.
     - **Four arms:**
-      - `origin/main`;
+      - `e757c375`;
       - PR 11 without the name sentence;
       - PR 11 with the name sentence;
-      - `origin/main` at `temperature: 0.5`. It keeps main's layout so the temperature
+      - `e757c375` at `temperature: 0.5`. It keeps that commit's layout so the temperature
         effect isn't mixed with the layout effect.
 
       Run each request 50 times per arm on `deepseek/deepseek-v4.1-flash`: 400 calls, about
@@ -450,7 +455,9 @@ Then:
       defaults to 1.0). Copying an address is the kind of task where sampling at 1.0 can pick
       a low-probability token, like the stray dot in #2033.
     - **Make the temperature arm actually send a temperature.** Providers forward
-      `options.temperature` as of #2038, so the probe can go through them. Assert from the
+      `options.temperature` as of #2038, but the pinned `e757c375` predates that fix, so its
+      providers would drop it. Send every arm through one call path that sets the request
+      body itself (see below), not through the pinned commit's providers. Assert from the
       request or OpenRouter's generation record that the value was sent.
     - **Make unsupported parameters fail loudly.** Send `provider: { require_parameters: true }`,
       so a provider that can't honor `temperature` or `logprobs` errors instead of ignoring
