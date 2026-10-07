@@ -121,7 +121,12 @@ import {
   formatResolvedRecipient,
   parseRecipientReference,
   resolveRecipientReference,
+  sendPinsMatch,
+  STALE_SEND_APPROVAL_ERROR,
+  type SendRecipientPin,
 } from './_shared/recipient-reference.js';
+
+export { STALE_SEND_APPROVAL_ERROR };
 
 /** Contact references one send may name across to/cc/recipient (#2033). */
 const MAX_SEND_REFERENCES = 25;
@@ -168,6 +173,12 @@ export interface InvokeOptions {
    *  All other checks (elevated-skill gate, content filter, blocked-contact) still run.
    *  See ADR-018. */
   humanApproved?: boolean;
+  /**
+   * Hinted recipients recorded when the approval was filed. On a humanApproved
+   * replay, the send is refused unless each one still resolves to the same
+   * identity and name (#2047).
+   */
+  sendResolution?: readonly SendRecipientPin[];
   /** Per-task-turn guard against blind identical re-delegation (#1171). Owned by the agent
    *  runtime; forwarded to the delegate skill for defense in depth. */
   delegationGuard?: import('../agents/delegation-guard.js').DelegationGuard;
@@ -562,6 +573,7 @@ export class ExecutionLayer {
     actionRisk: string | number,
     options: InvokeOptions | undefined,
     skillLogger: Logger,
+    sendResolution?: readonly SendRecipientPin[],
   ): Promise<string> {
     const baseMsg =
       `Tool '${toolName}' blocked — autonomy score is ${currentScore}, ` +
@@ -579,6 +591,7 @@ export class ExecutionLayer {
           displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore,
+          ...(sendResolution && sendResolution.length > 0 ? { sendResolution } : {}),
         });
         if (!result.created) {
           return (
@@ -620,6 +633,7 @@ export class ExecutionLayer {
     currentScore: number,
     options: InvokeOptions | undefined,
     skillLogger: Logger,
+    sendResolution?: readonly SendRecipientPin[],
   ): Promise<string> {
     const baseMsg =
       `Tool '${toolName}' blocked — the initiating contact's tier ('${initiatingTier}') ` +
@@ -639,6 +653,7 @@ export class ExecutionLayer {
           reason:
             `Curia wanted to run '${toolName}', but the initiating contact's tier ` +
             `('${initiatingTier}') requires approval for ${String(actionRisk)}-risk actions.`,
+          ...(sendResolution && sendResolution.length > 0 ? { sendResolution } : {}),
         });
         if (!result.created) {
           return (
@@ -937,12 +952,13 @@ export class ExecutionLayer {
     input: Record<string, unknown>,
     skillLogger: Logger,
   ): Promise<
-    | { ok: true; resolved: Map<string, string> }
+    | { ok: true; resolved: Map<string, string>; pins: SendRecipientPin[] }
     | { ok: false; error: string; errorType?: ErrorType }
   > {
     const resolved = new Map<string, string>();
+    const pins: SendRecipientPin[] = [];
     const fields = SEND_SKILL_RECIPIENT_FIELDS[toolName];
-    if (!fields) return { ok: true, resolved };
+    if (!fields) return { ok: true, resolved, pins };
     // email-send's cc is a reference field too, with cc_addresses as its raw sibling.
     const referenceFields = fields.channel === 'email'
       ? [{ field: 'to', rawField: 'to_address' }, { field: 'cc', rawField: 'cc_addresses' }]
@@ -974,7 +990,8 @@ export class ExecutionLayer {
     for (const { field, rawField } of referenceFields) {
       for (const entry of entriesOf(input[field])) {
         if (resolved.has(entry.trim())) continue;
-        const isReference = parseRecipientReference(entry) !== null;
+        const parsed = parseRecipientReference(entry);
+        const isReference = parsed !== null;
         if (isReference && !this.contactService) continue;
         const result = await resolveRecipientReference(entry, fields.channel, { field, rawField }, {
           // Never called for a reference without a contact service (skipped above);
@@ -998,9 +1015,42 @@ export class ExecutionLayer {
           return { ok: false, error: result.error };
         }
         resolved.set(entry.trim(), result.identifier);
+        if (parsed?.label) {
+          pins.push({
+            ref: entry.trim(),
+            identityId: result.identityId,
+            identityName: result.identityName,
+          });
+        }
       }
     }
-    return { ok: true, resolved };
+    return { ok: true, resolved, pins };
+  }
+
+  /**
+   * Re-resolve the recipients an approval pinned. Nothing is sent when the
+   * identity row or its name has changed (#2047).
+   */
+  async confirmPinnedSendResolution(
+    toolName: string,
+    approved: readonly SendRecipientPin[],
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (approved.length === 0) return { ok: true };
+    const fields = SEND_SKILL_RECIPIENT_FIELDS[toolName];
+    if (!fields || !this.contactService) return { ok: false, error: STALE_SEND_APPROVAL_ERROR };
+    const current: SendRecipientPin[] = [];
+    for (const pin of approved) {
+      const result = await resolveRecipientReference(
+        pin.ref,
+        fields.channel,
+        { field: fields.reference, rawField: fields.raw },
+        { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
+      );
+      if (!result.ok) return { ok: false, error: STALE_SEND_APPROVAL_ERROR };
+      current.push({ ref: pin.ref, identityId: result.identityId, identityName: result.identityName });
+    }
+    if (!sendPinsMatch(current, approved)) return { ok: false, error: STALE_SEND_APPROVAL_ERROR };
+    return { ok: true };
   }
 
   /**
@@ -1485,6 +1535,7 @@ export class ExecutionLayer {
     // principal is never asked to approve a send that cannot run. Gate C reuses the
     // resolved addresses, so it judges exactly where the skill will send.
     let sendRecipients: Map<string, string> | undefined;
+    let sendPins: readonly SendRecipientPin[] | undefined;
     if (SEND_SKILL_RECIPIENT_FIELDS[toolName]) {
       const checked = await this.resolveSendSkillReferences(toolName, input, skillLogger);
       if (!checked.ok) {
@@ -1495,6 +1546,18 @@ export class ExecutionLayer {
         };
       }
       sendRecipients = checked.resolved;
+      sendPins = checked.pins;
+      // A hinted approval recorded the identity it showed. Replay must still
+      // name that identity, including when the fresh resolve would fall back
+      // to a different unlabelled address (#2047).
+      if (
+        options?.humanApproved
+        && options.sendResolution
+        && options.sendResolution.length > 0
+        && !sendPinsMatch(checked.pins, options.sendResolution)
+      ) {
+        return { success: false, error: this.wrapSkillError(STALE_SEND_APPROVAL_ERROR) };
+      }
     }
 
     // Log every humanApproved invocation for operator traceability.
@@ -1568,7 +1631,7 @@ export class ExecutionLayer {
             // The stored payload in autonomy_action_log will contain normalized timestamps,
             // which is correct — re-normalization on approve-action re-invocation is a no-op.
             const gateAError = await this.buildGateError(
-              toolName, input, currentScore, 60, manifest.action_risk, options, skillLogger,
+              toolName, input, currentScore, 60, manifest.action_risk, options, skillLogger, sendPins,
             );
             return {
               success: false,
@@ -1599,7 +1662,7 @@ export class ExecutionLayer {
             }
             // Note: same post-normalization `input` as Gate A — see comment above.
             const gateBError = await this.buildGateError(
-              toolName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger,
+              toolName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger, sendPins,
             );
             return {
               success: false,
@@ -1634,7 +1697,7 @@ export class ExecutionLayer {
               );
               if (auditFail) return auditFail;
               const gateCError = await this.buildTierGateError(
-                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
+                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger, sendPins,
               );
               return {
                 success: false,
@@ -1788,7 +1851,7 @@ export class ExecutionLayer {
               );
               if (auditFail) return auditFail;
               const gateCError = await this.buildTierGateError(
-                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
+                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger, sendPins,
               );
               return {
                 success: false,
@@ -1837,7 +1900,7 @@ export class ExecutionLayer {
             // No tier to feed buildTierGateError — pass an explicit sentinel label so the
             // escalation message and approval request read sensibly (tier 'unresolved').
             const gateCError = await this.buildTierGateError(
-              toolName, input, 'unresolved', manifest.action_risk, currentScore, options, skillLogger,
+              toolName, input, 'unresolved', manifest.action_risk, currentScore, options, skillLogger, sendPins,
             );
             return {
               success: false,

@@ -101,6 +101,12 @@ export type RecipientResolution =
        * see, or `primary` / `unlabelled`. Never an address (#2047).
        */
       identityName: string;
+      /**
+       * The channel-identity row that was selected. An approval stores this with
+       * `identityName` and will not send if a later resolve picks a different row
+       * or a different name (#2047).
+       */
+      identityId: string;
     }
   /**
    * `error` is agent-facing and complete. `cause` is set only when the contact
@@ -123,6 +129,37 @@ export interface RecipientResolverDeps {
    * identity snapshot, which holds verified, active rows only.
    */
   principalContactId: string | undefined;
+}
+
+/**
+ * What an approval records for one hinted recipient, separate from the skill
+ * payload. Replay must resolve the same identity row and the same name.
+ * `identityName` is the label, or `primary` / `unlabelled` when the hint fell
+ * back to the single unlabelled address.
+ */
+export interface SendRecipientPin {
+  ref: string;
+  identityId: string;
+  identityName: string;
+}
+
+/** Shown when an approved hint no longer names the identity the principal saw. No address. */
+export const STALE_SEND_APPROVAL_ERROR =
+  'The approved recipient no longer matches the address that was shown. Nothing was sent.';
+
+/** True when a fresh resolve still names every identity the approval recorded. */
+export function sendPinsMatch(
+  current: readonly SendRecipientPin[],
+  approved: readonly SendRecipientPin[],
+): boolean {
+  if (current.length !== approved.length) return false;
+  const byRef = new Map(current.map((pin) => [pin.ref, pin]));
+  return approved.every((pin) => {
+    const now = byRef.get(pin.ref);
+    return now !== undefined
+      && now.identityId === pin.identityId
+      && now.identityName === pin.identityName;
+  });
 }
 
 /**
@@ -347,7 +384,8 @@ function selectIdentity(
   // A miss while any candidate is labelled is a conflict, including when some
   // addresses have no label: the unlabelled one might have been the target.
   // Several unlabelled addresses are a conflict too. One unlabelled address
-  // still sends: there is nothing else the hint could have meant.
+  // still sends: there is nothing else the hint could have meant. An approval
+  // pins that row, so a later replay cannot fall through to a different one.
   if (rows.some((row) => row.bounded !== null) || usable.length > 1) {
     return { ok: false, error: labelConflictError(contact, channel, usable, normalized, isPrincipal) };
   }
@@ -457,5 +495,6 @@ export async function resolveRecipientReference(
     identifier: chosen.channelIdentifier,
     displayName: found.contact.displayName,
     identityName: identityNameFor(found.contact, channel, chosen),
+    identityId: chosen.id,
   };
 }

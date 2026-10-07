@@ -20,6 +20,7 @@ import {
   resolvePrincipalEmail,
   type PrincipalEmailRef,
 } from '../contacts/types.js';
+import type { SendRecipientPin } from '../skills/_shared/recipient-reference.js';
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -157,6 +158,11 @@ export class ApprovalTriggerService {
      * contact UUID tells the approver nothing about where the message goes.
      */
     displayInput?: Record<string, unknown>;
+    /**
+     * Hinted recipients pinned beside the skill payload. Replay refuses the
+     * send when the identity or its name no longer matches (#2047).
+     */
+    sendResolution?: readonly SendRecipientPin[];
   }): Promise<ApprovalRequestResult> {
     const { taskId, conversationId, toolName, actionRisk, input, currentScore, requiredScore } = opts;
     const shown = opts.displayInput ?? input;
@@ -226,6 +232,7 @@ export class ApprovalTriggerService {
           expiresAt,
           shortRef,
           description,
+          sendResolution: opts.sendResolution ? [...opts.sendResolution] : undefined,
         });
         break; // Insert succeeded
       } catch (err) {

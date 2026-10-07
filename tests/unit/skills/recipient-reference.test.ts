@@ -8,6 +8,8 @@ import {
   formatResolvedRecipient,
   parseRecipientReference,
   resolveRecipientReference,
+  sendPinsMatch,
+  type SendRecipientPin,
 } from '../../../src/skills/_shared/recipient-reference.js';
 
 const FIELDS = { field: 'to', rawField: 'to_address' };
@@ -76,6 +78,7 @@ describe('resolveRecipientReference', () => {
       identifier: 'pat@home.example',
       displayName: 'Pat Principal',
       identityName: 'primary',
+      identityId: expect.any(String),
     });
   });
 
@@ -114,6 +117,7 @@ describe('resolveRecipientReference', () => {
       identifier: 'alex@vendor.example',
       displayName: 'Alex Vendor',
       identityName: 'unlabelled',
+      identityId: expect.any(String),
     });
   });
 
@@ -408,6 +412,32 @@ describe('label hint (#2047)', () => {
     // "school" is past the 40-character cut, so a token match has to use the full label.
     const token = await resolveRecipientReference(`${pat.id}#school`, 'email', FIELDS, deps());
     expect(token).toMatchObject({ ok: true, identifier: 'pat.home@hint.test', identityName: full });
+  });
+
+  it('a hinted approval pin no longer matches after that identity is removed', async () => {
+    const personal = { address: 'pat.home@hint.test', label: 'personal' };
+    const other = { address: 'pat.other@hint.test' };
+    const pat = await addContact([personal, other], { primaryEmail: 'pat.home@hint.test' });
+    const ref = `${pat.id}#personal`;
+    const first = await resolveRecipientReference(ref, 'email', FIELDS, deps());
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const approved: SendRecipientPin = {
+      ref,
+      identityId: first.identityId,
+      identityName: first.identityName,
+    };
+    expect(approved.identityName).toBe('personal');
+
+    await contacts.unlinkIdentity(first.identityId);
+    const later = await resolveRecipientReference(ref, 'email', FIELDS, deps());
+    // The only address left is unlabelled, so a fresh hint falls back to it.
+    expect(later).toMatchObject({ ok: true, identifier: 'pat.other@hint.test', identityName: 'unlabelled' });
+    if (!later.ok) return;
+    expect(sendPinsMatch(
+      [{ ref, identityId: later.identityId, identityName: later.identityName }],
+      [approved],
+    )).toBe(false);
   });
 
   it('quotes the full label in a conflict, not the 40-character cut', async () => {

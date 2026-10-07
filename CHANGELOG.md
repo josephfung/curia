@@ -156,6 +156,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Send approvals** — a hinted approval fails closed when that identity or label no longer matches. (#2047)
 - **LLM call archive** — stores OpenRouter reasoning, its token count, and text beside tool calls. (#2042)
 - **LLM call archive** — strips null bytes so one bad character cannot drop the audit row. (#2042)
 - **`ceo-inbox-draft-reply` outputs (public API)** — `already_exists` returns that draft's `snippet` and `date`. (#2035)
