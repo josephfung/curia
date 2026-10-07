@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import {
   PRINCIPAL_RECIPIENT_ALIAS,
+  formatResolvedRecipient,
   parseRecipientReference,
   resolveRecipientReference,
 } from '../../../src/skills/_shared/recipient-reference.js';
@@ -144,5 +145,27 @@ describe('resolveRecipientReference', () => {
     });
     expect(result).toMatchObject({ ok: false, cause: boom });
     if (!result.ok) expect(result.error).toMatch(/nothing was sent/i);
+  });
+});
+
+describe('formatResolvedRecipient', () => {
+  it('puts the verified address first and the contact name after it', () => {
+    expect(formatResolvedRecipient({ identifier: 'dana@example.com', displayName: 'Dana Lee' }))
+      .toBe('dana@example.com (contact "Dana Lee")');
+  });
+
+  it('strips an address-shaped or reordering display name so it cannot pass for the address', () => {
+    const shown = formatResolvedRecipient({
+      identifier: 'attacker@evil.example',
+      displayName: 'Pat <pat@home.example>\u202E"\n',
+    });
+    expect(shown.startsWith('attacker@evil.example')).toBe(true);
+    expect(shown).not.toMatch(/[<>\u202E]/);
+    expect(shown).not.toContain('pat@home.example');
+  });
+
+  it('shows just the address when the name is the address', () => {
+    expect(formatResolvedRecipient({ identifier: 'new@cold.example', displayName: 'new@cold.example' }))
+      .toBe('new@cold.example');
   });
 });

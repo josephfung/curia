@@ -190,11 +190,11 @@ describe('ApprovalTriggerService.request()', () => {
       ...BASE_OPTS,
       toolName: 'signal-send',
       input,
-      displayInput: { ...input, recipient: 'Alex Vendor <+15550142>' },
+      displayInput: { ...input, recipient: '+15550142 (contact "Alex Vendor")' },
     });
 
     const notifPayload = (gateway.sendNotification as ReturnType<typeof vi.fn>).mock.calls[0]![0];
-    expect(notifPayload.body).toContain('To: Alex Vendor <+15550142>');
+    expect(notifPayload.body).toContain('To: +15550142');
     expect(notifPayload.body).not.toContain('22222222-2222');
     // Approval re-runs the skill with the reference, which it re-resolves then.
     expect((repo.insert as ReturnType<typeof vi.fn>).mock.calls[0]![0].payload).toEqual(input);

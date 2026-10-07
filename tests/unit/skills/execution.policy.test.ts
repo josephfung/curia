@@ -3378,7 +3378,7 @@ describe('approval trigger on gate block', () => {
       displayInput: Record<string, unknown>;
     });
     expect(calls[0]!.input.to).toBe(ref);
-    expect(calls[0]!.displayInput.to).toBe('Dana Lee <dana@example.com>');
+    expect(calls[0]!.displayInput.to).toBe('dana@example.com (contact "Dana Lee")');
     // The raw path is shown under `to`, the field the approval renderer reads.
     expect(calls[1]!.input).not.toHaveProperty('to');
     expect(calls[1]!.displayInput.to).toBe('new@cold.example');

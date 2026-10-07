@@ -89,10 +89,19 @@ function safeName(name: string): string {
   return name.replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
 }
 
-/** "Name <address>" for a resolved recipient, for a person to read (an approval). */
+/**
+ * A resolved recipient for a person to read (an approval): the verified address
+ * first, then the contact name in quotes. The name comes from inbound headers, so
+ * it is stripped of anything that could pass for an address or reorder the text
+ * (angle brackets, `@`, quotes, bidi and zero-width characters). Otherwise a name
+ * like `Pat <pat@home.example>` would put a fake address in front of the real one.
+ */
 export function formatResolvedRecipient(resolution: { identifier: string; displayName: string }): string {
-  const name = safeName(resolution.displayName);
-  return name && name !== resolution.identifier ? `${name} <${resolution.identifier}>` : resolution.identifier;
+  const raw = safeName(resolution.displayName);
+  // A contact the gateway created is named after its address; showing it twice adds nothing.
+  if (raw.toLowerCase() === resolution.identifier.toLowerCase()) return resolution.identifier;
+  const name = raw.replace(/[<>@"​-‏‪-‮⁦-⁩﻿]/g, '').trim();
+  return name ? `${resolution.identifier} (contact "${name}")` : resolution.identifier;
 }
 
 /** The contact's designated primary for the channel, if it has one. */
