@@ -20,10 +20,11 @@
 // (HealthService only tracks tier models; the judge model is usually not one).
 
 import { createHash } from 'node:crypto';
-import type { LLMProvider, LLMUsage, LLMCallProvenance } from '../agents/llm/provider.js';
+import type { LLMProvider, LLMResponse, LLMUsage } from '../agents/llm/provider.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
+import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall, createOutboundJudge } from '../bus/events.js';
 import type { OutboundJudgeOutcome, OutboundJudgeReasonCode } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
@@ -182,7 +183,7 @@ export class OutboundLlmJudge implements OutboundJudge {
     }
 
     // Telemetry only on a real, parsed model response.
-    await this.publishTelemetry(response.usage, response.provenance, latencyMs, userPrompt, response.content, input);
+    await this.publishTelemetry(response, latencyMs, userPrompt, input);
 
     if (verdict.leak) {
       await this.publishDecision(input, 'judged_block', 'audience_leak', 'llm-judge-audience-leak');
@@ -244,16 +245,15 @@ export class OutboundLlmJudge implements OutboundJudge {
   }
 
   private async publishTelemetry(
-    usage: LLMUsage,
-    provenance: LLMCallProvenance,
+    response: Extract<LLMResponse, { type: 'text' }>,
     latencyMs: number,
     prompt: string,
-    responseText: string,
     input: JudgeInput,
   ): Promise<void> {
     try {
+      const { usage, provenance } = response;
       const promptHash = createHash('sha256').update(prompt).digest('hex');
-      const responseHash = createHash('sha256').update(responseText).digest('hex');
+      const responseHash = createHash('sha256').update(response.content).digest('hex');
       const event = createLlmCall({
         agentId: 'outbound-judge',
         conversationId: input.conversationId || 'system',
@@ -276,7 +276,7 @@ export class OutboundLlmJudge implements OutboundJudge {
             system: JUDGE_SYSTEM_PROMPT,
             user: prompt,
           },
-          response: { type: 'text', content: responseText },
+          response: buildLlmArchiveResponse(response),
         },
       });
       await this.bus.publish('agent', event);

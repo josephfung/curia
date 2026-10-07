@@ -578,6 +578,37 @@ describe('llmResponseAsStream (#1563)', () => {
     ]);
   });
 
+  it('carries reasoning onto message_end and tool_use', async () => {
+    const textEvents: LLMStreamEvent[] = [];
+    for await (const event of llmResponseAsStream({
+      type: 'text',
+      content: 'hello',
+      usage: { ...usage, reasoningTokens: 3 },
+      provenance,
+      reasoning: 'because',
+    })) {
+      textEvents.push(event);
+    }
+    expect(textEvents.at(-1)).toMatchObject({
+      type: 'message_end',
+      reasoning: 'because',
+      usage: { reasoningTokens: 3 },
+    });
+
+    const toolEvents: LLMStreamEvent[] = [];
+    for await (const event of llmResponseAsStream({
+      type: 'tool_use',
+      toolCalls: [{ id: 'c1', name: 'x', input: {} }],
+      usage,
+      provenance,
+      reasoningOmitted: 'encrypted',
+    })) {
+      toolEvents.push(event);
+    }
+    expect(toolEvents[0]).toMatchObject({ type: 'tool_use', reasoningOmitted: 'encrypted' });
+    expect(toolEvents[0] && 'reasoning' in toolEvents[0] ? toolEvents[0].reasoning : undefined).toBeUndefined();
+  });
+
   it('maps empty text to message_end only', async () => {
     const events: LLMStreamEvent[] = [];
     for await (const event of llmResponseAsStream({

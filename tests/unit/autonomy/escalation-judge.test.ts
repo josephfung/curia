@@ -422,6 +422,26 @@ describe('EscalationJudge.classifyDisclosure', () => {
     );
   });
 
+  it('archives the classifier reasoning through the shared response builder (#2042)', async () => {
+    const response = textResponse('{"class": "public", "reason": "fine"}');
+    if (response.type !== 'text') throw new Error('expected text');
+    const withReasoning: LLMResponse = {
+      ...response,
+      reasoning: 'The text is a greeting.',
+      usage: { ...response.usage, reasoningTokens: 2 },
+    };
+    const { judge, bus } = makeJudge(providerReturning(withReasoning));
+    await judge.classifyDisclosure({ content: 'hello', recipientTier: 'unknown', conversationId: 'c1' });
+    const events = (bus as unknown as { published: Array<{ type: string; archive?: { response?: unknown } }> }).published
+      .filter((e) => e.type === 'llm.call');
+    expect(events[0]?.archive?.response).toEqual({
+      type: 'text',
+      content: '{"class": "public", "reason": "fine"}',
+      reasoning: 'The text is a greeting.',
+      reasoningTokens: 2,
+    });
+  });
+
   it('does not publish telemetry on timeout (no model response)', async () => {
     const slowProvider = {
       id: 'slow',

@@ -74,6 +74,26 @@ export interface LLMUsage {
   cacheCreationInputTokens: number;
   /** Tokens served from the prompt cache on this call. 0 when not applicable. */
   cacheReadInputTokens: number;
+  /**
+   * Tokens spent on reasoning, when the provider reports them.
+   * Already included in outputTokens — recorded so a call can be explained.
+   */
+  reasoningTokens?: number;
+}
+
+/**
+ * Why readable reasoning was not stored, when usage reported reasoning tokens
+ * and no readable text came back. `encrypted` means the provider returned only
+ * sealed reasoning details. `empty` means the token count was non-zero and no
+ * reasoning text arrived.
+ */
+export type ReasoningOmission = 'empty' | 'encrypted';
+
+/** Reasoning carried on a successful response. Both fields are optional. */
+export interface LLMReasoning {
+  /** Plain-text reasoning the provider returned. Absent when none was readable. */
+  reasoning?: string;
+  reasoningOmitted?: ReasoningOmission;
 }
 
 /**
@@ -118,14 +138,14 @@ export interface ToolResult {
 // Successful variants carry provenance — the runtime uses it to publish llm.call events.
 // Error paths omit provenance: when the API fails there is no response body to extract from.
 export type LLMResponse =
-  | { type: 'text'; content: string; usage: LLMUsage; provenance: LLMCallProvenance }
-  | { type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance }
+  | ({ type: 'text'; content: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
+  | ({ type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
   | { type: 'error'; error: AgentError; usage?: LLMUsage };
 
 export type LLMStreamEvent =
   | { type: 'text_delta'; text: string }
-  | { type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance }
-  | { type: 'message_end'; content: string; usage: LLMUsage; provenance: LLMCallProvenance }
+  | ({ type: 'tool_use'; toolCalls: ToolCall[]; content?: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
+  | ({ type: 'message_end'; content: string; usage: LLMUsage; provenance: LLMCallProvenance } & LLMReasoning)
   | { type: 'error'; error: AgentError; usage?: LLMUsage };
 
 export interface LLMProvider {

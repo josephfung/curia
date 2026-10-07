@@ -171,6 +171,8 @@ CREATE TABLE llm_call_archive (
 
 **Config kill-switch:** `audit.llmCallArchive.enabled` in `config/default.yaml` (default `true`). When `false`, `AuditLogger` skips archive writes even if the `llm.call` event carries archive content — operators can kill the store fast if redaction misses something. Provenance hashes on the `llm.call` audit row still write.
 
+**Reasoning:** OpenRouter responses may include the model's reasoning. The archive response records that text, the reasoning-token count, and `reasoningOmitted` (`empty` or `encrypted`) when the token count is non-zero but no readable reasoning came back. `audit.llmCallArchive.includeReasoning` (default `true`) drops the reasoning string from new rows when `false`; token counts and the rest of the archive still write. The text is redacted with the rest of the row and is not encrypted at rest. Null bytes are stripped from prompt, response, and tool definitions before insert so one U+0000 cannot roll back the `llm.call` audit row.
+
 **Retention:** The `llm_call_archive` is large (prompts and responses can be several KB each). Hot retention is `audit.llmCallArchive.hotRetentionDays` (default 90); DreamEngine's decay pass DELETEs older rows. Cold archive to compressed JSONL on disk remains a later-phase job. The `audit_log` row (with hashes) is retained per the standard audit retention schedule.
 
 **Encryption-at-rest:** Phase 1 stores redacted JSONB in Postgres plaintext (same class as other sensitive tables). Application-level or column encryption for the archive is an explicit follow-up — until then treat the table as a plaintext concentration of conversational content with best-effort redaction.

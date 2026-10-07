@@ -12,6 +12,7 @@ import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
 import type { ModelRegistry } from './llm/model-registry.js';
 import { parseTemperature } from './llm/sampling-options.js';
 import { createHash } from 'node:crypto';
+import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import { historyForLlm, LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
@@ -2996,9 +2997,7 @@ export class AgentRuntime {
         // Typed non-persisted archive — AuditLogger writes llm_call_archive atomically.
         archive: {
           prompt: { messages: params.messages },
-          response: response.type === 'text'
-            ? { type: 'text', content: response.content }
-            : { type: 'tool_use', toolCalls: response.toolCalls },
+          response: buildLlmArchiveResponse(response),
           toolDefinitions: params.tools ?? [],
         },
       });

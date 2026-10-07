@@ -15,10 +15,11 @@
 // decision='escalate' and a reason string suitable for audit logging.
 
 import { createHash } from 'node:crypto';
-import type { LLMProvider, LLMUsage, LLMCallProvenance } from '../agents/llm/provider.js';
+import type { LLMProvider, LLMUsage, LLMCallProvenance, ReasoningOmission } from '../agents/llm/provider.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
+import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import type { ContactTier } from '../contacts/types.js';
@@ -95,6 +96,8 @@ interface LlmCallResult {
   usage: LLMUsage;
   provenance: LLMCallProvenance;
   latencyMs: number;
+  reasoning?: string;
+  reasoningOmitted?: ReasoningOmission;
 }
 
 export class EscalationJudge {
@@ -260,6 +263,8 @@ export class EscalationJudge {
         usage: raced.usage,
         provenance: raced.provenance,
         latencyMs: Date.now() - start,
+        reasoning: raced.reasoning,
+        reasoningOmitted: raced.reasoningOmitted,
       };
     } catch (err) {
       // Provider threw despite the non-throwing contract — treat as a gate failure and escalate.
@@ -300,7 +305,13 @@ export class EscalationJudge {
             system: kind === 'disclosure' ? DISCLOSURE_SYSTEM_PROMPT : ACTION_SYSTEM_PROMPT,
             user: userPrompt,
           },
-          response: { type: 'text', content: result.content },
+          response: buildLlmArchiveResponse({
+            type: 'text',
+            content: result.content,
+            usage: result.usage,
+            reasoning: result.reasoning,
+            reasoningOmitted: result.reasoningOmitted,
+          }),
         },
       });
       await this.bus.publish('agent', event);
