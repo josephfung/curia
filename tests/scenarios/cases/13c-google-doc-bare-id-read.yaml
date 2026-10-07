@@ -1,0 +1,58 @@
+# Case 13c (#2024): the principal names a Doc by its bare ID, with no link. A hint keyed
+# on docs.google.com links would miss this, which is why the coordinator's prompt says to
+# activate google-workspace for any Google file, link or not. Rule:
+# agents/coordinator.yaml, "Google Workspace".
+name: google doc bare id read
+description: >
+  The principal gives a Google Doc's ID, with no link, and asks what launch date it
+  gives. The coordinator activates its Google Workspace tools, reads that Doc, and
+  answers from it.
+tags: [google-workspace, skill-activation]
+inbound:
+  from: principal
+  content: What launch date does doc 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge give for the Atlas release?
+tool_stubs:
+  get_doc_as_markdown:
+    - match: {}
+      return: &launch_doc |
+        # Atlas release: launch plan
+
+        **Status:** approved. **Owner:** Priya Shah.
+
+        ## Timeline
+        - Beta freeze: November 3
+        - Public launch: **November 18**
+        - Press embargo lifts: November 18, 9:00 ET
+
+        ## Risks
+        - Billing migration must finish before the beta freeze.
+  get_doc_content:
+    - match: {}
+      return: *launch_doc
+  get_drive_file_content:
+    - match: {}
+      return: *launch_doc
+expected_behaviors:
+  - id: activates_google_workspace
+    weight: critical
+    description: Activates the google-workspace skill to get its Docs tools.
+    check:
+      called: skill-activate
+      with: { skill: google-workspace }
+  - id: reads_the_doc
+    weight: critical
+    description: Reads the Doc by the ID the principal gave.
+    check:
+      any_of:
+        - called: get_doc_as_markdown
+          with: { document_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
+        - called: get_doc_content
+          with: { document_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
+        - called: get_drive_file_content
+          with: { file_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
+  - id: answers_from_doc
+    weight: important
+    description: Answers that the public launch is November 18.
+failure_modes:
+  - Asks the principal for a link instead of using the ID
+  - Says it has no access to Google Docs
