@@ -19,7 +19,7 @@ log.
 | Start (`3155f290`) | — | 20,532 | ~6,673 / 7,000 |
 | 1: restatements and stale sections | Merged (2026-10-07, #2031) | 18,561 | ~6,180 / 6,400 |
 | 2: one home each for voice and contact resolution | Merged (2026-10-07, #2034) | 15,709 | ~5,467 / 5,600 |
-| 11: Who you are / Who you serve preamble | Not started; land before PR 3 | Unchanged (code-owned blocks only) | — |
+| 11: Who you are / Who you serve preamble | In progress (2026-10-07) | 15,709 (unchanged; code-owned blocks only) | ~5,467 / 5,600 |
 | 3–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
@@ -183,7 +183,7 @@ Added 2026-10-07, measured on that day's prod prompt (llm.call
 |---|---|---|---|
 | Facts about the principal | Scattered across about 560 lines of the rendered prompt, under four names | The identity block's constraint and a stored behavioral preference both say "CEO". The preference also carries the principal's name. The rest of the rendered prompt says "principal" about 110 times. The addresses are in the last block before the turn budget. | 11: one `## Who you serve` block in the preamble |
 | `## Your Contact Details`, `## Principal Contact Details` (~600) | Rendered after the per-minute clock, so they are cached only within one task's tool loop and miss the prefix shared across tasks | `buildBaseSystemPrompt` order: … time → own contacts → principal contacts → turn budget. The system string is built once per task (`src/agents/runtime.ts`). | 11: move them into the preamble |
-| The `[primary]` email line | Sits directly above a similar work-email line | The invented address in #2033 reads as the primary line blended with the next line's local part | 11: state the primary in its own sentence; the probe measures the effect |
+| The `[primary]` email line | Sits directly above a similar work-email line | The invented address in #2033 reads as the primary line blended with the next line's local part | 11: list the primary on its own. Send by reference (#2045) is the fix for the error itself |
 | Voice | Code-owned blocks are second person. The YAML mixes the two, roughly half and half (about 50 lines each at `3155f290`). | People needs a "'you' or 'your' means me" clause | Decisions; 3: convert |
 | Bullpen reply rule | An absolute that contradicts a sanctioned path | `src/agents/prompts/bullpen-reply-rule.ts` (#1959) says "never with … email-send", and a bullpen send request asks for exactly that. In #2033 both copies of the rule (the ambient block and the mention wake) sat next to such a request, and the call spent 3,909 output tokens before sending. | 10: say what to do. Reply on the thread with `bullpen`; a send the thread asks for is a separate action |
 
@@ -245,8 +245,8 @@ Added 2026-10-07, measured on that day's prod prompt (llm.call
     section is about voice. People and Audience awareness, its children today, become `##`
     sections of their own.
 - **Facts about the principal get one home at the top of the prompt** (PR 11). The layout is
-  for clarity. It is not the fix for the invented address in #2033; send-by-reference is.
-  PR 11's probe measures whether the layout affects that error at all.
+  for clarity and caching. It is not the fix for the invented address in #2033; send by
+  reference is (#2045).
 - **Who you serve does not carry the principal's contact ID.** Spec 09 ("Why the contact-ID
   handle is opt-in") keeps that handle opt-in through `${principal_contact_id}`, because it
   unlocks calendar and attribute reads. Only calendar, contacts and meeting-debrief opt in;
@@ -259,14 +259,27 @@ Added 2026-10-07, measured on that day's prod prompt (llm.call
   - Reasoning models can loop when run cold. DeepSeek's guidance for its earlier reasoning
     model was 0.5–0.7.
   - It reduces the error rather than removing it, and #2033 removes it by construction.
-  - PR 11's probe gets a temperature arm. If that arm helps, add a per-tier sampling setting
-    and put it through the behavior gate before enabling it.
+  - Whether agent calls should send a temperature at all is now part of #2044 (see below). If
+    a lower value helps, add a per-tier sampling setting and put it through the behavior gate
+    before enabling it.
   - **Prerequisite (fixed in #2038):** providers now forward a caller's `temperature`.
     - OpenRouter and Anthropic `buildCreateParams` send a finite `options.temperature` and
       omit it when unset. Judges' `temperature: 0` reaches the API.
     - `llm.call` records the temperature sent (or `null` when omitted).
     - Per-tier sampling can build on this plumbing; treat `{ temperature: undefined }` as
       unset so a missing tier value does not warn on every agent call.
+
+- **Late 2026-10-07, after #2045 (send by reference) merged:**
+  - **Drop PR 11's address-fidelity probe.** Sends to the principal now pass the alias
+    `principal`, so the coordinator no longer types the address the probe measured. Arms
+    built on any later `main` would score near 100%; arms pinned to `e757c375` would measure
+    a path production no longer takes.
+  - **Leave the name sentence out of PR 11.** #1950 found the principal's name drives guessed
+    addresses, and nothing now measures whether one sentence above the addresses changes
+    that. A guessed address can still go out through the raw-address fields (#2041). The
+    section defines "the principal" without naming them.
+  - **The temperature question moves to #2044,** to be decided with reasoning effort using the
+    reasoning-token counts #2048 records.
 
 ## PR sequence
 
@@ -346,6 +359,9 @@ Then:
 
 Numbered 11 so PRs 3–10 keep their numbers; it lands before PR 3.
 
+Scope as built (2026-10-07), after send by reference (#2045) shipped and two decisions
+narrowed it (Decisions, 2026-10-07, late): no name sentence and no address probe.
+
 Changes:
 
 - **New preamble order.** `src/agents/system-prompt.ts`, `buildBaseSystemPrompt`:
@@ -356,157 +372,49 @@ Changes:
   - Specialists get no identity or security block, so for them it is
     `## Your Contact Details` → `## Who you serve` → YAML body → … .
   - The roster, autonomy, the date guardrail, time and the turn budget stay where they are.
-  - Update the order comment (`system-prompt.ts`, "Order (do not change…)").
-- **`## Who you serve`** (draft G). Two parts, each with its own gate. Neither part's failure
-  takes the other with it.
-  - **The name sentence.**
-    - What it says: the principal's display name, and one sentence saying "the principal" in
-      instructions, tool descriptions and messages from other agents means them.
-    - When it renders: only when a principal exists and the name passes sanitizing. Strip
-      newlines, cap the length, and leave the sentence out (with a one-time warning) for any
-      name containing `@`, a domain-like token or 7 or more digits. Contact names can hold
-      real addresses with the `@` dropped (#1950).
-    - A missing or rejected name never renders a blank. It calls `failBlock('who-you-serve')`,
-      so renders that use `onBlockError: 'throw'` catch it.
-    - Behind the probe: #1950 found the name drives guessed addresses, and this puts it one
-      sentence above the addresses. The probe's third arm decides whether it ships.
-  - **`### Principal Contact Details`.** Today's gate and #1953's closed-set guarantee stay as
-    they are: it renders only when there is at least one verified, active identity.
-    - When `contacts.primary_email` matches a listed identity, that identifier (never the raw
-      column) gets a sentence of its own and is not repeated in the list.
-    - When nothing matches (the column is null, it points at an unverified address, or the
-      principal has Signal only), render today's neutral list with no primary sentence.
-    - Log a warning when the principal identities refresh if `primary_email` is set but
-      matches nothing. Today that mismatch is silent.
-    - Positive phrasing replaces "Do not infer, invent, or substitute an address".
-  - **No contact ID.** See the decision above.
-- **Plumbing.**
-  - The display name is a new input. It must flow through `SystemPromptSourceContext` and
-    `SYSTEM_PROMPT_SOURCE_CONTEXT_KEYS` (`src/startup/agent-assembly.ts`), so the curia-deploy
-    eval loader's missing-input guard sees it. The prompt snapshot
-    (`scripts/inspect-prompts.ts`) needs a display-name field too.
-  - The principal contact is resolved once at boot, and `refreshPrincipalIdentities` updates
-    only the identities and the primary. Refresh the name there too, or a rename never
-    reaches the prompt while the addresses beside it do.
+- **`## Who you serve`** (draft G): one sentence defining "the principal" as the person the
+  agent works for, then `### Principal Contact Details`. It renders under today's gate (at
+  least one verified, active identity), so no section stands over an empty set (#1950).
+  - When `contacts.primary_email` matches a listed email identity, that identity is listed on
+    its own under "Primary email" and not repeated under "Other addresses". A list item
+    rather than a sentence, so no trailing period sits against the address.
+  - When nothing matches (the column is null, it points at an unverified address, or the
+    principal has Signal only), the list renders under "Addresses" with no primary.
+  - The identity refresh (`src/index.ts`) logs a warning when `primary_email` is set but
+    matches nothing. Before, that mismatch was silent.
+  - Positive phrasing replaces "Do not infer, invent, or substitute an address" and "must not
+    be used". The `principal` alias and label-hint sentence from #2045 and #2051 stay.
+  - **No contact ID**, per the decision above, and **no display name** (Decisions, late).
 - **Keep the heading names** `Your Contact Details` and `Principal Contact Details` so
-  existing references still resolve: People, the two-sends rule, draft D, and
+  existing references still resolve: People, draft D, `recipient-reference.ts`, and
   `skills/async-offramp/handler.ts`.
 - **Personality stays in the identity block** (principle 3). Who you serve states facts only.
-  How to address the principal remains a principal-authored setting.
 
 Then:
 
-- **Tests:**
-  - The order is pinned in `tests/unit/startup/agent-assembly.test.ts` (the "every block
-    production sends, in order" list) and `tests/unit/agents/runtime.test.ts`.
-    `runtime.test.ts` asserts `'\n\n## Principal Contact Details'` and that the YAML body
-    comes before it, and PR 11 reverses both.
-  - `tests/unit/agents/principal-contact-block.test.ts`: every #1950 guarantee still holds.
-    The list is closed, labels are not addresses, and no identities renders nothing.
-  - New cases:
-    - no principal: no Who you serve;
-    - identities but no name: the list renders without a name sentence;
-    - a name but no identities: the name sentence renders, with no `### Principal Contact
-      Details` and no completeness claim;
-    - a name with a newline or an `@`: stripped or left out;
-    - primary null, unverified, or Signal-only: the neutral list.
-  - Today's negative checks (`runtime.test.ts`, `tests/integration/test-mode-stack.test.ts`)
-    match substrings and would still pass, so they can't stand in for these.
-- **Docs that describe the block** (lesson 4): spec 09 item 2 and "Why the contact-ID handle
-  is opt-in", `docs/dev/adding-an-agent.md` ("Principal vocabulary", the `[primary]`
-  marker), and CLAUDE.md's "Reaching the principal".
-- **Caching:** both blocks join the prefix shared across tasks. Today they are cached only
-  within one task's tool loop. An identity edit invalidates the prefix, which is rare.
+- **Tests:** the order pin in `tests/unit/startup/agent-assembly.test.ts` and
+  `tests/unit/agents/runtime.test.ts` now puts both blocks ahead of the YAML body.
+  `principal-contact-block.test.ts` keeps every #1950 guarantee (closed list, labels are not
+  addresses, nothing for no identities, newline stripping) and adds the primary/other split,
+  the neutral list and `findPrimaryEmailIdentity`.
+- **Docs that describe the block** (lesson 4): spec 09 item 2, `docs/dev/adding-an-agent.md`
+  ("Principal vocabulary") and CLAUDE.md's "Reaching the principal".
+- **Caching:** both blocks join the prefix shared across tasks. Before, they followed the
+  per-minute clock and were cached only within one task's tool loop. An identity edit
+  invalidates the prefix, which is rare.
 - **Exfiltration markers:** no change. These blocks were already code-owned.
 - **References in other repos:**
   - curia-deploy `social-media.yaml` says the principal's details are "injected above". That
-    is wrong today and becomes correct after this PR.
+    was wrong and becomes correct with this PR.
   - curia-deploy's eval harness pins the old block text and order
     (`tests/eval/loader-prompt.test.ts`, including the `[primary]` line) and documents it
-    (`tests/eval/loader.ts`, `tests/eval/README.md`). It also needs the display name in its
-    snapshot adapter, and a snapshot re-fetch after deploy.
+    (`tests/eval/loader.ts`, `tests/eval/README.md`). It needs a companion PR and a snapshot
+    re-fetch after deploy.
   - Recheck the other custom agents in the final phase (curia-deploy#276).
-- **Verify:**
-  - The full A/B per principle 6, plus the smoke contact cases.
-  - **Address-fidelity probe**, a scratch script like #1990's judge probe:
-    - **Render from the prod snapshot** through the curia-deploy eval loader, not the local
-      database. Assert on every arm that the primary and the line below it are present, so
-      the arms really differ in layout.
-    - **Replay real messages.** Replay the two 2026-10-07 bullpen send requests from #2033: the
-      one that produced the invented address and the one that didn't. Don't replay from
-      `llm_call_archive`, which is PII-scrubbed. Assert that no `[EMAIL]` or `[PHONE]` tokens
-      remain.
-      - The eval loader renders an ordinary turn and leaves out wake-time blocks. #2033's
-        call carried the bullpen reply rule twice (the ambient block and the mention wake).
-        Build each request from llm.call `88597cd5`'s structure, and assert every arm carries
-        the same wake and bullpen blocks.
-    - **Pin every arm to `e757c375`** (main on 2026-10-07, before #2033's send by reference).
-      After #2033 the coordinator sends to the principal by reference and never types the
-      address, so arms built on a later `main` would all score near 100% and measure
-      nothing. The PR 11 arms apply PR 11's block changes on top of that commit.
-      - The eval harness takes code from two places, and both must be pinned. Point
-        `CURIA_REPO_PATH` at an `e757c375` checkout, and regenerate curia-deploy's
-        `tests/eval/tool-schemas/` from it with `scripts/extract-tool-schemas.ts`. The
-        committed schema snapshot is not tied to `CURIA_REPO_PATH`, and the loader's
-        version-skew check doesn't cover it.
-      - Use the prod snapshot only for instance inputs (identities, primary email, roster).
-        A version-skew warning is expected.
-      - Assert that every arm's `email-send` schema takes a typed address and has no
-        principal alias.
-      - Build "PR 11 without the name sentence" with a code toggle, not by dropping the
-        display name from the snapshot: the loader renders with `onBlockError: 'throw'`,
-        so a missing name would throw from `failBlock('who-you-serve')`.
-    - **Check that the baseline reproduces the error first.** `e757c375` already carries PR 1
-      and PR 2, and the incident ran on `3155f290`. If the `e757c375` arm shows no wrong
-      addresses on the bad request, the PR 11 arms can't show an effect. Report the probe as
-      inconclusive rather than "layout doesn't matter", or add a `3155f290` arm.
-    - **Four arms:**
-      - `e757c375`;
-      - PR 11 without the name sentence;
-      - PR 11 with the name sentence;
-      - `e757c375` at `temperature: 0.5`. It keeps that commit's layout so the temperature
-        effect isn't mixed with the layout effect.
-
-      Run each request 50 times per arm on `deepseek/deepseek-v4.1-flash`: 400 calls, about
-      $4.
-    - **Why a temperature arm.** Agent calls send no `temperature` today, so they use the
-      provider default. OpenRouter publishes no default for this model (DeepSeek's own API
-      defaults to 1.0). Copying an address is the kind of task where sampling at 1.0 can pick
-      a low-probability token, like the stray dot in #2033.
-    - **Make the temperature arm actually send a temperature.** Providers forward
-      `options.temperature` as of #2038, but the pinned `e757c375` predates that fix, so its
-      providers would drop it. Send every arm through one call path that sets the request
-      body itself (see below), not through the pinned commit's providers. Assert from the
-      request or OpenRouter's generation record that the value was sent.
-    - **Send no temperature on the other three arms.** curia-deploy's eval client defaults
-      to `temperature: 0` (`tests/eval/openrouter.ts`), unlike prod, which sends none.
-      Through that client, the control would be near-deterministic and the 0.5 arm would
-      be the hottest, not the coolest. Send all four arms through one call path with the
-      same body fields, and assert from the generation records that arms 1 to 3 carried no
-      temperature.
-    - **Make unsupported parameters fail loudly.** Send `provider: { require_parameters: true }`,
-      so a provider that can't honor `temperature` or `logprobs` errors instead of ignoring
-      it.
-    - **Request `logprobs`** (with `top_logprobs`) on every arm. The probability the model put
-      on each token of the `to` argument is a far more sensitive signal than a failure count
-      over 50 runs, and it shows where along the address the model wavered. If the response
-      has no logprobs for the tool-call arguments, report the logprobs part as not measured.
-      Don't silently fall back to counts.
-    - **Record the reasoning on the probe's own calls,** unredacted and kept locally with the
-      results. That shows why each wrong address happened. The archive can't serve this: it
-      would store the address as `[EMAIL]`.
-    - **Report four counts per arm:** sends to the exact primary (normalized as
-      `isPrincipalIdentity` does), sends to another address, runs with no send, and errors.
-      Classify the wrong addresses, including name-derived ones.
-    - **Read it honestly.** 50 runs per request per arm can show a drop from about 20% to
-      about 5%; it cannot prove zero.
-    - Record the numbers in the baseline log and on #2033.
-- **Capture reasoning in the archive, for future prod incidents.** A small code change,
-  independent of PR 11. The probe doesn't depend on it. Tracked in #2042: OpenRouter
-  already returns reasoning, and Curia's parsing and the five archive call sites drop it.
-  Archived reasoning is redacted, so its addresses read as `[EMAIL]`.
-- **Risk:** medium. The order changes for every agent. Content changes in the principal
-  block's wording and the new name sentence. Specialists are covered only by smoke.
+- **Verify:** the full A/B per principle 6, plus the smoke contact cases and scenario
+  `14a-send-to-principal-by-alias`.
+- **Risk:** medium. The order changes for every agent, and the principal block's wording
+  changes. Specialists are covered only by smoke.
 
 ### PR 3: rewrite pass
 
@@ -852,28 +760,26 @@ contacts specialist (adding, merging, renaming, identities, relationships, trust
 permissions), except a profile field the principal states, which `contact-update` records.
 ```
 
-**G. Who you serve** (PR 11; code-rendered, values in angle brackets. No contact ID, per
-spec 09. Each part renders under its own gate.)
+**G. Who you serve** (PR 11, as built; code-rendered, values in angle brackets. No contact ID,
+per spec 09, and no display name.)
 
 ```
 ## Who you serve
-You work for <principal display name>, your principal. "The principal" in these
-instructions, in tool descriptions and in messages from other agents means them.
+You work for the principal. In these instructions, in tool descriptions and in messages from other agents, "the principal" means them.
 
 ### Principal Contact Details
-These are all of the principal's verified addresses, and the list is complete: an address
-that is not listed here is not theirs. Use an address exactly as written here. A label in
-parentheses is a note, not an address.
+These are all of the principal's verified addresses, and the list is complete: an address that is not listed here is not theirs.
+To send to the principal with email-send, signal-send, sms-send or slack-send, pass "principal" as the recipient. To pick a labelled address, add its label as a hint, as in principal#personal.
+When a tool needs a literal address, copy one exactly as it is written here. A label in parentheses is a note, not an address.
 
-Their primary email is <identifier of the identity matching contacts.primary_email>.
+Primary email:
+- email: <identifier of the identity matching contacts.primary_email> (label: "<label>")
 
-Their other addresses:
+Other addresses:
 - <channel>: <identifier> (label: "<label>")
 - …
 ```
 
-- The name sentence renders only when the display name passes sanitizing. The probe's third
-  arm decides whether it ships at all.
-- With no matching primary, the primary sentence is left out, and the list is introduced as
-  "Their addresses:".
-- With no identities, the whole `### Principal Contact Details` part is left out.
+- With no matching primary, the primary list is left out, and the rest is introduced as
+  "Addresses:".
+- With no identities, the whole section is left out.

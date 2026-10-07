@@ -139,7 +139,7 @@ The LLM instructions for this agent. Written in plain text. Key points:
 
 Agent prompts, schedule `task` text, skill `SKILL.md` bodies, and `tool.json` descriptions are all shown to the model. Core uses **the principal** for the person the deployment serves. A president, chair, founder, or executive director is still the principal.
 
-Write overlay agents and tools the same way. A prompt that says "email the CEO" while the injected Principal Contact Details block says "the principal" is how a model invents an address that was never on file. Ask for the principal, then use an address from that block. The list is complete: an identifier that is not listed is not the principal's. When the block marks an email `[primary]`, that address is `contacts.primary_email`.
+Write overlay agents and tools the same way. A prompt that says "email the CEO" while the injected Principal Contact Details block says "the principal" is how a model invents an address that was never on file. Ask for the principal, then use an address from that block. The list is complete: an identifier that is not listed is not the principal's. The email the block lists under "Primary email" is `contacts.primary_email`. To send to the principal, pass the alias `principal` to a send skill rather than copying an address (ADR-047).
 
 Do not rename identifiers to match the prose. Agent names (`ceo-inbox`), secret names, and schema values such as task `owner: "ceo"` stay as they are.
 

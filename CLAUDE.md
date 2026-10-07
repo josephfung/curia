@@ -198,10 +198,11 @@ task.
 
 ### Reaching the principal
 
-The runtime injects a **`## Principal Contact Details`** block into every agent's
-effective system prompt on each task turn. The block lists the principal's verified
-channel identities (email, Signal, phone, etc.) loaded from `contact_channel_identities`
-at startup. They are authoritative and labelled as such in the block.
+The runtime injects a **`## Who you serve`** section into every agent's effective
+system prompt on each task turn, ahead of the YAML body. Its **`### Principal Contact
+Details`** block lists the principal's verified channel identities (email, Signal,
+phone, etc.) loaded from `contact_channel_identities` at startup. They are
+authoritative and labelled as such in the block.
 
 To **send** to the principal, agents pass the reserved alias `principal` as the
 recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`; the skill looks
