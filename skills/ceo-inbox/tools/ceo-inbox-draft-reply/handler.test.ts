@@ -51,6 +51,7 @@ function buildNylasMessage(opts: {
   from: Array<{ email: string; name?: string }>;
   to: Array<{ email: string; name?: string }>;
   cc?: Array<{ email: string; name?: string }>;
+  folders?: string[];
 }) {
   return {
     data: {
@@ -65,7 +66,7 @@ function buildNylasMessage(opts: {
       snippet: 'Hello',
       date: 1700000000,
       unread: false,
-      folders: ['INBOX'],
+      folders: opts.folders ?? ['INBOX'],
       labels: [],
     },
   };
@@ -646,8 +647,8 @@ describe('CeoInboxDraftReplyHandler', () => {
           subject: 'Re: Test Subject',
           to: [{ email: 'alice@external.com', name: 'Alice' }],
           cc: [],
-          snippet: '',
-          date: 1,
+          snippet: 'Thanks for reaching out.',
+          date: 1_700_000_000,
         };
         drafts.push(created);
         return new Response(JSON.stringify({ data: created }), { status: 200 });
@@ -666,7 +667,45 @@ describe('CeoInboxDraftReplyHandler', () => {
     const secondData = second.data as { draft_id: string; already_exists: boolean };
     expect(firstData.draft_id).toBe('draft-1');
     expect(firstData.already_exists).toBe(false);
-    expect(secondData).toMatchObject({ draft_id: 'draft-1', already_exists: true });
+    expect(secondData).toMatchObject({
+      draft_id: 'draft-1',
+      already_exists: true,
+      snippet: 'Thanks for reaching out.',
+      date: 1_700_000_000,
+    });
+  });
+
+  it('refuses to draft a reply to Spam or Trash however many times it is called (#2035)', async () => {
+    for (const folder of ['SPAM', 'trash']) {
+      const messageResponse = buildNylasMessage({
+        from: [{ email: 'phish@evil.test', name: 'Bank' }],
+        to: [{ email: 'ceo@example.com' }],
+        folders: [folder],
+      });
+      let creates = 0;
+
+      mockFetch.mockImplementation(async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const urlStr = String(url);
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (urlStr.includes('/messages/msg-001')) {
+          return new Response(JSON.stringify(messageResponse), { status: 200 });
+        }
+        if (urlStr.includes('/drafts') && method === 'POST') {
+          creates += 1;
+          return new Response(JSON.stringify(DRAFT_RESPONSE), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${method} ${urlStr}`);
+      });
+
+      const ctx = buildCtx();
+      const first = await handler.execute(ctx);
+      const second = await handler.execute(buildCtx({ body: 'A second attempt.' }));
+
+      expect(creates).toBe(0);
+      expect(first).toMatchObject({ success: false, error: 'Message is in Spam or Trash; not drafting a reply' });
+      expect(second).toMatchObject({ success: false, error: 'Message is in Spam or Trash; not drafting a reply' });
+      expect(ctx.log.warn).toHaveBeenCalled();
+    }
   });
 
   it('still creates a draft when the only existing draft is on another thread', async () => {

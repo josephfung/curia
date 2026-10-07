@@ -1,6 +1,6 @@
 {
   "name": "ceo-inbox-draft-reply",
-  "description": "Create a reply-all draft in the principal's personal email inbox. The draft is never sent automatically — the principal reviews and sends from Gmail. Always replies to the original sender and CCs all other recipients. If this thread already has a draft, returns that draft with already_exists: true instead of creating another; update a stale one with ceo-inbox-draft-edit. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
+  "description": "Create a reply-all draft in the principal's personal email inbox. The draft is never sent automatically — the principal reviews and sends from Gmail. Always replies to the original sender and CCs all other recipients. Refuses messages in Spam or Trash. If this thread already has a draft, returns that draft with already_exists: true plus its snippet and date, instead of creating another. Call ceo-inbox-draft-edit only when that snippet is clearly an earlier Curia draft for this same reply; leave a draft the principal wrote alone. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
   "version": "0.4.0",
   "sensitivity": "normal",
   "action_risk": "low",
@@ -14,7 +14,9 @@
     "subject": "string (auto-generated Re: subject)",
     "to": "array of { name?, email }",
     "cc": "array of { name?, email }",
-    "already_exists": "boolean — true when a draft for this thread already existed and was returned instead of creating another"
+    "already_exists": "boolean — true when a draft for this thread already existed and was returned instead of creating another",
+    "snippet": "string? (present when already_exists is true — the existing draft's snippet, so you can see what it already says)",
+    "date": "number? (unix timestamp, present when already_exists is true)"
   },
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id", "ceo_self_email"],

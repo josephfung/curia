@@ -1,5 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient, type NylasDraftSummary, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
+import { isSpamOrTrash } from '../../../_shared/mail-folders.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 10;
@@ -14,18 +15,9 @@ const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
 const DRAFT_SCAN_LIMIT = 500;
 const DRAFT_PAGE_SIZE = 100;
 
-// Gmail files these outside INBOX. A native query such as `is:unread` still
-// returns them, and triage must not draft a reply to Spam (#2035). Callers
-// opt in with `include_spam_and_trash`; the query string alone does not.
-const HIDDEN_FOLDERS = new Set(['SPAM', 'TRASH']);
-
 // Pages to walk when hidden or Curia-self mail would otherwise shrink a full
 // page to nothing and hide a later real message. Bounded like the list handler.
 const SEARCH_PAGE_CAP = 25;
-
-function isSpamOrTrash(folders: string[]): boolean {
-  return folders.some((folder) => HIDDEN_FOLDERS.has(folder.toUpperCase()));
-}
 
 /**
  * Case-insensitive substring match of `query` against a draft's subject and

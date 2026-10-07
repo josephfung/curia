@@ -200,9 +200,37 @@ describe('CeoInboxListHandler — batch listing (no watermark)', () => {
     // The cursor already carries the first page's filters.
     expect(second.searchParams.get('in')).toBeNull();
     expect(second.searchParams.get('unread')).toBeNull();
+    expect(second.searchParams.get('limit')).toBe('20');
   });
 
-  it('returns count 0 and has_more false when every unread message is Curia-self (#2035)', async () => {
+  it('returns count 0 and has_more false when the mailbox of Curia-self mail is exhausted (#2035)', async () => {
+    const self = 'curia@example.com';
+    const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
+    const curiaPage = (prefix: string) => Array.from({ length: 6 }, (_, i) => ({
+      id: `${prefix}${i}`, threadId: `t${prefix}${i}`, date: i, subject: 'self',
+      from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '',
+      unread: true, folders: ['INBOX'], attachments: [],
+    }));
+    const fetchSpy = vi.fn().mockImplementation(async (url: string) => {
+      const page = new URL(url).searchParams.get('page_token');
+      if (!page) {
+        return { ok: true, json: async () => ({ data: curiaPage('a'), next_cursor: 'p2' }) };
+      }
+      return { ok: true, json: async () => ({ data: curiaPage('b') }) };
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean; scan_incomplete?: boolean };
+    expect(data.count).toBe(0);
+    expect(data.has_more).toBe(false);
+    expect(data.scan_incomplete).toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(ctx.log.error).not.toHaveBeenCalled();
+  });
+
+  it('stops at the page cap and reports scan_incomplete when the cursor never ends (#2035)', async () => {
     const self = 'curia@example.com';
     const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
     const curiaPage = Array.from({ length: 6 }, (_, i) => ({
@@ -218,10 +246,14 @@ describe('CeoInboxListHandler — batch listing (no watermark)', () => {
 
     const result = await handler.execute(ctx);
     if (!result.success) throw new Error(result.error);
-    const data = result.data as { count: number; has_more: boolean };
+    const data = result.data as { count: number; has_more: boolean; scan_incomplete?: boolean };
     expect(data.count).toBe(0);
     expect(data.has_more).toBe(false);
-    expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+    expect(data.scan_incomplete).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(25);
+    expect(ctx.log.error).toHaveBeenCalled();
+    const followUp = new URL(fetchSpy.mock.calls[1]![0] as string);
+    expect(followUp.searchParams.get('limit')).toBe('20');
   });
 });
 

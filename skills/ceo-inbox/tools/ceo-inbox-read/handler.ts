@@ -102,7 +102,9 @@ async function resolveLabelNames(
   ctx: ToolContext,
   messageId: string,
 ): Promise<string[]> {
-  if (ids.length === 0) return ids;
+  // System labels (INBOX, UNREAD, CATEGORY_*) pass through unchanged. Skip the
+  // extra /folders round-trip unless a Gmail user label id is present.
+  if (ids.length === 0 || !ids.some((id) => id.startsWith('Label_'))) return ids;
   try {
     const folders = await client.listFolders();
     const nameById = new Map<string, string>();
