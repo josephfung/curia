@@ -16,7 +16,6 @@ describe('loadAgentConfig', () => {
     expect(config.model.tier).toBe('standard');
     // System prompt is meaningful and reflects the routing-decision spine.
     expect(config.system_prompt).toContain('Transfer-ownership');
-    expect(config.system_prompt).toContain('**Channel ownership.**');
   });
 
   it('coordinator.yaml carries no ${...} runtime placeholders', () => {
@@ -50,6 +49,11 @@ describe('loadAgentConfig', () => {
     ['Message ID stamping detail', /drops any other `Message ID:`/, 'delegate handler identifier stamp'],
     ['principal [primary] email rule', /\[primary\]/, '## Principal Contact Details block'],
     ['calendar discovery ban', /tool-registry or skill-activate for calendar/, 'skillReservedForOtherAgents'],
+    // Prompt trim PR 1 (docs/wip/2026-10-06-coordinator-prompt-trim.md).
+    ['channel ownership after a specialist send', /\*\*Channel ownership\.\*\*/, 'dispatcher reply-lock (#1860)'],
+    ['bulk-export confirmation', /bulk-export sensitive data/, 'export controls (#201)'],
+    ['task_error carve-outs', /This cuts one way only/, '<task_error> reporting_constraint (#1546)'],
+    ['acting-as account fallback', /"acting as" parameter/, 'MCP fixed_inputs + ## Your Contact Details'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);
