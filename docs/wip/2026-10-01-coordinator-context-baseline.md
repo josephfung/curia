@@ -931,3 +931,58 @@ the YAML: bundle members can't be excluded one at a time; `sms-send` and
 `context-bridge-clear` serve rare principal requests. `approval-expiry-sweep`
 (713 calls) is used only by the hourly cron. Taking that run off the LLM needs a
 system-invoked sweep, which is follow-up work.
+
+### 2026-10-06 — google-workspace activated on demand, not pinned (#2024)
+
+**Size.** Measured on the files, before deploy, against `2f6e57d7` on `main`
+(coordinator 0.23.0). The google-workspace bytes are the 2026-10-05 production capture
+above (#1957, workspace-mcp 1.22.0); 2.0.1 (curia-deploy#266) would make them about
+98.5 KB.
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `agents/coordinator.yaml` bytes | 24,393 | 24,118 | −275 |
+| `system_prompt` chars | 20,951 | 20,532 | −419 |
+| "Google Workspace" section chars | 1,171 | 752 | −419 |
+| pinned entries | 27 | 26 | −1 |
+| mcp:google-workspace tools on every call | 49 | 0 | −49 |
+| mcp:google-workspace bytes on every call | 89,693 | 0 | **−89,693** |
+
+Plus the ~0.3 KB google-workspace reference index that pin resolution added to the
+always-on prompt (#1960). A task that needs the tools calls
+`skill-activate google-workspace`, and pays for them from then on, including after a
+wake (`progress.activeSkills`). Over the 60 days to 2026-10-06 that was 15 of 2,204
+coordinator tasks (0.7%).
+
+**Behavior, before deploy.** `deepseek/deepseek-v4.1-flash`, gpt-4o judge, local dev
+database. The test-mode stack now serves google-workspace from a tools/list snapshot
+(`tests/fixtures/mcp/`), and `skill-activate` works there (its `taskRepo` is optional).
+
+- **Scenarios, full suite on `631644bf`: every case passed on behavior** (25 cases,
+  405 s, estimated $0.88). 24 at 100% weighted, `paused delegate no redelegate` 96%. The
+  gate failed on a stub hole: `scheduler ambiguous asks` called `scheduler-report` twice
+  (refused) in 1 of 5 runs, the same one-in-many flake as #1959. A 5-run re-run of that
+  case was clean.
+- **New cases 13a–13f, 5 runs each on `11f0ad6f`, after the review fixes: every behavior
+  100%, no stub holes.** The coordinator activated google-workspace in all 20 runs of
+  13a–13d (filing a specialist's Doc, a Docs link, a bare doc ID, sharing a named file)
+  and in none of the 10 runs of 13e–13f (a chat turn, a scheduled job).
+- **Smoke on `631644bf`: 45 of 46** (767 s, estimated $1.23). Forwarded Receipt and
+  Reschedule Board Chair passed on retry. Natural Language Deadlines failed both
+  attempts: on a Tuesday the model read "next Friday" as the coming Friday and the judge
+  wanted the one after (the date-resolve ambiguity kept in PR#1993). A/B below.
+
+**After deploy:** add a `report-agent-context` capture. It now prints the share of
+tasks that activated each skill (`#### Skill activations`) and charges activated MCP
+tools to their server.
+
+**Natural Language Deadlines A/B.** Three alternating single-case smoke rounds per side
+on `202c912c`, swapping in `origin/main`'s `agents/coordinator.yaml` for the main side.
+
+| | Case passed (after retry) | First attempt passed |
+|---|---:|---:|
+| Branch | 3 of 3 | 0 of 3 (two date misreads, one 180 s timeout) |
+| `origin/main` prompt | 2 of 3 | 1 of 3 |
+
+Every miss on both sides is the same misread: "next Friday" taken as the coming Friday.
+The failure mode is not this change; the case depends on the weekday it runs on.
