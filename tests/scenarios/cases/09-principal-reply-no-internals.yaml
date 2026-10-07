@@ -1,6 +1,7 @@
 # Case 9 (#1956): a principal-facing reply names no tools, agents or systems. The
 # outbound judge skips principal-only messages, so the prompt is the only guard. Rule:
-# agents/coordinator.yaml, "Who I am" and Audience awareness → "Talking to the principal".
+# agents/coordinator.yaml, "Who I am" (every audience) and Audience awareness → "Talking to
+# the principal".
 #
 # The stubbed specialist result is deliberately full of internals (agent names, ids,
 # "knowledge graph") — the realistic shape of a contacts briefing — so relaying it

@@ -63,28 +63,25 @@ function extractPrincipalCalendarSection(prompt: string): string {
 }
 
 describe('coordinator principal-calendar routing (#1853)', () => {
-  it('has an explicit principal calendar → @calendar borrow-then-answer rule', () => {
+  it('has the prompt-only parts of the principal-calendar rule: the route and the failure line', () => {
+    // "I never read or mutate the principal's calendar myself" is gone from the prompt
+    // (prompt trim PR 2): allowed_callers enforces it, and the discovery and pin tests
+    // below assert that. The route and the failure handling have no code home yet.
     const section = extractPrincipalCalendarSection(loadCoordinator().system_prompt);
-    expect(section).toMatch(/delegated to `@calendar`/);
-    expect(section).toMatch(/never\s+read or mutate the principal's calendar myself/i);
-    expect(section).toMatch(/never present the brief/i);
+    expect(section).toMatch(/borrow-then-answer through `@calendar`/);
     expect(section).toMatch(/could not be read/i);
   });
 
-  it('drops calendar from handle-directly (no Curia calendar path)', () => {
+  it('handle-directly does not claim the calendar (no Curia calendar path)', () => {
     const handleDirectly = extractHandleDirectlySection(loadCoordinator().system_prompt);
-    expect(handleDirectly).toMatch(/Calendar is never handle-directly/i);
-    expect(handleDirectly).toMatch(/@calendar/);
-    expect(handleDirectly).not.toMatch(/my own email\/calendar\/workspace/);
+    expect(handleDirectly).not.toMatch(/calendar/i);
     expect(handleDirectly).not.toMatch(/Curia's identity only/);
   });
 
-  it('states the @calendar route only in the routing section and the calendar section (#1958)', () => {
+  it('states the @calendar route only in the calendar section (#1958)', () => {
     // It was once repeated in nine places. Each copy is rule density with no added protection.
     const prompt = loadCoordinator().system_prompt;
-    const outside = prompt
-      .replace(extractHandleDirectlySection(prompt), '')
-      .replace(extractPrincipalCalendarSection(prompt), '');
+    const outside = prompt.replace(extractPrincipalCalendarSection(prompt), '');
     expect(outside).not.toMatch(/@calendar/);
   });
 

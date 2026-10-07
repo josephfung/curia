@@ -54,6 +54,11 @@ describe('loadAgentConfig', () => {
     ['bulk-export confirmation', /bulk-export sensitive data/, 'export controls (#201)'],
     ['task_error carve-outs', /This cuts one way only/, '<task_error> reporting_constraint (#1546)'],
     ['acting-as account fallback', /"acting as" parameter/, 'MCP fixed_inputs + ## Your Contact Details'],
+    // Prompt trim PR 2: each of these restated a rule that now has one home.
+    ['a second outbound-voice rule', /Outbound voice \(mandatory\)/, 'Who I am (every audience)'],
+    ['a second no-internals rule', /NEVER expose contact lookup results/, 'Who I am (every audience)'],
+    ['a second contact-resolution section', /### Contact intelligence|Before composing any email/, 'People'],
+    ['calendar in handle-directly', /Calendar is never handle-directly/, 'calendar allowed_callers + Principal calendar requests'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);
@@ -66,9 +71,9 @@ describe('loadAgentConfig', () => {
     expect(count(/return exactly `NO_REPLY`/)).toBe(1);
     // The transfer-ownership reply rule has one canonical statement; others point at it.
     expect(count(/is \*\*always\*\* transfer-ownership/)).toBe(1);
-    // "Never name internals" is stated once, under Who I am, for every audience.
-    expect(count(/NEVER name tools, systems/)).toBe(1);
-    expect(count(/multiple agents were involved|more than one agent was involved/)).toBe(1);
+    // "No internals" and contact resolution each live in one section now (prompt trim
+    // PR 2); the "does not restate" rows above keep their old duplicates out, and
+    // scenarios 09 and 10 test the behavior.
   });
 
   it('coordinator prompt does not claim continuation is manual (#1958)', () => {
