@@ -471,6 +471,14 @@
               "items": { "type": "string", "minLength": 1 }
             }
           }
+        },
+        "approval_expiry": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "System-interval sweep that expires stale pending approvals (#2013).",
+          "properties": {
+            "sweep_interval_minutes": { "type": "integer", "minimum": 1 }
+          }
         }
       }
     },

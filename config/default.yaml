@@ -532,6 +532,11 @@ autonomy:
     same_task: 70      # posture B floor — must not drop below 60
     derived_child: 90  # posture D floor
 
+  # Expires pending approvals past expires_at and emails the principal about
+  # high/critical ones (#2013). A system interval: no agent turn, no LLM call.
+  approval_expiry:
+    sweep_interval_minutes: 60
+
   # Emoji → approval intent for inbound.reaction (#1479). Channel-agnostic —
   # Slack shortcodes and unicode glyphs both listed. Adapters never map intent.
   # Skin tones / VS16 are stripped before matching (see normalizeReactionEmoji).
