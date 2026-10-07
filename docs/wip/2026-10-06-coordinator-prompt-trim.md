@@ -261,6 +261,14 @@ Added 2026-10-07, measured on that day's prod prompt (llm.call
   - It reduces the error rather than removing it, and #2033 removes it by construction.
   - PR 11's probe gets a temperature arm. If that arm helps, add a per-tier sampling setting
     and put it through the behavior gate before enabling it.
+  - **Prerequisite, and a live bug:** neither provider sends a caller's `temperature`.
+    - `src/agents/llm/openrouter.ts` `buildCreateParams` reads only `model`, `max_tokens` and
+      `signal` from `options`, and `anthropic.ts` has no temperature handling at all.
+    - So the `temperature: 0` that the outbound judge, the escalation judge and the drift
+      detector pass has never been sent. Their "deterministic" verdicts run at the provider
+      default.
+    - Fix the plumbing before any temperature setting can mean anything. That fix is its own
+      issue, not part of this plan.
 
 ## PR sequence
 
@@ -439,31 +447,55 @@ Then:
 
       Run each request 50 times per arm on `deepseek/deepseek-v4.1-flash`: 400 calls, about
       $4.
-    - **Why a temperature arm.** Agent calls send no `temperature`; the OpenRouter provider
+    - **Why a temperature arm.** Agent calls send no `temperature`. The OpenRouter provider
       sends only `model`, `max_tokens`, `messages` and `tools`. OpenRouter publishes no
       default for this model, so the provider default applies (DeepSeek's own API defaults to
       1.0). Copying an address is the kind of task where sampling at 1.0 can pick a
       low-probability token, like the stray dot in #2033.
+    - **Make the temperature arm actually send a temperature.** The providers drop
+      `options.temperature` (see Findings), so a probe that goes through them would measure
+      nothing. Call OpenRouter directly, or plumb the parameter through first. Assert from
+      the request or OpenRouter's generation record that the value was sent.
+    - **Make unsupported parameters fail loudly.** Send `provider: { require_parameters: true }`,
+      so a provider that can't honor `temperature` or `logprobs` errors instead of ignoring
+      it.
     - **Request `logprobs`** (with `top_logprobs`) on every arm. The probability the model put
       on each token of the `to` argument is a far more sensitive signal than a failure count
-      over 50 runs, and it shows where along the address the model wavered. First check that
-      the provider returns logprobs for tool-call arguments, not only for content. If it
-      doesn't, rely on the counts alone.
+      over 50 runs, and it shows where along the address the model wavered. If the response
+      has no logprobs for the tool-call arguments, report the logprobs part as not measured.
+      Don't silently fall back to counts.
+    - **Record the reasoning on the probe's own calls,** unredacted and kept locally with the
+      results. That shows why each wrong address happened. The archive can't serve this: it
+      would store the address as `[EMAIL]`.
     - **Report four counts per arm:** sends to the exact primary (normalized as
       `isPrincipalIdentity` does), sends to another address, runs with no send, and errors.
       Classify the wrong addresses, including name-derived ones.
     - **Read it honestly.** 50 runs per request per arm can show a drop from about 20% to
       about 5%; it cannot prove zero.
     - Record the numbers in the baseline log and on #2033.
-- **Capture reasoning in the archive.** A small code change that can land before PR 11, and
-  should, so the probe can read the reasoning behind each wrong address.
-  - Today it can't be recovered: Curia never requests `include_reasoning`, and OpenRouter
-    keeps no content on a paid account. So the reasoning behind #2033's invented address
-    (3,909 output tokens) is gone.
-  - Request it in `buildCreateParams` (`src/agents/llm/openrouter.ts`), carry it on the
-    provider response, and store it with the response in `llm_call_archive`.
-  - The archive already redacts secrets and PII from every string it stores
-    (`src/audit/llm-call-archive.ts`), so reasoning gets the same treatment as prompts.
+- **Capture reasoning in the archive, for future prod incidents.** A small code change,
+  independent of PR 11. The probe doesn't depend on it.
+  - Today the reasoning behind a prod call is lost. The reasoning behind #2033's invented
+    address (3,909 output tokens) can't be recovered, and OpenRouter keeps no content on a
+    paid account.
+  - Check OpenRouter's docs first. For reasoning models, the response may already carry a
+    `reasoning` field, with `include_reasoning` only a legacy flag. If so, the loss is in
+    Curia's parsing, not the request, and the request side is `reasoning: {…}`, not
+    `include_reasoning`.
+  - The parsing drops reasoning in three places, and all of them need changing:
+    - the streaming loop reads only `delta.content` and `delta.tool_calls`;
+    - `chat()` maps only `message.content` and `message.tool_calls` (both in
+      `src/agents/llm/openrouter.ts`);
+    - the five call sites that build the archive response by hand: `runtime.ts`,
+      `telemetry-provider.ts`, `outbound-judge.ts`, `escalation-judge.ts` and
+      `skills/infra-llm.ts`.
+  - Archived reasoning is redacted like everything else (`src/audit/llm-call-archive.ts`).
+    It explains the decision, but the addresses in it read as `[EMAIL]`.
+  - Strip `\u0000` before the insert. Postgres `jsonb` rejects it. The archive insert shares
+    a transaction with the `audit_log` row, so one bad reasoning string would roll back the
+    audit row and its cost tracking.
+  - Test that reasoning is stored whenever usage reports reasoning tokens. Some providers
+    return empty or encrypted reasoning, and that should be visible rather than silent.
   - Reasoning tokens are already billed. The cost is archive size, so check the archive's
     retention before turning it on for every call.
 - **Risk:** medium. The order changes for every agent. Content changes in the principal
