@@ -43,7 +43,7 @@ describe('EmailSendHandler — reply quote', () => {
       getEmailMessage: vi.fn().mockResolvedValue(originalMessage),
     };
     const result = await handler.execute(makeCtx(
-      { to: 'alice@example.com', subject: 'Re: Q2 planning', body: 'Sounds good!', reply_to_message_id: 'msg-orig' },
+      { to_address: 'alice@example.com', subject: 'Re: Q2 planning', body: 'Sounds good!', reply_to_message_id: 'msg-orig' },
       gateway,
       { timezone: 'America/Toronto' },
     ));
@@ -67,7 +67,7 @@ describe('EmailSendHandler — reply quote', () => {
       getEmailMessage: vi.fn(),
     };
     const result = await handler.execute(makeCtx(
-      { to: 'alice@example.com', subject: 'Hello', body: 'Hi there' },
+      { to_address: 'alice@example.com', subject: 'Hello', body: 'Hi there' },
       gateway,
     ));
 
@@ -86,7 +86,7 @@ describe('EmailSendHandler — reply quote', () => {
     };
     const warnSpy = vi.fn();
     const ctx = makeCtx(
-      { to: 'alice@example.com', subject: 'Re: Q2', body: 'Got it', reply_to_message_id: 'msg-missing' },
+      { to_address: 'alice@example.com', subject: 'Re: Q2', body: 'Got it', reply_to_message_id: 'msg-missing' },
       gateway,
     );
     ctx.log = { ...logger, warn: warnSpy, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;

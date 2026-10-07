@@ -9,6 +9,15 @@ function makeLogger() {
   return pino({ level: 'silent' });
 }
 
+const ALICE_ID = '11111111-1111-4111-8111-111111111111';
+
+/** Stands in for the gateway's reference resolver (#2033); its rules are tested elsewhere. */
+const resolveRecipientReference = vi.fn(async (_channel: string, value: string) => {
+  if (value === 'principal') return { ok: true, contactId: 'principal-id', identifier: '+15195550100', displayName: 'Principal' };
+  if (value === ALICE_ID) return { ok: true, contactId: ALICE_ID, identifier: 'alice-not-e164', displayName: 'Alice' };
+  return { ok: false, error: `No contact for "${value}". Nothing was sent.` };
+});
+
 function makeCtx(overrides: {
   input?: Record<string, unknown>;
   gateway?: Partial<OutboundGateway>;
@@ -17,6 +26,7 @@ function makeCtx(overrides: {
   const gateway = {
     send: vi.fn().mockResolvedValue({ success: true }),
     getSignalGroupMembers: vi.fn().mockResolvedValue([]),
+    resolveRecipientReference,
     ...overrides.gateway,
   } as unknown as OutboundGateway;
 
@@ -42,7 +52,7 @@ describe('SignalSendHandler', () => {
   });
 
   it('returns error when message is missing', async () => {
-    const ctx = makeCtx({ input: { recipient: '+14155551234' } });
+    const ctx = makeCtx({ input: { recipient_number: '+14155551234' } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/message/);
@@ -56,28 +66,76 @@ describe('SignalSendHandler', () => {
   });
 
   it('returns error when both recipient and group_id are provided', async () => {
-    const ctx = makeCtx({ input: { recipient: '+14155551234', group_id: 'grpABC==', message: 'hi' } });
+    const ctx = makeCtx({ input: { recipient_number: '+14155551234', group_id: 'grpABC==', message: 'hi' } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/either.*not both|not both/i);
+    if (!result.success) expect(result.error).toMatch(/exactly one of recipient, recipient_number, or group_id/);
+  });
+
+  it('returns error when both recipient and recipient_number are provided', async () => {
+    const ctx = makeCtx({ input: { recipient: 'principal', recipient_number: '+14155551234', message: 'hi' } });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+  });
+
+  describe('send by reference (#2033)', () => {
+    beforeEach(() => resolveRecipientReference.mockClear());
+
+    it('resolves recipient through the gateway and sends to the looked-up number', async () => {
+      const gateway = { send: vi.fn().mockResolvedValue({ success: true }) };
+      const ctx = makeCtx({ input: { recipient: 'principal', message: 'hello' }, gateway });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(true);
+      expect(resolveRecipientReference).toHaveBeenCalledWith('signal', 'principal', { field: 'recipient', rawField: 'recipient_number' });
+      expect(gateway.send).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: 'signal', recipient: '+15195550100' }),
+        expect.anything(),
+      );
+      if (result.success) expect(result.data).toMatchObject({ delivered_to: '+15195550100', contact_id: 'principal-id' });
+    });
+
+    it('sends nothing when the reference does not resolve', async () => {
+      const gateway = { send: vi.fn() };
+      const ctx = makeCtx({ input: { recipient: 'principle', message: 'hello' }, gateway });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/Nothing was sent/);
+      expect(gateway.send).not.toHaveBeenCalled();
+    });
+
+    it('refuses a stored identity that is not E.164', async () => {
+      const gateway = { send: vi.fn() };
+      const ctx = makeCtx({ input: { recipient: ALICE_ID, message: 'hello' }, gateway });
+
+      const result = await handler.execute(ctx);
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/not an E\.164 number/);
+      expect(gateway.send).not.toHaveBeenCalled();
+    });
   });
 
   it('returns error when recipient is not a valid E.164 number', async () => {
-    const ctx = makeCtx({ input: { recipient: 'not-a-phone', message: 'hi' } });
+    const ctx = makeCtx({ input: { recipient_number: 'not-a-phone', message: 'hi' } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/E\.164/);
   });
 
   it('returns error when message exceeds max length', async () => {
-    const ctx = makeCtx({ input: { recipient: '+14155551234', message: 'x'.repeat(10_001) } });
+    const ctx = makeCtx({ input: { recipient_number: '+14155551234', message: 'x'.repeat(10_001) } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/10.000|10,000/);
   });
 
   it('returns error when outboundGateway is not available', async () => {
-    const ctx = makeCtx({ input: { recipient: '+14155551234', message: 'hi' } });
+    const ctx = makeCtx({ input: { recipient_number: '+14155551234', message: 'hi' } });
     (ctx as unknown as Record<string, unknown>).outboundGateway = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
@@ -86,7 +144,7 @@ describe('SignalSendHandler', () => {
 
   it('sends a 1:1 Signal message and returns delivered_to', async () => {
     const gateway = { send: vi.fn().mockResolvedValue({ success: true }) };
-    const ctx = makeCtx({ input: { recipient: '+14155551234', message: 'hello' }, gateway });
+    const ctx = makeCtx({ input: { recipient_number: '+14155551234', message: 'hello' }, gateway });
 
     const result = await handler.execute(ctx);
 
@@ -103,7 +161,7 @@ describe('SignalSendHandler', () => {
 
   it('returns error when gateway blocks the 1:1 send', async () => {
     const gateway = { send: vi.fn().mockResolvedValue({ success: false, blockedReason: 'Recipient is blocked' }) };
-    const ctx = makeCtx({ input: { recipient: '+14155551234', message: 'hi' }, gateway });
+    const ctx = makeCtx({ input: { recipient_number: '+14155551234', message: 'hi' }, gateway });
 
     const result = await handler.execute(ctx);
 
@@ -189,7 +247,7 @@ describe('SignalSendHandler', () => {
     it('registers a context bridge entry after successful 1:1 send', async () => {
       const ctx = makeCtx({
         input: {
-          recipient: '+14155551234',
+          recipient_number: '+14155551234',
           message: 'Any takeaways?',
           context_bridge: JSON.stringify({
             agent_id: 'meeting-debrief',
@@ -230,7 +288,7 @@ describe('SignalSendHandler', () => {
 
     it('registers a minimal entry when context_bridge is absent', async () => {
       const ctx = makeCtx({
-        input: { recipient: '+14155551234', message: 'Hello' },
+        input: { recipient_number: '+14155551234', message: 'Hello' },
       });
       (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true, messageId: 'msg-1',
@@ -260,7 +318,7 @@ describe('SignalSendHandler', () => {
     it('does not register when send fails', async () => {
       const ctx = makeCtx({
         input: {
-          recipient: '+14155551234',
+          recipient_number: '+14155551234',
           message: 'Hello',
           context_bridge: JSON.stringify({ agent_id: 'coordinator' }),
         },
@@ -286,7 +344,7 @@ describe('SignalSendHandler', () => {
     it('logs a warning but succeeds when context bridge registration fails', async () => {
       const ctx = makeCtx({
         input: {
-          recipient: '+14155551234',
+          recipient_number: '+14155551234',
           message: 'Hello',
           context_bridge: JSON.stringify({ agent_id: 'coordinator' }),
         },
