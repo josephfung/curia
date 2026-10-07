@@ -1025,5 +1025,12 @@ database; both suites side by side at concurrency 4.
 | smoke Pre-Meeting Prep Brief, 4 rounds | 4 of 4 (89%); 1 needed its retry (180 s timeout) | 4 of 4 (89%); 1 needed its retry (78%) |
 
 Every full-run miss either recurs on `origin/main`'s prompt or does not recur on the
-branch. The `google file filing` stub hole happens on both prompts, so it measures the
-harness: worth stubbing `inspect_doc_structure` in that case.
+branch. The `google file filing` stub hole happens on both prompts, so it measured the
+harness, not the model.
+
+**Case 13a stub hole, closed in the same PR.** Stubbing `inspect_doc_structure` exposed
+other lookups the coordinator reaches for about 1 run in 10: `search_docs` (sibling cases
+13c and 13d already stub it), then `doc-place` and `doc-write`, when it also saved the
+comparison to the working-docs workspace, which test mode lacks. With all of those plus
+`check_drive_file_public_access` stubbed, 10 runs made no refused calls (74 stubbed, 27
+passthrough), and the case passed the gate at 98%.
