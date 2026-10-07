@@ -1053,13 +1053,14 @@ committed stub-coverage record stays the clean one from `ddd9a537`.
 
 ### 2026-10-07 — prompt trim PR 2: one home each for voice and contact resolution
 
-Stacked on PR 1 (`cc42b17a`). Measured through `assembleAgent()` on `620b89f1`.
+Stacked on PR 1 (`cc42b17a`). Measured through `assembleAgent()` on the final commit (after
+the review fixes below).
 
 | | PR 1 | PR 2 | Change |
 |---|---:|---:|---:|
-| `system_prompt` chars | 18,561 | 15,602 | **−2,959 (−16%)** |
-| `system_prompt` est. tokens | ~4,640 | ~3,901 | under #1954's 4k target |
-| always-on (YAML + SKILL.md 6,157), est. tokens | ~6,180 | ~5,440 | ~−740 |
+| `system_prompt` chars | 18,561 | 15,709 | **−2,852 (−15%)** |
+| `system_prompt` est. tokens | ~4,640 | ~3,927 | under #1954's 4k target |
+| always-on (YAML + SKILL.md 6,157), est. tokens | ~6,180 | ~5,467 | ~−713 |
 | CI budget, always-on tokens | 6,400 | 5,600 | lowered |
 
 **Full suites on `ec116f47`** (before the fix below). Model `deepseek/deepseek-v4.1-flash`,
@@ -1089,3 +1090,9 @@ gpt-4o judge, concurrency 4.
 
 Neither side timed out. Both were marked down on the same judgment-heavy behaviors
 (`mark-sensitivity`, `draft-apologetic-email`, `propose-new-times`).
+
+**Review fixes.** People's list of contact changes that go to the contacts specialist had
+narrowed from PR 1's catch-all. It is a catch-all again, with the one exception Storing
+facts uses: a profile field the principal states goes through `contact-update`. The
+calendar-routing unit test now also pins "I compose the reply". Smoke's contact cases ran
+once on the result, the full suites did not run again; see below.

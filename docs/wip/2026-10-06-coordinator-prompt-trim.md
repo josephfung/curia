@@ -18,7 +18,7 @@ log.
 |---|---|---:|---:|
 | Start (`3155f290`) | — | 20,532 | ~6,673 / 7,000 |
 | 1: restatements and stale sections | In review (2026-10-07) | 18,561 | ~6,180 / 6,400 |
-| 2: one home each for voice and contact resolution | In progress (2026-10-07), stacked on PR 1 | 15,602 | ~5,440 / 5,600 |
+| 2: one home each for voice and contact resolution | In review (2026-10-07), stacked on PR 1 | 15,709 | ~5,467 / 5,600 |
 | 3–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
