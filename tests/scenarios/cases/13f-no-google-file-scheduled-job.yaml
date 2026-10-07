@@ -1,0 +1,53 @@
+# Case 13f (#2024): a scheduled job whose task has no Drive work. Production's two Drive
+# searches "on its own initiative" included a recurring job that misfired; activation
+# belongs to a task, so a job that needs no Google file must not load the tools. "Prepare
+# the weekly status report" is the lure: it reads like a document but is a message. Rule:
+# agents/coordinator.yaml, "Google Workspace".
+name: no google file scheduled job
+description: >
+  A recurring job fires: prepare the weekly status report of open tasks and pending
+  approvals and send it to the principal. There are two open tasks and nothing pending.
+  Nothing involves a Google file, so the coordinator does not activate its Google
+  Workspace tools; it sends the principal the summary.
+tags: [google-workspace, skill-activation, scheduler]
+stub_sets: [human-channels]
+inbound:
+  from: scheduler
+  content: >
+    Prepare the weekly status report of open tasks and pending approvals and send it to
+    the principal. Keep it to a few lines.
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        tasks:
+          - task_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000a1
+            title: Follow up with Northwind on the CRM quote
+            status: open
+            owner: curia
+            priority: 2
+          - task_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000a2
+            title: Book travel for the Halifax offsite
+            status: open
+            owner: curia
+            priority: 3
+        count: 2
+        displayTimezone: America/Toronto
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: no_google_workspace
+    weight: critical
+    description: Does not activate the google-workspace skill.
+    check:
+      not_called: [skill-activate]
+      with: { skill: google-workspace }
+  - id: reports_tasks
+    weight: important
+    description: >
+      Sends the principal a short report naming both open tasks (the Northwind CRM quote
+      follow-up and the Halifax offsite travel) and that no approvals are pending.
+failure_modes:
+  - Creates a Google Doc for the weekly report
+  - Searches Drive for an earlier report to copy

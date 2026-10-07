@@ -1,0 +1,88 @@
+# Case 13d (#2024): the principal asks to share a file they name, with no link, with a
+# contact. Nothing in the message is a Google URL, so only the prompt's "any Google file,
+# link or not" tells the coordinator to activate google-workspace. With the tools
+# unloaded, the failure to watch for is "I can't share files". Rule:
+# agents/coordinator.yaml, "Google Workspace".
+name: google file share named
+description: >
+  The principal asks to share their latest pitch deck with Kevin Osei, a known contact,
+  without a link. The coordinator activates its Google Drive tools, finds the latest
+  deck, and shares it with Kevin's email address. It never says it cannot share files.
+tags: [google-workspace, skill-activation]
+timeout_seconds: 300
+# Letting Kevin know by email is reasonable after sharing; sends succeed.
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: kevin
+      display_name: Kevin Osei
+      tier: known
+      kind: person
+      channel: email
+      identifier: kevin.osei@example.test
+inbound:
+  from: principal
+  content: Share my latest pitch deck with Kevin Osei.
+tool_stubs:
+  # Resolving Kevin through the contacts specialist is a fine path too.
+  delegate:
+    - match: {}
+      return:
+        agent: contacts
+        response: Kevin Osei, known contact. Email kevin.osei@example.test.
+  search_drive_files:
+    - match: {}
+      return: &decks |
+        Found 2 files:
+        - Name: "Pitch deck: Series A (v7)" (ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc, Type: application/vnd.google-apps.presentation, Modified: 3 days ago)
+        - Name: "Pitch deck: Seed round (2025)" (ID: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty, Type: application/vnd.google-apps.presentation, Modified: 14 months ago)
+  list_drive_items:
+    - match: {}
+      return: *decks
+  get_drive_file_permissions:
+    - match: {}
+      return: |
+        File: Pitch deck: Series A (v7)
+        ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc
+        Owner: assistant@example.test
+        Permissions:
+          - assistant@example.test: owner
+  manage_drive_access:
+    - match: {}
+      return: 'Permission granted on "Pitch deck: Series A (v7)".'
+  get_drive_shareable_link:
+    - match: {}
+      return: "https://docs.google.com/presentation/d/1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc/edit?usp=sharing"
+expected_behaviors:
+  - id: activates_google_workspace
+    weight: critical
+    description: Activates the google-workspace skill to get its Drive tools.
+    check:
+      called: skill-activate
+      with: { skill: google-workspace }
+  - id: shares_latest_deck_with_kevin
+    weight: critical
+    description: Grants Kevin's email access to the Series A (v7) deck with manage_drive_access.
+    check:
+      any_of:
+        - called: manage_drive_access
+          with: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+          contains: { share_with: kevin.osei@example.test }
+        - called: manage_drive_access
+          with: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+          contains: { recipients: kevin.osei@example.test }
+  - id: not_the_old_deck
+    weight: important
+    description: Does not share the 2025 seed deck.
+    check:
+      not_called: [manage_drive_access]
+      with: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+  - id: never_says_cannot
+    weight: critical
+    description: >
+      Confirms the latest deck is shared with Kevin. Never says it cannot share files, has
+      no Google Drive access, or asks the principal to share it themselves.
+failure_modes:
+  - '"I don''t have access to your Google Drive"'
+  - Asks for a link to the deck instead of searching for it
+  - Shares the older seed deck

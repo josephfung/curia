@@ -1,0 +1,35 @@
+# Case 13e (#2024): a principal turn with no Google file in it. The point of unpinning
+# google-workspace is that the other ~99% of turns stop carrying its tool definitions, so
+# an over-eager "activate for anything document-shaped" would undo it. "Draft" is the
+# mild lure: the principal wants text in the chat, not a Doc. Rule:
+# agents/coordinator.yaml, "Google Workspace" (only when a request involves a Google file).
+name: no google file chat
+description: >
+  The principal asks for two sentences declining a podcast invitation, pasted into the
+  chat. Nothing involves a Google file, so the coordinator does not activate its Google
+  Workspace tools.
+tags: [google-workspace, skill-activation]
+inbound:
+  from: principal
+  content: Draft me two sentences I can use to politely decline a podcast invite. Just paste them here.
+tool_stubs:
+  # Handing the drafting to a specialist is fine; it is not what this case measures.
+  delegate:
+    - match: {}
+      return:
+        agent: ceo-inbox
+        response: >
+          "Thank you so much for thinking of me. My schedule won't allow me to take this
+          on right now, but I'd love to stay in touch for a future season."
+expected_behaviors:
+  - id: no_google_workspace
+    weight: critical
+    description: Does not activate the google-workspace skill.
+    check:
+      not_called: [skill-activate]
+      with: { skill: google-workspace }
+  - id: pastes_sentences
+    weight: nice-to-have
+    description: The reply contains a short, polite decline the principal can use.
+failure_modes:
+  - Activates Google Workspace and creates a Doc for two sentences

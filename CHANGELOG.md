@@ -15,6 +15,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`tool.json` (public API)** — optional `optional_capabilities`: injected when configured, never a reason to refuse. (#2024)
+- **Test-mode MCP snapshots** — test mode serves google-workspace from a tools/list snapshot with canned results. (#2024)
+- **Scenario cases 13a–13f** — the coordinator activates google-workspace for Google files, and only then. (#2024)
+- **Scenario scheduler inbound** — `from: scheduler` fires a recurring job's task at the coordinator. (#2024)
 - **ADR-046** — agent behavior fixes go on the highest rung that works; the always-on prompt is last. (#1961)
 - **Agent context budget test** — CI fails when the coordinator's always-on prompt or local tool definitions exceed budget. (#1961)
 - **`context.budget` `tool_definitions` tier** — tool definitions are now estimated, charged and recorded in `audit_log`. (#1961)
@@ -65,6 +69,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Coordinator pins** — google-workspace is activated on demand, not pinned; 85–98 KB off most calls. (#2024)
+- **`skill-activate`** — `taskRepo` is optional, so skills activate in the test-mode stack too. (#2024)
 - **Coordinator prompt** — tool how-to moves into tool descriptions and a skill reference; 33 KB → 24 KB. (#1960)
 - **Specialist prompts** — research-analyst, ceo-inbox and contacts drop memory how-to the tool descriptions now carry. (#1960)
 - **Coordinator pins** — `image-generate` and `drive-download-file`, unused for 30 days, are now reached through discovery. (#1960)
