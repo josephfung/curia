@@ -29,7 +29,11 @@
 //     read-only views of the autonomy score and office identity (a real instance would
 //     send under a changed score), and no working-docs repo (ceo-inbox shadow drafts
 //     feed the real instance's learning signal).
-//   - No calendar client, MCP servers, browser, scheduler loop or heartbeat.
+//   - No calendar client, browser, scheduler loop or heartbeat, and no MCP server
+//     process. A configured MCP server with a tools/list snapshot (tests/fixtures/mcp)
+//     is registered from it instead, answering every call with a canned result
+//     (test-mode-mcp.ts, #2024): its tools and projected skill are production's, but
+//     nothing reaches an account.
 //
 // The real vault IS read, the way boot reads it (#911): LLM API keys, the Signal
 // number and the email-account grants come from it, so the prompt's contact-details
@@ -39,7 +43,8 @@
 //
 // Known differences from production (none of them change the system prompt):
 //   - The tools above fail closed instead of running.
-//   - MCP-projected tools (google-workspace) are absent from the tool list.
+//   - MCP tools come from a snapshot and return canned results; a configured server
+//     without a snapshot is absent (listed in `warnings`).
 //   - No Dispatcher: the caller wires its own (the smoke harness does).
 //   - Offline mode without SECRET_ENCRYPTION_KEY: no Signal number, and email
 //     self-addresses come from email_accounts without the vault grant check.
@@ -108,8 +113,12 @@ import {
   registerAgentRoster,
   type AssembledAgent,
 } from './agent-assembly.js';
+import { registerSnapshotMcpServers } from './test-mode-mcp.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
+
+/** tools/list snapshots of the configured MCP servers (#2024). */
+const MCP_SNAPSHOT_DIR = path.join(REPO_ROOT, 'tests', 'fixtures', 'mcp');
 
 /**
  * Secrets a skill may still read from env in test mode. Read-only lookups only:
@@ -226,6 +235,12 @@ export interface TestModeStack {
    * Measured on the unwrapped layer — a stub wrapper may answer some of these.
    */
   disabledTools: Record<string, Array<{ tool: string; missing: string[] }>>;
+  /**
+   * Tools registered from an MCP tools/list snapshot (#2024). Their session answers
+   * with a canned result and reaches no account, so they are safe to run unstubbed
+   * whatever their action_risk says.
+   */
+  snapshotMcpTools: ReadonlySet<string>;
   /**
    * Ways this stack differs from production that change what agents see (no vault
    * key, unresolved pins). Callers print these: the stack's own logger is usually silent.
@@ -615,6 +630,18 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     const skillRegistry = new SkillRegistry();
     await loadToolsFromDirectory(toolDiscovery, toolRegistry, logger, enabled.tool);
     loadSkillsFromDiscovery(skillDiscovery, skillRegistry, logger, enabled.skill);
+    // Boot's order: MCP tools after local ones, projected before synthetic singletons.
+    const snapshotMcp = registerSnapshotMcpServers({
+      configDir: path.join(REPO_ROOT, 'config'),
+      snapshotDir: MCP_SNAPSHOT_DIR,
+      toolRegistry,
+      skillRegistry,
+      skillsDir,
+      logger,
+    });
+    for (const server of snapshotMcp.serversWithoutSnapshot) {
+      warnings.push(`MCP server '${server}' has no tools/list snapshot in tests/fixtures/mcp, so its tools are absent here.`);
+    }
     registerSyntheticSingletonSkills(toolRegistry, skillRegistry, logger);
 
     const enabledAgents = enabled.agent;
@@ -711,8 +738,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     }
 
     // Unresolved pins drop tools and SKILL.md bodies; resolvePinnedSkills only logs
-    // them, and the stack's logger is usually silent. MCP servers are never loaded
-    // here, so an MCP-projected pin (google-workspace) always appears.
+    // them, and the stack's logger is usually silent. A pin on an MCP server without
+    // a snapshot appears here.
     for (const assembled of agents) {
       for (const pin of assembled.pinResolution.unresolvedPins) {
         warnings.push(
@@ -758,6 +785,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       llmProviders: providerRegistry,
       agents,
       disabledTools,
+      snapshotMcpTools: snapshotMcp.tools,
       warnings,
       agent,
       renderSystemPrompt: async (agentName = 'coordinator', renderOpts = {}) => {
