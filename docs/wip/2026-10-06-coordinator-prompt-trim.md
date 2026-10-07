@@ -9,6 +9,55 @@ Sizes and behavior runs are recorded in the [baseline log](2026-10-01-coordinato
 This document is planning only. Each PR below gets its own branch and is A/B'd against
 `origin/main`'s prompt before merge.
 
+## Status
+
+Updated as each PR lands. Measurements and behavior runs for each PR are in the baseline
+log.
+
+| PR | State | YAML `system_prompt` | Always-on (est. tokens) / CI budget |
+|---|---|---:|---:|
+| Start (`3155f290`) | — | 20,532 | ~6,673 / 7,000 |
+| 1: restatements and stale sections | In review (2026-10-07) | 18,573 | ~6,183 / 6,400 |
+| 2–10, final phase | Not started | — | — |
+
+**PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
+don't drop", Addresses and accounts, Low-trust senders, the roster pointer and the
+casual-messages style line. Channel ownership became one clause on the transfer-ownership
+item, and the stale `contact-update` pin comment was fixed. Spec 06 no longer quotes the
+deleted directives. `loader.test.ts` gained four "does not restate" rows instead of the
+`**Channel ownership.**` assertion.
+
+Behavior held:
+- **Scenarios:** every case passed on behavior. The only gate failure was an unstubbed
+  `inspect_doc_structure` call in `google file filing after delegation`, which also
+  happens on main's prompt.
+- **Smoke:** 44 of 46. Both failures passed 4 of 4 rounds on each side in the A/B.
+
+### Lessons so far
+
+These apply to every later PR and to the final phase. They are also posted on #2025 and
+curia-deploy#276.
+
+1. **Rules outlive their causes.** The acting-as rule (April) was written for
+   workspace-mcp's `user_google_email`. Code fixed that in May, and the text stayed for
+   five more months. For each rule, `git log -S` its first line, then check whether a later
+   code change already handles the cause.
+2. **Prompts and pin comments drift from the toolset.** The coordinator named two tools it
+   doesn't pin. A pin comment claimed `contact-update` promotes low-trust senders; the tool
+   has no tier field. Cross-check every tool a prompt names against the agent's resolved
+   pins.
+3. **"Enforced in code" needs reading the enforcement point.** The reply-lock suppresses
+   only the final relay. The NO_REPLY backstop only catches narration that contains the
+   token. Where enforcement is partial, keep one clause rather than the paragraph.
+4. **Specs quote prompt text.** Spec 06 quoted the deleted Data protection lines word for
+   word. Grep `docs/specs/` before deleting.
+5. **Guard deletions with the "does not restate" table** in `loader.test.ts`, not with
+   assertions on the remaining prose. Each row names where the rule now lives.
+6. **A full-suite miss is not a regression until the A/B says so.** All five
+   below-threshold results in PR 1's full runs either recurred on main's prompt or
+   disappeared on rerun. That matches #1958–#2024. Budget a targeted A/B (about 30 minutes,
+   under $2) into every PR rather than reading a single red run.
+
 ## Goal
 
 | Measure | Today (`3155f290`) | Epic target | This plan |
