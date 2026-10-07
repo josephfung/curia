@@ -201,8 +201,8 @@ export interface AgentConfig {
    *  If omitted, no time block is injected. */
   timezone?: string;
   /** Curia's own channel contact details, sourced from deployment env vars (NYLAS_SELF_EMAIL,
-   *  SIGNAL_PHONE_NUMBER). When provided, a "Your Contact Details" block is appended to the
-   *  system prompt so the LLM knows which accounts to use when tools ask for an email address
+   *  SIGNAL_PHONE_NUMBER). When provided, a "Your Contact Details" block is added to the
+   *  system prompt preamble so the LLM knows which accounts to use when tools ask for an email address
    *  or phone number. Injected into all agents — specialists need this too (#387). */
   channelAccounts?: {
     email?: string;
@@ -220,7 +220,7 @@ export interface AgentConfig {
   agentContactId?: string;
   /** The principal's verified channel identities (email, phone, Signal), loaded from
    *  contact_channel_identities at startup. When provided and non-empty, a
-   *  "## Principal Contact Details" block is appended to the system prompt on every task
+   *  "## Who you serve" section (with "### Principal Contact Details") is added to the system prompt on every task
    *  so agents have an authoritative, closed set of addresses for reaching the principal.
    *  Injected into all agents — specialists need this too.
    *  See #786, #1950. */

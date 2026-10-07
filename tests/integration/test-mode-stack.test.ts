@@ -15,7 +15,7 @@ import pg from 'pg';
 import type { OfficeIdentity } from '../../src/identity/types.js';
 import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../src/agents/prompts/date-resolve-guardrail.js';
-import { formatPrincipalContactDetailsBlock } from '../../src/agents/principal-contact-block.js';
+import { formatWhoYouServeBlock } from '../../src/agents/principal-contact-block.js';
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../../src/security/security-context.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
@@ -118,14 +118,15 @@ describeIf('test-mode stack', () => {
       // block at all. So derive the expectation from what the stack loaded at boot,
       // through the same formatter, rather than from whether a principal exists.
       const rc = stack.agent('coordinator').runtimeConfig;
-      const expected = formatPrincipalContactDetailsBlock(
+      const expected = formatWhoYouServeBlock(
         rc.principalIdentities ?? [],
         rc.principalPrimaryEmail?.current ?? null,
       );
       if (expected) {
         expect(rendered).toContain(expected);
       } else {
-        expect(rendered).not.toContain('## Principal Contact Details');
+        expect(rendered).not.toContain('## Who you serve');
+        expect(rendered).not.toContain('Principal Contact Details');
       }
     });
   });

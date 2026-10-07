@@ -10,9 +10,9 @@
 //
 // Two pieces live here:
 //   - buildBaseSystemPrompt(): everything that does not depend on the task — the
-//     identity/security preamble, the YAML body, the specialist roster, the
-//     autonomy band, the date guardrail, the time block, both contact-details
-//     blocks and the turn budget. For an ordinary principal turn this is the whole
+//     preamble (identity, security, own contact details, Who you serve), the YAML
+//     body, the specialist roster, the autonomy band, the date guardrail, the
+//     time block and the turn budget. For an ordinary principal turn this is the whole
 //     system string.
 //   - formatTaskTailBlocks(): the intent anchor and the scheduler fence, which
 //     depend only on the task event. They go last.
@@ -29,7 +29,7 @@ import { DEFAULT_ERROR_BUDGET } from '../errors/types.js';
 import { parseSchedulerRunJobId } from '../scheduler/conversation-id.js';
 import { formatTimeContextBlock } from '../time/time-context.js';
 import {
-  formatPrincipalContactDetailsBlock,
+  formatWhoYouServeBlock,
   OWN_CONTACT_DETAILS_INTRO,
 } from './principal-contact-block.js';
 import { DATE_RESOLVE_GUARDRAIL } from './prompts/date-resolve-guardrail.js';
@@ -69,9 +69,12 @@ export function resolveMaxTurns(errorBudget: AgentConfig['errorBudget']): number
  * Build the task-independent part of the per-turn system string.
  *
  * Order (do not change without updating the tests that pin it):
- *   identity → security → YAML body → ## Available Specialists → autonomy →
- *   date guardrail (coordinator) → time → ## Your Contact Details →
- *   ## Principal Contact Details → turn budget
+ *   identity → security → ## Your Contact Details → ## Who you serve (with
+ *   ### Principal Contact Details) → YAML body → ## Available Specialists →
+ *   autonomy → date guardrail (coordinator) → time → turn budget
+ *
+ * Specialists get no identity or security block, so theirs starts at
+ * ## Your Contact Details.
  *
  * Every block is rebuilt per call, so identity, autonomy and principal-identity
  * changes take effect on the next turn without a restart. By default a failure
@@ -113,6 +116,41 @@ export async function buildBaseSystemPrompt(
   if (sources.securityContextBlock) {
     preambleParts.push(sources.securityContextBlock);
   }
+
+  // Who the agent is and who it serves come next, ahead of the YAML body, so the
+  // body's references to them ("Your Contact Details", "the principal") point up
+  // at facts already stated. They change only when an identity is edited, so they
+  // sit in the prefix shared across tasks rather than after the per-minute clock,
+  // where they were cached only within one task's tool loop (trim plan PR 11).
+  //
+  // Curia's own contact details — a concrete "acting as" identity so the LLM doesn't
+  // guess or fall back to the principal's details when a tool needs an account.
+  // Injected into ALL agents (#387). Rendered when there is ANY identity to show —
+  // gating on channel accounts alone would drop the contact ID for a deployment with
+  // no email/phone (codeant review on #974).
+  const { channelAccounts } = sources;
+  if ((channelAccounts && (channelAccounts.email || channelAccounts.phone)) || sources.agentContactId) {
+    const lines: string[] = ['## Your Contact Details', ...OWN_CONTACT_DETAILS_INTRO, ''];
+    if (channelAccounts?.email) lines.push(`- Email: ${channelAccounts.email}`);
+    if (channelAccounts?.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
+    // The agent's own contact ID — coordinator-only in practice.
+    if (sources.agentContactId) lines.push(`- Contact ID: ${sources.agentContactId}`);
+    preambleParts.push(lines.join('\n'));
+  }
+
+  // The principal and their verified contact details. The list is closed: an address
+  // not rendered here is not the principal's (#1950). Injected into ALL agents. With
+  // no identities the whole section stays omitted — do not render a complete-set
+  // claim over nothing.
+  const { principalIdentities } = sources;
+  if (principalIdentities && principalIdentities.length > 0) {
+    const block = formatWhoYouServeBlock(
+      principalIdentities,
+      sources.principalPrimaryEmail?.current ?? null,
+    );
+    if (block) preambleParts.push(block);
+  }
+
   if (preambleParts.length > 0) {
     prompt = preambleParts.join('\n\n') + '\n\n' + prompt;
   }
@@ -165,33 +203,6 @@ export async function buildBaseSystemPrompt(
       failBlock('time', err);
       logger.error({ err, agentId, timezone }, 'formatTimeContextBlock failed — time context not injected; check TIMEZONE config');
     }
-  }
-
-  // Curia's own contact details — a concrete "acting as" identity so the LLM doesn't
-  // guess or fall back to the principal's details when a tool needs an account.
-  // Injected into ALL agents (#387). Rendered when there is ANY identity to show —
-  // gating on channel accounts alone would drop the contact ID for a deployment with
-  // no email/phone (codeant review on #974).
-  const { channelAccounts } = sources;
-  if ((channelAccounts && (channelAccounts.email || channelAccounts.phone)) || sources.agentContactId) {
-    const lines: string[] = ['## Your Contact Details', ...OWN_CONTACT_DETAILS_INTRO, ''];
-    if (channelAccounts?.email) lines.push(`- Email: ${channelAccounts.email}`);
-    if (channelAccounts?.phone) lines.push(`- Phone: ${channelAccounts.phone}`);
-    // The agent's own contact ID — coordinator-only in practice.
-    if (sources.agentContactId) lines.push(`- Contact ID: ${sources.agentContactId}`);
-    prompt += '\n\n' + lines.join('\n');
-  }
-
-  // The principal's verified contact details. The list is closed: an address not
-  // rendered here is not the principal's (#1950). Injected into ALL agents. Empty
-  // stays omitted — do not render a complete-set claim over nothing.
-  const { principalIdentities } = sources;
-  if (principalIdentities && principalIdentities.length > 0) {
-    const block = formatPrincipalContactDetailsBlock(
-      principalIdentities,
-      sources.principalPrimaryEmail?.current ?? null,
-    );
-    if (block) prompt += '\n\n' + block;
   }
 
   // Turn budget — tells the model the exact number of turns it has so it can plan

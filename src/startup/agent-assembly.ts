@@ -474,7 +474,7 @@ export function assembleAgents(
 /**
  * Read the principal's promptable identities: verified + active only. Shared by
  * the boot-time hot-reload in index.ts and the test-mode stack so the
- * "## Principal Contact Details" block is built from the same filter.
+ * "## Who you serve" section is built from the same filter.
  */
 export async function readPrincipalIdentitySnapshot(
   contactService: Pick<ContactService, 'getContactWithIdentities'>,

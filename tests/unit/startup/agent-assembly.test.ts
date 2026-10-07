@@ -423,16 +423,18 @@ describe('rendered coordinator system string', () => {
     expect(sent.content).toBe(rendered);
 
     // And it carries every block production sends, in order.
+    // Both contact blocks sit in the preamble, ahead of the YAML body (trim plan PR 11).
     const order = [
       '## Identity',
       '## Security',
+      '## Your Contact Details',
+      '## Who you serve',
+      '### Principal Contact Details',
       'You are the coordinator.',
       'NOTES SKILL BODY',
       '## Available Specialists',
       'Spot', // autonomy band label
       DATE_RESOLVE_GUARDRAIL.split('\n')[0]!,
-      '## Your Contact Details',
-      '## Principal Contact Details',
     ];
     let cursor = -1;
     for (const marker of order) {
