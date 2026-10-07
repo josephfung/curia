@@ -924,7 +924,9 @@ export class ExecutionLayer {
    * any gate runs. Every entry in a reference field (`to`, `cc`, `recipient`) must
    * be a contact UUID or "principal"; an address or a template token there is
    * refused with the resolver's message, no lookup needed. References resolve
-   * through the same resolver the skill uses.
+   * through the same resolver the skill uses, including a `#label` hint on the
+   * entry (`principal#personal`, #2047), so the gate sees the address the skill
+   * will send to.
    *
    * Returns reference → address. Without a contact service the map is empty: the
    * skill still resolves (and fails closed) itself, and Gate C refuses any

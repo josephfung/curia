@@ -77,6 +77,7 @@ export class SlackSendHandler implements ToolHandler {
     // Resolve the reference (#2033). No contact, or no verified Slack id, means no send.
     let destination: string;
     let contactId: string | undefined;
+    let identityName: string | undefined;
     if (recipient) {
       const resolved = await ctx.outboundGateway.resolveRecipientReference('slack', recipient, {
         field: 'recipient',
@@ -95,6 +96,7 @@ export class SlackSendHandler implements ToolHandler {
       // Echo the contact ID only for a UUID the agent passed. For the alias it is the
       // principal's, which spec 09 keeps out of the model's context.
       contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
+      identityName = resolved.identityName;
     } else {
       destination = recipientUserId as string;
     }
@@ -141,6 +143,7 @@ export class SlackSendHandler implements ToolHandler {
           // The resolved user id. Reply-lock reads this field.
           delivered_to: destination,
           ...(contactId ? { contact_id: contactId } : {}),
+          ...(identityName ? { recipient_identity: identityName } : {}),
           channel: 'slack',
         },
       };

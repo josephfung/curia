@@ -13,7 +13,10 @@ import type { SmsClient } from '../../../src/channels/sms/sms-client.js';
 import type { SlackClient } from '../../../src/channels/slack/slack-client.js';
 import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import type { EventBus } from '../../../src/bus/bus.js';
-import type { ToolContext, ToolHandler } from '../../../src/skills/types.js';
+import type { ToolContext, ToolHandler, ToolManifest } from '../../../src/skills/types.js';
+import { ExecutionLayer } from '../../../src/skills/execution.js';
+import { ToolRegistry } from '../../../src/skills/registry.js';
+import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
 import { EmailSendHandler } from '../../../skills/email/tools/email-send/handler.js';
 import { SignalSendHandler } from '../../../skills/signal-send/handler.js';
 import { SmsSendHandler } from '../../../skills/sms-send/handler.js';
@@ -140,7 +143,7 @@ describe('send to the principal by reference (#2033 regression)', () => {
     expect(result.success).toBe(true);
     expect(delivered(h)).toEqual(['pat@home.example']);
     if (result.success) {
-      expect(result.data).toMatchObject({ to: 'pat@home.example' });
+      expect(result.data).toMatchObject({ to: 'pat@home.example', to_identity: 'primary' });
       // The principal's contact ID stays out of the model's context (spec 09).
       expect(result.data).not.toHaveProperty('contact_id');
     }
@@ -324,5 +327,157 @@ describe('approvals show the resolved recipient (#2033)', () => {
       .find((event) => event.type === 'outbound.notification' && event.payload.notificationType === 'approval_requested');
     expect(approval?.payload.body).toContain('sam@home.example');
     expect(approval?.payload.body).not.toContain(h.spouseId);
+  });
+});
+
+describe('label hint (#2047)', () => {
+  const WORK = {
+    email: 'vendor.work@hint.test',
+    signal: '+15195551111',
+    sms: '+15195551111',
+    slack: 'UWORK0001',
+  };
+  const PERSONAL = {
+    email: 'vendor.home@hint.test',
+    signal: '+15195552222',
+    sms: '+15195553333',
+    slack: 'UHOME0001',
+  };
+
+  async function labelledPerson(h: Harness) {
+    const person = await h.contacts.createContact({ displayName: 'Pat Vendor', source: 'ceo_stated', tier: 'known' });
+    const link = (channel: string, channelIdentifier: string, label: string) =>
+      h.contacts.linkIdentity({ contactId: person.id, channel, channelIdentifier, label, source: 'ceo_stated' });
+    await link('email', WORK.email, 'work');
+    await link('email', PERSONAL.email, 'personal');
+    await link('signal', WORK.signal, 'work');
+    await link('signal', PERSONAL.signal, 'personal');
+    await link('sms', WORK.sms, 'work');
+    await link('sms', PERSONAL.sms, 'personal');
+    await link('slack', WORK.slack, 'work');
+    await link('slack', PERSONAL.slack, 'personal');
+    await h.contacts.updateContactFields(person.id, { primaryEmail: WORK.email, primaryPhone: WORK.signal });
+    return person;
+  }
+
+  it.each(Object.keys(SKILLS) as Channel[])('%s: a label hint selects that identity and the result names it', async (channel) => {
+    const h = await harness();
+    const person = await labelledPerson(h);
+    const skill = SKILLS[channel];
+    const result = await skill.handler.execute(ctx(h, skill.input(`${person.id}#personal`)));
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual([PERSONAL[channel]]);
+    if (result.success) {
+      const identityKey = channel === 'email' ? 'to_identity' : 'recipient_identity';
+      expect(result.data).toMatchObject({ [identityKey]: 'personal' });
+    }
+  });
+
+  it('a hint on a single unlabelled address sends to it', async () => {
+    const h = await harness();
+    const sam = await h.contacts.createContact({ displayName: 'Sam Only', source: 'ceo_stated', tier: 'known' });
+    await h.contacts.linkIdentity({
+      contactId: sam.id, channel: 'email', channelIdentifier: 'sam.only@hint.test', source: 'ceo_stated',
+    });
+    const result = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(`${sam.id}#personal`)));
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual(['sam.only@hint.test']);
+    if (result.success) expect(result.data).toMatchObject({ to_identity: 'unlabelled' });
+  });
+
+  it('email cc takes a label hint on each entry', async () => {
+    const h = await harness();
+    const pat = await labelledPerson(h);
+    const other = await h.contacts.createContact({ displayName: 'Other Vendor', source: 'ceo_stated', tier: 'known' });
+    await h.contacts.linkIdentity({
+      contactId: other.id, channel: 'email', channelIdentifier: 'other.work@hint.test', label: 'work', source: 'ceo_stated',
+    });
+    await h.contacts.linkIdentity({
+      contactId: other.id, channel: 'email', channelIdentifier: 'other.home@hint.test', label: 'personal', source: 'ceo_stated',
+    });
+    await h.contacts.updateContactFields(other.id, { primaryEmail: 'other.home@hint.test' });
+
+    const result = await SKILLS.email.handler.execute(ctx(h, {
+      to: h.spouseId,
+      cc: `${pat.id}#personal, ${other.id}#work`,
+      subject: 'Hi',
+      body: 'Hello',
+    }));
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual(['sam@home.example', PERSONAL.email, 'other.work@hint.test']);
+    if (result.success) expect(result.data).toMatchObject({ cc_identities: ['personal', 'work'] });
+  });
+
+  it('the skill, Gate C and the approval display resolve the same hinted identity', async () => {
+    const h = await harness();
+    const pat = await labelledPerson(h);
+    const reference = `${pat.id}#personal`;
+    const input = { to: reference, subject: 'Hi', body: 'Hello' };
+
+    const sent = await SKILLS.email.handler.execute(ctx(h, input));
+    expect(sent.success).toBe(true);
+    expect(delivered(h)).toEqual([PERSONAL.email]);
+    if (sent.success) expect(sent.data).toMatchObject({ to: PERSONAL.email, to_identity: 'personal' });
+
+    const manifest: ToolManifest = {
+      name: 'email-send',
+      description: 'email-send description',
+      version: '1.0.0',
+      sensitivity: 'normal',
+      action_risk: 'medium',
+      inputs: {},
+      outputs: {},
+      permissions: [],
+      secrets: [],
+      timeout: 5000,
+    };
+    const origin = {
+      senderId: PERSONAL.email,
+      taskMetadata: {
+        originator: {
+          contactId: 'contact-abc',
+          systemRole: null,
+          channel: 'email',
+          initiatedAt: new Date().toISOString(),
+          tier: 'known' as const,
+        },
+      },
+    };
+    const classifyAction = vi.fn().mockResolvedValue({
+      decision: 'escalate',
+      actionClass: 'reversible-external',
+      isThirdPartyFacing: true,
+      reason: 'stub',
+    });
+    const gateRegistry = new ToolRegistry();
+    const gateHandler = { execute: vi.fn().mockResolvedValue({ success: true, data: {} }) };
+    gateRegistry.register(manifest, gateHandler);
+    const gate = new ExecutionLayer(gateRegistry, logger, {
+      autonomyService: { getConfig: vi.fn().mockResolvedValue({ score: 100 }) } as never,
+      bus: { publish: vi.fn().mockResolvedValue(undefined), subscribe: vi.fn() } as never,
+      escalationJudge: { classifyAction, isEnabled: () => true } as unknown as EscalationJudge,
+      contactService: h.contacts,
+    });
+    const gated = await gate.invoke('email-send', input, undefined, origin);
+    expect(gated.success).toBe(true);
+    expect(gateHandler.execute).toHaveBeenCalledOnce();
+    const description = (classifyAction.mock.calls[0]![0] as { description: string }).description;
+    expect(description).toContain(`Resolved recipients: ${JSON.stringify([PERSONAL.email])}`);
+    expect(description).not.toContain(WORK.email);
+
+    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'e-1', notificationSent: true });
+    const approvalRegistry = new ToolRegistry();
+    approvalRegistry.register(manifest, { execute: vi.fn().mockResolvedValue({ success: true, data: {} }) });
+    const approval = new ExecutionLayer(approvalRegistry, logger, {
+      autonomyService: { getConfig: vi.fn().mockResolvedValue({ score: 65 }) } as never,
+      bus: { publish: vi.fn().mockResolvedValue(undefined), subscribe: vi.fn() } as never,
+      approvalTrigger: { request } as never,
+      contactService: h.contacts,
+    });
+    const held = await approval.invoke('email-send', input, undefined, { ...origin, taskEventId: 'task-hint-1' });
+    expect(held.success).toBe(false);
+    const shown = (request.mock.calls[0]![0] as { displayInput: { to: string } }).displayInput.to;
+    expect(shown.startsWith(PERSONAL.email)).toBe(true);
+    expect(shown).not.toContain(WORK.email);
   });
 });

@@ -22,17 +22,26 @@ function stripNewlines(value: string): string {
 const LABEL_MAX_CHARS = 40;
 
 /**
- * Render a parenthetical label, or '' when the label must not appear.
+ * The label an agent may see, or null when it must not appear.
+ *
  * An `@` or a run of 7+ digits is an address or phone stuffed into the note.
  * Leaving it in the closed list would teach the model that the address is verified.
+ * Send-by-reference uses this same rule for label hints (#2047): a hidden label
+ * is not a hint target, and a conflict error must not quote it.
  */
-function renderLabel(raw: string | null | undefined): string {
-  if (!raw) return '';
+export function visibleIdentityLabel(raw: string | null | undefined): string | null {
+  if (!raw) return null;
   const cleaned = stripNewlines(raw).trim();
-  if (!cleaned) return '';
-  if (cleaned.includes('@') || /\d{7,}/.test(cleaned)) return '';
-  const capped = cleaned.slice(0, LABEL_MAX_CHARS);
-  const quoted = capped.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  if (!cleaned) return null;
+  if (cleaned.includes('@') || /\d{7,}/.test(cleaned)) return null;
+  return cleaned.slice(0, LABEL_MAX_CHARS);
+}
+
+/** Render a parenthetical label, or '' when the label must not appear. */
+function renderLabel(raw: string | null | undefined): string {
+  const visible = visibleIdentityLabel(raw);
+  if (!visible) return '';
+  const quoted = visible.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return ` (label: "${quoted}")`;
 }
 
@@ -77,7 +86,7 @@ export function formatPrincipalContactDetailsBlock(
     'Do not infer, invent, or substitute an address.',
     // The send skills resolve the alias server-side (#2033), so a send to the
     // principal never needs an address typed from this list.
-    'To send to the principal with email-send, signal-send, sms-send or slack-send, pass "principal" as the recipient instead of an address.',
+    'To send to the principal with email-send, signal-send, sms-send or slack-send, pass "principal" as the recipient instead of an address. To pick a labelled address, add its label as a hint, as in principal#personal.',
     'Only the identifier after the channel name is an address. A parenthetical label note is not an address and must not be used as one.',
   ];
   if (markedPrimary) {

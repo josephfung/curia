@@ -23,12 +23,23 @@ describe('parseRecipientReference', () => {
     expect(parseRecipientReference(` ${id} `)).toEqual({ kind: 'contact', contactId: id });
   });
 
+  it('reads a label hint after #, and a blank hint is no hint', () => {
+    const id = '4fdfd02a-1466-46ca-b37b-13bb564fe3f0';
+    expect(parseRecipientReference('  Principal # Personal ')).toEqual({ kind: 'principal', label: 'Personal' });
+    expect(parseRecipientReference(`${id}#work email`)).toEqual({ kind: 'contact', contactId: id, label: 'work email' });
+    expect(parseRecipientReference('principal#')).toEqual({ kind: 'principal' });
+    expect(parseRecipientReference('principal#   ')).toEqual({ kind: 'principal' });
+  });
+
   it('is null for addresses and other values', () => {
     expect(parseRecipientReference('joseph@example.com')).toBeNull();
     expect(parseRecipientReference('+14155552671')).toBeNull();
     expect(parseRecipientReference('U012ABCDEF')).toBeNull();
     expect(parseRecipientReference('the principal')).toBeNull();
     expect(parseRecipientReference('')).toBeNull();
+    // A `#` does not make an address a reference. The left side has to be one.
+    expect(parseRecipientReference('user#tag@example.com')).toBeNull();
+    expect(parseRecipientReference('+1415555#2671')).toBeNull();
   });
 });
 
@@ -53,7 +64,14 @@ describe('resolveRecipientReference', () => {
 
   it('resolves the principal alias to the primary email', async () => {
     const result = await resolveRecipientReference(PRINCIPAL_RECIPIENT_ALIAS, 'email', FIELDS, deps());
-    expect(result).toEqual({ ok: true, kind: 'principal', contactId: principalId, identifier: 'pat@home.example', displayName: 'Pat Principal' });
+    expect(result).toEqual({
+      ok: true,
+      kind: 'principal',
+      contactId: principalId,
+      identifier: 'pat@home.example',
+      displayName: 'Pat Principal',
+      identityName: 'primary',
+    });
   });
 
   it('resolves the principal alias on another channel', async () => {
@@ -84,7 +102,14 @@ describe('resolveRecipientReference', () => {
     const alex = await contacts.createContact({ displayName: 'Alex Vendor', source: 'ceo_stated', tier: 'known' });
     await contacts.linkIdentity({ contactId: alex.id, channel: 'email', channelIdentifier: 'alex@vendor.example', source: 'email_participant' });
     const result = await resolveRecipientReference(alex.id, 'email', FIELDS, deps());
-    expect(result).toEqual({ ok: true, kind: 'contact', contactId: alex.id, identifier: 'alex@vendor.example', displayName: 'Alex Vendor' });
+    expect(result).toEqual({
+      ok: true,
+      kind: 'contact',
+      contactId: alex.id,
+      identifier: 'alex@vendor.example',
+      displayName: 'Alex Vendor',
+      identityName: 'unlabelled',
+    });
   });
 
   it('a mistyped UUID finds no contact and fails closed', async () => {
@@ -162,6 +187,204 @@ describe('resolveRecipientReference', () => {
     });
     expect(result).toMatchObject({ ok: false, cause: boom });
     if (!result.ok) expect(result.error).toMatch(/nothing was sent/i);
+  });
+});
+
+describe('label hint (#2047)', () => {
+  let contacts: ContactService;
+
+  beforeEach(() => {
+    contacts = ContactService.createInMemory();
+  });
+
+  function deps(principalContactId?: string) {
+    return { contactService: contacts, principalContactId };
+  }
+
+  async function addContact(
+    rows: Array<{ address: string; label?: string; channel?: string }>,
+    options?: { primaryEmail?: string; primaryPhone?: string; name?: string },
+  ) {
+    const contact = await contacts.createContact({
+      displayName: options?.name ?? 'Pat Vendor',
+      source: 'ceo_stated',
+      tier: 'known',
+    });
+    for (const row of rows) {
+      await contacts.linkIdentity({
+        contactId: contact.id,
+        channel: row.channel ?? 'email',
+        channelIdentifier: row.address,
+        ...(row.label ? { label: row.label } : {}),
+        source: 'ceo_stated',
+      });
+    }
+    if (options?.primaryEmail || options?.primaryPhone) {
+      await contacts.updateContactFields(contact.id, {
+        ...(options.primaryEmail ? { primaryEmail: options.primaryEmail } : {}),
+        ...(options.primaryPhone ? { primaryPhone: options.primaryPhone } : {}),
+      });
+    }
+    return contact;
+  }
+
+  /** The first quoted label in the candidate list — what a retry should pass. */
+  function listedLabel(error: string): string | undefined {
+    const candidates = error.split('Candidates:')[1] ?? '';
+    return candidates.match(/"((?:\\.|[^"\\])*)"/)?.[1];
+  }
+
+  it('with no hint, still uses the primary, otherwise the oldest', async () => {
+    const pat = await addContact(
+      [{ address: 'pat.work@hint.test', label: 'work' }, { address: 'pat.home@hint.test', label: 'personal' }],
+      { primaryEmail: 'pat.home@hint.test' },
+    );
+    const hinted = await resolveRecipientReference(pat.id, 'email', FIELDS, deps());
+    expect(hinted).toMatchObject({ ok: true, identifier: 'pat.home@hint.test', identityName: 'personal' });
+
+    const unlabelled = await addContact([
+      { address: 'old@hint.test' },
+      { address: 'new@hint.test' },
+    ]);
+    const oldest = await resolveRecipientReference(unlabelled.id, 'email', FIELDS, deps());
+    expect(oldest).toMatchObject({ ok: true, identifier: 'old@hint.test', identityName: 'unlabelled' });
+  });
+
+  it('sends to the one identity the hint matches, and names that label', async () => {
+    const pat = await addContact(
+      [
+        { address: 'pat.work@hint.test', label: 'work' },
+        { address: 'pat.home@hint.test', label: 'personal' },
+      ],
+      { primaryEmail: 'pat.work@hint.test' },
+    );
+    const result = await resolveRecipientReference(`${pat.id}# Personal `, 'email', FIELDS, deps());
+    expect(result).toMatchObject({ ok: true, identifier: 'pat.home@hint.test', identityName: 'personal' });
+  });
+
+  it('matches a token of the label, so work selects work email and not homework', async () => {
+    const pat = await addContact(
+      [{ address: 'pat.work@hint.test', label: 'work email' }, { address: 'pat.home@hint.test', label: 'homework' }],
+      { primaryEmail: 'pat.home@hint.test' },
+    );
+    const result = await resolveRecipientReference(`${pat.id}#work`, 'email', FIELDS, deps());
+    expect(result).toMatchObject({ ok: true, identifier: 'pat.work@hint.test', identityName: 'work email' });
+  });
+
+  it('prefers one exact match over a token match', async () => {
+    const pat = await addContact(
+      [{ address: 'pat.email@hint.test', label: 'work email' }, { address: 'pat.work@hint.test', label: 'work' }],
+      { primaryEmail: 'pat.email@hint.test' },
+    );
+    const result = await resolveRecipientReference(`${pat.id}#WORK`, 'email', FIELDS, deps());
+    expect(result).toMatchObject({ ok: true, identifier: 'pat.work@hint.test', identityName: 'work' });
+  });
+
+  it('sends to the default when a hint is given and no address is labelled', async () => {
+    const pat = await addContact(
+      [{ address: 'only@hint.test' }],
+      { primaryEmail: 'only@hint.test' },
+    );
+    const result = await resolveRecipientReference(`${pat.id}#personal`, 'email', FIELDS, deps());
+    expect(result).toMatchObject({ ok: true, identifier: 'only@hint.test', identityName: 'primary' });
+  });
+
+  it('treats an address stuffed into a label as unlabelled, so a single such address still sends', async () => {
+    const pat = await addContact(
+      [{ address: 'only@hint.test', label: 'alt: hidden@secret.test' }],
+      { primaryEmail: 'only@hint.test' },
+    );
+    const result = await resolveRecipientReference(`${pat.id}#hidden@secret.test`, 'email', FIELDS, deps());
+    expect(result).toMatchObject({ ok: true, identifier: 'only@hint.test', identityName: 'primary' });
+  });
+
+  it('conflicts when labelled addresses exist and the hint matches none, including an unlabelled one', async () => {
+    const pat = await addContact(
+      [
+        { address: 'pat.home@hint.test', label: 'personal' },
+        { address: 'pat.work@hint.test', label: 'work' },
+        { address: 'pat.other@hint.test' },
+      ],
+      { primaryEmail: 'pat.work@hint.test', name: 'named@address.test' },
+    );
+    const result = await resolveRecipientReference(`${pat.id}#office`, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/does not identify exactly one/);
+      expect(result.error).toMatch(/"personal"/);
+      expect(result.error).toMatch(/"work" \[primary\]/);
+      expect(result.error).toMatch(/unlabelled/);
+      expect(result.error).toMatch(/omit the label to use the primary/);
+      expect(result.error).toContain(pat.id);
+      for (const secret of ['pat.home@hint.test', 'pat.work@hint.test', 'pat.other@hint.test', 'named@address.test']) {
+        expect(result.error).not.toContain(secret);
+      }
+    }
+  });
+
+  it('conflicts when more than one address matches, and does not echo an address-shaped hint', async () => {
+    const pat = await addContact(
+      [
+        { address: 'pat.email@hint.test', label: 'work email' },
+        { address: 'pat.phone@hint.test', label: 'work phone' },
+        { address: 'pat.hidden@hint.test', label: 'also hidden@secret.test' },
+      ],
+      { primaryEmail: 'pat.email@hint.test' },
+    );
+    const many = await resolveRecipientReference(`${pat.id}#work`, 'email', FIELDS, deps());
+    expect(many.ok).toBe(false);
+    if (!many.ok) {
+      expect(many.error).toMatch(/"work email" \[primary\]/);
+      expect(many.error).toMatch(/"work phone"/);
+      expect(many.error).toMatch(/unlabelled/);
+      expect(many.error).not.toContain('hidden@secret.test');
+      expect(many.error).not.toContain('pat.email@hint.test');
+    }
+
+    const hintedAddress = await resolveRecipientReference(`${pat.id}#pat.email@hint.test`, 'email', FIELDS, deps());
+    expect(hintedAddress.ok).toBe(false);
+    if (!hintedAddress.ok) {
+      expect(hintedAddress.error).toMatch(/the label hint does not identify exactly one/);
+      expect(hintedAddress.error).not.toContain('pat.email@hint.test');
+      expect(hintedAddress.error).not.toContain('hidden@secret.test');
+    }
+  });
+
+  it('a retry with a label listed in the conflict error succeeds', async () => {
+    const pat = await addContact(
+      [
+        { address: 'pat.home@hint.test', label: 'personal' },
+        { address: 'pat.work@hint.test', label: 'work email' },
+      ],
+      { primaryEmail: 'pat.work@hint.test' },
+    );
+    const failed = await resolveRecipientReference(`${pat.id}#office`, 'email', FIELDS, deps());
+    expect(failed.ok).toBe(false);
+    if (failed.ok) return;
+    const label = listedLabel(failed.error);
+    expect(label).toBe('personal');
+    const retry = await resolveRecipientReference(`${pat.id}#${label}`, 'email', FIELDS, deps());
+    expect(retry).toMatchObject({ ok: true, identifier: 'pat.home@hint.test', identityName: 'personal' });
+  });
+
+  it('a principal conflict names labels and not the contact id or any address', async () => {
+    const principal = await addContact(
+      [
+        { address: 'pat.work@hint.test', label: 'work' },
+        { address: 'pat.home@hint.test', label: 'personal' },
+      ],
+      { primaryEmail: 'pat.work@hint.test', name: 'Pat Principal' },
+    );
+    const result = await resolveRecipientReference('principal#office', 'email', FIELDS, deps(principal.id));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/The principal/);
+      expect(result.error).toMatch(/principal#work/);
+      expect(result.error).toMatch(/omit the label to use the primary/);
+      expect(result.error).not.toContain(principal.id);
+      expect(result.error).not.toContain('pat.work@hint.test');
+      expect(result.error).not.toContain('pat.home@hint.test');
+    }
   });
 });
 
