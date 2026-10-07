@@ -477,30 +477,9 @@ Then:
       about 5%; it cannot prove zero.
     - Record the numbers in the baseline log and on #2033.
 - **Capture reasoning in the archive, for future prod incidents.** A small code change,
-  independent of PR 11. The probe doesn't depend on it.
-  - Today the reasoning behind a prod call is lost. The reasoning behind #2033's invented
-    address (3,909 output tokens) can't be recovered, and OpenRouter keeps no content on a
-    paid account.
-  - Check OpenRouter's docs first. For reasoning models, the response may already carry a
-    `reasoning` field, with `include_reasoning` only a legacy flag. If so, the loss is in
-    Curia's parsing, not the request, and the request side is `reasoning: {…}`, not
-    `include_reasoning`.
-  - The parsing drops reasoning in three places, and all of them need changing:
-    - the streaming loop reads only `delta.content` and `delta.tool_calls`;
-    - `chat()` maps only `message.content` and `message.tool_calls` (both in
-      `src/agents/llm/openrouter.ts`);
-    - the five call sites that build the archive response by hand: `runtime.ts`,
-      `telemetry-provider.ts`, `outbound-judge.ts`, `escalation-judge.ts` and
-      `skills/infra-llm.ts`.
-  - Archived reasoning is redacted like everything else (`src/audit/llm-call-archive.ts`).
-    It explains the decision, but the addresses in it read as `[EMAIL]`.
-  - Strip `\u0000` before the insert. Postgres `jsonb` rejects it. The archive insert shares
-    a transaction with the `audit_log` row, so one bad reasoning string would roll back the
-    audit row and its cost tracking.
-  - Test that reasoning is stored whenever usage reports reasoning tokens. Some providers
-    return empty or encrypted reasoning, and that should be visible rather than silent.
-  - Reasoning tokens are already billed. The cost is archive size, so check the archive's
-    retention before turning it on for every call.
+  independent of PR 11. The probe doesn't depend on it. Tracked in #2042: OpenRouter
+  already returns reasoning, and Curia's parsing and the five archive call sites drop it.
+  Archived reasoning is redacted, so its addresses read as `[EMAIL]`.
 - **Risk:** medium. The order changes for every agent. Content changes in the principal
   block's wording and the new name sentence. Specialists are covered only by smoke.
 
