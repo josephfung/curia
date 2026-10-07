@@ -118,6 +118,7 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 | `crm_import` | Pulled from the CEO's CRM during an action | Yes |
 | `calendar_attendee` | Extracted from a calendar event | Yes |
 | `self_claimed` | The sender identified themselves ("Hi, it's Jenna") | No |
+| `outbound_recipient` | First-time recipient of an agent send, recorded by the outbound gateway after delivery. An agent typed it (ADR-047) | No |
 
 CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
 
@@ -325,6 +326,14 @@ The `${principal_contact_id}` placeholder (the UUID handle, item 1 above) is del
 2. **Consistency.** The same opt-in pattern is established for `${agent_contact_id}`. Two handles with two different injection rules would be confusing.
 
 This is distinct from the `## Principal Contact Details` block (item 2 above), which **is** injected universally. The split is deliberate: the *reach-the-principal* channel identities are injected everywhere because hallucinated addresses are a correctness-and-safety problem the `Reaching the principal` convention alone did not prevent (#786), whereas the *contact-ID handle* that unlocks calendar lookups and arbitrary attribute reads stays opt-in to keep each agent's capability surface minimal.
+
+### Sending to the principal and other contacts (#2033)
+
+Send skills (`email-send`, `signal-send`, `sms-send`, `slack-send`) take a contact reference, not an address: a contact UUID, or the reserved alias `principal`. The address comes from that contact's verified, active identities on the skill's channel (the primary when it is one of them, otherwise the oldest). A reference that matches no contact, or a contact with no verified identity on the channel, fails closed. See [ADR-047](../adr/047-send-skills-address-recipients-by-reference.md).
+
+The alias stays within the split above. It resolves only to the verified identities the `## Principal Contact Details` block already shows every agent, and the block tells agents to pass `principal` instead of typing an address. The contact-ID handle stays opt-in. For anyone else, the handle is the contact UUID from `<resolved_entities>` or the contacts specialist.
+
+Someone with no contact record is reached through a separate raw-address field (`to_address`, `cc_addresses`, `recipient_number`, `recipient_user_id`). The gateway records them afterwards as a `known` contact with an unverified `outbound_recipient` identity. #2040 decides that tier, and #2041 whether the raw fields stay.
 
 ### Operating on the principal's calendar (#1217)
 

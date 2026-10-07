@@ -1954,7 +1954,7 @@ export class OutboundGateway {
         // Tier stays 'known' for now so a reply is not held: at 'unknown', Gate C
         // escalates every external send the reply leads to, a relay to the principal
         // included. Lowering it is a separate decision (ADR-047).
-        // TODO(#2033 follow-up): decide the tier for agent-created outbound contacts.
+        // TODO(#2040): decide the tier for agent-created outbound contacts.
         created = await this.contactService.createContact({
           displayName: recipientId,
           fallbackDisplayName: recipientId,

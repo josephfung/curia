@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **ADR-047** — send skills address recipients by contact reference; a near-miss principal check is rejected. (#2033)
 - **`tool.json` (public API)** — optional `optional_capabilities`: injected when configured, never a reason to refuse. (#2024)
 - **Test-mode MCP snapshots** — test mode serves google-workspace from a tools/list snapshot with canned results. (#2024)
 - **Scenario cases 13a–13f** — the coordinator activates google-workspace for Google files, and only then. (#2024)
@@ -69,6 +70,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Send skills (public API, breaking)** — `to`, `cc` and `recipient` take a contact ID or `principal`; raw addresses get separate fields. (#2033)
+- **Principal Contact Details** — tells agents to pass `principal` to send skills instead of an address. (#2033)
+- **Gate C** — resolves recipient references before the principal carve-out and reply-to-sender checks. (#2033)
 - **Coordinator prompt** — one section each for voice and contact resolution; calendar text trimmed; 18.6k → 15.7k chars. (#1954)
 - **Coordinator prompt** — drops code-enforced restatements and sections naming tools it doesn't pin; 20.5k → 18.6k chars. (#1954)
 - **Approval expiry** — runs as an hourly system interval, not a coordinator LLM turn. (#2013)
@@ -150,6 +154,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Outbound block errors** — name recipients that match no contact, so agents stop rewriting content to wrong addresses. (#2033)
+- **Outbound contact creation** — first-time recipients get unverified `outbound_recipient` provenance, not principal-stated `ceo_stated`. (#2033)
 - **LLM providers** — forward caller `temperature` (judges' `0` applies); `llm.call` records it. (#2038)
 - **Scenario case 13a** — stubs every lookup the coordinator reaches for, so the gate measures the model. (#1954)
 - **OpenRouter usage** — reports cache-read and cache-write tokens; `inputTokens` now counts only uncached input. (#1962)
@@ -282,6 +288,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Send by reference** — a mistyped recipient reference fails closed instead of delivering to whoever owns the address. (#2033)
 - **Dependency floors** — `fast-uri` and `ip-address` raised past ineffective pins, clearing six advisories. (#1933)
 - **Override floor audit** — seven more pins raised off versions that were still vulnerable. (#1933)
 - **Override floors** — `smol-toml`, `js-yaml`, `brace-expansion` raised off versions carrying upstream-only advisories. (#1934)
