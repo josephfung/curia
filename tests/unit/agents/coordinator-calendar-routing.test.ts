@@ -187,7 +187,6 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       'drive-download-file',
       'signal-send',
       'activity-log',
-      'approval-expiry-sweep',
       'secret-capture-request',
       'list-user-secrets',
       'create_doc',

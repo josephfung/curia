@@ -257,7 +257,7 @@ export class ActionLogRepo {
   /**
    * Return all pending_approval rows that have passed their expiry time.
    * These are the inverse of findAllPending() — rows where expires_at <= now().
-   * Used by the approval-expiry-sweep skill to transition stale requests.
+   * Used by ApprovalExpirySweep (src/autonomy/approval-expiry-sweep.ts) to transition stale requests.
    */
   async findExpired(): Promise<ActionLogRow[]> {
     const result = await this.pool.query(

@@ -95,7 +95,6 @@ function resolveAgent(agentFile: string): string[] {
     'drive-download-file',
     'signal-send',
     'activity-log',
-    'approval-expiry-sweep',
     'secret-capture-request',
     'list-user-secrets',
     'create_doc',

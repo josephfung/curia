@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.24.0"
+version: "0.24.1"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -376,8 +376,8 @@ pinned_skills:
   # slack-send are how the principal is reached on a deployment without Signal.
   # contact-update promotes a confirmed low-trust sender. context-bridge-clear
   # handles "clear out those debriefs". All four are rare by nature, and a
-  # missing one would be noticed only when it was needed. approval-expiry-sweep
-  # is called hourly, but only by the cron job below.
+  # missing one would be noticed only when it was needed. Approval expiry is
+  # a system interval (#2013), not a coordinator tool.
   - bullpen
   - delegate
   - signal-send
@@ -389,20 +389,9 @@ pinned_skills:
   - file-parse
   - tool-registry
   - activity-log
-  - approval-expiry-sweep
   - secret-capture-request
   - list-user-secrets
 allow_discovery: true
 error_budget:
   max_turns: 40
   max_cost_usd: 1.00
-schedule:
-  - cron: "0 * * * *"
-    task: >
-      Run the approval expiry sweep. Call approval-expiry-sweep exactly once.
-      Then call scheduler-report exactly once, with a one-line summary and
-      context set to the expired and notified counts. This is a silent
-      maintenance run: do NOT post to the bullpen, and do NOT send any
-      additional principal messages beyond what approval-expiry-sweep itself emits.
-      Do not perform any other work on this wake.
-    expectedDurationSeconds: 360

@@ -16,10 +16,9 @@ import type { ToolContext } from '../../src/skills/types.js';
 /**
  * Resolve the principal's verified + ACTIVE email address, or null (a silent skip).
  *
- * Mirrors approval-expiry-sweep's resolvePrincipalEmail: findContactBySystemRole('principal') is
- * the single source of truth for principal identity, and delivery is restricted to a verified +
- * active email (a defunct/bounced address may be reassigned, so we don't route principal notifications
- * to it). Never throws — a contacts-layer error on this notification path is treated as "no email".
+ * findContactBySystemRole('principal') is the single source of truth for principal identity, and
+ * delivery is restricted to a verified + active email (a defunct/bounced address may be reassigned,
+ * so we don't route principal notifications to it). Never throws — a contacts-layer error on this notification path is treated as "no email".
  */
 export async function resolvePrincipalEmail(ctx: ToolContext): Promise<string | null> {
   if (!ctx.contactService) {

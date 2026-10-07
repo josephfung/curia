@@ -1098,7 +1098,7 @@ export class AgentRuntime {
 
     // Ambient Bullpen threads are surfaced so an agent is aware of active
     // inter-agent discussions — but NOT inside autonomous scheduler runs (#1609).
-    // A scheduled job (e.g. the coordinator's hourly approval-expiry-sweep) runs
+    // A scheduled job (#1609 was the coordinator's former hourly approval-expiry cron) runs
     // unattended with human-channel send tools pinned; injecting an unrelated
     // unread @mention there invites the model to "reply" to it out-of-band and
     // mis-route internal agent chatter to a human channel — in prod this landed a

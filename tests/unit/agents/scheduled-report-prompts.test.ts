@@ -50,21 +50,11 @@ describe('scheduled-task prompts name scheduler-report (#1831)', () => {
     expect(expectedDurationSeconds).toBe(120);
   });
 
-  it('coordinator approval-expiry: names tool, context counts, negative list, duration', () => {
+  it('coordinator has no approval-expiry cron or pin — it is a system interval (#2013)', () => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
-    // Full scheduler bundle already includes scheduler-report
-    expect(config.pinned_skills).toContain('scheduler');
-    expect(config.schedule).toHaveLength(1);
-
-    const { task, expectedDurationSeconds } = scheduleEntryByCron(config, '0 * * * *');
-    expect(task).toMatch(/approval-expiry-sweep/);
-    expect(task).toMatch(/scheduler-report/);
-    expect(task).toMatch(/exactly once/);
-    expect(task).toMatch(/context set to/);
-    expect(task).toMatch(/expired and notified/);
-    expect(task).toMatch(/do NOT post to the bullpen/);
-    expect(task).toMatch(/silent maintenance run/);
-    expect(expectedDurationSeconds).toBe(360);
+    // Removing the entry is what lets SchedulerService cancel the old declarative row on boot.
+    expect(config.schedule ?? []).toHaveLength(0);
+    expect(config.pinned_skills).not.toContain('approval-expiry-sweep');
   });
 
   it('meeting-debrief detection: names tool, context counts, negative list, duration, pin', () => {
