@@ -95,6 +95,25 @@ describe('outbound identity gate (#1818)', () => {
     expect(nylasClient.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('names a recipient that matches no contact, since its reason says only "an external recipient" (#2033)', async () => {
+    const entities = ConversationEntityState.createInMemory({ get: () => undefined }, ['Joseph Fung']);
+    entities.turnIdentities.begin(TASK);
+    // The default mock resolves no contact for any address.
+    const { gw } = gateway(entities);
+
+    const result = await gw.send({
+      channel: 'email',
+      to: 'joseph@joseph.example',
+      subject: 'Registration',
+      body: 'He and Xiaopu (last name to be confirmed) would like to attend.',
+    }, { taskEventId: TASK, conversationId: 'conv-1' });
+
+    expect(result.success).toBe(false);
+    expect(result.blockedRules).toEqual(['unresolved-identity']);
+    expect(result.blockedReason).toContain('joseph@joseph.example matches no known contact');
+    expect(result.unmatchedRecipients).toEqual(['joseph@joseph.example']);
+  });
+
   it('allows the send once the full name is resolved in this turn', async () => {
     const entities = ConversationEntityState.createInMemory({ get: () => card() }, ['Joseph Fung']);
     entities.turnIdentities.begin(TASK);

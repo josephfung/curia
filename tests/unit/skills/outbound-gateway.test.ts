@@ -15,6 +15,15 @@ vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
   realpath: vi.fn(),
 }));
+/**
+ * A block reason without the recipient note (#2033). These mocks resolve no
+ * contact, so every filter block also names its recipient; tests that pin the
+ * filter's own reason compare the part before the note.
+ */
+function reasonBeforeRecipientNote(reason: string | undefined): string | undefined {
+  return reason?.split('\n\nRecipient check:')[0];
+}
+
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockRealpath = realpath as ReturnType<typeof vi.fn>;
 
@@ -501,7 +510,7 @@ describe('OutboundGateway', () => {
       // The blocked result now carries the principal-safe reason summary and the
       // rule name(s) so the agent's tool loop can self-correct and retry (#1051).
       // For a Stage-1 deterministic rule, the summary is the rule name only.
-      expect(result.blockedReason).toBe('secret-pattern');
+      expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('secret-pattern');
       expect(result.blockedRules).toEqual(['secret-pattern']);
     });
 
@@ -561,7 +570,7 @@ describe('OutboundGateway', () => {
       // The matched secret must never reach the LLM-facing result...
       expect(result.blockedReason).not.toContain(secretFragment);
       // ...but the rule name is safe and tells the agent which class of rule fired.
-      expect(result.blockedReason).toBe('secret-pattern');
+      expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('secret-pattern');
       expect(result.blockedRules).toEqual(['secret-pattern']);
     });
 
@@ -1429,7 +1438,7 @@ describe('OutboundGateway contact promotion on successful send', () => {
     // (pipeline is optional and not provided in this test, so no scoring call fires)
   });
 
-  it('creates a confirmed contact when no record exists for the recipient', async () => {
+  it('creates a known-tier outbound_recipient contact when no record exists for the recipient', async () => {
     const nylasClient = {
       sendMessage: vi.fn().mockResolvedValue({ id: 'sent-2' }),
     } as unknown as NylasClient;
@@ -1446,20 +1455,22 @@ describe('OutboundGateway contact promotion on successful send', () => {
 
     expect(result.success).toBe(true);
     expect(contactService.createContact).toHaveBeenCalledOnce();
-    // Outbound recipient = CEO-trusted → tier must be 'known' explicitly,
-    // matching the former status='confirmed'→known mapping. This tier must
-    // not regress to 'unknown' if Task 5 removes the service default (#955).
+    // Tier stays 'known' explicitly so replies are not held, and must not regress
+    // to 'unknown' if the service default changes (#955). Provenance is
+    // outbound_recipient, not ceo_stated: an agent typed the address (#2033).
     expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
       tier: 'known',
-      source: 'ceo_stated',
+      source: 'outbound_recipient',
     }));
     expect(contactService.linkIdentity).toHaveBeenCalledOnce();
     expect(contactService.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
       contactId: 'new-contact-id',
       channel: 'email',
       channelIdentifier: 'donna@example.com',
-      source: 'ceo_stated',
+      source: 'outbound_recipient',
     }));
+    // No explicit verified flag: outbound_recipient is not an auto-verified source.
+    expect((contactService.linkIdentity as ReturnType<typeof vi.fn>).mock.calls[0]![0]).not.toHaveProperty('verified');
     // trustLevel band-aid removed — confidence pipeline handles scoring now
     // (pipeline is optional and not provided in this test, so no scoring call fires)
   });
@@ -1984,7 +1995,7 @@ describe('OutboundGateway.sendEmailDraft', () => {
     // #1158: the draft block path now mirrors send() — it returns the principal-safe
     // reason summary and the rule name(s) so the agent's tool loop can self-correct
     // and retry. For a Stage-1 deterministic rule, the summary is the rule name only.
-    expect(result.blockedReason).toBe('secret-pattern');
+    expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('secret-pattern');
     expect(result.blockedRules).toEqual(['secret-pattern']);
     expect(nylasClient.sendDraft).not.toHaveBeenCalled();
   });
@@ -2024,7 +2035,7 @@ describe('OutboundGateway.sendEmailDraft', () => {
     // The matched secret must never reach the LLM-facing result...
     expect(result.blockedReason).not.toContain(secretFragment);
     // ...but the rule name is safe and tells the agent which class of rule fired.
-    expect(result.blockedReason).toBe('secret-pattern');
+    expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('secret-pattern');
     expect(result.blockedRules).toEqual(['secret-pattern']);
     expect(nylasClient.sendDraft).not.toHaveBeenCalled();
   });
@@ -2278,7 +2289,7 @@ describe('humanApproved option on send()', () => {
 
     expect(result.success).toBe(false);
     // The blocked result now surfaces the rule name as the reason (#1051).
-    expect(result.blockedReason).toBe('test-rule');
+    expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('test-rule');
     expect(result.blockedRules).toEqual(['test-rule']);
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
@@ -2742,7 +2753,7 @@ describe('isSystemNotification option on send()', () => {
 
     expect(result.success).toBe(false);
     // The blocked result now surfaces the rule name as the reason (#1051).
-    expect(result.blockedReason).toBe('test-rule');
+    expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('test-rule');
     expect(result.blockedRules).toEqual(['test-rule']);
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });
@@ -2985,7 +2996,7 @@ describe('CEO recipient bypass on send()', () => {
 
     expect(result.success).toBe(false);
     // The blocked result now surfaces the rule name as the reason (#1051).
-    expect(result.blockedReason).toBe('test-rule');
+    expect(reasonBeforeRecipientNote(result.blockedReason)).toBe('test-rule');
     expect(result.blockedRules).toEqual(['test-rule']);
     expect(mocks.nylasClient.sendMessage).not.toHaveBeenCalled();
   });

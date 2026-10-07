@@ -73,6 +73,12 @@ import type { ExportItem } from '../security/export-controls.js';
 import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
 import { describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
 import type { IdentityGateMode } from '../config.js';
+import {
+  PRINCIPAL_RECIPIENT_ALIAS,
+  resolveRecipientReference,
+  type RecipientReferenceFields,
+  type RecipientResolution,
+} from './_shared/recipient-reference.js';
 
 // ---------------------------------------------------------------------------
 // Public types — request variants owned by channel packages; re-exported here
@@ -128,6 +134,12 @@ export interface OutboundSendResult {
    * as "no rule info available".
    */
   blockedRules?: string[];
+  /**
+   * Recipients of a blocked send that match no contact (#2033). Set only on
+   * filter blocks, and only for identifiers the contact lookup confirmed are
+   * unknown; `blockedReason` already carries the agent-facing note.
+   */
+  unmatchedRecipients?: string[];
   /** True when the autonomy gate blocked this send */
   gated?: boolean;
   /** Short reference for the action_log row (e.g. 'a3f7c12b'). Present when gated is true. */
@@ -333,6 +345,40 @@ function buildBlockReasonSummary(findings: Array<{ rule: string; detail: string 
       return showDetail ? `${f.rule}: ${f.detail}` : f.rule;
     })
     .join('\n');
+}
+
+/**
+ * Agent-facing note for a blocked send whose recipient matches no contact (#2033).
+ *
+ * Block reasons describe the content, so an agent with a mistyped address edits
+ * the message until it passes. On 2026-10-07 that loop delivered principal-facing
+ * content to an invented domain on the fifth try. Naming the recipient points the
+ * agent at the address first.
+ */
+export function formatUnmatchedRecipientNote(unmatched: readonly string[]): string {
+  const subject = unmatched.length === 1
+    ? `${unmatched[0]} matches no known contact.`
+    : `${unmatched.join(', ')} match no known contact.`;
+  return (
+    `Recipient check: ${subject} The block may be about who this is going to, not what it says. ` +
+    `Check the recipient before you rewrite the message. To reach a known person, send by their contact ID, ` +
+    `or "${PRINCIPAL_RECIPIENT_ALIAS}" for the principal, instead of typing an address.`
+  );
+}
+
+/**
+ * The recipient lines of the principal's "outbound message blocked" FYI, marking
+ * any recipient that matches no contact (#2033). The 2026-10-07 FYIs read as
+ * content problems while the address was the problem.
+ */
+function unmatchedRecipientNotificationLines(intended: string, unmatched: readonly string[]): string[] {
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const intendedUnmatched = unmatched.some((u) => same(u, intended));
+  const others = unmatched.filter((u) => !same(u, intended));
+  return [
+    `Intended recipient: ${intended}${intendedUnmatched ? ' (matches no known contact)' : ''}`,
+    ...(others.length > 0 ? [`Also matching no known contact: ${others.join(', ')}`] : []),
+  ];
 }
 
 /** Node.js network-error `code` values that indicate a transient, retryable failure. */
@@ -852,7 +898,13 @@ export class OutboundGateway {
       recipientId,
       options,
     });
-    if (identityBlock) return identityBlock;
+    if (identityBlock) {
+      // Its reason names "an external recipient", never which one (#2033).
+      return this.withUnmatchedRecipientNote(
+        identityBlock,
+        await this.findUnmatchedRecipients(request.channel, this.personRecipients(request)),
+      );
+    }
 
     // ------------------------------------------------------------------
     // Step 1.25: Bulk export controls — attachments only (#201)
@@ -890,7 +942,10 @@ export class OutboundGateway {
             { channel: request.channel, recipientId: redactId(recipientId), code: outcome.code },
             'outbound-gateway: export blocked — restricted bulk export',
           );
-          return { success: false, blockedReason: outcome.message };
+          return this.withUnmatchedRecipientNote(
+            { success: false, blockedReason: outcome.message },
+            await this.findUnmatchedRecipients(request.channel, this.personRecipients(request)),
+          );
         }
 
         if (outcome.action === 'approval_required') {
@@ -1033,7 +1088,10 @@ export class OutboundGateway {
             'outbound-gateway: failed to publish outbound.blocked event for PII redactor error',
           );
         }
-        return { success: false, blockedReason: 'pii_redactor_error' };
+        return this.withUnmatchedRecipientNote(
+          { success: false, blockedReason: 'pii_redactor_error' },
+          await this.findUnmatchedRecipients(request.channel, this.personRecipients(request)),
+        );
       }
     }
 
@@ -1093,6 +1151,9 @@ export class OutboundGateway {
       // reason but never a Stage-1 finding's (potentially sensitive) detail. See
       // buildBlockReasonSummary for the per-rule policy.
       const reasonSummary = buildBlockReasonSummary(filterFindings);
+      // Recipients that match no contact (#2033). The judge reasons about content
+      // only, so without this the agent rewrites the body to a wrong address.
+      const unmatched = await this.findUnmatchedRecipients(request.channel, this.personRecipients(request));
 
       // Publish the blocked event for audit logging and downstream consumers.
       // Capture the event so we can link the outbound.notification to it via parentEventId.
@@ -1151,7 +1212,7 @@ export class OutboundGateway {
               // emit an ambiguous bare timestamp.
               `Time: ${blockedEvent.timestamp.toISOString()} (UTC)`,
               `Channel: ${request.channel}`,
-              `Intended recipient: ${recipientId}`,
+              ...unmatchedRecipientNotificationLines(recipientId, unmatched),
               '',
               `Block ID: ${blockId}`,
               `Audit event ID: ${blockedEvent.id}`,
@@ -1185,11 +1246,14 @@ export class OutboundGateway {
       // matched fragment. Surfacing it here gives the agent's tool-use loop enough
       // signal to rewrite the message and retry organically; blockedRules carries
       // the specific rule category (rule names only) so it can fix the root cause.
-      return {
-        success: false,
-        blockedReason: reasonSummary,
-        blockedRules: filterFindings.map((f) => f.rule),
-      };
+      return this.withUnmatchedRecipientNote(
+        {
+          success: false,
+          blockedReason: reasonSummary,
+          blockedRules: filterFindings.map((f) => f.rule),
+        },
+        unmatched,
+      );
     }
 
     // ------------------------------------------------------------------
@@ -1554,6 +1618,79 @@ export class OutboundGateway {
   }
 
   /**
+   * Resolve a send skill's recipient reference — a contact UUID or the alias
+   * `principal` — to the address on that contact's verified, active identity
+   * for `channel` (#2033, ADR-047). Fails closed with an agent-facing error.
+   *
+   * The principal's contact ID comes from the hot-reloaded identity snapshot
+   * (verified + active rows only), so the alias has no target when the
+   * principal has no verified identity at all.
+   */
+  async resolveRecipientReference(
+    channel: string,
+    value: string,
+    fields: RecipientReferenceFields,
+  ): Promise<RecipientResolution> {
+    const result = await resolveRecipientReference(value, channel, fields, {
+      contactService: this.contactService,
+      principalContactId: this.principalIdentities[0]?.contactId,
+    });
+    if (!result.ok && result.cause !== undefined) {
+      this.log.warn(
+        { err: result.cause, channel },
+        'outbound-gateway: recipient reference lookup failed — send refused (fail-closed)',
+      );
+    }
+    return result;
+  }
+
+  /** Recipient identifiers that name a person (never a group or conversation id). */
+  private personRecipients(request: OutboundSendRequest): string[] {
+    return this.projectRecipients(request)
+      .filter((r) => r.principalEligible)
+      .map((r) => r.identifier);
+  }
+
+  /**
+   * The identifiers among `identifiers` that match no contact on `channel` (#2033).
+   * Called only on a block, so ordinary sends pay no extra lookups. A lookup
+   * error leaves that identifier out: the note says "matches no contact" only
+   * when the lookup confirmed it.
+   */
+  private async findUnmatchedRecipients(channel: string, identifiers: readonly string[]): Promise<string[]> {
+    const unmatched: string[] = [];
+    const seen = new Set<string>();
+    for (const identifier of identifiers) {
+      const key = identifier.toLowerCase();
+      if (identifier.length === 0 || seen.has(key)) continue;
+      seen.add(key);
+      try {
+        const contact = await this.contactService.resolveByChannelIdentity(channel, identifier);
+        if (contact === null) unmatched.push(identifier);
+      } catch (err) {
+        this.log.warn(
+          { err, channel, recipientId: redactId(identifier) },
+          'outbound-gateway: recipient lookup for the block note failed — note omits this recipient',
+        );
+      }
+    }
+    return unmatched;
+  }
+
+  /** Append the unmatched-recipient note to a blocked result (#2033). */
+  private withUnmatchedRecipientNote(
+    result: OutboundSendResult,
+    unmatched: readonly string[],
+  ): OutboundSendResult {
+    if (unmatched.length === 0) return result;
+    return {
+      ...result,
+      blockedReason: `${result.blockedReason ?? 'Send blocked'}\n\n${formatUnmatchedRecipientNote(unmatched)}`,
+      unmatchedRecipients: [...unmatched],
+    };
+  }
+
+  /**
    * Check whether the primary recipient is the principal (the human Curia serves).
    * Uses the first principal-eligible identifier from `projectRecipients` (email
    * `to`, Signal `recipient`, Slack `slackUserId`) against verified identities.
@@ -1783,8 +1920,10 @@ export class OutboundGateway {
    * After a successful outbound send, ensure the recipient has a confirmed contact record.
    *
    * - If the contact exists and is provisional: promote to confirmed.
-   * - If no contact record exists: create one with status confirmed, using the
-   *   channel identifier as a placeholder display name (enrichment happens later).
+   * - If no contact record exists: create one at tier known, using the channel
+   *   identifier as a placeholder display name (enrichment happens later). Its
+   *   provenance is `outbound_recipient` and its identity is unverified: an agent
+   *   typed the address and nobody confirmed it (#2033, ADR-047).
    * - If the contact is already confirmed or blocked: no-op.
    *
    * Fail-open: the message was already sent, so a DB error here must not surface
@@ -1808,14 +1947,18 @@ export class OutboundGateway {
       // until the contact is enriched or the principal assigns a proper name.
       let created;
       try {
-        // Explicit tier: the outbound recipient (someone the principal is emailing) is
-        // principal-trusted — equivalent to the former status='confirmed'→tier='known' path.
-        // Set tier='known' explicitly so this intent survives Task 5, which removes
-        // createContact's internal status default (#955).
+        // Source: outbound_recipient, not ceo_stated (#2033). The principal did not
+        // state this address; an agent typed it, and ceo_stated made an invented
+        // address look principal-confirmed afterwards (the 2026-10-07 contact).
+        //
+        // Tier stays 'known' for now so a reply is not held: at 'unknown', Gate C
+        // escalates every external send the reply leads to, a relay to the principal
+        // included. Lowering it is a separate decision (ADR-047).
+        // TODO(#2033 follow-up): decide the tier for agent-created outbound contacts.
         created = await this.contactService.createContact({
           displayName: recipientId,
           fallbackDisplayName: recipientId,
-          source: 'ceo_stated',
+          source: 'outbound_recipient',
           tier: 'known',
         });
       } catch (err) {
@@ -1827,15 +1970,18 @@ export class OutboundGateway {
       }
 
       try {
+        // outbound_recipient is not auto-verified, so this identity lands unverified.
+        // A send by reference to this contact therefore fails closed until someone
+        // verifies the address; the raw-address field still reaches it.
         await this.contactService.linkIdentity({
           contactId: created.id,
           channel,
           channelIdentifier: recipientId,
-          source: 'ceo_stated',
+          source: 'outbound_recipient',
         });
         this.log.info(
           { channel, recipientId: redactId(recipientId), contactId: created.id },
-          'outbound-gateway: created confirmed contact for outbound recipient',
+          'outbound-gateway: created known-tier contact (unverified identity) for first-time outbound recipient',
         );
       } catch (err) {
         // createContact committed but linkIdentity failed — the contact exists with no
@@ -2170,7 +2316,20 @@ export class OutboundGateway {
       options,
       draftId,
     });
-    if (identityBlock) return identityBlock;
+
+    // Build the audience set from the draft's full envelope (To + CC + BCC) so a draft
+    // addressed To: principal with a CC'd/BCC'd third party still runs the judge.
+    // Falls back to the single primary recipient when allRecipients is not supplied.
+    const draftEnvelope = (draftMeta.allRecipients && draftMeta.allRecipients.length > 0)
+      ? draftMeta.allRecipients
+      : [recipientEmail];
+
+    if (identityBlock) {
+      return this.withUnmatchedRecipientNote(
+        identityBlock,
+        await this.findUnmatchedRecipients('email', draftEnvelope),
+      );
+    }
 
     // ------------------------------------------------------------------
     // Step 2: Content filter
@@ -2180,13 +2339,6 @@ export class OutboundGateway {
     // flagged patterns before committing to sending. Fail-closed on filter crash.
     let filterPassed = false;
     let filterFindings: Array<{ rule: string; detail: string }> = [];
-
-    // Build the audience set from the draft's full envelope (To + CC + BCC) so a draft
-    // addressed To: principal with a CC'd/BCC'd third party still runs the judge.
-    // Falls back to the single primary recipient when allRecipients is not supplied.
-    const draftEnvelope = (draftMeta.allRecipients && draftMeta.allRecipients.length > 0)
-      ? draftMeta.allRecipients
-      : [recipientEmail];
     const { recipients: draftRecipients, principalIncluded: draftPrincipalIncluded, principalIsSoleRecipient: draftPrincipalSole } = this.buildRecipientSet(draftEnvelope);
 
     try {
@@ -2226,6 +2378,7 @@ export class OutboundGateway {
       // Stage-1 finding's (potentially sensitive) detail. See buildBlockReasonSummary
       // for the per-rule policy. Mirrors the send() block path (#1051/#1158).
       const reasonSummary = buildBlockReasonSummary(filterFindings);
+      const unmatched = await this.findUnmatchedRecipients('email', draftEnvelope);
 
       const blockedEvent = createOutboundBlocked({
         blockId,
@@ -2263,7 +2416,7 @@ export class OutboundGateway {
               `Reason: ${reasonSummary}`,
               `Time: ${blockedEvent.timestamp.toISOString()} (UTC)`,
               'Channel: email (draft)',
-              `Intended recipient: ${recipientEmail}`,
+              ...unmatchedRecipientNotificationLines(recipientEmail, unmatched),
               '',
               `Draft ID: ${draftId}`,
               `Block ID: ${blockId}`,
@@ -2288,11 +2441,14 @@ export class OutboundGateway {
       // obeys buildBlockReasonSummary's per-rule contract — only an LLM-judge finding's
       // abstract detail is included, never a Stage-1 rule's matched fragment; blockedRules
       // carries rule names only. Mirrors the send() block path (#1051).
-      return {
-        success: false,
-        blockedReason: reasonSummary,
-        blockedRules: filterFindings.map((f) => f.rule),
-      };
+      return this.withUnmatchedRecipientNote(
+        {
+          success: false,
+          blockedReason: reasonSummary,
+          blockedRules: filterFindings.map((f) => f.rule),
+        },
+        unmatched,
+      );
     }
 
     // ------------------------------------------------------------------
