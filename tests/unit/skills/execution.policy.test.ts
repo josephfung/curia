@@ -1527,6 +1527,177 @@ describe('autonomy gates', () => {
       expect(classifyAction).not.toHaveBeenCalled();
     });
 
+    // -- Send by reference (#2033): Gate C resolves references the way the skill will ----
+
+    const ALICE_REF = '22222222-2222-4222-8222-222222222222';
+    const BOB_REF = '33333333-3333-4333-8333-333333333333';
+
+    /** Contacts for reference resolution: the principal, the sender (Alice), a third party (Bob). */
+    function makeReferenceContacts() {
+      const identity = (contactId: string, channel: string, channelIdentifier: string): ChannelIdentity => ({
+        id: `id-${channelIdentifier}`, contactId, channel, channelIdentifier, label: null,
+        verified: true, verifiedAt: new Date(), status: 'active', source: 'ceo_stated',
+        createdAt: new Date(), updatedAt: new Date(),
+      });
+      const byId: Record<string, { contact: Record<string, unknown>; identities: ChannelIdentity[] }> = {
+        'principal-1': {
+          contact: { id: 'principal-1', displayName: 'Principal', primaryEmail: 'ceo@example.com', primaryPhone: null },
+          identities: TEST_PRINCIPAL_IDENTITIES as ChannelIdentity[],
+        },
+        [ALICE_REF]: {
+          contact: { id: ALICE_REF, displayName: 'Alice', primaryEmail: null, primaryPhone: null },
+          identities: [identity(ALICE_REF, 'email', 'alice@example.com')],
+        },
+        [BOB_REF]: {
+          contact: { id: BOB_REF, displayName: 'Bob', primaryEmail: null, primaryPhone: null },
+          identities: [identity(BOB_REF, 'email', 'bob@example.com')],
+        },
+      };
+      return {
+        getContactWithIdentities: vi.fn(async (id: string) => byId[id]),
+        getIdentitiesForContact: vi.fn().mockResolvedValue([]),
+      } as unknown as ContactService;
+    }
+
+    it('allows email-send to "principal" from a known contact without consulting the judge', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: 'principal', subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('allows signal-send to "principal" from a known contact without consulting the judge', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('signal-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'signal-send',
+        { recipient: 'principal', message: 'heads-up' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(true);
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('keeps the principal carve-out on the raw to_address path', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to_address: 'ceo@example.com', subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(true);
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('treats a reference to the initiating sender as a reply to them (structural allow)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
+      const handler = makeHandler('ok');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: ALICE_REF, subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      // The judge said "third party", but the resolved reference is the sender, and the
+      // structural pin wins (#1815). The judge still runs, only to check for an upgrade to
+      // the irreversible class. Without resolution, the UUID would match no sender
+      // identifier and escalate.
+      expect(result.success).toBe(true);
+      expect(handler.execute).toHaveBeenCalledOnce();
+      expect(classifyAction).toHaveBeenCalledOnce();
+    });
+
+    it('escalates a reference to a third party from a known contact (structural pin)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: BOB_REF, subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('returns the resolver error for a reference that matches no contact, without escalating', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const bus = { publish: vi.fn().mockResolvedValue(undefined), subscribe: vi.fn() } as unknown as EventBus;
+      const { registry, layer } = makeLayerWithScore100(bus, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: '00000000-0000-4000-8000-000000000000', subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('unknown'),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/No contact has ID 00000000-0000-4000-8000-000000000000/);
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
+    it('fails closed on a reference when no contact service is wired', async () => {
+      const { judge } = makeEscalationJudge({ isThirdPartyFacing: false });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-send',
+        { to: 'principal', subject: 'x', body: 'y' },
+        undefined,
+        originatorMeta('known'),
+      );
+
+      expect(result.success).toBe(false);
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
     it('still escalates irreversible actions to the principal only', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);

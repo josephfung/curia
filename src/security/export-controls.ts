@@ -386,7 +386,9 @@ export function extractDestinationFromInput(
   input: Record<string, unknown>,
 ): ExportDestination | null {
   if (GATEWAY_ATTACHMENT_TOOLS.has(toolName)) {
-    const to = input['to'];
+    // email-send: `to` is a contact reference (shown as written; the gateway's own
+    // export gate sees the resolved address) and `to_address` the raw path (#2033).
+    const to = input['to'] ?? input['to_address'];
     if (typeof to === 'string' && to.trim()) {
       return { kind: 'email', address: to.trim() };
     }
@@ -398,7 +400,7 @@ export function extractDestinationFromInput(
   }
 
   if (toolName === 'signal-send') {
-    const recipient = input['recipient'];
+    const recipient = input['recipient'] ?? input['recipient_number'];
     if (typeof recipient === 'string' && recipient.trim()) {
       return { kind: 'signal', address: recipient.trim() };
     }
