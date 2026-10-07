@@ -436,11 +436,30 @@ Then:
       one that produced the invented address and the one that didn't. Don't replay from
       `llm_call_archive`, which is PII-scrubbed. Assert that no `[EMAIL]` or `[PHONE]` tokens
       remain.
+      - The eval loader renders an ordinary turn and leaves out wake-time blocks. #2033's
+        call carried the bullpen reply rule twice (the ambient block and the mention wake).
+        Build each request from llm.call `88597cd5`'s structure, and assert every arm carries
+        the same wake and bullpen blocks.
     - **Pin every arm to `e757c375`** (main on 2026-10-07, before #2033's send by reference).
       After #2033 the coordinator sends to the principal by reference and never types the
       address, so arms built on a later `main` would all score near 100% and measure
-      nothing. Render the prompts and tool schemas from curia at that commit; the PR 11 arms
-      apply PR 11's block changes on top of it.
+      nothing. The PR 11 arms apply PR 11's block changes on top of that commit.
+      - The eval harness takes code from two places, and both must be pinned. Point
+        `CURIA_REPO_PATH` at an `e757c375` checkout, and regenerate curia-deploy's
+        `tests/eval/tool-schemas/` from it with `scripts/extract-tool-schemas.ts`. The
+        committed schema snapshot is not tied to `CURIA_REPO_PATH`, and the loader's
+        version-skew check doesn't cover it.
+      - Use the prod snapshot only for instance inputs (identities, primary email, roster).
+        A version-skew warning is expected.
+      - Assert that every arm's `email-send` schema takes a typed address and has no
+        principal alias.
+      - Build "PR 11 without the name sentence" with a code toggle, not by dropping the
+        display name from the snapshot: the loader renders with `onBlockError: 'throw'`,
+        so a missing name would throw from `failBlock('who-you-serve')`.
+    - **Check that the baseline reproduces the error first.** `e757c375` already carries PR 1
+      and PR 2, and the incident ran on `3155f290`. If the `e757c375` arm shows no wrong
+      addresses on the bad request, the PR 11 arms can't show an effect. Report the probe as
+      inconclusive rather than "layout doesn't matter", or add a `3155f290` arm.
     - **Four arms:**
       - `e757c375`;
       - PR 11 without the name sentence;
@@ -459,6 +478,12 @@ Then:
       providers would drop it. Send every arm through one call path that sets the request
       body itself (see below), not through the pinned commit's providers. Assert from the
       request or OpenRouter's generation record that the value was sent.
+    - **Send no temperature on the other three arms.** curia-deploy's eval client defaults
+      to `temperature: 0` (`tests/eval/openrouter.ts`), unlike prod, which sends none.
+      Through that client, the control would be near-deterministic and the 0.5 arm would
+      be the hottest, not the coolest. Send all four arms through one call path with the
+      same body fields, and assert from the generation records that arms 1 to 3 carried no
+      temperature.
     - **Make unsupported parameters fail loudly.** Send `provider: { require_parameters: true }`,
       so a provider that can't honor `temperature` or `logprobs` errors instead of ignoring
       it.
