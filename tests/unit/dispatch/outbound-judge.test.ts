@@ -192,6 +192,26 @@ describe('OutboundLlmJudge', () => {
     );
   });
 
+  it('archives the judge reasoning through the shared response builder (#2042)', async () => {
+    const response = textResponse('{"leak": false, "reason": ""}');
+    if (response.type !== 'text') throw new Error('expected text');
+    const withReasoning: LLMResponse = {
+      ...response,
+      reasoning: 'No side channel in the body.',
+      usage: { ...response.usage, reasoningTokens: 3 },
+    };
+    const { judge, bus } = makeJudge(providerReturning(withReasoning));
+    await judge.review(MIXED_INPUT);
+    const calls = (bus as unknown as { published: Array<{ type: string; archive?: { response?: unknown } }> }).published
+      .filter((e) => e.type === 'llm.call');
+    expect(calls[0]?.archive?.response).toEqual({
+      type: 'text',
+      content: '{"leak": false, "reason": ""}',
+      reasoning: 'No side channel in the body.',
+      reasoningTokens: 3,
+    });
+  });
+
   it('does NOT publish telemetry when unreachable (no model response)', async () => {
     const errorResponse: LLMResponse = { type: 'error', error: { message: 'boom' } as never };
     const { judge, bus } = makeJudge(providerReturning(errorResponse), { failMode: 'open' });

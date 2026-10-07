@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **LLM call archive** — `includeReasoning` drops reasoning text without disabling the archive. (#2042)
 - **ADR-047** — send skills address recipients by contact reference; a near-miss principal check is rejected. (#2033)
 - **`tool.json` (public API)** — optional `optional_capabilities`: injected when configured, never a reason to refuse. (#2024)
 - **Test-mode MCP snapshots** — test mode serves google-workspace from a tools/list snapshot with canned results. (#2024)
@@ -154,6 +155,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **LLM call archive** — stores OpenRouter reasoning, its token count, and text beside tool calls. (#2042)
+- **LLM call archive** — strips null bytes so one bad character cannot drop the audit row. (#2042)
 - **`ceo-inbox-draft-reply` outputs (public API)** — `already_exists` returns that draft's `snippet` and `date`. (#2035)
 - **`ceo-inbox-draft-reply`** — refuses to draft a reply to a message in Spam or Trash. (#2035)
 - **`ceo-inbox-list` outputs (public API)** — `scan_incomplete` when the page cap hides older unread mail. (#2035)

@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, Message, ToolDefinition, ToolResult } from './provider.js';
 import type { EventBus } from '../../bus/bus.js';
 import type { ModelRegistry } from './model-registry.js';
+import { buildLlmArchiveResponse } from '../../audit/llm-archive-response.js';
 import { createLlmCall, createLlmError } from '../../bus/events.js';
 import { createEstimateCostUsd } from './pricing.js';
 import { classifyError } from '../../errors/classify.js';
@@ -79,9 +80,7 @@ export class TelemetryLlmProvider implements LLMProvider {
             messages: params.messages,
             toolResults: params.toolResults ?? [],
           },
-          response: response.type === 'tool_use'
-            ? { type: 'tool_use', toolCalls: response.toolCalls }
-            : { type: 'text', content: response.content },
+          response: buildLlmArchiveResponse(response),
           toolDefinitions: params.tools ?? [],
         },
       });

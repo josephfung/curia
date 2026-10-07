@@ -277,6 +277,61 @@ describeIf('audit log Phase 1 hardening (#1383)', () => {
     expect(a.response).toMatchObject({ type: 'text', content: 'ok' });
   });
 
+  it('commits the audit row and the archive when content contains a null byte (#2042)', async () => {
+    const bus = new EventBus(
+      logger,
+      (event) => auditLogger.log(event),
+      (eventId) => auditLogger.markAcknowledged(eventId),
+    );
+
+    const event = createLlmCall({
+      agentId: 'coordinator',
+      conversationId: `conv-nul-${Date.now()}`,
+      requestedModel: 'deepseek/deepseek-v4.1-flash',
+      actualModel: 'deepseek/deepseek-v4.1-flash',
+      provider: 'openrouter',
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      estimatedCostUsd: 0,
+      latencyMs: 1,
+      providerRequestId: 'req-nul',
+      promptHash: 'e'.repeat(64),
+      responseHash: 'f'.repeat(64),
+      parentEventId: 'system',
+      archive: {
+        prompt: { messages: [{ role: 'user', content: 'page\u0000body' }] },
+        response: { type: 'text', content: 'ans\u0000wer', reasoning: 'be\u0000cause' },
+        toolDefinitions: [{ name: 'web-fetch', description: 'read\u0000page' }],
+      },
+    });
+
+    await bus.publish('agent', event);
+
+    const audit = await pool.query<{ id: string }>(
+      `SELECT id FROM audit_log WHERE id = $1`,
+      [event.id],
+    );
+    expect(audit.rows).toHaveLength(1);
+
+    const archive = await pool.query<{
+      prompt: { messages: Array<{ content: string }> };
+      response: { content: string; reasoning: string };
+      tool_definitions: Array<{ description: string }>;
+    }>(
+      `SELECT prompt, response, tool_definitions FROM llm_call_archive WHERE audit_event_id = $1`,
+      [event.id],
+    );
+    expect(archive.rows).toHaveLength(1);
+    const row = archive.rows[0]!;
+    expect(row.prompt.messages[0]!.content).toBe('pagebody');
+    expect(row.response.content).toBe('answer');
+    expect(row.response.reasoning).toBe('because');
+    expect(row.tool_definitions[0]!.description).toBe('readpage');
+    expect(JSON.stringify(row)).not.toContain('\\u0000');
+  });
+
   it('activity-log returns structured-column data for new hashed rows', async () => {
     const bus = new EventBus(
       logger,

@@ -396,6 +396,7 @@ async function main(): Promise<void> {
   const llmCallArchiveCfg = yamlConfig.audit?.llmCallArchive;
   const auditLogger = new AuditLogger(pool, logger, {
     llmCallArchiveEnabled: llmCallArchiveCfg?.enabled !== false,
+    llmCallArchiveIncludeReasoning: llmCallArchiveCfg?.includeReasoning !== false,
   });
 
   // 3a. Confirm hash-chain schema + log head (spec 10). Chain state lives in the
@@ -2134,6 +2135,7 @@ async function main(): Promise<void> {
       scratchTtlDays: yamlConfig.documentWorkspace?.scratchTtlDays ?? DEFAULT_SCRATCH_DOC_TTL_DAYS,
       scratchTtlFromConfig: yamlConfig.documentWorkspace?.scratchTtlDays !== undefined,
       llmCallArchiveEnabled: llmCallArchiveCfg?.enabled !== false,
+      llmCallArchiveIncludeReasoning: llmCallArchiveCfg?.includeReasoning !== false,
       llmCallArchiveRetentionDays,
     },
     'DreamEngine configured',

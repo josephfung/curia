@@ -7699,6 +7699,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     narration: string;
     taskCreateSucceeds: boolean;
     taskUpdateSucceeds?: boolean;
+    toolAside?: string;
+    reasoning?: string;
+    reasoningTokens?: number;
   }): Promise<{
     content: string;
     notes: DelegationPrincipalNoteEvent[];
@@ -7753,7 +7756,15 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-1990', name: 'delegate', input: { agent: 'ceo-inbox', task: 'Find the venue thread' } }],
-            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            ...(opts.toolAside !== undefined ? { content: opts.toolAside } : {}),
+            ...(opts.reasoning !== undefined ? { reasoning: opts.reasoning } : {}),
+            usage: {
+              inputTokens: 10,
+              outputTokens: 5,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 0,
+              ...(opts.reasoningTokens !== undefined ? { reasoningTokens: opts.reasoningTokens } : {}),
+            },
             provenance: MOCK_PROVENANCE,
           };
         }
@@ -7890,6 +7901,24 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(narrationCall.archive?.response).toEqual({ type: 'text', content: narration });
     const promptMessages = (narrationCall.archive?.prompt as { messages: Array<{ role: string; content: unknown }> }).messages;
     expect(String(promptMessages.at(-1)!.content)).toMatch(/note_for_principal/);
+  });
+
+  it('archives tool-call text and reasoning on llm.call (#2042)', async () => {
+    const { llmCalls } = await runNarratedFailure({
+      metadata: originatorOf(null, 'known'),
+      narration: `<reply>${cleanVenueReply}</reply>`,
+      taskCreateSucceeds: true,
+      toolAside: 'Checking the thread.',
+      reasoning: 'The sender asked about venues.',
+      reasoningTokens: 12,
+    });
+    expect(llmCalls[0]!.archive?.response).toEqual({
+      type: 'tool_use',
+      toolCalls: [{ id: 'call-1990', name: 'delegate', input: { agent: 'ceo-inbox', task: 'Find the venue thread' } }],
+      content: 'Checking the thread.',
+      reasoning: 'The sender asked about venues.',
+      reasoningTokens: 12,
+    });
   });
 
   it('drops a model draft that leaks the registry id (#1860)', async () => {

@@ -93,6 +93,7 @@ describe('OpenRouterProvider', () => {
       outputTokens: 5,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 0,
+      reasoningTokens: 0,
     });
 
     // Provenance
@@ -498,6 +499,7 @@ describe('usageFromOpenRouter', () => {
       outputTokens: 60,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 10318,
+      reasoningTokens: 0,
     });
   });
 
@@ -507,6 +509,7 @@ describe('usageFromOpenRouter', () => {
       outputTokens: 2,
       cacheCreationInputTokens: 100,
       cacheReadInputTokens: 0,
+      reasoningTokens: 0,
     });
   });
 
@@ -516,6 +519,7 @@ describe('usageFromOpenRouter', () => {
       outputTokens: 5,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 0,
+      reasoningTokens: 0,
     });
   });
 
@@ -537,7 +541,17 @@ describe('usageFromOpenRouter', () => {
       outputTokens: 0,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 0,
+      reasoningTokens: 0,
     });
+  });
+
+  it('records reasoning_tokens without removing them from outputTokens', () => {
+    expect(usageFromOpenRouter({
+      prompt_tokens: 10,
+      completion_tokens: 50,
+      total_tokens: 60,
+      completion_tokens_details: { reasoning_tokens: 42 },
+    })).toMatchObject({ outputTokens: 50, reasoningTokens: 42 });
   });
 });
 
@@ -621,6 +635,7 @@ describe('OpenRouterProvider — cache usage', () => {
       outputTokens: 40,
       cacheCreationInputTokens: 600,
       cacheReadInputTokens: 4000,
+      reasoningTokens: 0,
     });
   });
 });
@@ -670,7 +685,7 @@ describe('OpenRouterProvider — stream', () => {
       {
         type: 'message_end',
         content: 'hello',
-        usage: { inputTokens: 12, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        usage: { inputTokens: 12, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, reasoningTokens: 0 },
         provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-123' },
       },
     ]);
@@ -738,7 +753,7 @@ describe('OpenRouterProvider — stream', () => {
       type: 'tool_use',
       toolCalls: [{ id: 'call_1', name: 'search', input: { query: 'curia' } }],
       content: 'Checking. ',
-      usage: { inputTokens: 22, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      usage: { inputTokens: 22, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, reasoningTokens: 0 },
       provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-tool' },
     });
   });
@@ -918,5 +933,261 @@ describe('OpenRouterProvider — stream', () => {
 
     expect(stream.controller.abort).toHaveBeenCalledTimes(1);
     expect(events.at(-1)).toMatchObject({ type: 'error' });
+  });
+});
+
+const REASONING_MODEL = 'deepseek/deepseek-v4.1-flash';
+
+function reasoningUsage(reasoningTokens: number) {
+  return {
+    prompt_tokens: 10,
+    completion_tokens: 20,
+    total_tokens: 30,
+    completion_tokens_details: { reasoning_tokens: reasoningTokens },
+  };
+}
+
+function chatCompletion(message: Record<string, unknown>, reasoningTokens: number, finish: 'stop' | 'tool_calls' = 'stop') {
+  return {
+    id: 'chatcmpl-reason',
+    model: REASONING_MODEL,
+    choices: [{
+      index: 0,
+      finish_reason: finish,
+      message: {
+        role: 'assistant',
+        content: 'done',
+        refusal: null,
+        ...message,
+      },
+      logprobs: null,
+    }],
+    usage: reasoningUsage(reasoningTokens),
+    object: 'chat.completion' as const,
+    created: 1700000000,
+  };
+}
+
+function streamChunks(
+  deltas: Array<Record<string, unknown>>,
+  reasoningTokens: number,
+  finish: 'stop' | 'tool_calls',
+) {
+  const contentDeltas = deltas.length > 0 ? deltas : [{}];
+  return makeStream([
+    ...contentDeltas.map((delta, index) => ({
+      id: 'chatcmpl-reason-stream',
+      model: REASONING_MODEL,
+      choices: [{
+        index: 0,
+        delta,
+        finish_reason: index === contentDeltas.length - 1 ? finish : null,
+        logprobs: null,
+      }],
+      usage: null,
+      object: 'chat.completion.chunk',
+      created: 1700000000,
+    })),
+    {
+      id: 'chatcmpl-reason-stream',
+      model: REASONING_MODEL,
+      choices: [],
+      usage: reasoningUsage(reasoningTokens),
+      object: 'chat.completion.chunk',
+      created: 1700000000,
+    },
+  ]);
+}
+
+describe('OpenRouterProvider — reasoning (#2042)', () => {
+  const provider = () => new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  describe.each(['text', 'tool_use'] as const)('%s', (kind) => {
+    const toolMessage = kind === 'tool_use'
+      ? {
+          content: 'Checking the thread.',
+          tool_calls: [{
+            id: 'call_reason',
+            type: 'function',
+            function: { name: 'email-send', arguments: '{"to":"a@b.test"}' },
+          }],
+        }
+      : { content: 'The answer is 4.' };
+
+    const toolDeltas = kind === 'tool_use'
+      ? [
+          { content: 'Checking the thread.' },
+          {
+            tool_calls: [{
+              index: 0,
+              id: 'call_reason',
+              type: 'function',
+              function: { name: 'email-send', arguments: '{"to":"a@b.test"}' },
+            }],
+          },
+        ]
+      : [{ content: 'The answer is 4.' }];
+
+    const finish = kind === 'tool_use' ? 'tool_calls' as const : 'stop' as const;
+
+    async function read(extras: Array<Record<string, unknown>>, reasoningTokens: number) {
+      mockCreate.mockResolvedValueOnce(chatCompletion({ ...toolMessage, ...extras[0] }, reasoningTokens, finish));
+      const chat = await provider().chat({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: REASONING_MODEL,
+      });
+      mockCreate.mockResolvedValueOnce(streamChunks(
+        toolDeltas.map((delta, index) => ({ ...delta, ...(extras[index] ?? {}) })),
+        reasoningTokens,
+        finish,
+      ));
+      const events = await collectStream(provider().stream({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: REASONING_MODEL,
+      }));
+      const streamed = events.at(-1);
+      return { chat, streamed };
+    }
+
+    it('reads message.reasoning and the reasoning-token count on chat and stream', async () => {
+      const reasoningDelta = kind === 'tool_use'
+        ? [{ reasoning: 'Look up ' }, { reasoning: 'the address.' }]
+        : [{ reasoning: 'Add the numbers.' }];
+      const { chat, streamed } = await read(
+        kind === 'tool_use'
+          ? [{ reasoning: 'Look up the address.' }, {}]
+          : [{ reasoning: 'Add the numbers.' }],
+        11,
+      );
+      // Re-run stream with split reasoning deltas. The shared helper puts the
+      // whole string on the first chat message and the first stream delta.
+      mockCreate.mockReset();
+      mockCreate.mockResolvedValueOnce(streamChunks(
+        toolDeltas.map((delta, index) => ({ ...delta, ...(reasoningDelta[index] ?? {}) })),
+        11,
+        finish,
+      ));
+      const split = await collectStream(provider().stream({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: REASONING_MODEL,
+      }));
+
+      for (const result of [chat, streamed, split.at(-1)]) {
+        expect(result && 'reasoning' in result ? result.reasoning : undefined).toBe(
+          kind === 'tool_use' ? 'Look up the address.' : 'Add the numbers.',
+        );
+        expect(result && 'usage' in result ? result.usage?.reasoningTokens : undefined).toBe(11);
+        expect(result && 'reasoningOmitted' in result ? result.reasoningOmitted : undefined).toBeUndefined();
+      }
+      if (kind === 'tool_use') {
+        expect(chat).toMatchObject({ type: 'tool_use', content: 'Checking the thread.' });
+        expect(streamed).toMatchObject({ type: 'tool_use', content: 'Checking the thread.' });
+      } else {
+        expect(chat).toMatchObject({ type: 'text', content: 'The answer is 4.' });
+        expect(streamed).toMatchObject({ type: 'message_end', content: 'The answer is 4.' });
+      }
+    });
+
+    it('falls back to reasoning_details text and summary when message.reasoning is absent', async () => {
+      const details = [
+        { type: 'reasoning.summary', summary: 'Short version.', id: 'sum-1' },
+        { type: 'reasoning.text', text: 'Longer trace.', id: 'txt-1' },
+      ];
+      const { chat, streamed } = await read(
+        [{ reasoning_details: details }, { reasoning_details: [{ type: 'reasoning.text', text: ' continues', id: 'txt-1' }] }],
+        6,
+      );
+      expect(chat).toMatchObject({
+        reasoning: 'Short version.\nLonger trace.',
+        usage: { reasoningTokens: 6 },
+      });
+      // Tool-use streams a second delta that continues the same text block.
+      // A text response has one delta, so it keeps the two complete entries.
+      expect(streamed).toMatchObject({
+        reasoning: kind === 'tool_use'
+          ? 'Short version.\nLonger trace. continues'
+          : 'Short version.\nLonger trace.',
+        usage: { reasoningTokens: 6 },
+      });
+    });
+
+    it('records encrypted-only details without storing the ciphertext', async () => {
+      const { chat, streamed } = await read(
+        [{
+          reasoning_details: [{ type: 'reasoning.encrypted', data: 'CIPHERTEXT-DO-NOT-STORE', id: 'enc-1' }],
+        }],
+        8,
+      );
+      for (const result of [chat, streamed]) {
+        expect(result).toMatchObject({ reasoningOmitted: 'encrypted', usage: { reasoningTokens: 8 } });
+        expect(result && 'reasoning' in result ? result.reasoning : undefined).toBeUndefined();
+        expect(JSON.stringify(result)).not.toContain('CIPHERTEXT-DO-NOT-STORE');
+      }
+    });
+
+    it('records nothing when the model returned no reasoning', async () => {
+      const { chat, streamed } = await read([{}], 0);
+      for (const result of [chat, streamed]) {
+        expect(result && 'reasoning' in result ? result.reasoning : undefined).toBeUndefined();
+        expect(result && 'reasoningOmitted' in result ? result.reasoningOmitted : undefined).toBeUndefined();
+        expect(result && 'usage' in result ? result.usage?.reasoningTokens : undefined).toBe(0);
+      }
+    });
+  });
+
+  it('records an empty omission when reasoning tokens arrive with no text', async () => {
+    mockCreate.mockResolvedValue(streamChunks([{ content: 'ok' }], 5, 'stop'));
+    const events = await collectStream(provider().stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: REASONING_MODEL,
+    }));
+    const end = events.at(-1);
+    expect(end).toMatchObject({ type: 'message_end', reasoningOmitted: 'empty', usage: { reasoningTokens: 5 } });
+    expect(end && 'reasoning' in end ? end.reasoning : undefined).toBeUndefined();
+  });
+
+  it('prefers message.reasoning over reasoning_details', async () => {
+    mockCreate.mockResolvedValue(chatCompletion({
+      content: '4',
+      reasoning: 'from the field',
+      reasoning_details: [{ type: 'reasoning.text', text: 'from the details', id: 'txt-1' }],
+    }, 3));
+    const result = await provider().chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: REASONING_MODEL,
+    });
+    expect(result).toMatchObject({ reasoning: 'from the field' });
+  });
+
+  it('warns once per model when reasoning tokens come back with no readable text', async () => {
+    const warn = vi.fn();
+    const logger = {
+      debug: vi.fn(), info: vi.fn(), warn, error: vi.fn(), fatal: vi.fn(), trace: vi.fn(),
+      child() { return logger; },
+    } as unknown as import('../../../../src/logger.js').Logger;
+    const omitting = new OpenRouterProvider('test-key', logger, new ModelRegistry(logger));
+    const empty = chatCompletion({ content: 'ok' }, 4);
+    empty.model = 'deepseek/deepseek-v4-pro-0813';
+    mockCreate.mockResolvedValue(empty);
+    await omitting.chat({ messages: [{ role: 'user', content: 'Hello' }], model: 'deepseek/deepseek-v4-pro-0813' });
+    await omitting.chat({ messages: [{ role: 'user', content: 'Hello' }], model: 'deepseek/deepseek-v4-pro-0813' });
+    const encrypted = chatCompletion({
+      content: 'ok',
+      reasoning_details: [{ type: 'reasoning.encrypted', data: 'sealed' }],
+    }, 2);
+    encrypted.model = 'deepseek/deepseek-v4-pro';
+    mockCreate.mockResolvedValue(encrypted);
+    await omitting.chat({ messages: [{ role: 'user', content: 'Hello' }], model: 'deepseek/deepseek-v4-pro' });
+
+    const omissionWarns = warn.mock.calls.filter((call) =>
+      String(call[1]).includes('no readable reasoning'),
+    );
+    expect(omissionWarns).toHaveLength(2);
+    expect(omissionWarns[0]?.[0]).toMatchObject({ model: 'deepseek/deepseek-v4-pro-0813', reasoningOmitted: 'empty' });
+    expect(omissionWarns[1]?.[0]).toMatchObject({ model: 'deepseek/deepseek-v4-pro', reasoningOmitted: 'encrypted' });
   });
 });

@@ -608,6 +608,11 @@ export interface YamlConfig {
       enabled?: boolean;
       /** Delete archive rows older than this many days (DreamEngine decay pass). Default 90. */
       hotRetentionDays?: number;
+      /**
+       * When false, archive rows omit the reasoning string. Token counts still
+       * store, and the rest of the archive still writes. Default true.
+       */
+      includeReasoning?: boolean;
     };
   };
   contact_creation_limits?: {
@@ -1233,6 +1238,14 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       ) {
         throw new Error(
           `audit.llmCallArchive.hotRetentionDays must be a positive integer, got: ${llmCallArchive.hotRetentionDays}`,
+        );
+      }
+      if (
+        llmCallArchive.includeReasoning !== undefined &&
+        typeof llmCallArchive.includeReasoning !== 'boolean'
+      ) {
+        throw new Error(
+          `audit.llmCallArchive.includeReasoning must be a boolean, got: ${String(llmCallArchive.includeReasoning)}`,
         );
       }
     }
