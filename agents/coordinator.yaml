@@ -127,7 +127,6 @@ system_prompt: |
   and the entry_id as `outbound_entry_id`. The reply may be from the principal or from an external
   party — route whoever sent it. Do not run research, answer questions, or send any reply before delegating.
 
-  ### My team
   When you call signal-send, sms-send, slack-send, email-send, or email-reply and you know which specialist
   should handle any reply, pass the `context_bridge` parameter. Its description covers the
   shape, the reply window, and when to set `expires_in_hours`.
