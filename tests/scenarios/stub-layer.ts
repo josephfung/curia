@@ -17,7 +17,9 @@
 //      both is still bounded by the test-mode stack (no transport, withheld services).
 //   3. No stub, read-only tool → the real layer runs it (memory reads, date-resolve…).
 //      So does a tool the stack serves from an MCP snapshot (#2024): its session returns
-//      a canned result and reaches no account, whatever its action_risk says.
+//      a canned result and reaches no account, whatever its action_risk says. The call
+//      is recorded as `canned`, a stub hole like a refusal: the model acted on an empty
+//      stand-in result, not on data the case chose.
 //
 // Everything other than invoke() goes to the real layer, so tool definitions, skill
 // activation and the runtime's <task_error> formatting are production's.
@@ -78,7 +80,7 @@ export interface StubbedCall {
   invokeEventId: string | undefined;
   toolName: string;
   input: Record<string, unknown>;
-  disposition: 'stubbed' | 'passthrough' | 'refused';
+  disposition: 'stubbed' | 'passthrough' | 'canned' | 'refused';
 }
 
 export interface StubController {
@@ -162,7 +164,7 @@ export function createStubController(
       };
     }
 
-    record('passthrough');
+    record(inert().has(toolName) ? 'canned' : 'passthrough');
     return real.invoke(...args);
   };
 

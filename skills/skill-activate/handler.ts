@@ -58,6 +58,11 @@ export class SkillActivateHandler implements ToolHandler {
     const bound = boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined);
     const taskId = bound?.taskId;
 
+    if (taskId && !ctx.taskRepo) {
+      // taskRepo is optional (#2024): absent in the test-mode stack, never on a real
+      // bound task. Without it the activation lasts only this turn, not past a wake.
+      ctx.log.warn({ taskId, skill: resolved.skill }, 'skill-activate: bound task but no taskRepo — activation will not survive a wake');
+    }
     if (taskId && ctx.taskRepo) {
       try {
         const task = await ctx.taskRepo.getTask(taskId);

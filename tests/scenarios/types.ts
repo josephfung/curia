@@ -159,11 +159,12 @@ export interface ScenarioCase {
 /** A bus-observed call (tests/shared/turn-capture.ts) plus how the harness answered it. */
 export interface CapturedToolCall extends ObservedToolCall {
   /**
-   * stubbed = answered by a stub; passthrough = real read-only tool; refused = fail-closed
-   * by the stub layer; runtime = the runtime answered it without the ExecutionLayer (a
-   * tool outside the turn's allowlist, a delegation its guard blocked).
+   * stubbed = answered by a stub; passthrough = real read-only tool; canned = an
+   * unstubbed snapshot-served MCP tool, answered with an empty stand-in (#2024);
+   * refused = fail-closed by the stub layer; runtime = the runtime answered it without
+   * the ExecutionLayer (a tool outside the turn's allowlist, a delegation its guard blocked).
    */
-  disposition: 'stubbed' | 'passthrough' | 'refused' | 'runtime';
+  disposition: 'stubbed' | 'passthrough' | 'canned' | 'refused' | 'runtime';
 }
 
 export interface ScenarioRun {

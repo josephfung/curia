@@ -1867,8 +1867,17 @@ export class ExecutionLayer {
     // Optional capabilities (#2024) are injected when this layer has the service and
     // skipped when it does not, so they never refuse the call. They join `caps` before
     // the guards below, so every allowlist check applies to them as to required ones.
-    const optionalCaps = (manifest.optional_capabilities ?? [])
+    const declaredOptional = manifest.optional_capabilities ?? [];
+    const optionalCaps = declaredOptional
       .filter(cap => this.missingCapabilities([cap], capabilityServices).length === 0);
+    if (optionalCaps.length < declaredOptional.length) {
+      // Expected where a deployment leaves a service out (the test-mode stack has no
+      // task repo); logged so a production wiring gap is findable.
+      skillLogger.debug(
+        { toolName, skippedOptionalCapabilities: declaredOptional.filter(cap => !optionalCaps.includes(cap)) },
+        'Optional capabilities not configured on ExecutionLayer — not injected',
+      );
+    }
     const caps = [...(manifest.capabilities ?? []), ...optionalCaps];
 
     // Hard-restrict executionLayer to approve-action only.

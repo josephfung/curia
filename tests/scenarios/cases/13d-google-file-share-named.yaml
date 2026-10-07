@@ -47,6 +47,12 @@ tool_stubs:
         Owner: assistant@example.test
         Permissions:
           - assistant@example.test: owner
+  search_docs:
+    - match: {}
+      return: No Google Docs matched; the decks are Slides presentations.
+  check_drive_file_public_access:
+    - match: {}
+      return: '"Pitch deck: Series A (v7)" is not shared publicly. Link sharing: restricted.'
   manage_drive_access:
     - match: {}
       return: 'Permission granted on "Pitch deck: Series A (v7)".'
