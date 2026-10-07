@@ -201,8 +201,15 @@ task.
 The runtime injects a **`## Principal Contact Details`** block into every agent's
 effective system prompt on each task turn. The block lists the principal's verified
 channel identities (email, Signal, phone, etc.) loaded from `contact_channel_identities`
-at startup. Agents should use those values when they need to reach the principal —
-they are authoritative and labelled as such in the block.
+at startup. They are authoritative and labelled as such in the block.
+
+To **send** to the principal, agents pass the reserved alias `principal` as the
+recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`; the skill looks
+the address up from those verified identities (#2033,
+[ADR-047](docs/adr/047-send-skills-address-recipients-by-reference.md)). A model with
+the right address in context still mistypes it, so no prompt or task payload should
+ask an agent to copy the principal's address into a send skill. The block's values are
+for tools that need a literal address.
 
 The `${principal_contact_id}` placeholder is also injected at bootstrap by
 `interpolateRuntimeContext()` for agents that reference it. Use the contact ID
@@ -212,7 +219,8 @@ the platform resolves the ID once at bootstrap.
 
 For **other contacts** (third parties, external people), use `${principal_contact_id}`
 with `entity-context` or resolve via the contacts specialist — do not hardcode
-their addresses.
+their addresses. Send skills take the contact's UUID; the raw-address fields
+(`to_address`, `recipient_number`, …) are only for someone with no contact record.
 
 #### Where the placeholder resolves — and where it does not
 
