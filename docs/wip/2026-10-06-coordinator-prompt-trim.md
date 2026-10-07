@@ -18,7 +18,8 @@ log.
 |---|---|---:|---:|
 | Start (`3155f290`) | — | 20,532 | ~6,673 / 7,000 |
 | 1: restatements and stale sections | Merged (2026-10-07, #2031) | 18,561 | ~6,180 / 6,400 |
-| 2: one home each for voice and contact resolution | In review (2026-10-07, #2034) | 15,709 | ~5,467 / 5,600 |
+| 2: one home each for voice and contact resolution | Merged (2026-10-07, #2034) | 15,709 | ~5,467 / 5,600 |
+| 11: Who you are / Who you serve preamble | Not started; land before PR 3 | — (code-owned blocks; the YAML loses only references) | — |
 | 3–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
@@ -40,7 +41,7 @@ Behavior held:
   Drive and Docs tool that can touch its Doc.
 - **Smoke:** 44 of 46. Both failures passed 4 of 4 rounds on each side in the A/B.
 
-**PR 2 (2026-10-07, branch `chore/coordinator-prompt-consolidate`).** Who I am absorbs the
+**PR 2 (2026-10-07, #2034).** Who I am absorbs the
 outbound-voice, no-internals and signing bullets as one positive paragraph with no quoted
 anti-examples. People replaces My identity, Contact intelligence, Email with Before
 composing, and the person-resolution part of Storing facts. The calendar section drops
@@ -128,8 +129,10 @@ cost. The payoff is fewer rules to weigh at once:
    #1990: pointing the model at a place for the note worked, and the prohibition ("add no
    note") did not.
 3. **Policy goes in the YAML; personality goes in the identity block.**
-   - The YAML says who gets what information, keeps one first-person voice, keeps
-     internals out, and says whose instructions count.
+   - The YAML says who gets what information, keeps internals out, and says whose
+     instructions count. It addresses the agent in the second person, the same voice as
+     every code-owned block, and uses first person only inside quoted speech (see
+     Decisions; PR 3 converts the text written in the first person).
    - Warmth, formality, length, directness and how readily to ask questions belong to the
      office identity, which the principal edits in the console's Personality settings.
    - YAML text that sets any of these overrides the principal's own settings.
@@ -173,6 +176,17 @@ Measured on `3155f290`. "Rung" is the destination under ADR-046.
 | Per-specialist routing (inbox, calendar) | The roster descriptions are operational, not about routing | ceo-inbox's roster entry is 668 chars, mostly about its 15-minute triage | Add a routing field to the roster |
 | SKILL.md bodies: `tasks` (3,474), `documents` (2,679) | Much of it applies only on wakes | The Placement paragraph is already injected on wakes (`src/agents/document-placement.ts`) | 2: inject at wake time |
 
+Added 2026-10-07, measured on that day's prod prompt (llm.call
+`88597cd5-8325-48d7-8cc7-ca75e846446e`, image `3155f290`) while investigating #2033:
+
+| Section (chars) | Finding | Evidence | Rung / action |
+|---|---|---|---|
+| Facts about the principal | Scattered across about 560 lines, under four names | The identity block's constraint and a stored behavioral preference both say "CEO". The preference also carries the principal's name. The YAML says "principal" about 110 times. The addresses are in the last block before the turn budget. | 11: one `## Who you serve` preamble |
+| `## Your Contact Details`, `## Principal Contact Details` (~600) | Rendered after the per-minute clock, so they are never in the cached prefix | `buildBaseSystemPrompt` order: … time → own contacts → principal contacts → turn budget | 11: move them into the preamble |
+| The `[primary]` email line | Sits directly above a similar work-email line | The invented address in #2033 reads as the primary line blended with the next line's local part | 11: state the primary in its own sentence; the probe measures the effect |
+| Voice | Code-owned blocks are second person; the YAML is first person and slips into the second | About 46 lines use I/my and 95 use you/your. People needs a "'you' or 'your' means me" clause. | Decisions; 3: convert |
+| Bullpen reply rule | An absolute that contradicts a sanctioned path | `src/agents/prompts/bullpen-reply-rule.ts` (#1959) says "never with … email-send", and a bullpen send request asks for exactly that. In #2033 both copies of the rule (the ambient block and the mention wake) sat next to such a request, and the call spent 3,909 output tokens before sending. | 10: say what to do. Reply on the thread with `bullpen`; a send the thread asks for is a separate action |
+
 ## Decisions (2026-10-06)
 
 - **How far to go.** As far as the A/B runs allow. Every PR below is in scope.
@@ -205,6 +219,33 @@ Measured on `3155f290`. "Rung" is the destination under ADR-046.
     loses exact lookup.
 - **The email signature is applied in code,** not described in the prompt.
 
+## Decisions (2026-10-07)
+
+- **One voice: second person for instructions, first person only inside quoted speech.**
+  This replaces "keeps one first-person voice" in principle 3.
+  - **Today.** All of the code-owned text is in the second person:
+    - the identity block ("You are …"), the security block and both contact blocks;
+    - the turn budget, turn guidance and every tool description.
+
+    The YAML is first person, with slips into the second.
+  - **Why second person.**
+    - **"You" then means the agent everywhere,** including in messages people send it
+      ("what's your email?"). People no longer needs its "'you' or 'your' means me" clause.
+    - **Instructions and speech separate cleanly:** "You speak in the first person singular
+      ('I checked your calendar')". In PR 2's text, "your" means the principal inside Who I
+      am's quoted example, and the agent two paragraphs later in People.
+    - **The alternative touches shared text.** Moving the code-owned surface to first person
+      would rewrite the tool descriptions, SKILL.md files and turn guidance, which every
+      agent reads.
+  - **What we don't know.** There is no in-house evidence that the voice mix changes
+    behavior. First-person self-description may help the persona hold. The A/B decides.
+  - **Where.** PR 3 already rewrites every remaining sentence, so it converts the voice at no
+    extra A/B cost. That includes PR 2's Who I am and People (drafts E and F). Who I am
+    becomes How you speak, because identity moves to the preamble (PR 11).
+- **Facts about the principal get one home at the top of the prompt** (PR 11). The layout is
+  for clarity. It is not the fix for the invented address in #2033; send-by-reference is.
+  PR 11's probe measures whether the layout affects that error at all.
+
 ## PR sequence
 
 Sizes are estimates: drafted rewrites (see the appendix) plus measured paragraphs. Each
@@ -214,6 +255,7 @@ PR's A/B decides whether its cuts stay.
 |---|---|---:|
 | 1 | Delete restated code rules and stale sections | ~18.6k |
 | 2 | Consolidate the People, Who I am and calendar text | ~15.3k (meets the epic target) |
+| 11 | Who you are / Who you serve preamble (code). Independent of PRs 3–10; land it before PR 3 so the rewrite pass writes against the final layout | Unchanged (references only) |
 | 3 | Rewrite pass: positive phrasing, style text out, tighter direct-capability sections | ~11.1k |
 | 4 | Audience in code: sender line, non-principal turn guidance, reply rule, provenance | ~7.6k |
 | 5 | Principal note block on the relay | ~7.6k (the turn guidance shrinks) |
@@ -278,12 +320,72 @@ Then:
   - Smoke Draft Email in CEO Voice, and the calendar cases.
 - **Budget:** lower it. This PR meets the epic's 4k-token acceptance criterion.
 
+### PR 11: Who you are / Who you serve preamble
+
+Numbered 11 so PRs 3–10 keep their numbers; it lands before PR 3.
+
+Changes:
+
+- **New preamble order.** `src/agents/system-prompt.ts`, `buildBaseSystemPrompt`:
+  - Coordinator: identity → `## Your Contact Details` → `## Who you serve` → security → YAML
+    body → roster → autonomy → date guardrail → time → turn budget.
+  - Specialists get no identity or security block, so for them it is
+    `## Your Contact Details` → `## Who you serve` → YAML body → … .
+  - Only per-turn blocks stay below the YAML (autonomy, time, turn budget). Update the order
+    comment and the tests that pin the order.
+- **`## Who you serve`** (draft G), rendered for every agent that gets principal identities
+  today:
+  - The principal's display name, and one sentence saying "the principal" in instructions,
+    tool descriptions and messages from other agents means them.
+  - The principal's contact ID, which is the handle #2033's send-by-reference will take.
+  - Then `### Principal Contact Details`, keeping #1953's closed-set guarantee:
+    - The primary email gets a sentence of its own.
+    - The other identities follow as a separate list, introduced as being for recognizing the
+      principal's messages and for a channel a task names.
+    - The negative phrasing becomes positive ("use an address exactly as written here").
+- **Keep the heading names** `Your Contact Details` and `Principal Contact Details` so
+  existing references still resolve: People, the two-sends rule, draft D, and
+  `skills/async-offramp/handler.ts`.
+- **Personality stays in the identity block** (principle 3). Who you serve states facts and
+  references only. How to address the principal remains a principal-authored setting.
+
+Then:
+
+- **Tests:**
+  - The order tests for `buildBaseSystemPrompt`.
+  - `principal-contact-block` rendering tests. Every #1950 guarantee must still hold: the
+    list is closed, labels are not addresses, and an empty list renders nothing.
+- **Caching:** both blocks move into the cached prefix. An identity or principal-identity
+  edit invalidates the prefix, which is rare.
+- **Exfiltration markers:** no change. These blocks were already code-owned.
+- **References in other repos:** curia-deploy `social-media.yaml` says the principal's
+  details are "injected above". That is wrong today and becomes correct after this PR.
+  Recheck the other custom agents in the final phase (curia-deploy#276).
+- **Verify:**
+  - The full A/B per principle 6, plus the smoke contact cases.
+  - **Address-fidelity probe**, a scratch script like #1990's judge probe:
+    - Render the coordinator prompt with `onBlockError: 'throw'` for `origin/main` and for
+      this branch.
+    - Replay the two 2026-10-07 bullpen send requests from #2033: the one that produced the
+      invented address and the one that didn't.
+    - Run each 50 times on `deepseek/deepseek-v4.1-flash`, and count `email-send` calls whose
+      `to` is not exactly the primary.
+    - That is 200 calls, under $2. 50 per side can show a drop from about 20% to about 5%; it
+      cannot prove zero.
+    - Record the numbers in the baseline log and on #2033.
+- **Risk:** medium. The order changes for every agent, but none of its content changes
+  except the principal block's wording. Specialists are covered only by smoke.
+
 ### PR 3: rewrite pass
 
 Changes:
 
 - **Negatives:** every remaining negative becomes a positive instruction. Capitals and
   emphasis labels go.
+- **Voice:** every sentence moves to the second person (Decisions, 2026-10-07). Who I am
+  becomes How you speak (draft E), and People takes draft F, which also names the principal's
+  ID from PR 11 as the second ID that needs no resolving. First person stays only inside
+  quoted speech.
 - **Style text:** delete "Be professional and competent" and "Ask clarifying questions
   freely" (PR 2 already removed "Keep email responses concise and professional"). "Be candid…" becomes a disclosure
   rule: the principal gets everything I know and the current state of things.
@@ -432,6 +534,9 @@ These blocks sit outside the budget but are read on every turn they appear:
 - `non-principal-reply-shaped`: lists questions never to ask.
 - The security block: two NEVERs.
 - The date guardrail: quotes "Monday May 19".
+- The bullpen reply rule (`src/agents/prompts/bullpen-reply-rule.ts`): "never with … email-send"
+  contradicts bullpen send requests (#2033). Say what to do: reply on the thread with
+  `bullpen`, and treat a send the thread asks for as a separate action.
 
 Same principles as PR 3.
 
@@ -488,6 +593,8 @@ over:
   - `coordinator-cold-compose.test.ts` pins one sentence.
   - `prompts/trigger-guidance.test.ts` pins turn-guidance text, and caps all of it
     together at 6,000 chars (PR 4).
+  - The `buildBaseSystemPrompt` order tests and the `principal-contact-block` rendering
+    tests (PR 11).
 - **Exfiltration markers.** They are built from `system_prompt` lines
   (`src/dispatch/prompt-exfiltration-markers.ts`). Text moved to turn guidance stays
   covered; text moved to code-owned blocks or tool descriptions does not.
@@ -502,6 +609,11 @@ over:
 - `src/agents/prompts/routing-decision-guardrail.ts` still lists calendar as
   handle-directly. Only `scripts/spikes/voice-brain-parity` imports it; the live voice
   runtime does not.
+- **Stored identity text predates the vocabulary pass.** `src/identity/defaults.ts` says
+  "Never impersonate the principal", but an office identity saved before #1950 keeps "the
+  CEO", and so does the prod version saved on 2026-10-05. The fix is data: re-save it in the
+  console Personality settings. Whether built-in constraints should always follow the code
+  default is a separate decision.
 
 ## Appendix: draft rewrites
 
@@ -561,3 +673,56 @@ to an address in Principal Contact Details.
 After PR 5, the last sentence becomes: "Put anything for the principal inside
 <note_for_principal></note_for_principal>; it is removed from the reply and delivered to
 them."
+
+**E. How you speak** (PR 3; replaces PR 2's Who I am, same content in the second person)
+
+```
+## How you speak
+You are a person, a chief of staff, not a platform. You speak in the first person singular
+to everyone ("I checked your calendar", "I'll follow up"), and work a specialist did is
+yours when you report it. You describe what you can do the way a person would: "I have it on
+file", "I'll look into that". Messages carry outcomes in plain language ("I've split this
+into a few parts; I'll report back in about 15 minutes"); tools, agents, systems, IDs, file
+paths and task mechanics stay out of them, the principal's included. Asked how you work, you
+say briefly that you're an AI assistant with access to their contacts, email and a research
+team. When something fails, anyone but the principal simply hears that you'll follow up.
+You sign emails with your name and title.
+```
+
+**F. People** (PR 3; replaces PR 2's People. Keeps lesson 10's catch-all and adds the
+principal's ID from PR 11)
+
+```
+### People
+Two contact IDs need no resolving: yours, in "Your Contact Details", and the principal's, in
+"Who you serve". Everyone else (the sender, third parties, recipients and CCs) you resolve by
+briefing the contacts specialist: "Brief me on Sarah Johnson, I'm about to schedule a meeting
+with her." Anyone already in this turn's <resolved_entities> block is resolved: use their ID
+and addresses from it, and brief only for people missing from it. Before sending to anyone
+but the principal, resolve everyone you name, and ask the principal for details only as a
+last resort; the platform catches only some unresolved names. If a briefing fails, tell the
+principal and retry, and act once you have the ID. Any change to a contact also goes to the
+contacts specialist (adding, merging, renaming, identities, relationships, trust,
+permissions), except a profile field the principal states, which `contact-update` records.
+```
+
+**G. Who you serve** (PR 11; code-rendered, values in angle brackets)
+
+```
+## Who you serve
+You work for <principal display name>, your principal. "The principal" in these
+instructions, in tool descriptions and in messages from other agents means them. Their
+contact ID is <principal contact id>; use it wherever a tool asks for the principal's
+contact ID.
+
+### Principal Contact Details
+These are all of the principal's verified addresses, and the list is complete: an address
+that is not listed here is not theirs. Use an address exactly as written here. A label in
+parentheses is a note, not an address.
+
+Email the principal at <primary email>.
+
+Also theirs, for recognizing their messages and for a channel a task names:
+- <channel>: <identifier> (label: "<label>")
+- …
+```
