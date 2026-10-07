@@ -151,7 +151,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
 
     const bullpenSend = await execution.invoke(
       'signal-send',
-      { recipient: PRINCIPAL, message: 'Bluesky batch is actioned, boss.' },
+      { recipient_number: PRINCIPAL, message: 'Bluesky batch is actioned, boss.' },
       undefined,
       {
         agentId: 'coordinator',
@@ -169,7 +169,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
 
     const originSend = await execution.invoke(
       'signal-send',
-      { recipient: PRINCIPAL, message: 'Held batch is in and the new batch is out.' },
+      { recipient_number: PRINCIPAL, message: 'Held batch is in and the new batch is out.' },
       undefined,
       {
         agentId: 'coordinator',
@@ -231,7 +231,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
     const send = vi.fn().mockResolvedValue({ success: true });
     const result = await executionWith(send).invoke(
       'signal-send',
-      { recipient: PRINCIPAL, message: 'The filing deadline moved to Friday.' },
+      { recipient_number: PRINCIPAL, message: 'The filing deadline moved to Friday.' },
       undefined,
       {
         agentId: 'coordinator',
@@ -322,7 +322,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
     const send = vi.fn().mockResolvedValue({ success: true });
     const result = await executionWith(send).invoke(
       'signal-send',
-      { recipient: PRINCIPAL, message: 'Still goes out.' },
+      { recipient_number: PRINCIPAL, message: 'Still goes out.' },
       undefined,
       {
         agentId: 'coordinator',
@@ -339,7 +339,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
     const send = vi.fn().mockResolvedValue({ success: true });
     const result = await executionWith(send).invoke(
       'signal-send',
-      { recipient: PRINCIPAL, message: 'Approved.' },
+      { recipient_number: PRINCIPAL, message: 'Approved.' },
       undefined,
       {
         agentId: 'coordinator',

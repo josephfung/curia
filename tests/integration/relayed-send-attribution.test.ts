@@ -80,7 +80,7 @@ describe('relayed send attribution (#1972)', () => {
     const result = await executionLayer.invoke(
       'signal-send',
       {
-        recipient: '+15555550199',
+        recipient_number: '+15555550199',
         message: 'Dana proposes Wednesday 2pm instead. Accept?',
         context_bridge: JSON.stringify({
           agent_id: 'coordinator',
@@ -105,7 +105,7 @@ describe('relayed send attribution (#1972)', () => {
     const { executionLayer, register } = setup();
     const result = await executionLayer.invoke(
       'signal-send',
-      { recipient: '+15555550199', message: 'Scheduling reply could not be drafted for Partnership call.' },
+      { recipient_number: '+15555550199', message: 'Scheduling reply could not be drafted for Partnership call.' },
       undefined,
       relayWake,
     );
@@ -118,7 +118,7 @@ describe('relayed send attribution (#1972)', () => {
     const result = await executionLayer.invoke(
       'signal-send',
       {
-        recipient: '+15555550199',
+        recipient_number: '+15555550199',
         message: 'Departure-day confirm for Friday.',
         context_bridge: JSON.stringify({ agent_id: 'coordinator', delegation_hint: 'calendar-specialist' }),
       },
