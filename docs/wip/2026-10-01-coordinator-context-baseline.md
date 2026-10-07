@@ -995,8 +995,8 @@ First PR of `2026-10-06-coordinator-prompt-trim.md`. Measured through `assembleA
 
 | | Before | After | Change |
 |---|---:|---:|---:|
-| `system_prompt` chars | 20,532 | 18,573 | **−1,959 (−9.5%)** |
-| always-on (YAML + SKILL.md 6,157), est. tokens | ~6,673 | ~6,183 | ~−490 |
+| `system_prompt` chars | 20,532 | 18,561 | **−1,971 (−9.6%)** |
+| always-on (YAML + SKILL.md 6,157), est. tokens | ~6,673 | ~6,180 | ~−490 |
 | CI budget, always-on tokens | 7,000 | 6,400 | lowered |
 | local tool definitions | 74,651 B, 65 tools | unchanged | — |
 

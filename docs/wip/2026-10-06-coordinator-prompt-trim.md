@@ -17,17 +17,19 @@ log.
 | PR | State | YAML `system_prompt` | Always-on (est. tokens) / CI budget |
 |---|---|---:|---:|
 | Start (`3155f290`) | — | 20,532 | ~6,673 / 7,000 |
-| 1: restatements and stale sections | In review (2026-10-07) | 18,573 | ~6,183 / 6,400 |
+| 1: restatements and stale sections | In review (2026-10-07) | 18,561 | ~6,180 / 6,400 |
 | 2–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
 request requires specialized expertise…" (the `delegate` description says it) and the
 casual-messages style line. Channel ownership became one clause on the transfer-ownership
-item. The stale `contact-update` pin comment was fixed. "My team" now heads only the
-`context_bridge` paragraph; PR 2 retitles or moves it while restructuring that area, so
-the heading change doesn't detach PR 1's prompt from the commit its behavior runs used. Spec 06 no longer quotes the
-deleted directives. `loader.test.ts` gained four "does not restate" rows instead of the
+item. The "My team" heading went too (review): its `context_bridge` paragraph now sits
+under the transfer-ownership reply rule, as the sending half of that contract. The stale
+`contact-update` pin comment was fixed. The "ask when an export's scope is unclear"
+judgment moved to the export section of the google-workspace `drive-files.md` reference,
+which loads with every Drive or Sheets export. Spec 06 no longer quotes the deleted
+directives. `loader.test.ts` gained four "does not restate" rows instead of the
 `**Channel ownership.**` assertion.
 
 Behavior held:
@@ -114,7 +116,7 @@ Measured on `3155f290`. "Rung" is the destination under ADR-046.
 | Section (chars) | Finding | Evidence | Rung / action |
 |---|---|---|---|
 | My team: Channel ownership (387) | Partly enforced in code | The reply-lock suppresses the coordinator's final relay once a human-facing send has reached the sender, and files it on the bullpen (`src/dispatch/reply-lock.ts`, `dispatcher.ts` `handleAgentResponse`, #1860). An extra send the coordinator makes itself is not blocked. | Replace with one clause in the transfer-ownership item |
-| Data protection (329) | Mostly enforced in code | `src/security/export-controls.ts` covers email attachments and Google Workspace MCP exports (item threshold, destination allowlist, restricted block). Stage 2.5 gates disclosure in prose, and the security block sets a data-export threshold. The "ask when the scope is unclear" judgment has no code behind it. | 1: delete; watch for it in the A/B |
+| Data protection (329) | Mostly enforced in code | `src/security/export-controls.ts` covers email attachments and Google Workspace MCP exports (item threshold, destination allowlist, restricted block). Stage 2.5 gates disclosure in prose, and the security block sets a data-export threshold. The "ask when the scope is unclear" judgment has no code behind it. | 1: delete; the scope judgment moves to the export section of `drive-files.md` (rung 4, loads with every export) |
 | Reporting, second paragraph (265) | Duplicate | Every `<task_error>` carries the same rule and both exceptions (`src/errors/classify.ts`, #1546) | 2: delete |
 | Scheduling: "Decide, don't drop" (155) | Duplicate | `skills/tasks/SKILL.md` states the same rule in different words | Delete |
 | NO_REPLY: "Do not narrate that decision…" | Partly enforced in code | A body containing a standalone NO_REPLY is treated as a decline (`src/dispatch/no-reply.ts`); auto-generated mail never relays. Narration without the token still sends. | 2: fold into the non-principal guidance (PR 4) |
@@ -225,8 +227,6 @@ Changes:
   configured signature in code.
 - **Calendar:** drop the Handle-directly clause and "I never read or mutate…", which code
   enforces. Keep the routing line and the failure line.
-- **"My team":** after PR 1 it heads only the `context_bridge` paragraph. Retitle it, or
-  move the paragraph next to the transfer-ownership rule.
 
 Then:
 

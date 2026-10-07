@@ -42,8 +42,9 @@ in your tool list.
 ## Exporting knowledge-graph data to Drive or Sheets
 
 `create_drive_file`, `append_table_rows` and `create_sheet` are bulk exports.
-The export gate counts discrete items and works out their sensitivity from
-knowledge-graph node IDs. When the data comes from the knowledge graph, pass
-`export_items` with one `{node_id, label}` per confidential-or-higher row or
-file. Without node IDs the gate treats every item as `internal`, so confidential
-thresholds never fire.
+When the principal hasn't said which records to include, ask before exporting
+everything that matches. The export gate counts discrete items and works out
+their sensitivity from knowledge-graph node IDs. When the data comes from the
+knowledge graph, pass `export_items` with one `{node_id, label}` per
+confidential-or-higher row or file. Without node IDs the gate treats every item
+as `internal`, so confidential thresholds never fire.
