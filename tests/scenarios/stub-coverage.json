@@ -121,6 +121,24 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-07T03:44:55.198Z"
     },
+    "send to contact by id": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-07T21:31:16.149Z"
+    },
+    "send to principal by alias": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-07T21:28:46.669Z"
+    },
+    "signal to contact by id": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-07T21:31:16.149Z"
+    },
     "sweep-on-close closing result": {
       "unstubbed": 0,
       "runs": 5,

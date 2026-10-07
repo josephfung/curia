@@ -1,0 +1,53 @@
+# Case 14c (#2033): a Signal message to a known contact passes the contact's ID, never a
+# number. Rule: the `recipient` and `recipient_number` descriptions in
+# skills/signal-send/tool.json (recipient_number is for someone with no contact record).
+name: signal to contact by id
+description: >
+  The principal asks the coordinator to text Daniel Osei, a known contact with a Signal
+  number on file, that the principal is running late.
+tags: [signal, recipient]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: daniel
+      display_name: Daniel Osei
+      tier: known
+      channel: signal
+      identifier: "+16135550142"
+inbound:
+  from: principal
+  channel: cli
+  content: Text Daniel Osei on Signal that I'm running ten minutes late and to start without me.
+tool_stubs:
+  # The contacts specialist's briefing format (agents/contacts.yaml): prose, then the
+  # contact ID. It names the number too, as a real briefing would.
+  delegate:
+    - match: {}
+      return:
+        agent: contacts
+        response: |
+          Daniel Osei is a known contact with a verified Signal number, +16135550142.
+          No recent meetings or notes on file.
+
+          <resolved_entities>
+            <contact name="Daniel Osei" id="{{contact:daniel}}"/>
+          </resolved_entities>
+expected_behaviors:
+  - id: sends_by_contact_id
+    weight: critical
+    description: Calls signal-send with `recipient` set to Daniel's contact ID.
+    check:
+      called: signal-send
+      with: { recipient: "{{contact:daniel}}" }
+  - id: no_raw_number
+    weight: critical
+    description: Does not text Daniel by typing a number into `recipient_number`.
+    check:
+      not_called: [signal-send]
+      with: { recipient: null }
+  - id: message_says_late
+    weight: important
+    description: The message tells Daniel the principal is about ten minutes late and to start without them.
+failure_modes:
+  - Looks up Daniel's number and types it into recipient_number
+  - Passes a phone number in `recipient`, which the skill refuses

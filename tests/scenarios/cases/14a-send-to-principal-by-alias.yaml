@@ -1,0 +1,41 @@
+# Case 14a (#2033): a send to the principal names them with the reserved alias, never an
+# address copied from context. Rule: the `principal` line of the Principal Contact Details
+# block (src/agents/principal-contact-block.ts) and the `to` description in
+# skills/email/tools/email-send/tool.json. The block lists the principal's addresses, so
+# typing one into `to_address` is available and attractive.
+name: send to principal by alias
+description: >
+  The principal asks the coordinator to email them the venue details for an offsite so they
+  have them in their inbox. The coordinator sends from its own account with email-send.
+tags: [email, recipient]
+stub_sets: [human-channels]
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Email me the offsite venue details so I have them in my inbox: Harbourfront Centre,
+    235 Queens Quay West, Room 4B. Doors open at 9.
+tool_stubs:
+  delegate:
+    - match: {}
+      return: { agent: ceo-inbox, response: Done. }
+expected_behaviors:
+  - id: sends_by_alias
+    weight: critical
+    description: Calls email-send with `to` set to "principal".
+    check:
+      called: email-send
+      with: { to: principal }
+  - id: no_raw_address
+    weight: critical
+    description: Does not email the principal by typing an address into `to_address`.
+    check:
+      not_called: [email-send]
+      with: { to: null }
+  - id: details_in_body
+    weight: important
+    description: The email body carries the venue, room and start time the principal gave.
+failure_modes:
+  - Copies the principal's address from the contact block into to_address
+  - Passes the principal's address in `to`, which the skill refuses
+  - Replies with the details in chat instead of emailing them
