@@ -21,9 +21,12 @@ log.
 | 2–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
-don't drop", Addresses and accounts, Low-trust senders, the roster pointer and the
+don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
+request requires specialized expertise…" (the `delegate` description says it) and the
 casual-messages style line. Channel ownership became one clause on the transfer-ownership
-item, and the stale `contact-update` pin comment was fixed. Spec 06 no longer quotes the
+item. The stale `contact-update` pin comment was fixed. "My team" now heads only the
+`context_bridge` paragraph; PR 2 retitles or moves it while restructuring that area, so
+the heading change doesn't detach PR 1's prompt from the commit its behavior runs used. Spec 06 no longer quotes the
 deleted directives. `loader.test.ts` gained four "does not restate" rows instead of the
 `**Channel ownership.**` assertion.
 
@@ -44,7 +47,8 @@ curia-deploy#276.
    code change already handles the cause.
 2. **Prompts and pin comments drift from the toolset.** The coordinator named two tools it
    doesn't pin. A pin comment claimed `contact-update` promotes low-trust senders; the tool
-   has no tier field. Cross-check every tool a prompt names against the agent's resolved
+   has no tier field, and the capability lives in the contacts specialist's
+   `contact-set-tier`. Cross-check every tool a prompt names against the agent's resolved
    pins.
 3. **"Enforced in code" needs reading the enforcement point.** The reply-lock suppresses
    only the final relay. The NO_REPLY backstop only catches narration that contains the
@@ -114,7 +118,7 @@ Measured on `3155f290`. "Rung" is the destination under ADR-046.
 | Scheduling: "Decide, don't drop" (155) | Duplicate | `skills/tasks/SKILL.md` states the same rule in different words | Delete |
 | NO_REPLY: "Do not narrate that decision…" | Partly enforced in code | A body containing a standalone NO_REPLY is treated as a decline (`src/dispatch/no-reply.ts`); auto-generated mail never relays. Narration without the token still sends. | 2: fold into the non-principal guidance (PR 4) |
 | Addresses and accounts (329) | Stale | See Decisions. `entity-context` is a standalone tool the coordinator does not pin; it can reach it only through discovery. | Delete |
-| Low-trust senders (203) | Stale | `contact-register` is not pinned. `contact-update` is pinned, but neither tool can set a tier: `contact-update` has no tier or trust field, and `contact-register`'s description says elevation is not its job. The pin comment saying `contact-update` "promotes a confirmed low-trust sender" is stale too. | Delete and fix the pin comment. If the principal needs to be able to promote a sender, that is a missing feature to file separately |
+| Low-trust senders (203) | Stale | `contact-register` is not pinned. `contact-update` is pinned, but neither tool can set a tier: `contact-update` has no tier or trust field, and `contact-register`'s description says elevation is not its job. The pin comment saying `contact-update` "promotes a confirmed low-trust sender" is stale too. | Delete and fix the pin comment. Promotion already works: the contacts specialist's `contact-set-tier` handles "treat X as trusted", reached by delegating to it |
 | Calendar (742, plus 184 in Handle directly) | Mostly enforced in code | Calendar tools are restricted to other agents with `allowed_callers` (#1958) | Keep the routing line and the failure line |
 | "Resolve people through the contacts specialist" | Stated five times (~2,530) | My identity, Contact intelligence, Before composing, Addresses, Storing facts | Merge into one People section |
 | "No internals" and voice | Stated four times (~2,090) | Who I am, Outbound voice, "NEVER expose…", the task-mechanics bullet | Merge into Who I am |
@@ -220,6 +224,8 @@ Changes:
   configured signature in code.
 - **Calendar:** drop the Handle-directly clause and "I never read or mutate…", which code
   enforces. Keep the routing line and the failure line.
+- **"My team":** after PR 1 it heads only the `context_bridge` paragraph. Retitle it, or
+  move the paragraph next to the transfer-ownership rule.
 
 Then:
 
