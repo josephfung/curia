@@ -79,7 +79,11 @@ export type IdentitySource =
   // Contact registered by an agent calling the contact-register skill directly,
   // outside the normal dispatcher pipeline. Treated with the same trust as
   // email_participant — the agent is responsible for sourcing the identifier.
-  | 'agent_called';
+  | 'agent_called'
+  // First-time outbound recipient the gateway recorded after a send
+  // (promoteOrCreateRecipientContact). An agent typed this address; nobody
+  // stated or confirmed it, so it is not auto-verified (#2033, ADR-047).
+  | 'outbound_recipient';
 
 // -- Identity status --
 // active: address is believed to be valid and usable (default)
