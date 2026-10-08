@@ -204,16 +204,13 @@ describe('extractDestinationFromInput', () => {
     expect(dest).toEqual({ kind: 'spreadsheet', spreadsheetId: '(new)' });
   });
 
-  it('reads the raw-address fields of email-send and signal-send (#2033)', () => {
-    expect(extractDestinationFromInput('email-send', { to_address: 'new@cold.example' }))
-      .toEqual({ kind: 'email', address: 'new@cold.example' });
-    expect(extractDestinationFromInput('email-send', { to: 'principal' }))
-      .toEqual({ kind: 'email', address: 'principal' });
-    expect(extractDestinationFromInput('signal-send', { recipient_number: '+15551234567' }))
-      .toEqual({ kind: 'signal', address: '+15551234567' });
-    // A blank reference field does not hide the raw one.
-    expect(extractDestinationFromInput('email-send', { to: '  ', to_address: 'new@cold.example' }))
-      .toEqual({ kind: 'email', address: 'new@cold.example' });
+  it('reads the reference inputs of email-send and signal-send only (#2041)', () => {
+    expect(extractDestinationFromInput('email-send', { to: 'principal' })).toEqual({ kind: 'email', address: 'principal' });
+    expect(extractDestinationFromInput('signal-send', { recipient: 'principal' })).toEqual({ kind: 'signal', address: 'principal' });
+    // Retired raw inputs are not read (the pre-gate check refuses them first).
+    expect(extractDestinationFromInput('email-send', { to_address: 'new@cold.example' })).toBeNull();
+    expect(extractDestinationFromInput('email-send', { to: '  ', to_address: 'new@cold.example' })).toBeNull();
+    expect(extractDestinationFromInput('signal-send', { recipient_number: '+15551234567' })).toBeNull();
   });
 });
 

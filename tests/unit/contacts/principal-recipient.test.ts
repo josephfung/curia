@@ -210,14 +210,26 @@ describe('principal-recipient', () => {
       )).toBe(true);
     });
 
-    // Raw-address fields (#2033). References in to/recipient are resolved by
-    // Gate C before this check; here the parsers only have to read both fields.
-    it('reads the raw-address fields of each send skill', () => {
+    // Retired raw-address inputs (#2041): a present one fails the parser closed, even with the principal's own address.
+    it('fails closed when a retired raw-address input is present', () => {
       const cases: Array<[string, Record<string, unknown>]> = [
         ['email-send', { to_address: 'ceo@example.com', subject: 'x', body: 'y' }],
+        ['email-send', { to: 'ceo@example.com', cc_addresses: 'ceo@example.com', subject: 'x', body: 'y' }],
         ['signal-send', { recipient_number: '+15551234567', message: 'hi' }],
         ['sms-send', { recipient_number: '+15559876543', message: 'hi' }],
         ['slack-send', { recipient_user_id: 'U_CEO', message: 'hi' }],
+      ];
+      for (const [tool, input] of cases) {
+        expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(false);
+      }
+    });
+
+    it('ignores a blank retired input', () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['email-send', { to: 'ceo@example.com', to_address: '', cc_addresses: '  ', subject: 'x', body: 'y' }],
+        ['signal-send', { recipient: '+15551234567', recipient_number: '', message: 'hi' }],
+        ['sms-send', { recipient: '+15559876543', recipient_number: null, message: 'hi' }],
+        ['slack-send', { recipient: 'U_CEO', recipient_user_id: '', message: 'hi' }],
       ];
       for (const [tool, input] of cases) {
         expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(true);
@@ -234,14 +246,6 @@ describe('principal-recipient', () => {
       for (const [tool, input] of cases) {
         expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(false);
       }
-    });
-
-    it('counts cc_addresses toward the email-send recipient set', () => {
-      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
-        'email-send',
-        { to_address: 'ceo@example.com', cc_addresses: 'other@example.com', subject: 'x', body: 'y' },
-        PRINCIPAL_IDENTITIES,
-      )).toBe(false);
     });
 
     it('does not treat an unresolved reference as the principal', () => {

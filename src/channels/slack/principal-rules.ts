@@ -22,14 +22,14 @@ function parseSlackSendRecipients(input: Record<string, unknown>): string[] | nu
     'groupId',
     'slackChannelId',
     'channel_id',
+    'recipient_user_id', // retired raw input (#2041): fail closed
   ] as const;
   for (const key of unparsedRecipientKeys) {
     if (hasPresentValue(input[key])) return null;
   }
 
-  // `recipient` holds a contact reference and `recipient_user_id` a raw U… id
-  // (#2033). Gate C resolves a reference to its user id before comparing.
-  return parseOneRecipient(input, 'recipient_user_id');
+  // `recipient` holds a contact reference (#2033); Gate C resolves it before comparing.
+  return parseOneRecipient(input);
 }
 
 /**
