@@ -21,6 +21,8 @@ import { EmailSendHandler } from '../../../skills/email/tools/email-send/handler
 import { SignalSendHandler } from '../../../skills/signal-send/handler.js';
 import { SmsSendHandler } from '../../../skills/sms-send/handler.js';
 import { SlackSendHandler } from '../../../skills/slack-send/handler.js';
+import { ContactCreateHandler } from '../../../skills/contacts/tools/contact-create/handler.js';
+import { ContactLinkIdentityHandler } from '../../../skills/contacts/tools/contact-link-identity/handler.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -489,5 +491,88 @@ describe('label hint (#2047)', () => {
     expect(request.mock.calls[0]![0]).toMatchObject({
       sendResolution: [{ ref: reference, identityId: personalId, identityName: 'personal' }],
     });
+  });
+});
+
+function contactCtx(h: Harness, input: Record<string, unknown>): ToolContext {
+  return {
+    input,
+    secret: () => { throw new Error('no secrets'); },
+    log: logger,
+    contactService: h.contacts,
+  } as unknown as ToolContext;
+}
+
+describe('cold outreach creates a contact first (#2041)', () => {
+  let h: Harness;
+  beforeEach(async () => { h = await harness(); });
+
+  it('contact-create, then email-send to the returned ID, reaches the address that was entered', async () => {
+    const created = await new ContactCreateHandler().execute(contactCtx(h, {
+      name: 'Dana Whitfield', email: 'Dana.Whitfield@NewCo.example',
+    }));
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+    const contactId = (created.data as { contact_id: string }).contact_id;
+
+    const sent = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(contactId)));
+
+    expect(sent.success).toBe(true);
+    expect(delivered(h)).toEqual(['dana.whitfield@newco.example']);
+    if (sent.success) expect(sent.data).toMatchObject({ contact_id: contactId });
+  });
+
+  it('a number entered in local form is stored as E.164 and reachable by sms-send', async () => {
+    const created = await new ContactCreateHandler().execute(contactCtx(h, { name: 'Lee Park', sms: '(416) 555-0123' }));
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+    const contactId = (created.data as { contact_id: string }).contact_id;
+
+    const sent = await SKILLS.sms.handler.execute(ctx(h, SKILLS.sms.input(contactId)));
+
+    expect(sent.success).toBe(true);
+    expect(delivered(h)).toEqual(['+14165550123']);
+  });
+
+  it('a near-miss of a known address is refused, naming that contact, and nothing is sent', async () => {
+    const created = await new ContactCreateHandler().execute(contactCtx(h, { name: 'Sam P', email: 'sam@home.exampel' }));
+    expect(created.success).toBe(false);
+    if (!created.success) {
+      expect(created.error).toContain(h.spouseId);
+      expect(created.error).toContain('similar email address');
+      expect(created.error).not.toContain('sam@home.example');
+    }
+    expect(delivered(h)).toEqual([]);
+  });
+
+  it("a typo of the principal's address is caught as the principal, without the principal's contact ID", async () => {
+    const principal = await h.contacts.getContact(h.principalId);
+    await h.contacts.saveContact({ ...principal!, systemRole: 'principal' });
+
+    const created = await new ContactCreateHandler().execute(contactCtx(h, { name: 'Pat', email: 'pat@home.exampel' }));
+
+    expect(created.success).toBe(false);
+    if (!created.success) {
+      expect(created.error).toContain('the principal');
+      expect(created.error).not.toContain(h.principalId);
+    }
+  });
+
+  it('re-stating a first-time recipient makes it reachable by reference', async () => {
+    await h.gateway.send({ channel: 'email', to: 'new.person@cold.example', subject: 'Hi', body: 'Hello.' });
+    const resolved = await h.contacts.resolveByChannelIdentity('email', 'new.person@cold.example');
+    h.nylasSend.mockClear();
+
+    const before = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(resolved!.contactId)));
+    expect(before.success).toBe(false);
+
+    const restated = await new ContactLinkIdentityHandler().execute(contactCtx(h, {
+      contact_id: resolved!.contactId, channel: 'email', identifier: 'new.person@cold.example',
+    }));
+    expect(restated).toMatchObject({ success: true, data: { already_linked: true, verified: true } });
+
+    const after = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(resolved!.contactId)));
+    expect(after.success).toBe(true);
+    expect(delivered(h)).toEqual(['new.person@cold.example']);
   });
 });

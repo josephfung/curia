@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.24.4"
+version: "0.25.0"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -290,10 +290,13 @@ pinned_skills:
   # come with their bundle, since a pin cannot exclude one tool. sms-send and
   # slack-send are how the principal is reached on a deployment without Signal.
   # contact-update records a known person's profile field when the principal
-  # states one (it cannot change a contact's trust tier). context-bridge-clear
-  # handles "clear out those debriefs". All four are rare by nature, and a
-  # missing one would be noticed only when it was needed. Approval expiry is
-  # a system interval (#2013), not a coordinator tool.
+  # states one (it cannot change a contact's trust tier).
+  # contact-create adds someone who is not a contact yet: the send skills take a
+  # contact ID only, so a cold outreach is contact-create, then the send to the
+  # contact_id it returns, in one turn (#2041).
+  # context-bridge-clear handles "clear out those debriefs". All four are rare
+  # by nature, and a missing one would be noticed only when it was needed.
+  # Approval expiry is a system interval (#2013), not a coordinator tool.
   - bullpen
   - delegate
   - signal-send
@@ -302,6 +305,7 @@ pinned_skills:
   - config-store
   - date-resolve
   - contact-update
+  - contact-create
   - file-parse
   - tool-registry
   - activity-log
