@@ -173,7 +173,7 @@ anything carrying those markers — and nothing else.
 The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
 
 1. A **matching stub** answers the call. The real tool never runs. A success stub for
-   `email-send` or `email-reply` still refuses an attachment whose `file_url` is outside
+   `email-send`, `email-reply`, or `email-draft-save` still refuses an attachment whose `file_url` is outside
    the temp store, with the error production's gateway returns (#2059). That call is
    recorded as stubbed: the model is told what went wrong and can recover, and it is
    not a stub hole.

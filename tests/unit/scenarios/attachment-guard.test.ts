@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emailAttachmentRefusal } from '../../scenarios/attachment-guard.js';
 
 const STORE = '/run/curia-tempfiles';
@@ -8,6 +8,10 @@ function attachment(fileUrl: string): Record<string, unknown> {
 }
 
 describe('emailAttachmentRefusal', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('refuses a file_url outside the temp store and allows one inside it', () => {
     const outside = emailAttachmentRefusal(
       'email-send',
@@ -48,6 +52,21 @@ describe('emailAttachmentRefusal', () => {
     expect(emailAttachmentRefusal('email-send', {}, STORE)).toBeUndefined();
     expect(emailAttachmentRefusal('email-send', { attachments: [] }, STORE)).toBeUndefined();
     expect(emailAttachmentRefusal('signal-send', attachment('file:///etc/passwd'), STORE)).toBeUndefined();
+  });
+
+  it('refuses an email-draft-save attachment outside the fixture store', () => {
+    const message = emailAttachmentRefusal(
+      'email-draft-save',
+      attachment('file:///tmp/.workspace-mcp/attachments/deck.pdf'),
+    );
+    expect(message).toContain('outside the allowed temp store directory');
+  });
+
+  it('keeps the fixture store when CURIA_TEMPFILE_DIR points somewhere else', () => {
+    vi.stubEnv('CURIA_TEMPFILE_DIR', '/tmp');
+    expect(emailAttachmentRefusal('email-send', attachment('file:///run/curia-tempfiles/deck.pdf'))).toBeUndefined();
+    expect(emailAttachmentRefusal('email-draft-save', attachment('file:///tmp/deck.pdf')))
+      .toContain('outside the allowed temp store directory');
   });
 
   it('refuses when any attachment in the list is outside the store', () => {

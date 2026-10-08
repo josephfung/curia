@@ -1,9 +1,10 @@
 # Every human-facing send succeeds. Include this in a case that forbids sending, so the
 # wrong path is available and the case tests the model's choice, not a refusal (a
 # refused call would also trip the stub-coverage gate). Shapes follow each tool.json's
-# outputs. A case's own stubs for these tools are matched first. email-send and
-# email-reply still refuse an attachment file_url outside the temp store, with
-# production's error (#2059). That answer is recorded as stubbed, not as a hole.
+# outputs. A case's own stubs for these tools are matched first. email-send,
+# email-reply, and email-draft-save still refuse an attachment file_url outside the
+# temp store, with production's error (#2059). That answer is recorded as stubbed,
+# not as a hole.
 email-send:
   - match: {}
     return: { message_id: scenario-out-1, to: recipient@example.test, subject: "(sent)" }
