@@ -110,7 +110,8 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 
 | Source | Meaning | Verified? |
 |---|---|---|
-| `ceo_stated` | CEO explicitly provided the identifier ("Jenna's email is jenna@acme.com") | Yes |
+| `ceo_stated` | CEO explicitly provided the identifier, through the console or setup ("Jenna's email is jenna@acme.com") | Yes |
+| `agent_stated` | An agent entered the identifier with contact-create or contact-link-identity, after the duplicate check before the write (#2041, ADR-047) | Yes |
 | `email_participant` | Extracted from To/CC on an email the CEO sent or was part of | Yes |
 | `signal_participant` | Extracted from a Signal sender (E.164) on inbound | Yes |
 | `slack_participant` | Extracted from a Slack user id (`U…`) on inbound DM/@mention/thread/reaction | Yes |
@@ -118,9 +119,9 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 | `crm_import` | Pulled from the CEO's CRM during an action | Yes |
 | `calendar_attendee` | Extracted from a calendar event | Yes |
 | `self_claimed` | The sender identified themselves ("Hi, it's Jenna") | No |
-| `outbound_recipient` | First-time recipient of an agent send, recorded by the outbound gateway after delivery. An agent typed it (ADR-047) | No |
+| `outbound_recipient` | First-time recipient of an agent send, recorded by the outbound gateway after delivery. An agent typed it (ADR-047) | No; verified when the principal confirms it or an agent re-states it |
 
-CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
+CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Agent-stated identities are verified because the duplicate check runs before they are written; see ADR-047. Agents cannot change the principal's identities. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
 
 ### contact_auth_overrides
 
@@ -261,7 +262,7 @@ The CEO mentions a person in conversation. The Coordinator extracts entities and
 **Full identifier provided:**
 > CEO: "Jenna Torres is my CFO. Her email is jenna@acme.com and she's on Signal at +15550001111."
 
-→ Creates KG person node, contact record, and two verified channel identities (source: `ceo_stated`).
+→ Creates KG person node, contact record, and two verified channel identities (source: `agent_stated`, after the duplicate check; ADR-047).
 
 **Partial mention (no identifiers):**
 > CEO: "My CFO Jenna attends all board meetings."
@@ -275,7 +276,7 @@ An unknown sender messages on a channel. Under the default `allow` policy the me
 **Flow:**
 1. Contact resolver finds no match for `(channel, sender_id)`
 2. Per-channel unknown sender policy applies (see [Unknown Sender Policy](#unknown-sender-policy)): `allow` auto-creates a `tier='unknown'` contact and routes to the coordinator; `ignore` drops the message
-3. The coordinator (or the CEO) identifies the sender → channel identity linked to existing or new contact (source: `ceo_stated`, verified: `true`)
+3. The coordinator (or the CEO) identifies the sender → channel identity linked to existing or new contact (source: `agent_stated`, verified: `true`)
 4. Subsequent messages from that sender resolve to the now-known contact; the CEO can elevate the tier with `contact-set-tier`
 
 ### Path 3: External Source (CRM, calendar, address book)
@@ -333,7 +334,7 @@ Send skills (`email-send`, `signal-send`, `sms-send`, `slack-send`) take a conta
 
 The alias stays within the split above. It resolves only to the verified identities the `### Principal Contact Details` block already shows every agent, and the block tells agents to pass `principal` instead of typing an address. The contact-ID handle stays opt-in. For anyone else, the handle is the contact UUID from `<resolved_entities>` or the contacts specialist.
 
-Someone with no contact record is reached through a separate raw-address field (`to_address`, `cc_addresses`, `recipient_number`, `recipient_user_id`). The gateway records them afterwards as a `known` contact with an unverified `outbound_recipient` identity. #2040 decides that tier, and #2041 whether the raw fields stay.
+There is no raw-address path (#2041). Someone with no contact record is added first with `contact-create`, which refuses an address another contact holds and lists contacts that may be the same person until the agent names them in `distinct_from`. The send skills then take the returned contact ID. `email-draft-save` takes a reference too.
 
 ### Operating on the principal's calendar (#1217)
 
