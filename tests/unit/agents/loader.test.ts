@@ -79,6 +79,15 @@ describe('loadAgentConfig', () => {
     // scenarios 09 and 10 test the behavior.
   });
 
+  it('coordinator prompt keeps a routine change to one job (prompt trim PR 3)', () => {
+    // Pinned because dropping it was a measured regression: without "never a second job",
+    // smoke "Coordinator edits an existing recurring job" cancelled and recreated the job
+    // after a re-list showed the old time, and first attempts fell to 8 of 13 against
+    // main's 11 of 11.
+    const prompt = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml')).system_prompt;
+    expect(prompt).toMatch(/`scheduler-update` on\s+that job, never a second job/);
+  });
+
   it('coordinator prompt does not claim continuation is manual (#1958)', () => {
     // ResumableContinuationSubscriber schedules the next slice on execution_paused. The
     // statement now arrives with the paused result (#1959), not in the prompt.
