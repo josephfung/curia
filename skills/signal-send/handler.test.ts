@@ -131,6 +131,45 @@ describe('SignalSendHandler', () => {
     );
   });
 
+  // The same filler habit applies to the live destination inputs: a blank
+  // group_id or recipient is not a second destination.
+  it.each([[''], ['  '], [null]])('ignores a blank group_id %o beside a recipient', async (blank) => {
+    const gateway = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+      getSignalGroupMembers: vi.fn(),
+    };
+    const ctx = makeCtx({ input: { recipient: BOB_ID, group_id: blank, message: 'hi' }, gateway });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(gateway.getSignalGroupMembers).not.toHaveBeenCalled();
+    expect(gateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'signal', recipient: '+14155551234' }),
+      expect.anything(),
+    );
+  });
+
+  it('ignores a whitespace-only recipient beside a group_id', async () => {
+    const gateway = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+      getSignalGroupMembers: vi.fn().mockResolvedValue([]),
+    };
+    const ctx = makeCtx({ input: { recipient: '  ', group_id: 'grpABC==', message: 'hi' }, gateway });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(gateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'signal', groupId: 'grpABC==' }),
+      expect.anything(),
+    );
+  });
+
+  it('treats whitespace-only recipient and group_id as no destination', async () => {
+    const ctx = makeCtx({ input: { recipient: '  ', group_id: '  ', message: 'hi' } });
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/Missing destination/);
+    expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+  });
+
   describe('send by reference (#2033)', () => {
     beforeEach(() => resolveRecipientReference.mockClear());
 
