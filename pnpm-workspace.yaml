@@ -242,6 +242,11 @@ overrides:
   # publishes `repository: "github:squirrelchat/smol-toml"`, the npm shorthand, which the
   # first repo-URL parser returned null for, silently skipping the upstream-advisory leg.
   smol-toml: '>=1.9.0'
+  # HIGH CVE from Trivy, 2026-10-08 (code-scanning #291, #297):
+  # CVE-2026-93749 (HIGH, <1.2.2): DoS via malformed indexed source maps. Unpinned, the
+  # postcss@8.5.26 that sanitize-html (a prod dependency) and tsup pull in resolved 1.2.1;
+  # only vite's postcss@8.5.28 had moved to 1.2.2. 1.2.2 is the first patched release.
+  source-map-js: '>=1.2.2'
   #
   # Advisories deliberately left WITHOUT a clearing override (re-check before assuming
   # they were missed — the adm-zip entry that used to sit here was fixed by 0.6.1, and
