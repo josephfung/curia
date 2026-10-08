@@ -55,8 +55,8 @@ describe('loadAgentConfig', () => {
     ['task_error carve-outs', /This cuts one way only/, '<task_error> reporting_constraint (#1546)'],
     ['acting-as account fallback', /"acting as" parameter/, 'MCP fixed_inputs + ## Your Contact Details'],
     // Prompt trim PR 2: each of these restated a rule that now has one home.
-    ['a second outbound-voice rule', /Outbound voice \(mandatory\)/, 'Who I am (every audience)'],
-    ['a second no-internals rule', /NEVER expose contact lookup results/, 'Who I am (every audience)'],
+    ['a second outbound-voice rule', /Outbound voice \(mandatory\)/, 'How you speak (every audience)'],
+    ['a second no-internals rule', /NEVER expose contact lookup results/, 'How you speak (every audience)'],
     ['a second contact-resolution section', /### Contact intelligence|Before composing any email/, 'People'],
     ['calendar in handle-directly', /Calendar is never handle-directly/, 'calendar allowed_callers + Principal calendar requests'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {

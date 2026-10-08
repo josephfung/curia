@@ -72,8 +72,11 @@ interface AgentBudget {
 // ~6,180 tokens with SKILL.md 6,157; 74,651 bytes over 65 local tools.
 // Prompt trim PR 2 (one section each for voice and contact resolution): YAML 15,709
 // chars (~3,927 tokens, under #1954's 4k target), ~5,467 tokens with SKILL.md.
+// Prompt trim PR 3 (second person, positive phrasing, tighter direct-capability
+// sections): YAML 12,560 chars, ~4,680 tokens with SKILL.md; 76,898 bytes over 66 local
+// tools, after task-create's owner values moved into its description.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 5_600, localToolDefinitionBytes: 77_000, allowMcpPins: false },
+  { agent: 'coordinator', alwaysOnPromptTokens: 4_800, localToolDefinitionBytes: 77_000, allowMcpPins: false },
 ];
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };

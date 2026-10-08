@@ -449,7 +449,8 @@ describe('task-create manifest (#1939)', () => {
   ) as ToolManifest;
 
   it('documents the four source categories beside owner and priority', () => {
-    expect(manifest.description).toContain('owner (curia/ceo/external)');
+    // Each owner value says when it applies; the coordinator's prompt no longer does (prompt trim PR 3).
+    expect(manifest.description).toContain('owner (ceo when the principal must act, curia when it is yours to advance, external when waiting on someone else)');
     expect(manifest.description).toContain('priority (0-100)');
     expect(manifest.description).toContain('source (ceo/agent/scheduler/coordinator)');
   });
