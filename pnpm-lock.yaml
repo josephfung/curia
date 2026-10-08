@@ -29,6 +29,7 @@ overrides:
   fflate: '>=0.8.3'
   smol-toml: '>=1.9.0'
   source-map-js: '>=1.2.2'
+  fast-copy: '>=4.1.0'
 
 importers:
 
@@ -3780,8 +3781,8 @@ packages:
     engines: {node: '>= 10.17.0'}
     hasBin: true
 
-  fast-copy@4.0.3:
-    resolution: {integrity: sha512-58apWr0GUiDFM8+3afrO6eYwJBn9ZAhDOzG3L+/9llab/haCARS2UIfffmOurYLwbgDRs8n0rfr6qAAPEAuAQw==}
+  fast-copy@4.1.2:
+    resolution: {integrity: sha512-DUHggaYcouhy5I1LacDJ+JDSqGlumVJP2EAi5Nwt1pWPeLpSvIjkrY+x4fsoI1/+GlTyq+DM9zdgWCFSfqNODA==}
 
   fast-decode-uri-component@1.0.1:
     resolution: {integrity: sha512-WKgKWg5eUxvRZGwW8FvfbaH7AXSh2cL+3j5fMGzUMCxWBJ3dV3a7Wz8y2f/uQ0e3B6WmodD3oS54jTQ9HVTIIg==}
@@ -10001,7 +10002,7 @@ snapshots:
       - supports-color
     optional: true
 
-  fast-copy@4.0.3: {}
+  fast-copy@4.1.2: {}
 
   fast-decode-uri-component@1.0.1: {}
 
@@ -11581,7 +11582,7 @@ snapshots:
     dependencies:
       colorette: 2.0.20
       dateformat: 4.6.3
-      fast-copy: 4.0.3
+      fast-copy: 4.1.2
       fast-safe-stringify: 2.1.1
       help-me: 5.0.0
       joycon: 3.1.1

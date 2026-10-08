@@ -247,6 +247,11 @@ overrides:
   # postcss@8.5.26 that sanitize-html (a prod dependency) and tsup pull in resolved 1.2.1;
   # only vite's postcss@8.5.28 had moved to 1.2.2. 1.2.2 is the first patched release.
   source-map-js: '>=1.2.2'
+  # MED advisory from Trivy, 2026-10-08 (code-scanning #290, #296):
+  # GHSA-jggr-w7fw-pc2j (MED): stack exhaustion when copying deeply-nested values. Unpinned,
+  # pino-pretty (dev, and via @livekit/rtc-node in prod) resolved 4.0.3. Patched in 4.1.0 on
+  # the 4.x line that pino-pretty depends on (2.2.0 / 3.1.0 on older lines, not in our tree).
+  fast-copy: '>=4.1.0'
   #
   # Advisories deliberately left WITHOUT a clearing override (re-check before assuming
   # they were missed — the adm-zip entry that used to sit here was fixed by 0.6.1, and
