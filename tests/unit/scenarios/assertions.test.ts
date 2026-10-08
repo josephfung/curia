@@ -32,6 +32,21 @@ describe('evaluateCheck: called', () => {
     expect(evaluateCheck({ kind: 'called', tool: 'bullpen' }, r, ctx).rating).toBe('MISS');
   });
 
+  it('can require the call to have succeeded', () => {
+    const failed: CapturedToolCall = {
+      name: 'email-send',
+      input: { to: 'kevin', attachments: [{ file_url: 'file:///tmp/5b1e7c3a.pdf' }] },
+      disposition: 'stubbed',
+      result: { success: false, error: 'Attachment error: outside the store' },
+    };
+    const ok = call('email-send', { to: 'kevin', attachments: [{ file_url: 'file:///run/curia-tempfiles/5b1e7c3a.pdf' }] });
+    const check = { kind: 'called' as const, tool: 'email-send', contains: { attachments: '5b1e7c3a' }, success: true };
+    expect(evaluateCheck(check, run([failed]), ctx).rating).toBe('MISS');
+    expect(evaluateCheck(check, run([failed, ok]), ctx).rating).toBe('PASS');
+    // A refused attempt is still an attempt. not_called does not grow a success filter.
+    expect(evaluateCheck({ kind: 'not_called', tools: ['email-send'], contains: { attachments: '5b1e7c3a' } }, run([failed]), ctx).rating).toBe('MISS');
+  });
+
   it('enforces min and max counts', () => {
     const twice = run([call('delegate'), call('delegate')]);
     expect(evaluateCheck({ kind: 'called', tool: 'delegate', max: 1 }, twice, ctx).rating).toBe('MISS');

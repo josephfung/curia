@@ -303,6 +303,7 @@ expected_behaviors:
     description: Delegates to ceo-inbox with the entry id.
     check:                                # omit to have the judge score it
       called: delegate                    # or: not_called: [..] | order: [a, b]
+      success: true                       # called only: the tool result succeeded
       with: { agent: ceo-inbox }          #     | reply: no_reply | not_no_reply
       contains: { task: "{{entry:offsite}}" }   # | reply_excludes: [regex]
       max: 1                              #     | reply_excludes_internal_names: true
