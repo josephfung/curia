@@ -35,8 +35,11 @@ export function normalizeAgentIdentifier(channel: string, raw: string): Normaliz
 
   if (PHONE_CHANNELS.has(channel)) {
     // A valid E.164 number the phone library does not recognise (a new range, a
-    // fictional 555 area code) is kept as typed rather than refused.
-    const normalized = normalizePhone(value) ?? (E164_REGEX.test(value) ? value : null);
+    // fictional 555 area code) is kept rather than refused. The fallback ignores
+    // formatting (spaces, parentheses, dots, hyphens), so `+1 (555) 123-4567` is
+    // stored compact as `+15551234567`.
+    const compact = value.replace(/[\s().-]/g, '');
+    const normalized = normalizePhone(value) ?? (E164_REGEX.test(compact) ? compact : null);
     return normalized
       ? { ok: true, identifier: normalized }
       : { ok: false, error: `${channel} must be a phone number in international form, such as +14155552671.` };

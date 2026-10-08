@@ -28,6 +28,19 @@ describe('normalizeAgentIdentifier', () => {
     expect(normalizeAgentIdentifier('sms', '+15555550199')).toEqual({ ok: true, identifier: '+15555550199' });
   });
 
+  it('keeps a formatted valid E.164 number the phone library does not recognise, stored compact', () => {
+    // normalizePhone() returns null for these; the fallback ignores formatting.
+    expect(normalizeAgentIdentifier('sms', '+1 (555) 123-4567')).toEqual({ ok: true, identifier: '+15551234567' });
+    expect(normalizeAgentIdentifier('sms', '+1 555 123 4567')).toEqual({ ok: true, identifier: '+15551234567' });
+  });
+
+  it('refuses an unrecognised number that has no leading +, even when formatted', () => {
+    // normalizePhone() returns null here too, and without a + it is not E.164.
+    const result = normalizeAgentIdentifier('sms', '555-123-4567');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/international form/);
+  });
+
   it('refuses a value that is not a phone number', () => {
     const result = normalizeAgentIdentifier('sms', 'call me');
     expect(result.ok).toBe(false);
