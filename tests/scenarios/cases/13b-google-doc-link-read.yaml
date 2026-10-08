@@ -72,6 +72,18 @@ tool_stubs:
           "headers": {},
           "footers": {}
         }
+  # The Doc has no tables; this is the real tool's answer for one without.
+  debug_table_structure:
+    - match: {}
+      return: "Error: Table index 0 not found. Document has 0 table(s)."
+  list_drive_items:
+    - match: {}
+      return: &listing |
+        Found 1 item:
+        - Name: "Q3 leadership offsite: plan" (ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga, Type: application/vnd.google-apps.document)
+  list_docs_in_folder:
+    - match: {}
+      return: *listing
   get_drive_file_permissions:
     - match: {}
       return: |
