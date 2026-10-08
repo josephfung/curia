@@ -350,7 +350,8 @@ export interface ToolContext {
   sensitivityClassifier?: import('../memory/sensitivity.js').SensitivityClassifier;
   /** Where an identifier an agent enters may have come from (#2061, ADR-047): the messages
    *  people sent in this task's conversation and the results of source tools read in it.
-   *  Set by the agent runtime; absent on calls outside a task (approval replays, voice). Read
+   *  Set by the agent runtime and the voice bridge; absent on calls outside a task (approval
+   *  replays). Read
    *  through `identifierHasSource()` in `src/skills/_shared/identifier-source.ts`. */
   identifierSources?: import('../contacts/identifier-provenance.js').IdentifierSources;
 }

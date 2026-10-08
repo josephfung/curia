@@ -316,7 +316,7 @@ Opts this skill's output out of **only** the broad generic-long-hex secret scrub
 
 #### `provenance_source` (optional, default: `false`)
 
-Marks this skill's successful output as **source text for identifier provenance** (#2061, ADR-047). An email address or phone number an agent enters with `contact-create`, `contact-link-identity` or `contact-register` is verified only when it occurs in a message a person sent in the conversation, or in the result of a skill that sets this field. Set it only on a skill whose output is data it read: a web page, a document, a mail listing. Never set it on a skill whose output a model wrote (`delegate`, `bullpen`, a summarizer): a typo in that text would then verify itself. `tests/unit/skills/provenance-source-manifests.test.ts` pins the list, so adding a skill there is a deliberate change.
+Marks this skill's successful output as **source text for identifier provenance** (#2061, ADR-047). An email address or phone number an agent enters with `contact-create`, `contact-link-identity` or `contact-register` is verified only when it occurs in a message a person sent in the conversation, or in the result of a skill that sets this field (or when the principal approved the write). Set it only on a skill whose output is data it read: a web page, a document, a mail listing. Never set it on a skill whose output a model wrote (`delegate`, `bullpen`, a summarizer): a typo in that text would then verify itself. `tests/unit/skills/provenance-source-manifests.test.ts` pins the list, so adding a skill there is a deliberate change.
 
 ```json
 "provenance_source": true

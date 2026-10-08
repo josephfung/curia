@@ -610,6 +610,23 @@ describe('ContactRegisterHandler — identifier provenance (#2061)', () => {
     const result = await register('sam@venue-co.com', { humanApproved: true });
     expect(result).toMatchObject({ success: true, data: { verified: true } });
   });
+
+  it('refuses a blank identifier instead of storing an empty address', async () => {
+    const before = (await contactService.listContacts()).length;
+    const result = await register('   ', { identifierSources: sourcesFrom(INBOX_LISTING) });
+    expect(result.success).toBe(false);
+    expect((await contactService.listContacts()).length).toBe(before);
+  });
+
+  it('stores a phone number in E.164, the form the send skills address', async () => {
+    const result = await handler.execute(makeCtx({
+      contactService,
+      input: { channel: 'phone', identifier: '(416) 555-0100', displayName: 'Front Desk', messageTimestamp: TIMESTAMP_A },
+      identifierSources: sourcesFrom('Front desk: 416-555-0100'),
+    }));
+    expect(result).toMatchObject({ success: true, data: { created: true, verified: true } });
+    expect(await contactService.resolveByChannelIdentity('phone', '+14165550100')).not.toBeNull();
+  });
 });
 
 // contact-register records agent_called, verified only when the identifier has a source

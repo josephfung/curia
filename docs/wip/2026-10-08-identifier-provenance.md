@@ -82,7 +82,7 @@ export const sharedIdentifierSourceIndex: IdentifierSourceIndex;
   - expiry after the TTL, using an injected clock;
   - the per-conversation cap dropping the oldest keys;
   - the conversation cap evicting the least recently touched conversation.
-- [ ] Implement it as a `Map<conversationKey, Map<key, addedAt>>`. Re-touching a conversation moves it to the end. The defaults are a 24 h TTL, 20 000 keys and 1 000 conversations.
+- [ ] Implement it as a `Map<conversationKey, Map<key, addedAt>>`. Re-touching a conversation moves it to the end. The defaults are a 24 h TTL, 5 000 keys per conversation and 500 conversations; conversations whose last record has expired are purged on the next record.
 - [ ] Run the tests and confirm they pass. Commit.
 
 ### Task 3: Plumbing (manifest field, working memory, execution, runtime)
