@@ -49,6 +49,11 @@ tool_stubs:
   scheduler-create:
     - match: {}
       return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }
+  # A run recorded a "verification" report on the job after editing it. Harmless here,
+  # and production would accept it; refusing it measured the harness, not the edit.
+  scheduler-report:
+    - match: {}
+      return: { success: true }
 expected_behaviors:
   - id: edits_existing_job
     weight: critical
