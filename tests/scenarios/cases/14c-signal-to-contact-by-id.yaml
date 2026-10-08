@@ -1,6 +1,5 @@
 # Case 14c (#2033): a Signal message to a known contact passes the contact's ID, never a
-# number. Rule: the `recipient` and `recipient_number` descriptions in
-# skills/signal-send/tool.json (recipient_number is for someone with no contact record).
+# number. Rule: the `recipient` description in skills/signal-send/tool.json.
 name: signal to contact by id
 description: >
   The principal asks the coordinator to text Daniel Osei, a known contact with a Signal
@@ -41,7 +40,7 @@ expected_behaviors:
       with: { recipient: "{{contact:daniel}}" }
   - id: no_raw_number
     weight: critical
-    description: Does not text Daniel by typing a number into `recipient_number`.
+    description: Does not call signal-send without `recipient` (a number in a retired raw input is refused).
     check:
       not_called: [signal-send]
       with: { recipient: null }
@@ -49,5 +48,5 @@ expected_behaviors:
     weight: important
     description: The message tells Daniel the principal is about ten minutes late and to start without them.
 failure_modes:
-  - Looks up Daniel's number and types it into recipient_number
+  - Looks up Daniel's number and types it into `recipient`
   - Passes a phone number in `recipient`, which the skill refuses
