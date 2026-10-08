@@ -1,9 +1,28 @@
 name: Schedule External Meeting
-description: Agent should handle a meeting scheduling request with an external party, checking availability, proposing times, and offering to send the request email
+description: >
+  The principal asks for a 30-minute intro call with an external contact sometime next
+  week and gives her email. Curia should do the planning itself: find open times on the
+  principal's calendar, place holds on a couple of them, and email the contact asking
+  which one works. The principal delegated the scheduling, so Curia must not hand the
+  choice of times back to them (#2049).
 tags:
   - meeting-coordination
   - scheduling
   - single-turn
+judge_tool_calls: true
+
+tool_stubs:
+  # Smoke disables send skills unless a case stubs them, so without this a send to Jamie
+  # comes back as a test-mode capability refusal and the judge scores how the model
+  # narrates the refusal instead of whether it chose to send (#2049).
+  email-send:
+    - match: {}
+      return: { message_id: smoke-sent-0001, to: "{{input:to_address}}", subject: "{{input:subject}}" }
+  # Jamie is not a fixture contact, so the coordinator may create one. Stubbed so a gated
+  # retry doesn't inherit it from the first attempt's database writes.
+  contact-create:
+    - match: {}
+      return: { contact_id: 7c1d9e2a-4b3f-4e8a-9d6c-2f5a8b1e0c47, display_name: "{{input:name}}", identities_added: 0 }
 
 turns:
   - role: user
@@ -12,21 +31,36 @@ turns:
       Her email is jamie@stripe.com. Sometime next week works for me.
 
 expected_behaviors:
-  - id: acknowledge-with-details
-    description: Acknowledges the scheduling request and confirms all captured details (Jamie Rodriguez, Stripe, 30 min, next week)
+  - id: uses-real-availability
+    description: >
+      Picks times from the principal's actual calendar for next week (the calendar's free
+      windows), not invented ones, and each is 30 minutes long
     weight: critical
-  - id: check-availability
-    description: Proposes checking the CEO's calendar for available slots next week
+  - id: plans-without-the-principal
+    description: >
+      Chooses the times itself and goes ahead, rather than listing options for the
+      principal to pick from or asking the principal whether to contact Jamie
     weight: critical
-  - id: offer-to-send
-    description: Offers to send the meeting request email on the CEO's behalf
+  - id: reaches-jamie
+    description: >
+      Contacts Jamie Rodriguez at jamie@stripe.com about the call, by email or by a
+      calendar invite
+    weight: critical
+  - id: holds-and-offers-choice
+    description: >
+      Places holds on two or more of the open slots and emails Jamie offering those
+      times, asking which one works best, rather than booking a single time she has not
+      agreed to
     weight: important
-  - id: proper-format
-    description: Uses professional meeting request format (who, purpose, proposed times)
+  - id: reports-back
+    description: >
+      Tells the principal what it did: which times it held or booked, and that Jamie was
+      contacted
     weight: important
 
 failure_modes:
-  - Drops the email address or gets the name wrong
-  - Doesn't propose checking calendar availability first
-  - Sends an email without confirming times with the CEO
-  - Treats this as informational rather than actionable
+  - Asks the principal to choose between proposed times
+  - Asks the principal for permission before contacting Jamie
+  - Offers or books a time that conflicts with an event on the principal's calendar
+  - Drops or mistypes jamie@stripe.com, or gets Jamie's name wrong
+  - Says an email or invite went out when no send succeeded

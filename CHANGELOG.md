@@ -159,6 +159,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Smoke inbox fixture** — every listed message, attachment and triage write is stubbed, so inbox cases measure the model.
 - **Scenario cases 13a–13d** — stub every Workspace read and task step they reach; 13d accepts an emailed PDF. (#2050)
 - **Scenario harness** — tools found through `tool-registry` count as reachable; unservable ones are refused as stub holes. (#2050)
+- **Schedule External Meeting smoke case** — expects held slots offered to the guest, not principal confirmation; stubs the send. (#2049)
 - **Send approvals** — a hinted approval fails closed when that identity or label no longer matches. (#2047)
 - **LLM call archive** — stores OpenRouter reasoning, its token count, and text beside tool calls. (#2042)
 - **LLM call archive** — strips null bytes so one bad character cannot drop the audit row. (#2042)
