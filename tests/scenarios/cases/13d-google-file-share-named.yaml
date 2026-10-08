@@ -69,9 +69,10 @@ tool_stubs:
     - match: {}
       return: "https://docs.google.com/presentation/d/1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc/edit?usp=sharing"
   # Some runs read the deck or export it to PDF to attach to an email to Kevin (#2050).
-  # workspace-mcp 2.0.1's formats, over stdio as Curia runs it.
+  # workspace-mcp 2.0.1's formats, over stdio as Curia runs it. Keyed by file, so a run
+  # that opens the seed deck sees the seed deck rather than being steered back to v7.
   get_drive_file_content:
-    - match: {}
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
       return: |
         File: "Pitch deck: Series A (v7)" (ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc, Type: application/vnd.google-apps.presentation)
         Link: https://docs.google.com/presentation/d/1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc/edit?usp=drivesdk
@@ -85,8 +86,22 @@ tool_stubs:
 
         The ask
         $8M Series A. 18 months of runway. 12 hires, 4 in engineering.
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: |
+        File: "Pitch deck: Seed round (2025)" (ID: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty, Type: application/vnd.google-apps.presentation)
+        Link: https://docs.google.com/presentation/d/1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty/edit?usp=drivesdk
+
+        --- CONTENT ---
+        Seed round
+        Raising $2M to reach product-market fit
+
+        Traction
+        $180k ARR. 9 design partners.
+
+        The ask
+        $2M seed. 24 months of runway.
   get_drive_file_download_url:
-    - match: {}
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
       return: |
         File downloaded successfully!
         File: Pitch deck: Series A (v7)
@@ -99,10 +114,25 @@ tool_stubs:
         The file has been saved to disk and can be accessed directly via the file path.
 
         Note: Google native file exported to application/pdf format.
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: |
+        File downloaded successfully!
+        File: Pitch deck: Seed round (2025)
+        File ID: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty
+        Size: 1934.2 KB (1980621 bytes)
+        MIME Type: application/pdf
+
+        📎 Saved to: /tmp/.workspace-mcp/attachments/Pitch_deck_Seed_round_2025_8d41e0b6-27c3-4f19-a6e2-5b90c3d7f184.pdf
+
+        The file has been saved to disk and can be accessed directly via the file path.
+
+        Note: Google native file exported to application/pdf format.
   # The real tool exports only Google Docs; both decks are Slides presentations.
   export_doc_to_pdf:
-    - match: {}
+    - match: { document_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
       return: "Error: File 'Pitch deck: Series A (v7)' is not a Google Doc (MIME type: application/vnd.google-apps.presentation). Only native Google Docs can be exported to PDF."
+    - match: { document_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: "Error: File 'Pitch deck: Seed round (2025)' is not a Google Doc (MIME type: application/vnd.google-apps.presentation). Only native Google Docs can be exported to PDF."
 expected_behaviors:
   - id: activates_google_workspace
     weight: critical
