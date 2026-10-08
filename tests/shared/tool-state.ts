@@ -1,3 +1,6 @@
+import { CronExpressionParser } from 'cron-parser';
+import { toLocalIso } from '../../src/time/timestamp.js';
+
 // tests/shared/tool-state.ts — per-case memory of stubbed writes (#2074).
 //
 // Smoke and the scenario suite both answer scheduler, task and draft reads from
@@ -66,6 +69,39 @@ function str(v: unknown): string | undefined {
 function clampLimit(raw: unknown, fallback: number, max: number): number {
   const n = typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : fallback;
   return Math.max(1, Math.min(Math.floor(n), max));
+}
+
+/**
+ * Next fire of a cron expression, in the job's zone. Same call as
+ * `SchedulerService.nextRunFromCron`. A bad expression or zone returns undefined
+ * so a fixture cannot take the case down.
+ */
+function nextFire(cronExpr: string, timezone: string): Date | undefined {
+  try {
+    return CronExpressionParser.parse(cronExpr, { tz: timezone }).next().toDate();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Local ISO, as `scheduler-list` returns it (`toLocalIso`), not a UTC Z string. */
+function formatNextRun(instant: Date, timezone: string): string | null {
+  if (Number.isNaN(instant.getTime())) return null;
+  try {
+    return toLocalIso(Math.floor(instant.getTime() / 1000), timezone);
+  } catch {
+    return null;
+  }
+}
+
+/** Cron wins on create, matching `createJob`. An edit that sets `run_at` is handled by the caller. */
+function scheduledNextRun(cronExpr: string | null, runAt: string | null, timezone: string): string | null {
+  if (cronExpr) {
+    const instant = nextFire(cronExpr, timezone);
+    return instant ? formatNextRun(instant, timezone) : null;
+  }
+  if (!runAt) return null;
+  return formatNextRun(new Date(runAt), timezone);
 }
 
 const TASK_PREVIEW_CHARS = 160;
@@ -173,18 +209,23 @@ export class SchedulerState {
     const taken = new Set(this.created.map(job => String(job['id'])));
     const id = freshId(str(data['jobId']), taken, 'job-created', this.created.length + 1);
     const task = typeof input['task'] === 'string' ? input['task'] : undefined;
+    const cronExpr = str(input['cron_expr']) ?? null;
+    const runAt = str(input['run_at']) ?? null;
+    const timezone = str(input['timezone']) ?? null;
+    // A job with no zone is interpreted in UTC for the next-run math. The real
+    // service uses its configured zone; the stub does not have that.
     this.created.push({
       id,
       agentId: str(input['agent_id']) ?? 'coordinator',
       status: 'pending',
-      cronExpr: str(input['cron_expr']) ?? null,
-      runAt: str(input['run_at']) ?? null,
-      nextRunAt: null,
+      cronExpr,
+      runAt,
+      nextRunAt: scheduledNextRun(cronExpr, runAt, timezone ?? 'UTC'),
       lastRunAt: null,
       lastRunOutcome: null,
       consecutiveFailures: 0,
       lastError: null,
-      timezone: str(input['timezone']) ?? null,
+      timezone,
       taskTitle: null,
       taskPreview: task !== undefined ? taskPreview(task) : null,
       intentAnchor: str(input['intent_anchor']) ?? null,
@@ -227,13 +268,17 @@ export class SchedulerState {
    * A listing as it stands after this case's writes. Status and agent filters apply
    * whenever the call passes them, so the same arguments don't change meaning after
    * an unrelated write. `dirty()` only decides whether to merge writes in.
+   *
+   * `nextRunAt` is refreshed after the merge, once the row's timezone is known.
+   * An edit that sets `cron_expr` or `run_at` replaces it (a `run_at` edit wins,
+   * as in `updateJob`). A row the stub left without one is filled from its cron
+   * or `run_at`, so a weekday job is not stuck on a date a placeholder invented.
    */
   replayOnto(data: Json, input: Json): Json {
     const listed = data['jobs'];
     if (!Array.isArray(listed)) return data;
     const filtering = input['status'] !== undefined || input['agent_id'] !== undefined;
     const limitAsked = typeof input['limit'] === 'number';
-    if (!this.dirty() && !filtering && !limitAsked) return data;
 
     let jobs: unknown[];
     if (this.dirty()) {
@@ -241,6 +286,12 @@ export class SchedulerState {
       jobs = filtering ? rows : [...rows, ...extras];
     } else {
       jobs = [...listed];
+    }
+    const pinned = pinnedNextRuns(listed);
+    jobs = jobs.map(job => this.refreshNextRun(job, pinned));
+    if (!this.dirty() && !filtering && !limitAsked) {
+      if (jobs.every((job, i) => job === listed[i])) return data;
+      return { ...data, jobs };
     }
     if (typeof input['status'] === 'string') jobs = jobs.filter(job => isRecord(job) && job['status'] === input['status']);
     if (typeof input['agent_id'] === 'string') jobs = jobs.filter(job => isRecord(job) && job['agentId'] === input['agent_id']);
@@ -251,6 +302,40 @@ export class SchedulerState {
     const page = jobs.slice(0, limit);
     return { ...data, jobs: page, count: page.length, truncated, limit };
   }
+
+  /**
+   * Next run for one merged row. A schedule edit replaces a pinned value. A row
+   * the stub left blank is filled from the merged cron, which may be the turn
+   * stub's rather than the create's.
+   */
+  private refreshNextRun(job: unknown, pinned: ReadonlySet<string>): unknown {
+    if (!isRecord(job)) return job;
+    const id = typeof job['id'] === 'string' ? job['id'] : undefined;
+    const update = id !== undefined ? this.updates.get(id) : undefined;
+    const tz = typeof job['timezone'] === 'string' && job['timezone'] !== '' ? job['timezone'] : 'UTC';
+    const runAtEdit = update !== undefined ? str(update['runAt']) : undefined;
+    const cronEdit = update !== undefined && typeof update['cronExpr'] === 'string';
+    if (!runAtEdit && !cronEdit && id !== undefined && pinned.has(id)) return job;
+
+    const cron = typeof job['cronExpr'] === 'string' ? job['cronExpr'] : undefined;
+    const runAt = typeof job['runAt'] === 'string' ? job['runAt'] : undefined;
+    let formatted: string | null = null;
+    if (runAtEdit !== undefined) formatted = formatNextRun(new Date(runAtEdit), tz);
+    else if (cron) formatted = scheduledNextRun(cron, null, tz);
+    else if (runAt) formatted = formatNextRun(new Date(runAt), tz);
+    if (!formatted || formatted === job['nextRunAt']) return job;
+    return { ...job, nextRunAt: formatted };
+  }
+}
+
+/** Ids whose stub row already names a next run. An edit still replaces that value. */
+function pinnedNextRuns(listed: readonly unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const row of listed) {
+    if (!isRecord(row) || typeof row['id'] !== 'string') continue;
+    if (row['nextRunAt'] !== undefined && row['nextRunAt'] !== null) ids.add(row['id']);
+  }
+  return ids;
 }
 
 interface DraftRecord {
