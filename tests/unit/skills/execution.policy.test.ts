@@ -1320,27 +1320,6 @@ describe('autonomy gates', () => {
       expect(classifyAction).toHaveBeenCalledOnce();
     });
 
-    it('blocks a known contact send to a third party from structurally resolved recipients (#1815)', async () => {
-      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
-      const { registry, layer } = makeLayerWithScore100(undefined, judge);
-      const handler = makeHandler('should not run');
-      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
-
-      const result = await layer.invoke(
-        'email-send',
-        { to_address: 'stranger@example.com' },
-        undefined,
-        originatorMeta('known', null, { senderId: 'alice@example.com' }),
-      );
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error).toContain('known');
-      }
-      expect(handler.execute).not.toHaveBeenCalled();
-      expect(classifyAction).not.toHaveBeenCalled();
-    });
-
     it('clamps a judge class-downgrade up to the manifest floor (third-party send still escalates)', async () => {
       // Crafted/misclassified verdict: judge calls a medium skill "read-only" (none) but
       // flags it third-party-facing. Without the clamp, applyActionPolicy(known, none, …) would
@@ -1388,11 +1367,13 @@ describe('autonomy gates', () => {
     });
 
     it('fails closed (escalates) for a known-contact reversible-external action when no judge is configured', async () => {
-      const { registry, layer } = makeLayerWithScore100(); // no judge wired
+      const { registry, layer } = makeLayerWithScore100(undefined, undefined, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(), // no judge wired
+      });
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
 
-      const result = await layer.invoke('email-send', { to_address: 'stranger@example.com' }, undefined, originatorMeta('known'));
+      const result = await layer.invoke('email-send', { to: BOB_REF }, undefined, originatorMeta('known'));
 
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
@@ -1400,11 +1381,13 @@ describe('autonomy gates', () => {
 
     it('fails closed (escalates) when the judge is configured but disabled, without calling it', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false, enabled: false }); // disabled kill switch
-      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
 
-      const result = await layer.invoke('email-send', { to_address: 'stranger@example.com' }, undefined, originatorMeta('known'));
+      const result = await layer.invoke('email-send', { to: BOB_REF }, undefined, originatorMeta('known'));
 
       expect(result.success).toBe(false);
       expect(handler.execute).not.toHaveBeenCalled();
@@ -1437,24 +1420,6 @@ describe('autonomy gates', () => {
 
     // -- Principal-only carve-out (#1301): heads-up to the CEO is not third-party-facing ----
 
-    it('allows signal-send to the principal from a known contact without consulting the judge', async () => {
-      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
-      const { registry, layer } = makeLayerWithScore100(undefined, judge);
-      const handler = makeHandler('ok');
-      registry.register(makeRiskyManifest('signal-send', 'medium'), handler);
-
-      const result = await layer.invoke(
-        'signal-send',
-        { recipient_number: '+15551234567', message: 'account notification heads-up' },
-        undefined,
-        originatorMeta('known'),
-      );
-
-      expect(result.success).toBe(true);
-      expect(handler.execute).toHaveBeenCalledOnce();
-      expect(classifyAction).not.toHaveBeenCalled();
-    });
-
     it('escalates when a non-allowlisted skill targets the principal (parser fails closed)', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
@@ -1475,13 +1440,15 @@ describe('autonomy gates', () => {
 
     it('escalates email-send with unparsed bcc even when to is the principal', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
-      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'ceo@example.com', bcc: 'other@example.com', subject: 'x', body: 'y' },
+        { to: 'principal', bcc: 'other@example.com', subject: 'x', body: 'y' },
         undefined,
         originatorMeta('known'),
       );
@@ -1491,7 +1458,7 @@ describe('autonomy gates', () => {
       expect(classifyAction).toHaveBeenCalledOnce();
     });
 
-    it('rejects spoofed principal display name in to field (structurally escalates, #1815)', async () => {
+    it('refuses a spoofed principal display name in to before Gate C (#1815, #2041)', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const { registry, layer } = makeLayerWithScore100(undefined, judge);
       const handler = makeHandler('should not run');
@@ -1499,25 +1466,28 @@ describe('autonomy gates', () => {
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'CEO', subject: 'x', body: 'y' },
+        { to: 'CEO', subject: 'x', body: 'y' },
         undefined,
         originatorMeta('known', null, { senderId: 'alice@example.com' }),
       );
 
       expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/contact-create/);
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).not.toHaveBeenCalled();
     });
 
     it('escalates principal + non-principal mixed recipient set without the judge', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
-      const { registry, layer } = makeLayerWithScore100(undefined, judge);
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        contactService: makeReferenceContacts(),
+      });
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'ceo@example.com', cc_addresses: 'other@example.com', subject: 'x', body: 'y' },
+        { to: 'principal', cc: BOB_REF, subject: 'x', body: 'y' },
         undefined,
         originatorMeta('known', null, { senderId: 'alice@example.com' }),
       );
@@ -1531,9 +1501,15 @@ describe('autonomy gates', () => {
 
     const ALICE_REF = '22222222-2222-4222-8222-222222222222';
     const BOB_REF = '33333333-3333-4333-8333-333333333333';
+    const OLD_ALICE_REF = '44444444-4444-4444-8444-444444444444';
+    const UNVERIFIED_ALICE_REF = '55555555-5555-4555-8555-555555555555';
 
-    /** Contacts for reference resolution: the principal, the sender (Alice), a third party (Bob). */
-    function makeReferenceContacts() {
+    /**
+     * Contacts for reference resolution: the principal, the sender (Alice), a third
+     * party (Bob), and two Alices whose address is stale or unverified. The originator's
+     * identities are what the structural path compares the recipients against.
+     */
+    function makeReferenceContacts(originatorIdentities: ChannelIdentity[] = []) {
       const identity = (contactId: string, channel: string, channelIdentifier: string): ChannelIdentity => ({
         id: `id-${channelIdentifier}`, contactId, channel, channelIdentifier, label: null,
         verified: true, verifiedAt: new Date(), status: 'active', source: 'ceo_stated',
@@ -1552,10 +1528,18 @@ describe('autonomy gates', () => {
           contact: { id: BOB_REF, displayName: 'Bob', primaryEmail: null, primaryPhone: null },
           identities: [identity(BOB_REF, 'email', 'bob@example.com')],
         },
+        [OLD_ALICE_REF]: {
+          contact: { id: OLD_ALICE_REF, displayName: 'Alice (old address)', primaryEmail: null, primaryPhone: null },
+          identities: [identity(OLD_ALICE_REF, 'email', 'alice@oldcorp.com')],
+        },
+        [UNVERIFIED_ALICE_REF]: {
+          contact: { id: UNVERIFIED_ALICE_REF, displayName: 'Alice (unverified)', primaryEmail: null, primaryPhone: null },
+          identities: [identity(UNVERIFIED_ALICE_REF, 'email', 'alice@unverified.com')],
+        },
       };
       return {
         getContactWithIdentities: vi.fn(async (id: string) => byId[id]),
-        getIdentitiesForContact: vi.fn().mockResolvedValue([]),
+        getIdentitiesForContact: vi.fn().mockResolvedValue(originatorIdentities),
       } as unknown as ContactService;
     }
 
@@ -1624,23 +1608,6 @@ describe('autonomy gates', () => {
       expect(classifyAction).not.toHaveBeenCalled();
     });
 
-    it('keeps the principal carve-out on the raw to_address path', async () => {
-      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
-      const { registry, layer } = makeLayerWithScore100(undefined, judge);
-      const handler = makeHandler('ok');
-      registry.register(makeRiskyManifest('email-send', 'medium'), handler);
-
-      const result = await layer.invoke(
-        'email-send',
-        { to_address: 'ceo@example.com', subject: 'x', body: 'y' },
-        undefined,
-        originatorMeta('known'),
-      );
-
-      expect(result.success).toBe(true);
-      expect(classifyAction).not.toHaveBeenCalled();
-    });
-
     it('treats a reference to the initiating sender as a reply to them (structural allow)', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
       const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
@@ -1681,6 +1648,7 @@ describe('autonomy gates', () => {
       );
 
       expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('known');
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).not.toHaveBeenCalled();
     });
@@ -2253,23 +2221,21 @@ describe('autonomy gates', () => {
 
     it('does not treat a defunct identity as the initiating sender', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
-      const contactService = {
-        getIdentitiesForContact: vi.fn().mockResolvedValue([
-          {
-            id: 'id-defunct',
-            contactId: 'contact-abc',
-            channel: 'email',
-            channelIdentifier: 'alice@oldcorp.com',
-            label: null,
-            verified: true,
-            verifiedAt: new Date(),
-            status: 'defunct',
-            source: 'email_participant',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          },
-        ]),
-      } as unknown as ContactService;
+      const contactService = makeReferenceContacts([
+        {
+          id: 'id-defunct',
+          contactId: 'contact-abc',
+          channel: 'email',
+          channelIdentifier: 'alice@oldcorp.com',
+          label: null,
+          verified: true,
+          verifiedAt: new Date(),
+          status: 'defunct',
+          source: 'email_participant',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ]);
       const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
         contactService,
       });
@@ -2278,7 +2244,7 @@ describe('autonomy gates', () => {
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'alice@oldcorp.com' },
+        { to: OLD_ALICE_REF },
         undefined,
         originatorMeta('known', null, { senderId: 'alice@example.com' }),
       );
@@ -2290,23 +2256,21 @@ describe('autonomy gates', () => {
 
     it('does not treat an unverified identity as the initiating sender', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
-      const contactService = {
-        getIdentitiesForContact: vi.fn().mockResolvedValue([
-          {
-            id: 'id-unverified',
-            contactId: 'contact-abc',
-            channel: 'email',
-            channelIdentifier: 'alice@unverified.com',
-            label: null,
-            verified: false,
-            verifiedAt: null,
-            status: 'active',
-            source: 'self_claimed',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          },
-        ]),
-      } as unknown as ContactService;
+      const contactService = makeReferenceContacts([
+        {
+          id: 'id-unverified',
+          contactId: 'contact-abc',
+          channel: 'email',
+          channelIdentifier: 'alice@unverified.com',
+          label: null,
+          verified: false,
+          verifiedAt: null,
+          status: 'active',
+          source: 'self_claimed',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ]);
       const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
         contactService,
       });
@@ -2315,7 +2279,7 @@ describe('autonomy gates', () => {
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'alice@unverified.com' },
+        { to: UNVERIFIED_ALICE_REF },
         undefined,
         originatorMeta('known', null, { senderId: 'alice@example.com' }),
       );
@@ -2327,23 +2291,21 @@ describe('autonomy gates', () => {
 
     it('does not treat a cross-channel identity as the initiating sender', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
-      const contactService = {
-        getIdentitiesForContact: vi.fn().mockResolvedValue([
-          {
-            id: 'id-slack',
-            contactId: 'contact-abc',
-            channel: 'slack',
-            channelIdentifier: 'alice@example.com',
-            label: null,
-            verified: true,
-            verifiedAt: new Date(),
-            status: 'active',
-            source: 'slack_participant',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          },
-        ]),
-      } as unknown as ContactService;
+      const contactService = makeReferenceContacts([
+        {
+          id: 'id-slack',
+          contactId: 'contact-abc',
+          channel: 'slack',
+          channelIdentifier: 'alice@example.com',
+          label: null,
+          verified: true,
+          verifiedAt: new Date(),
+          status: 'active',
+          source: 'slack_participant',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ]);
       const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
         contactService,
       });
@@ -2352,7 +2314,7 @@ describe('autonomy gates', () => {
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'alice@example.com' },
+        { to: ALICE_REF },
         undefined,
         {
           taskMetadata: {
@@ -2375,9 +2337,7 @@ describe('autonomy gates', () => {
 
     it('does not take the structural path from contactId alone when sender identifiers are unknown', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
-      const contactService = {
-        getIdentitiesForContact: vi.fn().mockResolvedValue([]),
-      } as unknown as ContactService;
+      const contactService = makeReferenceContacts();
       const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
         contactService,
       });
@@ -2386,7 +2346,7 @@ describe('autonomy gates', () => {
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'alice@example.com' },
+        { to: ALICE_REF },
         undefined,
         originatorMeta('known'),
       );
@@ -2776,6 +2736,20 @@ describe('autonomy gates', () => {
       };
     }
 
+    // send skills take a contact reference (#2041), so the layer needs a contact to resolve
+    const VENDOR_REF = '66666666-6666-4666-8666-666666666666';
+    function vendorContacts(): ContactService {
+      return {
+        getContactWithIdentities: vi.fn(async (id: string) => (id === VENDOR_REF ? {
+          contact: { id, displayName: 'Vendor', primaryEmail: null, primaryPhone: null },
+          identities: [{ id: 'id-vendor', contactId: id, channel: 'email', channelIdentifier: 'vendor@example.com',
+            label: null, verified: true, verifiedAt: new Date(), status: 'active', source: 'ceo_stated',
+            createdAt: new Date(), updatedAt: new Date() }],
+        } : undefined)),
+        getIdentitiesForContact: vi.fn().mockResolvedValue([]),
+      } as unknown as ContactService;
+    }
+
     it('keys these fixtures on delegationOrigin and not on the internal channel', () => {
       // Strip the marker off the real fixture rather than hand-building a second one:
       // channelId stays 'internal' and the originator stays put, and the predicate must
@@ -2895,11 +2869,12 @@ describe('autonomy gates', () => {
         // 65 clears Gate A, so the block below is Gate B's threshold and nothing else.
         autonomyService: makeAutonomyService(65),
         bus: mockBus,
+        contactService: vendorContacts(),
       });
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'vendor@example.com' },
+        { to: VENDOR_REF },
         undefined,
         delegatedInvokeOptions(),
       );
@@ -2934,11 +2909,12 @@ describe('autonomy gates', () => {
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(100),
         bus: mockBus,
+        contactService: vendorContacts(),
       });
 
       const result = await layer.invoke(
         'email-send',
-        { to_address: 'stranger@example.com' },
+        { to: VENDOR_REF },
         undefined,
         delegatedInvokeOptions(externalOriginator('unknown')),
       );
@@ -3376,17 +3352,16 @@ describe('approval trigger on gate block', () => {
     registry.register(makeRiskyManifest('email-send', 'medium'), makeHandler('no'));
     const trigger = makeApprovalTrigger({ created: true, shortRef: 'email-2', notificationSent: true });
     const ref = '44444444-4444-4444-8444-444444444444';
+    const opsRef = '77777777-7777-4777-8777-777777777777';
+    const entry = (id: string, displayName: string, address: string) => ({
+      contact: { id, displayName, primaryEmail: null, primaryPhone: null },
+      identities: [{ id: `i-${id}`, contactId: id, channel: 'email', channelIdentifier: address, label: null,
+        verified: true, verifiedAt: new Date(), status: 'active', source: 'email_participant',
+        createdAt: new Date(), updatedAt: new Date() }],
+    });
     const contactService = {
-      getContactWithIdentities: vi.fn(async (id: string) => (id === ref
-        ? {
-          contact: { id: ref, displayName: 'Dana Lee', primaryEmail: null, primaryPhone: null },
-          identities: [{
-            id: 'i1', contactId: ref, channel: 'email', channelIdentifier: 'dana@example.com', label: null,
-            verified: true, verifiedAt: new Date(), status: 'active', source: 'email_participant',
-            createdAt: new Date(), updatedAt: new Date(),
-          }],
-        }
-        : undefined)),
+      getContactWithIdentities: vi.fn(async (id: string) =>
+        id === ref ? entry(ref, 'Dana Lee', 'dana@example.com') : id === opsRef ? entry(opsRef, 'Ops', 'ops@example.com') : undefined),
     } as unknown as ContactService;
 
     const layer = new ExecutionLayer(registry, logger, {
@@ -3396,20 +3371,16 @@ describe('approval trigger on gate block', () => {
       contactService,
     });
 
-    await layer.invoke('email-send', { to: ref, cc: ref, cc_addresses: 'ops@example.com', subject: 'Hi', body: 'Hello' }, undefined, { taskEventId: 'task-1' });
-    await layer.invoke('email-send', { to_address: 'new@cold.example', subject: 'Hi', body: 'Hello' }, undefined, { taskEventId: 'task-2' });
+    await layer.invoke('email-send', { to: ref, cc: `${ref}, ${opsRef}`, subject: 'Hi', body: 'Hello' }, undefined, { taskEventId: 'task-1' });
 
     const calls = (trigger.request as ReturnType<typeof vi.fn>).mock.calls.map(([opts]) => opts as {
       input: Record<string, unknown>;
       displayInput: Record<string, unknown>;
     });
+    expect(calls).toHaveLength(1);
     expect(calls[0]!.input.to).toBe(ref);
     expect(calls[0]!.displayInput.to).toBe('dana@example.com (contact "Dana Lee")');
-    // Every cc recipient is shown, referenced or raw.
-    expect(calls[0]!.displayInput.cc).toBe('dana@example.com (contact "Dana Lee"), ops@example.com');
-    // The raw path is shown under `to`, the field the approval renderer reads.
-    expect(calls[1]!.input).not.toHaveProperty('to');
-    expect(calls[1]!.displayInput.to).toBe('new@cold.example');
+    expect(calls[0]!.displayInput.cc).toBe('dana@example.com (contact "Dana Lee"), ops@example.com (contact "Ops")');
   });
 
   describe('send recipients are checked before any gate files an approval (#2033)', () => {
@@ -3418,6 +3389,8 @@ describe('approval trigger on gate block', () => {
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
       registry.register(makeRiskyManifest('signal-send', 'medium'), handler);
+      registry.register(makeRiskyManifest('sms-send', 'medium'), handler);
+      registry.register(makeRiskyManifest('slack-send', 'medium'), handler);
       const trigger = makeApprovalTrigger({ created: true, shortRef: 'x', notificationSent: true });
       const layer = new ExecutionLayer(registry, logger, {
         autonomyService: makeAutonomyService(65), // Gate B would file an approval
@@ -3429,12 +3402,9 @@ describe('approval trigger on gate block', () => {
     }
 
     it.each([
-      ['an address in to', 'email-send', { to: 'bob@example.com', subject: 'x', body: 'y' }, /to takes a contact ID or "principal"/],
+      ['an address in to', 'email-send', { to: 'bob@example.com', subject: 'x', body: 'y' }, /contact-create/],
       ['a template token in to', 'email-send', { to: '${principal_contact_id}', subject: 'x', body: 'y' }, /Unresolved template placeholder/],
-      ['a reference in to_address', 'email-send', { to_address: 'principal', subject: 'x', body: 'y' }, /to_address takes an address/],
-      ['a labelled reference in to_address', 'email-send', { to_address: 'principal#personal', subject: 'x', body: 'y' }, /to_address takes an address/],
-      ['an address whose local part contains # is not a reference', 'email-send', { to: 'principal#ops@vendor.example', subject: 'x', body: 'y' }, /to takes a contact ID or "principal"/],
-      ['a reference in recipient_number', 'signal-send', { recipient_number: 'principal', message: 'm' }, /recipient_number takes an address/],
+      ['an address whose local part contains # is not a reference', 'email-send', { to: 'principal#ops@vendor.example', subject: 'x', body: 'y' }, /contact-create/],
       ['a UUID matching no contact', 'email-send', { to: '00000000-0000-4000-8000-000000000000', subject: 'x', body: 'y' }, /No contact has ID/],
     ])('refuses %s without filing an approval', async (_label, tool, input, message) => {
       const { layer, handler, trigger } = layerWithTrigger();
@@ -3443,6 +3413,70 @@ describe('approval trigger on gate block', () => {
       if (!result.success) expect(result.error).toMatch(message as RegExp);
       expect(trigger.request).not.toHaveBeenCalled();
       expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['to_address', 'email-send', { to_address: 'bob@example.com', subject: 'x', body: 'y' }],
+      // Checked before reference resolution: "principal" cannot resolve with this layer's stub.
+      ['to_address beside a reference', 'email-send', { to: 'principal', to_address: 'bob@example.com', subject: 'x', body: 'y' }],
+      ['to_address as an array', 'email-send', { to_address: ['bob@example.com'], subject: 'x', body: 'y' }],
+      ['cc_addresses', 'email-send', { cc_addresses: 'ops@example.com', subject: 'x', body: 'y' }],
+      ['signal recipient_number', 'signal-send', { recipient_number: '+15551234567', message: 'm' }],
+      ['recipient_number as a number', 'signal-send', { recipient_number: 15551234567, message: 'm' }],
+      ['sms recipient_number', 'sms-send', { recipient_number: '+15551234567', message: 'm' }],
+      ['slack recipient_user_id', 'slack-send', { recipient_user_id: 'U012ABCDEF', message: 'm' }],
+    ])('refuses a retired raw input (%s) before any gate files an approval (#2041)', async (_label, tool, input) => {
+      const { layer, handler, trigger } = layerWithTrigger();
+      const result = await layer.invoke(tool as string, input as Record<string, unknown>, undefined, { taskEventId: 'task-1' });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/no longer accepted/);
+        expect(result.error).toMatch(/contact-create/);
+      }
+      expect(trigger.request).not.toHaveBeenCalled();
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    it('refuses a retired raw input on an approval replay too (Review Focus 2)', async () => {
+      const { layer, handler } = layerWithTrigger();
+      const result = await layer.invoke(
+        'email-send',
+        { to_address: 'bob@example.com', subject: 'x', body: 'y' },
+        undefined,
+        { taskEventId: 'task-1', humanApproved: true },
+      );
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/no longer accepted/);
+      expect(handler.execute).not.toHaveBeenCalled();
+    });
+
+    const DANA = '88888888-8888-4888-8888-888888888888';
+    function danaContacts(): ContactService {
+      const identity = (channel: string, address: string): ChannelIdentity => ({
+        id: `i-${channel}`, contactId: DANA, channel, channelIdentifier: address, label: null,
+        verified: true, verifiedAt: new Date(), status: 'active', source: 'ceo_stated',
+        createdAt: new Date(), updatedAt: new Date(),
+      });
+      return {
+        getContactWithIdentities: vi.fn(async (id: string) => (id === DANA ? {
+          contact: { id: DANA, displayName: 'Dana Lee', primaryEmail: null, primaryPhone: null },
+          identities: [identity('email', 'dana@example.com'), identity('signal', '+15550001111')],
+        } : undefined)),
+      } as unknown as ContactService;
+    }
+
+    it.each([
+      ['to_address: ""', 'email-send', { to: DANA, to_address: '', subject: 'x', body: 'y' }],
+      ['to_address: "  "', 'email-send', { to: DANA, to_address: '  ', subject: 'x', body: 'y' }],
+      ['to_address: null', 'email-send', { to: DANA, to_address: null, subject: 'x', body: 'y' }],
+      ['cc_addresses: []', 'email-send', { to: DANA, cc_addresses: [], subject: 'x', body: 'y' }],
+      ['recipient_number: ""', 'signal-send', { recipient: DANA, recipient_number: '', message: 'm' }],
+    ])('does not refuse a blank retired input (%s): the send reaches Gate B (Review Focus 1)', async (_label, tool, input) => {
+      const { layer, trigger } = layerWithTrigger(danaContacts());
+      const result = await layer.invoke(tool as string, input as Record<string, unknown>, undefined, { taskEventId: 'task-1' });
+      expect(result.success).toBe(false); // score 65: held for approval
+      if (!result.success) expect(result.error).not.toMatch(/no longer accepted/);
+      expect(trigger.request).toHaveBeenCalledOnce();
     });
 
     it('caps the references one send may name', async () => {
@@ -3496,17 +3530,6 @@ describe('approval trigger on gate block', () => {
       }
       expect(trigger.request).not.toHaveBeenCalled();
       expect(handler.execute).not.toHaveBeenCalled();
-    });
-
-    it('does not refuse an address whose local part contains # in to_address (#2047)', async () => {
-      const { layer } = layerWithTrigger();
-      const result = await layer.invoke(
-        'email-send',
-        { to_address: 'principal#ops@vendor.example', subject: 'x', body: 'y' },
-        undefined,
-        { taskEventId: 'task-1' },
-      );
-      if (!result.success) expect(result.error).not.toMatch(/takes an address/);
     });
 
     it('classifies a contact-store outage as DATABASE_UNAVAILABLE', async () => {

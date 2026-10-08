@@ -61,7 +61,6 @@ async function resolveReferenceList(
   gateway: OutboundGateway,
   raw: string,
   field: string,
-  rawField: string,
   log: ToolContext['log'],
 ): Promise<{ addresses: string[]; contactIds: Array<string | undefined>; identityNames: string[] } | { error: string }> {
   const addresses: string[] = [];
@@ -71,7 +70,7 @@ async function resolveReferenceList(
   // Parallel to addresses: the label, or "primary" / "unlabelled". Never an address.
   const identityNames: string[] = [];
   for (const entry of new Set(splitList(raw))) {
-    const resolved = await gateway.resolveRecipientReference('email', entry, { field, rawField });
+    const resolved = await gateway.resolveRecipientReference('email', entry, { field });
     if (!resolved.ok) return { error: resolved.error };
     if (!EMAIL_REGEX.test(resolved.identifier)) {
       // A stored identity Nylas cannot address: a data defect. Refuse rather than guess,
@@ -191,7 +190,7 @@ export class EmailSendHandler implements ToolHandler {
     let toContactId: string | undefined;
     let toIdentity: string | undefined;
     if (to) {
-      const resolved = await resolveReferenceList(ctx.outboundGateway, to, 'to', 'to_address', ctx.log);
+      const resolved = await resolveReferenceList(ctx.outboundGateway, to, 'to', ctx.log);
       if ('error' in resolved) return { success: false, error: resolved.error };
       toAddresses = resolved.addresses;
       toContactId = resolved.contactIds[0];
@@ -200,7 +199,7 @@ export class EmailSendHandler implements ToolHandler {
     let ccAddresses: string[] = [...rawCcAddresses];
     let ccIdentities: string[] = [];
     if (cc) {
-      const resolved = await resolveReferenceList(ctx.outboundGateway, cc, 'cc', 'cc_addresses', ctx.log);
+      const resolved = await resolveReferenceList(ctx.outboundGateway, cc, 'cc', ctx.log);
       if ('error' in resolved) return { success: false, error: resolved.error };
       ccAddresses = [...resolved.addresses, ...ccAddresses];
       ccIdentities = resolved.identityNames;

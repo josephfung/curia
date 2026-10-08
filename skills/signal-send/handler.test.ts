@@ -89,7 +89,7 @@ describe('SignalSendHandler', () => {
       const result = await handler.execute(ctx);
 
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('signal', 'principal', { field: 'recipient', rawField: 'recipient_number' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('signal', 'principal', { field: 'recipient' });
       expect(gateway.send).toHaveBeenCalledWith(
         expect.objectContaining({ channel: 'signal', recipient: '+15195550100' }),
         expect.anything(),

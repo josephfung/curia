@@ -341,7 +341,7 @@ describe('EmailSendHandler', () => {
       const result = await handler.execute(ctx);
 
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('email', ALICE_ID, { field: 'to', rawField: 'to_address' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('email', ALICE_ID, { field: 'to' });
       expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'alice@example.com', cc: undefined }),
         expect.anything(),
@@ -361,7 +361,7 @@ describe('EmailSendHandler', () => {
       const result = await handler.execute(ctx);
 
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('email', ALICE_ID, { field: 'cc', rawField: 'cc_addresses' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('email', ALICE_ID, { field: 'cc' });
       expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'ceo@example.com', cc: ['alice@example.com', 'bob@example.com'] }),
         expect.anything(),

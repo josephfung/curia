@@ -86,7 +86,7 @@ describe('slack-send handler', () => {
         outboundGateway: { send, resolveRecipientReference } as never,
       }));
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('slack', 'principal', { field: 'recipient', rawField: 'recipient_user_id' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('slack', 'principal', { field: 'recipient' });
       expect(send).toHaveBeenCalledWith(
         { channel: 'slack', slackChannelId: 'U0PRINCIPAL', slackUserId: 'U0PRINCIPAL', message: 'Hello' },
         expect.any(Object),

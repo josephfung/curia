@@ -81,7 +81,6 @@ export class SlackSendHandler implements ToolHandler {
     if (recipient) {
       const resolved = await ctx.outboundGateway.resolveRecipientReference('slack', recipient, {
         field: 'recipient',
-        rawField: 'recipient_user_id',
       });
       if (!resolved.ok) return { success: false, error: resolved.error };
       if (!SLACK_USER_ID_REGEX.test(resolved.identifier)) {

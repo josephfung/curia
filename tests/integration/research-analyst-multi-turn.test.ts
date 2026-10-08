@@ -213,7 +213,7 @@ describe('Research-analyst multi-turn clarification (issue #611)', () => {
                 id: 'call-2',
                 name: 'signal-send',
                 input: {
-                  recipient_number: '+15551234567',
+                  recipient: 'principal',
                   message: "Working on your acquisition research. I've found several candidates, but wanted to check: which angle matters most to you — valuation, key talent, or technology fit?",
                   context_bridge: JSON.stringify({
                     agent_id: 'coordinator',
