@@ -33,6 +33,7 @@ import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
 import type { ChannelIdentity, Contact } from '../../contacts/types.js';
 import { findPrincipalChannelRules } from '../../contacts/principal-channel-registry.js';
 import { isUuid } from '../../util/uuid.js';
+import { isAddressLikeName } from './address-like-name.js';
 import { isUnresolvedPlaceholder, unresolvedPlaceholderError } from './placeholder-guard.js';
 
 /** The reserved alias for the principal. More aliases may join it later. */
@@ -350,10 +351,14 @@ function labelConflictError(
   return `${who} has verified ${channel} addresses and ${which} of them. Nothing was sent. Candidates: ${candidates}. ${retry}`;
 }
 
-/** Display names come from inbound mail and may themselves be an address. */
+/**
+ * How an error names a contact to the agent. Display names come from inbound mail, and
+ * a contact the gateway created is named after its address or number, so an
+ * address-like name is left out: quoting it would hand the model something to retype.
+ */
 function contactWho(contact: Contact): string {
   const name = safeName(contact.displayName);
-  if (!name || name.includes('@') || /\d{7,}/.test(name)) return `Contact ${contact.id}`;
+  if (!name || isAddressLikeName(name)) return `Contact ${contact.id}`;
   return `Contact "${name}" (${contact.id})`;
 }
 
@@ -491,7 +496,7 @@ export async function resolveRecipientReference(
       ok: false,
       error: isPrincipal
         ? 'The principal contact is marked blocked. Nothing was sent.'
-        : `Contact "${safeName(found.contact.displayName)}" (${contactId}) is blocked. Nothing was sent.`,
+        : `${contactWho(found.contact)} is blocked. Nothing was sent.`,
     };
   }
 
@@ -504,11 +509,9 @@ export async function resolveRecipientReference(
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
   if (usable.length === 0) {
-    // Do not echo an unverified address back: the model would retype it into
-    // another field, which is the failure this design removes.
-    const who = isPrincipal
-      ? 'The principal'
-      : `Contact "${safeName(found.contact.displayName)}" (${contactId})`;
+    // Do not echo an unverified address back, in the name either: the model would
+    // retype it into another field, which is the failure this design removes.
+    const who = isPrincipal ? 'The principal' : contactWho(found.contact);
     const why = onChannel.length > 0 ? ' (the ones on file are unverified, inactive, or not sendable on this channel)' : '';
     const next = isPrincipal
       ? 'Use a channel listed in Principal Contact Details.'

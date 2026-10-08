@@ -156,6 +156,30 @@ describe('resolveRecipientReference', () => {
     if (!result.ok) expect(result.error).toMatch(/is blocked\. Nothing was sent/);
   });
 
+  // The gateway names a contact after its identifier. An error that quoted that name
+  // would hand the model the stored number to re-state (#2041).
+  it('never quotes a gateway-made contact named after its number', async () => {
+    const texted = await contacts.createContact({ displayName: '+14165550100', source: 'outbound_recipient', tier: 'known' });
+    await contacts.linkIdentity({ contactId: texted.id, channel: 'sms', channelIdentifier: '+14165550100', source: 'outbound_recipient' });
+    const result = await resolveRecipientReference(texted.id, 'sms', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/has no verified, active sms address/);
+      expect(result.error).toContain(`Contact ${texted.id}`);
+      expect(result.error).not.toContain('4165550100');
+    }
+  });
+
+  it('never quotes an address-shaped name on a blocked contact', async () => {
+    const blocked = await contacts.createContact({ displayName: 'spam@x.example', source: 'outbound_recipient', tier: 'blocked' });
+    await contacts.linkIdentity({ contactId: blocked.id, channel: 'email', channelIdentifier: 'spam@x.example', source: 'ceo_stated' });
+    const result = await resolveRecipientReference(blocked.id, 'email', FIELDS, deps());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe(`Contact ${blocked.id} is blocked. Nothing was sent.`);
+    }
+  });
+
   it('skips a verified identity the channel cannot send to, so it does not shadow a sendable one', async () => {
     const sam = await contacts.createContact({ displayName: 'Sam Signal', source: 'ceo_stated', tier: 'known' });
     // A Signal ACI UUID recorded when an inbound message carried no number, oldest first.
