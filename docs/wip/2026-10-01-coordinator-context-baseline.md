@@ -1103,3 +1103,39 @@ Mismatch 96% after a retry; its first attempt missed `ask-clarification`). A 3-r
 Role/Person Mismatch against PR 1's prompt: PR 2 passed 2 of 3 rounds (96% / 67% / 92%),
 PR 1 passed 1 of 3 (92% / 54% / 54%). The case is unsteady on both prompts, and no worse on
 PR 2.
+
+### 2026-10-07 — prompt trim PR 11: Who you serve preamble
+
+Code-owned blocks only; the YAML is unchanged (15,709 chars), and so is the CI budget, which
+counts the YAML and pinned SKILL.md bodies, not runtime blocks. Both contact blocks now
+precede the YAML body, so they join the prefix shared across tasks.
+
+**Full suites on `bb0c4cc4`.** Model `deepseek/deepseek-v4.1-flash`, gpt-4o judge,
+concurrency 4.
+
+- **Scenarios:** every critical behavior passed (28 cases, all ≥ 80%). The gate failed on
+  stub holes, not behavior: `scheduler ambiguous asks` called `scheduler-report` twice in one
+  run (seen on main before the trim PRs), and `bullpen mention stays on thread` called the
+  unstubbed `doc-place`. `send to contact by id` (14b) had one raw-address run in 5; a 10-run
+  A/B gave 10/10 on both PR 11 and main (`e65a9415`).
+- **Smoke:** 45 of 46. Speaking Engagement Intake timed out, then scored 72% on retry. Five
+  cases passed on retry, two of them known flakes (Schedule External Meeting #2049,
+  Pre-Meeting Prep).
+
+**A/B against `e65a9415`, 3 alternating rounds** (scores after smoke's one retry):
+
+| Case | PR 11 | main |
+|---|---|---|
+| Speaking Engagement Intake | 3 of 3 | 2 of 3 (one 180s timeout) |
+| Summarize Long Email Thread | 3 of 3 | 3 of 3 |
+| Coordinator edits an existing recurring job | 3 of 3 | 3 of 3 |
+| Triage Batch of Mixed Emails | 2 of 3 | 3 of 3 |
+
+Triage Batch got 5 more rounds per side: PR 11 4 of 5, main 5 of 5. Across all its runs,
+PR 11 passed 7 of 9 and main 8 of 8. Both PR 11 failures were the same: `ceo-inbox` ran out
+its consecutive-error budget on `ceo-inbox-read` calls that the smoke stub answers with
+"Message not found". The fixture lists messages the read stub doesn't cover (3 IDs are
+stubbed), so every run on both sides gets 4–12 failed reads, and the case partly measures
+how long the agent retries them. PR 11 averaged 6.6 failed reads and main 5.8. 2 of 9
+against 0 of 8 is within chance (Fisher's exact p ≈ 0.47), and the mechanism doesn't depend
+on where the contact blocks sit. Inconclusive until the stub covers every listed message.
