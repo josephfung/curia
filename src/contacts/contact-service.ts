@@ -274,8 +274,9 @@ interface ContactServiceBackend {
 // email (no header spoofing), so we trust the source number at the same level as email_participant.
 // slack_participant is auto-verified — Slack user ids from the principal's workspace (ADR-033).
 // sms_participant is NOT auto-verified — SMS From is spoofable (ADR-036); principal must verify.
-// agent_called is auto-verified — the agent extracted the identifier mechanically from the channel
-// (e.g. an email sender address), not from LLM-generated content. Same trust level as email_participant.
+// agent_called is auto-verified — contact-register records it, callable by ceo-inbox only, for a sender
+// ceo-inbox read from mail. The identifier is still tool input and gets no duplicate check; whether it
+// should is an open question, tracked in #2053 (#2041, ADR-047).
 // agent_stated is auto-verified — contact-create and contact-link-identity write it only after the
 // duplicate check passes (findLikelyDuplicates), and every send reaches it by reference afterwards,
 // so the agent types it once, in a checked place (#2041, ADR-047).
