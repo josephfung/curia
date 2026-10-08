@@ -8,7 +8,12 @@
 // get none of that — this skill provides the equivalent integration point.
 //
 // Per invocation:
-//   1. Resolve by channel identity (or create at tier='unknown' if unseen before)
+//   1. Resolve by channel identity (or create at tier='unknown' if unseen before).
+//      The identity is verified only when the identifier occurs in the conversation's
+//      sources (#2061, ADR-047): in practice the ceo-inbox-list/search/read results the
+//      agent copied it from. A typo occurs in none of them, so it is registered
+//      unverified: triage never stops, but nothing can be sent to it by reference.
+//      A later registration that finds a source verifies that identity in place.
 //   2. Trigger a scoring delta via the confidence pipeline (or update last_seen_at
 //      directly when the pipeline is not wired)
 //   3. Emit a contact.resolved bus event for the audit trail
@@ -26,12 +31,38 @@
 import { randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { createContactResolved } from '../../../../src/bus/events.js';
+import { sameIdentifier } from '../../../../src/contacts/identifier-near-miss.js';
+import { identifierHasSource } from '../../../../src/skills/_shared/identifier-source.js';
+
+/**
+ * Verify this contact's unverified agent_called identity for `identifier` when the
+ * identifier now has a source (#2061). Any other unverified source is left alone: only
+ * the principal, or the skill that recorded it, may verify those.
+ */
+async function verifyAgentCalledIfSourced(
+  ctx: ToolContext,
+  contactService: NonNullable<ToolContext['contactService']>,
+  contactId: string,
+  channel: string,
+  identifier: string,
+): Promise<boolean> {
+  const identities = await contactService.getIdentitiesForContact(contactId);
+  const unverified = identities.find((identity) =>
+    identity.channel === channel
+    && identity.source === 'agent_called'
+    && !identity.verified
+    && sameIdentifier(channel, identity.channelIdentifier, identifier));
+  if (!unverified || !(await identifierHasSource(ctx, channel, identifier))) return false;
+  await contactService.verifyIdentity(unverified.id);
+  ctx.log.info({ contactId, channel }, 'contact-register: agent_called identity verified in place — source found (#2061)');
+  return true;
+}
 
 export class ContactRegisterHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const {
       channel,
-      identifier,
+      identifier: rawIdentifier,
       displayName,
       direction,
       messageTimestamp,
@@ -48,9 +79,11 @@ export class ContactRegisterHandler implements ToolHandler {
     if (!channel || typeof channel !== 'string') {
       return { success: false, error: 'Missing required input: channel' };
     }
-    if (!identifier || typeof identifier !== 'string') {
+    if (!rawIdentifier || typeof rawIdentifier !== 'string') {
       return { success: false, error: 'Missing required input: identifier' };
     }
+    // Email is stored and matched lowercased; compare the provenance check on that form.
+    const identifier = channel === 'email' ? rawIdentifier.trim().toLowerCase() : rawIdentifier;
     if (!displayName || typeof displayName !== 'string') {
       return { success: false, error: 'Missing required input: displayName' };
     }
@@ -100,8 +133,17 @@ export class ContactRegisterHandler implements ToolHandler {
 
       let resolvedSender = await ctx.contactService.resolveByChannelIdentity(channel, identifier);
       let created = false;
+      let verifiedInPlace = false;
+
+      if (resolvedSender && !resolvedSender.verified) {
+        verifiedInPlace = await verifyAgentCalledIfSourced(ctx, ctx.contactService, resolvedSender.contactId, channel, identifier);
+      }
 
       if (!resolvedSender) {
+        // Never a refusal: an unsourced sender is still registered, unverified (#2061).
+        const sourced = await identifierHasSource(ctx, channel, identifier);
+        ctx.log.info({ channel, sourced }, 'contact-register: provenance checked for a new identity (#2061)');
+
         ctx.log.info({ channel }, 'contact-register: no existing contact — creating at tier=unknown');
 
         const { contact, kgNodeCreated } = await ctx.contactService.createContactWithKgOutcome({
@@ -132,6 +174,7 @@ export class ContactRegisterHandler implements ToolHandler {
             channel,
             channelIdentifier: identifier,
             source: 'agent_called',
+            verified: sourced,
           });
           linked = true;
         } catch (linkErr) {
@@ -214,7 +257,7 @@ export class ContactRegisterHandler implements ToolHandler {
           displayName: resolvedSender.displayName,
           role: resolvedSender.role,
           kgNodeId: resolvedSender.kgNodeId,
-          verificationStatus: resolvedSender.verified ? 'verified' : 'unverified',
+          verificationStatus: resolvedSender.verified || verifiedInPlace ? 'verified' : 'unverified',
           channel,
           channelIdentifier: identifier,
           // Use the task event ID for causal chain tracing; fall back to a fresh UUID
@@ -243,6 +286,7 @@ export class ContactRegisterHandler implements ToolHandler {
           display_name: resolvedSender.displayName,
           contact_confidence: updatedContact?.contactConfidence ?? resolvedSender.contactConfidence,
           created,
+          verified: resolvedSender.verified || verifiedInPlace,
         },
       };
     } catch (err) {

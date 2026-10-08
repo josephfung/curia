@@ -1,7 +1,7 @@
 {
   "name": "contact-register",
-  "description": "Register a contact interaction from an agent that reads a channel directly, outside the normal dispatcher pipeline. Given a channel type and identifier (e.g. an email address), resolves the sender to a known contact — or creates one at tier='unknown' — then updates last_seen_at and triggers a confidence scoring delta. Emits a contact.resolved bus event for the audit trail. Use this once per sender during triage when processing messages that bypass handleInbound(). Elevation from unknown to known is handled by auto-elevation in the dispatcher/judgment path, not this skill. Returns the contact record.",
-  "version": "1.2.1",
+  "description": "Register a contact interaction from an agent that reads a channel directly, outside the normal dispatcher pipeline. Given a channel type and identifier (e.g. an email address), resolves the sender to a known contact — or creates one at tier='unknown' — then updates last_seen_at and triggers a confidence scoring delta. Emits a contact.resolved bus event for the audit trail. Use this once per sender during triage when processing messages that bypass handleInbound(). Elevation from unknown to known is handled by auto-elevation in the dispatcher/judgment path, not this skill. Copy the identifier exactly from the message headers: an identifier that appears in no mail read in this conversation is registered unverified. Returns the contact record.",
+  "version": "1.3.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -15,7 +15,8 @@
     "contact_id": "string",
     "display_name": "string",
     "contact_confidence": "number (0.0–1.0)",
-    "created": "boolean (true if a new contact was created at tier='unknown')"
+    "created": "boolean (true if a new contact was created at tier='unknown')",
+    "verified": "boolean (false when the identifier appears in no mail read in this conversation)"
   },
   "permissions": [],
   "secrets": [],

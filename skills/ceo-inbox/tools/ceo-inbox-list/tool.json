@@ -1,9 +1,10 @@
 {
   "name": "ceo-inbox-list",
   "description": "List recent messages from the principal's personal email inbox. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "sensitivity": "normal",
   "action_risk": "none",
+  "provenance_source": true,
   "inputs": {
     "limit": "number? (max messages to return, 1–50, default 20)",
     "folder": "string? (Gmail folder/label to list, default 'INBOX'; use 'SENT' for the Sent folder, or 'DRAFTS' to list unsent drafts)",

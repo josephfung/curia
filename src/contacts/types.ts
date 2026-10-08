@@ -77,12 +77,14 @@ export type IdentitySource =
   | 'calendar_attendee'
   | 'self_claimed'
   // Contact registered by an agent calling the contact-register skill directly,
-  // outside the normal dispatcher pipeline. Treated with the same trust as
-  // email_participant — the agent is responsible for sourcing the identifier.
+  // outside the normal dispatcher pipeline (ceo-inbox triage). The agent copied the
+  // identifier from mail, so it is verified only when it occurs in mail read in the
+  // conversation (#2061, ADR-047); otherwise it is stored unverified.
   | 'agent_called'
   // Contact or address an agent entered with contact-create or contact-link-identity
   // (#2041). An agent typed it, so it is not the principal's own statement (ceo_stated).
-  // Auto-verified once the duplicate check before the write passes; see ADR-047.
+  // Written, verified, only after the duplicate check passes and the identifier is found
+  // in a message a person sent or a source-tool result (#2061); see ADR-047.
   | 'agent_stated'
   // First-time outbound recipient the gateway recorded after a send
   // (promoteOrCreateRecipientContact). An agent typed this address; nobody

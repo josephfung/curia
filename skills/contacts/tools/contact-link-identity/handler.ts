@@ -5,11 +5,13 @@
 // verified, as contact-create's are, once the duplicate check passes:
 //   - an address another contact holds is refused;
 //   - an address resembling another contact's is listed until the agent names that
-//     contact in distinct_from.
+//     contact in distinct_from;
+// and once it is found in the conversation's sources (#2061): a message a person sent,
+// or a source-tool result. An address found in neither is refused.
 //
 // Re-stating an address already on this contact is how an agent vouches for one it
 // typed earlier. An unverified outbound_recipient identity (recorded by the gateway
-// after a first-time send) is verified in place, after the same duplicate check: verifying
+// after a first-time send) is verified in place, after the same two checks: verifying
 // is the risky step, and the gateway records whatever address the agent typed, typos
 // included. Other unverified sources (self_claimed, sms_participant) need the principal.
 //
@@ -30,6 +32,7 @@ import {
   uncoveredCandidates,
 } from '../../../../src/skills/_shared/duplicate-refusal.js';
 import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
+import { identifierHasSource, unsourcedIdentifierError } from '../../../../src/skills/_shared/identifier-source.js';
 
 const NOT_LINKED = 'Nothing was linked.';
 const NOT_VERIFIED = 'Nothing was verified.';
@@ -66,6 +69,13 @@ async function duplicateRefusal(
     return candidatesError(check.candidates, action, NEXT);
   }
   return null;
+}
+
+/** The provenance check (#2061): a refusal, or null when the identifier has a source. */
+async function unsourcedRefusal(ctx: ToolContext, channel: string, identifier: string, action: string): Promise<string | null> {
+  if (await identifierHasSource(ctx, channel, identifier)) return null;
+  ctx.log.info({ channel }, 'contact-link-identity: refused — identifier has no source (#2061)');
+  return unsourcedIdentifierError(channel, action);
 }
 
 export class ContactLinkIdentityHandler implements ToolHandler {
@@ -152,6 +162,8 @@ export class ContactLinkIdentityHandler implements ToolHandler {
             NOT_VERIFIED,
           );
           if (restateRefusal) return { success: false, error: restateRefusal };
+          const restateUnsourced = await unsourcedRefusal(ctx, channel, normalized.identifier, NOT_VERIFIED);
+          if (restateUnsourced) return { success: false, error: restateUnsourced };
           const verified = await ctx.contactService.verifyIdentity(existing.id);
           ctx.log.info(
             { identityId: existing.id, contactId: contact_id },
@@ -173,6 +185,8 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         NOT_LINKED,
       );
       if (refusal) return { success: false, error: refusal };
+      const unsourced = await unsourcedRefusal(ctx, channel, normalized.identifier, NOT_LINKED);
+      if (unsourced) return { success: false, error: unsourced };
 
       ctx.log.info({ contact_id, channel }, 'Linking identity to contact');
       const identity = await ctx.contactService.linkIdentity({
@@ -181,6 +195,7 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         channelIdentifier: normalized.identifier,
         label: label ?? undefined,
         source: 'agent_stated',
+        verified: true,
       });
 
       ctx.log.info(

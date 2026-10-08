@@ -14,6 +14,7 @@ import type { SlackClient } from '../../../src/channels/slack/slack-client.js';
 import type { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
 import type { EventBus } from '../../../src/bus/bus.js';
 import type { ToolContext, ToolHandler, ToolManifest } from '../../../src/skills/types.js';
+import { sourceKeyFor, sourceKeysInText } from '../../../src/contacts/identifier-provenance.js';
 import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
@@ -494,12 +495,18 @@ describe('label hint (#2047)', () => {
   });
 });
 
-function contactCtx(h: Harness, input: Record<string, unknown>): ToolContext {
+/**
+ * A contact-skill call in a task where the principal said `said` (#2061): the runtime would
+ * offer exactly the identifiers in it as sources. With nothing said, nothing has a source.
+ */
+function contactCtx(h: Harness, input: Record<string, unknown>, said = ''): ToolContext {
+  const keys = sourceKeysInText(said);
   return {
     input,
     secret: () => { throw new Error('no secrets'); },
     log: logger,
     contactService: h.contacts,
+    identifierSources: { has: async (channel: string, identifier: string) => keys.has(sourceKeyFor(channel, identifier)) },
   } as unknown as ToolContext;
 }
 
@@ -510,7 +517,7 @@ describe('cold outreach creates a contact first (#2041)', () => {
   it('contact-create, then email-send to the returned ID, reaches the address that was entered', async () => {
     const created = await new ContactCreateHandler().execute(contactCtx(h, {
       name: 'Dana Whitfield', email: 'Dana.Whitfield@NewCo.example',
-    }));
+    }, 'Email Dana Whitfield at Dana.Whitfield@NewCo.example'));
     expect(created.success).toBe(true);
     if (!created.success) return;
     const contactId = (created.data as { contact_id: string }).contact_id;
@@ -522,8 +529,19 @@ describe('cold outreach creates a contact first (#2041)', () => {
     if (sent.success) expect(sent.data).toMatchObject({ contact_id: contactId });
   });
 
+  it('a typo of the address the principal gave is refused, so no contact exists to send to (#2061)', async () => {
+    const before = (await h.contacts.listContacts()).length;
+    const created = await new ContactCreateHandler().execute(contactCtx(h, {
+      name: 'Dana Whitfield', email: 'dana.whitfield@newco.exmaple',
+    }, 'Email Dana Whitfield at dana.whitfield@newco.example'));
+    expect(created.success).toBe(false);
+    if (!created.success) expect(created.error).not.toContain('newco.exmaple');
+    expect(await h.contacts.listContacts()).toHaveLength(before);
+    expect(delivered(h)).toEqual([]);
+  });
+
   it('a number entered in local form is stored as E.164 and reachable by sms-send', async () => {
-    const created = await new ContactCreateHandler().execute(contactCtx(h, { name: 'Lee Park', sms: '(416) 555-0123' }));
+    const created = await new ContactCreateHandler().execute(contactCtx(h, { name: 'Lee Park', sms: '(416) 555-0123' }, 'Text Lee at (416) 555-0123'));
     expect(created.success).toBe(true);
     if (!created.success) return;
     const contactId = (created.data as { contact_id: string }).contact_id;
@@ -551,7 +569,7 @@ describe('cold outreach creates a contact first (#2041)', () => {
   it('a second create with a near-miss of the address just created is refused, naming that contact', async () => {
     const first = await new ContactCreateHandler().execute(contactCtx(h, {
       name: 'Dana Whitfield', email: 'dana.whitfield@newco.example',
-    }));
+    }, 'Email Dana Whitfield at dana.whitfield@newco.example'));
     expect(first.success).toBe(true);
     if (!first.success) return;
     const danaId = (first.data as { contact_id: string }).contact_id;
@@ -596,7 +614,7 @@ describe('cold outreach creates a contact first (#2041)', () => {
 
     const restated = await new ContactLinkIdentityHandler().execute(contactCtx(h, {
       contact_id: resolved!.contactId, channel: 'email', identifier: 'new.person@cold.example',
-    }));
+    }, 'Yes, new.person@cold.example is the right address'));
     expect(restated).toMatchObject({ success: true, data: { already_linked: true, verified: true } });
 
     const after = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(resolved!.contactId)));

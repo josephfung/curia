@@ -5,6 +5,7 @@ import pino from 'pino';
 import { ContactRegisterHandler } from './handler.js';
 import { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
+import { sourceKeyFor, sourceKeysInText, type IdentifierSources } from '../../../../src/contacts/identifier-provenance.js';
 
 const silentLog = pino({ level: 'silent' });
 
@@ -527,9 +528,92 @@ describe('ContactRegisterHandler — promotion flow removed', () => {
   });
 });
 
-// contact-register records agent_called, which is auto-verified without the duplicate
-// check contact-create runs. Only ceo-inbox, which registers senders it read from mail,
-// may call it (#2041; the open question is #2061).
+/** Sources holding exactly the identifiers in `text`, as the runtime's lookup would. */
+function sourcesFrom(text: string): IdentifierSources {
+  const keys = sourceKeysInText(text);
+  return { has: async (channel, identifier) => keys.has(sourceKeyFor(channel, identifier)) };
+}
+
+// A triage list result, as ceo-inbox-list returns it and the runtime indexes it (#2061).
+const INBOX_LISTING = JSON.stringify({
+  messages: [{ id: 'm1', from: [{ name: 'Sam Rivera', email: 'sam@venue-co.com' }], to: [{ email: 'pat@principal.example' }] }],
+});
+
+describe('ContactRegisterHandler — identifier provenance (#2061)', () => {
+  let handler: ContactRegisterHandler;
+  let contactService: ContactService;
+
+  beforeEach(async () => {
+    handler = new ContactRegisterHandler();
+    contactService = ContactService.createInMemory();
+    const principal = await contactService.createContact({ displayName: 'Pat Principal', source: 'ceo_stated' });
+    await contactService.saveContact({ ...principal, systemRole: 'principal' });
+    await contactService.linkIdentity({ contactId: principal.id, channel: 'email', channelIdentifier: 'pat@principal.example', source: 'ceo_stated' });
+  });
+
+  const register = (identifier: string, extra: Partial<ToolContext>) => handler.execute(makeCtx({
+    contactService,
+    input: { channel: 'email', identifier, displayName: 'Sam Rivera', messageTimestamp: TIMESTAMP_A },
+    ...extra,
+  }));
+
+  async function identityOf(identifier: string) {
+    const resolved = await contactService.resolveByChannelIdentity('email', identifier);
+    const identities = await contactService.getIdentitiesForContact(resolved!.contactId);
+    return identities.find((identity) => identity.channelIdentifier === identifier)!;
+  }
+
+  it('verifies a new sender whose address is in the mail read this conversation', async () => {
+    const result = await register('Sam@Venue-Co.com', { identifierSources: sourcesFrom(INBOX_LISTING) });
+    expect(result).toMatchObject({ success: true, data: { created: true, verified: true } });
+    expect(await identityOf('sam@venue-co.com')).toMatchObject({ source: 'agent_called', verified: true });
+  });
+
+  it('registers a mistyped sender unverified, without failing triage', async () => {
+    const result = await register('sam@venu-co.com', { identifierSources: sourcesFrom(INBOX_LISTING) });
+    expect(result).toMatchObject({ success: true, data: { created: true, verified: false } });
+    expect(await identityOf('sam@venu-co.com')).toMatchObject({ verified: false });
+  });
+
+  it('registers a near miss of the principal unverified', async () => {
+    const result = await register('pat@principal.exampel', { identifierSources: sourcesFrom(INBOX_LISTING) });
+    expect(result).toMatchObject({ success: true, data: { created: true, verified: false } });
+  });
+
+  it('resolves the principal exactly, creating nothing', async () => {
+    const before = (await contactService.listContacts()).length;
+    const result = await register('pat@principal.example', { identifierSources: sourcesFrom(INBOX_LISTING) });
+    expect(result).toMatchObject({ success: true, data: { created: false, verified: true } });
+    expect((await contactService.listContacts()).length).toBe(before);
+  });
+
+  it('registers unverified when the task has no sources', async () => {
+    const result = await register('sam@venue-co.com', {});
+    expect(result).toMatchObject({ success: true, data: { created: true, verified: false } });
+  });
+
+  it('verifies an unverified agent_called identity in place once a source has it', async () => {
+    await register('sam@venue-co.com', {});
+    const again = await register('sam@venue-co.com', { identifierSources: sourcesFrom(INBOX_LISTING) });
+    expect(again).toMatchObject({ success: true, data: { created: false, verified: true } });
+    expect(await identityOf('sam@venue-co.com')).toMatchObject({ source: 'agent_called', verified: true });
+  });
+
+  it('does not verify an unverified identity of another source', async () => {
+    const contact = await contactService.createContact({ displayName: 'Sam Rivera', source: 'outbound_recipient' });
+    await contactService.linkIdentity({ contactId: contact.id, channel: 'email', channelIdentifier: 'sam@venue-co.com', source: 'outbound_recipient' });
+    const result = await register('sam@venue-co.com', { identifierSources: sourcesFrom(INBOX_LISTING) });
+    expect(result).toMatchObject({ success: true, data: { created: false, verified: false } });
+  });
+
+  it('treats a principal-approved replay as sourced', async () => {
+    const result = await register('sam@venue-co.com', { humanApproved: true });
+    expect(result).toMatchObject({ success: true, data: { verified: true } });
+  });
+});
+
+// contact-register records agent_called, verified only when the identifier has a source
+// (#2061). Only ceo-inbox, which registers senders it read from mail, may call it (#2041).
 describe('contact-register manifest', () => {
   it('is callable by ceo-inbox only', () => {
     const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, 'tool.json'), 'utf-8')) as {
