@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`tool.json` (public API)** — optional `provenance_source` marks a skill's output as identifier source text. (#2061)
 - **Send skills** — a label hint selects a contact's secondary address; an ambiguous hint sends nothing. (#2047)
 - **LLM call archive** — `includeReasoning` drops reasoning text without disabling the archive. (#2042)
 - **ADR-047** — send skills address recipients by contact reference; a near-miss principal check is rejected. (#2033)
@@ -72,6 +73,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **ADR-047** — agent-entered identifiers are verified by provenance, not by similarity to contacts. (#2061)
+- **`contact-create`, `contact-link-identity`** — refuse an address found in no person's message or read page. (#2061)
+- **`contact-register`** — verifies a sender only when the address appears in mail read; otherwise unverified. (#2061)
+- **Contacts bundle** — no longer lists `contact-register`; ceo-inbox still pins it. (#2061)
 - **ADR-047** — gateway-created contacts stay `known`; an inbound reply does not verify them. (#2040)
 - **Agent system prompts** — both contact blocks precede the YAML body; the principal's sits under "Who you serve".
 - **`contact-create`, `contact-link-identity`** — record `agent_stated`; refuse likely duplicates until `distinct_from` names them. (#2041)
@@ -317,6 +322,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Agent-entered addresses** — a typo of a new address is never verified, closing the live-domain gap. (#2061)
 - **`source-map-js`** — override floor raised to 1.2.2, clearing a HIGH DoS advisory (CVE-2026-93749).
 - **`fast-copy`** — override floor raised to 4.1.0, clearing a MED stack-exhaustion advisory (GHSA-jggr-w7fw-pc2j).
 - **Smoke `clone-db`** — the stale-clone LIKE pattern now escapes backslashes, not just underscores.

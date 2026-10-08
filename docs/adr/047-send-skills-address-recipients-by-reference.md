@@ -3,6 +3,7 @@
 Date: 2026-10-07
 Status: Accepted
 Amended: 2026-10-07 — no raw-address path; agent-entered contacts (#2041)
+Amended: 2026-10-08 — agent-entered identifiers are verified by provenance (#2061)
 
 ## Context
 
@@ -73,11 +74,11 @@ A call that still passes a retired input is refused, not ignored. A dropped `cc_
 
 `send-draft` is unchanged. It sends a draft's envelope as stored, behind its principal-origin gate (ADR-017). Once `email-draft-save` addresses drafts by reference, every draft it sends was addressed by reference or by a person in their own mail client. `ceo-inbox-draft-compose` and `ceo-inbox-draft-edit` still take typed addresses. Their drafts sit in the principal's Gmail and Curia cannot send them. #2053 covers them.
 
-### Agent-entered addresses: `agent_stated`, verified after a duplicate check (#2041)
+### Agent-entered addresses: `agent_stated`, verified after a duplicate check and a provenance check (#2041, #2061)
 
 `contact-create` and `contact-link-identity` used to record `ceo_stated`, so an address an agent typed looked like the principal's own statement. They now record `agent_stated`. `ceo_stated` stays where the principal entered the data: the console and the setup wizard.
 
-`agent_stated` is auto-verified, because otherwise "create, then send by ID" could not work: the resolver sends only to verified identities. The verification is earned by a duplicate check that runs before anything is written (`ContactService.findLikelyDuplicates`):
+An `agent_stated` identity is written verified, because otherwise "create, then send by ID" could not work: the resolver sends only to verified identities. The verification is earned by two checks that run before anything is written. The first is a duplicate check (`ContactService.findLikelyDuplicates`); the second is the provenance check below.
 
 | Finding | Result |
 |---|---|
@@ -92,7 +93,31 @@ The name threshold sits in the gap between typos of one name ("Priya Natarajan" 
 
 A candidate blocks the write until the agent passes `distinct_from` listing every candidate's ID. The list is a statement, "I checked these and they are different people". A boolean override was rejected because a model learns to set a flag before it has seen anything. Refusals name contacts and reasons, never an address. The principal is listed as `the principal`, with `principal` as its `distinct_from` token, so their contact ID stays out of the model's context. Because `sanitizeDisplayName` strips `@`, a contact the gateway named after its address is stored without it (`sam.rivera@vendor.example` is stored as `sam.riveravendor.example`), so a refusal names a candidate by its contact ID alone when its name looks like an address, a number or a Slack id, which includes a single dotted token with no spaces (`isAddressLikeName`). The send resolver's errors follow the same rule. A check that cannot run refuses the write.
 
-Nothing on the server enforces the order: `agent_stated` is auto-verified on the premise that `contact-create` and `contact-link-identity` are its only writers and both run `findLikelyDuplicates` first, so any future writer of `agent_stated` must run it before writing too. They are not the only agent writers of an auto-verified source: `contact-register` (ceo-inbox only) records `agent_called`, which is auto-verified without the duplicate check. That is an open question, tracked in #2061.
+Neither `agent_stated` nor `agent_called` is in `AUTO_VERIFIED_SOURCES`. Their writers pass `verified` explicitly, so a future writer of either source stores unverified unless it runs the checks.
+
+### Provenance: an agent-entered identifier is verified only when a source has it (#2061)
+
+The duplicate check compares an identifier with what is on file, so it cannot catch a typo in a new person's address. Triage registers new senders all day, and the 2026-09-30 typo reached a live domain. Provenance asks a different question: did this string come from text the model did not write? A typo occurs in no such text, whoever it resembles.
+
+**Sources.** An identifier is found when it occurs in either of these:
+- a message a person sent in the task's conversation: the active `user` turns in working memory that are not `synthetic` and not on a channel only agents write to (`internal`, `bullpen`, `scheduler`), with the `[ACTIVE OUTBOUND CONTEXT]` preamble removed because it quotes Curia's own sends (`WorkingMemory.getPersonTurns`);
+- the successful result of a source tool read in the conversation. A tool is a source when its manifest sets `provenance_source`: `web-fetch`, `web-browser`, `web-search`, `doc-read`, `doc-search`, `email-get`, `email-get-thread`, `email-list`, `file-parse`, `ceo-inbox-list`, `ceo-inbox-search` and `ceo-inbox-read`. The field defaults to false. `delegate` and `bullpen` return model-written text and are never sources.
+
+**Scope.** Sources are scoped to the root conversation. A delegated specialist counts toward the conversation it came from: it reads the coordinator's person turns there, and the source-tool results it records are visible to the coordinator, and the reverse. So "research the venue, then add its booking address" works whichever agent read the page. The runtime keeps source-tool results in a process-wide index (`IdentifierSourceIndex`, 24-hour TTL, capped per conversation). Losing it on a restart only means a later write is refused and the agent asks again.
+
+**Matching** is on normalized identifiers: email lowercased; phone numbers read from text in local or international form and compared in E.164; other ids (Slack, Telegram) as exact tokens.
+
+**What each writer does on a miss.**
+- `contact-create` and `contact-link-identity` (`agent_stated`) refuse and store nothing. The refusal names the channel, not the address, and tells the agent to copy it from where it came or ask the principal, whose answer is then a source. The duplicate check runs first, so "that address is already on …" still wins. Re-stating an unverified `outbound_recipient` identity needs a source too.
+- `contact-register` (`agent_called`, ceo-inbox triage) cannot stop, so it registers the sender with the identity **unverified** and reports `verified: false`. The mailbox listing the agent copied the address from is a source, so a correct copy is verified. A later registration that finds a source verifies an unverified `agent_called` identity in place.
+
+**An approval replay counts as a source.** When a contact write was held for approval, the principal saw the identifier in the approval, and the replay runs outside the task that had the sources.
+
+Rejected alternatives:
+- **Duplicate check in `contact-register`.** It knows only what is on file, so it misses a typo of a first-time sender. The first write wins: if the typo is registered first, the sender's correct address is the near miss. It also flags real lookalike addresses, and resolving a near miss to the existing contact would match a sender at a lookalike domain to the principal.
+- **Stop auto-verifying `agent_called` with no check.** Every correct registration would become unsendable by reference, score lower and show `[unverified]` when that person writes to Curia. The way out, an agent re-stating the address, is another transcription.
+- **Re-read the named message's headers from Nylas** (`contact-register` takes a `message_id`). Precise to From/To/Cc, but it costs an API call per new sender, needs mailbox secrets in the skill, and cannot be answered by the smoke and scenario stubs, which replace the mailbox tools by name. The fetched results are already in the conversation.
+- **Source-tool results count only within the task that read them.** A coordinator that delegated research sees only the specialist's model-written reply, so the address would be refused.
 
 Identifiers are normalized first:
 - email is lowercased;
@@ -109,7 +134,7 @@ This is not the near-miss rule rejected below (Option A). It covers every contac
 
 Re-stating an address already on the same contact:
 - a verified identity: unchanged;
-- an unverified `outbound_recipient` identity: the same duplicate check runs first, because the gateway records the address as the agent typed it, typos included (the 2026-10-07 incident address was one). If it passes, the identity is verified in place, keeping its source. If not, the call is refused and nothing is verified;
+- an unverified `outbound_recipient` identity: the same duplicate check and provenance check run first, because the gateway records the address as the agent typed it, typos included (the 2026-10-07 incident address was one). If both pass, the identity is verified in place, keeping its source. If not, the call is refused and nothing is verified;
 - anything else unverified (`self_claimed`, `sms_participant`): refused, because only the principal can verify those.
 
 Structural contacts are off limits to agents. No agent skill changes the addresses of a structural contact (the principal, an agent or a system contact: `isStructuralContact`). `contact-link-identity` refuses adding an identity, re-stating one, and verifying an `outbound_recipient` one. `contact-merge` refuses a structural contact on either side, since the primary gains the secondary's identities. `contact-unlink-identity` and `contact-set-identity-status` refuse a structural contact's identities. The principal's verified identities form the principal identity snapshot, which Gate C's carve-outs and the `principal` send alias trust, so an address an agent added there would be a way to impersonate the principal. The principal manages their own addresses in the console. The `ceo_stated` path that `contact-link-identity` used before this change had the same hole, and a security review flagged it.
@@ -130,7 +155,7 @@ When a filter blocks a send (identity gate, export block, PII redactor error, co
 
 ### Gateway-created contacts get honest provenance
 
-`promoteOrCreateRecipientContact` records a first-time outbound recipient with source `outbound_recipient`, not `ceo_stated`. That source is not auto-verified: on a raw send the address came from LLM-generated tool input, the opposite of the mechanical extraction that `email_participant` relies on. `agent_called` is not such an extraction either: `contact-register`, callable by ceo-inbox only, records it from tool input, auto-verified without the duplicate check. That is an open question, tracked in #2061. With the raw inputs retired (#2041), the gateway creates such a contact after any successful gateway send to an address with no contact record (send-draft, email-reply). An agent re-stating the address with contact-link-identity verifies it, after the duplicate check.
+`promoteOrCreateRecipientContact` records a first-time outbound recipient with source `outbound_recipient`, not `ceo_stated`. That source is not auto-verified: on a raw send the address came from LLM-generated tool input, the opposite of the mechanical extraction that `email_participant` relies on. `agent_called` is not such an extraction either: `contact-register`, callable by ceo-inbox only, records it from tool input, verified only when the provenance check finds it (#2061). With the raw inputs retired (#2041), the gateway creates such a contact after any successful gateway send to an address with no contact record (send-draft, email-reply). An agent re-stating the address with contact-link-identity verifies it, after the duplicate check.
 
 The tier of such a contact is `known` (#2040). No agent typed the address on either remaining path:
 - `send-draft` runs only on a principal-originated task (ADR-017). `email-draft-save` addresses by contact ID, so a draft whose To has no contact was written outside Curia, in practice by the principal;
@@ -149,7 +174,8 @@ An inbound reply does not verify an `outbound_recipient` identity (#2040), for t
 
 Option A is not added. What send-by-reference does not cover:
 
-- **A typo in a brand-new address is stored and verified** when it resembles nothing on file (#2041). The principal's message is the only check on that transcription. It now happens once, in a checked and recorded place, instead of on every send.
+- **A correct copy from the wrong source.** Provenance proves an identifier was copied, not that it belongs to the person meant. A sender at a lookalike domain is verified, as `email_participant` verifies them on Curia's own inbox; that is a question for triage and Gate C. A typo in a brand-new address, accepted here until #2061, is now refused or stored unverified.
+- **`file-parse` extraction.** For PDFs, images and HTML, `file-parse` extracts text with an LLM. The check then proves the agent copied the extracted text exactly, not that the extraction read the document correctly.
 - **Choosing the wrong contact** (#727 picked a real but wrong person) is a different failure. A reference makes it an explicit choice of contact rather than a transcription, but nothing here checks it.
 
 ## Consequences
@@ -162,3 +188,5 @@ Option A is not added. What send-by-reference does not cover:
 - A send by reference costs a contact read before the gates and another in the skill, plus one more if an approval is filed.
 - An approval resolves the reference again when it runs, up to 48 hours later. If the contact's primary changed in between, an unhinted send goes to the contact's new address, which is another verified address of the same person. A hinted approval records the identity row and the name that was resolved (`send_resolution`, not skill input). Replay sends only when both still match. A renamed or removed label, or a fallback onto a different unlabelled address, fails closed before the skill runs. A hint that originally selected the single unlabelled address still sends while that same row is the one resolved.
 - Contacts the gateway created before this change still carry `ceo_stated` and verified identities. Relabelling them is a data change, left to the operator.
+- **#2061:** a cold outreach to an address no person stated and no source tool read (a pattern guess, an address from memory or a delegate's reply alone) is refused until the principal states it. `agent_called` and `agent_stated` identities written before #2061 stay verified.
+- **`tool.json` gains `provenance_source` (public API).** Marking a tool is a security decision: its output must be data it read, never model text. `tests/unit/skills/provenance-source-manifests.test.ts` pins the list.
