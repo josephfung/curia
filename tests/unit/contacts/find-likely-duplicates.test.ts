@@ -17,11 +17,15 @@ describe('ContactService.findLikelyDuplicates', () => {
   });
 
   it('reports an identifier another contact holds on the same channel as taken (email ignores case)', async () => {
-    const check = await contacts.findLikelyDuplicates({ identities: [{ channel: 'email', identifier: 'PRIYA@example.test' }] });
+    // The same name too, so Priya would also be a same_name candidate: a taken contact is
+    // reported once, as taken, and dropped from the candidates.
+    const check = await contacts.findLikelyDuplicates({
+      displayName: 'Priya Natarajan',
+      identities: [{ channel: 'email', identifier: 'PRIYA@example.test' }],
+    });
     expect(check.taken).toHaveLength(1);
     expect(check.taken[0]!.contact.id).toBe(priyaId);
     expect(check.taken[0]!.channel).toBe('email');
-    // A taken contact is reported once, as taken, not also as a candidate.
     expect(check.candidates).toEqual([]);
   });
 
