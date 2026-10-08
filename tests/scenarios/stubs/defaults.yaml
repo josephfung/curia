@@ -73,7 +73,16 @@ email-mark-read:
 email-archive:
   - match: {}
     return: { archived: true }
-# Updating the task task-create above returned (any task id): the pair goes together.
+# Updating or completing the task task-create above returned (any task id): they go
+# together.
+task-complete:
+  - match: {}
+    return:
+      task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
+      title: (completed)
+      status: done
+      completed_at: "2026-10-01T12:05:00-04:00"
+      displayTimezone: America/Toronto
 task-update:
   - match: {}
     return:
