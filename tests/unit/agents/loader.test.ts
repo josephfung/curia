@@ -59,6 +59,9 @@ describe('loadAgentConfig', () => {
     ['a second no-internals rule', /NEVER expose contact lookup results/, 'How you speak (every audience)'],
     ['a second contact-resolution section', /### Contact intelligence|Before composing any email/, 'People'],
     ['calendar in handle-directly', /Calendar is never handle-directly/, 'calendar allowed_callers + Principal calendar requests'],
+    // Prompt trim PR 3: style belongs to the office identity, which the principal edits.
+    ['a style line', /professional and competent|clarifying questions freely|Be candid/, 'office identity (Personality settings)'],
+    ['task owner semantics', /principal must act/, 'task-create owner description'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);
