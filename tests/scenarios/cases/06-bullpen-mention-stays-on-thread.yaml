@@ -67,9 +67,11 @@ tool_stubs:
               - Q3 competitor brief
         displayTimezone: America/Toronto
   # Each mode returns that mode's action and a nested document, as the handler does.
-  # A catch-all `created` would describe an append as a create. The last stub covers a
-  # mode the handler does not know, so it is a scripted error rather than a refusal.
+  # Creating the saved brief is the handler's already-exists error, matched before the
+  # general create. An invalid mode is the validation error, not the unreachable default.
   doc-write:
+    - match: { mode: create, path: "/projects/q3-competitor-brief/brief.md" }
+      error: "Document already exists at /projects/q3-competitor-brief/brief.md — use append, replace, or section-edit"
     - match: { mode: create }
       return:
         action: created
@@ -103,7 +105,7 @@ tool_stubs:
           version: 2
           displayTimezone: America/Toronto
     - match: {}
-      error: "Unhandled mode"
+      error: "Missing or invalid mode — must be 'create', 'append', 'replace', or 'section-edit'"
 expected_behaviors:
   - id: replies_on_thread
     weight: critical

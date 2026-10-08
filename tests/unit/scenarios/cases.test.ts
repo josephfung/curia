@@ -84,7 +84,13 @@ describe('coordinator scenario cases', () => {
       type: 'brief',
       displayTimezone: 'America/Toronto',
     };
-    expect(answered('bullpen mention stays on thread', 'doc-write', { path: brief.path, mode: 'create' })).toEqual({
+    const bullpen = byName.get('bullpen mention stays on thread');
+    const alreadyExists = matchToolStub('doc-write', { path: brief.path, mode: 'create', type: 'brief' }, bullpen!.toolStubs);
+    expect(alreadyExists?.return).toBeUndefined();
+    expect(alreadyExists?.error).toBe(
+      "Document already exists at /projects/q3-competitor-brief/brief.md — use append, replace, or section-edit",
+    );
+    expect(answered('bullpen mention stays on thread', 'doc-write', { path: '/projects/q3-competitor-brief/notes.md', mode: 'create' })).toEqual({
       action: 'created',
       document: { ...brief, version: 1 },
     });
@@ -92,8 +98,8 @@ describe('coordinator scenario cases', () => {
       action: 'appended',
       document: { path: brief.path, version: 2 },
     });
-    const unknownMode = matchToolStub('doc-write', { path: brief.path, mode: 'rename' }, byName.get('bullpen mention stays on thread')!.toolStubs);
-    expect(unknownMode?.error).toBe('Unhandled mode');
+    const unknownMode = matchToolStub('doc-write', { path: brief.path, mode: 'rename' }, bullpen!.toolStubs);
+    expect(unknownMode?.error).toBe("Missing or invalid mode — must be 'create', 'append', 'replace', or 'section-edit'");
 
     const updated = answered('direct email reply as text', 'contact-update', { contact_id: '{{contact:tomas}}', fields: { organization: 'Northwind' } });
     expect(updated['contact_id']).toBe('{{contact:tomas}}');
