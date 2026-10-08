@@ -51,7 +51,7 @@ async function runTask(opts: {
       if (options?.identifierSources) seen.set(name, options.identifierSources);
       return { success: true, data: opts.results?.[name] ?? 'ok' };
     }),
-    isProvenanceSource: (name: string) => name === 'web-fetch',
+    provenanceSourceText: (name: string, _input: unknown, data: unknown) => (name === 'web-fetch' ? String(data) : null),
   } as unknown as ExecutionLayer;
 
   const runtime = new AgentRuntime({
@@ -151,7 +151,7 @@ describe('runtime identifier sources (#2061)', () => {
         sources = options?.identifierSources;
         return { success: true, data: 'ok' };
       }),
-      isProvenanceSource: () => false,
+      provenanceSourceText: () => null,
     } as unknown as ExecutionLayer;
     const runtime = new AgentRuntime({
       agentId: 'contacts',
@@ -182,6 +182,43 @@ describe('runtime identifier sources (#2061)', () => {
     await expect(sources!.has('email', 'sam@venue-co.com')).resolves.toBe(true);
     await expect(sources!.has('phone', '+14165550100')).resolves.toBe(true);
     await expect(sources!.has('email', 'lee@venue-co.com')).resolves.toBe(false);
+  });
+
+  it("ignores Curia's own sends quoted in an email turn, wherever the dispatcher put them", async () => {
+    const memory = WorkingMemory.createInMemory();
+    // Shape of a principal email turn: identifier block and participants prepended
+    // AFTER the outbound-context block, then the reply quoting Curia's message.
+    const stored = [
+      'Message ID: m-1',
+      'Account: personal',
+      '',
+      '[Thread participants — From: pat@principal.example; To: you]',
+      "[ACTIVE OUTBOUND CONTEXT — messages you've sent that may receive replies]",
+      'Each entry_id below is an outbound_context UUID.',
+      '---',
+      'entry_id: 1',
+      'preview: "I will loop in sam@venu-co.co"',
+      '---',
+      '',
+      'Yes please add lee@venue-co.com too.',
+      '',
+      'On Tue, Oct 7, 2026 at 3:00 PM Curia <curia@office.example> wrote:',
+      '> I will also cc rob@venu-co.co',
+    ].join('\n');
+    await memory.addTurn('conv-email', 'coordinator', { role: 'user', content: stored }, { channelId: 'email' });
+    const { sourcesFor } = await runTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-email',
+      channelId: 'email',
+      content: 'Re: venue',
+      calls: [{ name: 'contact-create', input: {} }],
+      memory,
+    });
+    const sources = sourcesFor('contact-create');
+    await expect(sources.has('email', 'lee@venue-co.com')).resolves.toBe(true);
+    await expect(sources.has('email', 'pat@principal.example')).resolves.toBe(true);
+    await expect(sources.has('email', 'sam@venu-co.co')).resolves.toBe(false);
+    await expect(sources.has('email', 'rob@venu-co.co')).resolves.toBe(false);
   });
 
   it('treats a failed person-turn read as not found and logs it', async () => {

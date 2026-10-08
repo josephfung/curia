@@ -16,9 +16,9 @@ import { sourceKeysInText } from '../contacts/identifier-provenance.js';
 export interface IdentifierSourceIndexOptions {
   /** How long a recorded key counts. Default 24 hours. */
   ttlMs?: number;
-  /** Keys kept per conversation; the oldest go first. Default 20 000. */
+  /** Keys kept per conversation; the oldest go first. Default 5 000. */
   maxKeysPerConversation?: number;
-  /** Conversations kept; the least recently recorded goes first. Default 1 000. */
+  /** Conversations kept; the least recently recorded goes first. Default 500. */
   maxConversations?: number;
   now?: () => number;
 }
@@ -29,32 +29,40 @@ export class IdentifierSourceIndex {
   private readonly maxConversations: number;
   private readonly now: () => number;
   // Map iteration order is insertion order: re-inserting moves an entry to the end,
-  // so the first entry is always the oldest.
-  private readonly conversations = new Map<string, Map<string, number>>();
+  // so the first entry is always the oldest — for conversations (by last record) and
+  // for the keys inside each.
+  private readonly conversations = new Map<string, { recordedAt: number; keys: Map<string, number> }>();
 
   constructor(options: IdentifierSourceIndexOptions = {}) {
     this.ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
-    this.maxKeys = options.maxKeysPerConversation ?? 20_000;
-    this.maxConversations = options.maxConversations ?? 1_000;
+    this.maxKeys = options.maxKeysPerConversation ?? 5_000;
+    this.maxConversations = options.maxConversations ?? 500;
     this.now = options.now ?? Date.now;
   }
 
   record(conversationKey: string, text: string): void {
-    const keys = sourceKeysInText(text);
-    if (keys.size === 0) return;
+    const found = sourceKeysInText(text);
+    if (found.size === 0) return;
 
-    const entries = this.conversations.get(conversationKey) ?? new Map<string, number>();
-    this.conversations.delete(conversationKey);
-    this.conversations.set(conversationKey, entries);
-
-    const addedAt = this.now();
-    for (const key of keys) {
-      entries.delete(key);
-      entries.set(key, addedAt);
+    const now = this.now();
+    // Conversations are ordered by last record, so expired ones sit at the front.
+    for (const [key, conversation] of this.conversations) {
+      if (now - conversation.recordedAt <= this.ttlMs) break;
+      this.conversations.delete(key);
     }
-    for (const oldest of entries.keys()) {
-      if (entries.size <= this.maxKeys) break;
-      entries.delete(oldest);
+
+    const conversation = this.conversations.get(conversationKey) ?? { recordedAt: now, keys: new Map<string, number>() };
+    conversation.recordedAt = now;
+    this.conversations.delete(conversationKey);
+    this.conversations.set(conversationKey, conversation);
+
+    for (const key of found) {
+      conversation.keys.delete(key);
+      conversation.keys.set(key, now);
+    }
+    for (const oldest of conversation.keys.keys()) {
+      if (conversation.keys.size <= this.maxKeys) break;
+      conversation.keys.delete(oldest);
     }
     for (const oldest of this.conversations.keys()) {
       if (this.conversations.size <= this.maxConversations) break;
@@ -63,8 +71,13 @@ export class IdentifierSourceIndex {
   }
 
   has(conversationKey: string, key: string): boolean {
-    const addedAt = this.conversations.get(conversationKey)?.get(key);
+    const addedAt = this.conversations.get(conversationKey)?.keys.get(key);
     return addedAt !== undefined && this.now() - addedAt <= this.ttlMs;
+  }
+
+  /** Conversations currently held — for tests and diagnostics. */
+  get size(): number {
+    return this.conversations.size;
   }
 }
 

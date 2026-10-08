@@ -90,18 +90,18 @@ export const sharedIdentifierSourceIndex: IdentifierSourceIndex;
 **Files:**
 - Modify: `src/skills/types.ts`, adding the `ToolManifest.provenance_source?: boolean` and `ToolContext.identifierSources?: IdentifierSources` fields.
 - Modify: `schemas/tool-manifest.schema.json`, adding the `provenance_source` boolean.
-- Modify: `src/skills/execution.ts`, adding `InvokeOptions.identifierSources`, forwarding it to ctx, and adding `isProvenanceSource(toolName): boolean`.
-- Modify: `src/startup/test-mode-stack.ts`, adding `isProvenanceSource` to `EXECUTION_LAYER_METHODS`.
+- Modify: `src/skills/execution.ts`, adding `InvokeOptions.identifierSources`, forwarding it to ctx, and adding `provenanceSourceText(toolName, input, data): string | null` (manifest flag, draft and Curia-sent filtering).
+- Modify: `src/startup/test-mode-stack.ts`, adding `provenanceSourceText` to `EXECUTION_LAYER_METHODS`.
 - Modify: `src/memory/working-memory.ts`, adding `getPersonTurns(conversationId, agentId): Promise<string[]>` on both backends, plus the `NON_PERSON_CHANNELS` export.
 - Modify: `src/agents/delegated-task-context.ts`, adding `delegationOriginAgentId`.
 - Modify: `src/agents/runtime.ts`, adding the config field `identifierSourceIndex?`. It builds `identifierSources` per task, records source-tool results after success, and passes the lookup in `invokeOptions`.
 - Tests: `tests/unit/memory/working-memory-person-turns.test.ts`, `tests/unit/agents/runtime-identifier-sources.test.ts`, `tests/unit/skills/execution.test.ts`, and an integration test for the Postgres `getPersonTurns`.
 
-- [ ] **Runtime test.** The LLM calls `web-fetch`, then `contact-create`. The fake execution layer has `isProvenanceSource: (n) => n === 'web-fetch'`, and `web-fetch` returns `'Book: events@venue.example'`. Assert that the second invoke's `options.identifierSources.has('email', 'events@venue.example')` resolves true and `has('email', 'event@venue.example')` false.
+- [ ] **Runtime test.** The LLM calls `web-fetch`, then `contact-create`. The fake execution layer has `provenanceSourceText` returning the result only for `web-fetch`, and `web-fetch` returns `'Book: events@venue.example'`. Assert that the second invoke's `options.identifierSources.has('email', 'events@venue.example')` resolves true and `has('email', 'event@venue.example')` false.
 - [ ] **Delegated runtime test.** The origin conversation's coordinator turn on channel `cli` says "email sam@venue-co.com". A delegated task has `delegationOrigin {conversationId, agentId:'coordinator'}`. `has` should resolve true. A turn on channel `internal` alone should resolve false.
 - [ ] **Memory failure test.** `getPersonTurns` throws. `has` resolves false and the failure is logged.
 - [ ] **Working memory test.** Only person turns are returned: synthetic, `internal`, `bullpen`, `scheduler`, assistant and archived turns are excluded.
-- [ ] **Execution test.** `identifierSources` reaches `ctx`, and `isProvenanceSource` reads the manifest.
+- [ ] **Execution test.** `identifierSources` reaches `ctx`, and `provenanceSourceText` reads the manifest and filters drafts and Curia's own messages.
 - [ ] Implement:
   - Root conversation = `delegationOriginConversationId(md) ?? conversationId`.
   - Person scope = the delegation origin's `(conversationId, agentId)` for a delegated task, otherwise `(conversationId, agentId)`.
@@ -116,7 +116,7 @@ export const sharedIdentifierSourceIndex: IdentifierSourceIndex;
 - Modify: `skills/contacts/tools/contact-create/{handler.ts,tool.json,handler.test.ts}`. After the duplicate check, an unsourced identifier is refused, and `verified: true` is passed explicitly. The manifest gets a patch bump.
 - Modify: `skills/contacts/tools/contact-link-identity/{handler.ts,tool.json,handler.test.ts}`. The new-link and `outbound_recipient` re-statement paths require a source. The manifest gets a patch bump.
 - Modify: `src/contacts/contact-service.ts` (`AUTO_VERIFIED_SOURCES` and its comment) and `src/contacts/types.ts` (the `agent_called` comment).
-- Modify these manifests to set `"provenance_source": true` with a patch bump: `web-fetch`, `web-browser`, `web-search`, `doc-read`, `doc-search`, `email-get`, `email-get-thread`, `email-list`, `file-parse`, `ceo-inbox-list`, `ceo-inbox-search`, `ceo-inbox-read`.
+- Modify these manifests to set `"provenance_source": true` with a patch bump: `web-fetch`, `web-search`, `email-get`, `email-get-thread`, `email-list`, `file-parse`, `ceo-inbox-list`, `ceo-inbox-search`, `ceo-inbox-read`. (Review: `doc-read`/`doc-search` read an agent-written workspace and `web-browser` echoes agent input, so they are not sources.)
 - Modify: `skills/contacts/SKILL.md`, removing `contact-register` from the bundle.
 - Test: `tests/unit/skills/provenance-source-manifests.test.ts`. It checks the exact flagged set, that `delegate` and `bullpen` are unflagged, that the contacts bundle omits `contact-register`, and that ceo-inbox pins it.
 

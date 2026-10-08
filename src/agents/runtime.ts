@@ -111,7 +111,7 @@ import {
 } from './delegated-task-context.js';
 import { SPECIALIST_DECLINE_REASON } from './specialist-decline.js';
 import { IdentifierSourceIndex, sharedIdentifierSourceIndex } from './identifier-source-index.js';
-import { sourceKeyFor, sourceKeysInText, type IdentifierSources } from '../contacts/identifier-provenance.js';
+import { createIdentifierSources } from './identifier-sources.js';
 import { principalAgentLabel } from './agent-display-name.js';
 import {
   delegationFailureAudience,
@@ -1090,7 +1090,7 @@ export class AgentRuntime {
     const sourceConversation = delegatedTask
       ? delegationOriginConversationId(taskEvent.payload.metadata) ?? conversationId
       : conversationId;
-    const personTurnScope = delegatedTask
+    const personTurns = delegatedTask
       ? (() => {
           const originConversation = delegationOriginConversationId(taskEvent.payload.metadata);
           const originAgent = delegationOriginAgentId(taskEvent.payload.metadata);
@@ -1099,22 +1099,7 @@ export class AgentRuntime {
             : undefined;
         })()
       : { conversationId, agentId };
-    const identifierSources: IdentifierSources = {
-      has: async (channel, identifier) => {
-        const key = sourceKeyFor(channel, identifier);
-        if (sourceIndex.has(sourceConversation, key)) return true;
-        if (!memory || !personTurnScope) return false;
-        try {
-          const turns = await memory.getPersonTurns(personTurnScope.conversationId, personTurnScope.agentId);
-          // The outbound-context preamble quotes Curia's own sent messages: model text.
-          return turns.some((turn) => sourceKeysInText(stripOutboundContextPreamble(turn)).has(key));
-        } catch (err) {
-          // Not found is the fail-closed answer: the write is refused or stored unverified.
-          logger.warn({ err, agentId, conversationId }, 'identifier provenance: could not read person turns — treating as not found');
-          return false;
-        }
-      },
-    };
+    const identifierSources = createIdentifierSources({ index: sourceIndex, sourceConversation, personTurns, memory, logger });
     const taskMetadataRecord = taskEvent.payload.metadata as Record<string, unknown> | undefined;
     const wokeBullpenThreadId = taskMetadataRecord?.['taskOrigin'] === 'bullpen'
       && typeof taskMetadataRecord['threadId'] === 'string'
@@ -2378,9 +2363,8 @@ export class AgentRuntime {
             // Best effort: a recording failure only means a later contact write is refused
             // and the agent asks again. It must not turn this successful call into an error.
             try {
-              if (executionLayer.isProvenanceSource(toolCall.name)) {
-                sourceIndex.record(sourceConversation, resultContent);
-              }
+              const sourceText = executionLayer.provenanceSourceText(toolCall.name, skillInput, result.data);
+              if (sourceText) sourceIndex.record(sourceConversation, sourceText);
             } catch (err) {
               logger.warn({ err, agentId, toolName: toolCall.name }, 'identifier provenance: could not record a source-tool result');
             }

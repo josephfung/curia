@@ -52,6 +52,8 @@ import {
   isDelegateDefaultBelowFloor,
 } from './agents/delegate-timeout.js';
 import { WorkingMemory } from './memory/working-memory.js';
+import { sharedIdentifierSourceIndex } from './agents/identifier-source-index.js';
+import { createIdentifierSources } from './agents/identifier-sources.js';
 import { EmbeddingService } from './memory/embedding.js';
 import { KnowledgeGraphStore } from './memory/knowledge-graph.js';
 import { MemoryValidator } from './memory/validation.js';
@@ -2635,6 +2637,15 @@ async function main(): Promise<void> {
               : null,
             channel: 'voice',
           };
+          // Identifier provenance (#2061): the caller's spoken turns are stored under the
+          // coordinator in this conversation, as a text turn's are.
+          const identifierSources = createIdentifierSources({
+            index: sharedIdentifierSourceIndex,
+            sourceConversation: ctx.conversationId,
+            personTurns: { conversationId: ctx.conversationId, agentId: 'coordinator' },
+            memory,
+            logger,
+          });
           const result = await executionLayer.invoke(call.name, call.input, executionCaller, {
             agentId: 'coordinator',
             channelId: 'voice',
@@ -2646,9 +2657,16 @@ async function main(): Promise<void> {
               originator: sessionCaller.originator,
               voiceSessionId: ctx.sessionId,
             },
+            identifierSources,
           });
           if (result.success) {
             const data = result.data;
+            try {
+              const sourceText = executionLayer.provenanceSourceText(call.name, call.input, data);
+              if (sourceText) sharedIdentifierSourceIndex.record(ctx.conversationId, sourceText);
+            } catch (err) {
+              logger.warn({ err, toolName: call.name }, 'identifier provenance: could not record a voice source-tool result');
+            }
             const content = typeof data === 'string'
               ? data
               : JSON.stringify(data ?? { ok: true });
