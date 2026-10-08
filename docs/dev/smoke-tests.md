@@ -76,7 +76,7 @@ The run **passes** when every case passes, apart from cases marked `known_failur
 
 ### Concurrency, cost and provider failures
 
-**Concurrency.** `--concurrency N` (default 4) sets how many cases run at once. A case's turns still run in order. Everything a case owns is kept per case, not per run: its stubs, the calendar writes it has made, the bullpen threads its agents are shown, model fallbacks and spend. The harness finds which case a tool call or model call belongs to through an `AsyncLocalStorage` context that follows the case's work across the bus, so a specialist the coordinator delegates to (in its own conversation) is still that case's (`tests/shared/case-scope.ts`). What concurrency cannot separate is real database writes from unstubbed tools: cases share the throwaway copy, as they already did one after another, but a write can now show up mid-case rather than only between cases. Higher concurrency also risks OpenRouter rate limits; the judge retries a 429 with a longer backoff.
+**Concurrency.** `--concurrency N` (default 4) sets how many cases run at once. A case's turns still run in order. Everything a case owns is kept per case, not per run: its stubs, the calendar, scheduler, task and draft writes it has made, the bullpen threads its agents are shown, model fallbacks and spend. The harness finds which case a tool call or model call belongs to through an `AsyncLocalStorage` context that follows the case's work across the bus, so a specialist the coordinator delegates to (in its own conversation) is still that case's (`tests/shared/case-scope.ts`). What concurrency cannot separate is real database writes from unstubbed tools: cases share the throwaway copy, as they already did one after another, but a write can now show up mid-case rather than only between cases. Higher concurrency also risks OpenRouter rate limits; the judge retries a 429 with a longer backoff.
 
 **Finished cases stop their work.** When a case ends, passed or timed out, it is cancelled: its later model calls fail at once and its tool calls are refused. The runtime has no way to cancel a turn, so before this an abandoned turn kept spending until it finished on its own, and its retry paid again. The harness waits up to 30 seconds for the case's leftover work to wind down before reading its spend; anything billed after that is printed as spend outside any case.
 
@@ -190,7 +190,29 @@ Test mode can't reach a real calendar, mailbox, scheduler or task store. So ever
   List and search results are narrowed to the call's time range or query, the way the real tools narrow them. Writes succeed and echo their inputs (`{{input:title}}`).
 - **`tests/smoke/fixtures/people.yaml`** seeds the people cases mention (Sarah Chen, David Kim, the board chair…) as real contacts in the copy. They use the reserved `.example` domain only.
 
-A case's own `tool_stubs` are tried first, then the office's, so a case can change one answer (a scheduler that now lists the job turn 1 created) or break one (a specialist that declines). Calendar writes are remembered for the rest of the case, so an event created in a case shows up when it re-reads the day. Calls nothing stubs run for real, on the copy. `--show-calls` prints every agent's calls, which tells you what a new case needs.
+A case's own `tool_stubs` are tried first, then the office's, so a case can change one answer (the jobs a turn starts from) or break one (a specialist that declines). Calls nothing stubs run for real, on the copy. `--show-calls` prints every agent's calls, which tells you what a new case needs.
+
+### Tools that keep state
+
+A stub is still the answer for one call. For the tools below, the harness also remembers the case's writes and replays them onto later reads in that case, the way the real store would. The matched stub — the turn's, then the case's, then the office default — is the base those writes merge onto. `clear()` at the end of the case drops the memory, and a concurrent case has its own.
+
+| Write | Later read |
+|---|---|
+| `calendar-create-event`, `calendar-update-event`, `calendar-delete-event` | `calendar-list-events` includes the event, with edits applied and deletes removed |
+| `scheduler-create`, `scheduler-update`, `scheduler-cancel` | `scheduler-list` includes the job (id, cron, timezone, task). An edit merges the fields it set. A cancel marks the job `cancelled` |
+| `task-create`, `task-update`, `task-complete` | `task-list` includes the task, with edits applied and a completion marked `done` |
+| `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`, `ceo-inbox-draft-edit` | `ceo-inbox-read` of that `draft_id` returns the draft, including later edits, and does not run the real tool |
+
+Until the case writes, a list stub is returned as written. After a write:
+
+- A job, task or event the stub already lists keeps the stub's fields. That is how a turn scripts the world it starts from, including one that disagrees with an earlier create. An update, completion or cancel during the turn still shows on the next list.
+- A row the stub does not list is added from the create. A second create that would reuse the stub's id gets a new id, so the two rows both appear. Draft ids stay as the stub returned them (`draft-0001`, `draft-0002`), because the office's edit stubs match those ids.
+- A list stub with no `jobs`, `tasks` or `events` array is returned as written. The replay does not apply, which is how a case scripts a result the memory must leave alone.
+- A `ceo-inbox-read` stub whose match names `draft_id` answers that read itself, ahead of the recorded draft.
+- `ceo-inbox-shadow-draft` stores a working-doc shadow, so `ceo-inbox-read` does not return it.
+- Once a scheduler or task write has happened, a later list is narrowed by the arguments the real tool filters on (status, agent, owner, tag, limit).
+
+The scenario suite replays scheduler, task and draft writes the same way for a single run. It still never writes a real scheduler row.
 
 A stubbed call is answered before the real tool layer, so trust and autonomy checks don't run on it: a stubbed write "succeeds" even where production would gate it. Stub a write when the case is about what Curia does next, not about whether it may write.
 

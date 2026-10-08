@@ -164,6 +164,8 @@ ceo-inbox-read:
     return: { id: 18f0d4a7c2e9b386, threadId: 18f0d4a7c2e9b386, from: [{ name: Sarah Johnson, email: sarah.johnson@lumen.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Follow-up after the demo?, body_plain: "Hi {{principal:first}},\n\nThanks again for the September demo. Could we find 30 minutes next week to go through pricing? Tuesday or Thursday afternoon works best on our side.\n\nSarah Johnson\nFounder and CEO, Lumen Analytics", date: 0, labels: [INBOX, UNREAD], attachments: [] }
   - match: { message_id: 18f1a9e5d3c7b042 }
     return: { id: 18f1a9e5d3c7b042, threadId: 18f1a9e5d3c7b042, from: [{ name: SaaS Weekly, email: newsletter@saasweekly.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "SaaS Weekly: pricing pages that convert", body_plain: "This week: five pricing page teardowns, and why an annual-plan toggle converts better than you'd think.\n\nYou are receiving this because you subscribed to SaaS Weekly. Unsubscribe: https://saasweekly.example/unsubscribe", date: 0, labels: [INBOX, UNREAD], attachments: [] }
+  # A draft_id recorded earlier in the case is answered from that draft (#2074).
+  # A stub whose match names draft_id answers the read itself. This catch-all is for messages.
   - match: {}
     error: Message not found in this mailbox.
 

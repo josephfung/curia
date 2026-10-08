@@ -177,6 +177,85 @@ describe('calendar writes within a case', () => {
   });
 });
 
+describe('scheduler, task and draft writes within a case', () => {
+  const JOB = '0f0f0f0f-0000-4000-8000-000000000001';
+
+  it('replays an edit onto a turn listing, and forgets it after clear()', async () => {
+    const { layer, invoke } = realLayer();
+    const stubs = createSmokeStubs();
+    const wrapped = stubs.wrap(layer);
+    const office = {
+      'scheduler-create': [{ match: {}, return: { jobId: JOB } }],
+      'scheduler-update': [{ match: {}, return: { jobId: '{{input:job_id}}', action: '{{input:action}}' } }],
+      'scheduler-list': [{ match: {}, return: { jobs: [], count: 0, truncated: false, limit: 50 } }],
+      'ceo-inbox-read': [{ match: {}, error: 'Message not found in this mailbox.' }],
+      'ceo-inbox-draft-compose': [{ match: {}, return: { draft_id: 'draft-0002', subject: '{{input:subject}}', to: '{{input:to}}', cc: [] } }],
+      'ceo-inbox-draft-edit': [{ match: {}, return: { draft_id: '{{input:draft_id}}' } }],
+    };
+    stubs.set(office);
+    await wrapped.invoke('scheduler-create', { task: 'Scan investor mail', cron_expr: '0 9 * * 1-5' }, undefined as never, opts('coordinator') as never);
+
+    // The next turn scripts the job at 9am. That listing is the base; the edit replays onto it.
+    stubs.set({
+      ...office,
+      'scheduler-list': [{
+        match: {},
+        return: { jobs: [{ id: JOB, status: 'active', cronExpr: '0 9 * * 1-5', taskTitle: 'Investor check' }], count: 1, truncated: false, limit: 50 },
+      }],
+    });
+    const before = await wrapped.invoke('scheduler-list', {}, undefined as never, opts('coordinator') as never) as { data: { jobs: Array<{ cronExpr: string }> } };
+    expect(before.data.jobs.map(job => job.cronExpr)).toEqual(['0 9 * * 1-5']);
+    await wrapped.invoke('scheduler-update', { job_id: JOB, action: 'edit', cron_expr: '0 10 * * 1-5' }, undefined as never, opts('coordinator') as never);
+    const after = await wrapped.invoke('scheduler-list', {}, undefined as never, opts('coordinator') as never) as { data: { jobs: Array<{ cronExpr: string; status: string; taskTitle: string }> } };
+    expect(after.data.jobs).toEqual([expect.objectContaining({ cronExpr: '0 10 * * 1-5', status: 'active', taskTitle: 'Investor check' })]);
+
+    // A turn stub with no jobs array is the scripted answer. The replay does not rewrite it.
+    stubs.set({ ...office, 'scheduler-list': [{ match: {}, return: { note: 'frozen' } }] });
+    expect(await wrapped.invoke('scheduler-list', {}, undefined as never, opts('coordinator') as never))
+      .toEqual({ success: true, data: { note: 'frozen' } });
+
+    await wrapped.invoke('ceo-inbox-draft-compose', { subject: 'Hello', to: ['maya@techto.example'], body: 'Tuesday.' }, undefined as never, opts('ceo-inbox') as never);
+    await wrapped.invoke('ceo-inbox-draft-edit', { draft_id: 'draft-0002', body: 'Wednesday.' }, undefined as never, opts('ceo-inbox') as never);
+    expect(await wrapped.invoke('ceo-inbox-read', { draft_id: 'draft-0002' }, undefined as never, opts('ceo-inbox') as never))
+      .toEqual({ success: true, data: expect.objectContaining({ id: 'draft-0002', is_draft: true, body_plain: 'Wednesday.', subject: 'Hello' }) });
+    expect(invoke).not.toHaveBeenCalled();
+
+    // A turn stub that names draft_id overrides the recorded draft.
+    stubs.set({
+      ...office,
+      'ceo-inbox-read': [{ match: { draft_id: 'draft-0002' }, return: { id: 'draft-0002', body_plain: 'scripted' } }],
+    });
+    expect(await wrapped.invoke('ceo-inbox-read', { draft_id: 'draft-0002' }, undefined as never, opts('ceo-inbox') as never))
+      .toEqual({ success: true, data: { id: 'draft-0002', body_plain: 'scripted' } });
+
+    stubs.clear();
+    stubs.set(office);
+    expect(await wrapped.invoke('scheduler-list', {}, undefined as never, opts('coordinator') as never))
+      .toEqual({ success: true, data: { jobs: [], count: 0, truncated: false, limit: 50 } });
+    expect(await wrapped.invoke('ceo-inbox-read', { draft_id: 'draft-0002' }, undefined as never, opts('ceo-inbox') as never))
+      .toEqual({ success: false, error: '<skill_error>Message not found in this mailbox.</skill_error>' });
+  });
+
+  it('keeps each case\'s scheduler writes to itself', async () => {
+    const context = createCaseContext<SmokeCaseState>();
+    const stubs = createStubsIn(context);
+    const wrapped = stubs.wrap(realLayer().layer);
+    const fixture = {
+      'scheduler-create': [{ match: {}, return: { jobId: JOB } }],
+      'scheduler-list': [{ match: {}, return: { jobs: [], count: 0 } }],
+    };
+    const call = (tool: string, input: Record<string, unknown>) => wrapped.invoke(tool, input, undefined as never, { agentId: 'coordinator' } as never);
+    const a = newSmokeCase('A');
+    const b = newSmokeCase('B');
+    await context.run(a, async () => { stubs.set(fixture); await call('scheduler-create', { task: 'A only', cron_expr: '0 9 * * 1' }); });
+    await context.run(b, async () => { stubs.set(fixture); });
+    const titles = (state: SmokeCaseState) => context.run(state, async () =>
+      (await call('scheduler-list', {}) as { data: { jobs: Array<{ taskPreview: string | null }> } }).data.jobs.map(job => job.taskPreview));
+    expect(await titles(a)).toEqual(['A only']);
+    expect(await titles(b)).toEqual([]);
+  });
+});
+
 describe('concurrent cases (#1980)', () => {
   const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 1));
 

@@ -23,8 +23,9 @@ turns:
     delay_ms: 2000
     content: |
       Actually, make that 10am instead of 9am. Same thing otherwise.
-    # The office's scheduler-create (stubs/office.yaml) answered turn 1 with this job id;
-    # by turn 2 the scheduler lists it, as the real one would.
+    # The office's scheduler-create answers turn 1 with this job id. This stub is the
+    # job as the turn starts (9am). Writes during the turn replay onto it, so a
+    # scheduler-list after scheduler-update shows the edit (#2074).
     tool_stubs:
       scheduler-list:
         - match: {}

@@ -280,4 +280,51 @@ describe('scenario stub layer', () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  it('replays scheduler and draft writes inside one run, and a draft_id stub overrides the read', async () => {
+    const { layer, controller, executed } = setup();
+    const job = '7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10';
+    const stubs = {
+      'scheduler-list': [{ match: {}, return: { jobs: [{ id: job, status: 'active', cronExpr: '0 9 * * 1', taskTitle: 'Pipeline review' }], count: 1 } }],
+      'scheduler-update': [{ match: {}, return: { jobId: job, action: 'edit' } }],
+      'scheduler-cancel': [{ match: {}, return: { cancelled: true, jobId: job } }],
+      'ceo-inbox-draft-compose': [{ match: {}, return: { draft_id: 'draft-0002', subject: 'Hello', to: ['maya@techto.example'], cc: [] } }],
+      'ceo-inbox-draft-edit': [{ match: {}, return: { draft_id: 'draft-0002' } }],
+      'ceo-inbox-read': [{ match: {}, error: 'Message not found in this mailbox.' }],
+    };
+    controller.beginRun(stubs, 'scenario-1');
+    controller.beginRun(stubs, 'scenario-2');
+    const call = (tool: string, input: Record<string, unknown>, conversationId = 'scenario-1') =>
+      layer.invoke(tool, input, undefined, { agentId: 'coordinator', conversationId });
+
+    await call('scheduler-update', { job_id: job, action: 'edit', cron_expr: '0 10 * * 1' });
+    const listed = await call('scheduler-list', {}) as { data: { jobs: Array<{ cronExpr: string; taskTitle: string }> } };
+    expect(listed.data.jobs).toEqual([expect.objectContaining({ cronExpr: '0 10 * * 1', taskTitle: 'Pipeline review' })]);
+    // The other run still sees the scripted 9am job.
+    const other = await call('scheduler-list', {}, 'scenario-2') as { data: { jobs: Array<{ cronExpr: string }> } };
+    expect(other.data.jobs.map(row => row.cronExpr)).toEqual(['0 9 * * 1']);
+
+    await call('scheduler-cancel', { job_id: job });
+    const cancelled = await call('scheduler-list', {}) as { data: { jobs: Array<{ status: string }> } };
+    expect(cancelled.data.jobs).toEqual([expect.objectContaining({ status: 'cancelled' })]);
+
+    await call('ceo-inbox-draft-compose', { subject: 'Hello', to: ['maya@techto.example'], body: 'Tuesday.' });
+    await call('ceo-inbox-draft-edit', { draft_id: 'draft-0002', body: 'Wednesday.' });
+    expect(await call('ceo-inbox-read', { draft_id: 'draft-0002' })).toEqual({
+      success: true,
+      data: expect.objectContaining({ id: 'draft-0002', is_draft: true, body_plain: 'Wednesday.' }),
+    });
+    expect(executed).toEqual([]);
+
+    controller.endRun('scenario-1');
+    controller.beginRun({
+      ...stubs,
+      'ceo-inbox-read': [{ match: { draft_id: 'draft-0002' }, return: { id: 'draft-0002', body_plain: 'scripted' } }],
+    }, 'scenario-1');
+    await call('ceo-inbox-draft-compose', { subject: 'Hello', to: ['maya@techto.example'], body: 'Tuesday.' });
+    expect(await call('ceo-inbox-read', { draft_id: 'draft-0002' })).toEqual({
+      success: true,
+      data: { id: 'draft-0002', body_plain: 'scripted' },
+    });
+  });
 });
