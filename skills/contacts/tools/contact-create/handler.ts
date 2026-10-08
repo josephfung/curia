@@ -18,6 +18,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { Contact, DuplicateCheck } from '../../../../src/contacts/types.js';
 import { normalizeAgentIdentifier } from '../../../../src/contacts/agent-identifier.js';
+import { hasPresentValue } from '../../../../src/contacts/principal-carveout-parse.js';
 import {
   candidatesError,
   parseDistinctFrom,
@@ -60,7 +61,8 @@ export class ContactCreateHandler implements ToolHandler {
     const identities: Array<{ channel: string; identifier: string }> = [];
     for (const channel of CHANNEL_INPUTS) {
       const raw = input[channel];
-      if (raw === undefined || raw === null || raw === '') continue;
+      // A blank value ("", "  ", null) is absent: models fill unused optional inputs with one.
+      if (!hasPresentValue(raw)) continue;
       if (typeof raw !== 'string') {
         return { success: false, error: `${channel} must be a string` };
       }
