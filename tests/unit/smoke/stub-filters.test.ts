@@ -164,6 +164,30 @@ describe('SchedulerState', () => {
     expect(jobs[0]!.nextRunAt).toEqual(expect.any(String));
   });
 
+  it('keeps the creating agent when the turn stub does not name one', () => {
+    const state = new CaseToolState();
+    shapeStubResult('scheduler-create', created, {
+      task: 'Scan investor mail',
+      cron_expr: '0 9 * * 1-5',
+      timezone: 'America/Toronto',
+      agent_id: 'ceo-inbox',
+    }, state);
+    const turn = {
+      jobs: [{
+        id: JOB_ID,
+        status: 'pending',
+        cronExpr: '0 9 * * 1-5',
+        timezone: 'America/Toronto',
+        taskTitle: 'Weekday investor inbox check',
+      }],
+      count: 1,
+    };
+    const found = shapeStubResult('scheduler-list', turn, { agent_id: 'ceo-inbox' }, state) as {
+      jobs: Array<{ id: string; agentId: string; createdBy: string }>;
+    };
+    expect(found.jobs).toEqual([expect.objectContaining({ id: JOB_ID, agentId: 'ceo-inbox', createdBy: 'ceo-inbox' })]);
+  });
+
   it('merges an edit onto a listed job and marks a cancel', () => {
     const state = new CaseToolState();
     shapeStubResult('scheduler-update', { jobId: JOB_ID, action: 'edit' }, { job_id: JOB_ID, action: 'edit', cron_expr: '0 10 * * 1-5' }, state);

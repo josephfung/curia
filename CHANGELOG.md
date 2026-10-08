@@ -172,6 +172,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Smoke and scenario stubs** — scheduler, task and draft reads replay writes from the same case. (#2074)
 - **Smoke scheduler stubs** — a schedule edit refreshes `nextRunAt`, and a missing one is filled from the cron. (#2074)
+- **Smoke scheduler list** — omitting `agentId` on a turn stub keeps the agent from the create. (#2074)
+- **Office scheduler stub** — an edit that sets no field is rejected, matching the real tool. (#2074)
 - **Scenario stubs** — five cases stub refused side calls; three discouraged ones are now scored. (#2058)
 - **Scenario harness** — refuses out-of-store email attachments and unservable activated tools. (#2059)
 - **Scenario `called` check** — optional `success` so a refused send is not a share. (#2059)

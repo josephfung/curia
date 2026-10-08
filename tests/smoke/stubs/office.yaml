@@ -301,7 +301,11 @@ scheduler-list:
 scheduler-create:
   - match: {}
     return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }
+# An edit that sets no field is the real handler's error. The catch-all below
+# would otherwise report success for { action: edit, job_id } (#2074).
 scheduler-update:
+  - match: { action: edit, cron_expr: null, run_at: null, task_payload: null }
+    error: action=edit requires at least one of cron_expr, run_at, or task_payload
   - match: {}
     return: { jobId: "{{input:job_id}}", action: "{{input:action}}" }
 scheduler-cancel:

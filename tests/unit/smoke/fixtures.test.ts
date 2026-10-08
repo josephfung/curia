@@ -100,6 +100,18 @@ describe('the committed suite', () => {
     expect(Object.keys(loadDefaultStubs('tests/smoke/stubs/office.yaml'))).toContain('calendar-list-events');
   });
 
+  it('rejects a scheduler-update edit that changes nothing, and accepts one that sets a cron', () => {
+    const office = loadDefaultStubs('tests/smoke/stubs/office.yaml');
+    const empty = matchToolStub('scheduler-update', { action: 'edit', job_id: 'job-1' }, office);
+    expect(empty?.error).toBe('action=edit requires at least one of cron_expr, run_at, or task_payload');
+    const cron = matchToolStub('scheduler-update', { action: 'edit', job_id: 'job-1', cron_expr: '0 10 * * 1-5' }, office);
+    expect(cron?.error).toBeUndefined();
+    expect(cron?.return).toEqual({ jobId: '{{input:job_id}}', action: '{{input:action}}' });
+    // Pause is not an edit, so the empty-edit guard must not catch it.
+    const pause = matchToolStub('scheduler-update', { action: 'pause', job_id: 'job-1' }, office);
+    expect(pause?.error).toBeUndefined();
+  });
+
   // A listed message the agent cannot open, or an attachment it cannot download, sends
   // ceo-inbox into a retry loop that can exhaust its error budget. The case then
   // measures the fixture, not the model (Triage Batch of Mixed Emails, trim plan PR 11
