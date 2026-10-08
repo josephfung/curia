@@ -7,8 +7,8 @@
 // the principal reviews and sends it from their email client.
 //
 // `to` is a contact reference (#2041, ADR-047): a contact ID or "principal", with an
-// optional #label hint, resolved by the gateway to a verified address. A draft is
-// never addressed to a typed address, so send-draft never sends to one.
+// optional #label hint, resolved by the gateway to a verified address. Curia's draft
+// skill no longer writes a typed address into a draft.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
@@ -54,8 +54,12 @@ export class EmailDraftSaveHandler implements ToolHandler {
     const resolved = await ctx.outboundGateway.resolveRecipientReference('email', to, { field: 'to' });
     if (!resolved.ok) return { success: false, error: resolved.error };
     if (!EMAIL_REGEX.test(resolved.identifier)) {
-      // A stored identity Nylas cannot address: a data defect. Never echo the ID (it may be the principal's).
-      ctx.log.warn({ field: 'to' }, 'email-draft-save: verified email identity is not a valid address — refusing (#2041)');
+      // A stored identity Nylas cannot address: a data defect. Log the contact for an
+      // operator, as email-send does; never echo the ID to the agent (it may be the principal's).
+      ctx.log.warn(
+        { contactId: resolved.contactId, field: 'to' },
+        'email-draft-save: verified email identity is not a valid address — refusing (#2041)',
+      );
       return {
         success: false,
         error: "The to contact's verified email identity is not a valid address, so no draft was saved. It needs correcting in Contacts.",
