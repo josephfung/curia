@@ -75,7 +75,7 @@
     "node-html-parser": "^9.0.4",
     "node-pg-migrate": "^9.0.0",
     "nylas": "^8.4.0",
-    "openai": "^7.20.0",
+    "openai": "^7.25.0",
     "openredaction": "^1.1.5",
     "patchright": "1.63.0",
     "pdf-parse": "^2.4.5",
