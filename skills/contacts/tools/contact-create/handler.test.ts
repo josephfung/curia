@@ -67,6 +67,16 @@ describe('ContactCreateHandler', () => {
     expect(await count()).toBe(before);
   });
 
+  it('skips a blank or whitespace-only optional channel input (Review Focus 1)', async () => {
+    const result = await handler.execute(makeCtx(contacts, {
+      name: 'Dana Whitfield', email: 'dana@newco.example', phone: ' ', sms: '', signal: null, slack: '   ',
+    }));
+    expect(result).toMatchObject({ success: true, data: { identities_added: 1 } });
+    if (!result.success) return;
+    const found = await contacts.getContactWithIdentities((result.data as { contact_id: string }).contact_id);
+    expect(found!.identities.map((i) => i.channel)).toEqual(['email']);
+  });
+
   it('refuses a malformed identifier and writes nothing', async () => {
     const before = await count();
     const result = await handler.execute(makeCtx(contacts, { name: 'Dana Whitfield', email: 'dana at newco' }));
