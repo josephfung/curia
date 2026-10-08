@@ -73,6 +73,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **Agent system prompts** — both contact blocks precede the YAML body; the principal's sits under "Who you serve".
+- **`contact-create`, `contact-link-identity`** — record `agent_stated`; refuse likely duplicates until `distinct_from` names them. (#2041)
+- **`email-draft-save` (public API)** — `to` takes a contact reference, not an address. (#2041)
+- **Coordinator** — pins `contact-create`, so cold outreach is create then send. (#2041)
 - **Send skills (public API, breaking)** — `to`, `cc` and `recipient` take a contact ID or `principal`; raw addresses get separate fields. (#2033)
 - **Principal Contact Details** — tells agents to pass `principal` to send skills instead of an address. (#2033)
 - **Gate C** — resolves recipient references before the principal carve-out and reply-to-sender checks. (#2033)
@@ -150,6 +153,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Removed
 
+- **Send skills (public API)** — `to_address`, `cc_addresses`, `recipient_number`, `recipient_user_id` removed; passing one is refused. (#2041)
 - **`approval-expiry-sweep` tool** — retired with the coordinator's hourly cron; `autonomy.approval_expiry` sets the interval. (#2013)
 - **`no_reply_principal` email** — a deliberate decline stays in audit and logs, not the inbox. (#1908)
 - **Google Workspace calendar tools** — no longer loaded; principal calendar belongs to `@calendar`. (#1853, #1957)
@@ -306,6 +310,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Agent-entered contacts** — no longer recorded as principal-stated; near-miss addresses are flagged before storing. (#2041)
+- **`contact-link-identity`** — refuses changes to the principal's addresses; only the principal manages them. (#2041)
 - **Send by reference** — a mistyped recipient reference fails closed instead of delivering to whoever owns the address. (#2033)
 - **Dependency floors** — `fast-uri` and `ip-address` raised past ineffective pins, clearing six advisories. (#1933)
 - **Override floor audit** — seven more pins raised off versions that were still vulnerable. (#1933)

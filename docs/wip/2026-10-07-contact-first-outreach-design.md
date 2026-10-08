@@ -1,6 +1,6 @@
 # Contact-first outreach
 
-**Status:** design approved 2026-10-07, implementation in progress (#2041).
+**Status:** implemented on branch feat/contact-first-outreach (#2041).
 **Decision:** retire the raw-address send fields. Cold outreach creates a contact first. Addresses an agent enters get their own source, `agent_stated`, which is verified only after a duplicate check that runs before anything is written.
 
 ## Context
