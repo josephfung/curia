@@ -534,7 +534,8 @@ describe('cold outreach creates a contact first (#2041)', () => {
     expect(delivered(h)).toEqual(['+14165550123']);
   });
 
-  it('a near-miss of a known address is refused, naming that contact, and nothing is sent', async () => {
+  it('a near-miss of a known address is refused, naming that contact, and no contact is created', async () => {
+    const before = (await h.contacts.listContacts()).length;
     const created = await new ContactCreateHandler().execute(contactCtx(h, { name: 'Sam P', email: 'sam@home.exampel' }));
     expect(created.success).toBe(false);
     if (!created.success) {
@@ -542,7 +543,27 @@ describe('cold outreach creates a contact first (#2041)', () => {
       expect(created.error).toContain('similar email address');
       expect(created.error).not.toContain('sam@home.example');
     }
-    expect(delivered(h)).toEqual([]);
+    const after = await h.contacts.listContacts();
+    expect(after).toHaveLength(before);
+    expect(after.filter((contact) => contact.displayName === 'Sam P')).toEqual([]);
+  });
+
+  it('a second create with a near-miss of the address just created is refused, naming that contact', async () => {
+    const first = await new ContactCreateHandler().execute(contactCtx(h, {
+      name: 'Dana Whitfield', email: 'dana.whitfield@newco.example',
+    }));
+    expect(first.success).toBe(true);
+    if (!first.success) return;
+    const danaId = (first.data as { contact_id: string }).contact_id;
+
+    const second = await new ContactCreateHandler().execute(contactCtx(h, {
+      name: 'D. Whitfield', email: 'dana.whitfeld@newco.example',
+    }));
+    expect(second.success).toBe(false);
+    if (!second.success) {
+      expect(second.error).toContain(`"Dana Whitfield" (${danaId}): similar email address`);
+      expect(second.error).not.toContain('dana.whitfield@newco.example');
+    }
   });
 
   it("a typo of the principal's address is caught as the principal, without the principal's contact ID", async () => {
@@ -555,6 +576,8 @@ describe('cold outreach creates a contact first (#2041)', () => {
     if (!created.success) {
       expect(created.error).toContain('the principal');
       expect(created.error).not.toContain(h.principalId);
+      expect(created.error).not.toContain('pat@home.example');
+      expect(created.error).not.toContain('pat@work.example');
     }
   });
 
@@ -565,6 +588,11 @@ describe('cold outreach creates a contact first (#2041)', () => {
 
     const before = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(resolved!.contactId)));
     expect(before.success).toBe(false);
+    if (!before.success) {
+      expect(before.error).toMatch(/has no verified, active email address/);
+      // The gateway named the contact after its address; the error must not quote it.
+      expect(before.error).not.toContain('cold.example');
+    }
 
     const restated = await new ContactLinkIdentityHandler().execute(contactCtx(h, {
       contact_id: resolved!.contactId, channel: 'email', identifier: 'new.person@cold.example',

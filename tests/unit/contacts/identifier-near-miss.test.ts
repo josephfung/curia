@@ -53,7 +53,23 @@ describe('isNearMiss', () => {
     expect(isNearMiss('email', 'ed@x.io', 'al@x.io')).toBe(false);
   });
 
-  it('does not match addresses three edits apart', () => {
+  it('allows two edits from 12 characters: 11 is one edit, 12 is two', () => {
+    // Two substitutions each time; only the length of the shorter address changes.
+    expect('ab@xyz.test'.length).toBe(11);
+    expect(osaDistance('ab@xyz.test', 'cd@xyz.test', 3)).toBe(2);
+    expect(isNearMiss('email', 'ab@xyz.test', 'cd@xyz.test')).toBe(false);
+    expect('abc@xyz.test'.length).toBe(12);
+    expect(osaDistance('abc@xyz.test', 'cdc@xyz.test', 3)).toBe(2);
+    expect(isNearMiss('email', 'abc@xyz.test', 'cdc@xyz.test')).toBe(true);
+  });
+
+  it('does not match addresses three edits apart, however long', () => {
+    expect(osaDistance('dana@newco.example', 'dina@nowco.exampel', 4)).toBe(3);
+    expect(isNearMiss('email', 'dana@newco.example', 'dina@nowco.exampel')).toBe(false);
+  });
+
+  it('does not match addresses four edits apart', () => {
+    expect(osaDistance('pat@example.test', 'priya@example.test', 5)).toBe(4);
     expect(isNearMiss('email', 'pat@example.test', 'priya@example.test')).toBe(false);
   });
 
