@@ -41,6 +41,7 @@ import type { DedupService } from './dedup-service.js';
 import {
   matchOutreachDuplicates,
   type IdentitySummary,
+  type NameSummary,
   type OutreachDuplicateReport,
 } from './outreach-duplicates.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
@@ -169,6 +170,8 @@ interface ContactServiceBackend {
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
   /** Channel identities on the given channels, with the owning contact's display name. */
   listIdentitySummaries(channels: readonly string[]): Promise<IdentitySummary[]>;
+  /** id and display name only. The outreach name scan does not need a full contact row. */
+  listContactNames(): Promise<NameSummary[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
   setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity>;
@@ -917,17 +920,17 @@ export class ContactService {
     excludeContactId?: string;
   }): Promise<OutreachDuplicateReport> {
     const channels = [...new Set(input.identifiers.map((item) => item.channel).filter((channel) => channel.length > 0))];
-    const [identities, contacts] = await Promise.all([
+    const [identities, names] = await Promise.all([
       this.backend.listIdentitySummaries(channels),
       input.displayName && input.displayName.trim()
-        ? this.backend.listContacts()
+        ? this.backend.listContactNames()
         : Promise.resolve([]),
     ]);
     return matchOutreachDuplicates({
       displayName: input.displayName,
       identifiers: input.identifiers,
       identities,
-      names: contacts.map((contact) => ({ contactId: contact.id, displayName: contact.displayName })),
+      names,
       excludeContactId: input.excludeContactId,
     });
   }
@@ -2387,8 +2390,9 @@ class PostgresContactBackend implements ContactServiceBackend {
       display_name: string;
       channel: string;
       channel_identifier: string;
+      verified: boolean;
     }>(
-      `SELECT cci.contact_id, c.display_name, cci.channel, cci.channel_identifier
+      `SELECT cci.contact_id, c.display_name, cci.channel, cci.channel_identifier, cci.verified
        FROM contact_channel_identities cci
        JOIN contacts c ON c.id = cci.contact_id
        WHERE cci.channel = ANY($1::text[])`,
@@ -2399,7 +2403,15 @@ class PostgresContactBackend implements ContactServiceBackend {
       displayName: row.display_name,
       channel: row.channel,
       channelIdentifier: row.channel_identifier,
+      verified: row.verified,
     }));
+  }
+
+  async listContactNames(): Promise<NameSummary[]> {
+    const result = await this.pool.query<{ id: string; display_name: string }>(
+      `SELECT id, display_name FROM contacts`,
+    );
+    return result.rows.map((row) => ({ contactId: row.id, displayName: row.display_name }));
   }
 
   async resolveByChannelIdentity(
@@ -3254,9 +3266,17 @@ class InMemoryContactBackend implements ContactServiceBackend {
         displayName: contact.displayName,
         channel: identity.channel,
         channelIdentifier: identity.channelIdentifier,
+        verified: identity.verified,
       });
     }
     return rows;
+  }
+
+  async listContactNames(): Promise<NameSummary[]> {
+    return [...this.contacts.values()].map((contact) => ({
+      contactId: contact.id,
+      displayName: contact.displayName,
+    }));
   }
 
   async resolveByChannelIdentity(

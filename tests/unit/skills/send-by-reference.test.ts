@@ -19,6 +19,7 @@ import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
 import { EmailSendHandler } from '../../../skills/email/tools/email-send/handler.js';
 import { ContactCreateHandler } from '../../../skills/contacts/tools/contact-create/handler.js';
+import { ContactLinkIdentityHandler } from '../../../skills/contacts/tools/contact-link-identity/handler.js';
 import { SignalSendHandler } from '../../../skills/signal-send/handler.js';
 import { SmsSendHandler } from '../../../skills/sms-send/handler.js';
 import { SlackSendHandler } from '../../../skills/slack-send/handler.js';
@@ -331,11 +332,65 @@ describe('cold outreach creates a contact, then sends by that id (#2041)', () =>
     expect(created.success).toBe(false);
     if (!created.success) {
       expect(created.error).toMatch(/confirm_new/);
+      expect(created.error).toMatch(/contact-link-identity/);
       expect(created.error).not.toContain('pat@home.exampl');
       expect(created.error).toContain(h.principalId);
     }
     expect(delivered(h)).toEqual([]);
     expect(await h.contacts.resolveByChannelIdentity('email', 'pat@home.exampl')).toBeNull();
+  });
+
+  it('a similar name links the new address, and a label hint sends there', async () => {
+    const priya = await h.contacts.createContact({ displayName: 'Priya Natarajan', source: 'ceo_stated', tier: 'known' });
+    await h.contacts.linkIdentity({
+      contactId: priya.id,
+      channel: 'email',
+      channelIdentifier: 'priya.natarajan@acme.example',
+      label: 'work',
+      source: 'ceo_stated',
+    });
+    await h.contacts.updateContactFields(priya.id, { primaryEmail: 'priya.natarajan@acme.example' });
+
+    const refused = await create({ name: 'Priya Natrajan', email: 'priya.n@gmail.com' });
+    expect(refused.success).toBe(false);
+    if (!refused.success) {
+      expect(refused.error).toMatch(/contact-link-identity/);
+      expect(refused.error).toMatch(/<id>#<label>/);
+      expect(refused.error).toContain(priya.id);
+      expect(refused.error).not.toContain('priya.n@gmail.com');
+    }
+
+    const linked = await new ContactLinkIdentityHandler().execute({
+      ...ctx(h, {
+        contact_id: priya.id,
+        channel: 'email',
+        identifier: 'priya.n@gmail.com',
+        label: 'personal',
+      }),
+      contactService: h.contacts,
+    });
+    expect(linked.success).toBe(true);
+
+    const sent = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(`${priya.id}#personal`)));
+    expect(sent.success).toBe(true);
+    expect(delivered(h)).toEqual(['priya.n@gmail.com']);
+  });
+
+  it('an exact match on an unverified outbound contact asks the principal to verify it', async () => {
+    await h.gateway.send({
+      channel: 'email',
+      to: 'old.outbound@cold.example',
+      subject: 'Hi',
+      body: 'Hello.',
+    });
+    const created = await create({ name: 'Old Outbound', email: 'old.outbound@cold.example' });
+    expect(created.success).toBe(false);
+    if (!created.success) {
+      expect(created.error).toMatch(/on file but unverified/);
+      expect(created.error).toMatch(/Ask the principal to verify/);
+      expect(created.error).not.toMatch(/Send to that contact/);
+      expect(created.error).not.toContain('old.outbound@cold.example');
+    }
   });
 });
 

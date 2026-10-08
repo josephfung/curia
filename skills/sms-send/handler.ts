@@ -12,7 +12,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
-import { presentRetiredRawField } from '../../src/skills/_shared/recipient-reference.js';
+import { presentRetiredRawField, RETIRED_SEND_RAW_FIELDS } from '../../src/skills/_shared/recipient-reference.js';
 
 const MAX_MESSAGE_LENGTH = 1600;
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
@@ -31,7 +31,7 @@ export class SmsSendHandler implements ToolHandler {
 
     const retired = presentRetiredRawField(
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {},
-      [['recipient_number', 'recipient']],
+      RETIRED_SEND_RAW_FIELDS['sms-send'] ?? [],
     );
     if (retired) return { success: false, error: retired };
 
@@ -63,26 +63,24 @@ export class SmsSendHandler implements ToolHandler {
     let destination: string;
     let contactId: string | undefined;
     let identityName: string | undefined;
-    {
-      const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient, {
-        field: 'recipient',
-      });
-      if (!resolved.ok) return { success: false, error: resolved.error };
-      if (!E164_REGEX.test(resolved.identifier)) {
-        // A stored identity Telnyx cannot address: a data defect. Refuse rather than
-        // guess, and log the contact for an operator (the ID may be the principal's).
-        ctx.log.warn({ contactId: resolved.contactId }, 'sms-send: verified SMS identity is not E.164 — refusing (#2033)');
-        return {
-          success: false,
-          error: `The contact's verified SMS identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
-        };
-      }
-      destination = resolved.identifier;
-      // Echo the contact ID only for a UUID the agent passed. For the alias it is the
-      // principal's, which spec 09 keeps out of the model's context.
-      contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
-      identityName = resolved.identityName;
+    const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient, {
+      field: 'recipient',
+    });
+    if (!resolved.ok) return { success: false, error: resolved.error };
+    if (!E164_REGEX.test(resolved.identifier)) {
+      // A stored identity Telnyx cannot address: a data defect. Refuse rather than
+      // guess, and log the contact for an operator (the ID may be the principal's).
+      ctx.log.warn({ contactId: resolved.contactId }, 'sms-send: verified SMS identity is not E.164 — refusing (#2033)');
+      return {
+        success: false,
+        error: `The contact's verified SMS identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
+      };
     }
+    destination = resolved.identifier;
+    // Echo the contact ID only for a UUID the agent passed. For the alias it is the
+    // principal's, which spec 09 keeps out of the model's context.
+    contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
+    identityName = resolved.identityName;
 
     ctx.log.info({ destinationType: '1:1', byReference: true }, 'sms-send: dispatching SMS via gateway');
 

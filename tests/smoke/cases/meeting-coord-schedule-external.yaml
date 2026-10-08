@@ -25,6 +25,9 @@ tool_stubs:
       error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). For someone with no contact record, record them with contact-create first, then pass that contact ID.'
     - match: { to: null }
       error: 'to_address is no longer accepted. Record the person with contact-create, then pass their contact ID in to. Nothing was sent.'
+    # The matcher cannot express "to is a UUID". This success stub matches any present
+    # `to` other than the exact lowercase address above, including a mistyped address
+    # or a made-up id. The reaches-jamie judge is what requires a send to her contact id.
     - match: { to_address: null }
       return: { message_id: smoke-sent-0001, to: "{{input:to}}", subject: "{{input:subject}}" }
     - match: {}

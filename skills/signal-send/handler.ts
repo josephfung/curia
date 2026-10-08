@@ -19,7 +19,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/type
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
-import { presentRetiredRawField } from '../../src/skills/_shared/recipient-reference.js';
+import { presentRetiredRawField, RETIRED_SEND_RAW_FIELDS } from '../../src/skills/_shared/recipient-reference.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -44,7 +44,7 @@ export class SignalSendHandler implements ToolHandler {
 
     const retired = presentRetiredRawField(
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {},
-      [['recipient_number', 'recipient']],
+      RETIRED_SEND_RAW_FIELDS['signal-send'] ?? [],
     );
     if (retired) return { success: false, error: retired };
 

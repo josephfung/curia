@@ -12,12 +12,23 @@ const PRIYA = '11111111-1111-4111-8111-111111111111';
 const JENNA = '22222222-2222-4222-8222-222222222222';
 const PAT = '33333333-3333-4333-8333-333333333333';
 
-function email(contactId: string, displayName: string, channelIdentifier: string): IdentitySummary {
-  return { contactId, displayName, channel: 'email', channelIdentifier };
+function email(
+  contactId: string,
+  displayName: string,
+  channelIdentifier: string,
+  verified = true,
+): IdentitySummary {
+  return { contactId, displayName, channel: 'email', channelIdentifier, verified };
 }
 
-function phone(contactId: string, displayName: string, channelIdentifier: string, channel = 'phone'): IdentitySummary {
-  return { contactId, displayName, channel, channelIdentifier };
+function phone(
+  contactId: string,
+  displayName: string,
+  channelIdentifier: string,
+  channel = 'phone',
+  verified = true,
+): IdentitySummary {
+  return { contactId, displayName, channel, channelIdentifier, verified };
 }
 
 function names(...rows: NameSummary[]): NameSummary[] {
@@ -43,7 +54,7 @@ describe('matchOutreachDuplicates', () => {
       names: names({ contactId: PRIYA, displayName: 'Priya Natarajan' }),
     });
     expect(report.exact).toEqual([
-      { contactId: PRIYA, displayName: 'Priya Natarajan', kind: 'same_address', channel: 'email' },
+      { contactId: PRIYA, displayName: 'Priya Natarajan', kind: 'same_address', channel: 'email', verified: true },
     ]);
     expect(report.likely).toEqual([]);
   });
@@ -172,13 +183,26 @@ describe('outreachDuplicateError', () => {
     expect(error).not.toMatch(/@/);
   });
 
-  it('tells the agent to pass confirm_new for a near-miss', () => {
+  it('tells the agent to pass confirm_new for a near-miss, or to link a new address', () => {
     const error = outreachDuplicateError({
       exact: [],
       likely: [{ ...priya, kind: 'similar_name' }],
     }, 'linked');
     expect(error).toMatch(/confirm_new true/);
+    expect(error).toMatch(/contact-link-identity/);
+    expect(error).toMatch(/<id>#<label>/);
     expect(error).toMatch(/Nothing was linked/);
+    expect(error).not.toMatch(/@/);
+  });
+
+  it('an unverified exact match asks the principal to verify, and does not say to send', () => {
+    const error = outreachDuplicateError({
+      exact: [{ ...priya, kind: 'same_address', channel: 'email', verified: false }],
+      likely: [],
+    }, 'created');
+    expect(error).toMatch(/on file but unverified/);
+    expect(error).toMatch(/Ask the principal to verify/);
+    expect(error).not.toMatch(/Send to that contact/);
     expect(error).not.toMatch(/@/);
   });
 });

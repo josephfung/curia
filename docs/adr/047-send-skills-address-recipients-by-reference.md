@@ -68,7 +68,9 @@ An unlabelled address next to labelled ones is a conflict rather than the defaul
 
 The raw-address fields are removed. `email-send` (`to`, `cc`), `signal-send`, `sms-send`, `slack-send` (`recipient`) and `email-draft-save` (`to`) take only a contact reference. A present retired field (`to_address`, `cc_addresses`, `recipient_number`, `recipient_user_id`) is refused before any gate. Gate C's parsers return null when one is present, so a typed address cannot take the principal-sole carve-out. Export control still reads a leftover raw field, so a stored payload cannot hide a destination.
 
-Cold outreach is `contact-create`, or `contact-link-identity` for someone already on file, then a send by the returned contact id. The principal's own Gmail drafts (`ceo-inbox-draft-compose` and its edit and reply tools) still take addresses: the principal reviews and sends those from Gmail.
+Cold outreach is `contact-create`, or `contact-link-identity` for someone already on file, then a send by the returned contact id. A near-miss is not a send to that contact's current address. When the principal named a new address for the same person, the agent adds it with `contact-link-identity` and a label, and the send uses `<id>#<label>`. Sending by the id alone would deliver to the old primary.
+
+The principal's own Gmail drafts (`ceo-inbox-draft-compose` and its edit and reply tools) still take addresses: the principal reviews and sends those from Gmail. Calendar writes stay on typed attendee emails too. `calendar-create-event` and `calendar-update-event` take `{ email }` attendees, and the calendar provider sends the invitation. That path is out of scope here: an invite is a guest on the principal's calendar, not a message the agent addresses.
 
 `contact-create` and `contact-link-identity` record source `agent_created`. That source is auto-verified, so the following send-by-reference can deliver. If it were not, cold outreach would stall at "no verified identity". Verification here means the agent asserted the address after the duplicate check below. It does not mean the principal confirmed it, and it does not get the `ceo_stated` confidence boost. Console, setup and the HTTP API stay `ceo_stated`, because a person stated the address. `agent_called` stays the mechanical channel extraction, not an LLM-typed address.
 
@@ -76,9 +78,10 @@ The duplicate check runs before the write. An error names the contact id and dis
 
 | Situation | Result |
 |---|---|
-| The address is already on a contact (email compared case-insensitively, including on this contact) | Refuse. `confirm_new` does not apply. Send to that contact. |
-| Same channel, Jaro-Winkler at least 0.92, both strings at least 8 characters | Refuse unless `confirm_new` is true. |
-| Display name Jaro-Winkler at least 0.9 (the dedup "certain" band) | Refuse unless `confirm_new` is true. |
+| The address is already on a contact, and that identity is verified (email compared case-insensitively, including on this contact) | Refuse. `confirm_new` does not apply. Send to that contact. |
+| The address is already on a contact, and that identity is unverified | Refuse. `confirm_new` does not apply. Ask the principal to verify it. Do not send: the resolver will not use an unverified identity. |
+| Same channel, Jaro-Winkler at least 0.92, both strings at least 8 characters | Refuse unless `confirm_new` is true. A new address for the same person is `contact-link-identity` with a label, then a send to `<id>#<label>`. |
+| Display name Jaro-Winkler at least 0.9 (the dedup "certain" band) | Refuse unless `confirm_new` is true. Same link-and-label path as a near-miss address. Sending by the id alone would use the address already on file. |
 | A different channel | Not compared. The same number may exist on phone and on Signal. |
 | `confirm_new` true, and the address is not already on file | Create or link. |
 

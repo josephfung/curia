@@ -28,6 +28,8 @@ export interface IdentitySummary {
   displayName: string;
   channel: string;
   channelIdentifier: string;
+  /** False when the stored identity cannot be sent to until the principal verifies it. */
+  verified: boolean;
 }
 
 export interface NameSummary {
@@ -40,6 +42,8 @@ export interface OutreachDuplicate {
   displayName: string;
   kind: 'same_address' | 'similar_address' | 'similar_name';
   channel?: string;
+  /** Exact address hits only. False means that stored identity is unverified. */
+  verified?: boolean;
 }
 
 export interface OutreachDuplicateReport {
@@ -105,6 +109,7 @@ export function matchOutreachDuplicates(input: {
             displayName: row.displayName,
             kind: 'same_address',
             channel: row.channel,
+            verified: row.verified,
           });
         }
         continue;
@@ -149,6 +154,9 @@ export function matchOutreachDuplicates(input: {
 
 function formatHit(hit: OutreachDuplicate): string {
   const who = `"${safeName(hit.displayName)}" (${hit.contactId})`;
+  if (hit.kind === 'same_address' && hit.verified === false) {
+    return `Same ${hit.channel ?? 'channel'} address on ${who}, unverified.`;
+  }
   if (hit.kind === 'same_address') return `Same ${hit.channel ?? 'channel'} address on ${who}.`;
   if (hit.kind === 'similar_address') return `Similar ${hit.channel ?? 'channel'} address on ${who}.`;
   return `Similar name to ${who}.`;
@@ -156,6 +164,11 @@ function formatHit(hit: OutreachDuplicate): string {
 
 /**
  * Agent-facing refusal. Names contacts and says how to retry. Contains no address.
+ *
+ * A near-miss is not permission to send to the contact's current address: that
+ * would deliver to the old primary when the principal named a new one. An exact
+ * hit on an unverified identity cannot be sent to either; the principal has to
+ * verify it (#2041).
  */
 export function outreachDuplicateError(
   report: OutreachDuplicateReport,
@@ -163,7 +176,30 @@ export function outreachDuplicateError(
 ): string {
   const lines = [...report.exact, ...report.likely].map(formatHit);
   const head = report.exact.length > 0
-    ? `Nothing was ${verb}: this address is already on a contact. Send to that contact. confirm_new does not apply when the address is already on file.`
-    : `Nothing was ${verb}: this may be someone already on file. Send to that contact, or pass confirm_new true if this is a different person.`;
+    ? exactHead(verb, report.exact)
+    : likelyHead(verb);
   return [head, ...lines].join(' ');
+}
+
+function exactHead(verb: 'created' | 'linked', exact: readonly OutreachDuplicate[]): string {
+  const unverified = exact.every((hit) => hit.verified === false);
+  if (unverified) {
+    return (
+      `Nothing was ${verb}: this address is on file but unverified. Ask the principal to verify it before sending. ` +
+      'confirm_new does not apply when the address is already on file.'
+    );
+  }
+  return (
+    `Nothing was ${verb}: this address is already on a contact. Send to that contact. ` +
+    'confirm_new does not apply when the address is already on file.'
+  );
+}
+
+function likelyHead(verb: 'created' | 'linked'): string {
+  return (
+    `Nothing was ${verb}: this may be someone already on file. ` +
+    'If that contact already has this address, send to that contact. ' +
+    'If this is a new address for the same person, add it with contact-link-identity and a label, then send to <id>#<label>. ' +
+    'Pass confirm_new true only if this is a different person.'
+  );
 }

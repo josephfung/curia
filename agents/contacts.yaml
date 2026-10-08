@@ -1,5 +1,5 @@
 name: contacts
-version: "0.13.0"
+version: "0.13.1"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -92,8 +92,12 @@ system_prompt: |
   contact-create to record them. When the coordinator provides new contact details
   for someone who already exists, use contact-link-identity or contact-set-role.
   If contact-create or contact-link-identity refuses because a contact already
-  exists, use that contact id. Pass confirm_new only when the refusal says this
-  is a different person. Do not retype the address into a send skill.
+  exists, use that contact id. If the coordinator gave a new address for that
+  person, add it with contact-link-identity and a label, and report the label
+  back so the send can use `<id>#<label>`. Pass confirm_new only when the
+  refusal says this is a different person. Do not retype the address into a
+  send skill. An address that is on file but unverified cannot be sent to;
+  ask the principal to verify it.
 
   When you need to find someone's details by name, use contact-lookup. If a name
   is ambiguous (e.g., "Michael" could be multiple people), use contact-lookup to

@@ -1,7 +1,7 @@
 {
   "name": "contact-link-identity",
-  "description": "Add a channel identity (email, phone, Signal, Telegram, Slack) to an existing contact. If the result says the address may already belong to someone else, use that contact id, or pass confirm_new true only when this is a different person. An address already on file is refused even with confirm_new. The identity is source agent_created: an agent supplied it, which is not the same as the principal confirming it. To update profile attributes (title, organization, timezone, etc.), use contact-update instead.",
-  "version": "1.2.0",
+  "description": "Add a channel identity (email, phone, Signal, Telegram, Slack) to an existing contact. If the result says the address may already belong to someone else, send to that contact id when the address is already on it. If this is a new address for that person, add it here with a label so the send can use <contact_id>#<label>. Pass confirm_new true only when this is a different person. An address already on file is refused even with confirm_new. If that identity is unverified, ask the principal to verify it instead of sending. The identity is source agent_created: an agent supplied it, which is not the same as the principal confirming it. To update profile attributes (title, organization, timezone, etc.), use contact-update instead.",
+  "version": "1.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

@@ -15,7 +15,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
-import { presentRetiredRawField } from '../../src/skills/_shared/recipient-reference.js';
+import { presentRetiredRawField, RETIRED_SEND_RAW_FIELDS } from '../../src/skills/_shared/recipient-reference.js';
 
 /** Slack chat.postMessage hard limit. */
 const MAX_MESSAGE_LENGTH = 40_000;
@@ -40,7 +40,7 @@ export class SlackSendHandler implements ToolHandler {
 
     const retired = presentRetiredRawField(
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {},
-      [['recipient_user_id', 'recipient']],
+      RETIRED_SEND_RAW_FIELDS['slack-send'] ?? [],
     );
     if (retired) return { success: false, error: retired };
 
@@ -72,25 +72,23 @@ export class SlackSendHandler implements ToolHandler {
     let destination: string;
     let contactId: string | undefined;
     let identityName: string | undefined;
-    {
-      const resolved = await ctx.outboundGateway.resolveRecipientReference('slack', recipient, {
-        field: 'recipient',
-      });
-      if (!resolved.ok) return { success: false, error: resolved.error };
-      if (!SLACK_USER_ID_REGEX.test(resolved.identifier)) {
-        // W… Enterprise Grid ids stay out of scope on the reference path too.
-        ctx.log.warn({ contactId: resolved.contactId }, 'slack-send: verified Slack identity is not a U… user id — refusing (#2033)');
-        return {
-          success: false,
-          error: `The contact's verified Slack identity is not a U… user id, so nothing was sent. Enterprise Grid (W…) ids are not supported.`,
-        };
-      }
-      destination = resolved.identifier;
-      // Echo the contact ID only for a UUID the agent passed. For the alias it is the
-      // principal's, which spec 09 keeps out of the model's context.
-      contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
-      identityName = resolved.identityName;
+    const resolved = await ctx.outboundGateway.resolveRecipientReference('slack', recipient, {
+      field: 'recipient',
+    });
+    if (!resolved.ok) return { success: false, error: resolved.error };
+    if (!SLACK_USER_ID_REGEX.test(resolved.identifier)) {
+      // W… Enterprise Grid ids stay out of scope on the reference path too.
+      ctx.log.warn({ contactId: resolved.contactId }, 'slack-send: verified Slack identity is not a U… user id — refusing (#2033)');
+      return {
+        success: false,
+        error: `The contact's verified Slack identity is not a U… user id, so nothing was sent. Enterprise Grid (W…) ids are not supported.`,
+      };
     }
+    destination = resolved.identifier;
+    // Echo the contact ID only for a UUID the agent passed. For the alias it is the
+    // principal's, which spec 09 keeps out of the model's context.
+    contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
+    identityName = resolved.identityName;
 
     ctx.log.info({ destinationType: '1:1', byReference: true }, 'slack-send: dispatching Slack DM via gateway');
 
