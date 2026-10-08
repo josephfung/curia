@@ -137,13 +137,13 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T11:04:25.085Z"
+      "recordedAt": "2026-10-08T11:16:21.435Z"
     },
     "signal to contact by id": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-08T11:05:24.691Z"
+      "recordedAt": "2026-10-08T11:15:38.997Z"
     },
     "sweep-on-close closing result": {
       "unstubbed": 0,

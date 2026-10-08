@@ -32,6 +32,12 @@ expected_behaviors:
     check:
       not_called: [email-send]
       with: { to: null }
+  - id: no_address_in_to
+    weight: critical
+    description: Does not type an address into `to` (the skill refuses it; the attempt is the failure).
+    check:
+      not_called: [email-send]
+      contains: { to: "@" }
   - id: details_in_body
     weight: important
     description: The email body carries the venue, room and start time the principal gave.
