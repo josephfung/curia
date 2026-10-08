@@ -19,6 +19,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/type
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import { hasPresentValue } from '../../src/contacts/principal-carveout-parse.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
   findRetiredRecipientField,
@@ -50,8 +51,11 @@ export class SignalSendHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message (string)' };
     }
 
-    // Exactly one of recipient / group_id must be provided.
-    const destinations = [recipient, group_id].filter((v) => v !== undefined && v !== null && v !== '');
+    // Exactly one of recipient / group_id must be provided. A blank or
+    // whitespace-only value is filler, not a destination — the same rule as the
+    // retired field above and the Gate C parser.
+    const groupId = hasPresentValue(group_id) ? group_id : undefined;
+    const destinations = [recipient, group_id].filter(hasPresentValue);
     if (destinations.length === 0) {
       return {
         success: false,
@@ -86,7 +90,7 @@ export class SignalSendHandler implements ToolHandler {
     // provide actionable error messages (listing which members need verification)
     // rather than a generic failure from the gateway.
 
-    if (group_id) {
+    if (groupId) {
       if (!ctx.contactService) {
         return {
           success: false,
@@ -96,7 +100,7 @@ export class SignalSendHandler implements ToolHandler {
 
       let memberPhones: string[];
       try {
-        memberPhones = await ctx.outboundGateway.getSignalGroupMembers(group_id);
+        memberPhones = await ctx.outboundGateway.getSignalGroupMembers(groupId);
       } catch (err) {
         const errMessage = err instanceof Error ? err.message : String(err);
         ctx.log.warn({ err, groupId: '[redacted]' }, 'signal-send: failed to fetch group members');
@@ -144,7 +148,7 @@ export class SignalSendHandler implements ToolHandler {
       try {
         const result = await ctx.outboundGateway.send({
           channel: 'signal',
-          groupId: group_id,
+          groupId,
           message,
         }, {
           taskEventId: ctx.taskEventId,
@@ -164,7 +168,7 @@ export class SignalSendHandler implements ToolHandler {
           boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
         });
 
-        return { success: true, data: { delivered_to: group_id, channel: 'signal' } };
+        return { success: true, data: { delivered_to: groupId, channel: 'signal' } };
       } catch (err) {
         const errMessage = err instanceof Error ? err.message : String(err);
         ctx.log.error({ err, destinationType: 'group' }, 'signal-send: gateway threw unexpectedly');
