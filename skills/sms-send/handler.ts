@@ -4,22 +4,31 @@
 // filter, blocked-contact, and autonomy. Carrier STOP (Telnyx 40300) surfaces as
 // blockedReason so the agent can record a KG fact instead of retrying.
 //
-// The recipient is a reference by default (#2033, ADR-047): `recipient` takes a
-// contact ID or "principal", resolved to that contact's verified SMS number.
-// `recipient_number` is the deliberate raw path, for someone with no contact record.
+// The recipient is a reference (#2033, #2041, ADR-047): `recipient` takes a contact ID
+// or "principal", resolved to that contact's verified SMS number. Someone who is not a
+// contact yet is added first with contact-create. The retired raw input
+// (recipient_number) is refused, never ignored.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import {
+  RECIPIENT_REFERENCE_SKILLS,
+  findRetiredRecipientField,
+  retiredRecipientFieldError,
+} from '../../src/skills/_shared/recipient-reference.js';
 
 const MAX_MESSAGE_LENGTH = 1600;
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
 export class SmsSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, recipient_number: recipientNumber, message, context_bridge: contextBridgeRaw } = ctx.input as {
+    const skill = RECIPIENT_REFERENCE_SKILLS['sms-send']!;
+    const retired = findRetiredRecipientField(skill, ctx.input);
+    if (retired) return { success: false, error: retiredRecipientFieldError(skill, retired) };
+
+    const { recipient, message, context_bridge: contextBridgeRaw } = ctx.input as {
       recipient?: unknown;
-      recipient_number?: unknown;
       message?: string;
       context_bridge?: string;
     };
@@ -31,23 +40,10 @@ export class SmsSendHandler implements ToolHandler {
     if (recipient !== undefined && recipient !== null && typeof recipient !== 'string') {
       return { success: false, error: 'recipient must be a string' };
     }
-    if (recipientNumber !== undefined && recipientNumber !== null && typeof recipientNumber !== 'string') {
-      return { success: false, error: 'recipient_number must be a string' };
-    }
-    if (!recipient && !recipientNumber) {
+    if (!recipient) {
       return {
         success: false,
-        error: 'Missing recipient: pass recipient (a contact ID, or "principal" for the principal). Only for someone with no contact record, pass recipient_number.',
-      };
-    }
-    if (recipient && recipientNumber) {
-      return { success: false, error: 'Pass either recipient or recipient_number, not both.' };
-    }
-
-    if (recipientNumber && !E164_REGEX.test(recipientNumber)) {
-      return {
-        success: false,
-        error: `recipient_number must be a valid E.164 phone number (e.g. +14155552671), got: ${recipientNumber}`,
+        error: 'Missing recipient: pass recipient (a contact ID, or "principal" for the principal). Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.',
       };
     }
 
@@ -66,33 +62,26 @@ export class SmsSendHandler implements ToolHandler {
     }
 
     // Resolve the reference (#2033). No contact, or no verified SMS number, means no send.
-    let destination: string;
-    let contactId: string | undefined;
-    let identityName: string | undefined;
-    if (recipient) {
-      const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient, {
-        field: 'recipient',
-      });
-      if (!resolved.ok) return { success: false, error: resolved.error };
-      if (!E164_REGEX.test(resolved.identifier)) {
-        // A stored identity Telnyx cannot address: a data defect. Refuse rather than
-        // guess, and log the contact for an operator (the ID may be the principal's).
-        ctx.log.warn({ contactId: resolved.contactId }, 'sms-send: verified SMS identity is not E.164 — refusing (#2033)');
-        return {
-          success: false,
-          error: `The contact's verified SMS identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
-        };
-      }
-      destination = resolved.identifier;
-      // Echo the contact ID only for a UUID the agent passed. For the alias it is the
-      // principal's, which spec 09 keeps out of the model's context.
-      contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
-      identityName = resolved.identityName;
-    } else {
-      destination = recipientNumber as string;
+    const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient as string, {
+      field: 'recipient',
+    });
+    if (!resolved.ok) return { success: false, error: resolved.error };
+    if (!E164_REGEX.test(resolved.identifier)) {
+      // A stored identity Telnyx cannot address: a data defect. Refuse rather than
+      // guess, and log the contact for an operator (the ID may be the principal's).
+      ctx.log.warn({ contactId: resolved.contactId }, 'sms-send: verified SMS identity is not E.164 — refusing (#2033)');
+      return {
+        success: false,
+        error: `The contact's verified SMS identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
+      };
     }
+    const destination = resolved.identifier;
+    // Echo the contact ID only for a UUID the agent passed. For the alias it is the
+    // principal's, which spec 09 keeps out of the model's context.
+    const contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
+    const identityName = resolved.identityName;
 
-    ctx.log.info({ destinationType: '1:1', byReference: !!recipient }, 'sms-send: dispatching SMS via gateway');
+    ctx.log.info({ destinationType: '1:1', byReference: true }, 'sms-send: dispatching SMS via gateway');
 
     try {
       const result = await ctx.outboundGateway.send(
