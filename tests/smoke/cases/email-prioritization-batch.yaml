@@ -6,6 +6,14 @@ tags:
   - multi-task
   - single-turn
 
+# Test mode gives the execution layer no bullpen service, so a real post fails. Triage
+# may escalate urgent items to the coordinator on the bullpen; that should not burn
+# ceo-inbox's error budget. Only here: targeted cases drive real bullpen threads.
+tool_stubs:
+  bullpen:
+    - match: {}
+      return: { thread_id: thread-0001, message_id: bullpen-msg-0001, deduplicated: false }
+
 turns:
   - role: user
     content: |

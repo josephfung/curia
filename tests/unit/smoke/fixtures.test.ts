@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TestModeStack } from '../../../src/startup/test-mode-stack.js';
 import { loadPeople, resolvePrincipalPlaceholders, seedPeople } from '../../smoke/fixtures.js';
 import { loadDefaultStubs, loadTestCases } from '../../smoke/loader.js';
+import { mergeStubs } from '../../smoke/stub-layer.js';
+import { matchToolStub } from '../../scenarios/stub-matcher.js';
 
 function peopleFile(body: string): string {
   const file = join(mkdtempSync(join(tmpdir(), 'smoke-people-')), 'people.yaml');
@@ -96,5 +98,48 @@ describe('the committed suite', () => {
   it('loads every case and the office stubs, placeholders included', () => {
     expect(loadTestCases('tests/smoke/cases').length).toBeGreaterThan(0);
     expect(Object.keys(loadDefaultStubs('tests/smoke/stubs/office.yaml'))).toContain('calendar-list-events');
+  });
+
+  // A listed message the agent cannot open, or an attachment it cannot download, sends
+  // ceo-inbox into a retry loop that can exhaust its error budget. The case then
+  // measures the fixture, not the model (Triage Batch of Mixed Emails, trim plan PR 11
+  // A/B). Checked per case through the runner's own merge and matcher, so a case-level
+  // catch-all that shadows an office stub counts as a gap too.
+  it('lets ceo-inbox open every message and attachment any case lists or finds', () => {
+    type Listed = { id: string; attachments?: Array<{ id: string; filename: string; size: number }> };
+    const office = loadDefaultStubs('tests/smoke/stubs/office.yaml');
+    const gaps: string[] = [];
+
+    for (const tc of loadTestCases('tests/smoke/cases')) {
+      const turnStubs = tc.turns.map((turn) => turn.toolStubs);
+      const stubs = mergeStubs(...turnStubs, tc.toolStubs, office);
+      const listed = ['ceo-inbox-list', 'ceo-inbox-search']
+        .flatMap((tool) => stubs[tool] ?? [])
+        .flatMap((stub) => ((stub.return as { messages?: Listed[] } | undefined)?.messages ?? []));
+
+      for (const message of listed) {
+        const read = matchToolStub('ceo-inbox-read', { message_id: message.id }, stubs);
+        if (!read || read.error) gaps.push(`${tc.name}: ceo-inbox-read cannot open ${message.id}`);
+        for (const attachment of message.attachments ?? []) {
+          const download = matchToolStub(
+            'ceo-inbox-download-attachment',
+            { message_id: message.id, attachment_id: attachment.id },
+            stubs,
+          );
+          if (!download || download.error) {
+            gaps.push(`${tc.name}: ceo-inbox-download-attachment cannot fetch ${attachment.filename}`);
+            continue;
+          }
+          // The bytes must be what the listing promises, so file-parse sees a real file.
+          const file = download.return as { filename: string; size: number; content_base64: string };
+          if (file.filename !== attachment.filename
+            || file.size !== attachment.size
+            || Buffer.from(file.content_base64, 'base64').length !== attachment.size) {
+            gaps.push(`${tc.name}: ${attachment.filename} download does not match its listing`);
+          }
+        }
+      }
+    }
+    expect([...new Set(gaps)]).toEqual([]);
   });
 });
