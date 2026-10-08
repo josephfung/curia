@@ -6,6 +6,7 @@
 // out of the model's context (spec 09).
 
 import type { Contact, DuplicateCandidate, DuplicateReason } from '../../contacts/types.js';
+import { isAddressLikeName } from './address-like-name.js';
 import { PRINCIPAL_RECIPIENT_ALIAS } from './recipient-reference.js';
 
 export function isPrincipalContact(contact: Contact): boolean {
@@ -44,20 +45,15 @@ export function uncoveredCandidates(
 /**
  * How to name a contact to the agent. Display names come from inbound headers, and a
  * contact the gateway created is named after its address, so a name that looks like
- * an address or a number is left out.
- *
- * Stored display names have been through sanitizeDisplayName, which strips the "@", so
- * `sam@vendor.example` is stored as `samvendor.example`. A single token with a dot inside
- * is therefore treated as an address too. Over-matching only costs the name: the contact
- * is listed by ID, which is the safe form.
+ * an address or a number (isAddressLikeName) is left out and the contact is listed by
+ * ID alone, which is the safe form.
  */
 function who(contact: Contact): string {
   const name = contact.displayName
     .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029"]+/g, ' ')
     .trim()
     .slice(0, 80);
-  const looksLikeAddress = name.includes('@') || (!/\s/.test(name) && /\S\.\S/.test(name));
-  if (!name || looksLikeAddress || /\d{7,}/.test(name)) return `contact ${contact.id}`;
+  if (!name || isAddressLikeName(name)) return `contact ${contact.id}`;
   return `"${name}" (${contact.id})`;
 }
 
