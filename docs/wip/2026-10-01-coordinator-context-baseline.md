@@ -1158,8 +1158,8 @@ can't serve. PR 11 doesn't change Triage Batch.
 
 ### 2026-10-08 — prompt trim PR 3: rewrite pass
 
-YAML 15,667 → 12,727 chars; always-on (YAML + pinned SKILL.md) ~5,456 → ~4,721 tokens,
-budget 5,600 → 4,800. Local tool definitions 76,811 → 76,898 bytes (budget 77,000): the
+YAML 15,667 → 13,180 chars; always-on (YAML + pinned SKILL.md) ~5,456 → ~4,835 tokens,
+budget 5,600 → 4,900. Local tool definitions 76,811 → 76,898 bytes (budget 77,000): the
 `owner` values moved into `task-create`'s description. Headroom was 189 bytes before this
 PR (the `contact-create` pin, #2041), so the other two hints the plan routed to tool
 descriptions stay in the YAML.
@@ -1198,3 +1198,27 @@ The runs above are on `c023e4b7` (12,560 chars). Review then added three clauses
 chars): the Memory "say so when nothing is stored" guard, "remind me every Monday" on the
 scheduler side, and "remember" routed to `config-store` for standing settings. One round of
 the memory, configuration and scheduler smoke cases checked them (below).
+
+| Case (`42963496`) | Result |
+|---|---|
+| Store and Recall Travel Preferences, Company Info, Meeting Link Storage, Tracking Third-Party Promises | pass |
+| Natural Language Deadlines | pass after a 180s timeout |
+| Coordinator edits an existing recurring job | pass after a first-attempt miss |
+| Scenarios 05a–c | pass |
+
+**Coordinator edits an existing recurring job.** The miss recurred, so it got its own runs.
+The case lists the job at 9am, and its `scheduler-list` stub stays at 9am after the edit.
+"Lists after edit" counts `scheduler-list` calls after the first `scheduler-update`, in the
+first attempt.
+
+| Prompt | First attempts | Lists after edit (mean) | Notes |
+|---|---|---:|---|
+| main (`636d07c6`) | 11 of 11 | 0.8 | |
+| PR 3 with draft C (`42963496`), all runs | 8 of 13 | — | twice cancelled the job and created a new one |
+| draft C + "never a second job" (`efa1acce`) | 8 of 10 | 2.3 | no recreating |
+| main's paragraph, second person | 10 of 10 | 0.4 | kept |
+
+Draft C against main on first attempts: Fisher's exact p = 0.04. Every run on every prompt
+chose `scheduler-update`. Draft C's prompt then re-checked its edit against the stale list,
+and the reply described the result less cleanly. Main's paragraph, converted to the second
+person, is what ships. Final YAML 13,180 chars.

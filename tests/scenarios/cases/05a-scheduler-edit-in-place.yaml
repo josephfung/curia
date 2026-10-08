@@ -1,7 +1,7 @@
 # Case 5 (#1956): changing an existing routine edits it in place. A create at the new
 # time makes the job fire twice: scheduler-create refuses only an exact copy, and
 # flags a same-task job on another schedule without blocking it (#1960). Rule:
-# agents/coordinator.yaml, "Tasks and routines", and the scheduler tools'
+# agents/coordinator.yaml, "Scheduling and task management", and the scheduler tools'
 # descriptions.
 #
 # Jobs are seeded through the scheduler-list stub, not real rows: the coordinator only

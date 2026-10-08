@@ -20,7 +20,7 @@ log.
 | 1: restatements and stale sections | Merged (2026-10-07, #2031) | 18,561 | ~6,180 / 6,400 |
 | 2: one home each for voice and contact resolution | Merged (2026-10-07, #2034) | 15,709 | ~5,467 / 5,600 |
 | 11: Who you are / Who you serve preamble | Merged (2026-10-08, #2052) | 15,709 (unchanged; code-owned blocks only; #2041 then took it to 15,667) | ~5,456 / 5,600 |
-| 3: rewrite pass | In progress (2026-10-08) | 12,727 | ~4,721 / 4,800 |
+| 3: rewrite pass | In progress (2026-10-08) | 13,180 | ~4,835 / 4,900 |
 | 4–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
@@ -61,9 +61,10 @@ draft, proposing new times).
 **PR 3 (2026-10-08).** Every instruction is in the second person; first person stays
 inside quoted speech. Who I am became How you speak (draft E); People (draft F) and
 Audience awareness are `##` sections. The style lines went, and "Be candid" became a
-disclosure rule. Memory and Configuration follow the config-store/memory split, Tasks and
-routines follow draft C but keep the scheduler tool names, and delegation acknowledgment,
-proactive surfacing, Google Workspace and capability discovery are tighter and positive.
+disclosure rule. Memory and Configuration follow the config-store/memory split, and
+delegation acknowledgment, proactive surfacing, Google Workspace and capability discovery
+are tighter and positive. Scheduling and task management keeps its old wording, converted
+to the second person: draft C measured worse (below).
 `task-create`'s description now says what each `owner` value means. Two choices differ
 from the plan:
 - **Tool-description hints.** Tool definitions had 189 bytes of headroom, not 2.3 KB, after
@@ -73,8 +74,17 @@ from the plan:
   determine the audience keep their wording. PR 4 moves them into turn guidance and the
   sender line (draft D is already positive), so rewriting them here would be undone there.
 
-Behavior held: scenarios passed every case, and the smoke A/B showed no regression (baseline
-log). The web-dependent long-running case needs a rerun once web search is back.
+- **Scheduling stays as it was.** With draft C, smoke "Coordinator edits an existing
+  recurring job" passed 8 of 13 first attempts against main's 11 of 11 (p = 0.04). The
+  case's re-list stub is static and still shows the old time after an edit. Draft C's
+  prompt re-listed to check its edit about three times as often as main's, and twice
+  cancelled the job and recreated it. Restoring "never a second job" stopped the
+  recreating but not the re-checking (8 of 10). Main's whole paragraph in the second person
+  passed 10 of 10 and re-listed least. The cause is somewhere in its wording; a later PR can
+  narrow it with its own A/B.
+
+Behavior held otherwise: scenarios passed every case, and the smoke A/B showed no regression
+(baseline log). The web-dependent long-running case needs a rerun once web search is back.
 
 ### Lessons so far
 
@@ -118,6 +128,11 @@ curia-deploy#276.
     the contacts specialist" into a list of named operations left renames, identity links
     and permissions without a route, and the contacts tools are discoverable. The PR 2
     review caught it.
+
+11. **A tighter paragraph can change how the model acts on a result, not just what it
+    decides.** PR 3's scheduling draft kept every rule and tool name, and the coordinator
+    still chose `scheduler-update`. It then distrusted its own edit and re-checked it. Look
+    at the calls after the decision, not only the decision, when a rewrite misses.
 
 ## Goal
 
