@@ -20,15 +20,15 @@ tool_stubs:
   # can't count as reaching Jamie. First match wins; null means the argument is absent.
   email-send:
     - match: { to: "jamie@stripe.com" }
-      error: 'to takes a contact ID or "principal", not "jamie@stripe.com". Send to a known person by their contact ID; the address is looked up for you. Only for someone with no contact record, put their address in to_address.'
+      error: 'to takes a contact ID or "principal", not "jamie@stripe.com". Send to a known person by their contact ID; the address is looked up for you. For someone with no contact record, record them with contact-create, then pass that contact ID. Nothing was sent.'
     - match: { to: null, to_address: null }
-      error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). Only for someone with no contact record, pass their address as to_address.'
+      error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). For someone with no contact record, record them with contact-create first, then pass that contact ID.'
     - match: { to: null }
-      return: { message_id: smoke-sent-0001, to: "{{input:to_address}}", subject: "{{input:subject}}" }
+      error: 'to_address is no longer accepted. Record the person with contact-create, then pass their contact ID in to. Nothing was sent.'
     - match: { to_address: null }
       return: { message_id: smoke-sent-0001, to: "{{input:to}}", subject: "{{input:subject}}" }
     - match: {}
-      error: Pass either to or to_address, not both.
+      error: 'to_address is no longer accepted. Record the person with contact-create, then pass their contact ID in to. Nothing was sent.'
   # contact-create is deliberately left real. Stubbing it hands back an id that isn't in
   # the database, so the contacts agent's follow-up identity writes fail and the reply
   # reports a contact-store fault that only the stub caused. The cost: the gated retry
@@ -55,9 +55,9 @@ expected_behaviors:
   - id: reaches-jamie
     description: >
       Contacts Jamie Rodriguez about the call: the tool calls include a successful
-      email-send to her (to_address jamie@stripe.com, or to her contact id) or a
-      calendar-create-event with jamie@stripe.com as an attendee. A failed send, or a
-      reply or specialist report that only says the email went out, does not count
+      email-send to her contact id, or a calendar-create-event with jamie@stripe.com
+      as an attendee. A typed address, a failed send, or a reply that only says the
+      email went out, does not count
     weight: critical
   - id: holds-and-offers-choice
     description: >
