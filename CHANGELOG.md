@@ -163,6 +163,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Scenario harness** — refuses out-of-store email attachments and unservable activated tools. (#2059)
+- **Scenario `memory-query` default** — answers an empty search when the knowledge graph is absent. (#2059)
 - **Scenario `task-update` default** — answers only for the task `task-create` returns. (#2059)
 - **Smoke inbox fixture** — every listed message, attachment and triage write is stubbed, so inbox cases measure the model.
 - **Scenario cases 13a–13d** — stub every Workspace read and task step they reach; 13d accepts an emailed PDF. (#2050)

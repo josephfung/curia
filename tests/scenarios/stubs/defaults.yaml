@@ -44,6 +44,11 @@ task-list:
 activity-log:
   - match: {}
     return: { actions: [], count: 0, displayTimezone: America/Toronto }
+# Semantic search needs the knowledge graph, which test mode does not serve. An empty
+# result is a quiet office; a refusal here is a failure production never shows (#2059).
+memory-query:
+  - match: {}
+    return: { results: [], count: 0 }
 list-pending-actions:
   - match: {}
     return: { pending: [], message: No pending approval requests. }
