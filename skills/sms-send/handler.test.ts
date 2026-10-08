@@ -23,9 +23,19 @@ const resolveRecipientReference = vi.fn(async (_channel: string, value: string) 
 });
 
 describe('sms-send handler', () => {
-  it('validates E.164 recipient and message', async () => {
+  it('asks for a recipient and points to contact-create when none is given', async () => {
+    const send = vi.fn();
+    const missing = await new SmsSendHandler().execute(makeCtx({
+      input: { message: 'hi' },
+      outboundGateway: { send, resolveRecipientReference } as never,
+    }));
+    expect(missing.success).toBe(false);
+    if (!missing.success) expect(missing.error).toMatch(/contact-create/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stored number that is not E.164', async () => {
     const handler = new SmsSendHandler();
-    expect((await handler.execute(makeCtx({ input: { message: 'hi' } }))).success).toBe(false);
     const send = vi.fn();
     const bad = await handler.execute(makeCtx({
       input: { recipient: BOB_ID, message: 'hi' },
