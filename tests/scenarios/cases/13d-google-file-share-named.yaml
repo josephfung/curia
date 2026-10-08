@@ -7,7 +7,8 @@ name: google file share named
 description: >
   The principal asks to share their latest pitch deck with Kevin Osei, a known contact,
   without a link. The coordinator activates its Google Drive tools, finds the latest
-  deck, and shares it with Kevin's email address. It never says it cannot share files.
+  deck, and shares it with Kevin, by Drive access or by emailing him a PDF. It never says
+  it cannot share files.
 tags: [google-workspace, skill-activation]
 timeout_seconds: 300
 # Letting Kevin know by email is reasonable after sharing; sends succeed.
@@ -140,9 +141,14 @@ expected_behaviors:
     check:
       called: skill-activate
       with: { skill: google-workspace }
+  # Emailing Kevin a PDF of the v7 deck is a fair reading of "share" too (#2050): the
+  # case tests that the Drive tools get used, not which way the deck reaches him. The
+  # attachment path is the one the v7 get_drive_file_download_url stub returns.
   - id: shares_latest_deck_with_kevin
     weight: critical
-    description: Grants Kevin's email access to the Series A (v7) deck with manage_drive_access.
+    description: >
+      Gets the Series A (v7) deck to Kevin: grants his email access with
+      manage_drive_access, or emails him the deck's PDF by his contact ID.
     check:
       any_of:
         - called: manage_drive_access
@@ -151,12 +157,21 @@ expected_behaviors:
         - called: manage_drive_access
           with: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
           contains: { recipients: kevin.osei@example.test }
+        - called: email-send
+          with: { to: "{{contact:kevin}}" }
+          contains: { attachments: Series_A_v7 }
   - id: not_the_old_deck
     weight: important
     description: Does not share the 2025 seed deck.
     check:
       not_called: [manage_drive_access]
       with: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+  - id: not_the_old_deck_by_email
+    weight: important
+    description: Does not email the 2025 seed deck's PDF.
+    check:
+      not_called: [email-send]
+      contains: { attachments: Seed_round_2025 }
   - id: never_says_cannot
     weight: critical
     description: >
