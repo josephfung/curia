@@ -24,12 +24,21 @@ inbound:
   from: principal
   content: Share my latest pitch deck with Kevin Osei.
 tool_stubs:
-  # Resolving Kevin through the contacts specialist is a fine path too.
+  # Resolving Kevin through the contacts specialist is a fine path too. The briefing
+  # format of agents/contacts.yaml: prose, then the contact ID a send skill takes (#2050).
   delegate:
-    - match: {}
+    - match: { agent: contacts }
       return:
         agent: contacts
-        response: Kevin Osei, known contact. Email kevin.osei@example.test.
+        response: |
+          Kevin Osei is a known contact. His verified email is kevin.osei@example.test.
+          No recent meetings or notes on file.
+
+          <resolved_entities>
+            <contact name="Kevin Osei" id="{{contact:kevin}}"/>
+          </resolved_entities>
+    - match: {}
+      return: { agent: ceo-inbox, response: Done. }
   search_drive_files:
     - match: {}
       return: &decks |
@@ -59,6 +68,41 @@ tool_stubs:
   get_drive_shareable_link:
     - match: {}
       return: "https://docs.google.com/presentation/d/1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc/edit?usp=sharing"
+  # Some runs read the deck or export it to PDF to attach to an email to Kevin (#2050).
+  # workspace-mcp 2.0.1's formats, over stdio as Curia runs it.
+  get_drive_file_content:
+    - match: {}
+      return: |
+        File: "Pitch deck: Series A (v7)" (ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc, Type: application/vnd.google-apps.presentation)
+        Link: https://docs.google.com/presentation/d/1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc/edit?usp=drivesdk
+
+        --- CONTENT ---
+        Series A
+        Raising $8M to scale enterprise sales
+
+        Traction
+        $1.2M ARR, 3x year over year. 41 paying customers.
+
+        The ask
+        $8M Series A. 18 months of runway. 12 hires, 4 in engineering.
+  get_drive_file_download_url:
+    - match: {}
+      return: |
+        File downloaded successfully!
+        File: Pitch deck: Series A (v7)
+        File ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc
+        Size: 2841.6 KB (2909798 bytes)
+        MIME Type: application/pdf
+
+        📎 Saved to: /tmp/.workspace-mcp/attachments/Pitch_deck_Series_A_v7_3f9c2a71-6b0e-4d8a-9c55-2e1f7a4b8d10.pdf
+
+        The file has been saved to disk and can be accessed directly via the file path.
+
+        Note: Google native file exported to application/pdf format.
+  # The real tool exports only Google Docs; both decks are Slides presentations.
+  export_doc_to_pdf:
+    - match: {}
+      return: "Error: File 'Pitch deck: Series A (v7)' is not a Google Doc (MIME type: application/vnd.google-apps.presentation). Only native Google Docs can be exported to PDF."
 expected_behaviors:
   - id: activates_google_workspace
     weight: critical

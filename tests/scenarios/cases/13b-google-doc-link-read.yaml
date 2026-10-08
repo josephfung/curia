@@ -34,6 +34,29 @@ tool_stubs:
   get_drive_file_content:
     - match: {}
       return: *offsite_doc
+  # Some runs read the Doc's comments too (#2050). workspace-mcp 2.0.1's format; the
+  # comments add detail without changing the gist.
+  list_document_comments:
+    - match: {}
+      return: |
+        Found 2 comments in document 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga:
+
+        Comment ID: AAABkq3Zr7c
+        Author: Dana Whitfield
+        Created: {{time:today-3 14:12}}
+        Quoted text: Dana wants a customer panel on day 2.
+        Content: Two customers have said yes in principle. I'll confirm names next week.
+
+        Comment ID: AAABkq4Lm2w
+        Author: Marcus Lee
+        Created: {{time:today-2 09:40}} [RESOLVED]
+        Quoted text: Budget is capped at $40k
+        Content: Finance confirmed the cap.
+          Replies (1):
+            Reply ID: AAABkq4Np8s
+            Author: Dana Whitfield
+            Created: {{time:today-2 10:05}}
+            Content: Thanks, resolving.
   search_drive_files:
     - match: {}
       return: |
