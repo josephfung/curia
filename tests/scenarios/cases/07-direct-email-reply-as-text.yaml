@@ -33,6 +33,13 @@ tool_stubs:
       return:
         agent: ceo-inbox
         response: The workshop deck will be shown on screen; no printed copies are needed.
+  # Sometimes writes a profile field on Tomas. action_risk is low, so an unstubbed
+  # call is refused (#2058).
+  contact-update:
+    - match: {}
+      return:
+        contact_id: "{{contact:tomas}}"
+        updated_fields: [organization]
 expected_behaviors:
   - id: no_reply_tool
     weight: critical

@@ -162,6 +162,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scenario stubs** — five cases answer side calls the stub-coverage gate used to refuse. (#2058)
 - **Scenario harness** — refuses out-of-store email attachments and unservable activated tools. (#2059)
 - **Scenario `memory-query` and `executive-profile-get` defaults** — answer as an empty office when test mode lacks the service. (#2059)
 - **Scenario `task-update` default** — answers only for the task `task-create` returns. (#2059)

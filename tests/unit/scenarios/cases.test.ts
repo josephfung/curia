@@ -4,7 +4,9 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PAUSED_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import { loadScenarioCases } from '../../scenarios/loader.js';
+import { matchToolStub } from '../../scenarios/stub-matcher.js';
 import { coverageViolations, readCoverage } from '../../scenarios/stub-coverage.js';
+import type { ScenarioCase } from '../../scenarios/types.js';
 
 const SCENARIOS_DIR = path.resolve(import.meta.dirname, '../../scenarios');
 const cases = loadScenarioCases(path.join(SCENARIOS_DIR, 'cases'));
@@ -35,6 +37,43 @@ describe('coordinator scenario cases', () => {
       .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && (r as Record<string, unknown>)['paused'] === true);
     expect(paused.length).toBeGreaterThan(0);
     for (const r of paused) expect(r['next_step']).toBe(PAUSED_NEXT_STEP);
+  });
+
+  it('answers the side calls that failed stub coverage (#2058)', () => {
+    // These calls are intermittent. Unstubbed, each one is a refused hole and the
+    // case fails the gate even when every behavior passes.
+    const byName = new Map(cases.map(c => [c.name, c]));
+    const answered = (caseName: string, tool: string, input: Record<string, unknown> = {}): Record<string, unknown> => {
+      const scenario: ScenarioCase | undefined = byName.get(caseName);
+      expect(scenario, caseName).toBeDefined();
+      const stub = matchToolStub(tool, input, scenario!.toolStubs);
+      expect(stub?.error, `${caseName} ${tool}`).toBeUndefined();
+      expect(stub?.return, `${caseName} ${tool}`).toEqual(expect.any(Object));
+      return stub!.return as Record<string, unknown>;
+    };
+
+    const memory = answered('send to principal by alias', 'memory-store', { entity: 'Harbourfront Centre', field: 'venue', value: 'Room 4B' });
+    expect(memory).toMatchObject({ stored: true, action: 'created' });
+    const config = answered('send to principal by alias', 'config-store', { action: 'store', namespace: 'offsite', key: 'venue', value: 'Room 4B' });
+    expect(config).toMatchObject({ stored: true, action: 'created', namespace: 'offsite', key: 'venue' });
+
+    expect(answered('scheduler ambiguous asks', 'scheduler-report', { summary: 'Asked which pipeline review.' })).toEqual({ success: true });
+
+    const profile = answered('external reply first person', 'executive-profile-get');
+    expect(profile['summary']).toEqual(expect.any(String));
+    expect(profile['profile']).toMatchObject({ writingVoice: { formality: 50 } });
+
+    const placement = answered('bullpen mention stays on thread', 'doc-place', { title: 'Q3 competitor brief' });
+    expect(placement).toMatchObject({
+      action: 'create_folder',
+      slug: 'q3-competitor-brief',
+      path: '/projects/q3-competitor-brief/brief.md',
+    });
+    expect(answered('bullpen mention stays on thread', 'doc-write', { path: '/projects/q3-competitor-brief/brief.md', mode: 'create' })).toMatchObject({ action: 'created' });
+
+    const updated = answered('direct email reply as text', 'contact-update', { contact_id: '{{contact:tomas}}', fields: { organization: 'Northwind' } });
+    expect(updated['contact_id']).toBe('{{contact:tomas}}');
+    expect(updated['updated_fields']).toEqual(['organization']);
   });
 
   it('have a well-formed stub-coverage record', () => {
