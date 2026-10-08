@@ -124,7 +124,7 @@ tool_stubs:
         - "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic)
   # Runs also tried the folder's ID as a spreadsheet, and rewrote the Doc's text (#2050).
   # The first fails in Sheets as it would for real. Editing the Doc is not asked for, but
-  # it succeeds, so the case scores what the model chose rather than a refusal.
+  # it succeeds, so leaves_research_text scores the choice rather than a refusal.
   get_spreadsheet_info:
     - match: {}
       error: 'API error in get_spreadsheet_info: <HttpError 404 when requesting https://sheets.googleapis.com/v4/spreadsheets/1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd?alt=json returned "Requested entity was not found.">'
@@ -191,6 +191,13 @@ expected_behaviors:
       Tells the principal the comparison is ready in their CRM evaluation folder and that
       they can edit it, with the gist of the findings. Does not say it was unable to file
       or share the document.
+  # batch_update_doc is stubbed to succeed, so a rewrite is scored here, not hidden (#2050).
+  - id: leaves_research_text
+    weight: important
+    description: Files and shares the research Doc without rewriting its content.
+    check:
+      not_called: [batch_update_doc]
+      with: { document_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic }
 failure_modes:
   - Tells the principal the Doc is in Drive root and leaves the filing to them
   - Says it has no Google Drive access instead of activating the skill

@@ -5,7 +5,8 @@
 # Without these the model sees tool failures production never shows and spirals (one
 # early run made 29 calls in 131s chasing a broken email-list). Only reads, the harmless
 # task-create, and follow-ups on the task it returns belong here; a case that tests a
-# write stubs it itself.
+# write stubs it itself. task-update still answers for any task id (it predates that
+# rule); task-complete answers only for the one task-create returns.
 email-list:
   - match: {}
     return: { messages: [], count: 0 }
