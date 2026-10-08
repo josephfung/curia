@@ -200,14 +200,14 @@ describe('scheduler, task and draft writes within a case', () => {
       ...office,
       'scheduler-list': [{
         match: {},
-        return: { jobs: [{ id: JOB, status: 'active', cronExpr: '0 9 * * 1-5', taskTitle: 'Investor check' }], count: 1, truncated: false, limit: 50 },
+        return: { jobs: [{ id: JOB, status: 'pending', cronExpr: '0 9 * * 1-5', taskTitle: 'Investor check' }], count: 1, truncated: false, limit: 50 },
       }],
     });
     const before = await wrapped.invoke('scheduler-list', {}, undefined as never, opts('coordinator') as never) as { data: { jobs: Array<{ cronExpr: string }> } };
     expect(before.data.jobs.map(job => job.cronExpr)).toEqual(['0 9 * * 1-5']);
     await wrapped.invoke('scheduler-update', { job_id: JOB, action: 'edit', cron_expr: '0 10 * * 1-5' }, undefined as never, opts('coordinator') as never);
     const after = await wrapped.invoke('scheduler-list', {}, undefined as never, opts('coordinator') as never) as { data: { jobs: Array<{ cronExpr: string; status: string; taskTitle: string }> } };
-    expect(after.data.jobs).toEqual([expect.objectContaining({ cronExpr: '0 10 * * 1-5', status: 'active', taskTitle: 'Investor check' })]);
+    expect(after.data.jobs).toEqual([expect.objectContaining({ cronExpr: '0 10 * * 1-5', status: 'pending', taskTitle: 'Investor check' })]);
 
     // A turn stub with no jobs array is the scripted answer. The replay does not rewrite it.
     stubs.set({ ...office, 'scheduler-list': [{ match: {}, return: { note: 'frozen' } }] });

@@ -26,7 +26,7 @@
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolResult } from '../../src/skills/types.js';
-import { applyCaseWrites, recordedDraftRead, SmokeToolState } from '../smoke/stub-filters.js';
+import { applyCaseWrites, recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
 import { emailAttachmentRefusal } from './attachment-guard.js';
 import { matchToolStub } from './stub-matcher.js';
 import type { ToolStub } from './types.js';
@@ -116,7 +116,7 @@ export function createStubController(
   unavailable: () => ReadonlySet<string> = () => new Set(),
   inert: () => ReadonlySet<string> = () => new Set(),
 ): StubController {
-  const runs = new Map<string, { stubs: Record<string, ToolStub[]>; calls: StubbedCall[]; tools: SmokeToolState }>();
+  const runs = new Map<string, { stubs: Record<string, ToolStub[]>; calls: StubbedCall[]; tools: CaseToolState }>();
   let staleCalls = 0;
 
   const invokeStubbed = async (
@@ -205,7 +205,7 @@ export function createStubController(
     },
     beginRun(next, conversationId) {
       if (runs.has(conversationId)) throw new Error(`StubController.beginRun: conversation ${conversationId} already has an open run`);
-      runs.set(conversationId, { stubs: next, calls: [], tools: new SmokeToolState() });
+      runs.set(conversationId, { stubs: next, calls: [], tools: new CaseToolState() });
     },
     endRun(conversationId) {
       const run = runs.get(conversationId);

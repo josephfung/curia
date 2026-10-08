@@ -33,7 +33,7 @@ turns:
             jobs:
               - id: 0f0f0f0f-0000-4000-8000-000000000001
                 agentId: coordinator
-                status: active
+                status: pending
                 cronExpr: "0 9 * * 1-5"
                 timezone: "{{timezone}}"
                 nextRunAt: "{{time:next-monday 09:00}}"
