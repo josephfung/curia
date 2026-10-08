@@ -76,7 +76,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`contact-create`, `contact-link-identity`** — record `agent_stated`; refuse likely duplicates until `distinct_from` names them. (#2041)
 - **`email-draft-save` (public API)** — `to` takes a contact reference, not an address. (#2041)
 - **Coordinator** — pins `contact-create`, so cold outreach is create then send. (#2041)
-- **Send skills (public API, breaking)** — `to`, `cc` and `recipient` take a contact ID or `principal`; raw addresses get separate fields. (#2033)
+- **Send skills (public API, breaking)** — `to`, `cc` and `recipient` take a contact ID or `principal`. (#2033)
 - **Principal Contact Details** — tells agents to pass `principal` to send skills instead of an address. (#2033)
 - **Gate C** — resolves recipient references before the principal carve-out and reply-to-sender checks. (#2033)
 - **Coordinator prompt** — one section each for voice and contact resolution; calendar text trimmed; 18.6k → 15.7k chars. (#1954)
