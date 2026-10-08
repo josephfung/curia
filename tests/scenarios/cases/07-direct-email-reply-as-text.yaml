@@ -33,8 +33,9 @@ tool_stubs:
       return:
         agent: ceo-inbox
         response: The workshop deck will be shown on screen; no printed copies are needed.
-  # Sometimes writes a profile field on Tomas. action_risk is low, so an unstubbed
-  # call is refused (#2058).
+  # Tomas's email states no profile facts, so a contact-update is scored below rather
+  # than accepted. The stub still succeeds, so the check measures the choice. updated_fields
+  # is fixed: the handler echoes the keys it was given, and a stub cannot (#2058).
   contact-update:
     - match: {}
       return:
@@ -58,6 +59,11 @@ expected_behaviors:
     check:
       not_called: [email-send]
       contains: { to: tomas.reyes@example.test }
+  - id: leaves_contact_unchanged
+    weight: important
+    description: Does not invent a profile update for Tomas.
+    check:
+      not_called: [contact-update]
   - id: replies_with_text
     weight: critical
     description: Returns a reply (not NO_REPLY).
