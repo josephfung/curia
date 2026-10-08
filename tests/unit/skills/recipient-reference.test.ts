@@ -539,7 +539,7 @@ describe('retired raw-address inputs (#2041)', () => {
     expect(message).toMatch(/Nothing was sent\.$/);
   });
 
-  it('covers the four send skills', () => {
-    expect(Object.keys(RECIPIENT_REFERENCE_SKILLS).sort()).toEqual(['email-send', 'signal-send', 'slack-send', 'sms-send']);
+  it('covers the send skills and email-draft-save', () => {
+    expect(Object.keys(RECIPIENT_REFERENCE_SKILLS).sort()).toEqual(['email-draft-save', 'email-send', 'signal-send', 'slack-send', 'sms-send']);
   });
 });

@@ -3393,6 +3393,7 @@ describe('approval trigger on gate block', () => {
       const registry = new ToolRegistry();
       const handler = makeHandler('should not run');
       registry.register(makeRiskyManifest('email-send', 'medium'), handler);
+      registry.register(makeRiskyManifest('email-draft-save', 'low'), handler);
       registry.register(makeRiskyManifest('signal-send', 'medium'), handler);
       registry.register(makeRiskyManifest('sms-send', 'medium'), handler);
       registry.register(makeRiskyManifest('slack-send', 'medium'), handler);
@@ -3411,6 +3412,7 @@ describe('approval trigger on gate block', () => {
       ['a template token in to', 'email-send', { to: '${principal_contact_id}', subject: 'x', body: 'y' }, /Unresolved template placeholder/],
       ['an address whose local part contains # is not a reference', 'email-send', { to: 'principal#ops@vendor.example', subject: 'x', body: 'y' }, /contact-create/],
       ['a UUID matching no contact', 'email-send', { to: '00000000-0000-4000-8000-000000000000', subject: 'x', body: 'y' }, /No contact has ID/],
+      ['an address in email-draft-save to', 'email-draft-save', { to: 'bob@example.com', subject: 'x', body: 'y' }, /contact-create/],
     ])('refuses %s without filing an approval', async (_label, tool, input, message) => {
       const { layer, handler, trigger } = layerWithTrigger();
       const result = await layer.invoke(tool as string, input as Record<string, unknown>, undefined, { taskEventId: 'task-1' });
@@ -3482,6 +3484,29 @@ describe('approval trigger on gate block', () => {
       expect(result.success).toBe(false); // score 65: held for approval
       if (!result.success) expect(result.error).not.toMatch(/no longer accepted/);
       expect(trigger.request).toHaveBeenCalledOnce();
+    });
+
+    it('shows the resolved address when an email-draft-save is held for approval (#2041)', async () => {
+      const registry = new ToolRegistry();
+      // medium (not the manifest's real low) so Gate B holds it at score 65.
+      registry.register(makeRiskyManifest('email-draft-save', 'medium'), makeHandler('should not run'));
+      const trigger = makeApprovalTrigger({ created: true, shortRef: 'x', notificationSent: true });
+      const layer = new ExecutionLayer(registry, logger, {
+        autonomyService: makeAutonomyService(65),
+        bus: { publish: vi.fn().mockResolvedValue(undefined) } as unknown as EventBus,
+        approvalTrigger: trigger,
+        contactService: danaContacts(),
+      });
+
+      await layer.invoke('email-draft-save', { to: DANA, subject: 'x', body: 'y' }, undefined, { taskEventId: 'task-1' });
+
+      expect(trigger.request).toHaveBeenCalledOnce();
+      const call = (trigger.request as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+        input: { to: string };
+        displayInput: { to: string };
+      };
+      expect(call.input.to).toBe(DANA);
+      expect(call.displayInput.to).toBe('dana@example.com (contact "Dana Lee")');
     });
 
     it('caps the references one send may name', async () => {
