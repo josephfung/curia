@@ -156,7 +156,7 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Sender contacts | `ContactService.createContact` + `linkIdentity` | Tagged in `notes`, deleted with their KG node after the run. A leftover from a crashed run is only removed if it carries the tag. |
 | Outbound-context entries | `OutboundContextService.register`, backdated to `sent_minutes_ago` | The Dispatcher's `getActive()` returns only this run's entries, each read through the real `getEntry` SQL. Deleted after the run. |
 | Bullpen threads | `BullpenService.openThread` | Runtimes see only this run's threads (the `wrapBullpenService` stack option). Deleted after the run. |
-| Scheduler jobs | the `scheduler-list` stub | Never written. A real row would be fired by any scheduler that comes up later. |
+| Scheduler jobs | the `scheduler-list` stub | Never written to the database. Within a run, a later list replays that run's stubbed creates, edits and cancels onto the stub. |
 | The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
 | Prior history | | Withheld. *Contact recent history* (a sender's turns from other conversations) returns nothing during a run (the `wrapWorkingMemory` stack option), so a case never inherits smoke runs' or the real principal's turns from the dev database. |
 
@@ -172,7 +172,7 @@ anything carrying those markers — and nothing else.
 
 The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
 
-1. A **matching stub** answers the call. The real tool never runs. A success stub for
+1. A **matching stub** answers the call. The real tool never runs. Within one run, scheduler, task and draft reads then replay that run's stubbed writes onto the stub, the same way smoke does (`docs/dev/smoke-tests.md`). A stub whose match names `draft_id` still answers that `ceo-inbox-read` itself. A success stub for
    `email-send`, `email-reply`, or `email-draft-save` still refuses an attachment whose `file_url` is outside
    the temp store, with the error production's gateway returns (#2059). That call is
    recorded as stubbed: the model is told what went wrong and can recover, and it is

@@ -18,7 +18,7 @@ import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolResult } from '../../src/skills/types.js';
 import { newAttempt, type CaseAttempt, type CaseContext } from '../shared/case-scope.js';
 import { matchToolStub } from '../scenarios/stub-matcher.js';
-import { CalendarState, shapeStubResult } from './stub-filters.js';
+import { recordedDraftRead, shapeStubResult, SmokeToolState } from './stub-filters.js';
 import type { ToolStub } from '../scenarios/types.js';
 
 /**
@@ -47,8 +47,8 @@ export interface SmokeCaseState extends CaseAttempt {
   stubs: Record<string, ToolStub[]>;
   answers: Map<string, CallAnswer[]>;
   calls: AgentToolCall[];
-  /** What this case has written to the (stubbed) calendar, replayed onto its later reads. */
-  calendar: CalendarState;
+  /** Stubbed writes replayed onto this case's later reads (calendar, scheduler, tasks, drafts). */
+  tools: SmokeToolState;
   /** Bullpen threads this case opened: the only ones its agents are shown as pending. */
   threads: Set<string>;
   /** Model fallbacks (any agent) during the case. */
@@ -61,7 +61,7 @@ export function newSmokeCase(label: string): SmokeCaseState {
     stubs: {},
     answers: new Map(),
     calls: [],
-    calendar: new CalendarState(),
+    tools: new SmokeToolState(),
     threads: new Set(),
     fallbacks: [],
   };
@@ -150,13 +150,21 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
     }
 
     const stub = matchToolStub(toolName, input, state.stubs);
+    // A draft this case already wrote answers ceo-inbox-read, ahead of the office
+    // catch-all error. A stub that names draft_id is scripting that read, so it wins.
+    const draft = recordedDraftRead(toolName, input, state.tools, stub?.match);
+    if (draft) {
+      record.disposition = 'stubbed';
+      record.success = true;
+      return { success: true, data: draft };
+    }
     if (stub) {
       record.disposition = 'stubbed';
       record.success = stub.error === undefined;
       if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
       // Clone so a handler-side mutation cannot change the fixture for a later call, then
-      // answer the question asked (time range, search query, echoed inputs).
-      return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input, state.calendar) };
+      // answer the question asked (time range, search query, echoed inputs, earlier writes).
+      return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input, state.tools) };
     }
     const result = await real.invoke(...args);
     record.success = result.success;
@@ -190,7 +198,7 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
       state.stubs = {};
       state.answers = new Map();
       state.calls = [];
-      state.calendar = new CalendarState();
+      state.tools = new SmokeToolState();
       return done;
     },
     get orphanCalls() {

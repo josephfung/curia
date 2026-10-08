@@ -26,6 +26,7 @@
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolResult } from '../../src/skills/types.js';
+import { applyCaseWrites, recordedDraftRead, SmokeToolState } from '../smoke/stub-filters.js';
 import { emailAttachmentRefusal } from './attachment-guard.js';
 import { matchToolStub } from './stub-matcher.js';
 import type { ToolStub } from './types.js';
@@ -115,7 +116,7 @@ export function createStubController(
   unavailable: () => ReadonlySet<string> = () => new Set(),
   inert: () => ReadonlySet<string> = () => new Set(),
 ): StubController {
-  const runs = new Map<string, { stubs: Record<string, ToolStub[]>; calls: StubbedCall[] }>();
+  const runs = new Map<string, { stubs: Record<string, ToolStub[]>; calls: StubbedCall[]; tools: SmokeToolState }>();
   let staleCalls = 0;
 
   const invokeStubbed = async (
@@ -145,6 +146,15 @@ export function createStubController(
     };
 
     const stub = stubs ? matchToolStub(toolName, input, stubs) : undefined;
+    // Same write-then-read replay as smoke (#2074). A stub that names draft_id
+    // still answers that ceo-inbox-read itself.
+    if (run) {
+      const draft = recordedDraftRead(toolName, input, run.tools, stub?.match);
+      if (draft) {
+        record('stubbed');
+        return { success: true, data: draft };
+      }
+    }
     if (stub) {
       record('stubbed');
       if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
@@ -155,7 +165,11 @@ export function createStubController(
       const attachmentError = emailAttachmentRefusal(toolName, input);
       if (attachmentError) return { success: false, error: skillError(attachmentError) };
       // Clone so a handler-side mutation in one run cannot leak into the next.
-      return { success: true, data: structuredClone(stub.return ?? null) };
+      const data = structuredClone(stub.return ?? null);
+      if (run && data !== null && typeof data === 'object' && !Array.isArray(data)) {
+        return { success: true, data: applyCaseWrites(toolName, data as Record<string, unknown>, input, run.tools) };
+      }
+      return { success: true, data };
     }
 
     if (stubs === null || mustStub(toolName, registry(), unavailable(), inert())) {
@@ -191,7 +205,7 @@ export function createStubController(
     },
     beginRun(next, conversationId) {
       if (runs.has(conversationId)) throw new Error(`StubController.beginRun: conversation ${conversationId} already has an open run`);
-      runs.set(conversationId, { stubs: next, calls: [] });
+      runs.set(conversationId, { stubs: next, calls: [], tools: new SmokeToolState() });
     },
     endRun(conversationId) {
       const run = runs.get(conversationId);

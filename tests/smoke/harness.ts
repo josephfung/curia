@@ -19,9 +19,10 @@
 //
 // Several cases run at once (#1980). Each attempt runs inside runInCase(), and everything
 // it sets off — the coordinator's turn, the specialists it delegates to, their tool and
-// model calls — carries that case's context (tests/shared/case-scope.ts). Stubs, calendar
-// writes, the bullpen threads agents are shown, model fallbacks and spend are all kept per
-// case through it. A case that times out is cancelled: its later model calls fail at once
+// model calls — carries that case's context (tests/shared/case-scope.ts). Stubs, the
+// calendar, scheduler, task and draft writes, the bullpen threads agents are shown,
+// model fallbacks and spend are all kept per case through it. A case that times out is
+// cancelled: its later model calls fail at once
 // and its tool calls are refused, so an abandoned turn neither spends nor touches anything.
 
 import { randomUUID } from 'node:crypto';
