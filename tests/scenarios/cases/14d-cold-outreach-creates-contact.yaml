@@ -3,7 +3,8 @@
 # (skills/contacts/tools/contact-create/tool.json): the send skills take a contact ID only,
 # so someone who is not a contact yet is added with contact-create and sent to by the
 # contact_id it returns. Both routes to an ID are stubbed to return the same one: the
-# coordinator's own contact-create, and the contacts specialist.
+# coordinator's own contact-create, and the contacts specialist. The contact-create stub
+# matches only a call carrying Dana's address, so a create without it is a stub hole.
 name: cold outreach creates a contact
 description: >
   The principal asks the coordinator to email someone who is not in contacts yet, giving
@@ -19,7 +20,7 @@ inbound:
     I'd like 30 minutes next week to talk about the pilot, and ask which times work for her.
 tool_stubs:
   contact-create:
-    - match: {}
+    - match: { email: dana.whitfield@newco.example.test }
       return:
         contact_id: 6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b
         display_name: Dana Whitfield
