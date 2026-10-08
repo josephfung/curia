@@ -1968,8 +1968,8 @@ export class OutboundGateway {
    * - If the contact exists and is provisional: promote to confirmed.
    * - If no contact record exists: create one at tier known, using the channel
    *   identifier as a placeholder display name (enrichment happens later). Its
-   *   provenance is `outbound_recipient` and its identity is unverified: an agent
-   *   typed the address and nobody confirmed it (#2033, ADR-047).
+   *   provenance is `outbound_recipient` and its identity is unverified: nobody
+   *   confirmed the address (#2033, #2040, ADR-047).
    * - If the contact is already confirmed or blocked: no-op.
    *
    * Fail-open: the message was already sent, so a DB error here must not surface
@@ -1994,13 +1994,16 @@ export class OutboundGateway {
       let created;
       try {
         // Source: outbound_recipient, not ceo_stated (#2033). The principal did not
-        // state this address; an agent typed it, and ceo_stated made an invented
-        // address look principal-confirmed afterwards (the 2026-10-07 contact).
+        // state this address, and ceo_stated made an invented address look
+        // principal-confirmed afterwards (the 2026-10-07 contact).
         //
-        // Tier stays 'known' for now so a reply is not held: at 'unknown', Gate C
-        // escalates every external send the reply leads to, a relay to the principal
-        // included. Lowering it is a separate decision (ADR-047).
-        // TODO(#2040): decide the tier for agent-created outbound contacts.
+        // Tier: known (#2040, ADR-047). Send skills address recipients by contact
+        // ID (#2041), so this branch runs only for send-draft, which needs a
+        // principal-originated task, and for email-reply, whose To is the From of
+        // the message being answered. Neither address was typed by an agent. The
+        // unknown-tier branch below promotes an existing contact on send, so a
+        // new one is treated the same. At 'unknown', Gate C would escalate every
+        // external send a reply led to, a relay to the principal included.
         created = await this.contactService.createContact({
           displayName: recipientId,
           fallbackDisplayName: recipientId,
@@ -2019,7 +2022,8 @@ export class OutboundGateway {
         // outbound_recipient is not auto-verified, so this identity lands unverified.
         // A send by reference to this contact therefore fails closed until the
         // principal verifies the address or an agent re-states it with
-        // contact-link-identity (#2041).
+        // contact-link-identity (#2041). An inbound reply does not verify it: a
+        // reply shows the address is live, not that it is the intended one (#2040).
         await this.contactService.linkIdentity({
           contactId: created.id,
           channel,
