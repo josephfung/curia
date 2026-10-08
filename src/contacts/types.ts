@@ -80,6 +80,10 @@ export type IdentitySource =
   // outside the normal dispatcher pipeline. Treated with the same trust as
   // email_participant — the agent is responsible for sourcing the identifier.
   | 'agent_called'
+  // Contact or address an agent entered with contact-create or contact-link-identity
+  // (#2041). An agent typed it, so it is not the principal's own statement (ceo_stated).
+  // Auto-verified once the duplicate check before the write passes; see ADR-047.
+  | 'agent_stated'
   // First-time outbound recipient the gateway recorded after a send
   // (promoteOrCreateRecipientContact). An agent typed this address; nobody
   // stated or confirmed it, so it is not auto-verified (#2033, ADR-047).
@@ -389,6 +393,28 @@ export interface DuplicatePair {
   score: number;         // 0–1
   confidence: DedupConfidence;
   reason: string;        // human-readable: "Same email address", "Similar name (0.91)"
+}
+
+/** Why an existing contact may be the person an agent is about to add (#2041). */
+export type DuplicateReason =
+  | { kind: 'same_name' }
+  | { kind: 'similar_address'; channel: string }
+  | { kind: 'same_number'; channel: string };
+
+export interface DuplicateCandidate {
+  contact: Contact;
+  /** In the order found: identity reasons first, then the name. */
+  reasons: DuplicateReason[];
+}
+
+/**
+ * Result of ContactService.findLikelyDuplicates. `taken` blocks the write outright:
+ * another contact already holds the identifier on that channel. `candidates` block
+ * it until the agent names each one in distinct_from.
+ */
+export interface DuplicateCheck {
+  taken: Array<{ contact: Contact; channel: string }>;
+  candidates: DuplicateCandidate[];
 }
 
 // -- Merge types --
