@@ -20,7 +20,7 @@ log.
 | 1: restatements and stale sections | Merged (2026-10-07, #2031) | 18,561 | ~6,180 / 6,400 |
 | 2: one home each for voice and contact resolution | Merged (2026-10-07, #2034) | 15,709 | ~5,467 / 5,600 |
 | 11: Who you are / Who you serve preamble | Merged (2026-10-08, #2052) | 15,709 (unchanged; code-owned blocks only; #2041 then took it to 15,667) | ~5,456 / 5,600 |
-| 3: rewrite pass | In progress (2026-10-08) | 13,180 | ~4,835 / 4,900 |
+| 3: rewrite pass | In review (2026-10-08, #2073) | 13,439 | ~4,899 / 5,000 |
 | 4–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
@@ -83,8 +83,15 @@ from the plan:
   passed 10 of 10 and re-listed least. The cause is somewhere in its wording; a later PR can
   narrow it with its own A/B.
 
+- **Delegation acknowledgment stays as it was,** for the same reason. The tighter draft
+  delegated without acknowledging first once web search came back; main's paragraph,
+  already second person, is restored.
+- **"Ask clarifying questions freely" stays out.** Pre-Meeting Prep Brief's meeting-purpose
+  check misses about as often on main, and restoring the line did no better. Joseph
+  (2026-10-08): if it proves needed, it returns as policy, not style.
+
 Behavior held otherwise: scenarios passed every case, and the smoke A/B showed no regression
-(baseline log). The web-dependent long-running case needs a rerun once web search is back.
+(baseline log).
 
 ### Lessons so far
 
