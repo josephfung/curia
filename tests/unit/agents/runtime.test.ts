@@ -1070,7 +1070,7 @@ describe('AgentRuntime', () => {
     );
   });
 
-  it('omits ## Principal Contact Details block when principalIdentities is empty', async () => {
+  it('omits ## Who you serve and its contact details when principalIdentities is empty', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -1099,7 +1099,7 @@ describe('AgentRuntime', () => {
     expect(systemMsg).not.toContain('the list is complete');
   });
 
-  it('omits ## Principal Contact Details block when principalIdentities is not provided', async () => {
+  it('omits ## Who you serve and its contact details when principalIdentities is not provided', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -1127,7 +1127,7 @@ describe('AgentRuntime', () => {
     expect(systemMsg).not.toContain('## Who you serve');
   });
 
-  it('injects ## Your Contact Details before ## Principal Contact Details when both are configured', async () => {
+  it('injects ## Your Contact Details before ### Principal Contact Details, both ahead of the body', async () => {
     // Validates the ordering of the two identity blocks — channelAccounts always comes first.
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
@@ -1234,7 +1234,7 @@ describe('AgentRuntime', () => {
     expect(systemMsg).toContain('Other addresses:\n- email: other@example.com (label: "personal")');
   });
 
-  it('injects ## Principal Contact Details block on scheduler-dispatched tasks', async () => {
+  it('injects ### Principal Contact Details on scheduler-dispatched tasks', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',

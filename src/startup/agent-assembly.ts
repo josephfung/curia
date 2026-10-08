@@ -40,6 +40,7 @@ import {
   type PinResolution,
 } from '../skills/pin-resolution.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
+import { findPrimaryEmailIdentity } from '../agents/principal-contact-block.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
@@ -483,4 +484,28 @@ export async function readPrincipalIdentitySnapshot(
   const withIdentities = await contactService.getContactWithIdentities(principalContactId);
   const identities = (withIdentities?.identities ?? []).filter((id) => id.verified && id.status === 'active');
   return { identities, primaryEmail: withIdentities?.contact.primaryEmail ?? null };
+}
+
+/**
+ * Gaps in a principal identity snapshot that change what every agent's prompt says,
+ * as operator-facing messages. Empty when there are none. The prompt builder drops
+ * these cases quietly by design (it must never render a complete-set claim over
+ * nothing, or an unverified address), so the boot-time refresh in index.ts logs
+ * them and the test-mode stack reports them in its warnings. Both call this, so the
+ * check cannot differ between production and the harnesses that render its prompt.
+ */
+export function principalIdentitySnapshotGaps(
+  snapshot: { identities: readonly ChannelIdentity[]; primaryEmail: string | null },
+): string[] {
+  if (snapshot.identities.length === 0) {
+    return [
+      'The principal has no verified, active channel identities: every agent runs without the ## Who you serve section until one is verified.',
+    ];
+  }
+  if (snapshot.primaryEmail && !findPrimaryEmailIdentity(snapshot.identities, snapshot.primaryEmail)) {
+    return [
+      'The principal\'s primary_email matches no verified, active email identity: agents see no primary email until it is verified or changed.',
+    ];
+  }
+  return [];
 }

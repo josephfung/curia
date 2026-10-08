@@ -161,7 +161,7 @@ export async function buildBaseSystemPrompt(
   // route work never see it.
   // @TODO: the roster comes from AgentRegistry.specialistSummary() over operator-authored
   // agent manifests — trusted. If specialist names/descriptions ever become user- or
-  // API-editable, strip newlines here (as the ## Principal Contact Details block does).
+  // API-editable, strip newlines here (as the ### Principal Contact Details block does).
   if (sources.availableSpecialists) {
     prompt += '\n\n## Available Specialists\n' + sources.availableSpecialists;
   }

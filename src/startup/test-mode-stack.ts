@@ -109,6 +109,7 @@ import {
 } from '../skills/skill-loader.js';
 import {
   assembleAgents,
+  principalIdentitySnapshotGaps,
   readPrincipalIdentitySnapshot,
   registerAgentRoster,
   type AssembledAgent,
@@ -582,6 +583,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       const snapshot = await readPrincipalIdentitySnapshot(contactService, principalContact.id);
       principalIdentities.push(...snapshot.identities);
       principalPrimaryEmail.current = snapshot.primaryEmail;
+      // The same gaps production logs at boot, so a smoke, scenario or snapshot run on
+      // a prompt without them says why (shared helper; see agent-assembly.ts).
+      warnings.push(...principalIdentitySnapshotGaps(snapshot));
     } else if (llmMode === 'live') {
       // Production refuses to serve without a principal (setup-required mode), so a
       // live run without one would test a path production never takes.

@@ -13,7 +13,7 @@
 // The principal's handle is the alias, never the contact ID. Spec 09 keeps
 // `${principal_contact_id}` opt-in because it unlocks calendar and attribute
 // reads. The alias resolves only to the verified identities every agent already
-// sees in `## Principal Contact Details`.
+// sees in `### Principal Contact Details`.
 //
 // The outbound gateway (for the skill handlers) and Gate C (execution layer) both
 // resolve through resolveRecipientReference, so the gate judges the same address

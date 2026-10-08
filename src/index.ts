@@ -166,12 +166,12 @@ import { collectPinnedByBundle } from './skills/pin-resolution.js';
 import {
   AgentAssemblyError,
   assembleAgent,
+  principalIdentitySnapshotGaps,
   readPrincipalIdentitySnapshot,
   registerAgentRoster,
   type AgentAssemblyContext,
   type AssembledAgent,
 } from './startup/agent-assembly.js';
-import { findPrimaryEmailIdentity } from './agents/principal-contact-block.js';
 import { BacklogHeartbeat } from './scheduler/backlog-heartbeat.js';
 import { ResumableContinuationSubscriber } from './agents/resumable-continuation-subscriber.js';
 import { LateDelegationSubscriber } from './agents/late-delegation-subscriber.js';
@@ -790,14 +790,11 @@ async function main(): Promise<void> {
     principalEmail.current =
       principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
     principalPrimaryEmail.current = snapshot.primaryEmail;
-    // A designated primary that matches no verified, active email identity is
-    // dropped from the prompt block (it must never render an unverified address),
-    // so every agent loses its primary email silently. Say so here instead.
-    if (snapshot.primaryEmail && !findPrimaryEmailIdentity(snapshot.identities, snapshot.primaryEmail)) {
-      logger.warn(
-        { contactId: principalContact.id, identityCount: principalIdentities.length },
-        'Principal primary_email matches no verified, active email identity — agents see no primary email until it is verified or changed',
-      );
+    // The prompt builder drops an unmatched primary and an empty identity set quietly
+    // (it must never render an unverified address or a complete-set claim over
+    // nothing), so every agent's prompt changes with no signal. Say so here instead.
+    for (const gap of principalIdentitySnapshotGaps(snapshot)) {
+      logger.warn({ contactId: principalContact.id, identityCount: principalIdentities.length }, gap);
     }
     logger.info(
       {

@@ -529,9 +529,9 @@ export class AgentRuntime {
     // each get their own copy and never see each other's expansions.
     let workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
-    // Task-independent part of the system string: identity/security preamble, YAML
-    // body, specialist roster, autonomy band, date guardrail, time, both contact
-    // blocks and the turn budget. Shared with the render script and the smoke
+    // Task-independent part of the system string: the preamble (identity, security,
+    // own contact details, Who you serve), YAML body, specialist roster, autonomy
+    // band, date guardrail, time and the turn budget. Shared with the render script and the smoke
     // harness so they send exactly what production sends (#1966). Rebuilt every
     // turn so identity / autonomy / principal-identity changes apply without restart.
     let effectiveSystemPrompt = await buildBaseSystemPrompt(this.config, { now: new Date(), logger });
