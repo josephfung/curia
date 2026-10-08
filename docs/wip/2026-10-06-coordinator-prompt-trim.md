@@ -19,8 +19,9 @@ log.
 | Start (`3155f290`) | — | 20,532 | ~6,673 / 7,000 |
 | 1: restatements and stale sections | Merged (2026-10-07, #2031) | 18,561 | ~6,180 / 6,400 |
 | 2: one home each for voice and contact resolution | Merged (2026-10-07, #2034) | 15,709 | ~5,467 / 5,600 |
-| 11: Who you are / Who you serve preamble | In review (2026-10-08, #2052) | 15,709 (unchanged; code-owned blocks only) | ~5,467 / 5,600 |
-| 3–10, final phase | Not started | — | — |
+| 11: Who you are / Who you serve preamble | Merged (2026-10-08, #2052) | 15,709 (unchanged; code-owned blocks only) | ~5,467 / 5,600 |
+| 3: rewrite pass | In progress (2026-10-08) | 12,560 | ~4,680 / 4,800 |
+| 4–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
@@ -56,6 +57,24 @@ known weekday-dependent date reading. Reschedule Board Chair timed out. In a 3-r
 rounds on both sides, with no timeouts. First attempts passed 1 of 3 here and 2 of 3 on
 PR 1, marked down on the same behaviors on both sides (marking sensitivity, the apology
 draft, proposing new times).
+
+**PR 3 (2026-10-08).** Every instruction is in the second person; first person stays
+inside quoted speech. Who I am became How you speak (draft E); People (draft F) and
+Audience awareness are `##` sections. The style lines went, and "Be candid" became a
+disclosure rule. Memory and Configuration follow the config-store/memory split, Tasks and
+routines follow draft C but keep the scheduler tool names, and delegation acknowledgment,
+proactive surfacing, Google Workspace and capability discovery are tighter and positive.
+`task-create`'s description now says what each `owner` value means. Two choices differ
+from the plan:
+- **Tool-description hints.** Tool definitions had 189 bytes of headroom, not 2.3 KB, after
+  the `contact-create` pin (#2041). Only the `owner` values moved; the `memory-query` query
+  hint and the `task-list` check stay in the YAML.
+- **Non-principal text.** The NO_REPLY, final-response and two-sends bullets and How to
+  determine the audience keep their wording. PR 4 moves them into turn guidance and the
+  sender line (draft D is already positive), so rewriting them here would be undone there.
+
+Behavior held: scenarios passed every case, and the smoke A/B showed no regression (baseline
+log). The web-dependent long-running case needs a rerun once web search is back.
 
 ### Lessons so far
 

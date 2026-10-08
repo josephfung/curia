@@ -1155,3 +1155,41 @@ Fisher's exact p = 1.0 on both. The first-attempt misses are the same kinds on b
 once, 75% once; main: 68% and 75%). PR 11's one final failure was a timeout whose retry scored 62%. No run on either side had
 a failed `ceo-inbox-read`; one main run had `ceo-inbox` call `doc-write`, which test mode
 can't serve. PR 11 doesn't change Triage Batch.
+
+### 2026-10-08 — prompt trim PR 3: rewrite pass
+
+YAML 15,667 → 12,560 chars; always-on (YAML + pinned SKILL.md) ~5,456 → ~4,680 tokens,
+budget 5,600 → 4,800. Local tool definitions 76,811 → 76,898 bytes (budget 77,000): the
+`owner` values moved into `task-create`'s description. Headroom was 189 bytes before this
+PR (the `contact-create` pin, #2041), so the other two hints the plan routed to tool
+descriptions stay in the YAML.
+
+**Full suites on `c023e4b7`.** Model `deepseek/deepseek-v4.1-flash`, gpt-4o judge,
+concurrency 4.
+
+- **Scenarios:** gate passed; all 29 cases ≥ 96%, including 05a–c, 09, 10, 12 and 13a–f.
+  No unstubbed calls.
+- **Smoke:** 43 of 46. Web search failed on all 32 calls (the outage seen on 2026-10-07
+  evening), and the three failures all wait on the research analyst: Pre-Meeting Prep
+  Brief, Speaking Engagement Intake, and Coordinator routes long-running task with
+  synchronous acknowledgment. In the last, the coordinator acknowledged and delegated
+  (`acknowledges_intent` passed); the research never finished.
+
+**A/B against `636d07c6`, 3 alternating rounds** (after smoke's one retry; first attempts
+in brackets):
+
+| Case | PR 3 | main |
+|---|---|---|
+| Ambiguous Contact Reference | 3 of 3 [3] | 3 of 3 [3] |
+| Create Event with Full Context | 3 of 3 [3] | 2 of 3 [1] |
+| Coordinator edits an existing recurring job | 3 of 3 [2, one timeout] | 3 of 3 [3] |
+| Group Thread Follow-Up | 3 of 3 [3] | 3 of 3 [2] |
+| Reschedule Board Chair Meeting | 3 of 3 [2, one timeout] | 2 of 3 [2] |
+| Schedule External Meeting | 3 of 3 [3] | 3 of 3 [3] |
+| Role/Person Mismatch | 2 of 3 [2] | 2 of 3 [0] |
+| Coordinator routes long-running task | 0 of 3 | 0 of 3 |
+
+Without the web-dependent case: PR 3 20 of 21, main 18 of 21; first attempts 18 of 21
+against 14 of 21. The long-running case failed every round on both sides while web search
+was down, so it says nothing about the rewritten delegation-acknowledgment text; rerun it
+once search is back.
