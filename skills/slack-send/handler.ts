@@ -7,13 +7,15 @@
 // Out of scope for v1: Enterprise Grid workspace user ids (W…) — rejected by
 // the recipient regex so Gate C / proactive DMs fail closed for those ids.
 //
-// The recipient is a reference by default (#2033, ADR-047): `recipient` takes a
+// The recipient is a contact reference (#2033, ADR-047): `recipient` takes a
 // contact ID or "principal", resolved to that contact's verified Slack user id.
-// `recipient_user_id` is the deliberate raw path, for someone with no contact record.
+// Someone with no contact record is recorded with contact-create first (#2041).
+// `recipient_user_id` is retired and refused.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import { presentRetiredRawField } from '../../src/skills/_shared/recipient-reference.js';
 
 /** Slack chat.postMessage hard limit. */
 const MAX_MESSAGE_LENGTH = 40_000;
@@ -26,9 +28,8 @@ const SLACK_USER_ID_REGEX = /^U[A-Z0-9]+$/;
 
 export class SlackSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, recipient_user_id: recipientUserId, message, context_bridge: contextBridgeRaw } = ctx.input as {
+    const { recipient, message, context_bridge: contextBridgeRaw } = ctx.input as {
       recipient?: unknown;
-      recipient_user_id?: unknown;
       message?: string;
       context_bridge?: string;
     };
@@ -37,26 +38,19 @@ export class SlackSendHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message (string)' };
     }
 
+    const retired = presentRetiredRawField(
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {},
+      [['recipient_user_id', 'recipient']],
+    );
+    if (retired) return { success: false, error: retired };
+
     if (recipient !== undefined && recipient !== null && typeof recipient !== 'string') {
       return { success: false, error: 'recipient must be a string' };
     }
-    if (recipientUserId !== undefined && recipientUserId !== null && typeof recipientUserId !== 'string') {
-      return { success: false, error: 'recipient_user_id must be a string' };
-    }
-    if (!recipient && !recipientUserId) {
+    if (!recipient) {
       return {
         success: false,
-        error: 'Missing recipient: pass recipient (a contact ID, or "principal" for the principal). Only for someone with no contact record, pass recipient_user_id.',
-      };
-    }
-    if (recipient && recipientUserId) {
-      return { success: false, error: 'Pass either recipient or recipient_user_id, not both.' };
-    }
-
-    if (recipientUserId && !SLACK_USER_ID_REGEX.test(recipientUserId)) {
-      return {
-        success: false,
-        error: `recipient_user_id must be a Slack user id (e.g. U012ABCDEF), got: ${recipientUserId}`,
+        error: 'Missing recipient: pass recipient (a contact ID, or "principal" for the principal). For someone with no contact record, record them with contact-create first, then pass that contact ID.',
       };
     }
 
@@ -78,10 +72,9 @@ export class SlackSendHandler implements ToolHandler {
     let destination: string;
     let contactId: string | undefined;
     let identityName: string | undefined;
-    if (recipient) {
+    {
       const resolved = await ctx.outboundGateway.resolveRecipientReference('slack', recipient, {
         field: 'recipient',
-        rawField: 'recipient_user_id',
       });
       if (!resolved.ok) return { success: false, error: resolved.error };
       if (!SLACK_USER_ID_REGEX.test(resolved.identifier)) {
@@ -97,11 +90,9 @@ export class SlackSendHandler implements ToolHandler {
       // principal's, which spec 09 keeps out of the model's context.
       contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
       identityName = resolved.identityName;
-    } else {
-      destination = recipientUserId as string;
     }
 
-    ctx.log.info({ destinationType: '1:1', byReference: !!recipient }, 'slack-send: dispatching Slack DM via gateway');
+    ctx.log.info({ destinationType: '1:1', byReference: true }, 'slack-send: dispatching Slack DM via gateway');
 
     try {
       // Overload: put U… in slackChannelId even though that field's type doc

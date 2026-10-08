@@ -12,7 +12,7 @@ import {
   type SendRecipientPin,
 } from '../../../src/skills/_shared/recipient-reference.js';
 
-const FIELDS = { field: 'to', rawField: 'to_address' };
+const FIELDS = { field: 'to' };
 
 describe('parseRecipientReference', () => {
   it('reads the principal alias, case and whitespace insensitive', () => {
@@ -170,12 +170,12 @@ describe('resolveRecipientReference', () => {
     expect(result).toMatchObject({ ok: true, identifier: 'pat@work.example' });
   });
 
-  it('rejects an address in the reference field and points at the raw field', async () => {
+  it('rejects an address in the reference field and points at contact-create', async () => {
     const result = await resolveRecipientReference('pat@home.example', 'email', FIELDS, deps());
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toMatch(/to takes a contact ID or "principal"/);
-      expect(result.error).toMatch(/to_address/);
+      expect(result.error).toMatch(/contact-create/);
     }
   });
 
@@ -316,7 +316,7 @@ describe('label hint (#2047)', () => {
     const result = await resolveRecipientReference(typed, 'email', FIELDS, deps());
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toMatch(/to_address/);
+      expect(result.error).toMatch(/contact-create/);
       // The error quotes the model's own input. It does not reveal a stored address.
       expect(result.error).toContain('someone.else@other.test');
       expect(result.error).not.toContain('only@hint.test');
@@ -385,7 +385,7 @@ describe('label hint (#2047)', () => {
     const hintedAddress = await resolveRecipientReference(typed, 'email', FIELDS, deps());
     expect(hintedAddress.ok).toBe(false);
     if (!hintedAddress.ok) {
-      expect(hintedAddress.error).toMatch(/to_address/);
+      expect(hintedAddress.error).toMatch(/contact-create/);
       // The typed string is the model's own input, so it may appear. A stored
       // address-shaped label must not.
       expect(hintedAddress.error).not.toContain('hidden@secret.test');

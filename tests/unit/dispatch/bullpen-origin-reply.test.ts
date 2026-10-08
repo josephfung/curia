@@ -85,7 +85,18 @@ function signalManifest(): ToolManifest {
 function executionWith(send: ReturnType<typeof vi.fn>): ExecutionLayer {
   const registry = new ToolRegistry();
   registry.register(signalManifest(), new SignalSendHandler());
-  const gateway = { send } as unknown as OutboundGateway;
+  const gateway = {
+    send,
+    resolveRecipientReference: vi.fn(async () => ({
+      ok: true,
+      kind: 'principal',
+      contactId: 'principal-id',
+      identifier: PRINCIPAL,
+      displayName: 'Principal',
+      identityName: 'primary',
+      identityId: 'i-principal',
+    })),
+  } as unknown as OutboundGateway;
   return new ExecutionLayer(registry, logger, { outboundGateway: gateway });
 }
 
@@ -151,7 +162,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
 
     const bullpenSend = await execution.invoke(
       'signal-send',
-      { recipient_number: PRINCIPAL, message: 'Bluesky batch is actioned, boss.' },
+      { recipient: 'principal', message: 'Bluesky batch is actioned, boss.' },
       undefined,
       {
         agentId: 'coordinator',
@@ -169,7 +180,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
 
     const originSend = await execution.invoke(
       'signal-send',
-      { recipient_number: PRINCIPAL, message: 'Held batch is in and the new batch is out.' },
+      { recipient: 'principal', message: 'Held batch is in and the new batch is out.' },
       undefined,
       {
         agentId: 'coordinator',
@@ -231,7 +242,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
     const send = vi.fn().mockResolvedValue({ success: true });
     const result = await executionWith(send).invoke(
       'signal-send',
-      { recipient_number: PRINCIPAL, message: 'The filing deadline moved to Friday.' },
+      { recipient: 'principal', message: 'The filing deadline moved to Friday.' },
       undefined,
       {
         agentId: 'coordinator',
@@ -322,7 +333,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
     const send = vi.fn().mockResolvedValue({ success: true });
     const result = await executionWith(send).invoke(
       'signal-send',
-      { recipient_number: PRINCIPAL, message: 'Still goes out.' },
+      { recipient: 'principal', message: 'Still goes out.' },
       undefined,
       {
         agentId: 'coordinator',
@@ -339,7 +350,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
     const send = vi.fn().mockResolvedValue({ success: true });
     const result = await executionWith(send).invoke(
       'signal-send',
-      { recipient_number: PRINCIPAL, message: 'Approved.' },
+      { recipient: 'principal', message: 'Approved.' },
       undefined,
       {
         agentId: 'coordinator',

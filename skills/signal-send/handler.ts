@@ -1,6 +1,6 @@
 // handler.ts — signal-send skill implementation.
 //
-// Sends a Signal message to a 1:1 recipient (by contact reference, or E.164 number) or to a
+// Sends a Signal message to a 1:1 recipient (by contact reference) or to a
 // group (by base64 group ID). Before dispatching a group send, all members are
 // checked against the contact system — unknown members are listed explicitly so
 // the caller knows who needs verification. Blocked members are reported without
@@ -10,14 +10,16 @@
 // for the final send, so this handler focuses on Signal-specific validation
 // and the group trust pre-check.
 //
-// 1:1 recipients are references by default (#2033, ADR-047): `recipient` takes a
+// 1:1 recipients are contact references (#2033, ADR-047): `recipient` takes a
 // contact ID or "principal", resolved to that contact's verified Signal number.
-// `recipient_number` is the deliberate raw path, for someone with no contact record.
+// Someone with no contact record is recorded with contact-create first (#2041).
+// `recipient_number` is retired and refused.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import { presentRetiredRawField } from '../../src/skills/_shared/recipient-reference.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -27,9 +29,8 @@ const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
 export class SignalSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, recipient_number: recipientNumber, group_id, message, context_bridge: contextBridgeRaw } = ctx.input as {
+    const { recipient, group_id, message, context_bridge: contextBridgeRaw } = ctx.input as {
       recipient?: string;
-      recipient_number?: string;
       group_id?: string;
       message?: string;
       context_bridge?: string;
@@ -41,30 +42,25 @@ export class SignalSendHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message (string)' };
     }
 
-    // Exactly one of recipient / recipient_number / group_id must be provided.
-    const destinations = [recipient, recipientNumber, group_id].filter((v) => v !== undefined && v !== null && v !== '');
+    const retired = presentRetiredRawField(
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {},
+      [['recipient_number', 'recipient']],
+    );
+    if (retired) return { success: false, error: retired };
+
+    // Exactly one of recipient / group_id must be provided.
+    const destinations = [recipient, group_id].filter((v) => v !== undefined && v !== null && v !== '');
     if (destinations.length === 0) {
       return {
         success: false,
-        error: 'Missing destination: pass recipient (a contact ID, or "principal" for the principal), or group_id. Only for someone with no contact record, pass recipient_number.',
+        error: 'Missing destination: pass recipient (a contact ID, or "principal" for the principal), or group_id. For someone with no contact record, record them with contact-create first, then pass that contact ID.',
       };
     }
     if (destinations.length > 1) {
-      return { success: false, error: 'Provide exactly one of recipient, recipient_number, or group_id' };
+      return { success: false, error: 'Provide exactly one of recipient or group_id' };
     }
-    if (
-      (recipient !== undefined && typeof recipient !== 'string')
-      || (recipientNumber !== undefined && typeof recipientNumber !== 'string')
-    ) {
-      return { success: false, error: 'recipient and recipient_number must be strings' };
-    }
-
-    // Validate E.164 format for raw 1:1 sends. References are validated after resolution.
-    if (recipientNumber && !E164_REGEX.test(recipientNumber)) {
-      return {
-        success: false,
-        error: `recipient_number must be a valid E.164 phone number (e.g. +14155552671), got: ${recipientNumber}`,
-      };
+    if (recipient !== undefined && typeof recipient !== 'string') {
+      return { success: false, error: 'recipient must be a string' };
     }
 
     if (message.length > MAX_MESSAGE_LENGTH) {
@@ -183,7 +179,6 @@ export class SignalSendHandler implements ToolHandler {
     if (recipient) {
       const resolved = await ctx.outboundGateway.resolveRecipientReference('signal', recipient, {
         field: 'recipient',
-        rawField: 'recipient_number',
       });
       if (!resolved.ok) return { success: false, error: resolved.error };
       if (!E164_REGEX.test(resolved.identifier)) {
@@ -201,12 +196,12 @@ export class SignalSendHandler implements ToolHandler {
       contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
       identityName = resolved.identityName;
     } else {
-      destination = recipientNumber!;
+      return { success: false, error: 'Missing destination: pass recipient or group_id.' };
     }
 
     // --- Dispatch via gateway (1:1) ---
 
-    ctx.log.info({ destinationType: '1:1', byReference: !!recipient }, 'signal-send: dispatching Signal message via gateway');
+    ctx.log.info({ destinationType: '1:1', byReference: true }, 'signal-send: dispatching Signal message via gateway');
 
     try {
       const result = await ctx.outboundGateway.send({

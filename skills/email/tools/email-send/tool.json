@@ -1,14 +1,12 @@
 {
   "name": "email-send",
-  "description": "Send a new email. to and cc take a contact ID, or \"principal\" for the principal; you choose the person and the address comes from their verified identities. A #label (principal#personal, or on each cc entry) is a hint for which labelled identity, not an address. Emails are sent from the agent's configured email address. Pass account only together with reply_to_message_id, to read and send a threaded reply from that mailbox. A new email always goes from the primary account.",
-  "version": "1.5.0",
+  "description": "Send a new email. to and cc take a contact ID, or \"principal\" for the principal; you choose the person and the address comes from their verified identities. A #label (principal#personal, or on each cc entry) is a hint for which labelled identity, not an address. Someone with no contact record must be recorded first with contact-create; an email address here is refused. Emails are sent from the agent's configured email address. Pass account only together with reply_to_message_id, to read and send a threaded reply from that mailbox. A new email always goes from the primary account.",
+  "version": "1.6.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
-    "to": "string? (contact ID or \"principal\", optional #label hint such as principal#personal — a hint, not an address. Pass to or to_address, not both)",
-    "to_address": "string? (email address, only for someone with no contact record)",
+    "to": "string (contact ID or \"principal\", optional #label hint such as principal#personal — a hint, not an address. For someone with no contact record, contact-create first)",
     "cc": "string? (comma-separated contact IDs or \"principal\", each with an optional #label hint such as the contact ID plus #work — a hint, not an address)",
-    "cc_addresses": "string? (comma-separated addresses of people with no contact record)",
     "subject": "string",
     "body": "string",
     "account": "string? (named account to thread a reply from, as configured under Settings → Channels → Email → Email accounts — the Account line on the inbound email preamble. Only valid together with reply_to_message_id — the quoted original is read from this account and the reply is sent from it. Omit it, and do not pass it on a new email, to use the primary account.)",
@@ -21,7 +19,7 @@
     "message_id": "string",
     "to": "string",
     "to_identity": "string? (label of the address used for a reference to, or \"primary\" or \"unlabelled\")",
-    "cc_identities": "string[]? (one per distinct cc address resolved from a reference, in that order; repeated references and cc_addresses are omitted)",
+    "cc_identities": "string[]? (one per distinct cc address resolved from a reference, in that order; repeated references are omitted)",
     "subject": "string"
   },
   "permissions": [],

@@ -83,7 +83,12 @@ export type IdentitySource =
   // First-time outbound recipient the gateway recorded after a send
   // (promoteOrCreateRecipientContact). An agent typed this address; nobody
   // stated or confirmed it, so it is not auto-verified (#2033, ADR-047).
-  | 'outbound_recipient';
+  | 'outbound_recipient'
+  // An agent recorded this identifier through contact-create or
+  // contact-link-identity, after the duplicate check (#2041, ADR-047).
+  // Auto-verified so the following send-by-reference can deliver. Verification
+  // means the agent asserted it, not that the principal confirmed it.
+  | 'agent_created';
 
 // -- Identity status --
 // active: address is believed to be valid and usable (default)

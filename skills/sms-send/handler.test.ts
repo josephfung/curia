@@ -13,22 +13,28 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 describe('sms-send handler', () => {
-  it('validates E.164 recipient and message', async () => {
+  const PAT_ID = '33333333-3333-4333-8333-333333333333';
+  const resolvePat = vi.fn(async () => ({
+    ok: true, kind: 'contact', contactId: PAT_ID, identifier: '+14155552671',
+    displayName: 'Pat', identityName: 'primary', identityId: 'i-pat',
+  }));
+
+  it('refuses a retired recipient_number and a missing recipient', async () => {
     const handler = new SmsSendHandler();
     expect((await handler.execute(makeCtx({ input: { message: 'hi' } }))).success).toBe(false);
     const bad = await handler.execute(makeCtx({
       input: { recipient_number: '4155552671', message: 'hi' },
     }));
     expect(bad.success).toBe(false);
-    if (!bad.success) expect(bad.error).toMatch(/E\.164/);
+    if (!bad.success) expect(bad.error).toMatch(/no longer accepted/);
   });
 
   it('dispatches via outboundGateway', async () => {
     const send = vi.fn().mockResolvedValue({ success: true, messageId: 'm1' });
     const handler = new SmsSendHandler();
     const result = await handler.execute(makeCtx({
-      input: { recipient_number: '+14155552671', message: 'Hello' },
-      outboundGateway: { send } as never,
+      input: { recipient: PAT_ID, message: 'Hello' },
+      outboundGateway: { send, resolveRecipientReference: resolvePat } as never,
       outboundContext: undefined,
     }));
     expect(result.success).toBe(true);
@@ -51,7 +57,7 @@ describe('sms-send handler', () => {
         outboundGateway: { send, resolveRecipientReference } as never,
       }));
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('sms', 'principal', { field: 'recipient', rawField: 'recipient_number' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('sms', 'principal', { field: 'recipient' });
       expect(send).toHaveBeenCalledWith({ channel: 'sms', recipient: '+15195550100', message: 'Hello' }, expect.any(Object));
       if (result.success) {
         expect(result.data).toMatchObject({ delivered_to: '+15195550100' });
@@ -69,12 +75,12 @@ describe('sms-send handler', () => {
       expect(send).not.toHaveBeenCalled();
     });
 
-    it('rejects recipient and recipient_number together', async () => {
+    it('refuses recipient and a retired recipient_number together', async () => {
       const result = await new SmsSendHandler().execute(makeCtx({
         input: { recipient: 'principal', recipient_number: '+14155552671', message: 'Hello' },
       }));
       expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toMatch(/either recipient or recipient_number/);
+      if (!result.success) expect(result.error).toMatch(/no longer accepted/);
     });
   });
 });

@@ -117,8 +117,33 @@ export type RecipientResolution =
 export interface RecipientReferenceFields {
   /** The reference input's name in tool.json (e.g. `to`, `recipient`). */
   field: string;
-  /** The raw-address input's name in tool.json (e.g. `to_address`). */
-  rawField: string;
+}
+
+/**
+ * A send skill no longer takes a typed address (#2041). The message names the
+ * retired field and the reference field the agent should use instead.
+ */
+export function retiredRawAddressError(rawField: string, referenceField: string): string {
+  return (
+    `${rawField} is no longer accepted. Record the person with contact-create, then pass their contact ID in ${referenceField}. ` +
+    'Nothing was sent.'
+  );
+}
+
+/**
+ * The first retired raw-address field that is present, as an agent-facing error.
+ * An empty string is absent. A non-string is present: it is still the retired field.
+ */
+export function presentRetiredRawField(
+  input: Record<string, unknown>,
+  fields: ReadonlyArray<readonly [rawField: string, referenceField: string]>,
+): string | undefined {
+  for (const [rawField, referenceField] of fields) {
+    const value = input[rawField];
+    const present = typeof value === 'string' ? value.trim().length > 0 : value !== undefined && value !== null;
+    if (present) return retiredRawAddressError(rawField, referenceField);
+  }
+  return undefined;
 }
 
 export interface RecipientResolverDeps {
@@ -163,15 +188,23 @@ export function sendPinsMatch(
 }
 
 /**
- * Each send skill's recipient inputs: the reference field and its raw-address
- * sibling. Code that reads a send skill's input outside the handler (approval
- * display, for one) uses this rather than hard-coding field names.
+ * Each send skill's recipient input. Code that reads a send skill's input
+ * outside the handler (approval display, for one) uses this rather than
+ * hard-coding field names. Raw-address siblings were removed (#2041).
  */
-export const SEND_SKILL_RECIPIENT_FIELDS: Readonly<Record<string, { channel: string; reference: string; raw: string }>> = {
-  'email-send': { channel: 'email', reference: 'to', raw: 'to_address' },
-  'signal-send': { channel: 'signal', reference: 'recipient', raw: 'recipient_number' },
-  'sms-send': { channel: 'sms', reference: 'recipient', raw: 'recipient_number' },
-  'slack-send': { channel: 'slack', reference: 'recipient', raw: 'recipient_user_id' },
+export const SEND_SKILL_RECIPIENT_FIELDS: Readonly<Record<string, { channel: string; reference: string }>> = {
+  'email-send': { channel: 'email', reference: 'to' },
+  'signal-send': { channel: 'signal', reference: 'recipient' },
+  'sms-send': { channel: 'sms', reference: 'recipient' },
+  'slack-send': { channel: 'slack', reference: 'recipient' },
+};
+
+/** Fields that used to take a typed address. A present value is refused, not sent. */
+export const RETIRED_SEND_RAW_FIELDS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+  'email-send': [['to_address', 'to'], ['cc_addresses', 'cc']],
+  'signal-send': [['recipient_number', 'recipient']],
+  'sms-send': [['recipient_number', 'recipient']],
+  'slack-send': [['recipient_user_id', 'recipient']],
 };
 
 /**
@@ -416,7 +449,7 @@ export async function resolveRecipientReference(
       error:
         `${fields.field} takes a contact ID or "${PRINCIPAL_RECIPIENT_ALIAS}", not "${safeName(value)}". ` +
         `Send to a known person by their contact ID; the address is looked up for you. ` +
-        `Only for someone with no contact record, put their address in ${fields.rawField}.`,
+        `For someone with no contact record, record them with contact-create, then pass that contact ID. Nothing was sent.`,
     };
   }
 

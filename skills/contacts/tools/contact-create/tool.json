@@ -1,7 +1,7 @@
 {
   "name": "contact-create",
-  "description": "Create a new contact. Provide the person's name and optionally their role, notes, and channel identifiers (email, phone, signal, telegram). Automatically creates a knowledge graph entry.",
-  "version": "1.0.0",
+  "description": "Create a new contact, then send to them by the returned contact_id. Provide the person's name and optionally their role, notes, and channel identifiers (email, phone, signal, telegram). If the result says the person may already be on file, send to that contact id, or pass confirm_new true only when it is a different person. An address that is already on file is refused even with confirm_new. Automatically creates a knowledge graph entry. The record is source agent_created: an agent supplied it, which is not the same as the principal confirming it.",
+  "version": "1.1.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -11,14 +11,16 @@
     "email": "string?",
     "phone": "string?",
     "signal": "string?",
-    "telegram": "string?"
+    "telegram": "string?",
+    "confirm_new": "boolean? (true only after a refusal said this is a different person. Does not override an address that is already on file.)"
   },
   "outputs": {
     "contact_id": "string",
     "display_name": "string",
     "role": "string?",
     "kg_node_id": "string?",
-    "identities_added": "number"
+    "identities_added": "number",
+    "source": "string (agent_created)"
   },
   "permissions": [],
   "secrets": [],

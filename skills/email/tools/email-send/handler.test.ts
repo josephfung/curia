@@ -16,8 +16,11 @@ const ALICE_ID = '11111111-1111-4111-8111-111111111111';
  * the handler's use of the result matters.
  */
 const resolveRecipientReference = vi.fn(async (_channel: string, value: string) => {
-  if (value === 'principal') return { ok: true, kind: 'principal', contactId: 'principal-id', identifier: 'ceo@example.com', displayName: 'Principal' };
-  if (value === ALICE_ID) return { ok: true, kind: 'contact', contactId: ALICE_ID, identifier: 'alice@example.com', displayName: 'Alice' };
+  if (value === 'principal') return { ok: true, kind: 'principal', contactId: 'principal-id', identifier: 'ceo@example.com', displayName: 'Principal', identityName: 'primary', identityId: 'i-principal' };
+  if (value === ALICE_ID) return { ok: true, kind: 'contact', contactId: ALICE_ID, identifier: 'alice@example.com', displayName: 'Alice', identityName: 'primary', identityId: 'i-alice' };
+  if (value === '22222222-2222-4222-8222-222222222222') {
+    return { ok: true, kind: 'contact', contactId: value, identifier: 'machine@exchange.example', displayName: 'Machine', identityName: 'primary', identityId: 'i-machine' };
+  }
   return { ok: false, error: `No contact for "${value}". Nothing was sent.` };
 });
 
@@ -52,35 +55,36 @@ describe('EmailSendHandler', () => {
   });
 
   it('returns error when subject is missing', async () => {
-    const ctx = makeCtx({ to_address: 'alice@example.com', body: 'Body text' });
+    const ctx = makeCtx({ to: ALICE_ID, body: 'Body text' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/subject/);
   });
 
   it('returns error when body is missing', async () => {
-    const ctx = makeCtx({ to_address: 'alice@example.com', subject: 'Hello' });
+    const ctx = makeCtx({ to: ALICE_ID, subject: 'Hello' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/body/);
   });
 
-  it('returns error when to_address is an invalid email', async () => {
+  it('refuses a retired to_address (#2041)', async () => {
     const ctx = makeCtx({ to_address: 'not-an-email', subject: 'Hello', body: 'Body' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/Invalid email/i);
+    if (!result.success) expect(result.error).toMatch(/no longer accepted/);
+    expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
   });
 
   it('returns error when multiple to addresses are provided', async () => {
-    const ctx = makeCtx({ to_address: 'alice@example.com,bob@example.com', subject: 'Hello', body: 'Body' });
+    const ctx = makeCtx({ to: 'alice@example.com,bob@example.com', subject: 'Hello', body: 'Body' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/single/i);
   });
 
   it('returns error when outboundGateway is not available', async () => {
-    const ctx = makeCtx({ to_address: 'alice@example.com', subject: 'Hello', body: 'Body' });
+    const ctx = makeCtx({ to: ALICE_ID, subject: 'Hello', body: 'Body' });
     (ctx as unknown as Record<string, unknown>).outboundGateway = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
@@ -88,7 +92,7 @@ describe('EmailSendHandler', () => {
   });
 
   it('sends an email and returns message_id, to, and subject', async () => {
-    const ctx = makeCtx({ to_address: 'alice@example.com', subject: 'Hello', body: 'Hi there' });
+    const ctx = makeCtx({ to: ALICE_ID, subject: 'Hello', body: 'Hi there' });
     (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
       success: true, messageId: 'msg-123',
     });
@@ -109,7 +113,7 @@ describe('EmailSendHandler', () => {
 
   it('reads the quoted original and sends from the named account (#1832)', async () => {
     const ctx = makeCtx({
-      to_address: 'alice@example.com',
+      to: ALICE_ID,
       subject: 'Re: Hello',
       body: 'Hi there',
       reply_to_message_id: 'msg-sec',
@@ -140,7 +144,7 @@ describe('EmailSendHandler', () => {
 
   it('rejects account on a new email that is not a threaded reply (#1832)', async () => {
     const ctx = makeCtx({
-      to_address: 'alice@example.com',
+      to: ALICE_ID,
       subject: 'Hello',
       body: 'Hi there',
       account: 'ceo',
@@ -154,7 +158,7 @@ describe('EmailSendHandler', () => {
   });
 
   it('returns error when gateway blocks the send', async () => {
-    const ctx = makeCtx({ to_address: 'alice@example.com', subject: 'Hello', body: 'Body' });
+    const ctx = makeCtx({ to: ALICE_ID, subject: 'Hello', body: 'Body' });
     (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
       success: false, blockedReason: 'Recipient is blocked',
     });
@@ -168,7 +172,7 @@ describe('EmailSendHandler', () => {
   describe('attachments', () => {
     it('passes attachments to the gateway when provided', async () => {
       const ctx = makeCtx({
-        to_address: 'alice@example.com',
+        to: ALICE_ID,
         subject: 'See attached',
         body: 'Please find attached.',
         attachments: [
@@ -190,7 +194,7 @@ describe('EmailSendHandler', () => {
 
     it('does not include attachments key when attachments is undefined', async () => {
       const ctx = makeCtx({
-        to_address: 'alice@example.com',
+        to: ALICE_ID,
         subject: 'Hello',
         body: 'Hi there',
       });
@@ -206,7 +210,7 @@ describe('EmailSendHandler', () => {
 
     it('returns error when attachments is not an array', async () => {
       const ctx = makeCtx({
-        to_address: 'alice@example.com',
+        to: ALICE_ID,
         subject: 'Hello',
         body: 'Hi',
         attachments: 'not-an-array',
@@ -221,7 +225,7 @@ describe('EmailSendHandler', () => {
 
     it('returns error when an attachment entry is missing file_url', async () => {
       const ctx = makeCtx({
-        to_address: 'alice@example.com',
+        to: ALICE_ID,
         subject: 'Hello',
         body: 'Hi',
         attachments: [{ filename: 'a.pdf', content_type: 'application/pdf' }],
@@ -238,7 +242,7 @@ describe('EmailSendHandler', () => {
   describe('context_bridge', () => {
     it('registers a context bridge entry after successful send', async () => {
       const ctx = makeCtx({
-        to_address: 'alice@example.com',
+        to: ALICE_ID,
         subject: 'Meeting follow-up',
         body: 'Any thoughts on the proposal?',
         context_bridge: JSON.stringify({
@@ -277,7 +281,7 @@ describe('EmailSendHandler', () => {
 
     it('registers a minimal entry when context_bridge is absent', async () => {
       const ctx = makeCtx({
-        to_address: 'alice@example.com',
+        to: ALICE_ID,
         subject: 'Hello',
         body: 'Hi there',
       });
@@ -310,7 +314,7 @@ describe('EmailSendHandler', () => {
 
     it('logs warning but succeeds when bridge registration fails', async () => {
       const ctx = makeCtx({
-        to_address: 'alice@example.com',
+        to: ALICE_ID,
         subject: 'Hello',
         body: 'Hi there',
         context_bridge: JSON.stringify({ agent_id: 'coordinator' }),
@@ -341,7 +345,7 @@ describe('EmailSendHandler', () => {
       const result = await handler.execute(ctx);
 
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('email', ALICE_ID, { field: 'to', rawField: 'to_address' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('email', ALICE_ID, { field: 'to' });
       expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'alice@example.com', cc: undefined }),
         expect.anything(),
@@ -349,11 +353,10 @@ describe('EmailSendHandler', () => {
       if (result.success) expect(result.data).toMatchObject({ to: 'alice@example.com', contact_id: ALICE_ID });
     });
 
-    it('resolves cc references and appends cc_addresses', async () => {
+    it('resolves cc references', async () => {
       const ctx = makeCtx({
         to: 'principal',
         cc: ALICE_ID,
-        cc_addresses: 'bob@example.com',
         subject: 'Hello',
         body: 'Hi there',
       });
@@ -361,9 +364,9 @@ describe('EmailSendHandler', () => {
       const result = await handler.execute(ctx);
 
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('email', ALICE_ID, { field: 'cc', rawField: 'cc_addresses' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('email', ALICE_ID, { field: 'cc' });
       expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'ceo@example.com', cc: ['alice@example.com', 'bob@example.com'] }),
+        expect.objectContaining({ to: 'ceo@example.com', cc: ['alice@example.com'] }),
         expect.anything(),
       );
     });
@@ -387,13 +390,13 @@ describe('EmailSendHandler', () => {
       expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
     });
 
-    it('rejects to and to_address together', async () => {
+    it('rejects to and a retired to_address together', async () => {
       const ctx = makeCtx({ to: 'principal', to_address: 'alice@example.com', subject: 'Hello', body: 'Hi' });
 
       const result = await handler.execute(ctx);
 
       expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toMatch(/either to or to_address/);
+      if (!result.success) expect(result.error).toMatch(/no longer accepted/);
       expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
     });
 
@@ -406,21 +409,22 @@ describe('EmailSendHandler', () => {
       if (!result.success) expect(result.error).toMatch(/single To recipient/);
     });
 
-    it('omits contact_id on the raw path', async () => {
+    it('sends nothing when to_address is used for a new person', async () => {
       const ctx = makeCtx({ to_address: 'new@cold.example', subject: 'Hello', body: 'Hi' });
 
       const result = await handler.execute(ctx);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/contact-create/);
       expect(resolveRecipientReference).not.toHaveBeenCalled();
-      if (result.success) expect(result.data).not.toHaveProperty('contact_id');
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
     });
   });
 
   describe('auto-generated sender suppress (#1734)', () => {
     it('blocks email-send to the machine sender when autoGeneratedSuppress is stamped', async () => {
       const ctx = makeCtx(
-        { to_address: 'machine@exchange.example', subject: 'Ack', body: 'Got it' },
+        { to: '22222222-2222-4222-8222-222222222222', subject: 'Ack', body: 'Got it' },
         {
           taskMetadata: {
             autoGeneratedSuppress: true,

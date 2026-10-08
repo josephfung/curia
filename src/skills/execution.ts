@@ -118,8 +118,10 @@ import { splitCommaSeparatedAddresses } from '../contacts/principal-carveout-par
 import type { ErrorType } from '../errors/types.js';
 import {
   SEND_SKILL_RECIPIENT_FIELDS,
+  RETIRED_SEND_RAW_FIELDS,
   formatResolvedRecipient,
   parseRecipientReference,
+  presentRetiredRawField,
   resolveRecipientReference,
   sendPinsMatch,
   STALE_SEND_APPROVAL_ERROR,
@@ -904,7 +906,7 @@ export class ExecutionLayer {
         const resolved = await resolveRecipientReference(
           entry,
           fields.channel,
-          { field, rawField: fields.raw },
+          { field },
           { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
         );
         if (resolved.ok) {
@@ -919,18 +921,6 @@ export class ExecutionLayer {
       shown[field] = parts.join(', ');
     }
 
-    // A raw-path send is shown under the reference field's name, which the
-    // approval renderer reads (to_address and recipient_number are new keys).
-    const reference = input[fields.reference];
-    const raw = input[fields.raw];
-    if (!(typeof reference === 'string' && reference.trim()) && typeof raw === 'string' && raw.trim()) {
-      shown[fields.reference] = raw.trim();
-    }
-    // Every cc recipient, referenced or raw, so none is hidden from the approver.
-    const ccRaw = input['cc_addresses'];
-    if (fields.channel === 'email' && typeof ccRaw === 'string' && ccRaw.trim()) {
-      shown['cc'] = [shown['cc'], ccRaw.trim()].filter((v) => typeof v === 'string' && v.trim()).join(', ');
-    }
     return shown;
   }
 
@@ -959,41 +949,34 @@ export class ExecutionLayer {
     const pins: SendRecipientPin[] = [];
     const fields = SEND_SKILL_RECIPIENT_FIELDS[toolName];
     if (!fields) return { ok: true, resolved, pins };
-    // email-send's cc is a reference field too, with cc_addresses as its raw sibling.
-    const referenceFields = fields.channel === 'email'
-      ? [{ field: 'to', rawField: 'to_address' }, { field: 'cc', rawField: 'cc_addresses' }]
-      : [{ field: fields.reference, rawField: fields.raw }];
+    // A typed address is refused before any gate, including one stored on an
+    // approval from before the fields were removed (#2041).
+    const retired = presentRetiredRawField(input, RETIRED_SEND_RAW_FIELDS[toolName] ?? []);
+    if (retired) {
+      skillLogger.info({ toolName }, 'send recipient refused: retired raw-address field (#2041)');
+      return { ok: false, error: retired };
+    }
+    // email-send's cc is a reference field too.
+    const referenceFields = fields.channel === 'email' ? ['to', 'cc'] : [fields.reference];
     const entriesOf = (value: unknown): string[] => {
       if (typeof value !== 'string' || !value.trim()) return [];
       return fields.channel === 'email' ? splitCommaSeparatedAddresses(value) : [value.trim()];
     };
 
-    // A reference in a raw field would slip past the resolver: Gate C normalizes a
-    // flat recipient list by shape, so the field split has to hold here.
-    for (const { field, rawField } of referenceFields) {
-      if (entriesOf(input[rawField]).some((entry) => parseRecipientReference(entry) !== null)) {
-        skillLogger.info({ toolName, rawField }, 'send recipient refused: a reference in a raw-address field (#2033)');
-        return {
-          ok: false,
-          error: `${rawField} takes an address. Pass a contact ID or "principal" in ${field} instead. Nothing was sent.`,
-        };
-      }
-    }
-
     // Each reference costs a contact read before any gate. Bound the fan-out from a
     // long list; the handler's own length cap runs later.
-    const referenceCount = new Set(referenceFields.flatMap(({ field }) => entriesOf(input[field]))).size;
+    const referenceCount = new Set(referenceFields.flatMap((field) => entriesOf(input[field]))).size;
     if (referenceCount > MAX_SEND_REFERENCES) {
       return { ok: false, error: `Too many recipients (${referenceCount}); the limit is ${MAX_SEND_REFERENCES}. Nothing was sent.` };
     }
 
-    for (const { field, rawField } of referenceFields) {
+    for (const field of referenceFields) {
       for (const entry of entriesOf(input[field])) {
         if (resolved.has(entry.trim())) continue;
         const parsed = parseRecipientReference(entry);
         const isReference = parsed !== null;
         if (isReference && !this.contactService) continue;
-        const result = await resolveRecipientReference(entry, fields.channel, { field, rawField }, {
+        const result = await resolveRecipientReference(entry, fields.channel, { field }, {
           // Never called for a reference without a contact service (skipped above);
           // a non-reference returns its error before any lookup.
           contactService: this.contactService ?? { getContactWithIdentities: async () => undefined },
@@ -1043,7 +1026,7 @@ export class ExecutionLayer {
       const result = await resolveRecipientReference(
         pin.ref,
         fields.channel,
-        { field: fields.reference, rawField: fields.raw },
+        { field: fields.reference },
         { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
       );
       if (!result.ok) return { ok: false, error: STALE_SEND_APPROVAL_ERROR };

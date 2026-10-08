@@ -13,29 +13,28 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 describe('slack-send handler', () => {
-  it('validates Slack user id recipient and message', async () => {
+  const PAT_ID = '33333333-3333-4333-8333-333333333333';
+  const resolvePat = vi.fn(async () => ({
+    ok: true, kind: 'contact', contactId: PAT_ID, identifier: 'U012ABCDEF',
+    displayName: 'Pat', identityName: 'primary', identityId: 'i-pat',
+  }));
+
+  it('refuses a retired recipient_user_id and a missing recipient', async () => {
     const handler = new SlackSendHandler();
     expect((await handler.execute(makeCtx({ input: { message: 'hi' } }))).success).toBe(false);
-    const bad = await handler.execute(makeCtx({
-      input: { recipient_user_id: 'C012CHANNEL', message: 'hi' },
-    }));
-    expect(bad.success).toBe(false);
-    if (!bad.success) expect(bad.error).toMatch(/Slack user id/);
-
-    // Lowercase U… and Enterprise Grid W… ids are rejected (exact-match principal compare).
-    for (const recipient of ['u012abcdef', 'W012ABCDEF']) {
+    for (const recipient of ['C012CHANNEL', 'u012abcdef', 'W012ABCDEF', 'U012ABCDEF']) {
       const rejected = await handler.execute(makeCtx({
         input: { recipient_user_id: recipient, message: 'hi' },
       }));
       expect(rejected.success).toBe(false);
-      if (!rejected.success) expect(rejected.error).toMatch(/Slack user id/);
+      if (!rejected.success) expect(rejected.error).toMatch(/no longer accepted/);
     }
   });
 
   it('rejects missing gateway', async () => {
     const handler = new SlackSendHandler();
     const result = await handler.execute(makeCtx({
-      input: { recipient_user_id: 'U012ABCDEF', message: 'hi' },
+      input: { recipient: PAT_ID, message: 'hi' },
     }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/outboundGateway/);
@@ -45,8 +44,8 @@ describe('slack-send handler', () => {
     const send = vi.fn().mockResolvedValue({ success: true, messageId: '1234.5678' });
     const handler = new SlackSendHandler();
     const result = await handler.execute(makeCtx({
-      input: { recipient_user_id: 'U012ABCDEF', message: 'Hello' },
-      outboundGateway: { send } as never,
+      input: { recipient: PAT_ID, message: 'Hello' },
+      outboundGateway: { send, resolveRecipientReference: resolvePat } as never,
       outboundContext: undefined,
     }));
     expect(result.success).toBe(true);
@@ -65,8 +64,8 @@ describe('slack-send handler', () => {
     const send = vi.fn().mockResolvedValue({ success: false, blockedReason: 'contact blocked' });
     const handler = new SlackSendHandler();
     const result = await handler.execute(makeCtx({
-      input: { recipient_user_id: 'U012ABCDEF', message: 'Hello' },
-      outboundGateway: { send } as never,
+      input: { recipient: PAT_ID, message: 'Hello' },
+      outboundGateway: { send, resolveRecipientReference: resolvePat } as never,
     }));
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toBe('contact blocked');
@@ -86,7 +85,7 @@ describe('slack-send handler', () => {
         outboundGateway: { send, resolveRecipientReference } as never,
       }));
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('slack', 'principal', { field: 'recipient', rawField: 'recipient_user_id' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('slack', 'principal', { field: 'recipient' });
       expect(send).toHaveBeenCalledWith(
         { channel: 'slack', slackChannelId: 'U0PRINCIPAL', slackUserId: 'U0PRINCIPAL', message: 'Hello' },
         expect.any(Object),

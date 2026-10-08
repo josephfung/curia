@@ -219,8 +219,8 @@ the platform resolves the ID once at bootstrap.
 
 For **other contacts** (third parties, external people), use `${principal_contact_id}`
 with `entity-context` or resolve via the contacts specialist — do not hardcode
-their addresses. Send skills take the contact's UUID; the raw-address fields
-(`to_address`, `recipient_number`, …) are only for someone with no contact record.
+their addresses. Send skills take the contact's UUID. Someone with no contact
+record is recorded with `contact-create` first, then the send passes that id.
 
 #### Where the placeholder resolves — and where it does not
 

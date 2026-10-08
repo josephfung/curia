@@ -169,13 +169,13 @@ describeIf('test-mode stack', () => {
       const opts = { agentId: 'coordinator', channelId: 'cli', conversationId: 'test-mode-no-send' };
       const email = await stack.executionLayer.invoke(
         'email-send',
-        { to_address: 'someone@example.com', subject: 'Hi', body: 'Hello' },
+        { subject: 'Hi', body: 'Hello' },
         undefined,
         opts,
       );
       const signal = await stack.executionLayer.invoke(
         'signal-send',
-        { recipient_number: '+15555550123', message: 'Hello' },
+        { message: 'Hello' },
         undefined,
         opts,
       );

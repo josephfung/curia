@@ -210,9 +210,9 @@ describe('principal-recipient', () => {
       )).toBe(true);
     });
 
-    // Raw-address fields (#2033). References in to/recipient are resolved by
-    // Gate C before this check; here the parsers only have to read both fields.
-    it('reads the raw-address fields of each send skill', () => {
+    // Retired raw-address fields fail closed (#2041). A typed address must not
+    // take the principal-sole carve-out.
+    it('fails closed on a retired raw-address field', () => {
       const cases: Array<[string, Record<string, unknown>]> = [
         ['email-send', { to_address: 'ceo@example.com', subject: 'x', body: 'y' }],
         ['signal-send', { recipient_number: '+15551234567', message: 'hi' }],
@@ -220,7 +220,7 @@ describe('principal-recipient', () => {
         ['slack-send', { recipient_user_id: 'U_CEO', message: 'hi' }],
       ];
       for (const [tool, input] of cases) {
-        expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(true);
+        expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(false);
       }
     });
 
@@ -236,10 +236,10 @@ describe('principal-recipient', () => {
       }
     });
 
-    it('counts cc_addresses toward the email-send recipient set', () => {
+    it('fails closed when a retired cc_addresses is present', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
         'email-send',
-        { to_address: 'ceo@example.com', cc_addresses: 'other@example.com', subject: 'x', body: 'y' },
+        { to: 'ceo@example.com', cc_addresses: 'other@example.com', subject: 'x', body: 'y' },
         PRINCIPAL_IDENTITIES,
       )).toBe(false);
     });

@@ -39,34 +39,32 @@ const EMAIL_REPLY_UNPARSED_RECIPIENT_KEYS = [
  * Parse email-send recipients from skill input. Returns null when the input contains
  * recipient-shaped keys this parser does not model (fail closed).
  *
- * `to` / `cc` hold contact references (a contact UUID or "principal") and
- * `to_address` / `cc_addresses` hold raw addresses (#2033). This parser returns
- * both as written; Gate C resolves the references to addresses before comparing.
+ * `to` / `cc` hold contact references (a contact UUID or "principal"). A retired
+ * raw field (`to_address`, `cc_addresses`) fails closed: the carve-out must not
+ * treat a typed address as the principal (#2041). Gate C resolves references
+ * to addresses before comparing.
  */
 function parseEmailSendRecipients(input: Record<string, unknown>): string[] | null {
   const unparsedRecipientKeys = ['bcc', 'recipients', 'recipient', 'group_id', 'groupId'] as const;
   for (const key of unparsedRecipientKeys) {
     if (hasPresentValue(input[key])) return null;
   }
+  // Retired raw-address fields. Present means the carve-out cannot see the
+  // recipient, so it does not apply.
+  if (hasPresentValue(input['to_address']) || hasPresentValue(input['cc_addresses'])) return null;
 
-  const fields = ['to', 'to_address', 'cc', 'cc_addresses'] as const;
+  const fields = ['to', 'cc'] as const;
   for (const key of fields) {
     const value = input[key];
     if (value !== undefined && value !== null && typeof value !== 'string') return null;
   }
   const to = input['to'] as string | undefined;
-  const toAddress = input['to_address'] as string | undefined;
-  // The skill refuses both at once; never guess which one it would have used.
-  if (hasPresentValue(to) && hasPresentValue(toAddress)) return null;
-  const primary = hasPresentValue(to) ? to : toAddress;
-  if (!hasPresentValue(primary) || typeof primary !== 'string') return null;
+  if (!hasPresentValue(to) || typeof to !== 'string') return null;
 
-  const emails = splitCommaSeparatedAddresses(primary);
-  for (const key of ['cc', 'cc_addresses'] as const) {
-    const value = input[key];
-    if (typeof value === 'string' && value.trim().length > 0) {
-      emails.push(...splitCommaSeparatedAddresses(value));
-    }
+  const emails = splitCommaSeparatedAddresses(to);
+  const cc = input['cc'];
+  if (typeof cc === 'string' && cc.trim().length > 0) {
+    emails.push(...splitCommaSeparatedAddresses(cc));
   }
   return emails;
 }

@@ -12,8 +12,8 @@ import { isSmsOutboundRequest } from './outbound-request.js';
  * Parse sms-send 1:1 recipient from skill input. Returns null when the input
  * contains recipient-shaped keys this parser does not model (fail closed).
  *
- * `recipient` holds a contact reference and `recipient_number` a raw E.164 (#2033).
- * Gate C resolves a reference to its number before comparing.
+ * `recipient` holds a contact reference. `recipient_number` is retired and fails
+ * closed (#2041). Gate C resolves a reference to its number before comparing.
  */
 function parseSmsSendRecipients(input: Record<string, unknown>): string[] | null {
   const unparsedRecipientKeys = ['to', 'cc', 'bcc', 'recipients', 'group_id', 'groupId'] as const;

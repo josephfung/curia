@@ -1,0 +1,51 @@
+# Case 15 (#2041): cold outreach from Curia's account creates a contact first, then
+# email-send takes that contact id. The address is never typed into `to`.
+# Rule: skills/email/tools/email-send/tool.json (`to` refuses an address) and
+# skills/contacts/tools/contact-create/tool.json. The coordinator does not pin
+# contact-create; it delegates to the contacts specialist and uses the id that comes back.
+name: cold outreach creates a contact
+description: >
+  The principal asks the coordinator to email someone new, at an address that is not
+  on file, from the coordinator's own account. The contacts specialist records the
+  person and returns their contact id.
+tags: [email, recipient, contacts]
+stub_sets: [human-channels]
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Email Dana Cho at dana.cho@example.test from your account and say the partnership
+    note is ready for her review.
+tool_stubs:
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: |
+          Dana Cho was not on file. I created a contact for her.
+
+          <resolved_entities>
+            <contact name="Dana Cho" id="a1b2c3d4-e5f6-4789-8012-3456789abcde"/>
+          </resolved_entities>
+    - match: {}
+      return: { agent: ceo-inbox, response: Done. }
+expected_behaviors:
+  - id: sends_by_new_contact_id
+    weight: critical
+    description: Calls email-send with `to` set to the contact id the contacts specialist returned.
+    check:
+      called: email-send
+      with: { to: a1b2c3d4-e5f6-4789-8012-3456789abcde }
+  - id: does_not_type_the_address
+    weight: critical
+    description: Does not pass Dana's email address in `to`.
+    check:
+      not_called: [email-send]
+      contains: { to: dana.cho@example.test }
+  - id: message_in_body
+    weight: important
+    description: The email tells Dana the partnership note is ready for her review.
+failure_modes:
+  - Passes dana.cho@example.test in `to`, which the skill refuses
+  - Delegates to ceo-inbox to draft from the principal's account
+  - Replies in chat instead of sending the email

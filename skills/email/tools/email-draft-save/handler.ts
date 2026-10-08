@@ -9,6 +9,7 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
+import { parseRecipientReference } from '../../../../src/skills/_shared/recipient-reference.js';
 
 export class EmailDraftSaveHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -34,7 +35,18 @@ export class EmailDraftSaveHandler implements ToolHandler {
     }
 
     const to = typeof rawTo === 'string' ? rawTo.trim() : undefined;
-    if (!to) return { success: false, error: 'Missing required input: to (string)' };
+    if (!to) {
+      return {
+        success: false,
+        error: 'Missing required input: to (a contact ID, or "principal"). For someone with no contact record, record them with contact-create first.',
+      };
+    }
+    if (parseRecipientReference(to) === null) {
+      return {
+        success: false,
+        error: 'to takes a contact ID or "principal", not an email address. Record a new person with contact-create, then pass that contact ID. Nothing was saved.',
+      };
+    }
     if (!subject || typeof subject !== 'string') return { success: false, error: 'Missing required input: subject (string)' };
     if (!body || typeof body !== 'string') return { success: false, error: 'Missing required input: body (string)' };
 
@@ -53,6 +65,9 @@ export class EmailDraftSaveHandler implements ToolHandler {
         + 'Did the coordinator mean to pass the principal account name?',
       );
     }
+
+    const resolved = await ctx.outboundGateway.resolveRecipientReference('email', to, { field: 'to' });
+    if (!resolved.ok) return { success: false, error: resolved.error };
 
     ctx.log.info({ to, subject, accountId, replyToMessageId }, 'email-draft-save: saving draft');
 
@@ -86,7 +101,7 @@ export class EmailDraftSaveHandler implements ToolHandler {
     try {
       result = await ctx.outboundGateway.createEmailDraft({
         channel: 'email',
-        to,
+        to: resolved.identifier,
         subject,
         body: quotedBody,
         accountId,
@@ -112,6 +127,12 @@ export class EmailDraftSaveHandler implements ToolHandler {
 
     ctx.log.info({ draftId: result.draftId, to, accountId }, 'email-draft-save: draft saved');
 
-    return { success: true, data: { draft_id: result.draftId } };
+    return {
+      success: true,
+      data: {
+        draft_id: result.draftId,
+        to_identity: resolved.identityName,
+      },
+    };
   }
 }

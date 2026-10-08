@@ -392,9 +392,8 @@ export function extractDestinationFromInput(
 ): ExportDestination | null {
   if (GATEWAY_ATTACHMENT_TOOLS.has(toolName)) {
     // email-send: `to` is a contact reference (shown as written; the gateway's own
-    // export gate sees the resolved address) and `to_address` the raw path (#2033).
-    // Same presence rule as the skill and the Gate C parser: a blank `to` does not
-    // hide `to_address`. The skill refuses both at once, so either label is display-only.
+    // export gate sees the resolved address). `to_address` is retired (#2041) and
+    // still counted here, so a leftover payload cannot hide its destination.
     const to = presentOr(input['to'], input['to_address']);
     if (typeof to === 'string' && to.trim()) {
       return { kind: 'email', address: to.trim() };

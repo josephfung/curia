@@ -10,11 +10,13 @@ function makeLogger() {
 }
 
 const ALICE_ID = '11111111-1111-4111-8111-111111111111';
+const PAT_ID = '33333333-3333-4333-8333-333333333333';
 
 /** Stands in for the gateway's reference resolver (#2033); its rules are tested elsewhere. */
 const resolveRecipientReference = vi.fn(async (_channel: string, value: string) => {
-  if (value === 'principal') return { ok: true, kind: 'principal', contactId: 'principal-id', identifier: '+15195550100', displayName: 'Principal' };
-  if (value === ALICE_ID) return { ok: true, kind: 'contact', contactId: ALICE_ID, identifier: 'alice-not-e164', displayName: 'Alice' };
+  if (value === 'principal') return { ok: true, kind: 'principal', contactId: 'principal-id', identifier: '+15195550100', displayName: 'Principal', identityName: 'primary', identityId: 'i-p' };
+  if (value === ALICE_ID) return { ok: true, kind: 'contact', contactId: ALICE_ID, identifier: 'alice-not-e164', displayName: 'Alice', identityName: 'primary', identityId: 'i-a' };
+  if (value === PAT_ID) return { ok: true, kind: 'contact', contactId: PAT_ID, identifier: '+14155551234', displayName: 'Pat', identityName: 'primary', identityId: 'i-pat' };
   return { ok: false, error: `No contact for "${value}". Nothing was sent.` };
 });
 
@@ -52,7 +54,7 @@ describe('SignalSendHandler', () => {
   });
 
   it('returns error when message is missing', async () => {
-    const ctx = makeCtx({ input: { recipient_number: '+14155551234' } });
+    const ctx = makeCtx({ input: { recipient: PAT_ID } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/message/);
@@ -66,16 +68,17 @@ describe('SignalSendHandler', () => {
   });
 
   it('returns error when both recipient and group_id are provided', async () => {
-    const ctx = makeCtx({ input: { recipient_number: '+14155551234', group_id: 'grpABC==', message: 'hi' } });
+    const ctx = makeCtx({ input: { recipient: PAT_ID, group_id: 'grpABC==', message: 'hi' } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/exactly one of recipient, recipient_number, or group_id/);
+    if (!result.success) expect(result.error).toMatch(/exactly one of recipient or group_id/);
   });
 
-  it('returns error when both recipient and recipient_number are provided', async () => {
+  it('refuses a retired recipient_number (#2041)', async () => {
     const ctx = makeCtx({ input: { recipient: 'principal', recipient_number: '+14155551234', message: 'hi' } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/no longer accepted/);
     expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
   });
 
@@ -89,7 +92,7 @@ describe('SignalSendHandler', () => {
       const result = await handler.execute(ctx);
 
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('signal', 'principal', { field: 'recipient', rawField: 'recipient_number' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('signal', 'principal', { field: 'recipient' });
       expect(gateway.send).toHaveBeenCalledWith(
         expect.objectContaining({ channel: 'signal', recipient: '+15195550100' }),
         expect.anything(),
@@ -124,22 +127,22 @@ describe('SignalSendHandler', () => {
     });
   });
 
-  it('returns error when recipient is not a valid E.164 number', async () => {
+  it('refuses a retired recipient_number that is not a phone', async () => {
     const ctx = makeCtx({ input: { recipient_number: 'not-a-phone', message: 'hi' } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/E\.164/);
+    if (!result.success) expect(result.error).toMatch(/no longer accepted/);
   });
 
   it('returns error when message exceeds max length', async () => {
-    const ctx = makeCtx({ input: { recipient_number: '+14155551234', message: 'x'.repeat(10_001) } });
+    const ctx = makeCtx({ input: { recipient: PAT_ID, message: 'x'.repeat(10_001) } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/10.000|10,000/);
   });
 
   it('returns error when outboundGateway is not available', async () => {
-    const ctx = makeCtx({ input: { recipient_number: '+14155551234', message: 'hi' } });
+    const ctx = makeCtx({ input: { recipient: PAT_ID, message: 'hi' } });
     (ctx as unknown as Record<string, unknown>).outboundGateway = undefined;
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
@@ -148,7 +151,7 @@ describe('SignalSendHandler', () => {
 
   it('sends a 1:1 Signal message and returns delivered_to', async () => {
     const gateway = { send: vi.fn().mockResolvedValue({ success: true }) };
-    const ctx = makeCtx({ input: { recipient_number: '+14155551234', message: 'hello' }, gateway });
+    const ctx = makeCtx({ input: { recipient: PAT_ID, message: 'hello' }, gateway });
 
     const result = await handler.execute(ctx);
 
@@ -165,7 +168,7 @@ describe('SignalSendHandler', () => {
 
   it('returns error when gateway blocks the 1:1 send', async () => {
     const gateway = { send: vi.fn().mockResolvedValue({ success: false, blockedReason: 'Recipient is blocked' }) };
-    const ctx = makeCtx({ input: { recipient_number: '+14155551234', message: 'hi' }, gateway });
+    const ctx = makeCtx({ input: { recipient: PAT_ID, message: 'hi' }, gateway });
 
     const result = await handler.execute(ctx);
 
@@ -251,7 +254,7 @@ describe('SignalSendHandler', () => {
     it('registers a context bridge entry after successful 1:1 send', async () => {
       const ctx = makeCtx({
         input: {
-          recipient_number: '+14155551234',
+          recipient: PAT_ID,
           message: 'Any takeaways?',
           context_bridge: JSON.stringify({
             agent_id: 'meeting-debrief',
@@ -292,7 +295,7 @@ describe('SignalSendHandler', () => {
 
     it('registers a minimal entry when context_bridge is absent', async () => {
       const ctx = makeCtx({
-        input: { recipient_number: '+14155551234', message: 'Hello' },
+        input: { recipient: PAT_ID, message: 'Hello' },
       });
       (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true, messageId: 'msg-1',
@@ -322,7 +325,7 @@ describe('SignalSendHandler', () => {
     it('does not register when send fails', async () => {
       const ctx = makeCtx({
         input: {
-          recipient_number: '+14155551234',
+          recipient: PAT_ID,
           message: 'Hello',
           context_bridge: JSON.stringify({ agent_id: 'coordinator' }),
         },
@@ -348,7 +351,7 @@ describe('SignalSendHandler', () => {
     it('logs a warning but succeeds when context bridge registration fails', async () => {
       const ctx = makeCtx({
         input: {
-          recipient_number: '+14155551234',
+          recipient: PAT_ID,
           message: 'Hello',
           context_bridge: JSON.stringify({ agent_id: 'coordinator' }),
         },

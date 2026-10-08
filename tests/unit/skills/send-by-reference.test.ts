@@ -18,6 +18,7 @@ import { ExecutionLayer } from '../../../src/skills/execution.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { EscalationJudge } from '../../../src/autonomy/escalation-judge.js';
 import { EmailSendHandler } from '../../../skills/email/tools/email-send/handler.js';
+import { ContactCreateHandler } from '../../../skills/contacts/tools/contact-create/handler.js';
 import { SignalSendHandler } from '../../../skills/signal-send/handler.js';
 import { SmsSendHandler } from '../../../skills/sms-send/handler.js';
 import { SlackSendHandler } from '../../../skills/slack-send/handler.js';
@@ -180,10 +181,10 @@ describe('send to the principal by reference (#2033 regression)', () => {
   it('an address in the reference field is rejected, not sent', async () => {
     const result = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input('pat@home.example')));
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/to_address/);
+    if (!result.success) expect(result.error).toMatch(/contact-create/);
     const signal = await SKILLS.signal.handler.execute(ctx(h, SKILLS.signal.input('+15195550100')));
     expect(signal.success).toBe(false);
-    if (!signal.success) expect(signal.error).toMatch(/recipient_number/);
+    if (!signal.success) expect(signal.error).toMatch(/contact-create/);
     expect(delivered(h)).toEqual([]);
   });
 });
@@ -197,20 +198,20 @@ describe('recipient-aware block errors (#2033)', () => {
     findings: [{ rule: 'llm-judge-audience-leak', detail: 'Content is intended for the principal' }],
   };
 
-  it('a raw recipient one character off a known identity, blocked by the judge, names the recipient', async () => {
+  it('a gateway recipient one character off a known identity, blocked by the judge, names the recipient', async () => {
     h.filterCheck.mockResolvedValue(AUDIENCE_LEAK);
-    const result = await SKILLS.email.handler.execute(ctx(h, {
-      to_address: 'pat@home.exampl',
+    // Send skills no longer take a typed address (#2041). The gateway still names
+    // an unmatched recipient when something else calls send() with one.
+    const result = await h.gateway.send({
+      channel: 'email',
+      to: 'pat@home.exampl',
       subject: 'Drafts',
       body: 'Here are the drafts.',
-    }));
+    });
     expect(result.success).toBe(false);
-    if (!result.success) {
-      // The judge's reason is still there; the recipient check is added to it.
-      expect(result.error).toContain('Content is intended for the principal');
-      expect(result.error).toContain('pat@home.exampl matches no known contact');
-      expect(result.error).toMatch(/"principal"/);
-    }
+    expect(result.blockedReason).toContain('Content is intended for the principal');
+    expect(result.blockedReason).toContain('pat@home.exampl matches no known contact');
+    expect(result.blockedReason).toMatch(/"principal"/);
     expect(delivered(h)).toEqual([]);
 
     // The principal's FYI says the same thing about the recipient.
@@ -221,30 +222,29 @@ describe('recipient-aware block errors (#2033)', () => {
     expect(notification?.payload.body).toContain('Intended recipient: pat@home.exampl (matches no known contact)');
   });
 
-  it('names an unmatched cc recipient on a raw-path block', async () => {
+  it('names an unmatched cc recipient on a gateway block', async () => {
     h.filterCheck.mockResolvedValue(AUDIENCE_LEAK);
-    const result = await SKILLS.email.handler.execute(ctx(h, {
-      to: 'principal',
-      cc_addresses: 'sam@home.exampl',
+    const result = await h.gateway.send({
+      channel: 'email',
+      to: 'pat@home.example',
+      cc: ['sam@home.exampl'],
       subject: 'Drafts',
       body: 'Here are the drafts.',
-    }));
+    });
     expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error).toContain('sam@home.exampl matches no known contact');
-      expect(result.error).not.toContain('pat@home.example matches');
-    }
+    expect(result.blockedReason).toContain('sam@home.exampl matches no known contact');
+    expect(result.blockedReason).not.toContain('pat@home.example matches');
   });
 
   it('flags a recipient that matches only an unverified identity, e.g. a typo delivered once before', async () => {
     // First send: the typo goes out and the gateway records an unverified outbound_recipient contact.
-    await SKILLS.email.handler.execute(ctx(h, { to_address: 'pat@home.exampl', subject: 'Hi', body: 'Hello.' }));
+    await h.gateway.send({ channel: 'email', to: 'pat@home.exampl', subject: 'Hi', body: 'Hello.' });
     h.filterCheck.mockResolvedValue(AUDIENCE_LEAK);
 
-    const result = await SKILLS.email.handler.execute(ctx(h, { to_address: 'pat@home.exampl', subject: 'Drafts', body: 'Here.' }));
+    const result = await h.gateway.send({ channel: 'email', to: 'pat@home.exampl', subject: 'Drafts', body: 'Here.' });
 
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('pat@home.exampl matches only an unverified contact address');
+    expect(result.blockedReason).toContain('pat@home.exampl matches only an unverified contact address');
   });
 
   it('adds nothing when every recipient is a known contact', async () => {
@@ -271,11 +271,13 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
   beforeEach(async () => { h = await harness(); });
 
   it('records the new contact as outbound_recipient, unverified, tier known', async () => {
-    const result = await SKILLS.email.handler.execute(ctx(h, {
-      to_address: 'new.person@cold.example',
+    // Agent send skills no longer reach this path (#2041). A gateway send still does.
+    const result = await h.gateway.send({
+      channel: 'email',
+      to: 'new.person@cold.example',
       subject: 'Introduction',
       body: 'Hello.',
-    }));
+    });
     expect(result.success).toBe(true);
 
     const resolved = await h.contacts.resolveByChannelIdentity('email', 'new.person@cold.example');
@@ -288,7 +290,7 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
   });
 
   it('so a later send by reference to that contact fails closed until an address is verified', async () => {
-    await SKILLS.email.handler.execute(ctx(h, { to_address: 'new.person@cold.example', subject: 'Hi', body: 'Hello.' }));
+    await h.gateway.send({ channel: 'email', to: 'new.person@cold.example', subject: 'Hi', body: 'Hello.' });
     const resolved = await h.contacts.resolveByChannelIdentity('email', 'new.person@cold.example');
     h.nylasSend.mockClear();
 
@@ -296,6 +298,44 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/unverified, inactive/);
     expect(delivered(h)).toEqual([]);
+  });
+});
+
+describe('cold outreach creates a contact, then sends by that id (#2041)', () => {
+  let h: Harness;
+  beforeEach(async () => { h = await harness(); });
+
+  function create(input: Record<string, unknown>) {
+    return new ContactCreateHandler().execute({
+      ...ctx(h, input),
+      contactService: h.contacts,
+    });
+  }
+
+  it('delivers to the address contact-create recorded, and the identity is agent_created', async () => {
+    const created = await create({ name: 'New Person', email: 'new.person@cold.example' });
+    expect(created.success).toBe(true);
+    if (!created.success) return;
+    const contactId = (created.data as { contact_id: string }).contact_id;
+
+    const sent = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(contactId)));
+    expect(sent.success).toBe(true);
+    expect(delivered(h)).toEqual(['new.person@cold.example']);
+
+    const found = await h.contacts.getContactWithIdentities(contactId);
+    expect(found?.identities[0]).toMatchObject({ source: 'agent_created', verified: true });
+  });
+
+  it('does not create or send when the address is one character off someone on file', async () => {
+    const created = await create({ name: 'Pat Typo', email: 'pat@home.exampl' });
+    expect(created.success).toBe(false);
+    if (!created.success) {
+      expect(created.error).toMatch(/confirm_new/);
+      expect(created.error).not.toContain('pat@home.exampl');
+      expect(created.error).toContain(h.principalId);
+    }
+    expect(delivered(h)).toEqual([]);
+    expect(await h.contacts.resolveByChannelIdentity('email', 'pat@home.exampl')).toBeNull();
   });
 });
 

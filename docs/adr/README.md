@@ -68,7 +68,7 @@ Each ADR follows the [Nygard format](https://adr.github.io/):
 | [044](044-delegate-wait-clamp-ceiling.md) | Delegate wait clamp stays at 895s; runs past it are late-delivery-only (#1857) | Accepted |
 | [045](045-delegated-specialist-trust.md) | Delegated specialist trust is decided upstream; requester identity is not a permission input (#1859) | Accepted |
 | [046](046-agent-behavior-fix-placement.md) | Agent behavior fixes go on the highest rung that works (code → trigger injection → tool description → playbook → always-on prompt); CI budgets the always-on prompt and local tool definitions (#1961) | Accepted |
-| [047](047-send-skills-address-recipients-by-reference.md) | Send skills address recipients by contact reference or the `principal` alias, with a separate raw-address field; a `#label` hint selects a secondary address; a near-miss principal check is rejected (#2033, #2047) | Accepted |
+| [047](047-send-skills-address-recipients-by-reference.md) | Send skills address recipients by contact reference or the `principal` alias; a `#label` hint selects a secondary address; cold outreach creates a contact first and the raw-address fields are removed (#2033, #2047, #2041) | Accepted |
 
 ## Adding new ADRs
 

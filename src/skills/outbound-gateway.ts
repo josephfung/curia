@@ -2018,7 +2018,8 @@ export class OutboundGateway {
       try {
         // outbound_recipient is not auto-verified, so this identity lands unverified.
         // A send by reference to this contact therefore fails closed until someone
-        // verifies the address; the raw-address field still reaches it.
+        // verifies the address. Agent send skills no longer reach it (#2041):
+        // they create the contact first, source agent_created.
         await this.contactService.linkIdentity({
           contactId: created.id,
           channel,

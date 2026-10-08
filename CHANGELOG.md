@@ -13,6 +13,11 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ## [Unreleased]
 
+### Security
+
+- **Send and draft skills** — cold outreach creates a contact first; typed addresses are refused. (#2041)
+- **`contact-create`** — agent-created contacts use source `agent_created`, verified after a duplicate check. (#2041)
+
 ### Added
 
 - **Send skills** — a label hint selects a contact's secondary address; an ambiguous hint sends nothing. (#2047)

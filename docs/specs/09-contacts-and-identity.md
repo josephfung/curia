@@ -119,8 +119,9 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 | `calendar_attendee` | Extracted from a calendar event | Yes |
 | `self_claimed` | The sender identified themselves ("Hi, it's Jenna") | No |
 | `outbound_recipient` | First-time recipient of an agent send, recorded by the outbound gateway after delivery. An agent typed it (ADR-047) | No |
+| `agent_created` | An agent recorded it through `contact-create` or `contact-link-identity`, after a duplicate check (ADR-047, #2041). Verified means the agent asserted it, not that the principal confirmed it | Yes |
 
-CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
+CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. `agent_created` is verified on creation too, after the duplicate check: that means the agent asserted the address, not that the principal confirmed it. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
 
 ### contact_auth_overrides
 
@@ -333,7 +334,7 @@ Send skills (`email-send`, `signal-send`, `sms-send`, `slack-send`) take a conta
 
 The alias stays within the split above. It resolves only to the verified identities the `## Principal Contact Details` block already shows every agent, and the block tells agents to pass `principal` instead of typing an address. The contact-ID handle stays opt-in. For anyone else, the handle is the contact UUID from `<resolved_entities>` or the contacts specialist.
 
-Someone with no contact record is reached through a separate raw-address field (`to_address`, `cc_addresses`, `recipient_number`, `recipient_user_id`). The gateway records them afterwards as a `known` contact with an unverified `outbound_recipient` identity. #2040 decides that tier, and #2041 whether the raw fields stay.
+Someone with no contact record is recorded with `contact-create` first (source `agent_created`, verified after a duplicate check), and the send passes that contact id. The raw-address fields are retired and refused (#2041, [ADR-047](../adr/047-send-skills-address-recipients-by-reference.md)). A gateway send that is not one of those skills can still record a `known` contact with an unverified `outbound_recipient` identity. #2040 decides that tier. A send by reference cannot reach it until the identity is verified.
 
 ### Operating on the principal's calendar (#1217)
 

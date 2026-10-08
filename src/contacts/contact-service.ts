@@ -38,6 +38,11 @@ import type {
   SystemRole,
 } from './types.js';
 import type { DedupService } from './dedup-service.js';
+import {
+  matchOutreachDuplicates,
+  type IdentitySummary,
+  type OutreachDuplicateReport,
+} from './outreach-duplicates.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
 import { normalizeExclusionPair, type ExclusionPair } from './dedup-exclusions.js';
 import { canonicalPairKey } from './dedup-pair-key.js';
@@ -162,6 +167,8 @@ interface ContactServiceBackend {
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentity(identityId: string): Promise<ChannelIdentity | null>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
+  /** Channel identities on the given channels, with the owning contact's display name. */
+  listIdentitySummaries(channels: readonly string[]): Promise<IdentitySummary[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
   setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity>;
@@ -272,6 +279,9 @@ interface ContactServiceBackend {
 // (e.g. an email sender address), not from LLM-generated content. Same trust level as email_participant.
 // outbound_recipient is NOT auto-verified — the address came from LLM-generated tool input on a
 // first-time send, the opposite of a mechanical extraction (#2033, ADR-047).
+// agent_created IS auto-verified — an agent recorded the identifier through contact-create
+// or contact-link-identity after the duplicate check, so the following send-by-reference
+// can deliver (#2041, ADR-047). It does not mean the principal confirmed the address.
 // Only self_claimed cannot be force-verified.
 const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'ceo_stated',
@@ -281,6 +291,7 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'crm_import',
   'calendar_attendee',
   'agent_called',
+  'agent_created',
 ]);
 
 /**
@@ -893,6 +904,32 @@ export class ContactService {
   /** List contacts, optionally filtered by tier, kind, and/or capped by limit with offset for pagination. */
   async listContacts(filters?: { tier?: ContactTier; kind?: ContactKind[]; limit?: number; offset?: number }): Promise<Contact[]> {
     return this.backend.listContacts(filters);
+  }
+
+  /**
+   * Contacts a proposed person might already be, before contact-create or
+   * contact-link-identity writes (#2041). Exact address matches are `exact`;
+   * near-miss addresses and names are `likely`.
+   */
+  async findOutreachDuplicates(input: {
+    displayName?: string;
+    identifiers: ReadonlyArray<{ channel: string; identifier: string }>;
+    excludeContactId?: string;
+  }): Promise<OutreachDuplicateReport> {
+    const channels = [...new Set(input.identifiers.map((item) => item.channel).filter((channel) => channel.length > 0))];
+    const [identities, contacts] = await Promise.all([
+      this.backend.listIdentitySummaries(channels),
+      input.displayName && input.displayName.trim()
+        ? this.backend.listContacts()
+        : Promise.resolve([]),
+    ]);
+    return matchOutreachDuplicates({
+      displayName: input.displayName,
+      identifiers: input.identifiers,
+      identities,
+      names: contacts.map((contact) => ({ contactId: contact.id, displayName: contact.displayName })),
+      excludeContactId: input.excludeContactId,
+    });
   }
 
   /**
@@ -2343,6 +2380,28 @@ class PostgresContactBackend implements ContactServiceBackend {
     return result.rows.map((row) => this.rowToIdentity(row));
   }
 
+  async listIdentitySummaries(channels: readonly string[]): Promise<IdentitySummary[]> {
+    if (channels.length === 0) return [];
+    const result = await this.pool.query<{
+      contact_id: string;
+      display_name: string;
+      channel: string;
+      channel_identifier: string;
+    }>(
+      `SELECT cci.contact_id, c.display_name, cci.channel, cci.channel_identifier
+       FROM contact_channel_identities cci
+       JOIN contacts c ON c.id = cci.contact_id
+       WHERE cci.channel = ANY($1::text[])`,
+      [channels],
+    );
+    return result.rows.map((row) => ({
+      contactId: row.contact_id,
+      displayName: row.display_name,
+      channel: row.channel,
+      channelIdentifier: row.channel_identifier,
+    }));
+  }
+
   async resolveByChannelIdentity(
     channel: string,
     channelIdentifier: string,
@@ -3181,6 +3240,23 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return results;
+  }
+
+  async listIdentitySummaries(channels: readonly string[]): Promise<IdentitySummary[]> {
+    const wanted = new Set(channels);
+    const rows: IdentitySummary[] = [];
+    for (const identity of this.identities.values()) {
+      if (!wanted.has(identity.channel)) continue;
+      const contact = this.contacts.get(identity.contactId);
+      if (!contact) continue;
+      rows.push({
+        contactId: identity.contactId,
+        displayName: contact.displayName,
+        channel: identity.channel,
+        channelIdentifier: identity.channelIdentifier,
+      });
+    }
+    return rows;
   }
 
   async resolveByChannelIdentity(

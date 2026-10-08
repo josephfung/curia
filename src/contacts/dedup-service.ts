@@ -60,7 +60,7 @@ function jaroSimilarity(s1: string, s2: string): number {
   ) / 3;
 }
 
-function jaroWinkler(s1: string, s2: string): number {
+export function jaroWinkler(s1: string, s2: string): number {
   const jaro = jaroSimilarity(s1, s2);
   let prefixLen = 0;
   const maxPrefix = Math.min(4, s1.length, s2.length);

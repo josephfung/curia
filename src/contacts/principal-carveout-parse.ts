@@ -17,18 +17,15 @@ export function splitCommaSeparatedAddresses(raw: string): string[] {
 }
 
 /**
- * Parse a 1:1 send skill's single recipient: the `recipient` reference field or
- * its raw-address sibling (#2033). Null when neither is present, when both are
- * (the skill refuses that), or when either is not a string — fail closed.
+ * Parse a 1:1 send skill's single recipient: the `recipient` reference field.
+ * A retired raw-address sibling (`rawKey`) fails closed — it is not a recipient
+ * the carve-out may treat as the principal (#2041). Null when the reference is
+ * absent or not a string.
  */
 export function parseOneRecipient(input: Record<string, unknown>, rawKey: string): string[] | null {
+  if (hasPresentValue(input[rawKey])) return null;
   const reference = input['recipient'];
-  const raw = input[rawKey];
-  for (const value of [reference, raw]) {
-    if (value !== undefined && value !== null && typeof value !== 'string') return null;
-  }
-  const hasReference = hasPresentValue(reference);
-  const hasRaw = hasPresentValue(raw);
-  if (hasReference === hasRaw) return null;
-  return [((hasReference ? reference : raw) as string).trim()];
+  if (reference !== undefined && reference !== null && typeof reference !== 'string') return null;
+  if (!hasPresentValue(reference)) return null;
+  return [(reference as string).trim()];
 }

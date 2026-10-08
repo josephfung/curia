@@ -4,22 +4,23 @@
 // filter, blocked-contact, and autonomy. Carrier STOP (Telnyx 40300) surfaces as
 // blockedReason so the agent can record a KG fact instead of retrying.
 //
-// The recipient is a reference by default (#2033, ADR-047): `recipient` takes a
+// The recipient is a contact reference (#2033, ADR-047): `recipient` takes a
 // contact ID or "principal", resolved to that contact's verified SMS number.
-// `recipient_number` is the deliberate raw path, for someone with no contact record.
+// Someone with no contact record is recorded with contact-create first (#2041).
+// `recipient_number` is retired and refused.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import { presentRetiredRawField } from '../../src/skills/_shared/recipient-reference.js';
 
 const MAX_MESSAGE_LENGTH = 1600;
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
 export class SmsSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, recipient_number: recipientNumber, message, context_bridge: contextBridgeRaw } = ctx.input as {
+    const { recipient, message, context_bridge: contextBridgeRaw } = ctx.input as {
       recipient?: unknown;
-      recipient_number?: unknown;
       message?: string;
       context_bridge?: string;
     };
@@ -28,26 +29,19 @@ export class SmsSendHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message (string)' };
     }
 
+    const retired = presentRetiredRawField(
+      ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {},
+      [['recipient_number', 'recipient']],
+    );
+    if (retired) return { success: false, error: retired };
+
     if (recipient !== undefined && recipient !== null && typeof recipient !== 'string') {
       return { success: false, error: 'recipient must be a string' };
     }
-    if (recipientNumber !== undefined && recipientNumber !== null && typeof recipientNumber !== 'string') {
-      return { success: false, error: 'recipient_number must be a string' };
-    }
-    if (!recipient && !recipientNumber) {
+    if (!recipient) {
       return {
         success: false,
-        error: 'Missing recipient: pass recipient (a contact ID, or "principal" for the principal). Only for someone with no contact record, pass recipient_number.',
-      };
-    }
-    if (recipient && recipientNumber) {
-      return { success: false, error: 'Pass either recipient or recipient_number, not both.' };
-    }
-
-    if (recipientNumber && !E164_REGEX.test(recipientNumber)) {
-      return {
-        success: false,
-        error: `recipient_number must be a valid E.164 phone number (e.g. +14155552671), got: ${recipientNumber}`,
+        error: 'Missing recipient: pass recipient (a contact ID, or "principal" for the principal). For someone with no contact record, record them with contact-create first, then pass that contact ID.',
       };
     }
 
@@ -69,10 +63,9 @@ export class SmsSendHandler implements ToolHandler {
     let destination: string;
     let contactId: string | undefined;
     let identityName: string | undefined;
-    if (recipient) {
+    {
       const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient, {
         field: 'recipient',
-        rawField: 'recipient_number',
       });
       if (!resolved.ok) return { success: false, error: resolved.error };
       if (!E164_REGEX.test(resolved.identifier)) {
@@ -89,11 +82,9 @@ export class SmsSendHandler implements ToolHandler {
       // principal's, which spec 09 keeps out of the model's context.
       contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
       identityName = resolved.identityName;
-    } else {
-      destination = recipientNumber as string;
     }
 
-    ctx.log.info({ destinationType: '1:1', byReference: !!recipient }, 'sms-send: dispatching SMS via gateway');
+    ctx.log.info({ destinationType: '1:1', byReference: true }, 'sms-send: dispatching SMS via gateway');
 
     try {
       const result = await ctx.outboundGateway.send(

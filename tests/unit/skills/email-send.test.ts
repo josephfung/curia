@@ -4,6 +4,25 @@ import type { ToolContext } from '../../../src/skills/types.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
+const ALICE_ID = '11111111-1111-4111-8111-111111111111';
+
+function withResolver(gateway: {
+  send: (...args: unknown[]) => unknown;
+  getEmailMessage: (...args: unknown[]) => unknown;
+}) {
+  return {
+    ...gateway,
+    resolveRecipientReference: vi.fn(async () => ({
+      ok: true,
+      kind: 'contact' as const,
+      contactId: ALICE_ID,
+      identifier: 'alice@example.com',
+      displayName: 'Alice',
+      identityName: 'primary',
+      identityId: 'i-alice',
+    })),
+  };
+}
 
 function makeCtx(
   input: Record<string, unknown>,
@@ -43,8 +62,8 @@ describe('EmailSendHandler — reply quote', () => {
       getEmailMessage: vi.fn().mockResolvedValue(originalMessage),
     };
     const result = await handler.execute(makeCtx(
-      { to_address: 'alice@example.com', subject: 'Re: Q2 planning', body: 'Sounds good!', reply_to_message_id: 'msg-orig' },
-      gateway,
+      { to: ALICE_ID, subject: 'Re: Q2 planning', body: 'Sounds good!', reply_to_message_id: 'msg-orig' },
+      withResolver(gateway),
       { timezone: 'America/Toronto' },
     ));
 
@@ -67,8 +86,8 @@ describe('EmailSendHandler — reply quote', () => {
       getEmailMessage: vi.fn(),
     };
     const result = await handler.execute(makeCtx(
-      { to_address: 'alice@example.com', subject: 'Hello', body: 'Hi there' },
-      gateway,
+      { to: ALICE_ID, subject: 'Hello', body: 'Hi there' },
+      withResolver(gateway),
     ));
 
     expect(result.success).toBe(true);
@@ -86,8 +105,8 @@ describe('EmailSendHandler — reply quote', () => {
     };
     const warnSpy = vi.fn();
     const ctx = makeCtx(
-      { to_address: 'alice@example.com', subject: 'Re: Q2', body: 'Got it', reply_to_message_id: 'msg-missing' },
-      gateway,
+      { to: ALICE_ID, subject: 'Re: Q2', body: 'Got it', reply_to_message_id: 'msg-missing' },
+      withResolver(gateway),
     );
     ctx.log = { ...logger, warn: warnSpy, info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 

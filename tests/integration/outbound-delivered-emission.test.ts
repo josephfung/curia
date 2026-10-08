@@ -36,6 +36,7 @@ describe('outbound.delivered emission (#729)', () => {
     //   2. In promoteOrCreateRecipientContact() after dispatch (promotion check)
     // Both calls return a confirmed contact so the promote path is a no-op (no
     // createContact, linkIdentity, or setStatus calls are made).
+    const signalContactId = '11111111-1111-4111-8111-111111111111';
     const contactService = {
       resolveByChannelIdentity: vi.fn().mockResolvedValue({
         contactId: 'contact-int-1',
@@ -45,6 +46,16 @@ describe('outbound.delivered emission (#729)', () => {
         kgNodeId: null,
         verified: true,
       }),
+      getContactWithIdentities: vi.fn(async (id: string) => (id === signalContactId
+        ? {
+          contact: { id, displayName: 'Integration Test Recipient', primaryEmail: null, primaryPhone: '+15555550199', tier: 'known' },
+          identities: [{
+            id: 'id-signal', contactId: id, channel: 'signal', channelIdentifier: '+15555550199',
+            label: null, verified: true, verifiedAt: new Date(), status: 'active', source: 'ceo_stated',
+            createdAt: new Date(), updatedAt: new Date(),
+          }],
+        }
+        : undefined)),
     } as unknown as ContactService;
 
     // Mock OutboundContentFilter — passes all messages (no blocking in this test path).
@@ -99,7 +110,7 @@ describe('outbound.delivered emission (#729)', () => {
     // so taskEventId/conversationId must go in the fourth argument for them to reach the payload.
     const result = await executionLayer.invoke(
       'signal-send',
-      { recipient_number: '+15555550199', message: 'audit emission test body' },
+      { recipient: '11111111-1111-4111-8111-111111111111', message: 'audit emission test body' },
       undefined,
       {
         agentId: 'coordinator',

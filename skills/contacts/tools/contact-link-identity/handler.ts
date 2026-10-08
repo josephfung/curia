@@ -1,21 +1,27 @@
 // handler.ts — contact-link-identity skill implementation.
 //
 // Adds a channel identity (email, phone, Signal, Telegram, Slack) to an existing
-// contact. Uses source 'ceo_stated' since the coordinator acts on behalf
-// of the principal, which means the identity is auto-verified.
+// contact. Source is `agent_created`: an agent supplied the identifier, after a
+// duplicate check. That source is auto-verified so a following send can deliver.
+// It does not mean the principal confirmed the address (#2041, ADR-047).
 //
 // This skill uses contactService, which is a universal service.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { LINKABLE_CHANNEL_IDENTITY_SET } from '../../../../src/contacts/linkable-channels.js';
+import {
+  isConfirmNew,
+  outreachDuplicateError,
+} from '../../../../src/contacts/outreach-duplicates.js';
 
 export class ContactLinkIdentityHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { contact_id, channel, identifier, label } = ctx.input as {
+    const { contact_id, channel, identifier, label, confirm_new: confirmNew } = ctx.input as {
       contact_id?: string;
       channel?: string;
       identifier?: string;
       label?: string;
+      confirm_new?: unknown;
     };
 
     // Validate required inputs
@@ -53,15 +59,41 @@ export class ContactLinkIdentityHandler implements ToolHandler {
       };
     }
 
-    ctx.log.info({ contact_id, channel, identifier }, 'Linking identity to contact');
+    const trimmed = identifier.trim();
+    let existing;
+    try {
+      existing = await ctx.contactService.resolveByChannelIdentity(channel, trimmed);
+    } catch (err) {
+      ctx.log.error({ err, contact_id, channel }, 'contact-link-identity: lookup failed');
+      return { success: false, error: 'Failed to check for an existing contact. Nothing was linked.' };
+    }
+    if (existing?.contactId === contact_id) {
+      return { success: false, error: 'That identifier is already on this contact. Nothing was linked.' };
+    }
+
+    let duplicates;
+    try {
+      duplicates = await ctx.contactService.findOutreachDuplicates({
+        identifiers: [{ channel, identifier: trimmed }],
+        excludeContactId: contact_id,
+      });
+    } catch (err) {
+      ctx.log.error({ err, contact_id, channel }, 'contact-link-identity: duplicate check failed');
+      return { success: false, error: 'Failed to check for an existing contact. Nothing was linked.' };
+    }
+    if (duplicates.exact.length > 0 || (duplicates.likely.length > 0 && !isConfirmNew(confirmNew))) {
+      return { success: false, error: outreachDuplicateError(duplicates, 'linked') };
+    }
+
+    ctx.log.info({ contact_id, channel }, 'Linking identity to contact');
 
     try {
       const identity = await ctx.contactService.linkIdentity({
         contactId: contact_id,
         channel,
-        channelIdentifier: identifier,
+        channelIdentifier: trimmed,
         label: label ?? undefined,
-        source: 'ceo_stated',
+        source: 'agent_created',
       });
 
       ctx.log.info(

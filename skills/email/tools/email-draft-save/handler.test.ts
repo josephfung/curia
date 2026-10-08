@@ -7,8 +7,10 @@ import { createSilentLogger } from '../../../../src/logger.js';
 
 // --- Shared test helpers ---
 
+const ALICE_ID = '11111111-1111-4111-8111-111111111111';
+
 const BASE_INPUT = {
-  to: 'alice@example.com',
+  to: ALICE_ID,
   subject: 'Hello',
   body: 'Hi there',
   account: 'ceo',
@@ -19,7 +21,15 @@ function makeMockGateway(overrides?: { createEmailDraft?: ReturnType<typeof vi.f
   return {
     createEmailDraft: overrides?.createEmailDraft
       ?? vi.fn().mockResolvedValue({ success: true, draftId: 'draft-abc' }),
-    // Other gateway methods are not used by this skill — typed as unknown
+    resolveRecipientReference: vi.fn(async () => ({
+      ok: true,
+      kind: 'contact',
+      contactId: ALICE_ID,
+      identifier: 'alice@example.com',
+      displayName: 'Alice',
+      identityName: 'primary',
+      identityId: 'i-alice',
+    })),
   } as unknown as ToolContext['outboundGateway'];
 }
 
@@ -52,6 +62,18 @@ describe('EmailDraftSaveHandler — baseline', () => {
     expect((result as { error: string }).error).toContain('to');
   });
 
+  it('refuses an email address in to (#2041)', async () => {
+    const handler = new EmailDraftSaveHandler();
+    const createEmailDraft = vi.fn();
+    const result = await handler.execute(makeCtx({
+      input: { ...BASE_INPUT, to: 'alice@example.com' },
+      outboundGateway: makeMockGateway({ createEmailDraft }),
+    }));
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/contact-create/);
+    expect(createEmailDraft).not.toHaveBeenCalled();
+  });
+
   it('returns error when "subject" field is missing', async () => {
     const handler = new EmailDraftSaveHandler();
     const result = await handler.execute(makeCtx({ input: { ...BASE_INPUT, subject: '' } }));
@@ -70,7 +92,10 @@ describe('EmailDraftSaveHandler — baseline', () => {
     const handler = new EmailDraftSaveHandler();
     const result = await handler.execute(makeCtx());
     expect(result.success).toBe(true);
-    expect((result as { data: Record<string, unknown> }).data).toEqual({ draft_id: 'draft-abc' });
+    expect((result as { data: Record<string, unknown> }).data).toEqual({
+      draft_id: 'draft-abc',
+      to_identity: 'primary',
+    });
   });
 
   it('returns error when gateway rejects the draft', async () => {

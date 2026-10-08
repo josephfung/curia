@@ -4,9 +4,17 @@
 // signal, telegram). Automatically creates a knowledge graph person node via
 // the ContactService.
 //
+// Source is `agent_created`: an agent supplied the identifier, after a duplicate
+// check. That source is auto-verified so a following send-by-reference can
+// deliver. It does not mean the principal confirmed the address (#2041, ADR-047).
+//
 // This skill uses contactService, which is a universal service.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import {
+  isConfirmNew,
+  outreachDuplicateError,
+} from '../../../../src/contacts/outreach-duplicates.js';
 
 // Channel names that this skill accepts as optional inputs.
 // Each maps to a channel type used by linkIdentity().
@@ -14,7 +22,8 @@ const CHANNEL_INPUTS = ['email', 'phone', 'signal', 'telegram'] as const;
 
 export class ContactCreateHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { name, role, notes, email, phone, signal, telegram } = ctx.input as {
+    const input = ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
+    const { name, role, notes, email, phone, signal, telegram, confirm_new: confirmNew } = input as {
       name?: string;
       role?: string;
       notes?: string;
@@ -22,6 +31,7 @@ export class ContactCreateHandler implements ToolHandler {
       phone?: string;
       signal?: string;
       telegram?: string;
+      confirm_new?: unknown;
     };
 
     // Validate required inputs
@@ -39,8 +49,9 @@ export class ContactCreateHandler implements ToolHandler {
     if (notes && notes.length > 5000) {
       return { success: false, error: 'Notes must be 5000 characters or fewer' };
     }
+    const channelValues: Record<string, string | undefined> = { email, phone, signal, telegram };
     for (const ch of CHANNEL_INPUTS) {
-      const val = ({ email, phone, signal, telegram } as Record<string, string | undefined>)[ch];
+      const val = channelValues[ch];
       if (val && val.length > 500) {
         return { success: false, error: `${ch} identifier must be 500 characters or fewer` };
       }
@@ -54,32 +65,48 @@ export class ContactCreateHandler implements ToolHandler {
       };
     }
 
+    const identifiers = CHANNEL_INPUTS.flatMap((channel) => {
+      const identifier = channelValues[channel];
+      return identifier && typeof identifier === 'string' && identifier.trim()
+        ? [{ channel, identifier: identifier.trim() }]
+        : [];
+    });
+
+    let duplicates;
+    try {
+      duplicates = await ctx.contactService.findOutreachDuplicates({ displayName: name, identifiers });
+    } catch (err) {
+      ctx.log.error({ err, name }, 'contact-create: duplicate check failed');
+      return { success: false, error: 'Failed to check for an existing contact. Nothing was created.' };
+    }
+    // An exact address match is the same person. A near-miss waits for confirm_new.
+    if (duplicates.exact.length > 0 || (duplicates.likely.length > 0 && !isConfirmNew(confirmNew))) {
+      return { success: false, error: outreachDuplicateError(duplicates, 'created') };
+    }
+
     ctx.log.info({ name, role }, 'Creating contact');
 
     try {
-      // Create the contact — this auto-creates a KG person node if entityMemory is available
+      // Create the contact — this auto-creates a KG person node if entityMemory is available.
+      // agent_created, not ceo_stated: an agent typed this (#2041).
       const contact = await ctx.contactService.createContact({
         displayName: name,
         role: role ?? undefined,
         notes: notes ?? undefined,
-        source: 'ceo_stated',
+        source: 'agent_created',
       });
 
       // Link any provided channel identities
-      const channelValues: Record<string, string | undefined> = { email, phone, signal, telegram };
       let identitiesAdded = 0;
 
-      for (const channel of CHANNEL_INPUTS) {
-        const identifier = channelValues[channel];
-        if (identifier && typeof identifier === 'string') {
-          await ctx.contactService.linkIdentity({
-            contactId: contact.id,
-            channel,
-            channelIdentifier: identifier,
-            source: 'ceo_stated',
-          });
-          identitiesAdded++;
-        }
+      for (const { channel, identifier } of identifiers) {
+        await ctx.contactService.linkIdentity({
+          contactId: contact.id,
+          channel,
+          channelIdentifier: identifier,
+          source: 'agent_created',
+        });
+        identitiesAdded++;
       }
 
       ctx.log.info(
@@ -95,6 +122,7 @@ export class ContactCreateHandler implements ToolHandler {
           role: contact.role,
           kg_node_id: contact.kgNodeId,
           identities_added: identitiesAdded,
+          source: 'agent_created',
         },
       };
     } catch (err) {
