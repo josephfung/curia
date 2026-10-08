@@ -60,7 +60,7 @@ function jaroSimilarity(s1: string, s2: string): number {
   ) / 3;
 }
 
-function jaroWinkler(s1: string, s2: string): number {
+export function jaroWinkler(s1: string, s2: string): number {
   const jaro = jaroSimilarity(s1, s2);
   let prefixLen = 0;
   const maxPrefix = Math.min(4, s1.length, s2.length);
@@ -81,7 +81,7 @@ function jaroWinkler(s1: string, s2: string): number {
  * - Strip non-alphanumeric except spaces
  * - Collapse whitespace
  */
-function normalizeDisplayName(name: string): string {
+export function normalizeDisplayName(name: string): string {
   // Unicode-aware: decompose + strip diacritics so "José"/"Jose" fold together,
   // and keep \p{L}/\p{N} so non-ASCII scripts (CJK, Arabic, etc.) are preserved
   // rather than collapsed to empty. Must stay in sync with the copy in

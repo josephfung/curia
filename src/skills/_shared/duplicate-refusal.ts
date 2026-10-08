@@ -61,6 +61,8 @@ function describeReason(reason: DuplicateReason): string {
   switch (reason.kind) {
     case 'same_name':
       return 'same name';
+    case 'similar_name':
+      return 'similar name';
     case 'similar_address':
       return reason.channel === 'email' ? 'similar email address' : `similar ${reason.channel} number`;
     case 'same_number':

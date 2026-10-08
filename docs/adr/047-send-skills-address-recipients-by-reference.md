@@ -86,6 +86,9 @@ A call that still passes a retired input is refused, not ignored. A dropped `cc_
 | A near-miss email: optimal-string-alignment distance 1–2, or 1 when the shorter address has fewer than 12 characters | Candidate |
 | A near-miss number: distance 1 on the digits | Candidate |
 | The same display name, ignoring case and spacing (`contact-create` only) | Candidate |
+| A near-miss display name (Jaro-Winkler ≥ 0.95 on the normalized names; `contact-create` only) | Candidate |
+
+The name threshold sits in the gap between typos of one name ("Priya Natarajan" / "Priya Natrajan", 0.958) and different people who share part of a name ("David Kim" / "David King", 0.938; "Sarah Johnson" / "Sarah Jones", 0.936). Some different people still score above it ("Michael Brown" / "Michelle Brown", 0.956), and `distinct_from` clears those.
 
 A candidate blocks the write until the agent passes `distinct_from` listing every candidate's ID. The list is a statement, "I checked these and they are different people". A boolean override was rejected because a model learns to set a flag before it has seen anything. Refusals name contacts and reasons, never an address. The principal is listed as `the principal`, with `principal` as its `distinct_from` token, so their contact ID stays out of the model's context. Because `sanitizeDisplayName` strips `@`, a contact the gateway named after its address is stored without it (`sam.rivera@vendor.example` is stored as `sam.riveravendor.example`), so a refusal names a candidate by its contact ID alone when its name looks like an address, a number or a Slack id, which includes a single dotted token with no spaces (`isAddressLikeName`). The send resolver's errors follow the same rule. A check that cannot run refuses the write.
 

@@ -60,18 +60,20 @@ An approval stored before the deploy with a raw field fails when it is approved,
 | A near-miss email: optimal-string-alignment distance 1–2 on the lowercased address, or exactly 1 when the shorter address has fewer than 12 characters | Candidate |
 | A near-miss number: distance exactly 1 on the E.164 digits (one substitution, adjacent swap, insertion or deletion), across the phone channels | Candidate |
 | The same display name, compared after sanitizing, case-insensitive (`contact-create` only) | Candidate |
+| A near-miss display name: Jaro-Winkler ≥ 0.95 on the sanitized, normalized names (`contact-create` only) | Candidate |
 
 Slack and Telegram ids are opaque, so they are matched exactly and have no near-miss. The two incidents in ADR-047 fall inside the bounds: `.com` for `.ca` is distance 2 on a 20-character address, and an inserted dot is distance 1.
 
 A candidate blocks the write until the call passes `distinct_from`, listing **every** candidate's ID. The `distinct_from` IDs are the agent saying "I checked these, and they are different people". A boolean override was rejected, because a model learns to set a flag before it has seen anything. IDs outside the candidate list are ignored. `distinct_from` never overrides a blocking match.
 
-The refusal lists each candidate by name, contact ID and reason (`same name`, `similar email address`, `same number on signal`). It never includes an address, because a model handed one will retype it. The principal is listed as `the principal`, with `principal` as its `distinct_from` token, so the principal's contact ID stays out of the model's context (spec 09). The refusal says how to continue:
+The refusal lists each candidate by name, contact ID and reason (`same name`, `similar name`, `similar email address`, `same number on signal`). It never includes an address, because a model handed one will retype it. The principal is listed as `the principal`, with `principal` as its `distinct_from` token, so the principal's contact ID stays out of the model's context (spec 09). The refusal says how to continue:
 - if one candidate is this person, use that contact's ID, and `contact-link-identity` adds a new address to it;
 - if not, retry with `distinct_from`.
 
 Mechanics:
 
 - A new backend method, `listIdentitiesOnChannels(channels)`, reads the identities for the near-miss scan. Creation is rare, and a principal's store holds thousands of identities at most, so the scan runs in memory.
+- The name scan reads every contact (`listContacts()`, which has no default cap) and scores each name with the dedup service's Jaro-Winkler. The 0.95 threshold (`NAME_NEAR_MISS_THRESHOLD`) sits between typos of one name ("Priya Natarajan" / "Priya Natrajan", 0.958; "Jenna Torres" / "Jena Torres", 0.981) and different people who share part of a name ("David Kim" / "David King", 0.938; "Sarah Johnson" / "Sarah Jones", 0.936; "Alex Morgan" / "Alex Martin", 0.905). A contact that already matched exactly is not listed twice.
 - A failed lookup fails the create closed, with the cause logged. It does not create without the check.
 - The check is not a lock. A concurrent create can still win the unique index. `contact-create` therefore validates every input before it writes. If `linkIdentity` then fails, it deletes the contact it just created (`deleteContact` with `archiveAnchoredNode` from `createContactWithKgOutcome`, as `contact-register` does) and reports a unique violation as the blocking match.
 

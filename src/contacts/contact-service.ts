@@ -40,7 +40,7 @@ import type {
   IdentityStatus,
   SystemRole,
 } from './types.js';
-import type { DedupService } from './dedup-service.js';
+import { jaroWinkler, normalizeDisplayName, type DedupService } from './dedup-service.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
 import { normalizeExclusionPair, type ExclusionPair } from './dedup-exclusions.js';
 import { canonicalPairKey } from './dedup-pair-key.js';
@@ -294,6 +294,30 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'agent_called',
   'agent_stated',
 ]);
+
+/**
+ * Jaro-Winkler score (0-1, on names normalized by normalizeDisplayName) at which a
+ * display name counts as a likely mistyping of an existing contact's (#2041). The
+ * check lists the contact as a `similar_name` candidate; the agent can still name it
+ * in distinct_from.
+ *
+ * Why 0.95. The scores sit in two groups with a gap between them:
+ *   typos of one person:  Priya Natarajan / Priya Natrajan  0.958
+ *                         Jenna Torres / Jena Torres        0.981
+ *                         Michael O'Connor / Micheal O'Connor  0.987
+ *   two people who share a first name or a surname:
+ *                         David Kim / David King            0.938
+ *                         Sarah Johnson / Sarah Jones       0.936
+ *                         Alex Morgan / Alex Martin         0.905
+ *                         Pat Principal / Sam Principal     0.852
+ * 0.95 is inside the gap, so a one-letter typo is listed and a different person with
+ * a shared name part is not. Raising it to 0.96 would miss "Natrajan"; lowering it
+ * to 0.93 would list Sarah Jones and David King. The dedup scan's cut-offs (0.7 and
+ * 0.9, dedup-service.ts) apply to a combined score and are too loose for a check
+ * that interrupts an agent's write. Some different people still score above 0.95
+ * (Michael Brown / Michelle Brown, 0.956); distinct_from clears those.
+ */
+export const NAME_NEAR_MISS_THRESHOLD = 0.95;
 
 /**
  * ContactService manages the lifecycle of contacts and their channel identities.
@@ -942,7 +966,8 @@ export class ContactService {
    * - taken: an identifier is already on another contact on the same channel (email
    *   ignoring case, numbers by digits). The write is refused outright.
    * - candidates: the same number on a sibling phone channel, a near-miss identifier
-   *   (identifier-near-miss.ts), or the same display name ignoring case and spacing.
+   *   (identifier-near-miss.ts), the same display name ignoring case and spacing, or a
+   *   near-miss display name (Jaro-Winkler at or above NAME_NEAR_MISS_THRESHOLD).
    *   The write is refused until the agent names each one in distinct_from.
    *
    * `identities` must already be normalized (normalizeAgentIdentifier).
@@ -987,9 +1012,24 @@ export class ContactService {
       const wantedName = comparable(sanitizeDisplayName(input.displayName));
       if (wantedName) {
         // findContactByName is a substring match; keep exact (normalized) names only.
+        const sameName = new Set<string>();
         for (const contact of await this.backend.findContactByName(wantedName)) {
           if (contact.id !== input.excludeContactId && comparable(contact.displayName) === wantedName) {
             addReason(contact.id, { kind: 'same_name' });
+            sameName.add(contact.id);
+          }
+        }
+
+        // A typo ("Priya Natrajan" for "Priya Natarajan") is not a substring of the real
+        // name, so it needs a scan. listContacts() with no filters reads every contact,
+        // and a principal's store is hundreds to low thousands, created at a low rate.
+        const wantedNormalized = normalizeDisplayName(sanitizeDisplayName(input.displayName));
+        if (wantedNormalized) {
+          for (const contact of await this.backend.listContacts()) {
+            if (contact.id === input.excludeContactId || sameName.has(contact.id)) continue;
+            if (jaroWinkler(wantedNormalized, normalizeDisplayName(contact.displayName)) >= NAME_NEAR_MISS_THRESHOLD) {
+              addReason(contact.id, { kind: 'similar_name' });
+            }
           }
         }
       }

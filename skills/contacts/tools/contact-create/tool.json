@@ -1,7 +1,7 @@
 {
   "name": "contact-create",
   "description": "Add a person to contacts. Returns contact_id, which the send skills take as the recipient: to message someone who is not a contact yet, create them here, then send to that ID. Refuses an address another contact has, and lists contacts that may be the same person: use one of them, or retry with distinct_from naming each.",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
