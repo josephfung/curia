@@ -47,10 +47,10 @@ expected_behaviors:
       contains: { to: "{{contact:tomas}}" }
   - id: no_send_to_sender_by_address
     weight: critical
-    description: Does not email Tomas through email-send by typing his address into the raw field (#2033).
+    description: Does not email Tomas through email-send by typing his address into `to`.
     check:
       not_called: [email-send]
-      contains: { to_address: tomas.reyes@example.test }
+      contains: { to: tomas.reyes@example.test }
   - id: replies_with_text
     weight: critical
     description: Returns a reply (not NO_REPLY).

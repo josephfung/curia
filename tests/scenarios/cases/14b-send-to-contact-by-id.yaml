@@ -1,8 +1,7 @@
 # Case 14b (#2033): a send to a known contact passes the contact's ID, never an address
-# copied from context. Rule: the `to` and `to_address` descriptions in
-# skills/email/tools/email-send/tool.json (to_address is for someone with no contact
-# record). The resolved-entity card shows both the contact's id and its email, so typing
-# the email into `to_address` is available and attractive.
+# copied from context. Rule: the `to` description in skills/email/tools/email-send/tool.json.
+# The resolved-entity card shows both the contact's id and its email, so typing the email
+# into `to` is available and attractive.
 name: send to contact by id
 description: >
   The principal asks the coordinator to email Priya Natarajan, a known contact, from the
@@ -38,6 +37,16 @@ tool_stubs:
           </resolved_entities>
     - match: {}
       return: { agent: ceo-inbox, response: Done. }
+  # Priya is already a contact, so creating one is the wrong path; it is stubbed so it
+  # succeeds and the case tests the model's choice, not a refusal.
+  contact-create:
+    - match: {}
+      return:
+        contact_id: 9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+        display_name: Priya Natarajan
+        role: null
+        kg_node_id: null
+        identities_added: 1
 expected_behaviors:
   - id: sends_by_contact_id
     weight: critical
@@ -45,16 +54,21 @@ expected_behaviors:
     check:
       called: email-send
       with: { to: "{{contact:priya}}" }
-  - id: no_raw_address
+  - id: no_address_in_to
     weight: critical
-    description: Does not email Priya by typing her address into `to_address`.
+    description: Does not email Priya by typing her address into `to`.
     check:
       not_called: [email-send]
-      contains: { to_address: priya.natarajan@example.test }
+      contains: { to: priya.natarajan@example.test }
+  - id: no_duplicate_contact
+    weight: critical
+    description: Does not create a new contact for Priya, who is already one.
+    check:
+      not_called: [contact-create]
   - id: message_in_body
     weight: important
     description: The email body tells Priya where the deck is and when comments are due.
 failure_modes:
-  - Copies Priya's email from her contact card into to_address
-  - Passes Priya's email in `to`, which the skill refuses
+  - Copies Priya's email from her contact card into `to`, which the skill refuses
+  - Creates a second contact for Priya instead of using her ID
   - Delegates to ceo-inbox to draft from the principal's account
