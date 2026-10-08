@@ -107,6 +107,26 @@ describe('EmailDraftSaveHandler', () => {
     if (!result.success) expect(result.error).toContain('blocked');
   });
 
+  it('refuses a verified identity that is not an address, logging the contact for an operator only', async () => {
+    const gateway = {
+      createEmailDraft: vi.fn(),
+      resolveRecipientReference: vi.fn().mockResolvedValue({
+        ok: true, kind: 'contact', contactId: R_ID, identifier: 'not-an-address', displayName: 'R', identityName: 'primary', identityId: 'id-r',
+      }),
+    };
+    const warnSpy = vi.fn();
+    const ctx = makeCtx({ to: R_ID, subject: 'Hi', body: 'Hello' }, gateway);
+    ctx.log = { ...logger, warn: warnSpy } as never;
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toMatch(/not a valid address, so no draft was saved/);
+      expect(result.error).not.toContain(R_ID);
+    }
+    expect(warnSpy).toHaveBeenCalledWith(expect.objectContaining({ contactId: R_ID }), expect.stringContaining('not a valid address'));
+    expect(gateway.createEmailDraft).not.toHaveBeenCalled();
+  });
+
   it('returns failure when gateway throws unexpectedly', async () => {
     const gateway = { createEmailDraft: vi.fn().mockRejectedValue(new Error('Nylas timeout')) };
     const result = await handler.execute(makeCtx({ to: R_ID, subject: 'Hi', body: 'Hello' }, gateway));
