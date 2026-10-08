@@ -20,6 +20,18 @@ describe('IdentifierSourceIndex', () => {
     expect(index.has('conv-a', 'email:events@venue.example')).toBe(false);
   });
 
+  it('drops conversations whose last record has expired', () => {
+    let now = 0;
+    const index = new IdentifierSourceIndex({ ttlMs: 1000, now: () => now });
+    index.record('conv-a', 'a@one.example');
+    now = 500;
+    index.record('conv-b', 'b@one.example');
+    now = 1200;
+    index.record('conv-c', 'c@one.example');
+    expect(index.size).toBe(2);
+    expect(index.has('conv-b', 'email:b@one.example')).toBe(true);
+  });
+
   it('drops the oldest keys past the per-conversation cap', () => {
     const index = new IdentifierSourceIndex({ maxKeysPerConversation: 2 });
     index.record('conv-a', 'a@one.example');

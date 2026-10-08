@@ -29,6 +29,7 @@ import {
   replyToMessageIdLooksLikeEntryIdError,
 } from '../channels/email/nylas-message-id.js';
 import type { ChannelIdentity } from '../contacts/types.js';
+import { provenanceSourceText } from '../contacts/identifier-provenance.js';
 import { applyActionPolicy, mapActionRiskToConsequenceClass, moreSevereConsequence, KG_WRITE_TOOLS } from '../autonomy/escalation-policy.js';
 import type { ActionConsequenceClass, EscalationDecision } from '../autonomy/escalation-policy.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
@@ -526,12 +527,19 @@ export class ExecutionLayer {
   }
 
   /**
-   * Whether `toolName`'s successful output is source text for identifier provenance
-   * (`provenance_source` in its manifest, #2061). The runtime asks after each result,
-   * so a stubbed result in smoke or scenarios is recorded just like a real one.
+   * The part of a successful `toolName` result that is source text for identifier
+   * provenance (#2061), or null. Null unless the manifest sets `provenance_source`, and
+   * for a call that reads drafts (a `folder` naming drafts, or a `draft_id`): a draft may
+   * be Curia's. Otherwise every string in the result except messages from Curia's own
+   * addresses and drafts (provenanceSourceText). The runtime asks after each result, so a
+   * stubbed result in smoke or scenarios is recorded just like a real one.
    */
-  isProvenanceSource(toolName: string): boolean {
-    return this.registry.get(toolName)?.manifest.provenance_source === true;
+  provenanceSourceText(toolName: string, input: Record<string, unknown>, data: unknown): string | null {
+    if (this.registry.get(toolName)?.manifest.provenance_source !== true) return null;
+    const folder = input['folder'];
+    if (typeof folder === 'string' && /draft/i.test(folder)) return null;
+    if (input['draft_id'] !== undefined && input['draft_id'] !== null && input['draft_id'] !== '') return null;
+    return provenanceSourceText(data, this.selfEmails);
   }
 
   /**

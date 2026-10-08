@@ -60,12 +60,37 @@ describe('ExecutionLayer', () => {
       expect(seen).toBe(sources);
     });
 
-    it('reports provenance_source from the manifest, false when unset or unknown', () => {
-      registry.register(makeManifest({ name: 'reader', provenance_source: true }), { execute: async () => ({ success: true, data: '' }) });
-      registry.register(makeManifest({ name: 'writer' }), { execute: async () => ({ success: true, data: '' }) });
-      expect(execution.isProvenanceSource('reader')).toBe(true);
-      expect(execution.isProvenanceSource('writer')).toBe(false);
-      expect(execution.isProvenanceSource('no-such-tool')).toBe(false);
+    const noop = { execute: async () => ({ success: true as const, data: '' }) };
+
+    it('returns source text only for a tool whose manifest sets provenance_source', () => {
+      registry.register(makeManifest({ name: 'reader', provenance_source: true }), noop);
+      registry.register(makeManifest({ name: 'writer' }), noop);
+      expect(execution.provenanceSourceText('reader', {}, 'Bookings: events@venue.example')).toContain('events@venue.example');
+      expect(execution.provenanceSourceText('writer', {}, 'Bookings: events@venue.example')).toBeNull();
+      expect(execution.provenanceSourceText('no-such-tool', {}, 'x')).toBeNull();
+    });
+
+    it('returns nothing for a call that reads drafts', () => {
+      registry.register(makeManifest({ name: 'reader', provenance_source: true }), noop);
+      expect(execution.provenanceSourceText('reader', { folder: 'DRAFTS' }, 'sam@venue.example')).toBeNull();
+      expect(execution.provenanceSourceText('reader', { draft_id: 'd1' }, 'sam@venue.example')).toBeNull();
+    });
+
+    it("leaves out messages from Curia's own addresses and drafts inside a result", () => {
+      const withSelf = new ExecutionLayer(registry, logger, { selfEmails: ['Curia@Office.example'] });
+      registry.register(makeManifest({ name: 'reader', provenance_source: true }), noop);
+      const text = withSelf.provenanceSourceText('reader', {}, {
+        messages: [
+          { from: [{ email: 'sam@venue.example' }], body: 'From Sam: lee@venue.example' },
+          { from: [{ email: 'curia@office.example' }], body: 'I will loop in sam@venu.example' },
+        ],
+        drafts: [{ to: [{ email: 'draft@typo.example' }] }],
+        draft: { is_draft: true, to: [{ email: 'other@typo.example' }] },
+      });
+      expect(text).toContain('lee@venue.example');
+      expect(text).not.toContain('sam@venu.example');
+      expect(text).not.toContain('draft@typo.example');
+      expect(text).not.toContain('other@typo.example');
     });
   });
 

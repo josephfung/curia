@@ -432,7 +432,7 @@ const EXECUTION_LAYER_METHODS = [
   'invoke',
   'getToolDefinitions',
   'resolveSkillActivationForAgent',
-  'isProvenanceSource',
+  'provenanceSourceText',
 ] as const;
 
 function routingFor(yamlConfig: YamlConfig, model: string | undefined, modelRegistry: ModelRegistry): ModelRoutingConfig {

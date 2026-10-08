@@ -28,22 +28,38 @@ const PHONE_RUN_IN_TEXT = /\+?\d[\d\s().-]{5,}\d/g;
 // them would crowd addresses out of the source index.
 const TOKEN_IN_TEXT = /[A-Za-z0-9@_][A-Za-z0-9_.@+-]{2,63}/g;
 
+// JSON escapes (`\n`, `\t`, `\"`): a stringified result glues `n` onto an address that
+// started a line, so `\nsam@x.com` would read as `nsam@x.com`.
+const JSON_ESCAPE = /\\[nrtbf"\/\\]/g;
+// Characters that can start a local part but are, in text, almost always punctuation
+// around the address ('sam@x.com', .sam@x.com). The address is read with and without them.
+const LEADING_PUNCTUATION = /^[.'+%-]+/;
+
 /** The key an identifier on `channel` is looked up by. */
 export function sourceKeyFor(channel: string, identifier: string): string {
   if (channel === 'email') return `email:${identifier.trim().toLowerCase()}`;
   if (PHONE_CHANNELS.has(channel)) {
     const normalized = normalizeAgentIdentifier(channel, identifier);
-    return normalized.ok ? `phone:${normalized.identifier}` : `token:${identifier.trim()}`;
+    return normalized.ok ? `phone:${normalized.identifier}` : `token:${bareToken(identifier)}`;
   }
-  return `token:${identifier.trim()}`;
+  return `token:${bareToken(identifier)}`;
+}
+
+/** An opaque id without the `@` a mention or handle carries (`@U012AB3CD`, `@sam_r`). */
+function bareToken(value: string): string {
+  return value.trim().replace(/^@/, '');
 }
 
 /** Every key an identifier occurring in `text` would be looked up by. */
-export function sourceKeysInText(text: string): Set<string> {
+export function sourceKeysInText(rawText: string): Set<string> {
   const keys = new Set<string>();
+  const text = rawText.replace(JSON_ESCAPE, ' ');
 
   for (const match of text.matchAll(EMAIL_IN_TEXT)) {
-    keys.add(`email:${match[0].toLowerCase()}`);
+    const address = match[0].toLowerCase();
+    keys.add(`email:${address}`);
+    const trimmed = address.replace(LEADING_PUNCTUATION, '');
+    if (trimmed !== address && !trimmed.startsWith('@')) keys.add(`email:${trimmed}`);
   }
 
   for (const match of text.matchAll(PHONE_RUN_IN_TEXT)) {
@@ -61,8 +77,51 @@ export function sourceKeysInText(text: string): Set<string> {
 
   for (const match of text.matchAll(TOKEN_IN_TEXT)) {
     const token = match[0].replace(/[.-]+$/, '');
-    if (/\d/.test(token) || token.startsWith('@')) keys.add(`token:${token}`);
+    if (/\d/.test(token) || token.startsWith('@')) keys.add(`token:${bareToken(token)}`);
   }
 
   return keys;
+}
+
+/**
+ * The text of a source tool's result that may verify an identifier: every string in it,
+ * except messages Curia wrote. A message whose `from` is one of `selfEmails` (Curia's sent
+ * mail, Curia's replies in a thread) and a draft (`is_draft`, or anything under `drafts`)
+ * hold addresses a model typed, so they are left out. Walking the values rather than the
+ * JSON text also keeps escapes out of the match.
+ */
+export function provenanceSourceText(data: unknown, selfEmails: readonly string[]): string {
+  const self = new Set(selfEmails.map((email) => email.trim().toLowerCase()));
+  const parts: string[] = [];
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 12) return;
+    if (typeof value === 'string') {
+      parts.push(value);
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+    } else if (value !== null && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      if (record['is_draft'] === true || sentBy(record['from'], self)) return;
+      for (const [key, child] of Object.entries(record)) {
+        if (key === 'drafts') continue;
+        visit(child, depth + 1);
+      }
+    }
+  };
+  visit(data, 0);
+  return parts.join('\n');
+}
+
+/** Whether a message's `from` (a string, `{ email }`, or a list of either) names one of `self`. */
+function sentBy(from: unknown, self: ReadonlySet<string>): boolean {
+  if (self.size === 0 || from === undefined || from === null) return false;
+  const entries = Array.isArray(from) ? from : [from];
+  return entries.some((entry) => {
+    const address = typeof entry === 'string'
+      ? entry
+      : entry !== null && typeof entry === 'object' ? (entry as { email?: unknown }).email : undefined;
+    if (typeof address !== 'string') return false;
+    const bracketed = /<([^>]+)>/.exec(address)?.[1] ?? address;
+    return self.has(bracketed.trim().toLowerCase());
+  });
 }
