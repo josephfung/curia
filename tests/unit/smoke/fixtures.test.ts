@@ -130,13 +130,16 @@ describe('the committed suite', () => {
             gaps.push(`${tc.name}: ceo-inbox-download-attachment cannot fetch ${attachment.filename}`);
             continue;
           }
-          // The bytes must be what the listing promises, so file-parse sees a real file.
-          const file = download.return as { filename: string; size: number; content_base64: string };
-          if (file.filename !== attachment.filename
-            || file.size !== attachment.size
-            || Buffer.from(file.content_base64, 'base64').length !== attachment.size) {
+          // The download must describe the listed file, and the agent's next step on it
+          // (file-parse, which test mode cannot run) must have an answer for that file.
+          const file = download.return as { filename: string; size: number; temp_file_url?: string };
+          if (file.filename !== attachment.filename || file.size !== attachment.size) {
             gaps.push(`${tc.name}: ${attachment.filename} download does not match its listing`);
           }
+          const parsed = file.temp_file_url
+            ? matchToolStub('file-parse', { temp_file_url: file.temp_file_url, mime_type: 'application/pdf' }, stubs)
+            : undefined;
+          if (!parsed || parsed.error) gaps.push(`${tc.name}: file-parse cannot read ${attachment.filename}`);
         }
       }
     }
