@@ -72,6 +72,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **ADR-047** — gateway-created contacts stay `known`; an inbound reply does not verify them. (#2040)
 - **Agent system prompts** — both contact blocks precede the YAML body; the principal's sits under "Who you serve".
 - **`contact-create`, `contact-link-identity`** — record `agent_stated`; refuse likely duplicates until `distinct_from` names them. (#2041)
 - **`email-draft-save` (public API)** — `to` takes a contact reference, not an address. (#2041)

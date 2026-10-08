@@ -1456,8 +1456,8 @@ describe('OutboundGateway contact promotion on successful send', () => {
     expect(result.success).toBe(true);
     expect(contactService.createContact).toHaveBeenCalledOnce();
     // Tier stays 'known' explicitly so replies are not held, and must not regress
-    // to 'unknown' if the service default changes (#955). Provenance is
-    // outbound_recipient, not ceo_stated: an agent typed the address (#2033).
+    // to 'unknown' if the service default changes (#955, #2040). Provenance is
+    // outbound_recipient, not ceo_stated: nobody confirmed the address (#2033).
     expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
       tier: 'known',
       source: 'outbound_recipient',
