@@ -49,6 +49,20 @@ activity-log:
 memory-query:
   - match: {}
     return: { results: [], count: 0 }
+# Test mode has no executive profile service. This is the profile a new deployment
+# seeds from config/executive-profile.yaml, with the summary the tool builds from it.
+executive-profile-get:
+  - match: {}
+    return:
+      profile:
+        writingVoice:
+          tone: [direct, warm]
+          formality: 50
+          patterns: [Concise and to the point, Professional but approachable]
+          vocabulary: { prefer: [], avoid: [] }
+          signOff: ""
+          guide: ""
+      summary: "Tone: direct, warm\nFormality: 50/100\n\nWriting patterns:\n  - Concise and to the point\n  - Professional but approachable"
 list-pending-actions:
   - match: {}
     return: { pending: [], message: No pending approval requests. }
