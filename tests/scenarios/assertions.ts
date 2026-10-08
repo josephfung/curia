@@ -3,7 +3,8 @@
 // When the behavior under test IS a tool call ("delegates to ceo-inbox", "never calls
 // email-reply"), asking an LLM whether it happened adds noise and nothing else. These
 // checks read the captured calls and reply directly. A refused call still counts as a
-// call: the model chose to make it, and that choice is what is being tested.
+// call: the model chose to make it, and that choice is what is being tested. A `called`
+// check may set `success` when the behavior is the effect, not the attempt.
 import { argsMatch } from './stub-matcher.js';
 import type { BehaviorCheck, CapturedToolCall, RunRating, ScenarioRun } from './types.js';
 
@@ -44,7 +45,10 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
   const calls = run.toolCalls;
   switch (check.kind) {
     case 'called': {
-      const matching = calls.filter(c => c.name === check.tool && callMatches(c, check.with, check.contains));
+      const matching = calls.filter(c =>
+        c.name === check.tool
+        && callMatches(c, check.with, check.contains)
+        && (check.success === undefined || c.result?.success === check.success));
       const min = check.min ?? 1;
       const max = check.max ?? Number.POSITIVE_INFINITY;
       if (matching.length >= min && matching.length <= max) {

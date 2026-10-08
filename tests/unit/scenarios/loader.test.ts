@@ -92,6 +92,8 @@ describe('loadScenarioCase', () => {
     ['a duplicate behavior id', VALID.replace('id: silent', 'id: routes'), /duplicate behavior id/],
     ['zero runs', VALID.replace('runs: 3', 'runs: 0'), /positive integer/],
     ['a bad regex', VALID.replace('description: does not answer directly', 'description: x\n    check: { reply_excludes: ["("] }'), /invalid pattern/],
+    ['a non-boolean success', VALID.replace('max: 1', 'max: 1\n      success: yes'), /'success' must be a boolean/],
+    ['success on not_called', VALID.replace('    check:\n      called: delegate\n      with: { agent: ceo-inbox }\n      contains: { task: "{{entry:offsite}}" }\n      max: 1', '    check:\n      not_called: [email-send]\n      success: true'), /unknown key\(s\) success/],
   ])('rejects %s', (_label, body, error) => {
     expect(() => loadScenarioCase(write('bad.yaml', body))).toThrow(error);
   });
@@ -107,6 +109,11 @@ describe('loadScenarioCase', () => {
     ['a placeholder in failure_modes', VALID + 'failure_modes:\n  - "drops {{entry:offsite}}"\n', /failure_modes cannot contain/],
   ])('rejects %s', (_label, body, error) => {
     expect(() => loadScenarioCase(write('bad2.yaml', body))).toThrow(error);
+  });
+
+  it('parses called success: true', () => {
+    const c = loadScenarioCase(write('ok.yaml', VALID.replace('max: 1', 'max: 1\n      success: true')));
+    expect(c.expectedBehaviors[0]!.check).toMatchObject({ kind: 'called', success: true, max: 1 });
   });
 
   it('parses an any_of check into its alternatives (#1972)', () => {

@@ -175,7 +175,8 @@ expected_behaviors:
   # attachment must be the temp-store file the v7 drive-download-file stub returns. A
   # workspace-mcp download path is outside that store; the stub layer refuses that
   # email-send with production's error, so the run can recover through
-  # drive-download-file (#2059).
+  # drive-download-file (#2059). The positive check requires that send to succeed:
+  # a refused attempt still has the v7 id in its arguments, and is not the share.
   - id: shares_latest_deck_with_kevin
     weight: critical
     description: >
@@ -190,6 +191,7 @@ expected_behaviors:
           with: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
           contains: { recipients: kevin.osei@example.test }
         - called: email-send
+          success: true
           with: { to: "{{contact:kevin}}" }
           contains: { attachments: 5b1e7c3a-94d2-4f6b-8a0e-c2d9f4a7e316 }
   - id: not_the_old_deck

@@ -164,6 +164,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Scenario stubs** — five cases stub refused side calls; three discouraged ones are now scored. (#2058)
 - **Scenario harness** — refuses out-of-store email attachments and unservable activated tools. (#2059)
+- **Scenario `called` check** — optional `success` so a refused send is not a share. (#2059)
 - **Scenario `memory-query` and `executive-profile-get` defaults** — answer as an empty office when test mode lacks the service. (#2059)
 - **Scenario `task-update` default** — answers only for the task `task-create` returns. (#2059)
 - **Smoke inbox fixture** — every listed message, attachment and triage write is stubbed, so inbox cases measure the model.

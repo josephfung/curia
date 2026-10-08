@@ -61,7 +61,7 @@ const EMAIL_KEYS = ['nylas_message_id', 'auto_generated', 'auto_generated_signal
 const STUB_KEYS = ['match', 'return', 'error'] as const;
 const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check'] as const;
 const CHECK_KEYS: Record<string, readonly string[]> = {
-  called: ['called', 'with', 'contains', 'min', 'max'],
+  called: ['called', 'with', 'contains', 'min', 'max', 'success'],
   not_called: ['not_called', 'with', 'contains'],
   order: ['order'],
   reply: ['reply'],
@@ -80,6 +80,13 @@ function optStr(raw: Raw, key: string, file: string, where: string): string | un
   const v = raw[key];
   if (v === undefined) return undefined;
   if (typeof v !== 'string') throw new CaseError(file, `${where}: '${key}' must be a string`);
+  return v;
+}
+
+function optBool(raw: Raw, key: string, file: string, where: string): boolean | undefined {
+  const v = raw[key];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'boolean') throw new CaseError(file, `${where}: '${key}' must be a boolean`);
   return v;
 }
 
@@ -135,6 +142,7 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
         ...filters,
         ...(optNum(raw, 'min', file, where) !== undefined ? { min: raw['min'] as number } : {}),
         ...(optNum(raw, 'max', file, where) !== undefined ? { max: raw['max'] as number } : {}),
+        ...(optBool(raw, 'success', file, where) !== undefined ? { success: raw['success'] as boolean } : {}),
       };
     case 'not_called':
       return { kind: 'not_called', tools: strList(raw, 'not_called', file, where, true), ...filters };
