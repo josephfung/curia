@@ -313,6 +313,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Agent-entered contacts** — no longer recorded as principal-stated; near-miss addresses are flagged before storing. (#2041)
 - **Contact skills** — refuse changes to the principal's addresses; only the principal manages them. (#2041)
+- **`vite`** — floor raised to 8.3.3, clearing three upstream-only advisories in the resolved tree. (#2032)
 - **Send by reference** — a mistyped recipient reference fails closed instead of delivering to whoever owns the address. (#2033)
 - **Dependency floors** — `fast-uri` and `ip-address` raised past ineffective pins, clearing six advisories. (#1933)
 - **Override floor audit** — seven more pins raised off versions that were still vulnerable. (#1933)

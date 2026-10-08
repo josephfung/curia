@@ -157,7 +157,22 @@ overrides:
   fast-uri: '>=4.2.1'
   # >=8.0.5 was satisfied by 8.0.5-8.0.15, all of which carry GHSA-fx2h-pf6j-xcff
   # (HIGH) and GHSA-v6wh-96g9-6wx3 (MED); both fixed in 8.0.16.
-  vite: '>=8.0.16'
+  # Raised off >=8.0.16 (#2032): that floor admitted 8.0.16-8.1.5, 8.2.0-8.2.2
+  # and 8.3.0-8.3.2, which carry three advisories published only on vitejs/vite
+  # (absent from GitHub's global advisory DB, so Dependabot raises no alert). Not a
+  # backstop: resolution was 8.3.0, inside every range, so the exposure was live on
+  # the console, antfarm, and vitest dev servers. Each is fixed in 8.1.6 / 8.2.4 /
+  # 8.3.3 except the second, which does not affect 8.0 or 8.1:
+  #   - GHSA-rq7h-c2jc-7f22 (MED): files outside server.fs.allow served when a
+  #     project path matches a system path on non-Windows
+  #   - GHSA-vfpm-58rq-9qcg (MED): ?vite-wasm-instance leaks the first 4 bytes of
+  #     files outside server.fs
+  #   - GHSA-9jrq-w75r-8gcw (LOW): cross-origin script execution through custom
+  #     middleware
+  # >=8.3.3 is the computed safe floor: anything lower still admits 8.3.0-8.3.2.
+  # 8.3.4 is also clean but younger than minimumReleaseAge, so this install resolves
+  # 8.3.3; resolution moves up on its own once the quarantine passes.
+  vite: '>=8.3.3'
   # Two DoS advisories, both fixed in 6.16.0. The prior >=6.15.2 floor was satisfied by
   # 6.15.3, so googleapis-common stayed on the vulnerable version:
   #   - CVE-2026-82417 / GHSA-4mjr-xmp4-gh2g: stringify() DoS via attacker-controlled isBuffer
