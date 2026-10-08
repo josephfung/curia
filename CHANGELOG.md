@@ -157,6 +157,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Smoke inbox fixture** — every listed message, attachment and triage write is stubbed, so inbox cases measure the model.
+- **Scenario cases 13b and 13d** — stub the Workspace reads models wander into; 13d's briefing carries Kevin's ID. (#2050)
 - **Send approvals** — a hinted approval fails closed when that identity or label no longer matches. (#2047)
 - **LLM call archive** — stores OpenRouter reasoning, its token count, and text beside tool calls. (#2042)
 - **LLM call archive** — strips null bytes so one bad character cannot drop the audit row. (#2042)
