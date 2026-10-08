@@ -12,18 +12,23 @@ import { isSignalOutboundRequest } from './outbound-request.js';
  * Parse signal-send 1:1 recipient from skill input. Returns null for group sends or
  * when the input contains recipient-shaped keys this parser does not model.
  *
- * `recipient` holds a contact reference and `recipient_number` a raw E.164 (#2033).
- * Gate C resolves a reference to its number before comparing.
+ * `recipient` holds a contact reference (#2033); Gate C resolves it before comparing.
  */
 function parseSignalSendRecipients(input: Record<string, unknown>): string[] | null {
-  const unparsedRecipientKeys = ['to', 'cc', 'bcc', 'recipients'] as const;
+  const unparsedRecipientKeys = [
+    'to',
+    'cc',
+    'bcc',
+    'recipients',
+    'recipient_number', // retired raw input (#2041): fail closed
+  ] as const;
   for (const key of unparsedRecipientKeys) {
     if (hasPresentValue(input[key])) return null;
   }
 
   const groupId = input['group_id'] ?? input['groupId'];
   if (hasPresentValue(groupId)) return null;
-  return parseOneRecipient(input, 'recipient_number');
+  return parseOneRecipient(input);
 }
 
 /**
