@@ -46,24 +46,64 @@ tool_stubs:
     - match: {}
       return: { posted: true, thread_id: "{{thread:brief}}" }
   # The brief is already saved, but a run sometimes places it anyway. Test mode has no
-  # workspace, so the call was refused (#2058). doc-write is the follow-up doc-place
-  # tells the model to make, and it is a write, so an unstubbed call would be the next hole.
+  # workspace, so the call was refused (#2058). This is the extend branch: the brief is
+  # already in the folder, so the result does not recommend a new one.
   doc-place:
     - match: {}
       return:
-        action: create_folder
+        action: extend
         slug: q3-competitor-brief
         directory_prefix: /projects/q3-competitor-brief/
         path: /projects/q3-competitor-brief/brief.md
-        reason: No existing project folder covers the Q3 competitor brief.
-        catalog: []
+        reason: "Existing document /projects/q3-competitor-brief/brief.md matches this work — prefer append or section-edit."
+        allocated: false
+        catalog:
+          - slug: q3-competitor-brief
+            directory_prefix: /projects/q3-competitor-brief/
+            document_count: 1
+            sample_paths:
+              - /projects/q3-competitor-brief/brief.md
+            sample_titles:
+              - Q3 competitor brief
         displayTimezone: America/Toronto
+  # Each mode returns that mode's action and a nested document, as the handler does.
+  # A catch-all `created` would describe an append as a create. The last stub covers a
+  # mode the handler does not know, so it is a scripted error rather than a refusal.
   doc-write:
-    - match: {}
+    - match: { mode: create }
       return:
         action: created
-        version: 1
-        displayTimezone: America/Toronto
+        document:
+          path: /projects/q3-competitor-brief/brief.md
+          type: brief
+          version: 1
+          displayTimezone: America/Toronto
+    - match: { mode: append }
+      return:
+        action: appended
+        document:
+          path: /projects/q3-competitor-brief/brief.md
+          type: brief
+          version: 2
+          displayTimezone: America/Toronto
+    - match: { mode: replace }
+      return:
+        action: replaced
+        document:
+          path: /projects/q3-competitor-brief/brief.md
+          type: brief
+          version: 2
+          displayTimezone: America/Toronto
+    - match: { mode: section-edit }
+      return:
+        action: section-edited
+        document:
+          path: /projects/q3-competitor-brief/brief.md
+          type: brief
+          version: 2
+          displayTimezone: America/Toronto
+    - match: {}
+      error: "Unhandled mode"
 expected_behaviors:
   - id: replies_on_thread
     weight: critical
@@ -78,6 +118,12 @@ expected_behaviors:
     description: Sends nothing on Signal, SMS, Slack or email.
     check:
       not_called: [signal-send, sms-send, slack-send, email-send, email-reply]
+  # doc-write succeeds, so rewriting the saved brief is scored here, not hidden (#2058).
+  - id: leaves_saved_brief
+    weight: important
+    description: Does not write a second copy of the brief research-analyst already saved.
+    check:
+      not_called: [doc-write]
 failure_modes:
   - Messages the principal on Signal with "@research-analyst got it"
   - Acknowledges in its reply text only, leaving the thread unanswered

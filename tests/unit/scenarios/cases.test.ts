@@ -57,7 +57,13 @@ describe('coordinator scenario cases', () => {
     const config = answered('send to principal by alias', 'config-store', { action: 'store', namespace: 'offsite', key: 'venue', value: 'Room 4B' });
     expect(config).toMatchObject({ stored: true, action: 'created', namespace: 'offsite', key: 'venue' });
 
-    expect(answered('scheduler ambiguous asks', 'scheduler-report', { summary: 'Asked which pipeline review.' })).toEqual({ success: true });
+    const ambiguous = byName.get('scheduler ambiguous asks');
+    const reportWithoutJob = matchToolStub('scheduler-report', { summary: 'Asked which pipeline review.' }, ambiguous!.toolStubs);
+    expect(reportWithoutJob?.error).toContain('Missing job_id');
+    expect(answered('scheduler ambiguous asks', 'scheduler-report', {
+      summary: 'Asked which pipeline review.',
+      job_id: '7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10',
+    })).toEqual({ success: true });
 
     const profile = answered('external reply first person', 'executive-profile-get');
     expect(profile['summary']).toEqual(expect.any(String));
@@ -65,15 +71,44 @@ describe('coordinator scenario cases', () => {
 
     const placement = answered('bullpen mention stays on thread', 'doc-place', { title: 'Q3 competitor brief' });
     expect(placement).toMatchObject({
-      action: 'create_folder',
+      action: 'extend',
       slug: 'q3-competitor-brief',
       path: '/projects/q3-competitor-brief/brief.md',
+      allocated: false,
     });
-    expect(answered('bullpen mention stays on thread', 'doc-write', { path: '/projects/q3-competitor-brief/brief.md', mode: 'create' })).toMatchObject({ action: 'created' });
+    expect(placement['catalog']).toEqual([
+      expect.objectContaining({ slug: 'q3-competitor-brief', document_count: 1 }),
+    ]);
+    const brief = {
+      path: '/projects/q3-competitor-brief/brief.md',
+      type: 'brief',
+      displayTimezone: 'America/Toronto',
+    };
+    expect(answered('bullpen mention stays on thread', 'doc-write', { path: brief.path, mode: 'create' })).toEqual({
+      action: 'created',
+      document: { ...brief, version: 1 },
+    });
+    expect(answered('bullpen mention stays on thread', 'doc-write', { path: brief.path, mode: 'append', content: 'noted', expected_version: 1 })).toMatchObject({
+      action: 'appended',
+      document: { path: brief.path, version: 2 },
+    });
+    const unknownMode = matchToolStub('doc-write', { path: brief.path, mode: 'rename' }, byName.get('bullpen mention stays on thread')!.toolStubs);
+    expect(unknownMode?.error).toBe('Unhandled mode');
 
     const updated = answered('direct email reply as text', 'contact-update', { contact_id: '{{contact:tomas}}', fields: { organization: 'Northwind' } });
     expect(updated['contact_id']).toBe('{{contact:tomas}}');
     expect(updated['updated_fields']).toEqual(['organization']);
+
+    // These calls are the wrong move for the case, so they are scored, not only stubbed.
+    for (const [caseName, id, tool] of [
+      ['bullpen mention stays on thread', 'leaves_saved_brief', 'doc-write'],
+      ['scheduler ambiguous asks', 'reports_no_run', 'scheduler-report'],
+      ['direct email reply as text', 'leaves_contact_unchanged', 'contact-update'],
+    ] as const) {
+      const behavior = byName.get(caseName)?.expectedBehaviors.find(b => b.id === id);
+      expect(behavior?.weight, id).toBe('important');
+      expect(behavior?.check).toMatchObject({ kind: 'not_called', tools: [tool] });
+    }
   });
 
   it('have a well-formed stub-coverage record', () => {

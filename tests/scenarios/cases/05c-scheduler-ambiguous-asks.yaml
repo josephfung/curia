@@ -40,9 +40,11 @@ tool_stubs:
   scheduler-create:
     - match: {}
       return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }
-  # Sometimes records a run while it is still asking which job. Test mode has no
-  # scheduler service, so the call was refused (#2058). The handler's data is `{ success: true }`.
+  # A chat turn, not a scheduled run. With no job_id the handler rejects the call;
+  # with one, it records the run. Both are stubbed, so neither is a coverage hole (#2058).
   scheduler-report:
+    - match: { job_id: null }
+      error: "Missing job_id: call scheduler-report from a scheduled run (or pass job_id explicitly outside one)"
     - match: {}
       return: { success: true }
 expected_behaviors:
@@ -54,6 +56,12 @@ expected_behaviors:
     description: Neither edits nor creates a job before the principal answers.
     check:
       not_called: [scheduler-update, scheduler-create]
+  # Recording a run picks a job while the case is still asking which one (#2058).
+  - id: reports_no_run
+    weight: important
+    description: Does not record a job run before the principal says which review was meant.
+    check:
+      not_called: [scheduler-report]
 failure_modes:
   - Picks the sales review and edits it
   - Moves both
