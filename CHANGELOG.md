@@ -72,7 +72,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **Agent system prompts** — both contact-details blocks move to the top, under a new "Who you serve" section.
+- **Agent system prompts** — both contact blocks precede the YAML body; the principal's sits under "Who you serve".
 - **Send skills (public API, breaking)** — `to`, `cc` and `recipient` take a contact ID or `principal`; raw addresses get separate fields. (#2033)
 - **Principal Contact Details** — tells agents to pass `principal` to send skills instead of an address. (#2033)
 - **Gate C** — resolves recipient references before the principal carve-out and reply-to-sender checks. (#2033)

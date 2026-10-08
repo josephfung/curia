@@ -34,6 +34,7 @@ import {
   AgentAssemblyError,
   assembleAgent,
   assembleAgents,
+  principalIdentitySnapshotGaps,
   registerAgentRoster,
   resolveAgentModelBinding,
   resolveSystemPromptSources,
@@ -633,5 +634,42 @@ describe('buildBaseSystemPrompt block failures', () => {
   it('throws for a render, so a partial prompt is never printed', async () => {
     await expect(buildBaseSystemPrompt(sources, { now: FIXED_NOW, logger, onBlockError: 'throw' }))
       .rejects.toThrow(/block 'identity' failed for agent 'coordinator'/);
+  });
+});
+
+// The prompt builder drops these cases quietly by design, so production (index.ts)
+// logs them and the test-mode stack reports them, both through this one check.
+describe('principalIdentitySnapshotGaps', () => {
+  const email = (channelIdentifier: string): ChannelIdentity => ({
+    id: channelIdentifier,
+    contactId: 'principal',
+    channel: 'email',
+    channelIdentifier,
+    label: null,
+    verified: true,
+    verifiedAt: new Date(),
+    status: 'active',
+    source: 'ceo_stated',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  it('reports nothing when the primary matches a listed identity, or none is set', () => {
+    expect(principalIdentitySnapshotGaps({ identities: [email('me@work.ca')], primaryEmail: 'Me@Work.ca' })).toEqual([]);
+    expect(principalIdentitySnapshotGaps({ identities: [email('me@work.ca')], primaryEmail: null })).toEqual([]);
+  });
+
+  it('reports a primary_email that matches no listed (verified, active) identity', () => {
+    const gaps = principalIdentitySnapshotGaps({ identities: [email('me@work.ca')], primaryEmail: 'unverified@work.ca' });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatch(/primary_email matches no verified, active email identity/);
+    // Operator logs carry no address.
+    expect(gaps[0]).not.toContain('unverified@work.ca');
+  });
+
+  it('reports an empty identity set, which drops the whole Who you serve section', () => {
+    const gaps = principalIdentitySnapshotGaps({ identities: [], primaryEmail: 'me@work.ca' });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatch(/no verified, active channel identities/);
   });
 });

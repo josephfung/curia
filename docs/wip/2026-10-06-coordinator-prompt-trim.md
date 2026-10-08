@@ -380,8 +380,11 @@ Changes:
     rather than a sentence, so no trailing period sits against the address.
   - When nothing matches (the column is null, it points at an unverified address, or the
     principal has Signal only), the list renders under "Addresses" with no primary.
-  - The identity refresh (`src/index.ts`) logs a warning when `primary_email` is set but
-    matches nothing. Before, that mismatch was silent.
+  - `principalIdentitySnapshotGaps` (`src/startup/agent-assembly.ts`) reports a
+    `primary_email` that matches nothing, and an empty identity set (which drops the whole
+    section). The identity refresh in `src/index.ts` logs them as warnings, and the
+    test-mode stack adds them to its warnings, so smoke, scenarios and the render scripts
+    say why too. Before, both were silent.
   - Positive phrasing replaces "Do not infer, invent, or substitute an address" and "must not
     be used". The `principal` alias and label-hint sentence from #2045 and #2051 stay.
   - **No contact ID**, per the decision above, and **no display name** (Decisions, late).
