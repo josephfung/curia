@@ -45,6 +45,25 @@ tool_stubs:
               workspace as "Q3 competitor brief". Can you acknowledge you've got it?
     - match: {}
       return: { posted: true, thread_id: "{{thread:brief}}" }
+  # The brief is already saved, but a run sometimes places it anyway. Test mode has no
+  # workspace, so the call was refused (#2058). doc-write is the follow-up doc-place
+  # tells the model to make, and it is a write, so an unstubbed call would be the next hole.
+  doc-place:
+    - match: {}
+      return:
+        action: create_folder
+        slug: q3-competitor-brief
+        directory_prefix: /projects/q3-competitor-brief/
+        path: /projects/q3-competitor-brief/brief.md
+        reason: No existing project folder covers the Q3 competitor brief.
+        catalog: []
+        displayTimezone: America/Toronto
+  doc-write:
+    - match: {}
+      return:
+        action: created
+        version: 1
+        displayTimezone: America/Toronto
 expected_behaviors:
   - id: replies_on_thread
     weight: critical

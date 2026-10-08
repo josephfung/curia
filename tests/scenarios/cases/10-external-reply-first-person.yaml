@@ -40,6 +40,31 @@ tool_stubs:
         response: >
           Calendar specialist: principal is free {{day:next-monday+1}} 10:00-11:30,
           {{day:next-monday+2}} 14:00-15:00, {{day:next-monday+3}} 09:00-10:00 ({{timezone}}).
+  # Sometimes read before drafting. Test mode has no profile service, so the call was
+  # refused (#2058). This is the shipped default voice (config/executive-profile.yaml);
+  # the summary is what the handler builds from it.
+  executive-profile-get:
+    - match: {}
+      return:
+        profile:
+          writingVoice:
+            tone: [direct, warm]
+            formality: 50
+            patterns:
+              - Concise and to the point
+              - Professional but approachable
+            vocabulary:
+              prefer: []
+              avoid: []
+            signOff: ""
+            guide: ""
+        summary: |-
+          Tone: direct, warm
+          Formality: 50/100
+
+          Writing patterns:
+            - Concise and to the point
+            - Professional but approachable
 expected_behaviors:
   # #1989: the judge docked the email sign-off (name + title) as "not first person" and
   # "implies a team-based role", and once quoted a "we" the reply did not contain. The

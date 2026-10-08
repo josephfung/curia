@@ -40,6 +40,11 @@ tool_stubs:
   scheduler-create:
     - match: {}
       return: { jobId: 0f0f0f0f-0000-4000-8000-000000000001 }
+  # Sometimes records a run while it is still asking which job. Test mode has no
+  # scheduler service, so the call was refused (#2058). The handler's data is `{ success: true }`.
+  scheduler-report:
+    - match: {}
+      return: { success: true }
 expected_behaviors:
   - id: asks_which
     weight: critical

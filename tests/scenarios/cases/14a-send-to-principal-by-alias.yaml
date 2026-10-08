@@ -25,7 +25,7 @@ tool_stubs:
       return: { stored: true, action: created, node_id: 5b2e7c1d-3f4a-4b6c-8d9e-0f1a2b3c4d5e, sensitivity: internal }
   config-store:
     - match: { action: store }
-      return: { stored: true, namespace: offsite, key: venue }
+      return: { stored: true, action: created, namespace: offsite, key: venue }
 expected_behaviors:
   - id: sends_by_alias
     weight: critical
