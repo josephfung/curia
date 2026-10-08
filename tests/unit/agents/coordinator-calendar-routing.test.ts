@@ -67,12 +67,13 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     // "I never read or mutate the principal's calendar myself" is gone from the prompt
     // (prompt trim PR 2): allowed_callers enforces it, and the discovery and pin tests
     // below assert that. The route, who composes the reply and the failure handling have
-    // no code home yet. "I compose the reply" is pinned because dropping it was a measured
+    // no code home yet. "You compose the reply" is pinned because dropping it was a measured
     // regression: scenario 10 handed external scheduling requests to @calendar as
-    // transfer-ownership and replied NO_REPLY in 2 of 5 runs (prompt trim PR 2).
+    // transfer-ownership and replied NO_REPLY in 2 of 5 runs (prompt trim PR 2). PR 3
+    // moved the prompt to the second person, so the anchor reads "you", not "I".
     const section = extractPrincipalCalendarSection(loadCoordinator().system_prompt);
     expect(section).toMatch(/borrow-then-answer through `@calendar`/);
-    expect(section).toMatch(/I compose the reply/);
+    expect(section).toMatch(/you compose the reply/);
     expect(section).toMatch(/could not be read/i);
   });
 

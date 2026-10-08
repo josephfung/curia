@@ -87,6 +87,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Send skills (public API, breaking)** — `to`, `cc` and `recipient` take a contact ID or `principal`. (#2033)
 - **Principal Contact Details** — tells agents to pass `principal` to send skills instead of an address. (#2033)
 - **Gate C** — resolves recipient references before the principal carve-out and reply-to-sender checks. (#2033)
+- **Coordinator prompt** — second person, positive phrasing, style lines removed; 15.7k → 12.6k chars. (#1954)
 - **Coordinator prompt** — one section each for voice and contact resolution; calendar text trimmed; 18.6k → 15.7k chars. (#1954)
 - **Coordinator prompt** — drops code-enforced restatements and sections naming tools it doesn't pin; 20.5k → 18.6k chars. (#1954)
 - **Approval expiry** — runs as an hourly system interval, not a coordinator LLM turn. (#2013)
