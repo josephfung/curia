@@ -1510,11 +1510,13 @@ export class ExecutionLayer {
       }
     }
 
-    // Send-skill recipient references (#2033, #2041): check and resolve them once, before
-    // any gate can file an approval. A retired raw-address input, an address in a reference
-    // input, or a reference that does not resolve is refused here with the skill's own message,
-    // so the principal is never asked to approve a send that cannot run. Gate C reuses the
-    // resolved addresses, so it judges exactly where the skill will send.
+    // Send-skill recipient references (#2033, #2041): check them once, before any gate can
+    // file an approval. A retired raw-address input or an address in a reference input is
+    // refused here with the skill's own message. When a contact service is configured, each
+    // reference is also resolved here, and one that does not resolve is refused, so the
+    // principal is never asked to approve a send that cannot run; Gate C reuses the resolved
+    // addresses, so it judges exactly where the skill will send. Without a contact service
+    // references are not resolved here, and Gate C fails closed on them.
     let sendRecipients: Map<string, string> | undefined;
     let sendPins: readonly SendRecipientPin[] | undefined;
     if (RECIPIENT_REFERENCE_SKILLS[toolName]) {
@@ -1711,11 +1713,13 @@ export class ExecutionLayer {
             if (foundCarveout && !foundCarveout.carveout.resolveRecipients) {
               recipients = foundCarveout.carveout.parseRecipients(input);
               // Send skills take contact references (#2033, #2041). The pre-gate check
-              // above already resolved each one and refused anything that is not a
-              // reference, so swap in the resolved address here: the principal
-              // carve-out and the reply-to-sender check then compare the address that
-              // will actually be sent to. No contact read happens here. An entry that
-              // is not reference-shaped would pass through unchanged, but no send skill
+              // above refused anything that is not a reference and, when a contact
+              // service is configured, resolved each one, so swap in the resolved
+              // address here: the principal carve-out and the reply-to-sender check then
+              // compare the address that will actually be sent to. Without a contact
+              // service there is no resolved address, and the reference is refused here
+              // (fail closed). No contact read happens here. An entry that is not
+              // reference-shaped would pass through unchanged, but no send skill
               // produces one now; a caller that holds a raw address (a non-skill call
               // to OutboundGateway.send) never reaches this skill-input path.
               if (recipients !== null) {
