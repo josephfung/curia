@@ -310,8 +310,11 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
  *                         Sarah Johnson / Sarah Jones       0.936
  *                         Alex Morgan / Alex Martin         0.905
  *                         Pat Principal / Sam Principal     0.852
- * 0.95 is inside the gap, so a one-letter typo is listed and a different person with
- * a shared name part is not. Raising it to 0.96 would miss "Natrajan"; lowering it
+ * 0.95 is inside the gap. It catches a one-letter typo after the first letter in a
+ * name of about eight or more characters; shorter names and first-letter typos can
+ * fall below it, and a few different people with one-letter-apart names of 8+
+ * characters can land above it (Wei Chen / Wei Chan, 0.95). Raising it to 0.96
+ * would miss "Natrajan"; lowering it
  * to 0.93 would list Sarah Jones and David King. The dedup scan's cut-offs (0.7 and
  * 0.9, dedup-service.ts) apply to a combined score and are too loose for a check
  * that interrupts an agent's write. Some different people still score above 0.95

@@ -73,7 +73,7 @@ The refusal lists each candidate by name, contact ID and reason (`same name`, `s
 Mechanics:
 
 - A new backend method, `listIdentitiesOnChannels(channels)`, reads the identities for the near-miss scan. Creation is rare, and a principal's store holds thousands of identities at most, so the scan runs in memory.
-- The name scan reads every contact (`listContacts()`, which has no default cap) and scores each name with the dedup service's Jaro-Winkler. The 0.95 threshold (`NAME_NEAR_MISS_THRESHOLD`) sits between typos of one name ("Priya Natarajan" / "Priya Natrajan", 0.958; "Jenna Torres" / "Jena Torres", 0.981) and different people who share part of a name ("David Kim" / "David King", 0.938; "Sarah Johnson" / "Sarah Jones", 0.936; "Alex Morgan" / "Alex Martin", 0.905). A contact that already matched exactly is not listed twice.
+- The name scan reads every contact (`listContacts()`, which has no default cap) and scores each name with the dedup service's Jaro-Winkler. The 0.95 threshold (`NAME_NEAR_MISS_THRESHOLD`) sits between typos of one name ("Priya Natarajan" / "Priya Natrajan", 0.958; "Jenna Torres" / "Jena Torres", 0.981) and different people who share part of a name ("David Kim" / "David King", 0.938; "Sarah Johnson" / "Sarah Jones", 0.936; "Alex Morgan" / "Alex Martin", 0.905). It catches a one-letter typo after the first letter in a name of about eight or more characters; shorter names and first-letter typos can fall below it, and a few different people with one-letter-apart names of 8+ characters land above it ("Wei Chen" / "Wei Chan", 0.95). A contact that already matched exactly is not listed twice.
 - A failed lookup fails the create closed, with the cause logged. It does not create without the check.
 - The check is not a lock. A concurrent create can still win the unique index. `contact-create` therefore validates every input before it writes. If `linkIdentity` then fails, it deletes the contact it just created (`deleteContact` with `archiveAnchoredNode` from `createContactWithKgOutcome`, as `contact-register` does) and reports a unique violation as the blocking match.
 
@@ -104,7 +104,7 @@ A typo in a brand-new address that resembles nothing on file is stored and verif
 
 A re-statement writes no new identity, but verifying is the risky step: the gateway records an `outbound_recipient` address as the agent typed it, so a typo of the principal's address (the 2026-10-07 incident) sits there unverified until someone vouches for it. The re-statement therefore runs the same check as a new address, with `excludeContactId` set to this contact, before it verifies. A candidate refuses the call until `distinct_from` names it; a check that cannot run refuses too. A verified identity is returned unchanged with no check, since nothing changes. The identifier is still normalized first, so `+1 (555) 123-4567` finds the stored `+15551234567`. An identifier on a *different* contact is the blocking match from §3.
 
-An agent may vouch only for what an agent typed. This is how agents reach the contacts that raw sends created. Spec 09's source table changes the `outbound_recipient` row to "No: verified when the principal confirms it or an agent re-states it".
+An agent may vouch only for what an agent typed. This is how agents reach the contacts that raw sends created. Spec 09's source table changes the `outbound_recipient` row to "No: verified when the principal confirms it or an agent re-states it (after the duplicate check)".
 
 ### 5. Coordinator ergonomics
 
