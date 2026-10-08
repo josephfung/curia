@@ -197,19 +197,22 @@ describe('recipient-aware block errors (#2033)', () => {
     findings: [{ rule: 'llm-judge-audience-leak', detail: 'Content is intended for the principal' }],
   };
 
-  it('a raw recipient one character off a known identity, blocked by the judge, names the recipient', async () => {
+  // No send skill takes an address any more (#2041), but the gateway does: scheduled
+  // and system sends still reach it with one, so the block error is tested there.
+  it('a gateway send to an address one character off a known identity, blocked by the judge, names the recipient', async () => {
     h.filterCheck.mockResolvedValue(AUDIENCE_LEAK);
-    const result = await SKILLS.email.handler.execute(ctx(h, {
-      to_address: 'pat@home.exampl',
+    const result = await h.gateway.send({
+      channel: 'email',
+      to: 'pat@home.exampl',
       subject: 'Drafts',
       body: 'Here are the drafts.',
-    }));
+    });
     expect(result.success).toBe(false);
     if (!result.success) {
       // The judge's reason is still there; the recipient check is added to it.
-      expect(result.error).toContain('Content is intended for the principal');
-      expect(result.error).toContain('pat@home.exampl matches no known contact');
-      expect(result.error).toMatch(/"principal"/);
+      expect(result.blockedReason).toContain('Content is intended for the principal');
+      expect(result.blockedReason).toContain('pat@home.exampl matches no known contact');
+      expect(result.blockedReason).toMatch(/"principal"/);
     }
     expect(delivered(h)).toEqual([]);
 
@@ -221,30 +224,31 @@ describe('recipient-aware block errors (#2033)', () => {
     expect(notification?.payload.body).toContain('Intended recipient: pat@home.exampl (matches no known contact)');
   });
 
-  it('names an unmatched cc recipient on a raw-path block', async () => {
+  it('names an unmatched cc recipient on a gateway block', async () => {
     h.filterCheck.mockResolvedValue(AUDIENCE_LEAK);
-    const result = await SKILLS.email.handler.execute(ctx(h, {
-      to: 'principal',
-      cc_addresses: 'sam@home.exampl',
+    const result = await h.gateway.send({
+      channel: 'email',
+      to: 'pat@home.example',
+      cc: ['sam@home.exampl'],
       subject: 'Drafts',
       body: 'Here are the drafts.',
-    }));
+    });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toContain('sam@home.exampl matches no known contact');
-      expect(result.error).not.toContain('pat@home.example matches');
+      expect(result.blockedReason).toContain('sam@home.exampl matches no known contact');
+      expect(result.blockedReason).not.toContain('pat@home.example matches');
     }
   });
 
   it('flags a recipient that matches only an unverified identity, e.g. a typo delivered once before', async () => {
     // First send: the typo goes out and the gateway records an unverified outbound_recipient contact.
-    await SKILLS.email.handler.execute(ctx(h, { to_address: 'pat@home.exampl', subject: 'Hi', body: 'Hello.' }));
+    await h.gateway.send({ channel: 'email', to: 'pat@home.exampl', subject: 'Hi', body: 'Hello.' });
     h.filterCheck.mockResolvedValue(AUDIENCE_LEAK);
 
-    const result = await SKILLS.email.handler.execute(ctx(h, { to_address: 'pat@home.exampl', subject: 'Drafts', body: 'Here.' }));
+    const result = await h.gateway.send({ channel: 'email', to: 'pat@home.exampl', subject: 'Drafts', body: 'Here.' });
 
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toContain('pat@home.exampl matches only an unverified contact address');
+    if (!result.success) expect(result.blockedReason).toContain('pat@home.exampl matches only an unverified contact address');
   });
 
   it('adds nothing when every recipient is a known contact', async () => {
@@ -271,11 +275,12 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
   beforeEach(async () => { h = await harness(); });
 
   it('records the new contact as outbound_recipient, unverified, tier known', async () => {
-    const result = await SKILLS.email.handler.execute(ctx(h, {
-      to_address: 'new.person@cold.example',
+    const result = await h.gateway.send({
+      channel: 'email',
+      to: 'new.person@cold.example',
       subject: 'Introduction',
       body: 'Hello.',
-    }));
+    });
     expect(result.success).toBe(true);
 
     const resolved = await h.contacts.resolveByChannelIdentity('email', 'new.person@cold.example');
@@ -288,7 +293,7 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
   });
 
   it('so a later send by reference to that contact fails closed until an address is verified', async () => {
-    await SKILLS.email.handler.execute(ctx(h, { to_address: 'new.person@cold.example', subject: 'Hi', body: 'Hello.' }));
+    await h.gateway.send({ channel: 'email', to: 'new.person@cold.example', subject: 'Hi', body: 'Hello.' });
     const resolved = await h.contacts.resolveByChannelIdentity('email', 'new.person@cold.example');
     h.nylasSend.mockClear();
 

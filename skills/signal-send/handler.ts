@@ -1,6 +1,6 @@
 // handler.ts — signal-send skill implementation.
 //
-// Sends a Signal message to a 1:1 recipient (by contact reference, or E.164 number) or to a
+// Sends a Signal message to a 1:1 recipient (by contact reference) or to a
 // group (by base64 group ID). Before dispatching a group send, all members are
 // checked against the contact system — unknown members are listed explicitly so
 // the caller knows who needs verification. Blocked members are reported without
@@ -10,14 +10,20 @@
 // for the final send, so this handler focuses on Signal-specific validation
 // and the group trust pre-check.
 //
-// 1:1 recipients are references by default (#2033, ADR-047): `recipient` takes a
-// contact ID or "principal", resolved to that contact's verified Signal number.
-// `recipient_number` is the deliberate raw path, for someone with no contact record.
+// 1:1 recipients are references (#2033, #2041, ADR-047): `recipient` takes a contact ID
+// or "principal", resolved to that contact's verified Signal number. Someone who is not
+// a contact yet is added first with contact-create. The retired raw input
+// (recipient_number) is refused, never ignored.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import {
+  RECIPIENT_REFERENCE_SKILLS,
+  findRetiredRecipientField,
+  retiredRecipientFieldError,
+} from '../../src/skills/_shared/recipient-reference.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -27,9 +33,12 @@ const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
 export class SignalSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const { recipient, recipient_number: recipientNumber, group_id, message, context_bridge: contextBridgeRaw } = ctx.input as {
+    const skill = RECIPIENT_REFERENCE_SKILLS['signal-send']!;
+    const retired = findRetiredRecipientField(skill, ctx.input);
+    if (retired) return { success: false, error: retiredRecipientFieldError(skill, retired) };
+
+    const { recipient, group_id, message, context_bridge: contextBridgeRaw } = ctx.input as {
       recipient?: string;
-      recipient_number?: string;
       group_id?: string;
       message?: string;
       context_bridge?: string;
@@ -41,30 +50,19 @@ export class SignalSendHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message (string)' };
     }
 
-    // Exactly one of recipient / recipient_number / group_id must be provided.
-    const destinations = [recipient, recipientNumber, group_id].filter((v) => v !== undefined && v !== null && v !== '');
+    // Exactly one of recipient / group_id must be provided.
+    const destinations = [recipient, group_id].filter((v) => v !== undefined && v !== null && v !== '');
     if (destinations.length === 0) {
       return {
         success: false,
-        error: 'Missing destination: pass recipient (a contact ID, or "principal" for the principal), or group_id. Only for someone with no contact record, pass recipient_number.',
+        error: 'Missing destination: pass recipient (a contact ID, or "principal" for the principal), or group_id. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.',
       };
     }
     if (destinations.length > 1) {
-      return { success: false, error: 'Provide exactly one of recipient, recipient_number, or group_id' };
+      return { success: false, error: 'Provide exactly one of recipient or group_id' };
     }
-    if (
-      (recipient !== undefined && typeof recipient !== 'string')
-      || (recipientNumber !== undefined && typeof recipientNumber !== 'string')
-    ) {
-      return { success: false, error: 'recipient and recipient_number must be strings' };
-    }
-
-    // Validate E.164 format for raw 1:1 sends. References are validated after resolution.
-    if (recipientNumber && !E164_REGEX.test(recipientNumber)) {
-      return {
-        success: false,
-        error: `recipient_number must be a valid E.164 phone number (e.g. +14155552671), got: ${recipientNumber}`,
-      };
+    if (recipient !== undefined && typeof recipient !== 'string') {
+      return { success: false, error: 'recipient must be a string' };
     }
 
     if (message.length > MAX_MESSAGE_LENGTH) {
@@ -177,35 +175,29 @@ export class SignalSendHandler implements ToolHandler {
     // --- Resolve the 1:1 recipient (#2033) ---
     // A reference fails closed: no contact, or no verified Signal number, means no send.
 
-    let destination: string;
-    let contactId: string | undefined;
-    let identityName: string | undefined;
-    if (recipient) {
-      const resolved = await ctx.outboundGateway.resolveRecipientReference('signal', recipient, {
-        field: 'recipient',
-      });
-      if (!resolved.ok) return { success: false, error: resolved.error };
-      if (!E164_REGEX.test(resolved.identifier)) {
-        // A stored identity that signal-cli cannot address: a data defect. Refuse rather
-        // than guess, and log the contact for an operator (the ID may be the principal's).
-        ctx.log.warn({ contactId: resolved.contactId }, 'signal-send: verified Signal identity is not E.164 — refusing (#2033)');
-        return {
-          success: false,
-          error: `The contact's verified Signal identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
-        };
-      }
-      destination = resolved.identifier;
-      // Echo the contact ID only for a UUID the agent passed. For the alias it is the
-      // principal's, which spec 09 keeps out of the model's context.
-      contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
-      identityName = resolved.identityName;
-    } else {
-      destination = recipientNumber!;
+    // recipient is the destination here: a group send returned above.
+    const resolved = await ctx.outboundGateway.resolveRecipientReference('signal', recipient as string, {
+      field: 'recipient',
+    });
+    if (!resolved.ok) return { success: false, error: resolved.error };
+    if (!E164_REGEX.test(resolved.identifier)) {
+      // A stored identity that signal-cli cannot address: a data defect. Refuse rather
+      // than guess, and log the contact for an operator (the ID may be the principal's).
+      ctx.log.warn({ contactId: resolved.contactId }, 'signal-send: verified Signal identity is not E.164 — refusing (#2033)');
+      return {
+        success: false,
+        error: `The contact's verified Signal identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
+      };
     }
+    const destination = resolved.identifier;
+    // Echo the contact ID only for a UUID the agent passed. For the alias it is the
+    // principal's, which spec 09 keeps out of the model's context.
+    const contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
+    const identityName = resolved.identityName;
 
     // --- Dispatch via gateway (1:1) ---
 
-    ctx.log.info({ destinationType: '1:1', byReference: !!recipient }, 'signal-send: dispatching Signal message via gateway');
+    ctx.log.info({ destinationType: '1:1', byReference: true }, 'signal-send: dispatching Signal message via gateway');
 
     try {
       const result = await ctx.outboundGateway.send({

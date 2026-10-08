@@ -314,7 +314,7 @@ function quotedLabel(raw: string | null | undefined): string | null {
 /**
  * A hint matched nothing usable, or matched more than one row. List every
  * candidate by the label the agent can see. Addresses stay out: a model handed
- * one will retype it into the raw field.
+ * one will retype it into another field.
  */
 function labelConflictError(
   contact: Contact,
@@ -503,7 +503,7 @@ export async function resolveRecipientReference(
 
   if (usable.length === 0) {
     // Do not echo an unverified address back: the model would retype it into
-    // the raw field, which is the failure this design removes.
+    // another field, which is the failure this design removes.
     const who = isPrincipal
       ? 'The principal'
       : `Contact "${safeName(found.contact.displayName)}" (${contactId})`;
