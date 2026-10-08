@@ -51,7 +51,7 @@ describe('sms-send handler', () => {
         outboundGateway: { send, resolveRecipientReference } as never,
       }));
       expect(result.success).toBe(true);
-      expect(resolveRecipientReference).toHaveBeenCalledWith('sms', 'principal', { field: 'recipient', rawField: 'recipient_number' });
+      expect(resolveRecipientReference).toHaveBeenCalledWith('sms', 'principal', { field: 'recipient' });
       expect(send).toHaveBeenCalledWith({ channel: 'sms', recipient: '+15195550100', message: 'Hello' }, expect.any(Object));
       if (result.success) {
         expect(result.data).toMatchObject({ delivered_to: '+15195550100' });

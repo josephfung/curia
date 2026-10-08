@@ -72,7 +72,6 @@ export class SmsSendHandler implements ToolHandler {
     if (recipient) {
       const resolved = await ctx.outboundGateway.resolveRecipientReference('sms', recipient, {
         field: 'recipient',
-        rawField: 'recipient_number',
       });
       if (!resolved.ok) return { success: false, error: resolved.error };
       if (!E164_REGEX.test(resolved.identifier)) {

@@ -180,10 +180,10 @@ describe('send to the principal by reference (#2033 regression)', () => {
   it('an address in the reference field is rejected, not sent', async () => {
     const result = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input('pat@home.example')));
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/to_address/);
+    if (!result.success) expect(result.error).toMatch(/contact-create/);
     const signal = await SKILLS.signal.handler.execute(ctx(h, SKILLS.signal.input('+15195550100')));
     expect(signal.success).toBe(false);
-    if (!signal.success) expect(signal.error).toMatch(/recipient_number/);
+    if (!signal.success) expect(signal.error).toMatch(/contact-create/);
     expect(delivered(h)).toEqual([]);
   });
 });

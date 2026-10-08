@@ -22,9 +22,14 @@
 // A reference may carry a label hint after `#` (`principal#personal`). The hint
 // is part of the string every caller already passes, so the skill, the pre-gate
 // check, Gate C and the approval display cannot choose different addresses.
+//
+// There is no raw-address path (#2041). Someone who is not a contact yet is added
+// first with contact-create, which returns the contact ID to send to. The retired
+// raw-address inputs are refused, never ignored.
 
 import { cleanedIdentityLabel, visibleIdentityLabel } from '../../agents/principal-contact-block.js';
 import type { ContactService } from '../../contacts/contact-service.js';
+import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
 import type { ChannelIdentity, Contact } from '../../contacts/types.js';
 import { findPrincipalChannelRules } from '../../contacts/principal-channel-registry.js';
 import { isUuid } from '../../util/uuid.js';
@@ -117,8 +122,6 @@ export type RecipientResolution =
 export interface RecipientReferenceFields {
   /** The reference input's name in tool.json (e.g. `to`, `recipient`). */
   field: string;
-  /** The raw-address input's name in tool.json (e.g. `to_address`). */
-  rawField: string;
 }
 
 export interface RecipientResolverDeps {
@@ -162,17 +165,47 @@ export function sendPinsMatch(
   });
 }
 
+export interface RecipientReferenceSkill {
+  channel: string;
+  /** Inputs that take a reference. On email each is a comma-separated list. */
+  references: readonly string[];
+  /** Raw-address inputs retired in #2041, each mapped to the reference input that replaced it. */
+  retired: Readonly<Record<string, string>>;
+}
+
 /**
- * Each send skill's recipient inputs: the reference field and its raw-address
- * sibling. Code that reads a send skill's input outside the handler (approval
- * display, for one) uses this rather than hard-coding field names.
+ * Skills that address a recipient by reference. The execution layer resolves these
+ * inputs before any gate and shows the resolved address in an approval. Code that
+ * reads one of these skills' recipient inputs uses this map, not hard-coded names.
  */
-export const SEND_SKILL_RECIPIENT_FIELDS: Readonly<Record<string, { channel: string; reference: string; raw: string }>> = {
-  'email-send': { channel: 'email', reference: 'to', raw: 'to_address' },
-  'signal-send': { channel: 'signal', reference: 'recipient', raw: 'recipient_number' },
-  'sms-send': { channel: 'sms', reference: 'recipient', raw: 'recipient_number' },
-  'slack-send': { channel: 'slack', reference: 'recipient', raw: 'recipient_user_id' },
+export const RECIPIENT_REFERENCE_SKILLS: Readonly<Record<string, RecipientReferenceSkill>> = {
+  'email-send': { channel: 'email', references: ['to', 'cc'], retired: { to_address: 'to', cc_addresses: 'cc' } },
+  'signal-send': { channel: 'signal', references: ['recipient'], retired: { recipient_number: 'recipient' } },
+  'sms-send': { channel: 'sms', references: ['recipient'], retired: { recipient_number: 'recipient' } },
+  'slack-send': { channel: 'slack', references: ['recipient'], retired: { recipient_user_id: 'recipient' } },
 };
+
+/**
+ * The first retired raw-address input present in `input`, or null. A blank value
+ * (`to_address: ""`, `[]`, null) is not present: models fill unused optional inputs
+ * with one, and refusing those would refuse ordinary sends.
+ */
+export function findRetiredRecipientField(skill: RecipientReferenceSkill, input: Record<string, unknown>): string | null {
+  return Object.keys(skill.retired).find((field) => hasPresentValue(input[field])) ?? null;
+}
+
+/**
+ * Refusal for a retired raw-address input. It is refused rather than ignored: a
+ * dropped cc list would send to fewer people than asked and report success.
+ */
+export function retiredRecipientFieldError(skill: RecipientReferenceSkill, field: string): string {
+  const reference = skill.retired[field] ?? skill.references[0] ?? 'to';
+  return (
+    `${field} is no longer accepted: sends go to contacts. Pass the person's contact ID in ${reference} ` +
+    `("${PRINCIPAL_RECIPIENT_ALIAS}" for the principal). Someone who is not a contact yet must be added first ` +
+    `with contact-create, which returns their contact ID. Nothing was sent.`
+  );
+}
 
 /**
  * Stored display names come from inbound mail and are attacker-influenced.
@@ -416,7 +449,7 @@ export async function resolveRecipientReference(
       error:
         `${fields.field} takes a contact ID or "${PRINCIPAL_RECIPIENT_ALIAS}", not "${safeName(value)}". ` +
         `Send to a known person by their contact ID; the address is looked up for you. ` +
-        `Only for someone with no contact record, put their address in ${fields.rawField}.`,
+        `Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.`,
     };
   }
 
@@ -477,7 +510,7 @@ export async function resolveRecipientReference(
     const why = onChannel.length > 0 ? ' (the ones on file are unverified, inactive, or not sendable on this channel)' : '';
     const next = isPrincipal
       ? 'Use a channel listed in Principal Contact Details.'
-      : 'Reach them on another channel, or ask the principal to verify an address.';
+      : 'Reach them on another channel, or add (or re-state) an address you are sure of with contact-link-identity.';
     return {
       ok: false,
       error: `${who} has no verified, active ${channel} address${why}. Nothing was sent. ${next}`,

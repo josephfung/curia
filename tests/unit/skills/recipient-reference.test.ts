@@ -5,14 +5,17 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { ContactService } from '../../../src/contacts/contact-service.js';
 import {
   PRINCIPAL_RECIPIENT_ALIAS,
+  RECIPIENT_REFERENCE_SKILLS,
+  findRetiredRecipientField,
   formatResolvedRecipient,
   parseRecipientReference,
   resolveRecipientReference,
+  retiredRecipientFieldError,
   sendPinsMatch,
   type SendRecipientPin,
 } from '../../../src/skills/_shared/recipient-reference.js';
 
-const FIELDS = { field: 'to', rawField: 'to_address' };
+const FIELDS = { field: 'to' };
 
 describe('parseRecipientReference', () => {
   it('reads the principal alias, case and whitespace insensitive', () => {
@@ -170,12 +173,13 @@ describe('resolveRecipientReference', () => {
     expect(result).toMatchObject({ ok: true, identifier: 'pat@work.example' });
   });
 
-  it('rejects an address in the reference field and points at the raw field', async () => {
+  it('rejects an address in the reference field and points at contact-create', async () => {
     const result = await resolveRecipientReference('pat@home.example', 'email', FIELDS, deps());
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toMatch(/to takes a contact ID or "principal"/);
-      expect(result.error).toMatch(/to_address/);
+      expect(result.error).toMatch(/contact-create/);
+      expect(result.error).not.toMatch(/to_address/);
     }
   });
 
@@ -316,7 +320,7 @@ describe('label hint (#2047)', () => {
     const result = await resolveRecipientReference(typed, 'email', FIELDS, deps());
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toMatch(/to_address/);
+      expect(result.error).toMatch(/contact-create/);
       // The error quotes the model's own input. It does not reveal a stored address.
       expect(result.error).toContain('someone.else@other.test');
       expect(result.error).not.toContain('only@hint.test');
@@ -385,7 +389,7 @@ describe('label hint (#2047)', () => {
     const hintedAddress = await resolveRecipientReference(typed, 'email', FIELDS, deps());
     expect(hintedAddress.ok).toBe(false);
     if (!hintedAddress.ok) {
-      expect(hintedAddress.error).toMatch(/to_address/);
+      expect(hintedAddress.error).toMatch(/contact-create/);
       // The typed string is the model's own input, so it may appear. A stored
       // address-shaped label must not.
       expect(hintedAddress.error).not.toContain('hidden@secret.test');
@@ -514,5 +518,28 @@ describe('formatResolvedRecipient', () => {
   it('shows just the address when the name is the address', () => {
     expect(formatResolvedRecipient({ identifier: 'new@cold.example', displayName: 'new@cold.example' }))
       .toBe('new@cold.example');
+  });
+});
+
+describe('retired raw-address inputs (#2041)', () => {
+  const email = RECIPIENT_REFERENCE_SKILLS['email-send']!;
+
+  it('finds a present retired input and ignores blank ones (Review Focus 1)', () => {
+    expect(findRetiredRecipientField(email, { to: 'principal', cc_addresses: 'ops@example.com' })).toBe('cc_addresses');
+    expect(findRetiredRecipientField(email, { to: 'principal', to_address: '', cc_addresses: '  ' })).toBeNull();
+    expect(findRetiredRecipientField(email, { to_address: null, cc_addresses: [] })).toBeNull();
+    expect(findRetiredRecipientField(RECIPIENT_REFERENCE_SKILLS['signal-send']!, { recipient_number: 15551234567 })).toBe('recipient_number');
+  });
+
+  it('names the input that replaced it and contact-create', () => {
+    const message = retiredRecipientFieldError(email, 'cc_addresses');
+    expect(message).toMatch(/^cc_addresses is no longer accepted/);
+    expect(message).toMatch(/contact ID in cc/);
+    expect(message).toMatch(/contact-create/);
+    expect(message).toMatch(/Nothing was sent\.$/);
+  });
+
+  it('covers the four send skills', () => {
+    expect(Object.keys(RECIPIENT_REFERENCE_SKILLS).sort()).toEqual(['email-send', 'signal-send', 'slack-send', 'sms-send']);
   });
 });
