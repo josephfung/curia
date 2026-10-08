@@ -2,9 +2,9 @@ name: Schedule External Meeting
 description: >
   The principal asks for a 30-minute intro call with an external contact sometime next
   week and gives her email. Curia should do the planning itself: find open times on the
-  principal's calendar, place holds on a couple of them, and email the contact asking
-  which one works. The principal delegated the scheduling, so Curia must not hand the
-  choice of times back to them (#2049).
+  principal's calendar, then either hold a couple of them and email the contact asking
+  which one works (preferred) or book one and invite her. The principal delegated the
+  scheduling, so Curia must not hand the choice of times back to them (#2049).
 tags:
   - meeting-coordination
   - scheduling
