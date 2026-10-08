@@ -1376,6 +1376,7 @@ describe('autonomy gates', () => {
       const result = await layer.invoke('email-send', { to: BOB_REF }, undefined, originatorMeta('known'));
 
       expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("tier ('known')");
       expect(handler.execute).not.toHaveBeenCalled();
     });
 
@@ -1390,6 +1391,7 @@ describe('autonomy gates', () => {
       const result = await layer.invoke('email-send', { to: BOB_REF }, undefined, originatorMeta('known'));
 
       expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("tier ('known')");
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).not.toHaveBeenCalled();
     });
@@ -1493,6 +1495,7 @@ describe('autonomy gates', () => {
       );
 
       expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("tier ('known')");
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).not.toHaveBeenCalled();
     });
@@ -1648,7 +1651,7 @@ describe('autonomy gates', () => {
       );
 
       expect(result.success).toBe(false);
-      if (!result.success) expect(result.error).toContain('known');
+      if (!result.success) expect(result.error).toContain("tier ('known')");
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).not.toHaveBeenCalled();
     });
@@ -2250,6 +2253,7 @@ describe('autonomy gates', () => {
       );
 
       expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("tier ('known')");
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).not.toHaveBeenCalled();
     });
@@ -2285,6 +2289,7 @@ describe('autonomy gates', () => {
       );
 
       expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain("tier ('known')");
       expect(handler.execute).not.toHaveBeenCalled();
       expect(classifyAction).not.toHaveBeenCalled();
     });
