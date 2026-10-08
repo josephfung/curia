@@ -56,6 +56,16 @@ tool_stubs:
           "headers": {},
           "footers": {}
         }
+  # The Doc has no tables; this is the real tool's answer for one without.
+  debug_table_structure:
+    - match: {}
+      return: "Error: Table index 0 not found. Document has 0 table(s)."
+  list_drive_items:
+    - match: {}
+      return: *found
+  list_docs_in_folder:
+    - match: {}
+      return: *found
   list_document_comments:
     - match: {}
       return: No comments found in document 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge
