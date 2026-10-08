@@ -76,6 +76,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`contact-create`, `contact-link-identity`** — record `agent_stated`; refuse likely duplicates until `distinct_from` names them. (#2041)
 - **`email-draft-save` (public API)** — `to` takes a contact reference, not an address. (#2041)
 - **Coordinator** — pins `contact-create`, so cold outreach is create then send. (#2041)
+- **`contact-register`** — callable by ceo-inbox only. (#2041)
 - **Send skills (public API, breaking)** — `to`, `cc` and `recipient` take a contact ID or `principal`. (#2033)
 - **Principal Contact Details** — tells agents to pass `principal` to send skills instead of an address. (#2033)
 - **Gate C** — resolves recipient references before the principal carve-out and reply-to-sender checks. (#2033)
@@ -311,7 +312,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Security
 
 - **Agent-entered contacts** — no longer recorded as principal-stated; near-miss addresses are flagged before storing. (#2041)
-- **`contact-link-identity`** — refuses changes to the principal's addresses; only the principal manages them. (#2041)
+- **Contact skills** — refuse changes to the principal's addresses; only the principal manages them. (#2041)
 - **Send by reference** — a mistyped recipient reference fails closed instead of delivering to whoever owns the address. (#2033)
 - **Dependency floors** — `fast-uri` and `ip-address` raised past ineffective pins, clearing six advisories. (#1933)
 - **Override floor audit** — seven more pins raised off versions that were still vulnerable. (#1933)
