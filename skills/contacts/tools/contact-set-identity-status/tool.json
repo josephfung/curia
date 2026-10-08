@@ -1,7 +1,7 @@
 {
   "name": "contact-set-identity-status",
-  "description": "Set the status of a contact's channel identity (email or phone). status must be 'active', 'defunct', or 'bounced'. identity_id must be a UUID from contact-lookup. Use when the principal reports an address is no longer valid, or to mark a bounced address.",
-  "version": "1.0.1",
+  "description": "Set the status of a contact's channel identity (email or phone). status must be 'active', 'defunct', or 'bounced'. identity_id must be a UUID from contact-lookup. Use when the principal reports an address is no longer valid, or to mark a bounced address. It cannot change the principal's own addresses.",
+  "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
