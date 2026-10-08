@@ -155,8 +155,6 @@ overrides:
   # RE-CHECK against `gh api /repos/fastify/fast-uri/security-advisories`, not just the
   # Dependabot alert list, which lags the upstream repo advisories.
   fast-uri: '>=4.2.1'
-  # >=8.0.5 was satisfied by 8.0.5-8.0.15, all of which carry GHSA-fx2h-pf6j-xcff
-  # (HIGH) and GHSA-v6wh-96g9-6wx3 (MED); both fixed in 8.0.16.
   # Raised off >=8.0.16 (#2032): that floor admitted 8.0.16-8.1.5, 8.2.0-8.2.2
   # and 8.3.0-8.3.2, which carry three advisories published only on vitejs/vite
   # (absent from GitHub's global advisory DB, so Dependabot raises no alert). Not a
