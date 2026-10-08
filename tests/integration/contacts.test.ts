@@ -385,4 +385,28 @@ describeIf('Contacts Integration', () => {
       expect(updated.primaryEmail).toBe('cci-test@example.com');
     });
   });
+
+  it('findLikelyDuplicates reads identities across channels from Postgres (#2041)', async () => {
+    const holder = await contactService.createContact({ displayName: 'Dup Check Holder', source: 'integration-test' });
+    await contactService.linkIdentity({
+      contactId: holder.id, channel: 'email', channelIdentifier: 'dup.check.holder@example.test', source: 'ceo_stated',
+    });
+    await contactService.linkIdentity({
+      contactId: holder.id, channel: 'signal', channelIdentifier: '+14165550177', source: 'ceo_stated',
+    });
+
+    const check = await contactService.findLikelyDuplicates({
+      identities: [
+        { channel: 'email', identifier: 'dup.check.holder@example.tset' },
+        { channel: 'sms', identifier: '+14165550177' },
+      ],
+    });
+
+    expect(check.taken).toEqual([]);
+    const candidate = check.candidates.find((c) => c.contact.id === holder.id);
+    expect(candidate?.reasons).toEqual([
+      { kind: 'similar_address', channel: 'email' },
+      { kind: 'same_number', channel: 'signal' },
+    ]);
+  });
 });

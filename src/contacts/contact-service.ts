@@ -25,7 +25,10 @@ import type {
   ContactServiceOptions,
   CreateContactOptions,
   DedupConfidence,
+  DuplicateCandidate,
+  DuplicateCheck,
   DuplicatePair,
+  DuplicateReason,
   GrantRecommendation,
   GrantRecommendationStatus,
   LinkIdentityOptions,
@@ -41,6 +44,7 @@ import type { DedupService } from './dedup-service.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
 import { normalizeExclusionPair, type ExclusionPair } from './dedup-exclusions.js';
 import { canonicalPairKey } from './dedup-pair-key.js';
+import { comparableChannels, isNearMiss, sameIdentifier } from './identifier-near-miss.js';
 
 /** Outcome of re-pointing a merged-away contact's dedup exclusions onto the survivor. */
 export interface ReattachExclusionsResult {
@@ -162,6 +166,8 @@ interface ContactServiceBackend {
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentity(identityId: string): Promise<ChannelIdentity | null>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
+  /** Every identity on any of these channels, for the duplicate check (#2041). */
+  listIdentitiesOnChannels(channels: string[]): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
   setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity>;
@@ -270,8 +276,12 @@ interface ContactServiceBackend {
 // sms_participant is NOT auto-verified — SMS From is spoofable (ADR-036); principal must verify.
 // agent_called is auto-verified — the agent extracted the identifier mechanically from the channel
 // (e.g. an email sender address), not from LLM-generated content. Same trust level as email_participant.
+// agent_stated is auto-verified — contact-create and contact-link-identity write it only after the
+// duplicate check passes (findLikelyDuplicates), and every send reaches it by reference afterwards,
+// so the agent types it once, in a checked place (#2041, ADR-047).
 // outbound_recipient is NOT auto-verified — the address came from LLM-generated tool input on a
-// first-time send, the opposite of a mechanical extraction (#2033, ADR-047).
+// first-time send, the opposite of a mechanical extraction (#2033, ADR-047). An agent re-stating it
+// with contact-link-identity verifies it (#2041).
 // Only self_claimed cannot be force-verified.
 const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'ceo_stated',
@@ -281,6 +291,7 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'crm_import',
   'calendar_attendee',
   'agent_called',
+  'agent_stated',
 ]);
 
 /**
@@ -921,6 +932,81 @@ export class ContactService {
       this.logger?.error({ err }, 'findDuplicates() failed during contact scan');
       throw err;
     }
+  }
+
+  /**
+   * Contacts that an agent-entered contact or address may duplicate (#2041).
+   * contact-create and contact-link-identity call this before writing anything.
+   *
+   * - taken: an identifier is already on another contact on the same channel (email
+   *   ignoring case, numbers by digits). The write is refused outright.
+   * - candidates: the same number on a sibling phone channel, a near-miss identifier
+   *   (identifier-near-miss.ts), or the same display name ignoring case and spacing.
+   *   The write is refused until the agent names each one in distinct_from.
+   *
+   * `identities` must already be normalized (normalizeAgentIdentifier).
+   * `excludeContactId` is the contact being added to, which is never its own duplicate.
+   * Errors propagate: callers refuse the write rather than skip the check.
+   */
+  async findLikelyDuplicates(input: {
+    displayName?: string;
+    identities: ReadonlyArray<{ channel: string; identifier: string }>;
+    excludeContactId?: string;
+  }): Promise<DuplicateCheck> {
+    const channels = new Set(input.identities.flatMap((wanted) => comparableChannels(wanted.channel)));
+    const onFile = channels.size > 0 ? await this.backend.listIdentitiesOnChannels([...channels]) : [];
+
+    const takenChannel = new Map<string, string>();
+    const reasons = new Map<string, DuplicateReason[]>();
+    const addReason = (contactId: string, reason: DuplicateReason): void => {
+      const list = reasons.get(contactId) ?? [];
+      const key = (r: DuplicateReason): string => `${r.kind}:${'channel' in r ? r.channel : ''}`;
+      if (!list.some((existing) => key(existing) === key(reason))) list.push(reason);
+      reasons.set(contactId, list);
+    };
+
+    for (const wanted of input.identities) {
+      const family = comparableChannels(wanted.channel);
+      for (const held of onFile) {
+        if (held.contactId === input.excludeContactId || !family.includes(held.channel)) continue;
+        if (sameIdentifier(wanted.channel, wanted.identifier, held.channelIdentifier)) {
+          if (held.channel === wanted.channel) {
+            if (!takenChannel.has(held.contactId)) takenChannel.set(held.contactId, wanted.channel);
+          } else {
+            addReason(held.contactId, { kind: 'same_number', channel: held.channel });
+          }
+        } else if (isNearMiss(wanted.channel, wanted.identifier, held.channelIdentifier)) {
+          addReason(held.contactId, { kind: 'similar_address', channel: held.channel });
+        }
+      }
+    }
+
+    if (input.displayName !== undefined) {
+      const comparable = (name: string): string => name.toLowerCase().replace(/\s+/g, ' ').trim();
+      const wantedName = comparable(sanitizeDisplayName(input.displayName));
+      if (wantedName) {
+        // findContactByName is a substring match; keep exact (normalized) names only.
+        for (const contact of await this.backend.findContactByName(wantedName)) {
+          if (contact.id !== input.excludeContactId && comparable(contact.displayName) === wantedName) {
+            addReason(contact.id, { kind: 'same_name' });
+          }
+        }
+      }
+    }
+
+    const taken: DuplicateCheck['taken'] = [];
+    for (const [contactId, channel] of takenChannel) {
+      // A taken contact is reported once, as taken.
+      reasons.delete(contactId);
+      const contact = await this.backend.getContact(contactId);
+      if (contact) taken.push({ contact, channel });
+    }
+    const candidates: DuplicateCandidate[] = [];
+    for (const [contactId, list] of reasons) {
+      const contact = await this.backend.getContact(contactId);
+      if (contact) candidates.push({ contact, reasons: list });
+    }
+    return { taken, candidates };
   }
 
   /**
@@ -2343,6 +2429,28 @@ class PostgresContactBackend implements ContactServiceBackend {
     return result.rows.map((row) => this.rowToIdentity(row));
   }
 
+  async listIdentitiesOnChannels(channels: string[]): Promise<ChannelIdentity[]> {
+    if (channels.length === 0) return [];
+    const result = await this.pool.query<{
+      id: string;
+      contact_id: string;
+      channel: string;
+      channel_identifier: string;
+      label: string | null;
+      verified: boolean;
+      verified_at: Date | null;
+      status: string;
+      source: string;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+       FROM contact_channel_identities WHERE channel = ANY($1::text[])`,
+      [channels],
+    );
+    return result.rows.map((row) => this.rowToIdentity(row));
+  }
+
   async resolveByChannelIdentity(
     channel: string,
     channelIdentifier: string,
@@ -3181,6 +3289,11 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return results;
+  }
+
+  async listIdentitiesOnChannels(channels: string[]): Promise<ChannelIdentity[]> {
+    const wanted = new Set(channels);
+    return [...this.identities.values()].filter((identity) => wanted.has(identity.channel));
   }
 
   async resolveByChannelIdentity(
