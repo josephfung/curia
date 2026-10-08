@@ -529,7 +529,7 @@ describe('ContactRegisterHandler — promotion flow removed', () => {
 
 // contact-register records agent_called, which is auto-verified without the duplicate
 // check contact-create runs. Only ceo-inbox, which registers senders it read from mail,
-// may call it (#2041; the open question is #2053).
+// may call it (#2041; the open question is #2061).
 describe('contact-register manifest', () => {
   it('is callable by ceo-inbox only', () => {
     const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, 'tool.json'), 'utf-8')) as {
