@@ -15,14 +15,23 @@ tool_stubs:
   # Smoke disables send skills unless a case stubs them, so without this a send to Jamie
   # comes back as a test-mode capability refusal and the judge scores how the model
   # narrates the refusal instead of whether it chose to send (#2049).
-  # Senders pass either `to` (a contact id, the usual path once Jamie is a contact) or
-  # `to_address`; only one is set, so `to` echoes whichever the call used.
+  # A stub answers before the handler, so the handler's recipient checks don't run. The
+  # entries below refuse the calls production refuses, in its words, so a malformed send
+  # can't count as reaching Jamie. First match wins; null means the argument is absent.
   email-send:
+    - match: { to: "jamie@stripe.com" }
+      error: 'to takes a contact ID or "principal", not "jamie@stripe.com". Send to a known person by their contact ID; the address is looked up for you. Only for someone with no contact record, put their address in to_address.'
+    - match: { to: null }
+      return: { message_id: smoke-sent-0001, to: "{{input:to_address}}", subject: "{{input:subject}}" }
+    - match: { to_address: null }
+      return: { message_id: smoke-sent-0001, to: "{{input:to}}", subject: "{{input:subject}}" }
     - match: {}
-      return: { message_id: smoke-sent-0001, to: "{{input:to}}{{input:to_address}}", subject: "{{input:subject}}" }
+      error: Pass either to or to_address, not both.
   # contact-create is deliberately left real. Stubbing it hands back an id that isn't in
   # the database, so the contacts agent's follow-up identity writes fail and the reply
-  # reports a contact-store fault that only the stub caused.
+  # reports a contact-store fault that only the stub caused. The cost: the gated retry
+  # runs on the same database copy, so it finds Jamie already a contact and skips the
+  # create-and-link path. Read a PASS* here with that in mind.
 
 turns:
   - role: user
@@ -43,10 +52,10 @@ expected_behaviors:
     weight: critical
   - id: reaches-jamie
     description: >
-      Contacts Jamie Rodriguez about the call: the tool calls include an email-send to
-      her (jamie@stripe.com or her contact id) or a calendar-create-event with
-      jamie@stripe.com as an attendee. A reply or a specialist report that only says the
-      email went out does not count
+      Contacts Jamie Rodriguez about the call: the tool calls include a successful
+      email-send to her (to_address jamie@stripe.com, or to her contact id) or a
+      calendar-create-event with jamie@stripe.com as an attendee. A failed send, or a
+      reply or specialist report that only says the email went out, does not count
     weight: critical
   - id: holds-and-offers-choice
     description: >
