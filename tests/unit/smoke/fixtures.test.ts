@@ -121,6 +121,14 @@ describe('the committed suite', () => {
           .flatMap((tool) => stubs[tool] ?? [])
           .flatMap((stub) => ((stub.return as { messages?: Listed[] } | undefined)?.messages ?? []));
 
+        const readOnly = (stubs['ceo-inbox-read'] ?? [])
+          .map((stub) => stub.match.message_id)
+          .filter((id): id is string => typeof id === 'string' && !listed.some((m) => m.id === id));
+        for (const id of readOnly) {
+          const label = matchToolStub('ceo-inbox-label', { message_id: id, labels: ['🚨 Urgent'] }, stubs);
+          if (!label || label.error) gaps.push(`${where}: ceo-inbox-label cannot label ${id}`);
+        }
+
         for (const message of listed) {
           messagesChecked++;
           const read = matchToolStub('ceo-inbox-read', { message_id: message.id }, stubs);
@@ -128,6 +136,9 @@ describe('the committed suite', () => {
             gaps.push(`${where}: ceo-inbox-read cannot open ${message.id}`);
             continue;
           }
+          // Triage labels what it reads.
+          const label = matchToolStub('ceo-inbox-label', { message_id: message.id, labels: ['🚨 Urgent'] }, stubs);
+          if (!label || label.error) gaps.push(`${where}: ceo-inbox-label cannot label ${message.id}`);
           // The agent takes attachment ids from the read (the download tool says so), so
           // check what the read returns as well as what the listing shows.
           const fromRead = (read.return as { attachments?: Attachment[] } | undefined)?.attachments ?? [];

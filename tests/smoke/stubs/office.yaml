@@ -195,6 +195,8 @@ ceo-inbox-draft-compose:
 # Triage writes (ceo-inbox SKILL.md). Test mode withholds the mailbox credentials, so the
 # real tools would fail. These succeed the way production does, and fail where the real
 # handler would: a missing argument, or a message that is not in this mailbox.
+# Any message id: cases define their own messages (the branch-a cases read ids the
+# office never lists), so "only listed ids" would fail real ones.
 ceo-inbox-label:
   - match: { message_id: null }
     error: message_id is required
@@ -202,26 +204,9 @@ ceo-inbox-label:
     error: labels array is required and must contain at least one label
   - match: { labels: [] }
     error: labels array is required and must contain at least one label
-  - match: { message_id: 18f2d9e40b6c1a73 }
-    return: { success: true, message_id: 18f2d9e40b6c1a73, applied: "{{input:labels}}", created: [], folders: [] }
-  - match: { message_id: 18f2a1c7d93e5b08 }
-    return: { success: true, message_id: 18f2a1c7d93e5b08, applied: "{{input:labels}}", created: [], folders: [] }
-  - match: { message_id: 18f1f6b2e8a4c917 }
-    return: { success: true, message_id: 18f1f6b2e8a4c917, applied: "{{input:labels}}", created: [], folders: [] }
-  - match: { message_id: 18f2b5d81c7e4a29 }
-    return: { success: true, message_id: 18f2b5d81c7e4a29, applied: "{{input:labels}}", created: [], folders: [] }
-  - match: { message_id: 18f0c8e3a6d2b154 }
-    return: { success: true, message_id: 18f0c8e3a6d2b154, applied: "{{input:labels}}", created: [], folders: [] }
-  - match: { message_id: 18f0d4a7c2e9b386 }
-    return: { success: true, message_id: 18f0d4a7c2e9b386, applied: "{{input:labels}}", created: [], folders: [] }
-  - match: { message_id: 18f1a9e5d3c7b042 }
-    return: { success: true, message_id: 18f1a9e5d3c7b042, applied: "{{input:labels}}", created: [], folders: [] }
-  - match: { message_id: 18eff2b6a1d8c530 }
-    return: { success: true, message_id: 18eff2b6a1d8c530, applied: "{{input:labels}}", created: [], folders: [] }
   - match: {}
-    error: "Failed to apply labels to principal inbox message: not found"
-# Not narrowed by message id: the matcher can't combine "listed id" with the three
-# `starred` cases without a row per pair. A string "false" lands on the type error.
+    return: { success: true, message_id: "{{input:message_id}}", applied: "{{input:labels}}", created: [], folders: [] }
+# Any message id, as for labels. A string "false" lands on the type error.
 ceo-inbox-mark-starred:
   - match: { message_id: null }
     error: message_id is required
