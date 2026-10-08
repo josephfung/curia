@@ -157,6 +157,9 @@ export const SECRET_RESOLVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['web-
 // Hard-allowlisted to list-user-secrets: declaring userSecretIndex elsewhere has no effect.
 export const USER_SECRET_INDEX_ALLOWED_TOOLS: ReadonlySet<string> = new Set(['list-user-secrets']);
 
+/** Appended when an object result is too large and collapsed to a string (#1487). */
+const OBJECT_OUTPUT_TRUNCATED_MARKER = '[truncated — output exceeded limit]';
+
 /** Options passed to ExecutionLayer.invoke() by the agent runtime. */
 export interface InvokeOptions {
   taskEventId?: string;
@@ -530,7 +533,8 @@ export class ExecutionLayer {
    * The part of a successful `toolName` result that is source text for identifier
    * provenance (#2061), or null. Null unless the manifest sets `provenance_source`, and
    * for a call that reads drafts (a `folder` naming drafts, or a `draft_id`): a draft may
-   * be Curia's. Otherwise every string in the result except messages from Curia's own
+   * be Curia's, and for an object result invoke() collapsed to a truncated string.
+   * Otherwise every string in the result except messages from Curia's own
    * addresses and drafts (provenanceSourceText). The runtime asks after each result, so a
    * stubbed result in smoke or scenarios is recorded just like a real one.
    */
@@ -539,6 +543,9 @@ export class ExecutionLayer {
     const folder = input['folder'];
     if (typeof folder === 'string' && /draft/i.test(folder)) return null;
     if (input['draft_id'] !== undefined && input['draft_id'] !== null && input['draft_id'] !== '') return null;
+    // An object result collapsed to a truncated string has lost the structure that tells
+    // Curia's own messages and drafts apart, so none of it counts.
+    if (typeof data === 'string' && data.endsWith(OBJECT_OUTPUT_TRUNCATED_MARKER)) return null;
     return provenanceSourceText(data, this.selfEmails);
   }
 
@@ -2586,7 +2593,7 @@ export class ExecutionLayer {
           // an unbounded one is not. Tools that can legitimately return large results
           // should page or trim at the source (see scheduler-list) so this never fires.
           const truncated =
-            serialized.slice(0, this.skillOutputMaxLength) + '[truncated — output exceeded limit]';
+            serialized.slice(0, this.skillOutputMaxLength) + OBJECT_OUTPUT_TRUNCATED_MARKER;
           return { success: true, data: truncated };
         }
         return { success: true, data: sanitizedData };

@@ -76,6 +76,18 @@ describe('ExecutionLayer', () => {
       expect(execution.provenanceSourceText('reader', { draft_id: 'd1' }, 'sam@venue.example')).toBeNull();
     });
 
+    it('returns nothing for an object result collapsed to a truncated string', async () => {
+      const small = new ExecutionLayer(registry, logger, { skillOutputMaxLength: 200 });
+      registry.register(makeManifest({ name: 'reader', provenance_source: true }), {
+        execute: async () => ({ success: true, data: { messages: Array.from({ length: 50 }, (_, i) => ({ from: [{ email: 'curia@office.example' }], body: `cc n${i}@typo.example` })) } }),
+      });
+      const result = await small.invoke('reader', {});
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(typeof result.data).toBe('string');
+      expect(small.provenanceSourceText('reader', {}, result.data)).toBeNull();
+    });
+
     it("leaves out messages from Curia's own addresses and drafts inside a result", () => {
       const withSelf = new ExecutionLayer(registry, logger, { selfEmails: ['Curia@Office.example'] });
       registry.register(makeManifest({ name: 'reader', provenance_source: true }), noop);

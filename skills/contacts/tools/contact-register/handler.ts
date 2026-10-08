@@ -32,6 +32,7 @@ import { randomUUID } from 'node:crypto';
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { createContactResolved } from '../../../../src/bus/events.js';
 import { sameIdentifier } from '../../../../src/contacts/identifier-near-miss.js';
+import { normalizeAgentIdentifier } from '../../../../src/contacts/agent-identifier.js';
 import { identifierHasSource } from '../../../../src/skills/_shared/identifier-source.js';
 
 /**
@@ -82,8 +83,11 @@ export class ContactRegisterHandler implements ToolHandler {
     if (!rawIdentifier || typeof rawIdentifier !== 'string') {
       return { success: false, error: 'Missing required input: identifier' };
     }
-    // Email is stored and matched lowercased; compare the provenance check on that form.
-    const identifier = channel === 'email' ? rawIdentifier.trim().toLowerCase() : rawIdentifier;
+    // The stored form: a lowercased email, an E.164 number. A blank identifier is refused
+    // here rather than stored. The provenance check and the lookup both use this form.
+    const normalized = normalizeAgentIdentifier(channel, rawIdentifier);
+    if (!normalized.ok) return { success: false, error: normalized.error };
+    const identifier = normalized.identifier;
     if (!displayName || typeof displayName !== 'string') {
       return { success: false, error: 'Missing required input: displayName' };
     }
