@@ -97,10 +97,10 @@ A typo in a brand-new address that resembles nothing on file is stored and verif
 | Existing identity | Result |
 |---|---|
 | Verified | Success, unchanged (`already_linked: true`) |
-| Unverified, source `outbound_recipient` | Verified in place (`verifyIdentity`). The source is kept, so the store still shows the address first came from a send |
+| Unverified, source `outbound_recipient` | The §3 duplicate check runs first. If it passes, verified in place (`verifyIdentity`) and the source is kept, so the store still shows the address first came from a send. If it finds a candidate or a blocking match, the call is refused and nothing is verified |
 | Unverified, any other source (`self_claimed`, `sms_participant`) | Refused. Only the principal can verify those, in the console |
 
-A re-statement writes no new identity, so it skips the duplicate check. The identifier is still normalized first, so `+1 (555) 123-4567` finds the stored `+15551234567`. An identifier on a *different* contact is the blocking match from §3.
+A re-statement writes no new identity, but verifying is the risky step: the gateway records an `outbound_recipient` address as the agent typed it, so a typo of the principal's address (the 2026-10-07 incident) sits there unverified until someone vouches for it. The re-statement therefore runs the same check as a new address, with `excludeContactId` set to this contact, before it verifies. A candidate refuses the call until `distinct_from` names it; a check that cannot run refuses too. A verified identity is returned unchanged with no check, since nothing changes. The identifier is still normalized first, so `+1 (555) 123-4567` finds the stored `+15551234567`. An identifier on a *different* contact is the blocking match from §3.
 
 An agent may vouch only for what an agent typed. This is how agents reach the contacts that raw sends created. Spec 09's source table changes the `outbound_recipient` row to "No: verified when the principal confirms it or an agent re-states it".
 

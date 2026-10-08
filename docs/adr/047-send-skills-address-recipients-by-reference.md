@@ -106,7 +106,7 @@ This is not the near-miss rule rejected below (Option A). It covers every contac
 
 Re-stating an address already on the same contact:
 - a verified identity: unchanged;
-- an unverified `outbound_recipient` identity: verified in place, keeping its source;
+- an unverified `outbound_recipient` identity: the same duplicate check runs first, because the gateway records the address as the agent typed it, typos included (the 2026-10-07 incident address was one). If it passes, the identity is verified in place, keeping its source. If not, the call is refused and nothing is verified;
 - anything else unverified (`self_claimed`, `sms_participant`): refused, because only the principal can verify those.
 
 Structural contacts are off limits to agents. No agent skill changes the addresses of a structural contact (the principal, an agent or a system contact: `isStructuralContact`). `contact-link-identity` refuses adding an identity, re-stating one, and verifying an `outbound_recipient` one. `contact-merge` refuses a structural contact on either side, since the primary gains the secondary's identities. `contact-unlink-identity` and `contact-set-identity-status` refuse a structural contact's identities. The principal's verified identities form the principal identity snapshot, which Gate C's carve-outs and the `principal` send alias trust, so an address an agent added there would be a way to impersonate the principal. The principal manages their own addresses in the console. The `ceo_stated` path that `contact-link-identity` used before this change had the same hole, and a security review flagged it.
