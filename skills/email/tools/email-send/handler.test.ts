@@ -50,7 +50,8 @@ describe('EmailSendHandler', () => {
     const ctx = makeCtx({ subject: 'Hello', body: 'Body text' });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/to/);
+    if (!result.success) expect(result.error).toMatch(/contact-create/);
+    expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
   });
 
   it('returns error when subject is missing', async () => {
@@ -400,7 +401,14 @@ describe('EmailSendHandler', () => {
     it.each([[{ to_address: '' }], [{ cc_addresses: '  ' }], [{ cc_addresses: [] }], [{ to_address: null }]])(
       'ignores a blank retired input %o (Review Focus 1)',
       async (fields) => {
-        expect((await handler.execute(makeCtx({ to: ALICE_ID, ...fields, subject: 'S', body: 'B' }))).success).toBe(true);
+        const ctx = makeCtx({ to: ALICE_ID, ...fields, subject: 'S', body: 'B' });
+        const result = await handler.execute(ctx);
+        expect(result.success).toBe(true);
+        // A blank retired input must not leak into the recipients that are sent to.
+        expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
+          expect.objectContaining({ to: 'alice@example.com', cc: undefined }),
+          expect.anything(),
+        );
       },
     );
 

@@ -64,7 +64,8 @@ describe('SignalSendHandler', () => {
     const ctx = makeCtx({ input: { message: 'hello' } });
     const result = await handler.execute(ctx);
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toMatch(/recipient|group_id/);
+    if (!result.success) expect(result.error).toMatch(/contact-create/);
+    expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
   });
 
   it('returns error when both recipient and group_id are provided', async () => {

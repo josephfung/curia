@@ -1710,10 +1710,14 @@ export class ExecutionLayer {
             let resolutionFailed = false;
             if (foundCarveout && !foundCarveout.carveout.resolveRecipients) {
               recipients = foundCarveout.carveout.parseRecipients(input);
-              // Send skills take contact references (#2033). Resolve them the way the
-              // skill will, so the principal carve-out and the reply-to-sender check
-              // compare the address that will actually be sent to. One indexed
-              // contact read per reference; raw addresses skip it.
+              // Send skills take contact references (#2033, #2041). The pre-gate check
+              // above already resolved each one and refused anything that is not a
+              // reference, so swap in the resolved address here: the principal
+              // carve-out and the reply-to-sender check then compare the address that
+              // will actually be sent to. No contact read happens here. An entry that
+              // is not reference-shaped would pass through unchanged, but no send skill
+              // produces one now; a caller that holds a raw address (a non-skill call
+              // to OutboundGateway.send) never reaches this skill-input path.
               if (recipients !== null) {
                 const normalized = this.substituteResolvedRecipients(recipients, sendRecipients);
                 if (!normalized.ok) {

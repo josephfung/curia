@@ -29,9 +29,15 @@ const resolveRecipientReference = vi.fn(async (_channel: string, value: string) 
 });
 
 describe('slack-send handler', () => {
-  it('requires a recipient and message', async () => {
-    const handler = new SlackSendHandler();
-    expect((await handler.execute(makeCtx({ input: { message: 'hi' } }))).success).toBe(false);
+  it('asks for a recipient and points to contact-create when none is given', async () => {
+    const send = vi.fn();
+    const result = await new SlackSendHandler().execute(makeCtx({
+      input: { message: 'hi' },
+      outboundGateway: { send, resolveRecipientReference } as never,
+    }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/contact-create/);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('rejects missing gateway', async () => {
