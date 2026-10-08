@@ -1,9 +1,10 @@
 {
   "name": "web-fetch",
   "description": "Fetch the content of a web page via HTTP GET. Returns the page body as text. Use this to look up information on the web.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sensitivity": "normal",
   "action_risk": "none",
+  "provenance_source": true,
   "inputs": {
     "url": "string",
     "max_length": "number?"

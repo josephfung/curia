@@ -274,12 +274,11 @@ interface ContactServiceBackend {
 // email (no header spoofing), so we trust the source number at the same level as email_participant.
 // slack_participant is auto-verified — Slack user ids from the principal's workspace (ADR-033).
 // sms_participant is NOT auto-verified — SMS From is spoofable (ADR-036); principal must verify.
-// agent_called is auto-verified — contact-register records it, callable by ceo-inbox only, for a sender
-// ceo-inbox read from mail. The identifier is still tool input and gets no duplicate check; whether it
-// should is an open question, tracked in #2061 (#2041, ADR-047).
-// agent_stated is auto-verified — contact-create and contact-link-identity write it only after the
-// duplicate check passes (findLikelyDuplicates), and every send reaches it by reference afterwards,
-// so the agent types it once, in a checked place (#2041, ADR-047).
+// agent_called and agent_stated are NOT auto-verified — an agent typed the identifier. Their writers
+// (contact-register; contact-create and contact-link-identity) pass `verified` explicitly: true only
+// when the identifier occurs in text the model did not write (a message a person sent, a source-tool
+// result), so a typo is never verified (#2061, ADR-047). A new writer of either source stores
+// unverified unless it runs that check.
 // outbound_recipient is NOT auto-verified — the address came from LLM-generated tool input on a
 // first-time send, the opposite of a mechanical extraction (#2033, ADR-047). An agent re-stating it
 // with contact-link-identity verifies it (#2041).
@@ -291,8 +290,6 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'slack_participant',
   'crm_import',
   'calendar_attendee',
-  'agent_called',
-  'agent_stated',
 ]);
 
 /**

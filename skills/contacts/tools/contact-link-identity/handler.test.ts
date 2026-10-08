@@ -6,11 +6,25 @@ import pino from 'pino';
 import { ContactLinkIdentityHandler } from './handler.js';
 import { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
+import { sourceKeyFor, sourceKeysInText, type IdentifierSources } from '../../../../src/contacts/identifier-provenance.js';
 
 const silentLog = pino({ level: 'silent' });
 
-function makeCtx(contactService: ContactService, input: Record<string, unknown>): ToolContext {
-  return { input, secret: () => 'unused', log: silentLog, contactService } as unknown as ToolContext;
+// Most cases here are about the duplicate check, so every identifier has a source unless
+// a case says otherwise. Provenance cases pass their own (#2061).
+const EVERYTHING_SOURCED: IdentifierSources = { has: async () => true };
+
+function makeCtx(
+  contactService: ContactService,
+  input: Record<string, unknown>,
+  extra: Partial<ToolContext> = { identifierSources: EVERYTHING_SOURCED },
+): ToolContext {
+  return { input, secret: () => 'unused', log: silentLog, contactService, ...extra } as unknown as ToolContext;
+}
+
+function sourcesFrom(text: string): IdentifierSources {
+  const keys = sourceKeysInText(text);
+  return { has: async (channel, identifier) => keys.has(sourceKeyFor(channel, identifier)) };
 }
 
 describe('ContactLinkIdentityHandler', () => {
@@ -270,5 +284,46 @@ describe('ContactLinkIdentityHandler', () => {
       }
       expect((await contacts.getContactWithIdentities(structural.id))!.identities).toHaveLength(0);
     });
+  });
+});
+
+describe('ContactLinkIdentityHandler — identifier provenance (#2061)', () => {
+  let contacts: ContactService;
+  let danaId: string;
+  const handler = new ContactLinkIdentityHandler();
+
+  beforeEach(async () => {
+    contacts = ContactService.createInMemory();
+    const dana = await contacts.createContact({ displayName: 'Dana Whitfield', source: 'ceo_stated' });
+    danaId = dana.id;
+  });
+
+  it('links an address found in a source as verified', async () => {
+    const result = await handler.execute(makeCtx(contacts, { contact_id: danaId, channel: 'email', identifier: 'dana@newco.example' },
+      { identifierSources: sourcesFrom('Her new address is dana@newco.example') }));
+    expect(result).toMatchObject({ success: true, data: { verified: true } });
+  });
+
+  it('refuses a new address with no source and links nothing', async () => {
+    const result = await handler.execute(makeCtx(contacts, { contact_id: danaId, channel: 'email', identifier: 'dana@newcoo.example' },
+      { identifierSources: sourcesFrom('Her new address is dana@newco.example') }));
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain('Nothing was linked.');
+    expect(result.error).not.toContain('dana@newcoo.example');
+    expect((await contacts.getContactWithIdentities(danaId))!.identities).toHaveLength(0);
+  });
+
+  it('re-states an unverified outbound_recipient address only when it has a source', async () => {
+    await contacts.linkIdentity({ contactId: danaId, channel: 'email', channelIdentifier: 'dana@newco.example', source: 'outbound_recipient' });
+    const input = { contact_id: danaId, channel: 'email', identifier: 'dana@newco.example' };
+
+    const refused = await handler.execute(makeCtx(contacts, input, { identifierSources: sourcesFrom('nothing here') }));
+    expect(refused.success).toBe(false);
+    if (!refused.success) expect(refused.error).toContain('Nothing was verified.');
+    expect((await contacts.getContactWithIdentities(danaId))!.identities[0]!.verified).toBe(false);
+
+    const verified = await handler.execute(makeCtx(contacts, input, { identifierSources: sourcesFrom('dana@newco.example') }));
+    expect(verified).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
   });
 });

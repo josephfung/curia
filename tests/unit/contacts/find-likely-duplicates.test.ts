@@ -166,13 +166,19 @@ describe('ContactService.findLikelyDuplicates', () => {
   });
 });
 
-describe('agent_stated identities', () => {
-  it('are verified on link', async () => {
+// An agent typed these identifiers, so they are verified only when the writer found them
+// in a source and says so (#2061). A writer that does not check stores them unverified.
+describe('agent-entered identities', () => {
+  it.each(['agent_stated', 'agent_called'] as const)('%s is unverified unless the writer verifies it', async (source) => {
     const contacts = ContactService.createInMemory();
-    const c = await contacts.createContact({ displayName: 'Dana Whitfield', source: 'agent_stated' });
-    const identity = await contacts.linkIdentity({
-      contactId: c.id, channel: 'email', channelIdentifier: 'dana@newco.example', source: 'agent_stated',
+    const c = await contacts.createContact({ displayName: 'Dana Whitfield', source });
+    const unchecked = await contacts.linkIdentity({
+      contactId: c.id, channel: 'email', channelIdentifier: 'dana@newco.example', source,
     });
-    expect(identity).toMatchObject({ source: 'agent_stated', verified: true });
+    expect(unchecked).toMatchObject({ source, verified: false });
+    const checked = await contacts.linkIdentity({
+      contactId: c.id, channel: 'email', channelIdentifier: 'dana@other.example', source, verified: true,
+    });
+    expect(checked).toMatchObject({ source, verified: true });
   });
 });

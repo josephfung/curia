@@ -2,7 +2,7 @@
 name: contacts
 description: >
   Contact identity, lifecycle, and grant recommendations. Mixed action_risk (lookup=none … grant/revoke=critical) preserved per tool.
-version: "0.2.0"
+version: "0.2.1"
 tools:
   - contact-create
   - contact-lookup
@@ -19,7 +19,6 @@ tools:
   - contact-dedup-exclude
   - contact-grant-permission
   - contact-revoke-permission
-  - contact-register
   - scan-grant-recommendations
   - approve-grant-recommendation
   - decline-grant-recommendation

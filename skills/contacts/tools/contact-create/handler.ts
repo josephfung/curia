@@ -10,8 +10,12 @@
 //   - an address another contact holds is refused;
 //   - a contact that may be the same person (similar address, same number on another
 //     channel, same name) is listed until the agent names it in distinct_from.
+//   - an identifier that occurs in no message a person sent in the conversation, and
+//     in no source-tool result read in it, is refused (#2061): a typo occurs nowhere.
 // Identities are recorded as agent_stated: an agent typed them, so they are not
-// presented as the principal's own statement (ceo_stated).
+// presented as the principal's own statement (ceo_stated). They are verified because
+// both checks passed, and the handler says so explicitly (agent_stated is not an
+// auto-verified source).
 //
 // This skill uses contactService, which is a universal service.
 
@@ -25,6 +29,7 @@ import {
   takenError,
   uncoveredCandidates,
 } from '../../../../src/skills/_shared/duplicate-refusal.js';
+import { identifierHasSource, unsourcedIdentifierError } from '../../../../src/skills/_shared/identifier-source.js';
 
 // Optional inputs, each linked as an identity on the channel of the same name.
 const CHANNEL_INPUTS = ['email', 'phone', 'signal', 'sms', 'slack', 'telegram'] as const;
@@ -104,6 +109,14 @@ export class ContactCreateHandler implements ToolHandler {
       return { success: false, error: candidatesError(check.candidates, NOT_CREATED, NEXT) };
     }
 
+    // After the duplicate check, whose refusals say more ("that address is already on …").
+    for (const identity of identities) {
+      if (!(await identifierHasSource(ctx, identity.channel, identity.identifier))) {
+        ctx.log.info({ channel: identity.channel }, 'contact-create: refused — identifier has no source (#2061)');
+        return { success: false, error: unsourcedIdentifierError(identity.channel, NOT_CREATED) };
+      }
+    }
+
     ctx.log.info({ name, role, channels: identities.map((identity) => identity.channel) }, 'Creating contact');
 
     let created: { contact: Contact; kgNodeCreated: boolean };
@@ -129,6 +142,7 @@ export class ContactCreateHandler implements ToolHandler {
           channel: identity.channel,
           channelIdentifier: identity.identifier,
           source: 'agent_stated',
+          verified: true,
         });
       } catch (err) {
         // Leave nothing half-made: remove the contact this call created. Retire its KG

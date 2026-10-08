@@ -6,11 +6,26 @@ import pino from 'pino';
 import { ContactCreateHandler } from './handler.js';
 import { ContactService } from '../../../../src/contacts/contact-service.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
+import { sourceKeyFor, sourceKeysInText, type IdentifierSources } from '../../../../src/contacts/identifier-provenance.js';
 
 const silentLog = pino({ level: 'silent' });
 
-function makeCtx(contactService: ContactService, input: Record<string, unknown>): ToolContext {
-  return { input, secret: () => 'unused', log: silentLog, contactService } as unknown as ToolContext;
+// Most cases here are about the duplicate check, so every identifier has a source unless
+// a case says otherwise. Provenance cases pass their own (#2061).
+const EVERYTHING_SOURCED: IdentifierSources = { has: async () => true };
+
+function makeCtx(
+  contactService: ContactService,
+  input: Record<string, unknown>,
+  extra: Partial<ToolContext> = { identifierSources: EVERYTHING_SOURCED },
+): ToolContext {
+  return { input, secret: () => 'unused', log: silentLog, contactService, ...extra } as unknown as ToolContext;
+}
+
+/** Sources that hold exactly these identifiers, as the runtime's lookup would. */
+function sourcesFrom(text: string): IdentifierSources {
+  const keys = sourceKeysInText(text);
+  return { has: async (channel, identifier) => keys.has(sourceKeyFor(channel, identifier)) };
 }
 
 describe('ContactCreateHandler', () => {
@@ -197,5 +212,62 @@ describe('ContactCreateHandler', () => {
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toMatch(/just added to another contact/);
     expect(await count()).toBe(before);
+  });
+});
+
+describe('ContactCreateHandler — identifier provenance (#2061)', () => {
+  let contacts: ContactService;
+  const handler = new ContactCreateHandler();
+
+  beforeEach(async () => {
+    contacts = ContactService.createInMemory();
+    const priya = await contacts.createContact({ displayName: 'Priya Natarajan', source: 'ceo_stated' });
+    await contacts.linkIdentity({ contactId: priya.id, channel: 'email', channelIdentifier: 'priya.natarajan@example.test', source: 'ceo_stated' });
+  });
+
+  it('verifies an address the principal stated, and a number stated in another format', async () => {
+    const sources = sourcesFrom('Email Dana at dana.whitfield@newco.example, or text 416-555-0100');
+    const result = await handler.execute(makeCtx(contacts, {
+      name: 'Dana Whitfield', email: 'dana.whitfield@newco.example', sms: '+1 416 555 0100',
+    }, { identifierSources: sources }));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const found = await contacts.getContactWithIdentities((result.data as { contact_id: string }).contact_id);
+    expect(found!.identities.every((identity) => identity.verified)).toBe(true);
+  });
+
+  it('refuses a typo of a stated address, writes nothing, and does not echo the address', async () => {
+    const before = (await contacts.listContacts()).length;
+    const result = await handler.execute(makeCtx(contacts, {
+      name: 'Dana Whitfield', email: 'dana.whitfeld@newco.example',
+    }, { identifierSources: sourcesFrom('Email Dana at dana.whitfield@newco.example') }));
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain('appears in no message a person sent');
+    expect(result.error).toContain('No contact was created.');
+    expect(result.error).not.toContain('dana.whitfeld@newco.example');
+    expect((await contacts.listContacts()).length).toBe(before);
+  });
+
+  it('refuses when the task has no sources at all', async () => {
+    const result = await handler.execute(makeCtx(contacts, { name: 'Dana Whitfield', email: 'dana@newco.example' }, {}));
+    expect(result.success).toBe(false);
+  });
+
+  it('still creates a name-only contact with no sources', async () => {
+    const result = await handler.execute(makeCtx(contacts, { name: 'Morgan Lee' }, {}));
+    expect(result.success).toBe(true);
+  });
+
+  it('reports an address already on file as taken, not as unsourced', async () => {
+    const result = await handler.execute(makeCtx(contacts, { name: 'P. Natarajan', email: 'priya.natarajan@example.test' }, {}));
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain('already on');
+  });
+
+  it('treats a principal-approved replay as sourced', async () => {
+    const result = await handler.execute(makeCtx(contacts, { name: 'Dana Whitfield', email: 'dana@newco.example' }, { humanApproved: true }));
+    expect(result.success).toBe(true);
   });
 });
