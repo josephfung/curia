@@ -34,7 +34,8 @@ export interface ToolStub {
  * `called` / `not_called` take an optional `with` (argument subset, same rules as a
  * stub match) and `contains` (each named argument, stringified, must contain the
  * substring — case-insensitive). `called` may also set `success`: only a call whose
- * result has that success value matches. A refused send still counts for `not_called`.
+ * result has that success value matches, and `min` / `max` count only those calls.
+ * A refused send still counts for `not_called`.
  */
 export type BehaviorCheck =
   | { kind: 'called'; tool: string; with?: Record<string, unknown>; contains?: Record<string, string>; min?: number; max?: number; success?: boolean }

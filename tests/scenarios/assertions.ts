@@ -35,7 +35,7 @@ function callMatches(
 
 function describeCalls(calls: CapturedToolCall[]): string {
   if (calls.length === 0) return 'no tool calls';
-  return calls.map(c => `${c.name}(${JSON.stringify(c.input).slice(0, 160)})`).join(', ');
+  return calls.map(c => `${c.name}${c.result?.success === false ? ' [failed]' : ''}(${JSON.stringify(c.input).slice(0, 160)})`).join(', ');
 }
 
 const pass = (justification: string): RunRating => ({ rating: 'PASS', justification });
@@ -56,7 +56,7 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
       }
       return miss(
         `expected ${check.tool} ${min}${Number.isFinite(max) ? `..${max}` : '+'}x matching ` +
-        `${JSON.stringify({ with: check.with, contains: check.contains })}; got ${matching.length}. ` +
+        `${JSON.stringify({ with: check.with, contains: check.contains, ...(check.success !== undefined ? { success: check.success } : {}) })}; got ${matching.length}. ` +
         `Calls: ${describeCalls(calls)}`,
       );
     }
