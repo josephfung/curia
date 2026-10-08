@@ -25,22 +25,23 @@ turns:
       Actually, make that 10am instead of 9am. Same thing otherwise.
     # The office's scheduler-create answers turn 1 with this job id. This stub is the
     # job as the turn starts (9am). Writes during the turn replay onto it, so a
-    # scheduler-list after scheduler-update shows the edit (#2074). nextRunAt is
-    # left off: a weekday cron's next fire is not "next Monday", and the date
-    # placeholders cannot name the next weekday. The replay fills it from the cron.
+    # scheduler-list after scheduler-update shows the edit (#2074).
+    # nextRunAt is left off: a weekday cron's next fire is not "next Monday", and
+    # the date placeholders cannot name the next weekday. The replay fills it.
+    # agentId and createdBy are left off too. Fields this stub names win over the
+    # create, so seeding coordinator would hide a job turn 1 created for ceo-inbox
+    # from scheduler-list {agent_id: ceo-inbox}. The create's agent comes through.
     tool_stubs:
       scheduler-list:
         - match: {}
           return:
             jobs:
               - id: 0f0f0f0f-0000-4000-8000-000000000001
-                agentId: coordinator
                 status: pending
                 cronExpr: "0 9 * * 1-5"
                 timezone: "{{timezone}}"
                 taskTitle: Weekday investor inbox check
                 intentAnchor: Every weekday at 9am, scan the principal's inbox for mail from investors and flag it
-                createdBy: coordinator
             count: 1
             truncated: false
             limit: 50
