@@ -280,6 +280,9 @@ Added 2026-10-07, measured on that day's prod prompt (llm.call
     section defines "the principal" without naming them.
   - **The temperature question moves to #2044,** to be decided with reasoning effort using the
     reasoning-token counts #2048 records.
+  - **Decided in ADR-048 (2026-10-08): agent calls send no temperature,** so PR 11 carries no
+    temperature probe. DeepSeek ignores temperature while thinking, Anthropic rejects it with
+    thinking on, and Google asks Gemini 3 callers to keep the default.
 
 ## PR sequence
 
