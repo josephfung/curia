@@ -1,4 +1,10 @@
+// handler.ts — contact-unlink-identity skill implementation.
+//
+// Removes a channel identity from a contact. A structural contact's identities (the
+// principal's above all) are not an agent's to remove: see structuralContactRefusal.
+
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 
 export class ContactUnlinkIdentityHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -23,6 +29,15 @@ export class ContactUnlinkIdentityHandler implements ToolHandler {
       if (!contactData) {
         return { success: false, error: `Contact not found: ${contact_id}` };
       }
+      // Before the ownership check, so nothing about a structural contact's identities
+      // is reported back (#2041).
+      const structural = structuralContactRefusal(
+        contactData.contact,
+        'Nothing was changed.',
+        ctx.log,
+        'contact-unlink-identity',
+      );
+      if (structural) return { success: false, error: structural };
       const ownsIdentity = contactData.identities.some(i => i.id === identity_id);
       if (!ownsIdentity) {
         return { success: false, error: `Identity ${identity_id} does not belong to contact ${contact_id}` };

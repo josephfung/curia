@@ -12,8 +12,8 @@
 // after a first-time send) is verified in place. Other unverified sources
 // (self_claimed, sms_participant) need the principal.
 //
-// A structural contact (systemRole set: principal, agent, system) is never changed
-// here — see the guard below.
+// A structural contact (the principal, an agent, a system contact: isStructuralContact)
+// is never changed here — see structuralContactRefusal.
 //
 // This skill uses contactService, which is a universal service.
 
@@ -24,11 +24,11 @@ import { normalizeAgentIdentifier } from '../../../../src/contacts/agent-identif
 import { sameIdentifier } from '../../../../src/contacts/identifier-near-miss.js';
 import {
   candidatesError,
-  isPrincipalContact,
   parseDistinctFrom,
   takenError,
   uncoveredCandidates,
 } from '../../../../src/skills/_shared/duplicate-refusal.js';
+import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 
 const NOT_LINKED = 'Nothing was linked.';
 const NEXT =
@@ -91,29 +91,12 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         return { success: false, error: `No contact has ID ${contact_id}. ${NOT_LINKED} contact-lookup returns the ID.` };
       }
 
-      // A structural contact's addresses are not an agent's to change. The principal's
-      // verified identities are trusted as the principal by Gate C and by the "principal"
-      // send alias, so an agent adding (or verifying) one would be able to impersonate
-      // the principal. This covers a new address, a re-statement, and verifying an
-      // outbound_recipient one. The principal's contact ID stays out of the error and the
-      // log: it must not reach the model's context (spec 09).
-      if (target.contact.systemRole !== null) {
-        if (isPrincipalContact(target.contact)) {
-          ctx.log.info({ channel }, 'contact-link-identity: refused — principal addresses are not agent-managed (#2041)');
-          return {
-            success: false,
-            error: `The principal's addresses are managed by the principal, in the console. ${NOT_LINKED}`,
-          };
-        }
-        ctx.log.info(
-          { contact_id, channel, systemRole: target.contact.systemRole },
-          'contact-link-identity: refused — system contact addresses are not agent-managed (#2041)',
-        );
-        return {
-          success: false,
-          error: `This is a system contact; its addresses are not managed by agents. ${NOT_LINKED}`,
-        };
-      }
+      // A structural contact's addresses are not an agent's to change: an agent adding
+      // (or verifying) one of the principal's would be able to impersonate the principal.
+      // This covers a new address, a re-statement, and verifying an outbound_recipient
+      // one. The same rule guards merge, unlink and set-identity-status.
+      const structural = structuralContactRefusal(target.contact, NOT_LINKED, ctx.log, 'contact-link-identity');
+      if (structural) return { success: false, error: structural };
 
       // Re-statement: the address is already on this contact.
       const existing = target.identities.find(

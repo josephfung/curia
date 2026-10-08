@@ -2,13 +2,15 @@
 //
 // Sets the status of a contact's channel identity (email, phone, etc.).
 // Status is orthogonal to the verified flag — an address can be
-// verified-but-bounced or unverified-but-active.
+// verified-but-bounced or unverified-but-active. A structural contact's identities
+// are refused: see structuralContactRefusal (#2041).
 //
 // See: https://github.com/josephfung/curia/issues/377
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { IdentityStatus } from '../../../../src/contacts/types.js';
 import { IdentityNotFoundError } from '../../../../src/contacts/types.js';
+import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
 
 const VALID_STATUSES = new Set<string>(['active', 'defunct', 'bounced']);
@@ -49,9 +51,28 @@ export class ContactSetIdentityStatusHandler implements ToolHandler {
       };
     }
 
-    ctx.log.info({ identity_id, status }, 'Setting identity status');
-
     try {
+      // A structural contact's identities (the principal's above all) are not an agent's
+      // to change: re-activating a defunct principal address would make it sendable and
+      // trusted as the principal again (#2041). Load the identity, then its contact.
+      const identity = await ctx.contactService.getIdentity(identity_id);
+      if (!identity) {
+        ctx.log.info({ identity_id }, 'Identity not found');
+        return {
+          success: false,
+          error: `No identity exists with id ${identity_id}. Use contact-lookup to verify the UUID.`,
+        };
+      }
+      const owner = await ctx.contactService.getContact(identity.contactId);
+      if (!owner) {
+        // Fail closed: without the owner the structural check cannot run.
+        ctx.log.error({ identity_id }, 'contact-set-identity-status: identity has no contact — refusing');
+        return { success: false, error: 'Failed to set identity status. See logs for details.' };
+      }
+      const structural = structuralContactRefusal(owner, 'Nothing was changed.', ctx.log, 'contact-set-identity-status');
+      if (structural) return { success: false, error: structural };
+
+      ctx.log.info({ identity_id, status }, 'Setting identity status');
       const updated = await ctx.contactService.setIdentityStatus(
         identity_id,
         status as IdentityStatus,

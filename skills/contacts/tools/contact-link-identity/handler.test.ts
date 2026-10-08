@@ -177,5 +177,24 @@ describe('ContactLinkIdentityHandler', () => {
       }
       expect((await contacts.getContactWithIdentities(structural.id))!.identities).toHaveLength(0);
     });
+
+    // isStructuralContact, not systemRole alone: a principal or agent row whose system
+    // role was never set is still off limits.
+    it.each([
+      ['kind principal', { kind: 'principal' }],
+      ['kind agent', { kind: 'agent' }],
+      ['tier principal', { tier: 'principal' }],
+    ] as const)('refuses a contact with no system role but %s', async (_label, fields) => {
+      const structural = await contacts.createContact({ displayName: 'Curia Internal', source: 'ceo_stated' });
+      await contacts.saveContact({ ...structural, ...fields });
+      const result = await handler.execute(makeCtx(contacts, {
+        contact_id: structural.id, channel: 'email', identifier: 'curia@example.test',
+      }));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toBe('This is a system contact; its addresses are not managed by agents. Nothing was linked.');
+      }
+      expect((await contacts.getContactWithIdentities(structural.id))!.identities).toHaveLength(0);
+    });
   });
 });

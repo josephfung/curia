@@ -18,8 +18,12 @@
 // than reintroducing a handler gate. See docs/specs/14-autonomy-engine.md.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { Contact } from '../../../../src/contacts/types.js';
 import { ContactNotFoundError } from '../../../../src/contacts/types.js';
+import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 import { isUuid } from '../../../../src/util/uuid.js';
+
+const NOT_MERGED = 'Nothing was merged.';
 
 export class ContactMergeHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -46,6 +50,31 @@ export class ContactMergeHandler implements ToolHandler {
     }
     if (!ctx.contactService) {
       return { success: false, error: 'contact-merge: contactService not available — this is a universal service, check ExecutionLayer configuration.' };
+    }
+
+    // The primary keeps the secondary's identities, so a merge into a structural contact
+    // adds addresses to it: onto the principal, verified addresses that Gate C and the
+    // "principal" alias trust (#2041). Refused here, on the agent path only (the console
+    // merge does not come through this skill). ContactService also refuses a structural
+    // secondary, but its error says to make that contact the primary, which this guard
+    // refuses too; checking the secondary here gives the agent the one answer. Checked
+    // before the log below, which carries both IDs.
+    let primary: Contact | undefined;
+    let secondary: Contact | undefined;
+    try {
+      [primary, secondary] = await Promise.all([
+        ctx.contactService.getContact(primary_contact_id),
+        ctx.contactService.getContact(secondary_contact_id),
+      ]);
+    } catch (err) {
+      ctx.log.error({ err }, 'contact-merge: contact lookup failed');
+      return { success: false, error: `The contact lookup failed. ${NOT_MERGED} Try again.` };
+    }
+    // A missing contact falls through: mergeContacts reports it as not found.
+    for (const contact of [primary, secondary]) {
+      if (!contact) continue;
+      const structural = structuralContactRefusal(contact, NOT_MERGED, ctx.log, 'contact-merge');
+      if (structural) return { success: false, error: structural };
     }
 
     // Default dry_run: true — safe default, prevents accidental merges without principal confirmation
