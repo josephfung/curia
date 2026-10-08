@@ -1158,8 +1158,8 @@ can't serve. PR 11 doesn't change Triage Batch.
 
 ### 2026-10-08 — prompt trim PR 3: rewrite pass
 
-YAML 15,667 → 13,180 chars; always-on (YAML + pinned SKILL.md) ~5,456 → ~4,835 tokens,
-budget 5,600 → 4,900. Local tool definitions 76,811 → 76,898 bytes (budget 77,000): the
+YAML 15,667 → 13,439 chars; always-on (YAML + pinned SKILL.md) ~5,456 → ~4,899 tokens,
+budget 5,600 → 5,000. Local tool definitions 76,811 → 76,898 bytes (budget 77,000): the
 `owner` values moved into `task-create`'s description. Headroom was 189 bytes before this
 PR (the `contact-create` pin, #2041), so the other two hints the plan routed to tool
 descriptions stay in the YAML.
@@ -1221,4 +1221,28 @@ first attempt.
 Draft C against main on first attempts: Fisher's exact p = 0.04. Every run on every prompt
 chose `scheduler-update`. Draft C's prompt then re-checked its edit against the stale list,
 and the reply described the result less cleanly. Main's paragraph, converted to the second
-person, is what ships. Final YAML 13,180 chars.
+person, is what ships (13,180 chars at that point).
+
+**Web-dependent cases, after web search came back (2026-10-08 night).** These three cases
+failed on both sides during the outage.
+
+- **First A/B, 3 rounds on `7cf3149c`.** Speaking Engagement Intake and Pre-Meeting Prep
+  Brief were flaky on both sides. Main also failed Pre-Meeting once, missing every check.
+  "Coordinator routes long-running task with synchronous acknowledgment" caught a real
+  miss: the tighter delegation-acknowledgment draft delegated without acknowledging first
+  (`acknowledges_intent` MISS). Main's paragraph is restored verbatim (`68f7ad4d`).
+- **Then 6 alternating rounds** of the long-running case and Pre-Meeting Prep Brief, PR 3
+  against main. Web search failed on every call from main's round 5 on, so rounds 5 and 6
+  count for less.
+
+| Check (6 rounds each) | PR 3 | main |
+|---|---|---|
+| `acknowledges_intent` | 4 pass, 2 partial | 3 pass, 3 partial |
+| Long-running case passed (final) | 6 of 6 | 5 of 6 |
+| Pre-Meeting `ask-meeting-purpose` | 2 pass, 1 partial, 3 miss | 2 pass, 2 partial, 2 miss |
+
+PR 3 dropped "Ask clarifying questions freely", and Pre-Meeting's `ask-meeting-purpose`
+check is the one that could show it. Main misses that check about as often, and a variant
+with the line restored did no better (4 runs, all with web search down: 1 pass, 2
+partial, 1 miss). The line stays out. Joseph's call (2026-10-08): if evidence later shows
+it is needed, it goes back as policy.

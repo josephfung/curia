@@ -73,11 +73,12 @@ interface AgentBudget {
 // Prompt trim PR 2 (one section each for voice and contact resolution): YAML 15,709
 // chars (~3,927 tokens, under #1954's 4k target), ~5,467 tokens with SKILL.md.
 // Prompt trim PR 3 (second person, positive phrasing, tighter direct-capability
-// sections): YAML 13,180 chars, ~4,835 tokens with SKILL.md; 76,898 bytes over 66 local
+// sections): YAML 13,439 chars, ~4,899 tokens with SKILL.md; 76,898 bytes over 66 local
 // tools, after task-create's owner values moved into its description. The scheduling
-// paragraph kept its old wording: the tighter draft measured worse (baseline log).
+// and delegation-acknowledgment paragraphs kept their old wording: the tighter drafts
+// measured worse (baseline log).
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 4_900, localToolDefinitionBytes: 77_000, allowMcpPins: false },
+  { agent: 'coordinator', alwaysOnPromptTokens: 5_000, localToolDefinitionBytes: 77_000, allowMcpPins: false },
 ];
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };
