@@ -1,6 +1,6 @@
 # Case 7 (#1956): replying to a direct inbound email is returning the text — the system
-# threads it. Calling email-reply or email-send starts a new thread. Rule:
-# agents/coordinator.yaml, Email → "Sending and replying".
+# threads it. Calling email-reply or email-send starts a new thread. Rule: turn guidance
+# `email-direct-reply` (src/agents/prompts/turn-guidance.ts), on email turns (#1959).
 name: direct email reply as text
 description: >
   An external contact emails the coordinator's own inbox with a simple logistics question
@@ -41,7 +41,13 @@ expected_behaviors:
       not_called: [email-reply]
   - id: no_send_to_sender
     weight: critical
-    description: Does not email Tomas through email-send.
+    description: Does not email Tomas through email-send by contact reference.
+    check:
+      not_called: [email-send]
+      contains: { to: "{{contact:tomas}}" }
+  - id: no_send_to_sender_by_address
+    weight: critical
+    description: Does not email Tomas through email-send by typing his address into `to`.
     check:
       not_called: [email-send]
       contains: { to: tomas.reyes@example.test }

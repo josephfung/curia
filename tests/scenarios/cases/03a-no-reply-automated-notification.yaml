@@ -1,7 +1,7 @@
 # Case 3 (#1956): an automated notification gets exactly NO_REPLY — no narration,
 # because narration is delivered as the email. The mail carries no auto-generated flag,
 # so the decision is the model's. Rule: agents/coordinator.yaml, "When nothing should go
-# out" (Audience awareness and Email → Sending and replying).
+# out" (Audience awareness).
 name: no-reply automated notification
 description: >
   A storage-usage report arrives at the coordinator's own inbox from a SaaS vendor's

@@ -10,7 +10,9 @@ import type { Tier } from './llm/model-router.js';
 import { ContextBudget } from './llm/context-budget.js';
 import { DEFAULT_SAFETY_MARGIN } from './llm/token-estimator.js';
 import type { ModelRegistry } from './llm/model-registry.js';
+import { parseTemperature } from './llm/sampling-options.js';
 import { createHash } from 'node:crypto';
+import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import type { Logger } from '../logger.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
 import { historyForLlm, LLM_FAILURE_TURN_CONTENT, LLM_FAILURE_USER_MESSAGE } from '../memory/llm-failure-turn.js';
@@ -29,6 +31,7 @@ import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/type
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { stripOutboundContextPreamble } from '../dispatch/outbound-context.js';
+import { parseTurnGuidanceKeys, renderTurnGuidance } from './prompts/turn-guidance.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
 import { createDbUnavailableAgentError, isDbUnavailableError } from '../db/resilience.js';
@@ -198,8 +201,8 @@ export interface AgentConfig {
    *  If omitted, no time block is injected. */
   timezone?: string;
   /** Curia's own channel contact details, sourced from deployment env vars (NYLAS_SELF_EMAIL,
-   *  SIGNAL_PHONE_NUMBER). When provided, a "Your Contact Details" block is appended to the
-   *  system prompt so the LLM knows which accounts to use when tools ask for an email address
+   *  SIGNAL_PHONE_NUMBER). When provided, a "Your Contact Details" block is added to the
+   *  system prompt preamble so the LLM knows which accounts to use when tools ask for an email address
    *  or phone number. Injected into all agents — specialists need this too (#387). */
   channelAccounts?: {
     email?: string;
@@ -217,7 +220,7 @@ export interface AgentConfig {
   agentContactId?: string;
   /** The principal's verified channel identities (email, phone, Signal), loaded from
    *  contact_channel_identities at startup. When provided and non-empty, a
-   *  "## Principal Contact Details" block is appended to the system prompt on every task
+   *  "## Who you serve" section (with "### Principal Contact Details") is added to the system prompt on every task
    *  so agents have an authoritative, closed set of addresses for reaching the principal.
    *  Injected into all agents — specialists need this too.
    *  See #786, #1950. */
@@ -435,7 +438,12 @@ export class AgentRuntime {
   private async processTask(taskEvent: AgentTaskEvent): Promise<void> {
     const { agentId, provider, bus, logger, memory, executionLayer, skillToolDefs } = this.config;
     const originalContent = taskEvent.payload.content;
-    let promptContent = originalContent;
+    // Trigger guidance (#1959) heads this turn's user message, next to the preambles it
+    // explains. Only promptContent carries it: working memory stores originalContent, so
+    // history never holds one copy per earlier turn, and the system string never varies
+    // by trigger. The keys are re-validated: the payload crossed the bus.
+    const turnGuidance = renderTurnGuidance(parseTurnGuidanceKeys(taskEvent.payload.turnGuidance));
+    let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     const { conversationId } = taskEvent.payload;
 
     // Manifest-only workspace injection at the message tail — keeps document bodies out
@@ -521,9 +529,9 @@ export class AgentRuntime {
     // each get their own copy and never see each other's expansions.
     let workingToolDefs = skillToolDefs ? [...skillToolDefs] : undefined;
 
-    // Task-independent part of the system string: identity/security preamble, YAML
-    // body, specialist roster, autonomy band, date guardrail, time, both contact
-    // blocks and the turn budget. Shared with the render script and the smoke
+    // Task-independent part of the system string: the preamble (identity, security,
+    // own contact details, Who you serve), YAML body, specialist roster, autonomy
+    // band, date guardrail, time and the turn budget. Shared with the render script and the smoke
     // harness so they send exactly what production sends (#1966). Rebuilt every
     // turn so identity / autonomy / principal-identity changes apply without restart.
     let effectiveSystemPrompt = await buildBaseSystemPrompt(this.config, { now: new Date(), logger });
@@ -781,10 +789,11 @@ export class AgentRuntime {
     });
 
     // Budget allocation order: reserve non-negotiable tiers first (system prompt,
-    // user message), then allocate in priority order (sender context, bullpen),
-    // and let history — which supports partial inclusion — take whatever's left.
-    // This matches the design spec priority order and ensures higher-priority tiers
-    // (especially security-relevant sender context) aren't starved by greedy history.
+    // user message), then allocate in priority order (sender context, tool
+    // definitions, bullpen), and let history — which supports partial inclusion —
+    // take whatever's left. This matches the design spec priority order and ensures
+    // higher-priority tiers (especially security-relevant sender context) aren't
+    // starved by greedy history.
     ctxBudget.allocateRequired('system_prompt', [{ role: 'system', content: effectiveSystemPrompt }]);
     ctxBudget.allocateRequired('user_message', [{ role: 'user', content: promptContent }]);
     if (ctxBudget.remaining < 0) {
@@ -1046,6 +1055,19 @@ export class AgentRuntime {
       }
     }
 
+    // Tool definitions (#1961). Always sent, so always charged — but only after the
+    // sender block, so a long tool list can never push out the sender's
+    // authorization or the LOW-TRUST constraints while the tools still go out.
+    // This is the first-round set; tools discovered mid-turn are not re-charged.
+    const remainingBeforeTools = ctxBudget.remaining;
+    ctxBudget.allocateToolDefinitions(workingToolDefs ?? []);
+    if (remainingBeforeTools >= 0 && ctxBudget.remaining < 0) {
+      logger.error(
+        { agentId, remaining: ctxBudget.remaining, availableBudget: ctxBudget.availableBudget },
+        'Tool definitions exceed the remaining context budget — lower-priority tiers will be dropped',
+      );
+    }
+
     // Bullpen read-watermark (#1065, #1901). Ambient threads actually shown this task,
     // plus every successful tool call, so completion can stamp only the threads the
     // agent handled. An @mention injected beside unrelated work stays pending when the
@@ -1078,7 +1100,7 @@ export class AgentRuntime {
 
     // Ambient Bullpen threads are surfaced so an agent is aware of active
     // inter-agent discussions — but NOT inside autonomous scheduler runs (#1609).
-    // A scheduled job (e.g. the coordinator's hourly approval-expiry-sweep) runs
+    // A scheduled job (#1609 was the coordinator's former hourly approval-expiry cron) runs
     // unattended with human-channel send tools pinned; injecting an unrelated
     // unread @mention there invites the model to "reply" to it out-of-band and
     // mis-route internal agent chatter to a human channel — in prod this landed a
@@ -1356,19 +1378,23 @@ export class AgentRuntime {
       ? configuredWait
       : DEFAULT_DEFERRED_WAKE_MS;
     const waitByAgent = new Map<string, number>();
-    const queuedUndispatchedBriefs = new Set<string>();
+    // Per brief, whether it was saved for a later wake. Kept per outcome, not as a seen-set:
+    // a repeat call reports the first attempt's result, never a queue that was capped.
+    const queuedUndispatchedBriefs = new Map<string, boolean>();
     // Match DEFAULT_LATE_DELIVERY_CONFIG when a caller did not pass the deployment values.
     const lateDeliveryTtlMinutes = this.config.lateDeliveryTtlMinutes ?? 60;
     const lateDeliverySweepMs = (this.config.lateDeliverySweepIntervalMinutes ?? 5) * 60_000;
+    /** Save a brief that did not dispatch for a later wake. Resolves to whether it was saved. */
     const queueUndispatchedDelegation = async (
       targetAgent: string,
       brief: string,
       wakeDelayMs?: number,
-    ): Promise<void> => {
-      if (targetAgent === '' || brief === '') return;
+    ): Promise<boolean> => {
+      if (targetAgent === '' || brief === '') return false;
       const key = `${targetAgent}\0${brief}`;
-      if (queuedUndispatchedBriefs.has(key)) return;
-      queuedUndispatchedBriefs.add(key);
+      const earlier = queuedUndispatchedBriefs.get(key);
+      if (earlier !== undefined) return earlier;
+      queuedUndispatchedBriefs.set(key, false);
       const prior = readDelegationRetryAttempt(taskEvent.payload.metadata);
       // A retry wake continues the chain for its specialist. A different specialist
       // on that turn starts at 1 — the cap is per busy specialist, not per turn.
@@ -1377,7 +1403,7 @@ export class AgentRuntime {
         ? wakeDelayMs
         : (waitByAgent.get(targetAgent) ?? deferredWakeFloor);
       try {
-        await enqueueUndispatchedDelegation({
+        const outcome = await enqueueUndispatchedDelegation({
           taskRepo: this.config.taskRepo,
           logger,
           originAgentId: agentId,
@@ -1390,12 +1416,18 @@ export class AgentRuntime {
           ...(originator !== undefined && { originator }),
           attempt,
         });
+        // 'capped' and 'unavailable' are logged inside enqueueUndispatchedDelegation.
+        const saved = outcome === 'enqueued';
+        queuedUndispatchedBriefs.set(key, saved);
+        return saved;
       } catch (err) {
+        // Not remembered: a later identical call in this turn may try again.
         queuedUndispatchedBriefs.delete(key);
         logger.error(
           { err, agentId, conversationId, targetAgent },
           'Failed to queue an undispatched delegation — the brief was not saved',
         );
+        return false;
       }
     };
 
@@ -1923,6 +1955,42 @@ export class AgentRuntime {
             result = await executionLayer.invoke(toolCall.name, skillInput, caller, invokeOptions);
           }
           const durationMs = Date.now() - startTime;
+
+          // An already_in_flight refusal (#1858) did not dispatch: queue its brief for a later
+          // wake and stamp whether that worked as `queued`, which the refusal's next_step
+          // branches on, so the model never promises a run that was not saved. Done here,
+          // before the result is recorded anywhere, so the bullpen touch, the tool.result
+          // audit event and the model all see the same result (#1958 review). A timeout never
+          // matches: it has failed: true and no in_flight flag, and late delivery wakes it.
+          if (
+            result.success &&
+            toolCall.name === 'delegate' &&
+            !delegateBlocked &&
+            typeof skillInput === 'object' &&
+            skillInput !== null &&
+            !Array.isArray(skillInput)
+          ) {
+            const inFlight = parseDelegateInFlightData(result.data, logger);
+            if (inFlight) {
+              const delegateInput = skillInput as Record<string, unknown>;
+              const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
+              // A running claim ends with the wait. A pending handle does not:
+              // waking on the wait burns the retry cap while the row is still open.
+              const wakeDelayMs = inFlight.handleStatus === 'pending'
+                ? pendingHandleWakeDelayMs({
+                  now: Date.now(),
+                  ...(inFlight.handleExpiresAt !== undefined && { expiresAt: inFlight.handleExpiresAt }),
+                  ttlMinutes: lateDeliveryTtlMinutes,
+                  sweepIntervalMs: lateDeliverySweepMs,
+                })
+                : undefined;
+              const queued = await queueUndispatchedDelegation(inFlight.agent, delegateTask, wakeDelayMs);
+              if (result.data !== null && typeof result.data === 'object' && !Array.isArray(result.data)) {
+                result = { ...result, data: { ...(result.data as Record<string, unknown>), queued } };
+              }
+            }
+          }
+
           bullpenToolTouches.push(toBullpenToolTouch(toolCall.name, skillInput, result));
 
           // Publish tool.result for audit trail
@@ -2146,25 +2214,8 @@ export class AgentRuntime {
             ) {
               const delegatePaused = parseDelegatePausedData(result.data, logger);
               if (!delegatePaused) {
-                const inFlight = parseDelegateInFlightData(result.data, logger);
-                if (inFlight) {
-                  // The call did not dispatch. A timeout must not reach this branch:
-                  // that result has failed: true and no in_flight flag, and late
-                  // delivery already wakes it.
-                  const delegateInput = skillInput as Record<string, unknown>;
-                  const delegateTask = typeof delegateInput['task'] === 'string' ? delegateInput['task'] : '';
-                  // A running claim ends with the wait. A pending handle does not:
-                  // waking on the wait burns the retry cap while the row is still open.
-                  const wakeDelayMs = inFlight.handleStatus === 'pending'
-                    ? pendingHandleWakeDelayMs({
-                      now: Date.now(),
-                      ...(inFlight.handleExpiresAt !== undefined && { expiresAt: inFlight.handleExpiresAt }),
-                      ttlMinutes: lateDeliveryTtlMinutes,
-                      sweepIntervalMs: lateDeliverySweepMs,
-                    })
-                    : undefined;
-                  await queueUndispatchedDelegation(inFlight.agent, delegateTask, wakeDelayMs);
-                }
+                // An already_in_flight refusal was queued before the result was recorded,
+                // above, so the audit event carries the same `queued` the model sees.
                 const delegateFailure = parseDelegateFailureData(result.data, logger);
                 if (delegateFailure) {
                   const delegateInput = skillInput as Record<string, unknown>;
@@ -2898,7 +2949,7 @@ export class AgentRuntime {
    */
   private async publishLlmCall(call: {
     provider: LLMProvider;
-    params: { messages: Message[]; tools?: ToolDefinition[] };
+    params: { messages: Message[]; tools?: ToolDefinition[]; options?: Record<string, unknown> };
     response: LLMResponse;
     latencyMs: number;
     taskEvent: AgentTaskEvent;
@@ -2920,6 +2971,11 @@ export class AgentRuntime {
         .update(response.type === 'text' ? response.content : JSON.stringify(response.toolCalls))
         .digest('hex');
 
+      // Pure parse (no warn) — the provider already warned on invalid values.
+      // null means the request omitted temperature (agent calls today always do).
+      const parsed = parseTemperature(params.options);
+      const temperature = parsed.kind === 'set' ? parsed.value : null;
+
       const event = createLlmCall({
         agentId,
         conversationId: taskEvent.payload.conversationId,
@@ -2936,13 +2992,12 @@ export class AgentRuntime {
         latencyMs: call.latencyMs,
         promptHash,
         responseHash,
+        temperature,
         parentEventId: taskEvent.id,
         // Typed non-persisted archive — AuditLogger writes llm_call_archive atomically.
         archive: {
           prompt: { messages: params.messages },
-          response: response.type === 'text'
-            ? { type: 'text', content: response.content }
-            : { type: 'tool_use', toolCalls: response.toolCalls },
+          response: buildLlmArchiveResponse(response),
           toolDefinitions: params.tools ?? [],
         },
       });

@@ -210,6 +210,53 @@ describe('principal-recipient', () => {
       )).toBe(true);
     });
 
+    // Retired raw-address inputs (#2041): a present one fails the parser closed, even with the principal's own address.
+    it('fails closed when a retired raw-address input is present', () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['email-send', { to_address: 'ceo@example.com', subject: 'x', body: 'y' }],
+        ['email-send', { to: 'ceo@example.com', cc_addresses: 'ceo@example.com', subject: 'x', body: 'y' }],
+        ['signal-send', { recipient_number: '+15551234567', message: 'hi' }],
+        ['sms-send', { recipient_number: '+15559876543', message: 'hi' }],
+        ['slack-send', { recipient_user_id: 'U_CEO', message: 'hi' }],
+      ];
+      for (const [tool, input] of cases) {
+        expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(false);
+      }
+    });
+
+    it('ignores a blank retired input', () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['email-send', { to: 'ceo@example.com', to_address: '', cc_addresses: '  ', subject: 'x', body: 'y' }],
+        ['signal-send', { recipient: '+15551234567', recipient_number: '', message: 'hi' }],
+        ['sms-send', { recipient: '+15559876543', recipient_number: null, message: 'hi' }],
+        ['slack-send', { recipient: 'U_CEO', recipient_user_id: '', message: 'hi' }],
+      ];
+      for (const [tool, input] of cases) {
+        expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(true);
+      }
+    });
+
+    it('fails closed when a reference field and its raw field are both set', () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ['email-send', { to: 'ceo@example.com', to_address: 'ceo@example.com', subject: 'x', body: 'y' }],
+        ['signal-send', { recipient: '+15551234567', recipient_number: '+15551234567', message: 'hi' }],
+        ['sms-send', { recipient: '+15559876543', recipient_number: '+15559876543', message: 'hi' }],
+        ['slack-send', { recipient: 'U_CEO', recipient_user_id: 'U_CEO', message: 'hi' }],
+      ];
+      for (const [tool, input] of cases) {
+        expect(resolvePrincipalIsSoleRecipientFromSkillInput(tool, input, PRINCIPAL_IDENTITIES), tool).toBe(false);
+      }
+    });
+
+    it('does not treat an unresolved reference as the principal', () => {
+      // Gate C substitutes the resolved address first; a bare alias never matches.
+      expect(resolvePrincipalIsSoleRecipientFromSkillInput(
+        'email-send',
+        { to: 'principal', subject: 'x', body: 'y' },
+        PRINCIPAL_IDENTITIES,
+      )).toBe(false);
+    });
+
     it('rejects mixed principal + cc recipient set', () => {
       expect(resolvePrincipalIsSoleRecipientFromSkillInput(
         'email-send',

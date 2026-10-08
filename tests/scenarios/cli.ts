@@ -2,6 +2,11 @@
 //
 //   pnpm scenarios --model deepseek/deepseek-v4.1-flash          # release gate
 //   pnpm scenarios --case transfer --runs 3                       # iterate on one case
+//   pnpm scenarios --concurrency 1                                # one case at a time
+//
+// Cases run --concurrency at a time (default 4); a case's own runs stay one at a time,
+// and cases that seed the same contact never overlap (seed.ts: seedConflictKeys). The
+// summary prints what the run spent on model calls, by agent and judge (#1980).
 //
 // Exits 1 when any critical behavior passes fewer than 80% of its runs, a run errors,
 // or a case's stubs left holes (refused calls over its allowance). See README.md.
@@ -18,8 +23,10 @@ import {
   type ScenarioHarness,
 } from './harness.js';
 import { createJudge, judgeRun, type Judge } from './judge.js';
-import { loadScenarioCases, resolvePlaceholders } from './loader.js';
-import { describeError } from './seed.js';
+import { loadScenarioCases, resolveRunPlaceholders } from './loader.js';
+import { describeError, seedConflictKeys } from './seed.js';
+import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from '../shared/case-scope.js';
+import { formatUsageLines, formatUsd, sumBreakdowns, UsageLedger } from '../shared/usage.js';
 import { mustStub } from './stub-layer.js';
 import { coverageViolations, mergeCoverage, readCoverage, writeCoverage } from './stub-coverage.js';
 import {
@@ -41,6 +48,7 @@ interface Args {
   caseFilter?: string;
   tags?: string[];
   runs?: number;
+  concurrency: number;
   allowOtherConnections: boolean;
 }
 
@@ -55,11 +63,13 @@ function parseArgs(argv: string[]): Args {
   const runsRaw = value('--runs');
   const runs = runsRaw === undefined ? undefined : Number(runsRaw);
   if (runs !== undefined && (!Number.isInteger(runs) || runs < 1)) throw new Error('--runs must be a positive integer');
+  const concurrencyRaw = value('--concurrency');
   return {
     model: value('--model'),
     caseFilter: value('--case'),
     tags: value('--tags')?.split(','),
     runs,
+    concurrency: concurrencyRaw === undefined ? DEFAULT_CONCURRENCY : parseConcurrency(concurrencyRaw),
     allowOtherConnections: argv.includes('--allow-other-connections'),
   };
 }
@@ -69,23 +79,27 @@ const err = (line: string): void => { process.stderr.write(`${line}\n`); };
 
 /**
  * Problems that would make a case measure the harness instead of the model, found
- * before any paid call: a stub for a tool the coordinator is not offered (a typo, or a
+ * before any paid call: a stub for a tool the coordinator can never reach (a typo, or a
  * tool the registry did not load), or a `called` check on a side-effecting tool with no
  * stub — that call would always be refused, so the check could never pass for the
- * right reason.
+ * right reason. "Reach" includes tools a skill-activate call would load (#2024) and
+ * tools a tool-registry search would return (#2050).
  */
 function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string[] {
   const problems: string[] = [];
   const registry = harness.stack.toolRegistry;
+  const reachable = harness.reachableTools;
+  const mustStubHere = (tool: string): boolean =>
+    mustStub(tool, registry, harness.unavailableTools, harness.inertTools);
   for (const c of cases) {
     for (const tool of c.explicitStubTools) {
-      if (!harness.coordinatorTools.has(tool)) {
-        problems.push(`${c.name}: stubs '${tool}', which the coordinator is not offered in this stack`);
+      if (!reachable.has(tool)) {
+        problems.push(`${c.name}: stubs '${tool}', which the coordinator is neither offered nor can activate in this stack`);
       }
     }
     const hasSuccessStub = (tool: string): boolean => (c.toolStubs[tool] ?? []).some(st => st.error === undefined);
     const needsStub = (tool: string): boolean =>
-      harness.coordinatorTools.has(tool) && !c.toolStubs[tool] && mustStub(tool, registry, harness.unavailableTools);
+      reachable.has(tool) && !c.toolStubs[tool] && mustStubHere(tool);
 
     for (const b of c.expectedBehaviors) {
       if (!b.check) continue;
@@ -101,17 +115,21 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
           if (!registry.get(tool)) problems.push(`${where} names '${tool}', which is not a registered tool`);
         }
         if ((check.kind === 'called' || check.kind === 'order')) {
-          for (const tool of named.filter(t => registry.get(t) && !harness.coordinatorTools.has(t))) {
-            problems.push(`${where} expects '${tool}', which the coordinator is not offered, so it can never pass`);
+          for (const tool of named.filter(t => registry.get(t) && !reachable.has(t))) {
+            problems.push(`${where} expects '${tool}', which the coordinator is neither offered nor can activate, so it can never pass`);
           }
         }
         // Argument keys must exist on the tool, or `with`/`contains` silently never match.
+        // An MCP tool's inputs are its JSON Schema properties; its manifest `inputs` is empty.
         if ((check.kind === 'called' || check.kind === 'not_called')) {
           const keys = [...Object.keys(check.with ?? {}), ...Object.keys(check.contains ?? {})];
           for (const tool of named) {
-            const inputs = registry.get(tool)?.manifest.inputs;
+            const registered = registry.get(tool);
+            const inputs = registered?.mcpInputSchema
+              ? registered.mcpInputSchema.properties ?? {}
+              : registered?.manifest.inputs;
             if (!inputs) continue;
-            for (const key of keys.filter(k => !(k in inputs))) {
+            for (const key of keys.filter(k => !Object.hasOwn(inputs, k))) {
               problems.push(`${where}: '${key}' is not an input of ${tool} (inputs: ${Object.keys(inputs).join(', ')})`);
             }
           }
@@ -124,7 +142,7 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
         // would also trip the coverage gate, blaming the harness for the model's mistake.
         if (check.kind === 'not_called') {
           for (const tool of check.tools) {
-            if (harness.coordinatorTools.has(tool) && mustStub(tool, registry, harness.unavailableTools) && !hasSuccessStub(tool)) {
+            if (reachable.has(tool) && mustStubHere(tool) && !hasSuccessStub(tool)) {
               problems.push(`${where} forbids ${tool}; give it a succeeding stub so the wrong path is available`);
             }
           }
@@ -135,13 +153,18 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
   return problems;
 }
 
+/**
+ * Rate every run. Each run's judge spend is added to its `usage` (so the runs are
+ * returned too, with that filled in).
+ */
 async function rateRuns(
   scenario: ScenarioCase,
   runs: ScenarioRun[],
   harness: ScenarioHarness,
   judge: Judge,
-): Promise<Map<string, RunRating[]>> {
+): Promise<{ ratings: Map<string, RunRating[]>; runs: ScenarioRun[] }> {
   const ratings = new Map<string, RunRating[]>(scenario.expectedBehaviors.map(b => [b.id, []]));
+  const rated: ScenarioRun[] = [];
 
   for (const run of runs) {
     if (run.error) {
@@ -150,12 +173,16 @@ async function rateRuns(
       for (const b of scenario.expectedBehaviors) {
         ratings.get(b.id)!.push({ rating: 'MISS', justification: `run errored: ${run.error}` });
       }
+      rated.push(run);
       continue;
     }
-    // Each run seeded its own rows, so {{entry:x}} in a check means this run's id.
-    const behaviors = resolvePlaceholders(scenario.expectedBehaviors, new Map(Object.entries(run.refs)));
+    // Each run seeded its own rows, so {{entry:x}} in a check means this run's id, and
+    // resolved its dates against its own clock, so {{day:…}} means that run's day.
+    const behaviors = resolveRunPlaceholders(scenario.expectedBehaviors, run);
     const judged = behaviors.filter(b => !b.check);
-    const judgeScores = await judgeRun(scenario, run, judged, judge);
+    const judgeUsage = new UsageLedger();
+    const judgeScores = await judgeRun(scenario, run, judged, judge, judgeUsage);
+    rated.push({ ...run, usage: sumBreakdowns([run.usage, judgeUsage.snapshot()]) });
     for (const b of behaviors) {
       ratings.get(b.id)!.push(
         b.check
@@ -164,7 +191,7 @@ async function rateRuns(
       );
     }
   }
-  return ratings;
+  return { ratings, runs: rated };
 }
 
 /**
@@ -203,6 +230,7 @@ async function main(): Promise<void> {
   out('\nCoordinator scenario suite');
   out(`   ${cases.length} case(s); runs per case: ${args.runs ?? `per case, default ${DEFAULT_RUNS}`}`);
   out(`   Per-run timeout: ${Math.round(RUN_TIMEOUT_MS / 1000)}s (SCENARIO_TIMEOUT_MS)`);
+  out(`   Concurrency: ${args.concurrency} case(s) at a time (--concurrency)`);
   out('   Booting the test-mode stack...');
 
   let harness: ScenarioHarness;
@@ -221,7 +249,7 @@ async function main(): Promise<void> {
     const principal = harness.stack.principalContactId
       ? await harness.stack.contactService.getContact(harness.stack.principalContactId)
       : undefined;
-    const judge = createJudge(harness.stack.llmProviders, principal?.displayName);
+    const judge = createJudge(harness.stack.llmProviders, principal?.displayName, { logger: harness.stack.logger });
     out(`   Model: ${model}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
     for (const warning of harness.stack.warnings) out(`   [WARN] ${warning}`);
@@ -275,46 +303,73 @@ async function main(): Promise<void> {
     }
 
     out('\n-- Running --\n');
-    const results: CaseResult[] = [];
-    for (const scenario of cases) {
+    // Set when a client connects mid-suite, or a case fails in a way that would repeat (a
+    // judge auth error): cases not yet started are skipped, and running ones stop at
+    // their next run instead of paying for runs nobody will see scored.
+    let stopReason: string | undefined;
+    const keysOf = new Map(cases.map(c => [c, seedConflictKeys(c)]));
+    const caseResults = await runConcurrently(cases, args.concurrency, async (scenario): Promise<CaseResult | undefined> => {
+      if (stopReason) return undefined;
       // An idle instance can hold no connection for most of a scheduler cycle, so one
       // check at start-up is not enough: look again before every case.
       if (!args.allowOtherConnections) {
         const late = await otherDatabaseClients(harness.stack);
         if (late.length > 0) {
-          err(`\nAnother client connected mid-suite (${late.map(o => `${o.application} ×${o.count}`).join(', ')}); stopping.`);
-          exitCode = 1;
-          return;
+          stopReason ??= `Another client connected mid-suite (${late.map(o => `${o.application} ×${o.count}`).join(', ')}); stopping.`;
+          return undefined;
         }
       }
       const n = args.runs ?? scenario.runs ?? DEFAULT_RUNS;
       const runs: ScenarioRun[] = [];
+      // A case's runs stay one at a time: each seeds the same contacts (seed.ts).
       for (let i = 0; i < n; i++) {
-        const run = await harness.runOnce(scenario, i);
+        if (stopReason) return undefined;
+        const run = await harness.runOnce(scenario, i, {
+          onProviderRetry: (reason) => out(`   ${scenario.name} [${i + 1}/${n}] provider failure: ${reason} — running it again (not counted)`),
+        });
         runs.push(run);
         // `name!` = refused by the stub layer (a hole in the stub table);
+        // `name~` = an unstubbed snapshot MCP tool answered with a stand-in (also a hole);
         // `name?` = a real read-only tool that failed (e.g. no mail client in test mode).
         const calls = run.toolCalls.map(c =>
           c.disposition === 'refused' ? `${c.name}!`
-            : c.disposition === 'passthrough' && c.result?.success === false ? `${c.name}?`
-              : c.name).join(', ') || 'no tools';
+            : c.disposition === 'canned' ? `${c.name}~`
+              : c.disposition === 'passthrough' && c.result?.success === false ? `${c.name}?`
+                : c.name).join(', ') || 'no tools';
         out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `ERROR ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}`}`);
       }
-      const result = scoreCase(
-        scenario.name, scenario.expectedBehaviors, runs, await rateRuns(scenario, runs, harness, judge), scenario.knownFailure,
-      );
-      results.push(result);
+      let rated: Awaited<ReturnType<typeof rateRuns>>;
+      try {
+        rated = await rateRuns(scenario, runs, harness, judge);
+      } catch (e) {
+        stopReason ??= `Rating '${scenario.name}' failed: ${describeError(e)}`;
+        throw e;
+      }
+      const result = scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure);
+      // One block per case, printed at once, so concurrent cases do not interleave inside it.
+      const lines = [`   == ${scenario.name}: ${formatUsd(result.usage.total.estimatedCostUsd)}`];
       for (const b of result.behaviors) {
         const flag = result.criticalFailures.includes(b.behavior.id)
           ? (result.knownFailure ? 'KNWN' : 'FAIL')
           : b.passRate >= CRITICAL_PASS_THRESHOLD ? 'ok  ' : 'low ';
-        out(`      ${flag} ${formatPct(b.passRate).padStart(4)}  ${b.behavior.id} [${b.behavior.weight}]`);
+        lines.push(`      ${flag} ${formatPct(b.passRate).padStart(4)}  ${b.behavior.id} [${b.behavior.weight}]`);
         if (b.passRate < 1) {
           const firstMiss = b.ratings.find(r => r.rating !== 'PASS');
-          if (firstMiss) out(`             e.g. ${firstMiss.justification.slice(0, 220)}`);
+          if (firstMiss) lines.push(`             e.g. ${firstMiss.justification.slice(0, 220)}`);
         }
       }
+      out(lines.join('\n'));
+      return result;
+    }, (scenario, running) => {
+      const keys = keysOf.get(scenario)!;
+      return !running.some(other => keysOf.get(other)!.some(k => keys.includes(k)));
+    });
+    if (stopReason) {
+      err(`\n${stopReason}`);
+      exitCode = 1;
+      return;
     }
+    const results = caseResults.filter((r): r is CaseResult => r !== undefined);
 
     if (harness.stubs.staleCalls > 0) {
       out(`\n   [WARN] ${harness.stubs.staleCalls} tool call(s) from timed-out turns were refused (they outlived their run).`);
@@ -340,6 +395,7 @@ async function main(): Promise<void> {
       : undefined;
     const known = knownFailureLines(results);
     const warnings = staleKnownFailures(results);
+    const overheadUsage = harness.unattributedUsage();
     const suite: SuiteResult = {
       timestamp: new Date(started).toISOString(),
       model,
@@ -352,6 +408,9 @@ async function main(): Promise<void> {
       warnings,
       gateFailures: failures,
       durationMs: Date.now() - started,
+      concurrency: args.concurrency,
+      usage: sumBreakdowns([...results.map(r => r.usage), overheadUsage]),
+      overheadUsage,
     };
     mkdirSync(RESULTS_DIR, { recursive: true });
     const resultsFile = path.join(RESULTS_DIR, `${suite.timestamp.replace(/[:.]/g, '-')}.json`);
@@ -360,12 +419,27 @@ async function main(): Promise<void> {
     out('\n-- Summary --\n');
     for (const r of results) {
       const status = r.criticalFailures.length === 0 ? 'PASS' : r.knownFailure ? 'KNWN' : 'FAIL';
-      out(`   ${status} ${formatPct(r.weightedScore).padStart(4)}  ${r.name}${r.knownFailure ? `  (known failure ${r.knownFailure.issue})` : ''}`);
+      const retried = r.runs.reduce((n, run) => n + run.providerRetries.length, 0);
+      out(
+        `   ${status} ${formatPct(r.weightedScore).padStart(4)}  ${formatUsd(r.usage.total.estimatedCostUsd).padStart(7)}  ${r.name}` +
+        `${r.knownFailure ? `  (known failure ${r.knownFailure.issue})` : ''}` +
+        `${retried > 0 ? `  (${retried} provider retr${retried === 1 ? 'y' : 'ies'})` : ''}`,
+      );
     }
     out(`\n   Commit:  ${suite.commit ?? '(unknown)'}`);
     out(`   Model:   ${model}`);
     out(`   Results: ${resultsFile}`);
-    out(`   Time:    ${Math.round(suite.durationMs / 1000)}s`);
+    out(`   Time:    ${Math.round(suite.durationMs / 1000)}s (concurrency ${args.concurrency})`);
+    out('\n   Model spend (estimated from registry prices; tests/shared/usage.ts):');
+    for (const line of formatUsageLines(suite.usage)) out(`     ${line}`);
+    if (overheadUsage.total.calls > 0) {
+      out(`     (includes ${formatUsd(overheadUsage.total.estimatedCostUsd)} over ${overheadUsage.total.calls} call(s) made outside a run or after it ended)`);
+    }
+    const providerRetries = results.flatMap(r => r.runs.flatMap(run => run.providerRetries.map(reason => `${r.name} run ${run.runIndex + 1}: ${reason}`)));
+    if (providerRetries.length > 0) {
+      out('\n   Provider failures, re-run without counting against the case:');
+      for (const line of providerRetries) out(`   - ${line}`);
+    }
     if (known.length > 0) {
       out('\n   Known failures (reported, not gated):');
       for (const k of known) out(`   - ${k}`);

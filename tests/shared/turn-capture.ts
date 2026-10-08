@@ -16,6 +16,7 @@ import type {
   ToolResultEvent,
 } from '../../src/bus/events.js';
 import type { DbPool } from '../../src/db/connection.js';
+import type { TurnErrorKind } from './case-scope.js';
 
 const COORDINATOR = 'coordinator';
 
@@ -44,6 +45,10 @@ export interface TurnOutcome {
   noReplyReason?: string;
   /** Set when the turn could not complete (timeout, agent.error, model fallback, delivery failure). */
   error?: string;
+  /** How it failed, when `error` is set: lets a harness tell a provider failure from the model's (#1980). */
+  errorKind?: TurnErrorKind;
+  /** The AgentError type of an agent.error or error response. */
+  errorType?: string;
 }
 
 interface PendingTurn {
@@ -54,6 +59,8 @@ interface PendingTurn {
   reply: string | null;
   noReplyReason?: string;
   error?: string;
+  errorKind?: TurnErrorKind;
+  errorType?: string;
   done: boolean;
   resolve: (outcome: TurnOutcome) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -83,6 +90,8 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
         reply: p.reply,
         ...(p.noReplyReason ? { noReplyReason: p.noReplyReason } : {}),
         ...(p.error ? { error: p.error } : {}),
+        ...(p.error && p.errorKind ? { errorKind: p.errorKind } : {}),
+        ...(p.error && p.errorType ? { errorType: p.errorType } : {}),
       });
     }, SETTLE_MS);
   };
@@ -128,7 +137,11 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     // ("NO_REPLY — automated notice") keeps its text and suppressDelivery, so it still
     // reads as not-exactly-NO_REPLY — which is the failure the check exists to catch.
     p.reply = payload.suppressDelivery && payload.content === '' ? 'NO_REPLY' : payload.content;
-    if (payload.isError) p.error ??= `${p.agentId} returned an error response: ${payload.content.slice(0, 200)}`;
+    if (payload.isError && p.error === undefined) {
+      p.error = `${p.agentId} returned an error response: ${payload.content.slice(0, 200)}`;
+      p.errorKind = 'error_response';
+      if (payload.errorType) p.errorType = payload.errorType;
+    }
     finish(payload.conversationId, p);
   });
 
@@ -137,6 +150,8 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     const p = forAgent(payload.agentId, payload.conversationId);
     if (!p) return;
     p.error = `agent.error ${payload.errorType}: ${payload.message}`;
+    p.errorKind = 'agent_error';
+    p.errorType = payload.errorType;
     finish(payload.conversationId, p);
   });
 
@@ -147,6 +162,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     const p = forAgent(payload.agentId, payload.conversationId);
     if (!p || p.done) return;
     p.error = `model fallback: ${payload.failedModel} → ${payload.fallbackModel} (${payload.reason})`;
+    p.errorKind = 'fallback';
   });
 
   on('outbound.no_reply', (event) => {
@@ -160,6 +176,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
       const p = pending.get(conversationId);
       if (!p || p.done) return;
       p.error = `could not deliver the inbound: ${err instanceof Error ? err.message : String(err)}`;
+      p.errorKind = 'delivery';
       finish(conversationId, p);
     },
     waitFor(conversationId, timeoutMs, agentId = COORDINATOR) {
@@ -183,6 +200,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
           timer: setTimeout(() => {
             const who = agentId === COORDINATOR ? 'the coordinator' : agentId;
             p.error = `Timeout waiting for ${who} (${Math.round(timeoutMs / 1000)}s)`;
+            p.errorKind = 'timeout';
             finish(conversationId, p);
           }, timeoutMs),
         };

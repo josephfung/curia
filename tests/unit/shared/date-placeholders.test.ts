@@ -1,6 +1,6 @@
 // Relative dates in smoke stub fixtures (#1956).
 import { describe, expect, it } from 'vitest';
-import { resolveDatePlaceholders } from '../../smoke/date-placeholders.js';
+import { resolveDatePlaceholders } from '../../shared/date-placeholders.js';
 
 // Friday 2026-10-02, 10:00 in Toronto (14:00 UTC).
 const NOW = new Date('2026-10-02T14:00:00Z');

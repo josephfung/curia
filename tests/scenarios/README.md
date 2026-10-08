@@ -27,12 +27,22 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
 | `--case <text>` | Only cases whose name contains this text (case-insensitive). |
 | `--tags a,b` | Only cases with one of these tags. |
 | `--runs <n>` | Runs per case, overriding the case's `runs` and the default of 5. |
+| `--concurrency <n>` | Cases run at once (default 4). A case's own runs are always one at a time. |
 | `--allow-other-connections` | Run even though another client is connected to the database (see below). |
 
 `SCENARIO_TIMEOUT_MS` sets the default per-run wait (180s). A case can set its own
 `timeout_seconds`. The wait is a hard bound: a turn that outlives it is scored as an
-errored run, its later tool calls are refused (never answered by the next run's stubs),
-and its conversation rows are cleaned when it finally ends.
+errored run and cancelled (every run is cancelled when it ends, so leftover work never
+outlives it). Its later model calls fail at once, so it stops spending; its
+later tool calls are refused (never answered by another run's stubs); and its
+conversation rows are cleaned when it finally ends.
+
+**Provider failures** are re-run, not scored. A run that errors with a model fallback, a
+provider-type agent error (`PROVIDER_ERROR`, `TIMEOUT`, `RATE_LIMIT`), or a timeout that
+fired while a model call had made no progress for 90 seconds is thrown away and run again, up to twice
+(`tests/shared/case-scope.ts`: `providerFailure`). Each re-run is printed, listed in the
+summary, and recorded on the run (`providerRetries`). A failure that is still there after
+two re-runs is scored as an errored run, as before.
 
 A run narrowed with `--case`, `--tags` or `--runs` can exit 0, but it says it is **not**
 a release-gate result, and the results JSON records the filters.
@@ -69,9 +79,15 @@ a release-gate result, and the results JSON records the filters.
 ### Output
 
 - A line per run, listing the tools called. `name!` means the stub layer refused the call.
+  `name~` means an unstubbed MCP tool got the canned stand-in (also a stub hole).
   `name?` means a real read-only tool failed — a real outcome production would also
   return (e.g. `date-resolve` rejecting an expression), not a harness gap.
-- Per behavior: its pass rate, and an example justification when it is under 100%.
+- Per case, once its runs are rated: its estimated spend, then per behavior its pass rate
+  and an example justification when it is under 100%.
+- In the summary, each case's spend and the run's total, split by agent and judge. The
+  results JSON holds the split per run, per case and for the suite (`usage`). These are
+  estimates from registry prices; see
+  [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
 - `tests/scenarios/results/<timestamp>.json` (gitignored), with the commit, the model and
   every run's tool calls, reply and ratings.
 - `tests/scenarios/stub-coverage.json` (committed). See [Stub coverage](#stub-coverage).
@@ -110,18 +126,28 @@ CLI warns that the marker may be stale. Remove the marker in the PR that fixes t
 
 ## How a run works
 
+Cases run `--concurrency` at a time; each case's runs are one after another. Two cases
+that seed the same contact identity or display name never run at once: seeding deletes a
+fixture already on that identity, and a run's coordinator could find another case's
+fixture by name with a real contact read (`seed.ts`: `seedConflictKeys`). Each run's
+seeded rows, stubs, model calls and spend are found through its own case context
+(`tests/shared/case-scope.ts`), so overlapping runs never see each other's state.
+
 1. **Seed** the case's rows through the real services (see the next section).
 2. **Send** the inbound through production's Dispatcher, which resolves the sender,
    injects `[ACTIVE OUTBOUND CONTEXT]` and builds the `agent.task`. Bullpen cases instead
    post on the thread and publish `agent.discuss`, which production's `BullpenDispatcher`
-   turns into the coordinator's task.
+   turns into the coordinator's task. Scheduler cases publish the `agent.task` a
+   recurring job with no linked task fires: channel `scheduler`, content
+   `{"task": <content>}`, no Dispatcher.
 3. **Capture** `tool.invoke` / `tool.result` and the coordinator's `agent.response` as the
    `system` layer. A `NO_REPLY` turn, or a reply Gate C holds for a non-principal, still
    ends the run. The runtime publishes an exact `NO_REPLY` as empty content with
    `suppressDelivery` (#1732), so capture restores the sentinel.
 4. **Clean up** every seeded row and the run's own conversation rows.
 5. **Rate:** apply each `check` in code and send the other behaviors to the judge, one run
-   at a time.
+   at a time. To try a cheaper judge on saved runs, see `pnpm rejudge` in
+   [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
 
 ### Seeded state and the shared database
 
@@ -154,8 +180,15 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
    The runtime formats the error as production's `<task_error>`.
 3. **No stub, read-only tool test mode can serve:** the real tool runs (memory reads,
    `date-resolve`, `web-fetch`). A read test mode cannot serve (missing capability) is
-   refused instead.
-4. **A call from another conversation** (a timed-out earlier turn) is refused.
+   refused instead, whether the coordinator is offered it or finds it through
+   `tool-registry` (`drive-download-file` needs the temp store, #2050).
+4. **No stub, MCP tool:** it runs. The stack serves each configured MCP server from a
+   tools/list snapshot (`tests/fixtures/mcp/`, #2024) with a session that reaches no
+   account, so its `action_risk` does not matter: a call missing a required argument
+   gets the server's validation error, any other a canned "nothing to return" result.
+   The call is recorded as `canned` and counts as a stub hole, like a refusal, so stub
+   every Drive/Docs/Sheets call a case's model makes with realistic data.
+5. **A call from another conversation** (a timed-out earlier turn) is refused.
 
 This sits on top of the test-mode stack's own guarantee: a gateway with no transport
 client (spec 16). So a run cannot send, and `tests/unit/scenarios/stub-layer.test.ts`
@@ -177,7 +210,9 @@ wrong path has to be available, or the case tests a refusal instead of the model
 
 Before any paid call the CLI also checks that every tool a check names is registered (a
 typo in `not_called` would otherwise pass forever), that `called`/`order` tools are
-offered to the coordinator, and that `with`/`contains` keys are real inputs of the tool.
+offered to the coordinator, loaded by a `skill-activate` it may call (the
+google-workspace tools, #2024) or returned by a `tool-registry` search (#2050), and that `with`/`contains` keys are real inputs of the
+tool (for an MCP tool, its JSON Schema properties).
 The loader rejects unknown keys anywhere in a case, so `weigth:` or `checks:` is an error,
 not a silently un-gated behavior. Reply-content checks (`reply_excludes*`) miss on a
 silent reply: saying nothing is not "naming no internals".
@@ -186,7 +221,8 @@ silent reply: saying nothing is not "naming no internals".
 
 A refused call is the harness's gap — an unstubbed side-effecting tool, or a tool test
 mode cannot serve (missing capability; those are refused up front rather than allowed
-to fail in a way production never does). Whatever the model
+to fail in a way production never does). So is a `canned` call: an unstubbed MCP tool
+answered with an empty stand-in. Whatever the model
 does next is scored against it. The CLI records each case's worst run in
 `stub-coverage.json` (committed, so the gate can't pass vacuously on a clean clone).
 A case fails when its count exceeds its allowance.
@@ -198,7 +234,9 @@ every case loads and has a well-formed entry.
 ## Writing a case
 
 Cases are `cases/NN<letter>-<slug>.yaml`, numbered by #1956's list. Start the file with a
-comment that cites the rule it tests (section of `agents/coordinator.yaml`). Two
+comment that cites the rule it tests: a section of `agents/coordinator.yaml`, or the
+trigger guidance in `src/agents/prompts/` that now carries it (#1959). A stub that stands
+in for a tool whose real result carries `next_step` must carry it too. Two
 principles:
 
 - **Make the wrong answer available and attractive.** Stub the wrong channel so it
@@ -241,7 +279,7 @@ seed:
       content: Opening message.
       mentions: []
 inbound:
-  from: principal                         # principal | bullpen | <contact key>
+  from: principal                         # principal | bullpen | scheduler | <contact key>
   channel: cli                            # principal only; default cli
   thread: brief                           # bullpen only
   content: "Yes"
@@ -267,6 +305,27 @@ failure_modes:
 
 `{{principal_contact_id}}` resolves too. A placeholder that names nothing the case seeds is
 a load error.
+
+**Dates are relative to the run.** Never write an absolute date the model reasons about
+(a meeting, a free slot, a job's next run): it goes stale, and the case starts testing
+the calendar instead of the coordinator. Use the date placeholders smoke uses
+(`tests/shared/date-placeholders.ts`), in the principal's timezone:
+
+| Placeholder | Example on Mon 2026-10-05 |
+|---|---|
+| `{{day:next-monday+1}}` | Tuesday, October 13 (Tuesday of next week) |
+| `{{date:today+1}}` | 2026-10-06 |
+| `{{time:next-monday 09:00}}` | 2026-10-12T09:00:00.000-04:00 |
+| `{{weekday:today}}` | Monday |
+| `{{at:now+60m}}` | an hour from now, same format as `time` |
+| `{{timezone}}` | America/Toronto |
+
+A day is `today`, `today±N` or `next-<weekday>[+N]`, where `next-<weekday>` is the first
+one strictly after today. They work in `seed`, `inbound`, `tool_stubs` and
+`expected_behaviors`, and resolve once per run against that run's clock, which the run
+records (`clock`) so rating uses the same days. A malformed one is a load error. They are
+refused in `description` and `failure_modes`, which reach the judge as written: say
+"next week" there. Past timestamps (a fact's `last_confirmed_at`) can stay absolute.
 
 After adding a case, run it (`--case`, a few runs) so the CLI records its stub coverage,
 and commit the updated `stub-coverage.json`.

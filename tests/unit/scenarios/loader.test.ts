@@ -7,6 +7,7 @@ import {
   loadScenarioCases,
   placeholdersIn,
   resolvePlaceholders,
+  resolveRunPlaceholders,
 } from '../../scenarios/loader.js';
 
 let dir: string;
@@ -75,10 +76,16 @@ describe('loadScenarioCase', () => {
     expect(c.expectedBehaviors[1]).toEqual({ id: 'silent', description: 'does not answer directly', weight: 'important' });
   });
 
+  it('loads a scheduler inbound (#2024)', () => {
+    const c = loadScenarioCase(write('s.yaml', VALID.replace('from: principal', 'from: scheduler')));
+    expect(c.inbound).toMatchObject({ from: 'scheduler', content: 'Yes' });
+  });
+
   it.each([
     ['a placeholder for an unseeded entry', VALID.replace('{{entry:offsite}}', '{{entry:missing}}'), /names no seeded entry/],
     ['an unknown placeholder kind', VALID.replace('{{entry:offsite}}', '{{job:x}}'), /unknown placeholder/],
-    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen or a seeded contact/],
+    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen, scheduler or a seeded contact/],
+    ['a scheduler inbound with a channel', VALID.replace('from: principal', 'from: scheduler\n  channel: signal'), /takes only 'content'/],
     ['a stub with both return and error', VALID.replace("error: wrong specialist", "error: x\n      return: {}"), /exactly one of 'return' or 'error'/],
     ['a check with two kinds', VALID.replace('max: 1', 'max: 1\n      not_called: [email-send]'), /exactly one of/],
     ['an invalid weight', VALID.replace('weight: critical', 'weight: urgent'), /invalid weight/],
@@ -174,5 +181,63 @@ describe('placeholders', () => {
 
   it('throws on an unresolved one', () => {
     expect(() => resolvePlaceholders('{{entry:nope}}', new Map())).toThrow(/Unresolved/);
+  });
+});
+
+// #1958: a stub pinned to absolute dates goes stale. Case 10 asked for "next week" and
+// stubbed Oct 6–8, which stopped being next week the day after it was written.
+describe('date placeholders', () => {
+  const DATED = VALID
+    .replace('content: "Yes"', 'content: "Can we do {{day:next-monday+1}}?"')
+    .replace('return: { response: "Sent." }', 'return: { response: "Free {{time:next-monday+1 10:00}} ({{timezone}})" }');
+
+  it('loads a case that uses them, leaving them for the run to resolve', () => {
+    const c = loadScenarioCase(write('d.yaml', DATED));
+    expect(c.inbound.content).toBe('Can we do {{day:next-monday+1}}?');
+    expect(c.toolStubs['delegate']![0]!.return).toEqual({ response: 'Free {{time:next-monday+1 10:00}} ({{timezone}})' });
+  });
+
+  it('accepts the keyless and colon-only forms the seeded-row check would otherwise reject', () => {
+    const body = VALID.replace('content: "Yes"', 'content: "{{date:today}} {{weekday:today}} {{at:now}} {{timezone}}"');
+    expect(() => loadScenarioCase(write('d2.yaml', body))).not.toThrow();
+  });
+
+  it.each([
+    ['an unknown day', 'content: "{{day:nxt-monday}}"', /date placeholder.*unknown day/],
+    ['a bad time', 'content: "{{time:today 25:00}}"', /date placeholder.*invalid time/],
+    // Keyless date kinds match neither resolver: they must fail here, not at rating time.
+    ['a keyless date kind', 'content: "{{date}}"', /unknown placeholder \{\{date\}\}/],
+    ['a keyed timezone', 'content: "{{timezone:x}}"', /unknown placeholder \{\{timezone:x\}\}/],
+  ])('rejects %s', (_label, content, error) => {
+    expect(() => loadScenarioCase(write('d3.yaml', VALID.replace('content: "Yes"', content)))).toThrow(error);
+  });
+
+  it('rejects one in failure_modes, which reach the judge as written', () => {
+    const body = VALID + 'failure_modes:\n  - "offers {{day:next-monday+1}}"\n';
+    expect(() => loadScenarioCase(write('d4.yaml', body))).toThrow(/failure_modes cannot contain/);
+  });
+
+  it('rejects one in the description, which reaches the judge as written', () => {
+    const body = VALID.replace('tags: [routing]', 'description: asks about {{day:today}}\ntags: [routing]');
+    expect(() => loadScenarioCase(write('d5.yaml', body))).toThrow(/description cannot contain date placeholders/);
+  });
+});
+
+describe('resolveRunPlaceholders', () => {
+  // Monday 2026-10-05 09:00 in Toronto.
+  const clock = { now: '2026-10-05T13:00:00.000Z', timezone: 'America/Toronto' };
+
+  it('resolves dates against the run clock, then seeded ids', () => {
+    const run = { refs: { 'entry:x': 'E1' }, clock };
+    expect(resolveRunPlaceholders('{{entry:x}} on {{day:next-monday+1}} ({{date:next-monday+1}})', run))
+      .toBe('E1 on Tuesday, October 13 (2026-10-13)');
+  });
+
+  it('leaves a value with no date placeholders alone when the run has no clock', () => {
+    expect(resolveRunPlaceholders('{{entry:x}}', { refs: { 'entry:x': 'E1' } })).toBe('E1');
+  });
+
+  it('throws rather than hand the judge a raw date when the run has no clock', () => {
+    expect(() => resolveRunPlaceholders('on {{day:today}}', { refs: {} })).toThrow(/no clock/);
   });
 });

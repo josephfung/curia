@@ -16,6 +16,13 @@
 // The CLI points DATABASE_URL at a throwaway copy of the database (clone-db.ts) before
 // booting, so whatever the agents write is dropped with it. Tool stubs (stub-layer.ts)
 // answer calls test mode cannot serve.
+//
+// Several cases run at once (#1980). Each attempt runs inside runInCase(), and everything
+// it sets off — the coordinator's turn, the specialists it delegates to, their tool and
+// model calls — carries that case's context (tests/shared/case-scope.ts). Stubs, calendar
+// writes, the bullpen threads agents are shown, model fallbacks and spend are all kept per
+// case through it. A case that times out is cancelled: its later model calls fail at once
+// and its tool calls are refused, so an abandoned turn neither spends nor touches anything.
 
 import { randomUUID } from 'node:crypto';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
@@ -25,8 +32,10 @@ import type { EventBus } from '../../src/bus/bus.js';
 import type { Logger } from '../../src/logger.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import { closeAttempt, createCaseContext, guardProvider, meterAgentCalls, type TurnErrorKind } from '../shared/case-scope.js';
 import { createTurnCapture, withoutRecentHistory, type ObservedToolCall } from '../shared/turn-capture.js';
-import { createSmokeStubs, type SmokeStubs } from './stub-layer.js';
+import { UsageLedger, type UsageBreakdown } from '../shared/usage.js';
+import { createSmokeStubs, newSmokeCase, type SmokeCaseState, type SmokeStubs } from './stub-layer.js';
 import type { CaseTarget, SmokeSender } from './types.js';
 
 // How long each sendMessage() call waits for the agent's response.
@@ -46,6 +55,20 @@ export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout >
 
 /** How long shutdown waits for turns that outlived their timeout. */
 const LATE_TURN_GRACE_MS = 60_000;
+
+/** How long a cancelled warm-up turn gets to wind down before the cases start. */
+const WARM_UP_SETTLE_MS = 30_000;
+
+/**
+ * A turn that did not complete, and how (turn-capture's errorKind), so the runner can tell
+ * a provider failure from the model's (#1980).
+ */
+export class TurnError extends Error {
+  constructor(message: string, readonly kind?: TurnErrorKind, readonly errorType?: string) {
+    super(message);
+    this.name = 'TurnError';
+  }
+}
 
 /**
  * After a publish resolves (the whole turn is over), how long to wait for the agent's
@@ -97,8 +120,13 @@ export interface CuriaHarness {
   /** Per-case tool stubs and the record of every agent's calls. */
   stubs: SmokeStubs;
   /**
-   * Send a single message and wait for the coordinator's turn to end. Rejects if it
-   * errors or does not end within RESPONSE_TIMEOUT_MS.
+   * Run `fn` as `state`'s work: every turn, tool call and model call it sets off is that
+   * case's. Everything below that names "the current case" must run inside one.
+   */
+  runInCase<T>(state: SmokeCaseState, fn: () => Promise<T>): Promise<T>;
+  /**
+   * Send a single message and wait for the coordinator's turn to end. Rejects with a
+   * TurnError if it errors or does not end within RESPONSE_TIMEOUT_MS.
    *
    * With `target`, the message is instead `target.spec.from`'s post on the thread,
    * mentioning `target.spec.agent`, and the turn awaited is that agent's.
@@ -112,7 +140,7 @@ export interface CuriaHarness {
     target?: { spec: CaseTarget; thread: TargetThread };
   }): Promise<TurnResponse>;
   /**
-   * Open a targeted case's thread: `target.agent` opened it with `target.opening`,
+   * Open the current case's thread: `target.agent` opened it with `target.opening`,
    * addressed to `target.from`. Written to the database copy, like any agent's post.
    */
   openTargetThread(target: CaseTarget): Promise<TargetThread>;
@@ -125,16 +153,26 @@ export interface CuriaHarness {
    * Send a no-op warm-up message to absorb cold-start latency (DB pool
    * warm-up, first LLM API round-trip) before real test cases run.
    * The response is discarded — we only care that the stack is primed.
+   * Returns what it spent.
    */
-  warmUp(): Promise<void>;
+  warmUp(): Promise<UsageBreakdown>;
   /**
-   * Wait (up to `maxMs`) for turns that outlived their timeout. A late turn keeps calling
-   * tools, and the stub layer would answer and record them as the next case's. Returns
-   * false if some are still running.
+   * Wait (up to `maxMs`) for `state`'s turns that outlived their timeout to wind down, so
+   * their spend is counted before the case's is read. A cancelled case's turn ends at its
+   * next model call. Returns false if some are still running (shutdown waits for those).
    */
-  settle(maxMs: number): Promise<boolean>;
-  /** Model fallbacks (any agent, specialists included) since the last call, and clear them. */
-  takeFallbacks(): string[];
+  settle(state: SmokeCaseState, maxMs: number): Promise<boolean>;
+  /**
+   * Model spend no case's figure includes: calls made outside every case, or billed after
+   * their case ended (a call still in flight past the settle wait).
+   */
+  unattributedUsage(): UsageBreakdown;
+  /**
+   * Work that lost its case: tool calls and model fallbacks with no case context. Test
+   * mode runs no scheduler, so each one is a case's work the harness could not keep
+   * isolated — answered unstubbed, or on another model. The CLI fails the gate on any.
+   */
+  isolationProblems(): string[];
   shutdown(): Promise<void>;
 }
 
@@ -142,22 +180,26 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   // Agents, services and the no-send outbound gateway — the production assembly
   // path in test mode. Throws with the provider name if the chosen model's API key
   // is missing.
-  const stubs = createSmokeStubs();
-  // The bullpen threads agents may see as pending: only the one the running case opened.
-  const caseThreads = new Set<string>();
+  const context = createCaseContext<SmokeCaseState>();
+  const stubs = createSmokeStubs(context);
   const stack = await createTestModeStack({
     model: options.model,
     wrapExecutionLayer: (layer) => stubs.wrap(layer),
+    // Times each model call against its case, and refuses a cancelled case's calls.
+    wrapLlmProvider: (provider) => guardProvider(provider, context.current),
     // No contact recent history: a case must not inherit another case's turns, or the
     // real principal's, through cross-conversation recall.
     wrapWorkingMemory: withoutRecentHistory,
     // Runtimes inject an agent's open bullpen threads from the last week into its prompt.
     // On a copy of the dev database those are whatever the dev instance left open: a real
-    // CONSULT REPLY would sit beside a targeted case's own. Show only the case's thread
-    // (the scenario suite's scopedBullpen does the same).
+    // CONSULT REPLY would sit beside a targeted case's own. Show only the threads the
+    // calling case opened — not another concurrent case's (the scenario suite's
+    // scopedBullpen does the same).
     wrapBullpenService: (bullpen) => Object.assign(Object.create(bullpen) as BullpenService, {
-      getPendingThreadsForAgent: async (agentId: string, windowMinutes: number) =>
-        (await bullpen.getPendingThreadsForAgent(agentId, windowMinutes)).filter(t => caseThreads.has(t.threadId)),
+      getPendingThreadsForAgent: async (agentId: string, windowMinutes: number) => {
+        const threads = context.current()?.threads;
+        return (await bullpen.getPendingThreadsForAgent(agentId, windowMinutes)).filter(t => threads?.has(t.threadId) === true);
+      },
     }),
   });
   const { bus, logger, contactResolver } = stack;
@@ -189,29 +231,44 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
 
   // A fallback means some agent ran on a different model than the one the run is labelled
   // with. The shared capture only sees the awaited agent's; specialists work in their own
-  // conversations, so collect every agent's here and let the runner charge the case.
-  let fallbacks: string[] = [];
+  // conversations, so collect every agent's here, on the case it happened in.
+  const orphanFallbacks: string[] = [];
   bus.subscribe('model.fallback', 'system', async (event) => {
     const { payload } = event as ModelFallbackEngagedEvent;
-    fallbacks.push(`${payload.agentId}: ${payload.failedModel} → ${payload.fallbackModel} (${payload.reason})`);
+    const line = `${payload.agentId}: ${payload.failedModel} → ${payload.fallbackModel} (${payload.reason})`;
+    const state = context.current();
+    if (state) state.fallbacks.push(line);
+    else orphanFallbacks.push(line);
   });
 
+  // Every agent's model spend, billed to the case it was made in (#1980).
+  const unattributed = new UsageLedger();
+  meterAgentCalls(bus, context.current, unattributed);
+
   /**
-   * Turns still running after sendMessage gave up on them. EventBus.publish awaits every
-   * subscriber, so a publish resolves only when the whole agent turn has finished;
-   * sendMessage therefore races the capture's timeout instead of awaiting it. Shutdown
-   * waits (bounded) for these before closing the pool.
+   * Turns still running after sendMessage gave up on them, and whose case each is.
+   * EventBus.publish awaits every subscriber, so a publish resolves only when the whole
+   * agent turn has finished; sendMessage therefore races the capture's timeout instead of
+   * awaiting it. settle() waits for one case's; shutdown waits (bounded) for all of them
+   * before closing the pool.
    */
-  const lateTurns = new Set<Promise<void>>();
+  const lateTurns = new Map<Promise<void>, SmokeCaseState | undefined>();
 
   function trackDelivery(delivery: Promise<void>, conversationId: string): void {
-    const settled = delivery
+    const settled: Promise<void> = delivery
       .catch((err: unknown) => {
         // sendMessage has its outcome already (capture.fail or the timeout).
         logger.error({ err, conversationId }, 'smoke harness: an agent turn failed');
       })
       .finally(() => { lateTurns.delete(settled); });
-    lateTurns.add(settled);
+    lateTurns.set(settled, context.current());
+  }
+
+  /** The case calling a method that only makes sense inside one. */
+  function currentCase(method: string): SmokeCaseState {
+    const state = context.current();
+    if (!state) throw new Error(`smoke harness: ${method}() called outside a case`);
+    return state;
   }
 
   async function openTargetThread(target: CaseTarget): Promise<TargetThread> {
@@ -223,7 +280,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
       [target.from],
     );
     const thread = { threadId: opened.thread.id, topic: opened.thread.topic, participants: opened.thread.participants };
-    caseThreads.add(thread.threadId);
+    currentCase('openTargetThread').threads.add(thread.threadId);
     answerOnThread(target, thread);
     return thread;
   }
@@ -266,8 +323,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   }
 
   async function closeTargetThread(target: CaseTarget, thread: TargetThread): Promise<void> {
-    // Out of view first: even if the close fails, no later case is shown this thread.
-    caseThreads.delete(thread.threadId);
+    // Out of view first: even if the close fails, no later attempt is shown this thread.
+    currentCase('closeTargetThread').threads.delete(thread.threadId);
     await stack.bullpenService.closeThread(thread.threadId, target.agent);
   }
 
@@ -365,7 +422,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     trackDelivery(delivery, options.conversationId);
 
     const outcome = await waiter;
-    if (outcome.error) throw new Error(outcome.error);
+    if (outcome.error) throw new TurnError(outcome.error, outcome.errorKind, outcome.errorType);
     return {
       content: outcome.reply ?? '',
       durationMs: Date.now() - start,
@@ -374,28 +431,39 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     };
   }
 
-  async function settle(maxMs: number): Promise<boolean> {
-    if (lateTurns.size === 0) return true;
+  async function settle(state: SmokeCaseState, maxMs: number): Promise<boolean> {
+    const own = (): Array<Promise<void>> => [...lateTurns].filter(([, s]) => s === state).map(([p]) => p);
+    if (own().length === 0) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      Promise.allSettled([...lateTurns]),
-      new Promise(resolve => setTimeout(resolve, maxMs)),
+      Promise.allSettled(own()),
+      new Promise(resolve => { timer = setTimeout(resolve, maxMs); timer.unref(); }),
     ]);
-    return lateTurns.size === 0;
+    clearTimeout(timer);
+    return own().length === 0;
   }
 
-  async function warmUp(): Promise<void> {
+  async function warmUp(): Promise<UsageBreakdown> {
     // Send a throwaway message to absorb cold-start latency: DB connection pool
     // warm-up, first LLM API round-trip, skill registry init, etc.
     // A failure is reported but not fatal — if the stack is broken, real test cases
-    // will surface it with clearer context.
-    try {
-      await sendMessage({ conversationId: `smoke-warmup-${randomUUID()}`, content: 'hello' });
-    } catch (err) {
-      process.stderr.write(`  [WARN] warm-up turn failed: ${err instanceof Error ? err.message : String(err)}\n`);
-    }
-    // The warm-up's calls and fallbacks are not any case's.
-    stubs.clear();
-    fallbacks = [];
+    // will surface it with clearer context. Its own case, so its calls, fallbacks and
+    // spend are no real case's.
+    const state = newSmokeCase('warm-up');
+    await context.run(state, async () => {
+      try {
+        await sendMessage({ conversationId: `smoke-warmup-${randomUUID()}`, content: 'hello' });
+      } catch (err) {
+        process.stderr.write(`  [WARN] warm-up turn failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
+    });
+    // Stop anything it left running (a timed-out warm-up turn especially) before the
+    // cases start beside it, then read what it spent.
+    state.cancelled = true;
+    await settle(state, WARM_UP_SETTLE_MS);
+    const usage = state.usage.snapshot();
+    closeAttempt(state);
+    return usage;
   }
 
   async function shutdown(): Promise<void> {
@@ -403,7 +471,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     if (lateTurns.size > 0) {
       process.stderr.write(`  waiting up to ${LATE_TURN_GRACE_MS / 1000}s for ${lateTurns.size} timed-out turn(s) to finish...\n`);
       await Promise.race([
-        Promise.allSettled([...lateTurns]),
+        Promise.allSettled([...lateTurns.keys()]),
         new Promise(resolve => setTimeout(resolve, LATE_TURN_GRACE_MS)),
       ]);
     }
@@ -415,16 +483,17 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     logger,
     stack,
     stubs,
+    runInCase: (state, fn) => context.run(state, fn),
     sendMessage,
     openTargetThread,
     closeTargetThread,
     warmUp,
     settle,
-    takeFallbacks: () => {
-      const taken = fallbacks;
-      fallbacks = [];
-      return taken;
-    },
+    unattributedUsage: () => unattributed.snapshot(),
+    isolationProblems: () => [
+      ...(stubs.orphanCalls > 0 ? [`${stubs.orphanCalls} tool call(s) ran outside any case (answered for real, not from a case's stubs)`] : []),
+      ...orphanFallbacks.map(f => `model fallback outside any case: ${f}`),
+    ],
     shutdown,
   };
 }

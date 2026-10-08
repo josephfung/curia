@@ -200,6 +200,53 @@ describe('loader: capability validation', () => {
     }
   });
 
+  it('rejects unknown optional_capabilities and a name listed as both required and optional (#2024)', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_cap_optional_bad__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const base = { description: 'test skill', version: '1.0.0', action_risk: 'none', inputs: {}, outputs: {} };
+    try {
+      setupSkillDir(tmpDir, 'typo-skill', { ...base, name: 'typo-skill', optional_capabilities: ['taskRepoo'] });
+      let discoveries = discoverToolManifests(tmpDir);
+      await expect(loadToolsFromDirectory(discoveries, new ToolRegistry(), logger, new Set(['typo-skill'])))
+        .rejects.toThrow('taskRepoo');
+
+      setupSkillDir(tmpDir, 'both-skill', {
+        ...base, name: 'both-skill', capabilities: ['taskRepo'], optional_capabilities: ['taskRepo'],
+      });
+      discoveries = discoverToolManifests(tmpDir);
+      await expect(loadToolsFromDirectory(discoveries, new ToolRegistry(), logger, new Set(['both-skill'])))
+        .rejects.toThrow('both capabilities and optional_capabilities');
+
+      // Allowlist-gated capabilities must be required, so a misdeclaration fails everywhere.
+      for (const cap of ['executionLayer', 'secretResolver', 'userSecretIndex', 'secretCapture']) {
+        const name = `gated-${cap.toLowerCase()}`;
+        setupSkillDir(tmpDir, name, { ...base, name, optional_capabilities: [cap] });
+        discoveries = discoverToolManifests(tmpDir);
+        await expect(loadToolsFromDirectory(discoveries, new ToolRegistry(), logger, new Set([name])), cap)
+          .rejects.toThrow('must be required capabilities');
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('freezes optional_capabilities (#2024)', async () => {
+    const tmpDir = path.join(import.meta.dirname, '__test_cap_optional_ok__');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      setupSkillDir(tmpDir, 'opt-skill', {
+        name: 'opt-skill', description: 'test skill', version: '1.0.0', action_risk: 'none',
+        inputs: {}, outputs: {}, optional_capabilities: ['taskRepo'],
+      });
+      const registry = new ToolRegistry();
+      const discoveries = discoverToolManifests(tmpDir);
+      expect(await loadToolsFromDirectory(discoveries, registry, logger, new Set(['opt-skill']))).toBe(1);
+      expect(Object.isFrozen(registry.get('opt-skill')?.manifest.optional_capabilities)).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('accepts valid capability names and freezes both manifest and capabilities array', async () => {
     const tmpDir = path.join(import.meta.dirname, '__test_cap_valid__');
     fs.mkdirSync(tmpDir, { recursive: true });

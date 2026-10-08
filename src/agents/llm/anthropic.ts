@@ -18,6 +18,7 @@ import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvena
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
+import { resolveTemperature } from './sampling-options.js';
 
 export class AnthropicProvider implements LLMProvider {
   id = 'anthropic';
@@ -145,6 +146,13 @@ export class AnthropicProvider implements LLMProvider {
       messages: conversationMessages,
     };
 
+    // Forward a finite caller temperature; omit the key otherwise so the
+    // upstream model keeps its default (judges pass 0 for stable verdicts).
+    const temperature = resolveTemperature(options, this.logger);
+    if (temperature !== undefined) {
+      createParams.temperature = temperature;
+    }
+
     // Only attach the tools array when tools are provided — the API rejects
     // an empty tools array, so we omit the key entirely when there are none.
     if (tools && tools.length > 0) {
@@ -159,9 +167,9 @@ export class AnthropicProvider implements LLMProvider {
         input_schema: t.input_schema as Anthropic.Messages.Tool['input_schema'],
       }));
       // Mark the last tool with a cache_control breakpoint so the entire tool
-      // list is captured in a single cache slot. The coordinator's tool list is
-      // stable (48 pinned skills), so this achieves near-100% hit rate within
-      // the 5-minute TTL and saves ~10K tokens per call.
+      // list is captured in a single cache slot. An agent's pinned tool list is
+      // stable between turns, so it is served from cache within the 5-minute
+      // TTL. No size is quoted here: it grows with every pinned skill.
       // Mutate in place rather than spread-reassign — the spread pattern widens
       // the inferred type and makes required fields optional, breaking assignability.
       mappedTools[mappedTools.length - 1]!.cache_control = { type: 'ephemeral' as const };

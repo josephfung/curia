@@ -223,6 +223,8 @@ export async function* llmResponseAsStream(
       content: response.content,
       usage: response.usage,
       provenance: response.provenance,
+      ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+      ...(response.reasoningOmitted ? { reasoningOmitted: response.reasoningOmitted } : {}),
     };
     return;
   }
@@ -234,6 +236,8 @@ export async function* llmResponseAsStream(
     content: response.content,
     usage: response.usage,
     provenance: response.provenance,
+    ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+    ...(response.reasoningOmitted ? { reasoningOmitted: response.reasoningOmitted } : {}),
   };
 }
 

@@ -204,6 +204,27 @@ export function resolveLateDeliveryConfig(yaml: YamlConfig['delegate']): LateDel
   };
 }
 
+// ---------------------------------------------------------------------------
+// Approval expiry sweep config (#2013)
+// ---------------------------------------------------------------------------
+
+export interface ApprovalExpiryConfig {
+  sweepIntervalMinutes: number;
+}
+
+const DEFAULT_APPROVAL_EXPIRY_CONFIG: ApprovalExpiryConfig = {
+  // Matches the hourly coordinator cron this replaced.
+  sweepIntervalMinutes: 60,
+};
+
+/** Resolve the optional autonomy.approval_expiry block to a fully-populated config. */
+export function resolveApprovalExpiryConfig(yaml: YamlConfig['autonomy']): ApprovalExpiryConfig {
+  return {
+    sweepIntervalMinutes:
+      yaml?.approval_expiry?.sweep_interval_minutes ?? DEFAULT_APPROVAL_EXPIRY_CONFIG.sweepIntervalMinutes,
+  };
+}
+
 /** Resolve the optional YAML tasks block to a fully-populated config with defaults. */
 export function resolveTasksConfig(yaml: YamlConfig['tasks']): TasksConfig {
   return {
@@ -587,6 +608,11 @@ export interface YamlConfig {
       enabled?: boolean;
       /** Delete archive rows older than this many days (DreamEngine decay pass). Default 90. */
       hotRetentionDays?: number;
+      /**
+       * When false, archive rows omit the reasoning string. Token counts still
+       * store, and the rest of the archive still writes. Default true.
+       */
+      includeReasoning?: boolean;
     };
   };
   contact_creation_limits?: {
@@ -736,6 +762,11 @@ export interface YamlConfig {
     reaction_intents?: {
       approve?: string[];
       reject?: string[];
+    };
+    /** System-interval sweep that expires stale pending approvals (#2013). */
+    approval_expiry?: {
+      /** Sweep interval in minutes. Default 60. */
+      sweep_interval_minutes?: number;
     };
   };
 }
@@ -1209,6 +1240,14 @@ export function loadYamlConfig(configDir: string): YamlConfig {
           `audit.llmCallArchive.hotRetentionDays must be a positive integer, got: ${llmCallArchive.hotRetentionDays}`,
         );
       }
+      if (
+        llmCallArchive.includeReasoning !== undefined &&
+        typeof llmCallArchive.includeReasoning !== 'boolean'
+      ) {
+        throw new Error(
+          `audit.llmCallArchive.includeReasoning must be a boolean, got: ${String(llmCallArchive.includeReasoning)}`,
+        );
+      }
     }
   }
 
@@ -1326,6 +1365,23 @@ export function loadYamlConfig(configDir: string): YamlConfig {
       60_000,
       'minutes',
     );
+  }
+
+  // Validate autonomy.approval_expiry if present (#2013). Same scalar-config guard as
+  // lateDelivery above: a mis-shaped block must fail loudly, not silently fall back to hourly.
+  const approvalExpiry = config.autonomy?.approval_expiry;
+  if (approvalExpiry !== undefined) {
+    if (typeof approvalExpiry !== 'object' || Array.isArray(approvalExpiry) || approvalExpiry === null) {
+      throw new Error(`autonomy.approval_expiry must be a YAML mapping, got: ${typeof approvalExpiry}`);
+    }
+    const interval = approvalExpiry.sweep_interval_minutes;
+    if (interval !== undefined && (!Number.isInteger(interval) || interval <= 0)) {
+      throw new Error(
+        `autonomy.approval_expiry.sweep_interval_minutes must be a positive integer, got: ${String(interval)}`,
+      );
+    }
+    // Reaches setInterval as minutes × 60000; an overflowed delay would fire in a tight loop.
+    assertFitsNodeTimer('autonomy.approval_expiry.sweep_interval_minutes', interval, 60_000, 'minutes');
   }
 
   // Validate scheduler if present.

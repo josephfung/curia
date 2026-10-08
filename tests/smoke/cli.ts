@@ -1,6 +1,6 @@
 // tests/smoke/cli.ts
 //
-// `pnpm smoke [--model <id>] [--case <substring>]... [--tags a,b] [--show-calls] [--allow-remote-db]`
+// `pnpm smoke [--model <id>] [--case <substring>]... [--tags a,b] [--concurrency N] [--show-calls] [--allow-remote-db]`
 //
 // Exits 1 when any case fails the gate (gate.ts: weighted score below 80%, a critical
 // behavior rated MISS, or an execution or judge error), known failures aside. The
@@ -8,6 +8,9 @@
 //
 // The run happens on a throwaway copy of DATABASE_URL's database (clone-db.ts),
 // dropped afterwards, so nothing the agents write reaches the real one.
+//
+// Cases run --concurrency at a time (default 4) and the summary prints what the run
+// spent on model calls, by agent and judge (#1980).
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
@@ -22,6 +25,7 @@ import { runTestCases } from './runner.js';
 import { evaluateCases } from './evaluator.js';
 import { formatPct, gatingFailures, mergeRetries, staleKnownFailures } from './gate.js';
 import { generateReport } from './report.js';
+import { emptyBreakdown, formatUsageLines, formatUsd, sumBreakdowns } from '../shared/usage.js';
 import { CASE_PASS_THRESHOLD, type CaseExecution, type RunResult, type HistoricalEntry } from './types.js';
 
 const CASES_DIR = path.resolve(import.meta.dirname, 'cases');
@@ -67,7 +71,7 @@ async function main(): Promise<void> {
     err(`smoke: ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);
   }
-  const { tags, model, showCalls } = args;
+  const { tags, model, showCalls, concurrency } = args;
   // A case runs when its name contains any --case value.
   const caseFilters = args.cases;
 
@@ -90,6 +94,7 @@ async function main(): Promise<void> {
   out(`\nCuria Smoke Test`);
   out(`   ${cases.length} test cases loaded`);
   out(`   Response timeout: ${timeoutSec}s (override with SMOKE_TIMEOUT_MS)`);
+  out(`   Concurrency: ${concurrency} case(s) at a time (--concurrency)`);
   out(`   Gate: every case ≥ ${formatPct(CASE_PASS_THRESHOLD)} weighted, no critical behavior MISS\n`);
 
   // Copy the database before anything connects to it: Postgres copies a template only
@@ -177,7 +182,7 @@ async function main(): Promise<void> {
       // the principal"; without one they would run on literal placeholders.
       throw new Error('this database has no principal contact; smoke needs an onboarded database');
     }
-    const judge = createJudge(harness.stack.llmProviders, principal.displayName);
+    const judge = createJudge(harness.stack.llmProviders, principal.displayName, { logger: harness.logger });
     out('   Stack ready.');
     out(`   Model: ${modelLabel ?? 'configured model_routing'}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
@@ -226,7 +231,7 @@ async function main(): Promise<void> {
       const status = exec.error
         ? `ERROR (${exec.error})`
         : exec.responses.map(r => `${r.durationMs}ms`).join(' + ');
-      out(`   [${index}/${total}] ${exec.testCase.name}... ${status}`);
+      out(`   [${index}/${total}] ${exec.testCase.name}... ${status}  ${formatUsd(exec.usage.total.estimatedCostUsd)}`);
       if (showCalls) {
         for (const c of exec.agentCalls) {
           const outcome = c.success === undefined ? '' : c.success ? ' ok' : ' FAILED';
@@ -234,14 +239,19 @@ async function main(): Promise<void> {
         }
       }
     };
+    const onProviderRetry = (tc: { name: string }, reason: string): void => {
+      out(`   [provider] ${tc.name}: ${reason} — running it again (not the gated retry)`);
+    };
     const principalRef = { name: principal.displayName, contactId: principal.id };
-    const executions = await runTestCases(harness, cases, {
+    const { executions, warmUpUsage } = await runTestCases(harness, cases, {
       defaultStubs,
       principal: principalRef,
+      concurrency,
       onWarmUp: () => {
         out('   Warming up stack...');
       },
       onCaseComplete,
+      onProviderRetry,
     });
 
     // Evaluate with judge (before shutdown: the judge uses the stack's provider)
@@ -249,20 +259,23 @@ async function main(): Promise<void> {
     const onCaseEval = (name: string, i: number, total: number): void => {
       out(`   [${i}/${total}] Judging: ${name}...`);
     };
-    let caseResults = await evaluateCases(executions, judge, { today, onCaseEval });
+    let caseResults = await evaluateCases(executions, judge, { today, onCaseEval, concurrency });
 
     // One retry for each gating failure (gate.ts explains why). Known failures are not
-    // retried: they are expected to fail.
+    // retried: they are expected to fail. Provider failures were already re-run above,
+    // without using this retry.
     const toRetry = gatingFailures(caseResults);
     if (toRetry.length > 0) {
       out(`\n-- Retrying ${toRetry.length} failing case(s) once --\n`);
-      const retryExecutions = await runTestCases(harness, toRetry.map(c => c.testCase), {
+      const { executions: retryExecutions } = await runTestCases(harness, toRetry.map(c => c.testCase), {
         defaultStubs,
         principal: principalRef,
+        concurrency,
         warmUp: false,
         onCaseComplete,
+        onProviderRetry,
       });
-      const retryResults = await evaluateCases(retryExecutions, judge, { today, onCaseEval });
+      const retryResults = await evaluateCases(retryExecutions, judge, { today, onCaseEval, concurrency });
       caseResults = mergeRetries(caseResults, retryResults);
     }
 
@@ -271,8 +284,13 @@ async function main(): Promise<void> {
       ? caseResults.reduce((sum, c) => sum + c.weightedScore, 0) / caseResults.length
       : 0;
     const failing = gatingFailures(caseResults);
+    // Work that lost its case could have been answered unstubbed or on another model, so
+    // no result in this run can be vouched for (harness.ts: isolationProblems).
+    const isolation = harness.isolationProblems();
     const knownFailing = caseResults.filter(c => !c.passed && !failing.includes(c));
     const stale = staleKnownFailures(caseResults);
+    // The warm-up and anything no case made: real spend, but no case's.
+    const overheadUsage = sumBreakdowns([warmUpUsage ?? emptyBreakdown(), harness.unattributedUsage()]);
 
     const runResult: RunResult = {
       timestamp,
@@ -281,8 +299,12 @@ async function main(): Promise<void> {
       filtered,
       cases: caseResults,
       overallScore,
-      passed: failing.length === 0,
+      passed: failing.length === 0 && isolation.length === 0,
       durationMs: Date.now() - startTime,
+      concurrency,
+      today,
+      usage: sumBreakdowns([...caseResults.map(c => c.usage), overheadUsage]),
+      overheadUsage,
     };
 
     // Load historical data BEFORE writing current results, so the trend chart
@@ -313,23 +335,37 @@ async function main(): Promise<void> {
     out(`   Overall Score: ${formatPct(overallScore)}`);
     out(`   Passed:        ${caseResults.filter(c => c.passed).length}/${caseResults.length} cases` +
       (knownFailing.length > 0 ? ` (${knownFailing.length} known failure(s))` : ''));
-    out(`   Duration:      ${Math.round(runResult.durationMs / 1000)}s`);
+    out(`   Duration:      ${Math.round(runResult.durationMs / 1000)}s (concurrency ${concurrency})`);
     out(`   Commit:        ${commit}`);
     out(`   Results:       ${resultsFile}`);
     out(`   Report:        ${reportFile}\n`);
+    out('   Model spend (estimated from registry prices; tests/shared/usage.ts):');
+    for (const line of formatUsageLines(runResult.usage)) out(`     ${line}`);
+    if (overheadUsage.total.calls > 0) {
+      const late = harness.unattributedUsage().total;
+      out(`     (includes ${formatUsd(overheadUsage.total.estimatedCostUsd)} outside any case: the warm-up` +
+        `${late.calls > 0 ? `, and ${formatUsd(late.estimatedCostUsd)} over ${late.calls} call(s) made outside a case or after it ended` : ''})`);
+    }
+    out('');
 
     // Per-case summary
     for (const c of caseResults) {
       const label = c.passed ? (c.firstAttempt ? 'PASS*' : 'PASS') : knownFailing.includes(c) ? 'KNOWN' : 'FAIL';
       const issue = c.testCase.knownFailure ? `  (known failure ${c.testCase.knownFailure.issue})` : '';
-      out(`   [${label}] ${formatPct(c.weightedScore).padStart(4)}  ${c.testCase.name}${issue}`);
+      out(`   [${label}] ${formatPct(c.weightedScore).padStart(4)}  ${formatUsd(c.usage.total.estimatedCostUsd).padStart(7)}  ${c.testCase.name}${issue}`);
       if (c.firstAttempt) {
         out(`            first attempt ${formatPct(c.firstAttempt.weightedScore)}: ${c.firstAttempt.failures.join('; ')}`);
       }
+      for (const r of c.providerRetries) out(`            provider retry: ${r}`);
       for (const f of c.failures) out(`            ${f}`);
     }
     if (caseResults.some(c => c.passed && c.firstAttempt)) {
       out('\n   PASS* = failed once, passed on retry. Worth a look if the same case keeps needing it.');
+    }
+    const providerRetried = caseResults.filter(c => c.providerRetries.length > 0);
+    if (providerRetried.length > 0) {
+      out(`\n   ${providerRetried.length} case(s) re-run after a provider failure (stall, provider error or model fallback).`);
+      out('   Those re-runs are not the gated retry; many of them point at the provider, not the model.');
     }
     out('');
     for (const c of stale) {
@@ -337,8 +373,11 @@ async function main(): Promise<void> {
         'if that issue is fixed, remove the marker.');
     }
 
+    for (const problem of isolation) err(`   [ISOLATION] ${problem}`);
     if (!runResult.passed) {
-      err(`GATE FAILED: ${failing.length} case(s) below the gate.`);
+      err(failing.length > 0
+        ? `GATE FAILED: ${failing.length} case(s) below the gate.`
+        : 'GATE FAILED: work escaped its case (above), so no case result can be trusted.');
       exitCode = 1;
     } else if (filtered) {
       out('Gate passed for the selected cases only (--case/--tags): not a full-suite result.');

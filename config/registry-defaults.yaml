@@ -64,7 +64,6 @@ tools:
   - list-user-secrets
   # Autonomy
   - activity-log
-  - approval-expiry-sweep
   # Infrastructure-only: re-publishes a Gate C–withheld dispatcher relay after CEO
   # approve (#1733). Not pinned to any agent; allowed_callers: ["system"] so agents
   # cannot invoke it — only approve-action's humanApproved re-exec path reaches it.

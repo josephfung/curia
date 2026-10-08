@@ -678,3 +678,480 @@ Each case runs once, and a case that fails the gate gets one retry.
   not an image. That description had also caused this case's weak first attempts in the
   baseline. Fixed in `a4b81cdd`; the case then passed 3 of 3 runs (92% each).
 - **The full-suite result for the PR's final commit** is recorded on #1979.
+
+### 2026-10-05 — behavior gate cost and duration (#1980)
+
+The first full run of both suites with per-case cost reporting and concurrency. Same
+model, judge and database as the 2026-10-02 baseline. Commit `4a22ceca`, both suites
+started together at `--concurrency 4` (scenarios began once smoke had copied the database).
+
+**Duration.** Both suites together: **12 min 21 s** (02:03:56–02:16:17 UTC). Smoke alone
+740 s, scenarios alone 529 s. The 2026-10-02 runs took 39–66 min (smoke) and 31 min
+(scenarios), one after the other.
+
+**Outcome.** Scenarios: gate passed, 18 of 18 cases. Smoke: 42 of 44; five cases needed
+the gated retry and two failed it on score ("Pre-Meeting Prep Brief" 78%, "Triage Batch
+of Mixed Emails" 75%). No provider retries, no timeouts, no isolation problems.
+
+**Cost split (estimate from registry prices).** OpenRouter cache reads are reported as
+zero (#1962), so all input is priced as uncached and these figures are an upper bound.
+
+| | Smoke | Scenarios |
+|---|---:|---:|
+| Total | **$2.84** (591 calls) | **$1.55** (305 calls) |
+| coordinator | $1.29 — 220 calls, 7.8M in | $1.38 — 250 calls, 8.4M in |
+| contacts | $0.40 — 139 calls | — |
+| ceo-inbox | $0.36 — 74 calls | — |
+| research-analyst | $0.27 — 29 calls | — |
+| calendar | $0.24 — 78 calls | — |
+| judge (`openai/gpt-4o`) | $0.28 — 51 calls | $0.17 — 55 calls |
+| Most expensive case | Reschedule Board Chair Meeting $0.17 | external reply first person $0.19 |
+
+Mean input per agent call: 26k tokens (smoke), 34k (scenario coordinator). Input tokens
+are 97% of the estimate. Scenario delegations are stubbed, so all its spend is the
+coordinator's.
+
+**What the measurements say about the cost cuts #1980 listed**
+
+- **Judge model: not changed.** The judge is 10% (smoke) and 11% (scenarios) of the
+  estimate. Even a free judge saves under $0.50 per release run, less than one smoke
+  retry pass costs. `pnpm rejudge` is in place to test a candidate if that changes.
+- **Prompt caching: cannot be checked yet.** Every call shows 0 cache reads, which is
+  #1962 (the OpenRouter provider hard-codes them to zero), not evidence of misses. Input
+  is the bulk of the spend, so caching is the lever worth pulling: at the registry's
+  cache-read rate ($0.003/M vs $0.15/M) a cached coordinator prefix is nearly free. Fix
+  #1962 first, then re-measure.
+- **Waste on timeouts: adopted.** A case that ends (timed out or not) is cancelled and its
+  later model calls fail at once. No case timed out in this run, so the saving did not
+  show here; in the 8-second-timeout check it ended an abandoned turn within its settle
+  wait instead of letting it run on.
+- **Concurrency: adopted** (time, not money): 4 cases at once took the gate from 70–97
+  min to 12 min.
+
+**Estimate vs. OpenRouter's bill.** OpenRouter billed **$2.10** for 02:03:56–02:16:17 UTC
+on 2026-10-05, against the $4.39 estimate: the estimate is about 2.1× the bill. That
+matches cached input being priced as uncached (#1962), so the provider is caching the
+prefix; the real per-release cost is about $2.
+
+### 2026-10-05 — google-workspace allowlist to Drive, Docs and Sheets (#1957)
+
+**Capture conditions**
+
+- Production change: curia-deploy#264 added `--tools drive docs sheets` to the instance
+  overlay, which had passed no `--tools` at all (so workspace-mcp loaded every service and
+  only core's runtime holdback removed Calendar). Core image `ad5fb6c8` (main with #2008,
+  `email-get-thread`). The app container was created at 2026-10-05T16:00:20Z.
+- Before: `--since 2026-09-28T16:00:00Z --until 2026-10-05T16:00:00Z` (1,008 archive rows).
+- After: `--since 2026-10-05T16:01:00Z`, run at 2026-10-05T16:51:27Z (2 archive rows).
+  Every call in both windows used its window's modal tool list (180 before, 117 after),
+  so the tool-definition figures are fixed per configuration and two samples are enough
+  for them. Provider input tokens depend on conversation length and are not comparable at
+  n=2; they are listed only for completeness.
+
+| Metric (p50) | Before | After | Change |
+|---|---:|---:|---:|
+| tool count | 180 | 117 | −63 |
+| tool-definition bytes | 226,910 | 160,942 | **−65,968 (−29%)** |
+| mcp:google-workspace tools | 114 | 49 | −65 |
+| mcp:google-workspace bytes | 158,797 | 89,693 | **−69,104 (−44%)** |
+| local tools | 66 | 68 | +2 |
+| local bytes | 67,753 | 71,015 | +3,262 |
+| provider input tokens (n=1,008 / n=2) | 76,882 | 74,166 | not comparable |
+
+The Workspace cut matches the server-side probe of workspace-mcp 1.22.0 with the same
+args (121 → 49 tools). Local tools grew by two between the windows, one of them
+`email-get-thread` (#2008), which replaces the Gmail thread read. google-workspace is now
+56% of tool-definition bytes, down from 70%; `batch_update_doc` alone is 23,180 bytes.
+
+### 2026-10-05 — restatements and duplicates removed from the prompt (#1958)
+
+**Size.** Measured on the file, before deploy: `origin/main` (`eed77036`, coordinator
+0.21.3) against the PR's final commit `a91d64bf` (0.21.4). Tokens are estimated at four
+characters each.
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `agents/coordinator.yaml` bytes | 58,275 | 45,749 | −12,526 (−21%) |
+| `agents/coordinator.yaml` lines | 896 | 722 | −174 |
+| `system_prompt` block bytes | 56,160 | 43,634 | **−12,526 (−22%)** |
+| `system_prompt` est. tokens | ~14.0k | ~10.9k | ~−3.1k |
+
+Per-call production figures (`report-agent-context`) need a deploy and belong in the
+next capture.
+
+**Behavior, on the final commit.** Same model, judge and database as the 2026-10-02
+baseline. Run on a Monday, which matters for two date-bound cases (below).
+
+- **Scenarios: gate passed, 19 of 19 cases** (596 s, estimated $1.54). New case 12,
+  `pronoun your calendar`, passed 5/5 on every critical behavior with "Resolving
+  pronouns before delegating" removed, so the section stays out.
+- **Smoke:** the full run (commit `8cc6ea77`) passed 41 of 44. The three cases that
+  failed both attempts each passed first time on the final commit: Pre-Meeting Prep Brief
+  89%, Schedule External Meeting 100%, Natural Language Deadlines 100%.
+
+**What the runs in between showed.** An earlier commit dropped the auto-generated-mail
+passage whole, including the "escalate only when actionable" judgment the issue said to
+keep. On `external reply first person` that branch timed out in 2 of 5 runs and emailed
+the principal in most completed runs, while `origin/main`'s prompt on the same day passed
+5/5. Restoring the judgment as one line fixed the timeouts. An A/B on `origin/main`'s
+prompt also passed the two smoke cases above and `scheduler additive create`, whose
+branch runs had called `scheduler-report` (refused, unstubbed) in 2 of 15 runs.
+
+**Date-bound cases.** Read these before comparing a later run:
+
+- `external reply first person` stubs open slots on Tue–Thu Oct 6–8 and asks for "next
+  week". From Monday Oct 5 that is the wrong week. `offers_times` (important) fell to 10%
+  on the final commit because the coordinator declined to offer those slots as next week;
+  `origin/main`'s prompt offered them in 4 of 5 runs, which is the factual error. The
+  critical behaviors cleared the gate (80–100%).
+- Smoke `Natural Language Deadlines` depends on the weekday: `date-resolve` reads "next
+  Friday" as the soonest Friday, so on a Monday the judge can disagree with it.
+
+**Second round (same PR): harness and discovery fixes.** Scenario cases now use relative
+dates, and a skill whose tools are all reserved for other agents is neither offered nor
+activatable, which retired the prompt's calendar discovery ban. Commit `6c0d11e8`,
+coordinator YAML 45,644 bytes.
+
+- **Scenarios: gate passed, 19 of 19 cases, every case 100% weighted** (371 s, estimated
+  $1.46). `external reply first person` now has next week's slots to offer: every
+  critical 5/5 and `offers_times` 100%, against 10% with the stale Oct 6–8 stub.
+- **Smoke: 42 of 44.** Two cases failed both attempts:
+  - *Coordinator routes long-running task with synchronous acknowledgment.* Tavily answered
+    every `web-search` in this run with HTTP 432 (11 of 11; the first round's 5 were
+    fine), so the research specialist fell back to scraping until the turn timed out.
+    Environmental. Re-run once the search quota resets.
+  - *Reschedule Board Chair Meeting* timed out (180 s) on both attempts. Interleaved
+    single-case runs the same evening, first attempts only: branch 6 timeouts in 9,
+    `origin/main`'s prompt 1 in 6. Completed attempts took 90–157 s on both prompts, and
+    the calendar specialist made 11–34 calls either way, so the case sits near the
+    timeout on both. Smoke keeps only the final attempt, so the timed-out runs' calls are
+    not recorded. **Unresolved:** a real shift (the branch splits the calendar work into
+    more delegations) or load on a near-ceiling case. Telling them apart needs a larger
+    sample or a section-by-section bisect.
+
+### 2026-10-06 — trigger-only guidance moved out of the prompt (#1959)
+
+**Size.** Measured on the parsed YAML: `origin/main` (`42d41cea`, coordinator 0.21.4)
+against the PR's head commit `23ed757d` (0.22.0). This parses `system_prompt` rather than
+measuring the raw block, so its byte counts differ slightly from the #1958 table's.
+Tokens are estimated at four characters each.
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `agents/coordinator.yaml` bytes | 45,644 | 33,117 | −12,527 (−27%) |
+| `agents/coordinator.yaml` lines | 721 | 540 | −181 |
+| `system_prompt` chars | 42,129 | 29,978 | **−12,151 (−29%)** |
+| `system_prompt` est. tokens | ~10.5k | ~7.5k | ~−3.0k |
+
+Most of the moved text now comes back as turn guidance on the turns it applies to, so the
+per-turn saving is smaller than this on email and principal turns. Per-call production
+figures need a deploy.
+
+**Behavior, on `23ed757d`.** Same model (`deepseek/deepseek-v4.1-flash`), judge and
+database as the #1958 runs. Both suites side by side at concurrency 4. **Both exited 1.**
+
+- **Scenarios: every case passed on behavior; the gate failed on a stub hole** (344 s,
+  estimated $1.38). 17 cases at 100% weighted, `no-reply calendar decline` 93%, `paused
+  delegate no redelegate` 96%. The high-risk cases (01a–c, 11, 08, 04a/b, 06, 07, 10)
+  were all 100% apart from 08. The failure was `scheduler ambiguous asks`: in 1 of 5 runs
+  the coordinator called `scheduler-report` twice (refused, unstubbed) before asking the
+  right question, and the case allows 0. Interleaved `--case` A/B, 10 runs per side: 0
+  refused calls on the branch, 0 on `origin/main`, every run 100%. That is 1 run in 15 on
+  the branch, and the PR does not touch scheduler text. Treated as noise; no allowance
+  added. (The committed `stub-coverage.json` records the last A/B run, so it shows 0.)
+- **Smoke: 42 of 44** (998 s, estimated $2.84). Six cases passed on retry
+  (`PASS*`): Triage Batch, Recruiter Not Urgent, Forwarded Receipt, Reschedule Board
+  Chair (65% first attempt, not a timeout this time), Schedule External Meeting and Vague
+  Follow Up (first attempt timed out). Two failed both attempts:
+  - *Speaking Engagement Intake* timed out (180 s) on both. **Environmental.** The Tavily
+    plan was at 1,000 of 1,000 searches and all 34 `web-search` calls in the run failed,
+    so the research specialist scraped until timeout. After a credit top-up, a re-run on
+    the same commit passed it and Vague Follow Up at 100% each.
+  - *Draft Email in CEO Voice* rated `warm-but-concise` (critical) MISS on both attempts.
+    The coordinator searched for TechTO's address and the invite, found neither, and asked
+    the principal for one instead of writing the decline. **Leaning branch-worse, not
+    proven.** Interleaved single-case runs, 8 per side, plus the gate run:
+
+    | | Case failed (after retry) | Attempts missed |
+    |---|---:|---:|
+    | Branch | 3 of 9 | 7 of 13 |
+    | `origin/main` | 0 of 8 | 2 of 10 |
+
+    First attempts alone are close (branch 3 of 8, `origin/main` 2 of 8). The difference
+    is the retries: a branch miss usually missed its retry too, and `origin/main` never
+    did. The failure mode exists on both prompts. The case seeds no TechTO contact or
+    invite, and the always-on cold-compose rule says to ask for an address it cannot
+    resolve, so a model that reads "draft" as "save a Gmail draft" fails the case by
+    following its prompt. A plausible branch-side push is that the mailbox rule ("never
+    draft the principal's mailbox directly") now appears on email turns only. Filed as
+    #2014, fixed by #2015: ceo-inbox looks up a missing address in the principal's mail
+    history, and the case now seeds the TechTO organizer and the invite.
+
+**Draft Email A/B after #2015.** The branch was rebased onto `0e8a4765` (#2015 merged)
+and re-run against `origin/main` at that commit: 8 alternating single-case rounds per side,
+both trees clean.
+
+| | Case failed (after retry) | First attempts missed |
+|---|---:|---:|
+| Branch (`502009f0`) | 0 of 8 | 0 of 8 |
+| `origin/main` (`0e8a4765`) | 0 of 8 | 0 of 8 |
+
+The branch scored 100% weighted in seven rounds and 92% in one; `origin/main` scored 100%
+in all eight. With the recipient resolvable, the case passes on both prompts, so the
+earlier gap came from the case design and cold-compose routing, not from moving the
+guidance.
+
+### 2026-10-06 — tool mechanics moved into tools, zero-call pins pruned (#1960)
+
+**Size.** Measured on the files, before deploy, against `844af2df` on `main`
+(coordinator 0.22.0, #2012 merged). Tokens are estimated at four
+characters each. Manifest bytes are each `tool.json` minified, which tracks but is
+not identical to the tool-definition bytes the report measures.
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `agents/coordinator.yaml` bytes | 33,004 | 24,393 | −8,611 (−26%) |
+| `system_prompt` block bytes | 30,063 | 21,075 | **−8,988 (−30%)** |
+| `system_prompt` est. tokens | ~7.5k | ~5.3k | ~−2.2k |
+| pinned entries | 29 | 27 | −2 |
+| manifest bytes of the 9 tools whose descriptions grew | 16,577 | 21,594 | +5,017 |
+| manifest bytes of the 2 unpinned tools | 2,266 | 0 | −2,266 |
+
+Moving text into a description doesn't shrink the per-call total, as #1960 said.
+The prompt's −9.0 KB is offset by +5.0 KB of descriptions and a ~0.3 KB
+reference index that pin resolution adds for `google-workspace`. The net per-call
+change is about −6 KB, and roughly a third of that comes from the two unpinned
+tools. The Drive mechanics (2.2 KB) now load only when the coordinator asks for
+`drive-files.md`.
+
+**Zero-call pins.** From the 2026-10-01 list, `image-generate` and
+`drive-download-file` are unpinned (discovery). The rest stay, with the reason in
+the YAML: bundle members can't be excluded one at a time; `sms-send` and
+`slack-send` reach the principal where Signal isn't set up; `contact-update` and
+`context-bridge-clear` serve rare principal requests. `approval-expiry-sweep`
+(713 calls) is used only by the hourly cron. Taking that run off the LLM needs a
+system-invoked sweep, which is follow-up work.
+
+### 2026-10-06 — google-workspace activated on demand, not pinned (#2024)
+
+**Size.** Measured on the files, before deploy, against `2f6e57d7` on `main`
+(coordinator 0.23.0). The google-workspace bytes are the 2026-10-05 production capture
+above (#1957, workspace-mcp 1.22.0); 2.0.1 (curia-deploy#266) would make them about
+98.5 KB.
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `agents/coordinator.yaml` bytes | 24,393 | 24,118 | −275 |
+| `system_prompt` chars | 20,951 | 20,532 | −419 |
+| "Google Workspace" section chars | 1,171 | 752 | −419 |
+| pinned entries | 27 | 26 | −1 |
+| mcp:google-workspace tools on every call | 49 | 0 | −49 |
+| mcp:google-workspace bytes on every call | 89,693 | 0 | **−89,693** |
+
+Plus the ~0.3 KB google-workspace reference index that pin resolution added to the
+always-on prompt (#1960). A task that needs the tools calls
+`skill-activate google-workspace`, and pays for them from then on, including after a
+wake (`progress.activeSkills`). Over the 60 days to 2026-10-06 that was 15 of 2,204
+coordinator tasks (0.7%).
+
+**Behavior, before deploy.** `deepseek/deepseek-v4.1-flash`, gpt-4o judge, local dev
+database. The test-mode stack now serves google-workspace from a tools/list snapshot
+(`tests/fixtures/mcp/`), and `skill-activate` works there (its `taskRepo` is optional).
+
+- **Scenarios, full suite on `631644bf`: every case passed on behavior** (25 cases,
+  405 s, estimated $0.88). 24 at 100% weighted, `paused delegate no redelegate` 96%. The
+  gate failed on a stub hole: `scheduler ambiguous asks` called `scheduler-report` twice
+  (refused) in 1 of 5 runs, the same one-in-many flake as #1959. A 5-run re-run of that
+  case was clean.
+- **New cases 13a–13f, 5 runs each on `11f0ad6f`, after the review fixes: every behavior
+  100%, no stub holes.** The coordinator activated google-workspace in all 20 runs of
+  13a–13d (filing a specialist's Doc, a Docs link, a bare doc ID, sharing a named file)
+  and in none of the 10 runs of 13e–13f (a chat turn, a scheduled job).
+- **Smoke on `631644bf`: 45 of 46** (767 s, estimated $1.23). Forwarded Receipt and
+  Reschedule Board Chair passed on retry. Natural Language Deadlines failed both
+  attempts: on a Tuesday the model read "next Friday" as the coming Friday and the judge
+  wanted the one after (the date-resolve ambiguity kept in PR#1993). A/B below.
+
+**After deploy:** add a `report-agent-context` capture. It now prints the share of
+tasks that activated each skill (`#### Skill activations`) and charges activated MCP
+tools to their server.
+
+**Natural Language Deadlines A/B.** Three alternating single-case smoke rounds per side
+on `202c912c`, swapping in `origin/main`'s `agents/coordinator.yaml` for the main side.
+
+| | Case passed (after retry) | First attempt passed |
+|---|---:|---:|
+| Branch | 3 of 3 | 0 of 3 (two date misreads, one 180 s timeout) |
+| `origin/main` prompt | 2 of 3 | 1 of 3 |
+
+Every miss on both sides is the same misread: "next Friday" taken as the coming Friday.
+The failure mode is not this change; the case depends on the weekday it runs on.
+
+### 2026-10-07 — prompt trim PR 1: code-enforced restatements and stale sections
+
+First PR of `2026-10-06-coordinator-prompt-trim.md`. Measured through `assembleAgent()`
+(the budget test's path) on `dc7690d7` against `origin/main` (`01a1b523`, coordinator
+0.24.1).
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| `system_prompt` chars | 20,532 | 18,561 | **−1,971 (−9.6%)** |
+| always-on (YAML + SKILL.md 6,157), est. tokens | ~6,673 | ~6,180 | ~−490 |
+| CI budget, always-on tokens | 7,000 | 6,400 | lowered |
+| local tool definitions | 74,651 B, 65 tools | unchanged | — |
+
+**Behavior on `dc7690d7`.** Model `deepseek/deepseek-v4.1-flash`, gpt-4o judge, local dev
+database; both suites side by side at concurrency 4.
+
+- **Scenarios: every case passed on behavior** (25 cases, 445 s, estimated $0.86). The gate
+  failed on a stub hole: `google file filing after delegation` called
+  `inspect_doc_structure` (unstubbed) in 1 of 5 runs. Two cases came in under 100%:
+  `scheduler ambiguous asks` 80% (assumed the job in 1 of 5 runs) and `paused delegate no
+  redelegate` 93% (`no_internals`, important, 3 of 5).
+- **Smoke: 44 of 46** (886 s, estimated $1.46). Urgent Escalation passed on retry. Two
+  cases failed both attempts: Pre-Meeting Prep Brief (67%; the judge wanted it to ask the
+  meeting's purpose) and "Coordinator edits an existing recurring job" (63%; it edited
+  the job but also re-listed and called `scheduler-create` once).
+
+**A/B against `origin/main`'s prompt.** Same commit's code on both sides (PR 1 changes no
+`src/`); the main side ran from a detached `origin/main` worktree. Interleaved, same evening.
+
+| Case | Branch | `origin/main` |
+|---|---|---|
+| scenarios `scheduler ambiguous asks`, 10 runs | 100% (both criticals 10/10) | 100% |
+| scenarios `paused delegate no redelegate`, 10 runs | 98%; `no_internals` 90% | 95%; `no_internals` 70% |
+| scenarios `google file filing after delegation`, 5 runs | 100%, no stub hole | 94%; the same unstubbed call in 1 run |
+| smoke "Coordinator edits an existing recurring job", 4 rounds | 4 of 4 at 100%, first attempt | 4 of 4 at 100%, first attempt |
+| smoke Pre-Meeting Prep Brief, 4 rounds | 4 of 4 (89%); 1 needed its retry (180 s timeout) | 4 of 4 (89%); 1 needed its retry (78%) |
+
+Every full-run miss either recurs on `origin/main`'s prompt or does not recur on the
+branch. The `google file filing` stub hole happens on both prompts, so it measured the
+harness, not the model.
+
+**Case 13a stub hole, closed in the same PR.** Stubbing `inspect_doc_structure` exposed
+other lookups the coordinator reaches for about 1 run in 10: `search_docs` (sibling cases
+13c and 13d already stub it), then `doc-place` and `doc-write`, when it also saved the
+comparison to the working-docs workspace, which test mode lacks. With all of those plus
+`check_drive_file_public_access` stubbed, 10 runs made no refused calls (74 stubbed, 27
+passthrough), and the case passed the gate at 98%.
+
+**Review fixes (`8871c6cc`).** The "My team" heading went (YAML 18,561 chars), and the
+export-scope sentence moved to `drive-files.md`. Full suites on that commit:
+
+- **Scenarios:** every case passed on behavior. The gate flagged two refused calls:
+  - `scheduler edit in place` called `scheduler-report` on a non-scheduled turn, the model
+    quirk seen in #1959 and #2024. 10 re-runs were clean.
+  - 13a called `get_drive_file_content`, one more way to read the Doc. 13a now stubs
+    every read-only Drive and Docs tool that can touch its Doc. One 13a re-run also called
+    `task-complete` on a task id it invented. That refusal is correct, so it stays
+    unstubbed.
+- **Smoke:** 45 of 46. Schedule External Meeting timed out on both attempts, with the
+  calendar specialist at 39 calls. That is the near-timeout pattern seen in #1958.
+
+No A/B was run, because the commit's only prompt change is one removed heading line. The
+committed stub-coverage record stays the clean one from `ddd9a537`.
+
+### 2026-10-07 — prompt trim PR 2: one home each for voice and contact resolution
+
+Stacked on PR 1 (`cc42b17a`). Measured through `assembleAgent()` on the final commit (after
+the review fixes below).
+
+| | PR 1 | PR 2 | Change |
+|---|---:|---:|---:|
+| `system_prompt` chars | 18,561 | 15,709 | **−2,852 (−15%)** |
+| `system_prompt` est. tokens | ~4,640 | ~3,927 | under #1954's 4k target |
+| always-on (YAML + SKILL.md 6,157), est. tokens | ~6,180 | ~5,467 | ~−713 |
+| CI budget, always-on tokens | 6,400 | 5,600 | lowered |
+
+**Full suites on `ec116f47`** (before the fix below). Model `deepseek/deepseek-v4.1-flash`,
+gpt-4o judge, concurrency 4.
+
+- **Scenarios:** 24 of 25 cases at 100%. `external reply first person` failed its gate:
+  `no_team_voice` and `no_identifiers` were at 60%. Both misses were runs that returned
+  `NO_REPLY`, so there was no reply to check. In those 2 of 5 runs the coordinator
+  delegated the request to `@calendar` "end-to-end (reply + booking)" as transfer-ownership
+  and sent Priya nothing. The rewrite had dropped "I compose the reply" from the calendar
+  section, and PR 1's prompt had passed this case in every run.
+- **Smoke:** 44 of 46.
+  - Natural Language Deadlines missed `parse-monday-after`, the weekday-dependent date
+    reading.
+  - Reschedule Board Chair timed out on both attempts.
+  - Four cases passed on retry.
+
+**Fix (`620b89f1`): "I compose the reply" restored.**
+
+- Scenario 10, 10 runs: every critical behavior 10/10, no `NO_REPLY`.
+- Reschedule Board Chair, 3 alternating smoke rounds against PR 1's prompt:
+
+| | Passed (after retry) | First attempt passed | Scores |
+|---|---:|---:|---|
+| PR 2 | 3 of 3 | 1 of 3 | 85% / 80% / 90% |
+| PR 1 | 3 of 3 | 2 of 3 | 90% / 100% / 85% |
+
+Neither side timed out. Both were marked down on the same judgment-heavy behaviors
+(`mark-sensitivity`, `draft-apologetic-email`, `propose-new-times`).
+
+**Review fixes.** People's list of contact changes that go to the contacts specialist had
+narrowed from PR 1's catch-all. It is a catch-all again, with the one exception Storing
+facts uses: a profile field the principal states goes through `contact-update`. The
+calendar-routing unit test now also pins "I compose the reply". Smoke's contact cases ran
+once on the result, the full suites did not run again; see below.
+
+Smoke contact cases on `5b8ca4bb`, one run each: all 4 passed (Ambiguous Contact Reference
+96%, Contact Briefing Delegation 100%, Conflicting Contact Info Update 90%, Role/Person
+Mismatch 96% after a retry; its first attempt missed `ask-clarification`). A 3-round A/B of
+Role/Person Mismatch against PR 1's prompt: PR 2 passed 2 of 3 rounds (96% / 67% / 92%),
+PR 1 passed 1 of 3 (92% / 54% / 54%). The case is unsteady on both prompts, and no worse on
+PR 2.
+
+### 2026-10-07 — prompt trim PR 11: Who you serve preamble
+
+Code-owned blocks only; the YAML is unchanged (15,709 chars), and so is the CI budget, which
+counts the YAML and pinned SKILL.md bodies, not runtime blocks. Both contact blocks now
+precede the YAML body, so they join the prefix shared across tasks.
+
+**Full suites on `bb0c4cc4`.** Model `deepseek/deepseek-v4.1-flash`, gpt-4o judge,
+concurrency 4.
+
+- **Scenarios:** every critical behavior passed (28 cases, all ≥ 80%). The gate failed on
+  stub holes, not behavior: `scheduler ambiguous asks` called `scheduler-report` twice in one
+  run (seen on main before the trim PRs), and `bullpen mention stays on thread` called the
+  unstubbed `doc-place`. `send to contact by id` (14b) had one raw-address run in 5; a 10-run
+  A/B gave 10/10 on both PR 11 and main (`e65a9415`).
+- **Smoke:** 45 of 46. Speaking Engagement Intake timed out, then scored 72% on retry. Five
+  cases passed on retry, two of them known flakes (Schedule External Meeting #2049,
+  Pre-Meeting Prep).
+
+**A/B against `e65a9415`, 3 alternating rounds** (scores after smoke's one retry):
+
+| Case | PR 11 | main |
+|---|---|---|
+| Speaking Engagement Intake | 3 of 3 | 2 of 3 (one 180s timeout) |
+| Summarize Long Email Thread | 3 of 3 | 3 of 3 |
+| Coordinator edits an existing recurring job | 3 of 3 | 3 of 3 |
+| Triage Batch of Mixed Emails | 2 of 3 | 3 of 3 |
+
+Triage Batch got 5 more rounds per side: PR 11 4 of 5, main 5 of 5. Across all its runs,
+PR 11 passed 7 of 9 and main 8 of 8. Both PR 11 failures were the same: `ceo-inbox` ran out
+its consecutive-error budget on `ceo-inbox-read` calls that the smoke stub answers with
+"Message not found". The fixture lists messages the read stub doesn't cover (3 IDs are
+stubbed), so every run on both sides gets 4–12 failed reads, and the case partly measures
+how long the agent retries them. PR 11 averaged 6.6 failed reads and main 5.8. 2 of 9
+against 0 of 8 is within chance (Fisher's exact p ≈ 0.47), and the mechanism doesn't depend
+on where the contact blocks sit. Inconclusive until the stub covers every listed message.
+
+**Triage Batch re-A/B on the fixed fixture (2026-10-08).** #2054 stubbed every listed
+message, attachment and triage write. Rebased onto it, PR 11 (`b352e8ae`) against main
+(`31bee28d`), 21 alternating rounds. Rounds lost to an OpenRouter key limit or a judge crash
+are left out:
+
+| | First attempt | After retry |
+|---|---|---|
+| PR 11 | 16 of 20 | 19 of 20 |
+| main | 16 of 19 | 19 of 19 |
+
+Fisher's exact p = 1.0 on both. The first-attempt misses are the same kinds on both sides:
+180s coordinator timeouts (PR 11 2, main 1) and judge misses (PR 11: `prioritize-critical`
+once, 75% once; main: 68% and 75%). PR 11's one final failure was a timeout whose retry scored 62%. No run on either side had
+a failed `ceo-inbox-read`; one main run had `ceo-inbox` call `doc-write`, which test mode
+can't serve. PR 11 doesn't change Triage Batch.

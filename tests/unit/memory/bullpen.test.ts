@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { BULLPEN_REPLY_RULE } from '../../../src/agents/prompts/bullpen-reply-rule.js';
 import {
   BULLPEN_PENDING_WINDOW_MINUTES,
   BullpenService,
@@ -452,6 +453,13 @@ describe('formatBullpenContext', () => {
     const out = formatBullpenContext([makePending()]);
     expect(out).toContain('ambient internal threads');
     expect(out).toContain('bullpen tools');
+  });
+
+  it('carries the full bullpen reply rule with the block (#1959)', () => {
+    // It names the human send tools a thread reply must never use; the coordinator's
+    // always-on prompt used to carry this.
+    expect(formatBullpenContext([makePending()])).toContain(BULLPEN_REPLY_RULE);
+    expect(formatBullpenContext([])).toBe('');
   });
 
   it('shows "first + last N" header and middle-omitted hint when thread is truncated (#1090)', () => {

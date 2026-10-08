@@ -68,7 +68,6 @@ export class CeoInboxReadHandler implements ToolHandler {
       return { success: false, error: 'Failed to read principal inbox message' };
     }
 
-    // All formatting below is pure computation — no async I/O, no realistic throw path.
     const attachmentSummary =
       msg.attachments.length > 0
         ? `\n\n[Attachments: ${msg.attachments.map((a) => `${a.filename} (${formatFileSize(a.size)})`).join(', ')}]`
@@ -86,10 +85,40 @@ export class CeoInboxReadHandler implements ToolHandler {
         body_plain: htmlToPlainText(msg.body) + attachmentSummary,
         body_html: msg.body,
         date: msg.date,
-        labels: msg.labels,
+        labels: await resolveLabelNames(client, msg.labels, ctx, messageId),
         attachments: msg.attachments,
       },
     };
+  }
+}
+
+// Gmail user labels come back as ids (`Label_39`). Map them to the folder
+// display name (`✍️ Drafted`) so a later run can see its own triage. An id
+// with no folder name (system tokens such as UNREAD) is returned unchanged.
+// A failed lookup must not fail the read — the body is already in hand.
+async function resolveLabelNames(
+  client: CeoNylasClient,
+  ids: string[],
+  ctx: ToolContext,
+  messageId: string,
+): Promise<string[]> {
+  // System labels (INBOX, UNREAD, CATEGORY_*) pass through unchanged. Skip the
+  // extra /folders round-trip unless a Gmail user label id is present.
+  if (ids.length === 0 || !ids.some((id) => id.startsWith('Label_'))) return ids;
+  try {
+    const folders = await client.listFolders();
+    const nameById = new Map<string, string>();
+    for (const folder of folders) {
+      const name = folder.name.trim();
+      if (name) nameById.set(folder.id, name);
+    }
+    return ids.map((id) => nameById.get(id) ?? id);
+  } catch (err) {
+    ctx.log.warn(
+      { err, messageId },
+      'ceo-inbox-read: folder name lookup failed — returning raw label ids',
+    );
+    return ids;
   }
 }
 

@@ -6,6 +6,18 @@ tags:
   - multi-task
   - single-turn
 
+# Test mode gives the execution layer no bullpen service, so a real post fails. Triage
+# may escalate an urgent item to the coordinator, or consult calendar about a meeting
+# request; those posts succeed with their own thread ids. Anything else (another action,
+# a missing participant) still fails loudly. Case-level only: targeted cases drive real
+# bullpen threads.
+tool_stubs:
+  bullpen:
+    - match: { action: post, participants: [coordinator] }
+      return: { thread_id: thread-0001, message_id: bullpen-msg-0001, deduplicated: false }
+    - match: { action: post, participants: [calendar] }
+      return: { thread_id: thread-0002, message_id: bullpen-msg-0002, deduplicated: false }
+
 turns:
   - role: user
     content: |

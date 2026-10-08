@@ -37,12 +37,16 @@ const DELEGATE_TOOL = {
   },
 };
 
-function providerReturning(toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>): LLMProvider {
+function providerReturning(
+  toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>,
+  seen?: unknown[][],
+): LLMProvider {
   let callCount = 0;
   return {
     id: 'mock',
-    chat: async () => {
+    chat: async (params: { messages: unknown[] }) => {
       callCount += 1;
+      seen?.push(params.messages);
       if (callCount === 1) {
         return {
           type: 'tool_use' as const,
@@ -102,16 +106,31 @@ async function runTurn(opts: {
   lateDeliveryTtlMinutes?: number;
   lateDeliverySweepIntervalMinutes?: number;
   agentRegistry?: AgentRegistry;
-}): Promise<{ createTask: ReturnType<typeof vi.fn> }> {
+  /** Make the task insert throw, as a database outage would. */
+  createTaskFails?: boolean;
+}): Promise<{
+  createTask: ReturnType<typeof vi.fn>;
+  toolResultData: () => Record<string, unknown>;
+  auditedDelegateData: () => Record<string, unknown>;
+}> {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
-  const createTask = vi.fn(async () => ({ id: 'task-queued' }));
+  const createTask = vi.fn(async () => {
+    if (opts.createTaskFails) throw new Error('db down');
+    return { id: 'task-queued' };
+  });
+  const seen: unknown[][] = [];
+  // The tool.result audit events, as the audit logger would record them.
+  const audited: Array<{ toolName: string; result: { success: boolean; data?: unknown } }> = [];
+  bus.subscribe('tool.result', 'system', async (event) => {
+    audited.push((event as unknown as { payload: (typeof audited)[number] }).payload);
+  });
   const taskRepo = { createTask } as unknown as TaskRepo;
   const execution = { invoke: vi.fn(opts.invoke) } as unknown as ExecutionLayer;
   const runtime = new AgentRuntime({
     agentId: 'coordinator',
     systemPrompt: 'You are the coordinator.',
-    provider: providerReturning(opts.toolCalls),
+    provider: providerReturning(opts.toolCalls, seen),
     resolvedModel: 'mock-model',
     bus,
     logger,
@@ -139,7 +158,19 @@ async function runTurn(opts: {
     metadata: opts.metadata ?? { originator: ORIGINATOR },
     parentEventId: 'inbound-1',
   }));
-  return { createTask };
+  // The first tool result the model was sent back, as data.
+  const toolResultData = (): Record<string, unknown> => {
+    const followUp = JSON.stringify(seen[1] ?? []);
+    const m = /\{\\"agent\\".*?\\"in_flight\\".*?\}/.exec(followUp);
+    if (!m) throw new Error(`no in-flight tool result in the follow-up call: ${followUp.slice(0, 500)}`);
+    return JSON.parse(JSON.parse(`"${m[0]}"`)) as Record<string, unknown>;
+  };
+  const auditedDelegateData = (): Record<string, unknown> => {
+    const delegate = audited.find(a => a.toolName === 'delegate');
+    if (!delegate) throw new Error('no tool.result audit event for delegate');
+    return delegate.result.data as Record<string, unknown>;
+  };
+  return { createTask, toolResultData, auditedDelegateData };
 }
 
 describe('runtime deferred delegation (#1893)', () => {
@@ -172,6 +203,42 @@ describe('runtime deferred delegation (#1893)', () => {
     expect(params.wakePayload.delegationRetry.conversationId).toBe('signal:+15551212');
     expect(params.wakePayload.delegationRetry.brief).toBe('Book Tuesday');
     expect(params.wakePayload.delegationRetry.attempt).toBe(1);
+  });
+
+  // #1958 review: the model is told whether the brief was really saved, so it never
+  // promises a queued run the platform did not record.
+  it('tells the model the in-flight brief was queued', async () => {
+    const { toolResultData } = await runTurn({
+      toolCalls: [{ id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Book Tuesday' } }],
+      invoke: async () => inFlightData('calendar'),
+    });
+    expect(toolResultData()['queued']).toBe(true);
+  });
+
+  // #1958 review: the audit trail records the result the model acted on, not an earlier copy.
+  it.each([
+    ['queued', {}, true],
+    ['not queued', { createTaskFails: true }, false],
+  ])('records the same queued outcome on the tool.result audit event (%s)', async (_label, extra, expected) => {
+    const { toolResultData, auditedDelegateData } = await runTurn({
+      toolCalls: [{ id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Book Tuesday' } }],
+      invoke: async () => inFlightData('calendar'),
+      ...extra,
+    });
+    expect(auditedDelegateData()['queued']).toBe(expected);
+    expect(toolResultData()['queued']).toBe(expected);
+  });
+
+  it.each([
+    ['the retry cap is reached', { metadata: { originator: ORIGINATOR, delegationRetry: { attempt: 3, targetAgent: 'calendar' } } }],
+    ['the task insert fails', { createTaskFails: true }],
+  ])('tells the model the brief was not queued when %s', async (_label, extra) => {
+    const { toolResultData } = await runTurn({
+      toolCalls: [{ id: 'call-1', name: 'delegate', input: { agent: 'calendar', task: 'Book Tuesday' } }],
+      invoke: async () => inFlightData('calendar'),
+      ...extra,
+    });
+    expect(toolResultData()['queued']).toBe(false);
   });
 
   it('queues a skipped later brief and not the one that timed out', async () => {

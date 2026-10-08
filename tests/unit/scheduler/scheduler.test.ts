@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  DAILY_DEBRIEF_RECAP_INSTRUCTION,
+  WEEKLY_DEBRIEF_RECAP_INSTRUCTION,
+} from '../../../src/agents/prompts/debrief-recap-instruction.js';
+import { WAKE_DISPOSITION_INSTRUCTION } from '../../../src/scheduler/wake-disposition.js';
 import { Scheduler, POLL_INTERVAL_MS, WATCHDOG_INTERVAL_MS, computeRecoveryTimeout, MAX_PRIOR_SUMMARY_CHARS, MAX_PRIOR_CONTEXT_CHARS, TRUNCATED_MARKER, DEFAULT_MAX_IN_FLIGHT } from '../../../src/scheduler/scheduler.js';
 import type { AgentYamlConfig } from '../../../src/agents/loader.js';
 
@@ -407,6 +412,64 @@ describe('Scheduler', () => {
       expect(content.intent_anchor).toBeUndefined();
       expect(content.progress).toEqual({ step: 3 });
       expect(content.task_payload).toEqual({ skill: 'morning-brief' });
+    });
+
+    // #1959: the recap steps travel with the debrief job instead of the always-on prompt.
+    it.each([
+      ['daily_debrief', DAILY_DEBRIEF_RECAP_INSTRUCTION],
+      ['weekly_debrief', WEEKLY_DEBRIEF_RECAP_INSTRUCTION],
+    ])('adds the recap steps to a coordinator %s job', async (anchor, instruction) => {
+      const row = fakeDbRow({
+        agent_id: 'coordinator',
+        agent_task_id: 'task-debrief',
+        intent_anchor: anchor,
+        task_payload: { task: 'Generate end-of-day summary' },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { content: string } }];
+      expect(JSON.parse(taskEvent.payload.content).instruction).toBe(instruction);
+    });
+
+    it.each([
+      ['another coordinator job', { agent_id: 'coordinator', agent_task_id: 'task-aaa', intent_anchor: 'weekly-report' }],
+      // Coordinator anchors are free text; only the wizard's exact anchors are debrief jobs.
+      ['a coordinator anchor that only mentions a debrief', { agent_id: 'coordinator', agent_task_id: 'task-aaa', intent_anchor: 'Follow up on the weekly board meeting debrief' }],
+      ['a debrief anchor on another agent', { agent_id: 'meeting-debrief', agent_task_id: 'task-aaa', intent_anchor: 'daily_debrief' }],
+      ['a job with no anchor', { agent_id: 'coordinator' }],
+    ])('adds no recap steps to %s', async (_label, overrides) => {
+      const row = fakeDbRow(overrides);
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { type: string; payload: { content: string } }];
+      expect(taskEvent.type).toBe('agent.task');
+      expect(taskEvent.payload.content).not.toContain('end-of-day debrief');
+    });
+
+    // A debrief run that parks its task with wake_at gets a task-wake job on the same task,
+    // so it carries the debrief anchor. The wake advances the parked task: it keeps the wake
+    // disposition and must not be told to redo the whole recap.
+    it('keeps the wake disposition and adds no recap steps to a task wake on a debrief task', async () => {
+      const row = fakeDbRow({
+        agent_id: 'coordinator',
+        agent_task_id: 'task-debrief',
+        intent_anchor: 'daily_debrief',
+        task_payload: { type: 'task-wake' },
+      });
+      pool.query.mockResolvedValueOnce({ rows: [row] });
+      pool.query.mockResolvedValueOnce(claimed());
+
+      await scheduler.pollDueJobs();
+
+      const [, taskEvent] = bus.publish.mock.calls[1] as [string, { payload: { content: string } }];
+      expect(JSON.parse(taskEvent.payload.content).instruction).toBe(WAKE_DISPOSITION_INSTRUCTION);
+      expect(taskEvent.payload.content).not.toContain('end-of-day debrief');
     });
 
     it('does not pass intentAnchor for jobs without a linked agent_task', async () => {

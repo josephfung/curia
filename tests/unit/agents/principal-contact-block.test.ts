@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { formatPrincipalContactDetailsBlock } from '../../../src/agents/principal-contact-block.js';
+import {
+  findPrimaryEmailIdentity,
+  formatPrincipalContactDetailsBlock,
+  formatWhoYouServeBlock,
+} from '../../../src/agents/principal-contact-block.js';
 import type { ChannelIdentity } from '../../../src/contacts/types.js';
 
 function identity(overrides: Partial<ChannelIdentity> & Pick<ChannelIdentity, 'channel' | 'channelIdentifier'>): ChannelIdentity {
@@ -18,7 +22,7 @@ function identity(overrides: Partial<ChannelIdentity> & Pick<ChannelIdentity, 'c
 }
 
 describe('formatPrincipalContactDetailsBlock', () => {
-  it('states the list is closed, marks the primary email, and passes labels through', () => {
+  it('states the list is closed, sets the primary email apart, and passes labels through', () => {
     const block = formatPrincipalContactDetailsBlock(
       [
         identity({
@@ -42,52 +46,54 @@ describe('formatPrincipalContactDetailsBlock', () => {
 
     expect(block).not.toBeNull();
     const text = block!;
-    expect(text).toContain('This list is complete.');
-    expect(text).toContain('is not the principal\'s and must not be used.');
-    expect(text).toContain('Do not infer, invent, or substitute an address.');
-    expect(text).toContain('A parenthetical label note is not an address and must not be used as one.');
-    expect(text).toContain('- [primary] email: Local@Domain.ca (label: "work email")');
+    expect(text.startsWith('### Principal Contact Details\n')).toBe(true);
+    expect(text).toContain('the list is complete: an address that is not listed here is not theirs.');
+    // The alias, never the contact ID: spec 09 keeps that handle opt-in (#2033).
+    expect(text).toContain('pass "principal" as the recipient');
+    expect(text).toContain('principal#personal');
+    expect(text).not.toMatch(/contact[ _-]?id/i);
+    expect(text).toContain('A label in parentheses is a note, not an address.');
+    // The primary has a list of its own and is not repeated among the others, so it
+    // never sits directly above a similar address (#2033).
+    expect(text).toContain('Primary email:\n- email: Local@Domain.ca (label: "work email")\n\nOther addresses:\n');
     expect(text).toContain('- email: other@domain.com (label: "personal")');
     expect(text).toContain('- signal: +15550001111');
-    expect(text).not.toMatch(/- \[primary\] email: other@domain.com/);
-    // The marker sentence is present only because a line is actually marked.
-    expect(text).toContain('The line that starts with [primary] is the principal\'s primary email.');
+    expect(text.match(/Local@Domain\.ca/g)).toHaveLength(1);
+    // Prohibitions became positive instructions (trim plan principle 2).
+    expect(text).not.toMatch(/must not|do not|never/i);
   });
 
-  it('marks a single matching email without a second dangling primary line', () => {
-    const block = formatPrincipalContactDetailsBlock(
+  it('renders a lone primary with no empty "Other addresses" heading', () => {
+    const text = formatPrincipalContactDetailsBlock(
       [identity({ channel: 'email', channelIdentifier: 'only@domain.ca', label: null })],
       'only@domain.ca',
-    );
-    const text = block!;
-    expect(text).toContain('This list is complete.');
-    expect(text.match(/\[primary\]/g)).toHaveLength(2);
-    expect(text).toContain('- [primary] email: only@domain.ca');
+    )!;
+    expect(text).toContain('Primary email:\n- email: only@domain.ca');
+    expect(text).not.toContain('Other addresses:');
+    expect(text).not.toContain('Addresses:');
     expect(text).not.toContain('()');
-    expect(text).not.toMatch(/primary:\s*$/m);
   });
 
-  it('renders one identity with no primary email and no primary marker', () => {
-    const block = formatPrincipalContactDetailsBlock(
+  it('renders a neutral list when no primary is designated (Signal-only principal)', () => {
+    const text = formatPrincipalContactDetailsBlock(
       [identity({ channel: 'signal', channelIdentifier: '+15550001111', label: 'mobile' })],
       null,
-    );
-    const text = block!;
-    expect(text).toContain('This list is complete.');
-    expect(text).toContain('- signal: +15550001111 (label: "mobile")');
-    expect(text).not.toContain('[primary]');
-    expect(text).not.toContain('primary email');
+    )!;
+    expect(text).toContain('the list is complete');
+    expect(text).toContain('Addresses:\n- signal: +15550001111 (label: "mobile")');
+    expect(text).not.toMatch(/primary email/i);
   });
 
-  it('does not mark primary when the designated email is not in the list', () => {
-    const block = formatPrincipalContactDetailsBlock(
+  it('renders a neutral list when the designated primary is not a listed identity', () => {
+    // An unverified or removed address in contacts.primary_email must not surface:
+    // only listed (verified, active) identities can be the primary.
+    const text = formatPrincipalContactDetailsBlock(
       [identity({ channel: 'email', channelIdentifier: 'listed@domain.ca', label: null })],
       'missing@domain.com',
-    );
-    const text = block!;
-    expect(text).toContain('- email: listed@domain.ca');
-    expect(text).not.toContain('[primary]');
-    expect(text).not.toContain('primary email');
+    )!;
+    expect(text).toContain('Addresses:\n- email: listed@domain.ca');
+    expect(text).not.toContain('missing@domain.com');
+    expect(text).not.toMatch(/primary email/i);
   });
 
   it('returns null for zero identities so the caller does not claim an empty set', () => {
@@ -96,7 +102,7 @@ describe('formatPrincipalContactDetailsBlock', () => {
   });
 
   it('strips newlines from channel, identifier, and label', () => {
-    const block = formatPrincipalContactDetailsBlock(
+    const text = formatPrincipalContactDetailsBlock(
       [
         identity({
           channel: 'email\ninjected',
@@ -105,20 +111,19 @@ describe('formatPrincipalContactDetailsBlock', () => {
         }),
       ],
       'a@b.ca',
-    );
-    const text = block!;
+    )!;
     expect(text).not.toContain('\ninjected');
     expect(text).not.toContain('\n## Injected Header');
     expect(text).not.toContain('\n## Pwned');
     // Channel is no longer exactly "email" once the injected newline is stripped,
-    // so the primary marker must not attach to a corrupted channel name.
+    // so the corrupted line must not be presented as the primary email.
     expect(text).toContain('- emailinjected: a@b.ca## Injected Header (label: "work## Pwned")');
-    expect(text).not.toContain('[primary]');
+    expect(text).not.toContain('Primary email:');
   });
 
   it('drops a label that smuggles an address or a long digit run, and caps the rest', () => {
     const longLabel = 'w'.repeat(41);
-    const block = formatPrincipalContactDetailsBlock(
+    const text = formatPrincipalContactDetailsBlock(
       [
         identity({
           channel: 'email',
@@ -137,13 +142,47 @@ describe('formatPrincipalContactDetailsBlock', () => {
         }),
       ],
       null,
-    );
-    const text = block!;
+    )!;
     expect(text).not.toContain('ceo.personal@gmail.com');
     expect(text).not.toContain('15550009999');
     expect(text).toContain('- email: listed@domain.ca\n');
     expect(text).toContain('- signal: +15550001111\n');
     expect(text).not.toContain('w'.repeat(41));
     expect(text).toContain('(label: "say \\"hi\\" ' + 'w'.repeat(31) + '")');
+  });
+});
+
+describe('formatWhoYouServeBlock', () => {
+  it('defines "the principal", then nests the contact details under it', () => {
+    const text = formatWhoYouServeBlock(
+      [identity({ channel: 'email', channelIdentifier: 'only@domain.ca' })],
+      'only@domain.ca',
+    )!;
+    expect(text.startsWith('## Who you serve\n')).toBe(true);
+    expect(text).toContain('"the principal" means them.');
+    expect(text.indexOf('## Who you serve')).toBeLessThan(text.indexOf('### Principal Contact Details'));
+    // No contact ID: spec 09 keeps that handle opt-in.
+    expect(text).not.toMatch(/contact[ _-]?id/i);
+  });
+
+  it('renders nothing without identities, so no section stands over an empty set', () => {
+    expect(formatWhoYouServeBlock([], 'only@domain.ca')).toBeNull();
+    expect(formatWhoYouServeBlock([], null)).toBeNull();
+  });
+});
+
+describe('findPrimaryEmailIdentity', () => {
+  it('matches a listed email identity case-insensitively and ignores other channels', () => {
+    const work = identity({ channel: 'email', channelIdentifier: 'Me@Work.ca' });
+    const signal = identity({ channel: 'signal', channelIdentifier: 'me@work.ca' });
+    expect(findPrimaryEmailIdentity([signal, work], ' me@work.ca ')).toBe(work);
+    expect(findPrimaryEmailIdentity([signal], 'me@work.ca')).toBeNull();
+  });
+
+  it('returns null for an unset or unlisted primary', () => {
+    const work = identity({ channel: 'email', channelIdentifier: 'me@work.ca' });
+    expect(findPrimaryEmailIdentity([work], null)).toBeNull();
+    expect(findPrimaryEmailIdentity([work], '')).toBeNull();
+    expect(findPrimaryEmailIdentity([work], 'other@work.ca')).toBeNull();
   });
 });

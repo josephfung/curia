@@ -1,6 +1,7 @@
-# The people in smoke's fixture office (#1956), seeded as known contacts with verified
-# email identities into each run's throwaway database copy (fixtures.ts). Cases refer to
-# them by name; stubs/office.yaml puts them on the calendar and in the inbox.
+# The people in smoke's fixture office (#1956), seeded as known contacts into each run's
+# throwaway database copy (fixtures.ts), with a verified email identity when they have an
+# address. Cases refer to them by name; stubs/office.yaml puts them on the calendar and
+# in the inbox.
 #
 # Addresses use the reserved .example TLD, so none can ever be a real mailbox. Keep the
 # cast small: every name here changes what "who is X?" returns in every case.
@@ -52,3 +53,10 @@
   title: Director of Operations
   organization: Apex Dynamics
   notes: Ran the Apex side of last year's logistics pilot.
+
+# No email on file: her address is only in the principal's mail history (her invite in
+# stubs/office.yaml), so drafting to her means finding it there (#2014).
+- display_name: Maya Fischer
+  title: Programming Lead
+  organization: TechTO
+  notes: Runs speaker programming for TechTO's events.

@@ -1,7 +1,7 @@
 # Case 10 (#1956): an external reply is one assistant speaking in the first person
 # singular, and never addresses the principal in a body an outsider receives. Rule:
-# agents/coordinator.yaml, Audience awareness → "Outbound voice (mandatory)" and the
-# two-independent-actions rule.
+# agents/coordinator.yaml, "Who I am" (first person singular to everyone) and the
+# two-independent-actions rule under Audience awareness.
 name: external reply first person
 description: >
   An external contact emails asking for the principal's availability for a call. The
@@ -30,18 +30,21 @@ inbound:
     Best,
     Priya
 tool_stubs:
+  # Next week's Tuesday to Thursday, whenever the suite runs (#1958). The slots were
+  # pinned to Oct 6–8, which stopped being "next week" once that week began, and the
+  # coordinator then (rightly) declined to offer them.
   delegate:
     - match: {}
       return:
         agent: calendar
         response: >
-          Calendar specialist: principal is free Tue Oct 6 10:00-11:30, Wed Oct 7 14:00-15:00,
-          Thu Oct 8 09:00-10:00 (America/Toronto).
+          Calendar specialist: principal is free {{day:next-monday+1}} 10:00-11:30,
+          {{day:next-monday+2}} 14:00-15:00, {{day:next-monday+3}} 09:00-10:00 ({{timezone}}).
 expected_behaviors:
   # #1989: the judge docked the email sign-off (name + title) as "not first person" and
   # "implies a team-based role", and once quoted a "we" the reply did not contain. The
-  # coordinator prompt *requires* that sign-off ("Sign emails professionally using your
-  # name and title"), so the description says outright what is and is not evidence.
+  # coordinator prompt *requires* that sign-off ("I sign emails with my name and title"),
+  # so the description says outright what is and is not evidence.
   - id: first_person_singular
     weight: critical
     description: >

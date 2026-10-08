@@ -386,6 +386,8 @@ export function extractDestinationFromInput(
   input: Record<string, unknown>,
 ): ExportDestination | null {
   if (GATEWAY_ATTACHMENT_TOOLS.has(toolName)) {
+    // email-send: `to` is a contact reference, shown as written; the gateway's own
+    // export gate sees the resolved address (#2033). Raw-address inputs are retired (#2041).
     const to = input['to'];
     if (typeof to === 'string' && to.trim()) {
       return { kind: 'email', address: to.trim() };

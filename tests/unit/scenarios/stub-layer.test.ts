@@ -72,6 +72,30 @@ describe('tools test mode cannot serve', () => {
   });
 });
 
+describe('inert tools (#2024)', () => {
+  it('run unstubbed whatever their action_risk, but never override delegate or an unavailable tool', () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest('update_drive_file', 'low'), { execute: async () => ({ success: true, data: null }) });
+    registry.register(manifest('delegate', 'none'), { execute: async () => ({ success: true, data: null }) });
+    expect(mustStub('update_drive_file', registry)).toBe(true);
+    expect(mustStub('update_drive_file', registry, new Set(), new Set(['update_drive_file']))).toBe(false);
+    expect(mustStub('delegate', registry, new Set(), new Set(['delegate']))).toBe(true);
+    expect(mustStub('update_drive_file', registry, new Set(['update_drive_file']), new Set(['update_drive_file']))).toBe(true);
+  });
+
+  it('pass through to the real layer when a run has no stub for them', async () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest('update_drive_file', 'low'), { execute: async () => ({ success: true, data: 'canned' }) });
+    const controller = createStubController(() => registry, () => new Set(), () => new Set(['update_drive_file']));
+    const layer = controller.wrap(new ExecutionLayer(registry, logger));
+    controller.beginRun({}, 'scenario-1');
+    const result = await layer.invoke('update_drive_file', {}, undefined, coordinatorCall);
+    expect(result).toEqual({ success: true, data: 'canned' });
+    // Recorded as canned, a stub hole: the model got a stand-in, not data the case chose.
+    expect(controller.endRun('scenario-1').map(c => c.disposition)).toEqual(['canned']);
+  });
+});
+
 describe('stale conversations', () => {
   it('refuses, and does not record, a call from a conversation other than the run\'s', async () => {
     const { layer, controller, executed } = setup();
@@ -82,7 +106,31 @@ describe('stale conversations', () => {
     expect(stalePassthrough.success).toBe(false);
     expect(executed).toEqual([]);
     expect(controller.staleCalls).toBe(2);
-    expect(controller.endRun()).toEqual([]);
+    expect(controller.endRun('scenario-2')).toEqual([]);
+  });
+});
+
+describe('concurrent runs (#1980)', () => {
+  it('answer and record each call from its own conversation\'s run', async () => {
+    const { layer, controller } = setup();
+    controller.beginRun({ 'email-send': [{ match: {}, return: { from: 'run-a' } }] }, 'scenario-a');
+    controller.beginRun({ 'email-send': [{ match: {}, return: { from: 'run-b' } }] }, 'scenario-b');
+    const send = (conversationId: string) => layer.invoke('email-send', {}, undefined, { agentId: 'coordinator', conversationId });
+
+    const [a1, b1, a2] = await Promise.all([send('scenario-a'), send('scenario-b'), send('scenario-a')]);
+    expect([a1, a2]).toEqual([{ success: true, data: { from: 'run-a' } }, { success: true, data: { from: 'run-a' } }]);
+    expect(b1).toEqual({ success: true, data: { from: 'run-b' } });
+    expect(controller.endRun('scenario-a')).toHaveLength(2);
+    // Closing one run leaves the other answering.
+    expect(await send('scenario-b')).toEqual({ success: true, data: { from: 'run-b' } });
+    expect(await send('scenario-a')).toMatchObject({ success: false });
+    expect(controller.endRun('scenario-b')).toHaveLength(2);
+  });
+
+  it('refuses to open a second run on the same conversation', () => {
+    const { controller } = setup();
+    controller.beginRun({}, 'scenario-a');
+    expect(() => controller.beginRun({}, 'scenario-a')).toThrow(/already has an open run/);
   });
 });
 
@@ -112,7 +160,7 @@ describe('scenario stub layer', () => {
       if (!result.success) expect(result.error).toMatch(/^<skill_error>.*no stub/);
     }
     expect(executed).toEqual([]);
-    expect(controller.endRun().map(c => c.disposition)).toEqual(Array(5).fill('refused'));
+    expect(controller.endRun('scenario-1').map(c => c.disposition)).toEqual(Array(5).fill('refused'));
   });
 
   it('answers a stubbed send itself and never reaches the real tool', async () => {
@@ -136,7 +184,7 @@ describe('scenario stub layer', () => {
     const result = await layer.invoke('memory-query', {}, undefined, coordinatorCall);
     expect(result).toMatchObject({ success: true, data: 'real memory-query' });
     expect(executed).toEqual(['memory-query']);
-    expect(controller.endRun()).toEqual([
+    expect(controller.endRun('scenario-1')).toEqual([
       { agentId: 'coordinator', invokeEventId: undefined, toolName: 'memory-query', input: {}, disposition: 'passthrough' },
     ]);
   });

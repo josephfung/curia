@@ -1,6 +1,7 @@
 // tests/smoke/types.ts
 import type { ToolStub } from '../scenarios/types.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
+import type { UsageBreakdown } from '../shared/usage.js';
 import type { AgentToolCall } from './stub-layer.js';
 
 // -- Test case definition (loaded from YAML) --
@@ -95,6 +96,13 @@ export interface CaseExecution {
   /** Every agent's tool calls during the case (specialists included), for stub authoring. */
   agentCalls: AgentToolCall[];
   error?: string;
+  /** Agents' model spend on this case, every attempt included (provider retries too). */
+  usage: UsageBreakdown;
+  /**
+   * Attempts thrown away for a provider failure (stall, provider error, model fallback)
+   * and run again, one reason each. They do not use the case's gated retry (#1980).
+   */
+  providerRetries: string[];
 }
 
 // -- Evaluation results --
@@ -109,6 +117,8 @@ export interface BehaviorScore {
 
 export interface CaseResult {
   testCase: TestCase;
+  /** A targeted case's target with its placeholders resolved, as the agent and judge saw it. */
+  target?: CaseTarget;
   responses: CapturedResponse[];
   scores: BehaviorScore[];
   /** Weighted score 0-1 for this case */
@@ -126,6 +136,10 @@ export interface CaseResult {
    * gating failure once). The result above is the retry's; this is what the first said.
    */
   firstAttempt?: { weightedScore: number; failures: string[] };
+  /** Model spend on the case: every agent's calls and the judge's, across all attempts. */
+  usage: UsageBreakdown;
+  /** Provider failures retried on the way to this result (both gated attempts). */
+  providerRetries: string[];
 }
 
 // -- Run-level results --
@@ -144,6 +158,17 @@ export interface RunResult {
   /** The suite passes when every case passes, known failures aside. */
   passed: boolean;
   durationMs: number;
+  /** Cases run at once (--concurrency). */
+  concurrency: number;
+  /** "Today" as the agents and the judge were told it (re-judging needs the same). */
+  today: string;
+  /**
+   * The run's estimated model spend: every case's plus `overheadUsage`. An estimate from
+   * registry prices — see tests/shared/usage.ts.
+   */
+  usage: UsageBreakdown;
+  /** Spend outside every case: the warm-up, and any call no case made (should be ~0). */
+  overheadUsage: UsageBreakdown;
 }
 
 // -- Historical tracking --

@@ -103,9 +103,10 @@ tool_stubs:
         date: 0
         labels: [INBOX]
         attachments: []
-    # Any other id: the thread's earlier messages are not in this mailbox view.
-    - match: {}
-      error: Message not found in this mailbox.
+    # No catch-all here: case stubs are tried before the office's (stub-layer.ts
+    # mergeStubs), so one would shadow the office's read of the Q2 deck message this
+    # case's list returns. Any other id falls through to the office's own
+    # "Message not found" fallback.
 
 turns:
   - role: user

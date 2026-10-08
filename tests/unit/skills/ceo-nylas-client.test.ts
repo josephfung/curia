@@ -151,6 +151,32 @@ describe('CeoNylasClient.listMessages — folder alias normalization', () => {
     expect(url.searchParams.get('in')).toBe('DRAFT');
   });
 
+  it('sends only page_token on a follow-up page', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: [], next_cursor: 'CUR' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = new CeoNylasClient('key', 'grant', logger);
+
+    const page = await client.listMessagesPage({
+      pageToken: 'CUR',
+      folder: 'INBOX',
+      unread: true,
+      query: 'is:unread',
+      limit: 5,
+    });
+
+    expect(page.nextCursor).toBe('CUR');
+    const url = new URL(fetchSpy.mock.calls[0]![0] as string);
+    expect(url.searchParams.get('page_token')).toBe('CUR');
+    expect(url.searchParams.get('in')).toBeNull();
+    expect(url.searchParams.get('unread')).toBeNull();
+    expect(url.searchParams.get('search_query_native')).toBeNull();
+    expect(url.searchParams.get('limit')).toBe('5');
+  });
+
   it('passes custom label names through unmodified', async () => {
     const fetchSpy = mockFetchSuccess();
     const client = new CeoNylasClient('key', 'grant', logger);
@@ -256,6 +282,27 @@ describe('CeoNylasClient — drafts (issue #1000)', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(3);
     });
 
+    it('stops on the page that contains a stopWhen match', async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(pageResponse([
+          { id: 'd1', thread_id: 't1', subject: 'a', to: [], cc: [] },
+          { id: 'd2', thread_id: 't2', subject: 'b', to: [], cc: [] },
+        ], 'CUR2'))
+        .mockResolvedValueOnce(pageResponse([
+          { id: 'd3', thread_id: 't3', subject: 'c', to: [], cc: [] },
+        ]));
+      const client = new CeoNylasClient('key', 'grant', logger);
+
+      const { drafts, truncated } = await client.listAllDrafts({
+        stopWhen: (draft) => draft.threadId === 't2',
+      });
+
+      expect(drafts.map((d) => d.id)).toEqual(['d1', 'd2']);
+      expect(truncated).toBe(false);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('stops if a page returns no drafts (defends against an empty-page loop)', async () => {
       const fetchSpy = vi
         .spyOn(globalThis, 'fetch')
@@ -324,5 +371,64 @@ describe('CeoNylasClient — drafts (issue #1000)', () => {
       expect(updated.subject).toBe('Corrected subject');
       expect(updated.body).toBe('<p>Updated</p>');
     });
+  });
+});
+
+describe('CeoNylasClient.listFolders (pagination)', () => {
+  function pageResponse(data: unknown[], nextCursor?: string) {
+    const body: Record<string, unknown> = { data };
+    if (nextCursor) body.next_cursor = nextCursor;
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('follows next_cursor and includes a folder from the second page', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(pageResponse([{ id: 'INBOX', name: 'INBOX' }], 'CUR2'))
+      .mockResolvedValueOnce(pageResponse([{ id: 'Label_39', name: '✍️ Drafted' }]));
+    const client = new CeoNylasClient('key', 'grant', logger);
+
+    const folders = await client.listFolders();
+
+    expect(folders).toEqual([
+      { id: 'INBOX', name: 'INBOX' },
+      { id: 'Label_39', name: '✍️ Drafted' },
+    ]);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const first = new URL(fetchSpy.mock.calls[0]![0] as string);
+    expect(first.searchParams.get('limit')).toBe('20');
+    expect(first.searchParams.has('page_token')).toBe(false);
+    const second = new URL(fetchSpy.mock.calls[1]![0] as string);
+    expect(second.searchParams.get('page_token')).toBe('CUR2');
+    expect(second.searchParams.get('limit')).toBe('20');
+  });
+
+  it('stops at the scan cap when next_cursor never ends', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => pageResponse(
+        Array.from({ length: 20 }, (_, i) => ({ id: `f-${i}`, name: `Folder ${i}` })),
+        'MORE',
+      ));
+    const client = new CeoNylasClient('key', 'grant', logger);
+
+    const folders = await client.listFolders();
+
+    // 25 pages of 20 is the 500-folder ceiling. The next cursor is not followed.
+    expect(folders).toHaveLength(500);
+    expect(fetchSpy).toHaveBeenCalledTimes(25);
+  });
+
+  it('stops when a page is empty even if a cursor is present', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(pageResponse([], 'MORE'));
+    const client = new CeoNylasClient('key', 'grant', logger);
+
+    const folders = await client.listFolders();
+
+    expect(folders).toEqual([]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

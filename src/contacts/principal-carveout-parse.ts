@@ -15,3 +15,15 @@ export function splitCommaSeparatedAddresses(raw: string): string[] {
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
 }
+
+/**
+ * Parse a 1:1 send skill's single recipient: the `recipient` reference input
+ * (#2033). Null when it is absent, blank, or not a string — fail closed. The
+ * retired raw-address inputs (#2041) are each parser's unparsed keys.
+ */
+export function parseOneRecipient(input: Record<string, unknown>): string[] | null {
+  const reference = input['recipient'];
+  if (reference !== undefined && reference !== null && typeof reference !== 'string') return null;
+  if (!hasPresentValue(reference)) return null;
+  return [(reference as string).trim()];
+}

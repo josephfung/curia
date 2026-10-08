@@ -1,5 +1,6 @@
 // tests/unit/smoke/gate.test.ts — smoke's pass/fail gate (#1956).
 import { describe, it, expect } from 'vitest';
+import { emptyBreakdown, UsageLedger, type UsageBreakdown } from '../../shared/usage.js';
 import { caseFailures, gatingFailures, mergeRetries, staleKnownFailures, type GateInput } from '../../smoke/gate.js';
 import type { BehaviorRating, BehaviorWeight, TestCase } from '../../smoke/types.js';
 
@@ -98,10 +99,26 @@ describe('known failures', () => {
 
 describe('mergeRetries', () => {
   type Attempt = { weightedScore: number; failures: string[] };
-  function named(name: string, weightedScore: number, failures: string[]): GateInput & { failures: string[]; passed: boolean; firstAttempt?: Attempt } {
+  type Named = GateInput & { failures: string[]; passed: boolean; firstAttempt?: Attempt; usage: UsageBreakdown; providerRetries: string[] };
+  function named(name: string, weightedScore: number, failures: string[], extra: Partial<Named> = {}): Named {
     const input = gateInput([['a', 'critical', failures.length ? 'MISS' : 'PASS']], weightedScore);
-    return { ...input, testCase: { ...input.testCase, name }, failures, passed: failures.length === 0 };
+    return { ...input, testCase: { ...input.testCase, name }, failures, passed: failures.length === 0, usage: emptyBreakdown(), providerRetries: [], ...extra };
   }
+
+  it('charges a retried case for both attempts\' spend and provider retries (#1980)', () => {
+    const spent = (usd: number): UsageBreakdown => {
+      const u = new UsageLedger();
+      u.addAgentCall('coordinator', { inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, usd);
+      return u.snapshot();
+    };
+    const [merged] = mergeRetries(
+      [named('B', 0.4, ['x'], { usage: spent(1), providerRetries: ['provider stall (one model call ran 95s)'] })],
+      [named('B', 0.9, [], { usage: spent(2) })],
+    );
+    expect(merged!.usage.total.estimatedCostUsd).toBe(3);
+    expect(merged!.usage.byAgent['coordinator']!.calls).toBe(2);
+    expect(merged!.providerRetries).toEqual(['provider stall (one model call ran 95s)']);
+  });
 
   it('takes the retry\'s result and keeps what the first attempt said', () => {
     const merged = mergeRetries(

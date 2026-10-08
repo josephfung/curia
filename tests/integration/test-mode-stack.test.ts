@@ -11,11 +11,12 @@
 // Skips without DATABASE_URL.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import type { OfficeIdentity } from '../../src/identity/types.js';
 import { AutonomyService } from '../../src/autonomy/autonomy-service.js';
 import { DATE_RESOLVE_GUARDRAIL } from '../../src/agents/prompts/date-resolve-guardrail.js';
-import { formatPrincipalContactDetailsBlock } from '../../src/agents/principal-contact-block.js';
+import { formatWhoYouServeBlock } from '../../src/agents/principal-contact-block.js';
 import { compileSecurityContextBlock, resolveSecurityThresholds } from '../../src/security/security-context.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import { requireCuriaTestDatabase } from './require-test-db.js';
@@ -118,14 +119,15 @@ describeIf('test-mode stack', () => {
       // block at all. So derive the expectation from what the stack loaded at boot,
       // through the same formatter, rather than from whether a principal exists.
       const rc = stack.agent('coordinator').runtimeConfig;
-      const expected = formatPrincipalContactDetailsBlock(
+      const expected = formatWhoYouServeBlock(
         rc.principalIdentities ?? [],
         rc.principalPrimaryEmail?.current ?? null,
       );
       if (expected) {
         expect(rendered).toContain(expected);
       } else {
-        expect(rendered).not.toContain('## Principal Contact Details');
+        expect(rendered).not.toContain('## Who you serve');
+        expect(rendered).not.toContain('Principal Contact Details');
       }
     });
   });
@@ -167,21 +169,23 @@ describeIf('test-mode stack', () => {
     // the transport-less gateway above is the second line if that ever changes.
     it('fails email-send and signal-send invoked the way the coordinator would', async () => {
       const opts = { agentId: 'coordinator', channelId: 'cli', conversationId: 'test-mode-no-send' };
-      const email = await stack.executionLayer.invoke(
-        'email-send',
-        { to: 'someone@example.com', subject: 'Hi', body: 'Hello' },
-        undefined,
-        opts,
-      );
-      const signal = await stack.executionLayer.invoke(
-        'signal-send',
-        { recipient: '+15555550123', message: 'Hello' },
-        undefined,
-        opts,
-      );
-      expect(email).toMatchObject({ success: false, error: expect.stringMatching(/requires capabilities/) });
-      expect(signal).toMatchObject({ success: false, error: expect.stringMatching(/requires capabilities/) });
-      expect(fetchSpy).not.toHaveBeenCalled();
+      // Send skills take a contact reference (#2041): the pre-gate check must pass so the
+      // capability check is what refuses. Unique identifiers: the database is shared.
+      const contact = await stack.contactService.createContact({ displayName: 'Test-mode no-send recipient', source: 'ceo_stated' });
+      try {
+        await stack.contactService.linkIdentity({ contactId: contact.id, channel: 'email',
+          channelIdentifier: `no-send-${randomUUID()}@example.com`, source: 'ceo_stated' });
+        await stack.contactService.linkIdentity({ contactId: contact.id, channel: 'signal',
+          channelIdentifier: `+1555${String(Date.now()).slice(-7)}`, source: 'ceo_stated' });
+        const email = await stack.executionLayer.invoke('email-send', { to: contact.id, subject: 'Hi', body: 'Hello' }, undefined, opts);
+        const signal = await stack.executionLayer.invoke('signal-send', { recipient: contact.id, message: 'Hello' }, undefined, opts);
+        expect(email).toMatchObject({ success: false, error: expect.stringMatching(/requires capabilities/) });
+        expect(signal).toMatchObject({ success: false, error: expect.stringMatching(/requires capabilities/) });
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        await stack.pool.query('DELETE FROM contacts WHERE id = $1', [contact.id]);
+        if (contact.kgNodeId) await stack.pool.query('DELETE FROM kg_nodes WHERE id = $1', [contact.kgNodeId]);
+      }
     });
 
     it('reports the refused tools per agent', () => {
@@ -195,7 +199,7 @@ describeIf('test-mode stack', () => {
       // credentials, never through the gateway.
       const result = await stack.executionLayer.invoke(
         'ceo-inbox-draft-compose',
-        { to: 'someone@example.com', subject: 'Hi', body: 'Hello' },
+        { to_address: 'someone@example.com', subject: 'Hi', body: 'Hello' },
         undefined,
         { agentId: 'ceo-inbox', channelId: 'cli', conversationId: 'test-mode-no-send' },
       );

@@ -88,7 +88,7 @@ export async function buildPromptInputsSnapshot(
   // and a snapshot without it would silently render a coordinator with that block gone.
   // The every-agent fields are checked for presence too: an absent principalIdentities
   // would otherwise read as `[]`, indistinguishable from a principal with no verified
-  // identities, and every agent would lose ## Principal Contact Details unnoticed.
+  // identities, and every agent would lose ## Who you serve unnoticed.
   if (!rc.officeIdentityService) throw new Error('coordinator runtime config has no officeIdentityService');
   if (!rc.securityContextBlock) throw new Error('coordinator runtime config has no securityContextBlock');
   if (rc.availableSpecialists === undefined) throw new Error('coordinator runtime config has no availableSpecialists');

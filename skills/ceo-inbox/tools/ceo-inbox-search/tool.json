@@ -1,12 +1,13 @@
 {
   "name": "ceo-inbox-search",
-  "description": "Search the principal's personal email inbox using Gmail-native query syntax. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
-  "version": "0.2.1",
+  "description": "Search the principal's personal email inbox using Gmail-native query syntax. Messages filed in Spam or Trash are omitted unless include_spam_and_trash is true, whatever the query says. Pass folder: 'DRAFTS' to instead search unsent drafts by subject/recipient. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
+  "version": "0.3.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
     "query": "string (for messages: Gmail-native search query, e.g. 'from:alice subject:invoice'. For drafts: a plain substring matched case-insensitively against subject and recipient name/email)",
     "folder": "string? (omit to search messages; pass 'DRAFTS' to search unsent drafts instead)",
+    "include_spam_and_trash": "boolean? (default false; set true to include messages filed in Spam or Trash. A query such as in:spam does not opt in by itself)",
     "limit": "number? (max results, 1–50, default 10)"
   },
   "outputs": {

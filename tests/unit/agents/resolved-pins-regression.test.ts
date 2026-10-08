@@ -95,7 +95,6 @@ function resolveAgent(agentFile: string): string[] {
     'drive-download-file',
     'signal-send',
     'activity-log',
-    'approval-expiry-sweep',
     'secret-capture-request',
     'list-user-secrets',
     'create_doc',
@@ -167,9 +166,9 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(tools).not.toContain('resolve-learning-digest');
   });
 
-  it('coordinator pins google-workspace skill instead of listing MCP tools', () => {
+  it('coordinator pins neither google-workspace nor its MCP tools (activated on demand, #2024)', () => {
     const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
-    expect(config.pinned_skills).toContain('google-workspace');
+    expect(config.pinned_skills).not.toContain('google-workspace');
     expect(config.pinned_skills).not.toContain('create_doc');
     expect(config.pinned_skills).toContain('contact-update');
     expect(config.pinned_skills).not.toContain('contact-lookup');
@@ -218,5 +217,15 @@ describe('resolved pin sets after #1494 bundling', () => {
     expect(config.pinned_skills).toContain('secret-capture-request');
     const tools = resolveAgent('coordinator.yaml');
     expect(tools).toEqual(expect.arrayContaining(['list-user-secrets', 'secret-capture-request']));
+  });
+
+  // #1960: unused for the 30-day baseline, so they are reached through discovery
+  // instead of riding along on every coordinator call.
+  it('coordinator leaves image-generate and drive-download-file to discovery', () => {
+    const config = loadAgentConfig(resolve(agentsDir, 'coordinator.yaml'));
+    expect(config.allow_discovery).toBe(true);
+    const tools = resolveAgent('coordinator.yaml');
+    expect(tools).not.toContain('image-generate');
+    expect(tools).not.toContain('drive-download-file');
   });
 });

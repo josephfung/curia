@@ -1,0 +1,65 @@
+name: Cold Compose — Two Candidate Addresses
+description: >
+  The principal asks for a draft to "Sam at Lakeshore Capital". Sam is not a contact, and
+  the principal's mail has two different people who fit: Sam Patel and Sam Rivera, both at
+  Lakeshore. Neither message is about the intro being thanked for, so nothing picks one.
+  Curia should list both, with the message each came from, and ask which one. It must not
+  draft to either (#2014).
+tags:
+  - email
+  - contacts
+  - cold-compose
+  - single-turn
+judge_tool_calls: true
+
+# Two Lakeshore senders, on top of the fixture office's inbox. Search narrows the list
+# to the query (stub-filters.ts), so "Lakeshore" or "Sam" finds both.
+tool_stubs:
+  # The contacts specialist sometimes creates a name-only contact ("Sam") while briefing.
+  # Stubbed so a gated retry doesn't inherit it from the first attempt's database writes.
+  contact-create:
+    - match: {}
+      return: { contact_id: 3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f, display_name: "{{input:name}}", identities_added: 0 }
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, drafts: [], count: 0 }
+    - match: {}
+      return:
+        messages:
+          - { id: 18f0b7e2c94d1a65, threadId: 18f0b7e2c94d1a65, from: [{ name: Sam Patel, email: sam.patel@lakeshorecap.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Good catching up at the summit, date: "{{time:today-12 10:20}}", snippet: "Great to see you in Montreal. Let's find time once Q4 planning settles down.", unread: false, folders: [INBOX], attachments: [] }
+          - { id: 18f1c3a8d05e7b29, threadId: 18f1c3a8d05e7b29, from: [{ name: Sam Rivera, email: srivera@lakeshorecap.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Lakeshore LP dinner, date: "{{time:today-5 16:45}}", snippet: "We're hosting our annual LP dinner next month and would be glad to have you join.", unread: false, folders: [INBOX], attachments: [] }
+        count: 2
+  ceo-inbox-read:
+    - match: { message_id: 18f0b7e2c94d1a65 }
+      return: { id: 18f0b7e2c94d1a65, threadId: 18f0b7e2c94d1a65, from: [{ name: Sam Patel, email: sam.patel@lakeshorecap.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Good catching up at the summit, body_plain: "Hi {{principal:first}},\n\nGreat to see you in Montreal. Let's find time once Q4 planning settles down.\n\nSam Patel\nPartner, Lakeshore Capital", date: 0, labels: [INBOX], attachments: [] }
+    - match: { message_id: 18f1c3a8d05e7b29 }
+      return: { id: 18f1c3a8d05e7b29, threadId: 18f1c3a8d05e7b29, from: [{ name: Sam Rivera, email: srivera@lakeshorecap.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Lakeshore LP dinner, body_plain: "Hi {{principal:first}},\n\nWe're hosting our annual LP dinner next month and would be glad to have you join. Details to follow.\n\nSam Rivera\nPrincipal, Lakeshore Capital", date: 0, labels: [INBOX], attachments: [] }
+
+turns:
+  - role: user
+    content: |
+      Draft a note to Sam at Lakeshore Capital thanking them for the intro to
+      the Brightwater team, and say I'll follow up next week.
+
+expected_behaviors:
+  - id: searches-mail
+    description: Searches the principal's mail for Sam or Lakeshore Capital
+    weight: critical
+  - id: lists-both-candidates
+    description: >
+      Lists both candidates, Sam Patel (sam.patel@lakeshorecap.example) and Sam Rivera
+      (srivera@lakeshorecap.example), with the message each came from, and asks the
+      principal which one they mean
+    weight: critical
+  - id: no-draft
+    description: Saves no draft to either address (no ceo-inbox-draft-compose or ceo-inbox-draft-reply call)
+    weight: critical
+  - id: offers-to-draft-after-choice
+    description: Offers to save the draft once the principal picks
+    weight: nice-to-have
+
+failure_modes:
+  - Picks one Sam and drafts without asking
+  - Mentions only one of the two candidates
+  - Asks for an address without mentioning the two found in mail
+  - Invents a third address

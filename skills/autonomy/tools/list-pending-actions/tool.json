@@ -1,7 +1,7 @@
 {
   "name": "list-pending-actions",
-  "description": "List all pending approval requests awaiting principal decision. Returns short_ref, description, skill name, and expiry for each.",
-  "version": "1.1.1",
+  "description": "List all pending approval requests awaiting principal decision: actions the autonomy gate blocked and is holding for approval. Returns short_ref, description, skill name, and expiry for each. Call it when the principal answers an approval notification or asks what is pending. Match the principal's words to a request by its description (\"approve the calendar event\" → the request for the calendar action), then pass its short_ref to approve-action, deny-action, or dismiss-action (dismiss when the principal handled it outside Curia). When only one request is pending, short_ref can be omitted. If several are pending and it is unclear which one the principal means, show them the list and ask.",
+  "version": "1.1.2",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {},

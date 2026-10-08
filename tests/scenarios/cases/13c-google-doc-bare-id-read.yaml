@@ -1,0 +1,129 @@
+# Case 13c (#2024): the principal names a Doc by its bare ID, with no link. A hint keyed
+# on docs.google.com links would miss this, which is why the coordinator's prompt says to
+# activate google-workspace for any Google file, link or not. Rule:
+# agents/coordinator.yaml, "Google Workspace".
+name: google doc bare id read
+description: >
+  The principal gives a Google Doc's ID, with no link, and asks what launch date it
+  gives. The coordinator activates its Google Workspace tools, reads that Doc, and
+  answers from it.
+tags: [google-workspace, skill-activation]
+inbound:
+  from: principal
+  content: What launch date does doc 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge give for the Atlas release?
+tool_stubs:
+  get_doc_as_markdown:
+    - match: {}
+      return: &launch_doc |
+        # Atlas release: launch plan
+
+        **Status:** approved. **Owner:** Priya Shah.
+
+        ## Timeline
+        - Beta freeze: November 3
+        - Public launch: **November 18**
+        - Press embargo lifts: November 18, 9:00 ET
+
+        ## Risks
+        - Billing migration must finish before the beta freeze.
+  get_doc_content:
+    - match: {}
+      return: *launch_doc
+  get_drive_file_content:
+    - match: {}
+      return: *launch_doc
+  # Looking the ID up first is a fine path; it finds the one Doc.
+  search_drive_files:
+    - match: {}
+      return: &found |
+        Found 1 file:
+        - Name: "Atlas release: launch plan" (ID: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge, Type: application/vnd.google-apps.document)
+  search_docs:
+    - match: {}
+      return: *found
+  # The rest of the read-only Drive and Docs surface that can touch this Doc, as in 13a,
+  # so a run that wanders onto another read path still gets an answer (#2050).
+  inspect_doc_structure:
+    - match: {}
+      return: |
+        Document structure for 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge:
+        {
+          "title": "Atlas release: launch plan",
+          "total_elements": 9,
+          "total_length": 268,
+          "tables": 0,
+          "table_details": [],
+          "headers": {},
+          "footers": {}
+        }
+  # The Doc has no tables; this is the real tool's answer for one without.
+  debug_table_structure:
+    - match: {}
+      return: "Error: Table index 0 not found. Document has 0 table(s)."
+  list_drive_items:
+    - match: {}
+      return: *found
+  list_docs_in_folder:
+    - match: {}
+      return: *found
+  list_document_comments:
+    - match: {}
+      return: No comments found in document 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge
+  get_drive_file_permissions:
+    - match: {}
+      return: |
+        File: Atlas release: launch plan
+        ID: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge
+        Type: application/vnd.google-apps.document
+        Owners: Priya Shah (priya.shah@example.test)
+
+        Sharing Status:
+          Shared: True
+          Number of permissions: 2
+          Permissions:
+            - user: priya.shah@example.test (owner)
+            - user: assistant@example.test (writer)
+  check_drive_file_public_access:
+    - match: {}
+      return: '"Atlas release: launch plan" is not shared publicly. Link sharing: restricted.'
+  get_drive_shareable_link:
+    - match: {}
+      return: "https://docs.google.com/document/d/1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge/edit?usp=sharing"
+  get_drive_file_download_url:
+    - match: {}
+      return: |
+        File downloaded successfully!
+        File: Atlas release: launch plan
+        File ID: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge
+        Size: 39.7 KB (40652 bytes)
+        MIME Type: application/pdf
+
+        📎 Saved to: /tmp/.workspace-mcp/attachments/Atlas_release_launch_plan_a7f3c1e9-52b8-4d6e-8f04-1c9b3e7d2a65.pdf
+
+        The file has been saved to disk and can be accessed directly via the file path.
+
+        Note: Google native file exported to application/pdf format.
+expected_behaviors:
+  - id: activates_google_workspace
+    weight: critical
+    description: Activates the google-workspace skill to get its Docs tools.
+    check:
+      called: skill-activate
+      with: { skill: google-workspace }
+  - id: reads_the_doc
+    weight: critical
+    description: Reads the Doc by the ID the principal gave.
+    check:
+      any_of:
+        - called: get_doc_as_markdown
+          with: { document_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
+        - called: get_doc_content
+          with: { document_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
+        - called: get_drive_file_content
+          with: { file_id: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge }
+  - id: answers_from_doc
+    weight: important
+    description: Answers that the public launch is November 18.
+failure_modes:
+  - Asks the principal for a link instead of using the ID
+  - Says it has no access to Google Docs

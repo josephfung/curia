@@ -9,7 +9,7 @@
 // for deciding whether to prune history; the actual token count comes from the
 // API response after the call.
 
-import type { ContentBlock, Message } from './provider.js';
+import type { ContentBlock, Message, ToolDefinition } from './provider.js';
 
 /** Characters-per-token ratio used for all estimates. */
 const CHARS_PER_TOKEN = 3.5;
@@ -81,6 +81,18 @@ export function estimateMessagesTokens(messages: Message[]): number {
     total += estimateTokens(msg.content) + MESSAGE_OVERHEAD_TOKENS;
   }
   return total;
+}
+
+/**
+ * Estimates the token count for the tool definitions sent with a call.
+ *
+ * Providers reshape the definitions into their own wire format, but the name,
+ * description and JSON Schema dominate in every format, so the serialised
+ * ToolDefinition array is a fair proxy. Returns 0 for no tools.
+ */
+export function estimateToolDefinitionsTokens(tools: readonly ToolDefinition[]): number {
+  if (tools.length === 0) return 0;
+  return Math.ceil(JSON.stringify(tools).length / CHARS_PER_TOKEN);
 }
 
 /** Safety margin (5%) subtracted from the context window before budgeting. */

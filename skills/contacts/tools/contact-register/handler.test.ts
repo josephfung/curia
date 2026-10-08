@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import pino from 'pino';
 import { ContactRegisterHandler } from './handler.js';
 import { ContactService } from '../../../../src/contacts/contact-service.js';
@@ -522,5 +524,17 @@ describe('ContactRegisterHandler — promotion flow removed', () => {
     const resolved = await contactService.resolveByChannelIdentity('email', 'ghost@example.com');
     const contact = await contactService.getContact(resolved!.contactId);
     expect(contact!.tier).toBe('unknown');
+  });
+});
+
+// contact-register records agent_called, which is auto-verified without the duplicate
+// check contact-create runs. Only ceo-inbox, which registers senders it read from mail,
+// may call it (#2041; the open question is #2061).
+describe('contact-register manifest', () => {
+  it('is callable by ceo-inbox only', () => {
+    const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, 'tool.json'), 'utf-8')) as {
+      allowed_callers?: string[];
+    };
+    expect(manifest.allowed_callers).toEqual(['ceo-inbox']);
   });
 });

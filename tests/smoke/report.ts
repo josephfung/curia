@@ -2,6 +2,7 @@
 // Generates a self-contained HTML report from smoke test results.
 // No external CSS/JS/fonts — everything is inline.
 
+import { formatUsd } from '../shared/usage.js';
 import type { RunResult, HistoricalEntry, CaseResult, BehaviorRating } from './types.js';
 
 /**
@@ -569,7 +570,7 @@ export function generateReport(run: RunResult, history?: HistoricalEntry[]): str
   <div class="container">
     <div class="header">
       <h1>Curia Smoke Test Report</h1>
-      <div class="meta">${escapeHtml(formattedTime)} &middot; Duration: ${duration}</div>
+      <div class="meta">${escapeHtml(formattedTime)} &middot; Duration: ${duration} &middot; Estimated model spend: ${formatUsd(run.usage.total.estimatedCostUsd)} (judge ${formatUsd(run.usage.judge.estimatedCostUsd)})</div>
       <div class="overall-label">Overall Score</div>
       <div class="overall-score" style="color:${overallColor}">${pct(run.overallScore)}</div>
     </div>

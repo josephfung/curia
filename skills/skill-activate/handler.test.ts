@@ -84,17 +84,17 @@ describe('skill-activate handler', () => {
     expect(String(data.instructions)).toContain('Task Management');
   });
 
-  it('does not surface tools the agent is not allowed to call', async () => {
+  // #1958: this used to succeed with zero tools and splice the bundle's instructions,
+  // written for the agent that owns it, into the caller's turn.
+  it('refuses a bundle whose tools are all reserved for other agents', async () => {
     const ctx = makeCtx({
       input: { skill: 'admin-bundle' },
       agentId: 'research-analyst',
     });
     const result = await handler.execute(ctx);
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    const data = result.data as { tools: string[]; skippedTools: string[] };
-    expect(data.tools).toEqual([]);
-    expect(data.skippedTools).toEqual(['secret-admin']);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toMatch(/reserved for other agents/);
   });
 
   it('persists activeSkills only for the bound task from taskMetadata', async () => {

@@ -25,6 +25,10 @@ import type { SignalRpcClient } from '../../src/channels/signal/signal-rpc-clien
 
 const logger = pino({ level: 'silent' });
 
+// signal-send takes a contact reference (#2041): the skill looks the number up from
+// this contact's verified signal identity.
+const RECIPIENT_ID = '44444444-4444-4444-8444-444444444444';
+
 function setup() {
   const bus = new EventBus(logger);
   const signalClient = {
@@ -37,6 +41,11 @@ function setup() {
       contactId: 'contact-principal', displayName: 'Principal', role: null,
       tier: 'known', kgNodeId: null, verified: true,
     }),
+    getContactWithIdentities: vi.fn(async (id: string) => (id === RECIPIENT_ID ? {
+      contact: { id, displayName: 'Principal', primaryEmail: null, primaryPhone: '+15555550199', tier: 'known' },
+      identities: [{ id: 'identity-relay-1', contactId: id, channel: 'signal', channelIdentifier: '+15555550199', label: null,
+        verified: true, verifiedAt: new Date(), status: 'active', source: 'ceo_stated', createdAt: new Date(), updatedAt: new Date() }],
+    } : undefined)),
   } as unknown as ContactService;
   const contentFilter = {
     check: vi.fn().mockResolvedValue({ passed: true, findings: [] }),
@@ -80,7 +89,7 @@ describe('relayed send attribution (#1972)', () => {
     const result = await executionLayer.invoke(
       'signal-send',
       {
-        recipient: '+15555550199',
+        recipient: RECIPIENT_ID,
         message: 'Dana proposes Wednesday 2pm instead. Accept?',
         context_bridge: JSON.stringify({
           agent_id: 'coordinator',
@@ -105,7 +114,7 @@ describe('relayed send attribution (#1972)', () => {
     const { executionLayer, register } = setup();
     const result = await executionLayer.invoke(
       'signal-send',
-      { recipient: '+15555550199', message: 'Scheduling reply could not be drafted for Partnership call.' },
+      { recipient: RECIPIENT_ID, message: 'Scheduling reply could not be drafted for Partnership call.' },
       undefined,
       relayWake,
     );
@@ -118,7 +127,7 @@ describe('relayed send attribution (#1972)', () => {
     const result = await executionLayer.invoke(
       'signal-send',
       {
-        recipient: '+15555550199',
+        recipient: RECIPIENT_ID,
         message: 'Departure-day confirm for Friday.',
         context_bridge: JSON.stringify({ agent_id: 'coordinator', delegation_hint: 'calendar-specialist' }),
       },

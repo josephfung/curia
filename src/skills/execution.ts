@@ -114,6 +114,24 @@ import {
 import { createExportDelivered } from '../bus/events.js';
 import { isDbUnavailableError } from '../db/resilience.js';
 import { USER_SECRET_PREFIX } from '../secrets/user-secret-name.js';
+import { splitCommaSeparatedAddresses } from '../contacts/principal-carveout-parse.js';
+import type { ErrorType } from '../errors/types.js';
+import {
+  RECIPIENT_REFERENCE_SKILLS,
+  findRetiredRecipientField,
+  formatResolvedRecipient,
+  parseRecipientReference,
+  resolveRecipientReference,
+  retiredRecipientFieldError,
+  sendPinsMatch,
+  STALE_SEND_APPROVAL_ERROR,
+  type SendRecipientPin,
+} from './_shared/recipient-reference.js';
+
+export { STALE_SEND_APPROVAL_ERROR };
+
+/** Contact references one send may name across to/cc/recipient (#2033). */
+const MAX_SEND_REFERENCES = 25;
 
 // Default max output length — used when no value is configured in default.yaml.
 // Skills returning more than this will have their output truncated before it
@@ -157,6 +175,12 @@ export interface InvokeOptions {
    *  All other checks (elevated-skill gate, content filter, blocked-contact) still run.
    *  See ADR-018. */
   humanApproved?: boolean;
+  /**
+   * Hinted recipients recorded when the approval was filed. On a humanApproved
+   * replay, the send is refused unless each one still resolves to the same
+   * identity and name (#2047).
+   */
+  sendResolution?: readonly SendRecipientPin[];
   /** Per-task-turn guard against blind identical re-delegation (#1171). Owned by the agent
    *  runtime; forwarded to the delegate skill for defense in depth. */
   delegationGuard?: import('../agents/delegation-guard.js').DelegationGuard;
@@ -551,6 +575,7 @@ export class ExecutionLayer {
     actionRisk: string | number,
     options: InvokeOptions | undefined,
     skillLogger: Logger,
+    sendResolution?: readonly SendRecipientPin[],
   ): Promise<string> {
     const baseMsg =
       `Tool '${toolName}' blocked — autonomy score is ${currentScore}, ` +
@@ -565,8 +590,10 @@ export class ExecutionLayer {
           toolName,
           actionRisk: String(actionRisk),
           input,
+          displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore,
+          ...(sendResolution && sendResolution.length > 0 ? { sendResolution } : {}),
         });
         if (!result.created) {
           return (
@@ -608,6 +635,7 @@ export class ExecutionLayer {
     currentScore: number,
     options: InvokeOptions | undefined,
     skillLogger: Logger,
+    sendResolution?: readonly SendRecipientPin[],
   ): Promise<string> {
     const baseMsg =
       `Tool '${toolName}' blocked — the initiating contact's tier ('${initiatingTier}') ` +
@@ -621,11 +649,13 @@ export class ExecutionLayer {
           toolName,
           actionRisk: String(actionRisk),
           input,
+          displayInput: await this.approvalDisplayInput(toolName, input, skillLogger),
           currentScore,
           requiredScore: currentScore,
           reason:
             `Curia wanted to run '${toolName}', but the initiating contact's tier ` +
             `('${initiatingTier}') requires approval for ${String(actionRisk)}-risk actions.`,
+          ...(sendResolution && sendResolution.length > 0 ? { sendResolution } : {}),
         });
         if (!result.created) {
           return (
@@ -736,16 +766,21 @@ export class ExecutionLayer {
 
     if (this.approvalTrigger && options?.taskEventId) {
       try {
+        const exportItems = items.map((i) => ({
+          node_id: i.nodeId,
+          label: i.label,
+          sensitivity: i.sensitivity,
+        }));
         const result = await this.approvalTrigger.request({
           taskId: options.taskEventId,
           conversationId: options.conversationId,
           toolName,
           actionRisk: String(actionRisk),
-          input: { ...input, export_items: items.map((i) => ({
-            node_id: i.nodeId,
-            label: i.label,
-            sensitivity: i.sensitivity,
-          })) },
+          input: { ...input, export_items: exportItems },
+          displayInput: {
+            ...(await this.approvalDisplayInput(toolName, input, skillLogger)),
+            export_items: exportItems,
+          },
           currentScore: 0,
           requiredScore: 0,
           reason: `${message}\n\n${itemSummary}`,
@@ -834,6 +869,195 @@ export class ExecutionLayer {
     }
 
     return { recipients: found.carveout.parseRecipients(input), resolutionFailed: false };
+  }
+
+  /**
+   * The copy of a send skill's input that an approval shows the principal (#2033).
+   *
+   * Each reference is resolved to "address (contact "Name")". The stored payload
+   * stays the agent's own input, so approval re-runs the skill as called (and
+   * re-resolves the reference then). Display only: a failed lookup shows the
+   * reference as written and never blocks the approval. Raw-address inputs are
+   * retired and refused before any gate (#2041), so none reaches an approval.
+   */
+  private async approvalDisplayInput(
+    toolName: string,
+    input: Record<string, unknown>,
+    skillLogger: Logger,
+  ): Promise<Record<string, unknown>> {
+    const skill = RECIPIENT_REFERENCE_SKILLS[toolName];
+    if (!skill) return input;
+    const shown: Record<string, unknown> = { ...input };
+
+    // References were checked before the gates, so a failure here is a lookup
+    // error or a change since then.
+    for (const field of skill.references) {
+      const value = input[field];
+      if (typeof value !== 'string' || !value.trim() || !this.contactService) continue;
+      const entries = skill.channel === 'email' ? splitCommaSeparatedAddresses(value) : [value.trim()];
+      const parts: string[] = [];
+      for (const entry of entries) {
+        if (parseRecipientReference(entry) === null) {
+          parts.push(entry);
+          continue;
+        }
+        const resolved = await resolveRecipientReference(
+          entry,
+          skill.channel,
+          { field },
+          { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
+        );
+        if (resolved.ok) {
+          parts.push(formatResolvedRecipient(resolved));
+        } else if (resolved.cause !== undefined) {
+          skillLogger.warn({ err: resolved.cause, toolName }, 'approval display: recipient reference lookup failed — showing it unresolved');
+          parts.push(`${entry} (contact lookup failed)`);
+        } else {
+          parts.push(`${entry} (could not be resolved)`);
+        }
+      }
+      shown[field] = parts.join(', ');
+    }
+    return shown;
+  }
+
+  /**
+   * Check and resolve a send skill's recipient references (#2033, ADR-047), before
+   * any gate runs.
+   *
+   * - A retired raw-address input (#2041) is refused. It is not ignored: dropping a
+   *   cc list would send to fewer people than the agent asked for.
+   * - Every entry in a reference input (`to`, `cc`, `recipient`) must be a contact
+   *   UUID or "principal". An address or a template token there is refused with the
+   *   resolver's message, before any lookup.
+   * - References resolve through the same resolver the skill uses, including a
+   *   `#label` hint (`principal#personal`, #2047), so the gate sees the address the
+   *   skill will send to.
+   *
+   * Returns reference → address. Without a contact service the map is empty: the
+   * skill still resolves (and fails closed) itself, and Gate C refuses any reference
+   * it cannot look up.
+   */
+  private async resolveSendSkillReferences(
+    toolName: string,
+    input: Record<string, unknown>,
+    skillLogger: Logger,
+  ): Promise<
+    | { ok: true; resolved: Map<string, string>; pins: SendRecipientPin[] }
+    | { ok: false; error: string; errorType?: ErrorType }
+  > {
+    const resolved = new Map<string, string>();
+    const pins: SendRecipientPin[] = [];
+    const skill = RECIPIENT_REFERENCE_SKILLS[toolName];
+    if (!skill) return { ok: true, resolved, pins };
+    const entriesOf = (value: unknown): string[] => {
+      if (typeof value !== 'string' || !value.trim()) return [];
+      return skill.channel === 'email' ? splitCommaSeparatedAddresses(value) : [value.trim()];
+    };
+
+    const retired = findRetiredRecipientField(skill, input);
+    if (retired) {
+      skillLogger.info({ toolName, field: retired }, 'send recipient refused: a retired raw-address input (#2041)');
+      return { ok: false, error: retiredRecipientFieldError(skill, retired) };
+    }
+
+    // Each reference costs a contact read before any gate. Bound the fan-out from a
+    // long list; the handler's own length cap runs later.
+    const referenceCount = new Set(skill.references.flatMap((field) => entriesOf(input[field]))).size;
+    if (referenceCount > MAX_SEND_REFERENCES) {
+      return { ok: false, error: `Too many recipients (${referenceCount}); the limit is ${MAX_SEND_REFERENCES}. Nothing was sent.` };
+    }
+
+    for (const field of skill.references) {
+      for (const entry of entriesOf(input[field])) {
+        if (resolved.has(entry.trim())) continue;
+        const parsed = parseRecipientReference(entry);
+        const isReference = parsed !== null;
+        if (isReference && !this.contactService) continue;
+        const result = await resolveRecipientReference(entry, skill.channel, { field }, {
+          // Never called for a reference without a contact service (skipped above);
+          // a non-reference returns its error before any lookup.
+          contactService: this.contactService ?? { getContactWithIdentities: async () => undefined },
+          principalContactId: this.principalIdentities[0]?.contactId,
+        });
+        if (!result.ok) {
+          if (result.cause !== undefined) {
+            skillLogger.warn(
+              { err: result.cause, toolName, field },
+              'send recipient reference lookup failed — refusing (fail-closed, #2033)',
+            );
+            return {
+              ok: false,
+              error: result.error,
+              ...(isDbUnavailableError(result.cause) ? { errorType: 'DATABASE_UNAVAILABLE' as const } : {}),
+            };
+          }
+          skillLogger.info({ toolName, field, isReference }, 'send recipient reference refused before the gates (#2033)');
+          return { ok: false, error: result.error };
+        }
+        resolved.set(entry.trim(), result.identifier);
+        if (parsed?.label) {
+          pins.push({
+            ref: entry.trim(),
+            identityId: result.identityId,
+            identityName: result.identityName,
+          });
+        }
+      }
+    }
+    return { ok: true, resolved, pins };
+  }
+
+  /**
+   * Re-resolve the recipients an approval pinned. Nothing is sent when the
+   * identity row or its name has changed (#2047).
+   */
+  async confirmPinnedSendResolution(
+    toolName: string,
+    approved: readonly SendRecipientPin[],
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (approved.length === 0) return { ok: true };
+    const skill = RECIPIENT_REFERENCE_SKILLS[toolName];
+    if (!skill || !this.contactService) return { ok: false, error: STALE_SEND_APPROVAL_ERROR };
+    const current: SendRecipientPin[] = [];
+    for (const pin of approved) {
+      const result = await resolveRecipientReference(
+        pin.ref,
+        skill.channel,
+        { field: skill.references[0] ?? 'to' },
+        { contactService: this.contactService, principalContactId: this.principalIdentities[0]?.contactId },
+      );
+      if (!result.ok) return { ok: false, error: STALE_SEND_APPROVAL_ERROR };
+      current.push({ ref: pin.ref, identityId: result.identityId, identityName: result.identityName });
+    }
+    if (!sendPinsMatch(current, approved)) return { ok: false, error: STALE_SEND_APPROVAL_ERROR };
+    return { ok: true };
+  }
+
+  /**
+   * Replace references in a Gate C recipient list with the addresses resolved
+   * before the gates. Raw identifiers pass through: a reference shape cannot
+   * collide with an address on any send channel (see parseRecipientReference).
+   * A reference with no resolved address fails closed — the gate cannot see
+   * where the send would go.
+   */
+  private substituteResolvedRecipients(
+    recipients: string[],
+    resolved: ReadonlyMap<string, string> | undefined,
+  ): { ok: true; recipients: string[] } | { ok: false; error: string } {
+    const out: string[] = [];
+    for (const recipient of recipients) {
+      if (parseRecipientReference(recipient) === null) {
+        out.push(recipient);
+        continue;
+      }
+      const address = resolved?.get(recipient.trim());
+      if (address === undefined) {
+        return { ok: false, error: 'The recipient reference cannot be resolved here (no contact service). Nothing was sent.' };
+      }
+      out.push(address);
+    }
+    return { ok: true, recipients: out };
   }
 
   /**
@@ -1286,6 +1510,39 @@ export class ExecutionLayer {
       }
     }
 
+    // Send-skill recipient references (#2033, #2041): check them once, before any gate can
+    // file an approval. A retired raw-address input or an address in a reference input is
+    // refused here with the skill's own message. When a contact service is configured, each
+    // reference is also resolved here, and one that does not resolve is refused, so the
+    // principal is never asked to approve a send that cannot run; Gate C reuses the resolved
+    // addresses, so it judges exactly where the skill will send. Without a contact service
+    // references are not resolved here, and Gate C fails closed on them.
+    let sendRecipients: Map<string, string> | undefined;
+    let sendPins: readonly SendRecipientPin[] | undefined;
+    if (RECIPIENT_REFERENCE_SKILLS[toolName]) {
+      const checked = await this.resolveSendSkillReferences(toolName, input, skillLogger);
+      if (!checked.ok) {
+        return {
+          success: false,
+          error: this.wrapSkillError(checked.error),
+          ...(checked.errorType ? { errorType: checked.errorType } : {}),
+        };
+      }
+      sendRecipients = checked.resolved;
+      sendPins = checked.pins;
+      // A hinted approval recorded the identity it showed. Replay must still
+      // name that identity, including when the fresh resolve would fall back
+      // to a different unlabelled address (#2047).
+      if (
+        options?.humanApproved
+        && options.sendResolution
+        && options.sendResolution.length > 0
+        && !sendPinsMatch(checked.pins, options.sendResolution)
+      ) {
+        return { success: false, error: this.wrapSkillError(STALE_SEND_APPROVAL_ERROR) };
+      }
+    }
+
     // Log every humanApproved invocation for operator traceability.
     // Both the caller gate (above) and the autonomy gates (below) are skipped
     // when this flag is set — emit a single entry that names both bypasses so
@@ -1357,7 +1614,7 @@ export class ExecutionLayer {
             // The stored payload in autonomy_action_log will contain normalized timestamps,
             // which is correct — re-normalization on approve-action re-invocation is a no-op.
             const gateAError = await this.buildGateError(
-              toolName, input, currentScore, 60, manifest.action_risk, options, skillLogger,
+              toolName, input, currentScore, 60, manifest.action_risk, options, skillLogger, sendPins,
             );
             return {
               success: false,
@@ -1388,7 +1645,7 @@ export class ExecutionLayer {
             }
             // Note: same post-normalization `input` as Gate A — see comment above.
             const gateBError = await this.buildGateError(
-              toolName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger,
+              toolName, input, currentScore, requiredScore, manifest.action_risk, options, skillLogger, sendPins,
             );
             return {
               success: false,
@@ -1423,7 +1680,7 @@ export class ExecutionLayer {
               );
               if (auditFail) return auditFail;
               const gateCError = await this.buildTierGateError(
-                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
+                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger, sendPins,
               );
               return {
                 success: false,
@@ -1455,6 +1712,24 @@ export class ExecutionLayer {
             let resolutionFailed = false;
             if (foundCarveout && !foundCarveout.carveout.resolveRecipients) {
               recipients = foundCarveout.carveout.parseRecipients(input);
+              // Send skills take contact references (#2033, #2041). The pre-gate check
+              // above refused anything that is not a reference and, when a contact
+              // service is configured, resolved each one, so swap in the resolved
+              // address here: the principal carve-out and the reply-to-sender check then
+              // compare the address that will actually be sent to. Without a contact
+              // service there is no resolved address, and the reference is refused here
+              // (fail closed). No contact read happens here. An entry that is not
+              // reference-shaped would pass through unchanged, but no send skill
+              // produces one now; a caller that holds a raw address (a non-skill call
+              // to OutboundGateway.send) never reaches this skill-input path.
+              if (recipients !== null) {
+                const normalized = this.substituteResolvedRecipients(recipients, sendRecipients);
+                if (!normalized.ok) {
+                  skillLogger.info({ toolName }, 'autonomy gate: Gate C refused an unresolved recipient reference (#2033)');
+                  return { success: false, error: this.wrapSkillError(normalized.error) };
+                }
+                recipients = normalized.recipients;
+              }
             }
             let isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
               toolName,
@@ -1565,7 +1840,7 @@ export class ExecutionLayer {
               );
               if (auditFail) return auditFail;
               const gateCError = await this.buildTierGateError(
-                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger,
+                toolName, input, initiatingTier, manifest.action_risk, currentScore, options, skillLogger, sendPins,
               );
               return {
                 success: false,
@@ -1614,7 +1889,7 @@ export class ExecutionLayer {
             // No tier to feed buildTierGateError — pass an explicit sentinel label so the
             // escalation message and approval request read sensibly (tier 'unresolved').
             const gateCError = await this.buildTierGateError(
-              toolName, input, 'unresolved', manifest.action_risk, currentScore, options, skillLogger,
+              toolName, input, 'unresolved', manifest.action_risk, currentScore, options, skillLogger, sendPins,
             );
             return {
               success: false,
@@ -1862,9 +2137,23 @@ export class ExecutionLayer {
     // Skills declare which privileged services they need in manifest.capabilities.
     // The loader validates the names and freezes the manifest at startup.
     // We inject only the declared services — skills cannot escalate privilege.
-    const caps = manifest.capabilities ?? [];
-
     const capabilityServices = this.capabilityServiceMap(outboundGatewayForCtx);
+
+    // Optional capabilities (#2024) are injected when this layer has the service and
+    // skipped when it does not, so they never refuse the call. They join `caps` before
+    // the guards below, so every allowlist check applies to them as to required ones.
+    const declaredOptional = manifest.optional_capabilities ?? [];
+    const optionalCaps = declaredOptional
+      .filter(cap => this.missingCapabilities([cap], capabilityServices).length === 0);
+    if (optionalCaps.length < declaredOptional.length) {
+      // Expected where a deployment leaves a service out (the test-mode stack has no
+      // task repo); logged so a production wiring gap is findable.
+      skillLogger.debug(
+        { toolName, skippedOptionalCapabilities: declaredOptional.filter(cap => !optionalCaps.includes(cap)) },
+        'Optional capabilities not configured on ExecutionLayer — not injected',
+      );
+    }
+    const caps = [...(manifest.capabilities ?? []), ...optionalCaps];
 
     // Hard-restrict executionLayer to approve-action only.
     // executionLayer grants invoke() with humanApproved: true, which bypasses autonomy

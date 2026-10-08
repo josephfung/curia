@@ -1,6 +1,8 @@
-# Case 5 (#1956): changing an existing routine edits it in place. scheduler-create has
-# no duplicate check, so a create here makes the job fire twice. Rule:
-# agents/coordinator.yaml, "Scheduling and task management".
+# Case 5 (#1956): changing an existing routine edits it in place. A create at the new
+# time makes the job fire twice: scheduler-create refuses only an exact copy, and
+# flags a same-task job on another schedule without blocking it (#1960). Rule:
+# agents/coordinator.yaml, "Scheduling and task management", and the scheduler tools'
+# descriptions.
 #
 # Jobs are seeded through the scheduler-list stub, not real rows: the coordinator only
 # sees jobs through that tool, and a real row would be fired by any scheduler that
@@ -25,7 +27,7 @@ tool_stubs:
             status: active
             cronExpr: "0 9 * * 1"
             timezone: America/Toronto
-            nextRunAt: "2026-10-05T09:00:00-04:00"
+            nextRunAt: "{{time:next-monday 09:00}}"
             taskTitle: Weekly pipeline review
             intentAnchor: Weekly pipeline review — summarize open deals and stalled stages for the principal
             createdBy: coordinator

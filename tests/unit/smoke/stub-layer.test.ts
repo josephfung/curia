@@ -1,8 +1,44 @@
 // Smoke's tool stubs (#1956): a matching stub answers any agent's call; anything else
-// runs for real (smoke runs on a throwaway database copy).
+// runs for real (smoke runs on a throwaway database copy). Stubs belong to the case the
+// call was made in (#1980), so concurrent cases never answer or record each other's calls.
 import { describe, expect, it, vi } from 'vitest';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
-import { createSmokeStubs, mergeStubs } from '../../smoke/stub-layer.js';
+import { createCaseContext } from '../../shared/case-scope.js';
+import { createSmokeStubs as createStubsIn, mergeStubs, newSmokeCase, type SmokeCaseState } from '../../smoke/stub-layer.js';
+
+/**
+ * Stubs bound to a context, with one case already entered for the rest of the test, so
+ * the single-case tests below read as before. The concurrency tests make their own.
+ */
+function createSmokeStubs(): ReturnType<typeof createStubsIn> {
+  const context = createCaseContext<SmokeCaseState>();
+  const state = newSmokeCase('test case');
+  const stubs = createStubsIn(context);
+  // Each method runs inside the case. The async body runs synchronously up to its first
+  // await (there is none), so `result` is set before run() returns.
+  const inCase = <A extends unknown[], R>(fn: (...args: A) => R) => (...args: A): R => {
+    let result!: R;
+    void context.run(state, async () => { result = fn(...args); });
+    return result;
+  };
+  return {
+    wrap: (layer) => {
+      const wrapped = stubs.wrap(layer);
+      return new Proxy(wrapped, {
+        get(target, prop, receiver) {
+          if (prop === 'invoke') {
+            return (...args: Parameters<ExecutionLayer['invoke']>) => context.run(state, () => target.invoke(...args));
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+    },
+    set: inCase(stubs.set),
+    answer: inCase(stubs.answer),
+    clear: inCase(stubs.clear),
+    get orphanCalls() { return stubs.orphanCalls; },
+  };
+}
 
 function realLayer(): { layer: ExecutionLayer; invoke: ReturnType<typeof vi.fn> } {
   const invoke = vi.fn(async () => ({ success: true, data: 'real' }));
@@ -138,5 +174,79 @@ describe('calendar writes within a case', () => {
     stubs.set(fixture);
     const next = await wrapped.invoke('calendar-list-events', {}, undefined as never, opts('calendar') as never) as { data: { count: number } };
     expect(next.data.count).toBe(0);
+  });
+});
+
+describe('concurrent cases (#1980)', () => {
+  const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 1));
+
+  it('answer and record each call from its own case\'s stubs, interleaved', async () => {
+    const { layer } = realLayer();
+    const context = createCaseContext<SmokeCaseState>();
+    const stubs = createStubsIn(context);
+    const wrapped = stubs.wrap(layer);
+    const a = newSmokeCase('A');
+    const b = newSmokeCase('B');
+
+    const run = (state: SmokeCaseState, who: string) => context.run(state, async () => {
+      stubs.set({ 'scheduler-list': [{ match: {}, return: { jobs: [who] } }] });
+      const answers: unknown[] = [];
+      for (let i = 0; i < 3; i++) {
+        // Yield between calls so the two cases' calls interleave.
+        await tick();
+        const agent = i === 1 ? 'calendar' : 'coordinator'; // a delegated specialist too
+        answers.push(await wrapped.invoke('scheduler-list', {}, undefined as never, { agentId: agent, conversationId: `${who}-${i}` } as never));
+      }
+      return { answers, calls: stubs.clear() };
+    });
+
+    const [ra, rb] = await Promise.all([run(a, 'A'), run(b, 'B')]);
+    expect(ra.answers.every(r => JSON.stringify(r) === JSON.stringify({ success: true, data: { jobs: ['A'] } }))).toBe(true);
+    expect(rb.answers.every(r => JSON.stringify(r) === JSON.stringify({ success: true, data: { jobs: ['B'] } }))).toBe(true);
+    expect(ra.calls).toHaveLength(3);
+    expect(rb.calls).toHaveLength(3);
+    expect(ra.calls.map(c => c.agentId)).toEqual(['coordinator', 'calendar', 'coordinator']);
+  });
+
+  it('keep each case\'s calendar writes to itself', async () => {
+    const context = createCaseContext<SmokeCaseState>();
+    const stubs = createStubsIn(context);
+    const wrapped = stubs.wrap(realLayer().layer);
+    const fixture = {
+      'calendar-create-event': [{ match: {}, return: { event: { title: '{{input:title}}' } } }],
+      'calendar-list-events': [{ match: {}, return: { events: [] } }],
+    };
+    const call = (tool: string, input: Record<string, unknown>) => wrapped.invoke(tool, input, undefined as never, { agentId: 'calendar' } as never);
+    const a = newSmokeCase('A');
+    const b = newSmokeCase('B');
+    await context.run(a, async () => { stubs.set(fixture); await call('calendar-create-event', { title: 'A only' }); });
+    await context.run(b, async () => { stubs.set(fixture); });
+
+    const listed = (state: SmokeCaseState) => context.run(state, async () =>
+      (await call('calendar-list-events', {}) as { data: { events: Array<{ title: string }> } }).data.events.map(e => e.title));
+    expect(await listed(a)).toEqual(['A only']);
+    expect(await listed(b)).toEqual([]);
+  });
+
+  it('refuse a cancelled case\'s calls without running or recording them', async () => {
+    const { layer, invoke } = realLayer();
+    const context = createCaseContext<SmokeCaseState>();
+    const stubs = createStubsIn(context);
+    const wrapped = stubs.wrap(layer);
+    const state = newSmokeCase('timed out');
+    state.cancelled = true;
+    const result = await context.run(state, () => wrapped.invoke('web-fetch', {}, undefined as never, { agentId: 'research' } as never));
+    expect(result).toEqual({ success: false, error: expect.stringContaining('passed its timeout') });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(state.calls).toEqual([]);
+  });
+
+  it('run a call made outside every case for real, and count it', async () => {
+    const { layer, invoke } = realLayer();
+    const stubs = createStubsIn(createCaseContext<SmokeCaseState>());
+    await stubs.wrap(layer).invoke('a', {}, undefined as never, { agentId: 'x' } as never);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(stubs.orphanCalls).toBe(1);
+    expect(() => stubs.set({})).toThrow(/outside a case/);
   });
 });

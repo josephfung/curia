@@ -15,6 +15,10 @@ import type { SignalRpcClient } from '../../src/channels/signal/signal-rpc-clien
 
 const logger = pino({ level: 'silent' });
 
+// signal-send takes a contact reference (#2041): the skill looks the number up from
+// this contact's verified signal identity.
+const RECIPIENT_ID = '44444444-4444-4444-8444-444444444444';
+
 describe('outbound.delivered emission (#729)', () => {
   it('signal-send invocation publishes one outbound.delivered event with full payload', async () => {
     const bus = new EventBus(logger);
@@ -38,13 +42,18 @@ describe('outbound.delivered emission (#729)', () => {
     // createContact, linkIdentity, or setStatus calls are made).
     const contactService = {
       resolveByChannelIdentity: vi.fn().mockResolvedValue({
-        contactId: 'contact-int-1',
+        contactId: RECIPIENT_ID,
         displayName: 'Integration Test Recipient',
         role: null,
         tier: 'known',
         kgNodeId: null,
         verified: true,
       }),
+      getContactWithIdentities: vi.fn(async (id: string) => (id === RECIPIENT_ID ? {
+        contact: { id, displayName: 'Integration Test Recipient', primaryEmail: null, primaryPhone: '+15555550199', tier: 'known' },
+        identities: [{ id: 'identity-int-1', contactId: id, channel: 'signal', channelIdentifier: '+15555550199', label: null,
+          verified: true, verifiedAt: new Date(), status: 'active', source: 'ceo_stated', createdAt: new Date(), updatedAt: new Date() }],
+      } : undefined)),
     } as unknown as ContactService;
 
     // Mock OutboundContentFilter — passes all messages (no blocking in this test path).
@@ -99,7 +108,7 @@ describe('outbound.delivered emission (#729)', () => {
     // so taskEventId/conversationId must go in the fourth argument for them to reach the payload.
     const result = await executionLayer.invoke(
       'signal-send',
-      { recipient: '+15555550199', message: 'audit emission test body' },
+      { recipient: RECIPIENT_ID, message: 'audit emission test body' },
       undefined,
       {
         agentId: 'coordinator',
@@ -123,7 +132,7 @@ describe('outbound.delivered emission (#729)', () => {
     expect(deliveredEvents[0]!.payload).toMatchObject({
       channel: 'signal',
       recipientId: '+15555550199',
-      recipientContactId: 'contact-int-1',
+      recipientContactId: RECIPIENT_ID,
       content: 'audit emission test body',
       conversationId: 'signal:+15555550199',
       taskEventId: 'task-int-1',

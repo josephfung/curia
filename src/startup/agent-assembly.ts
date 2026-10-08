@@ -24,6 +24,7 @@ import type { AgentRegistry } from '../agents/agent-registry.js';
 import type { LLMProvider, LLMUsage, ToolDefinition } from '../agents/llm/provider.js';
 import type { ModelRouter, Tier } from '../agents/llm/model-router.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
+import { DEFAULT_SAFETY_MARGIN } from '../agents/llm/token-estimator.js';
 import { AutonomyService } from '../autonomy/autonomy-service.js';
 import type { OfficeIdentityService } from '../identity/service.js';
 import type { WorkingMemory } from '../memory/working-memory.js';
@@ -39,6 +40,7 @@ import {
   type PinResolution,
 } from '../skills/pin-resolution.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
+import { findPrimaryEmailIdentity } from '../agents/principal-contact-block.js';
 import type { ContactService } from '../contacts/contact-service.js';
 import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
 import type { WorkingDocsRepo } from '../db/working-docs-repo.js';
@@ -388,6 +390,32 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
 
   const binding = resolveAgentModelBinding(agentConfig, ctx.models);
 
+  // context_budget.response_reserve sizes the runtime's ContextBudget (the runtime
+  // defaults it to 8192 when absent). Reject a value that would mis-size it rather
+  // than letting it silently shrink or inflate the history allowance.
+  const responseReserve = agentConfig.context_budget?.response_reserve;
+  if (responseReserve !== undefined && !(Number.isInteger(responseReserve) && responseReserve > 0)) {
+    throw new AgentAssemblyError(
+      `context_budget.response_reserve must be a positive integer (agent '${agentConfig.name}')`,
+      agentConfig.name,
+      { responseReserve },
+    );
+  }
+  // ContextBudget subtracts the reserve and a safety margin from the resolved model's
+  // window with no floor, so a reserve that leaves nothing would yield a negative
+  // input budget on every turn. The model is registry-validated by the binding above.
+  const contextWindow = ctx.models.modelRegistry.getContextWindow(binding.resolvedModel);
+  if (responseReserve !== undefined && contextWindow !== undefined) {
+    const inputBudget = contextWindow - responseReserve - Math.ceil(contextWindow * DEFAULT_SAFETY_MARGIN);
+    if (inputBudget <= 0) {
+      throw new AgentAssemblyError(
+        `context_budget.response_reserve ${responseReserve} leaves no input budget in ${binding.resolvedModel}'s ${contextWindow}-token window (agent '${agentConfig.name}')`,
+        agentConfig.name,
+        { responseReserve, model: binding.resolvedModel, contextWindow },
+      );
+    }
+  }
+
   const runtimeConfig: AgentConfig = {
     // agentId, systemPrompt, and every field buildBaseSystemPrompt() reads — including
     // the coordinator-only gating. Decided in one place; see resolveSystemPromptSources.
@@ -409,6 +437,7 @@ export function assembleAgent(agentConfig: AgentYamlConfig, ctx: AgentAssemblyCo
     // Registry-backed context window lookups and cost estimation (DI so runtime is testable).
     modelRegistry: ctx.models.modelRegistry,
     estimateCostUsd: ctx.estimateCostUsd,
+    contextBudget: responseReserve !== undefined ? { responseReserve } : undefined,
     // Every owned mailbox. Email recall requires one of these on the thread
     // so a BCC (Curia absent from To/CC) cannot look like a 1:1 (#1599).
     selfEmails: ctx.selfEmails,
@@ -446,7 +475,7 @@ export function assembleAgents(
 /**
  * Read the principal's promptable identities: verified + active only. Shared by
  * the boot-time hot-reload in index.ts and the test-mode stack so the
- * "## Principal Contact Details" block is built from the same filter.
+ * "## Who you serve" section is built from the same filter.
  */
 export async function readPrincipalIdentitySnapshot(
   contactService: Pick<ContactService, 'getContactWithIdentities'>,
@@ -455,4 +484,28 @@ export async function readPrincipalIdentitySnapshot(
   const withIdentities = await contactService.getContactWithIdentities(principalContactId);
   const identities = (withIdentities?.identities ?? []).filter((id) => id.verified && id.status === 'active');
   return { identities, primaryEmail: withIdentities?.contact.primaryEmail ?? null };
+}
+
+/**
+ * Gaps in a principal identity snapshot that change what every agent's prompt says,
+ * as operator-facing messages. Empty when there are none. The prompt builder drops
+ * these cases quietly by design (it must never render a complete-set claim over
+ * nothing, or an unverified address), so the boot-time refresh in index.ts logs
+ * them and the test-mode stack reports them in its warnings. Both call this, so the
+ * check cannot differ between production and the harnesses that render its prompt.
+ */
+export function principalIdentitySnapshotGaps(
+  snapshot: { identities: readonly ChannelIdentity[]; primaryEmail: string | null },
+): string[] {
+  if (snapshot.identities.length === 0) {
+    return [
+      'The principal has no verified, active channel identities: every agent runs without the ## Who you serve section until one is verified.',
+    ];
+  }
+  if (snapshot.primaryEmail && !findPrimaryEmailIdentity(snapshot.identities, snapshot.primaryEmail)) {
+    return [
+      'The principal\'s primary_email matches no verified, active email identity: agents see no primary email until it is verified or changed.',
+    ];
+  }
+  return [];
 }

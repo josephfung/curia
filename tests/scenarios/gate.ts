@@ -1,4 +1,5 @@
 // tests/scenarios/gate.ts — pass rates and the release gate.
+import { sumBreakdowns } from '../shared/usage.js';
 import {
   CRITICAL_PASS_THRESHOLD,
   RATING_VALUES,
@@ -62,6 +63,7 @@ export function scoreCase(
     judgeErrors: runs.filter((_, i) =>
       results.some(r => r.ratings[i]!.justification.startsWith(JUDGE_ERROR_PREFIX)),
     ).length,
+    usage: sumBreakdowns(runs.map(r => r.usage)),
   };
 }
 

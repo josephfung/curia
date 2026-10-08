@@ -106,6 +106,10 @@ export function extractSystemPromptLineMarkers(systemPrompt: string): string[] {
  *                     lines are extracted — this is the primary exfiltration target.
  *                     The parameter is generic so the same extractor can cover any
  *                     agent whose output is filtered.
+ * @param injectedGuidance Instruction text the platform injects outside the system
+ *                     prompt — trigger guidance in the user message, tool results and
+ *                     task payloads (#1959). Lines are extracted exactly as for the
+ *                     system prompt, so moving a rule out of the prompt keeps it scanned.
  *
  * Deliberately excludes "${name}, ${title}" — that is the standard email signature
  * and would false-positive on every outbound message.
@@ -113,6 +117,7 @@ export function extractSystemPromptLineMarkers(systemPrompt: string): string[] {
 export function extractPromptExfiltrationMarkers(
   identity: OfficeIdentity,
   systemPrompt?: string,
+  injectedGuidance: readonly string[] = [],
 ): string[] {
   const markers: string[] = [];
 
@@ -147,6 +152,9 @@ export function extractPromptExfiltrationMarkers(
   // the markers track any operator customization of the prompt.
   if (systemPrompt) {
     markers.push(...extractSystemPromptLineMarkers(systemPrompt));
+  }
+  for (const guidance of injectedGuidance) {
+    markers.push(...extractSystemPromptLineMarkers(guidance));
   }
 
   // Deduplicate while preserving order (a constraint may also appear as a prompt line).

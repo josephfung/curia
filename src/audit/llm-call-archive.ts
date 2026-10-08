@@ -12,6 +12,7 @@ import type { LlmCallArchiveContent } from '../bus/events.js';
 import type { Logger } from '../logger.js';
 import { scrubPii } from '../pii/scrubber.js';
 import { createSecretPatterns } from '../security/secret-patterns.js';
+import { stripNullBytes } from './strip-null-bytes.js';
 
 export type { LlmCallArchiveContent };
 
@@ -69,26 +70,58 @@ function redactString(text: string, secretPatterns: RegExp[]): string {
   return scrubPii(result);
 }
 
+export interface WriteLlmCallArchiveOptions {
+  /**
+   * When false, the reasoning string is omitted from the stored response.
+   * Token counts and reasoningOmitted stay. Default true.
+   */
+  includeReasoning?: boolean;
+}
+
+/**
+ * Drop the reasoning string from a plain-object response. Other fields,
+ * including reasoningTokens and reasoningOmitted, stay. The caller's object
+ * is not mutated.
+ */
+function withoutReasoningText(response: unknown, includeReasoning: boolean): unknown {
+  if (includeReasoning) return response;
+  if (response === null || typeof response !== 'object' || Array.isArray(response)) return response;
+  if (Object.getPrototypeOf(response) !== Object.prototype) return response;
+  if (!Object.prototype.hasOwnProperty.call(response, 'reasoning')) return response;
+  const copy = { ...(response as Record<string, unknown>) };
+  delete copy.reasoning;
+  return copy;
+}
+
 /**
  * INSERT a redacted archive row on the given client (must be inside the caller's
  * transaction with the matching audit_log INSERT). Returns false when redaction
  * failed and the archive write was skipped.
+ *
+ * Null bytes are stripped before redaction and before the INSERT. Postgres
+ * jsonb rejects U+0000, and a failed INSERT rolls back the audit_log row that
+ * shares this transaction.
  */
 export async function writeLlmCallArchive(
   client: PoolClient,
   auditEventId: string,
   content: LlmCallArchiveContent,
   logger: Logger,
+  options?: WriteLlmCallArchiveOptions,
 ): Promise<boolean> {
+  const includeReasoning = options?.includeReasoning !== false;
   let prompt: unknown;
   let response: unknown;
   let toolDefinitions: unknown = null;
 
   try {
-    prompt = redactArchiveContent(content.prompt);
-    response = redactArchiveContent(content.response);
+    // Strip before redaction so a NUL cannot split a secret across a pattern.
+    prompt = redactArchiveContent(stripNullBytes(content.prompt));
+    response = redactArchiveContent(
+      stripNullBytes(withoutReasoningText(content.response, includeReasoning)),
+    );
     if (content.toolDefinitions !== undefined) {
-      toolDefinitions = redactArchiveContent(content.toolDefinitions);
+      toolDefinitions = redactArchiveContent(stripNullBytes(content.toolDefinitions));
     }
   } catch (err) {
     logger.error(

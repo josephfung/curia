@@ -1,7 +1,7 @@
 {
   "name": "scheduler-update",
-  "description": "Modify an existing scheduled job by its ID. action=resume brings a suspended (failed) or paused (drift) job back to active; action=pause holds an active job; action=edit changes its cron_expr, run_at, or task_payload. Get the job_id from scheduler-list.",
-  "version": "0.1.1",
+  "description": "Modify an existing scheduled job by its ID. action=resume brings a suspended (failed) or paused (drift) job back to active; action=pause holds an active job; action=edit changes the job in place. Use edit, not scheduler-create, when asked to change a routine: a new time, reworded instructions, an added recipient. On a recurring job, change the cadence with cron_expr. run_at is for one-shot jobs: on a recurring job it moves only the next run and leaves the cron unchanged, so the reschedule does not stick. Pass task_payload to reword what the job does. Edit overwrites the job's schedule and task. It never adds a run, so a request for an additional run is scheduler-create. Get the job_id from scheduler-list. If more than one active job could be the one meant, ask which, citing each one's time, before editing. Afterwards, say what changed on the existing schedule.",
+  "version": "0.1.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

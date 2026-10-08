@@ -12,9 +12,10 @@
 
 import { createHash } from 'node:crypto';
 import type { EventBus } from '../bus/bus.js';
-import type { LLMProvider, LLMUsage, LLMCallProvenance } from '../agents/llm/provider.js';
+import type { LLMProvider, LLMResponse, LLMUsage } from '../agents/llm/provider.js';
 import type { ModelRouter } from '../agents/llm/model-router.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
+import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import type { Logger } from '../logger.js';
@@ -112,7 +113,7 @@ export class InfraLlmService {
       return { ok: false, error: errorMsg };
     }
 
-    await this.publishTelemetry(response.usage, response.provenance, latencyMs, prompt, response.content, scope);
+    await this.publishTelemetry(response, latencyMs, prompt, scope);
     return { ok: true, text: response.content };
   }
 
@@ -165,20 +166,19 @@ export class InfraLlmService {
       return { ok: false, error: errorMsg };
     }
 
-    await this.publishTelemetry(response.usage, response.provenance, latencyMs, prompt, response.content, scope, options?.image);
+    await this.publishTelemetry(response, latencyMs, prompt, scope, options?.image);
     return { ok: true, text: response.content };
   }
 
   private async publishTelemetry(
-    usage: LLMUsage,
-    provenance: LLMCallProvenance,
+    response: Extract<LLMResponse, { type: 'text' }>,
     latencyMs: number,
     prompt: string,
-    responseText: string,
     scope: InfraLlmScope,
     image?: { base64: string; mediaType: string },
   ): Promise<void> {
     try {
+      const { usage, provenance } = response;
       // Include image data in the hash when present — without this, two different
       // images with the same text prompt would produce identical promptHash values,
       // breaking audit traceability for vision calls.
@@ -188,7 +188,7 @@ export class InfraLlmService {
         hasher.update(image.base64);
       }
       const promptHash = hasher.digest('hex');
-      const responseHash = createHash('sha256').update(responseText).digest('hex');
+      const responseHash = createHash('sha256').update(response.content).digest('hex');
 
       const event = createLlmCall({
         agentId: scope.agentId ?? `skill:${scope.toolName}`,
@@ -205,12 +205,14 @@ export class InfraLlmService {
         providerRequestId: provenance.providerRequestId,
         promptHash,
         responseHash,
+        // Infra extract calls do not set temperature — record the omission.
+        temperature: null,
         parentEventId: scope.taskEventId ?? 'system',
         archive: {
           prompt: image
             ? { text: prompt, image: { mediaType: image.mediaType, base64: '[omitted from archive — binary]' } }
             : { text: prompt },
-          response: { type: 'text', content: responseText },
+          response: buildLlmArchiveResponse(response),
         },
       });
 

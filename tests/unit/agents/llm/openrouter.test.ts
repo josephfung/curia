@@ -5,7 +5,7 @@
 // vi.mock to stub the SDK, and createSilentLogger for silent logging.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OpenRouterProvider } from '../../../../src/agents/llm/openrouter.js';
+import { OpenRouterProvider, usageFromOpenRouter } from '../../../../src/agents/llm/openrouter.js';
 import { ModelRegistry } from '../../../../src/agents/llm/model-registry.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 import type { LLMStreamEvent } from '../../../../src/agents/llm/provider.js';
@@ -87,12 +87,13 @@ describe('OpenRouterProvider', () => {
     // Content
     expect(result.content).toBe('hello from openrouter');
 
-    // Usage — cache tokens always 0 for OpenRouter
+    // Usage — no prompt_tokens_details, so no cache tokens
     expect(result.usage).toEqual({
       inputTokens: 10,
       outputTokens: 5,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 0,
+      reasoningTokens: 0,
     });
 
     // Provenance
@@ -473,6 +474,172 @@ describe('OpenRouterProvider', () => {
   });
 });
 
+// Usage payloads in OpenRouter's documented shape (openrouter.ai/docs: prompt
+// caching and usage accounting). prompt_tokens is the whole prompt; the cached
+// share is broken out in prompt_tokens_details (#1962).
+const CACHE_HIT_USAGE = {
+  prompt_tokens: 10339,
+  completion_tokens: 60,
+  total_tokens: 10399,
+  prompt_tokens_details: { cached_tokens: 10318, cache_write_tokens: 0 },
+};
+const CACHE_WRITE_USAGE = {
+  prompt_tokens: 194,
+  completion_tokens: 2,
+  total_tokens: 196,
+  completion_tokens_details: { reasoning_tokens: 0 },
+  prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 100, audio_tokens: 0 },
+  cost: 0.95,
+};
+
+describe('usageFromOpenRouter', () => {
+  it('splits cache reads out of prompt_tokens on a cached completion', () => {
+    expect(usageFromOpenRouter(CACHE_HIT_USAGE)).toEqual({
+      inputTokens: 21,
+      outputTokens: 60,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 10318,
+      reasoningTokens: 0,
+    });
+  });
+
+  it('splits cache writes out of prompt_tokens', () => {
+    expect(usageFromOpenRouter(CACHE_WRITE_USAGE)).toEqual({
+      inputTokens: 94,
+      outputTokens: 2,
+      cacheCreationInputTokens: 100,
+      cacheReadInputTokens: 0,
+      reasoningTokens: 0,
+    });
+  });
+
+  it('reports all input as uncached when prompt_tokens_details is absent', () => {
+    expect(usageFromOpenRouter({ prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 })).toEqual({
+      inputTokens: 12,
+      outputTokens: 5,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      reasoningTokens: 0,
+    });
+  });
+
+  it('never reports negative input when cached counts exceed prompt_tokens', () => {
+    const usage = usageFromOpenRouter({
+      prompt_tokens: 10,
+      completion_tokens: 1,
+      total_tokens: 11,
+      prompt_tokens_details: { cached_tokens: 8, cache_write_tokens: 8 } as { cached_tokens: number },
+    });
+    expect(usage.inputTokens).toBe(0);
+    expect(usage.cacheReadInputTokens).toBe(8);
+    expect(usage.cacheCreationInputTokens).toBe(8);
+  });
+
+  it('returns zeros for missing usage', () => {
+    expect(usageFromOpenRouter(undefined)).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      reasoningTokens: 0,
+    });
+  });
+
+  it('records reasoning_tokens without removing them from outputTokens', () => {
+    expect(usageFromOpenRouter({
+      prompt_tokens: 10,
+      completion_tokens: 50,
+      total_tokens: 60,
+      completion_tokens_details: { reasoning_tokens: 42 },
+    })).toMatchObject({ outputTokens: 50, reasoningTokens: 42 });
+  });
+});
+
+describe('OpenRouterProvider — cache usage', () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  it('reports cache reads from chat() on a text response', async () => {
+    mockCreate.mockResolvedValue({ ...makeTextResponse(), usage: CACHE_HIT_USAGE });
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'google/gemini-2.0-flash-001',
+    });
+    expect(result.type).toBe('text');
+    if (result.type !== 'text') return;
+    expect(result.usage.cacheReadInputTokens).toBe(10318);
+    expect(result.usage.inputTokens).toBe(21);
+  });
+
+  it('reports cache reads from chat() on a tool_use response', async () => {
+    const response = makeTextResponse();
+    mockCreate.mockResolvedValue({
+      ...response,
+      choices: [{
+        ...response.choices[0]!,
+        finish_reason: 'tool_calls' as const,
+        message: {
+          ...response.choices[0]!.message,
+          content: null,
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+        },
+      }],
+      usage: CACHE_HIT_USAGE,
+    });
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const result = await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'google/gemini-2.0-flash-001',
+    });
+    expect(result.type).toBe('tool_use');
+    if (result.type !== 'tool_use') return;
+    expect(result.usage.cacheReadInputTokens).toBe(10318);
+  });
+
+  it('reports cache reads and writes from stream()', async () => {
+    mockCreate.mockResolvedValue(makeStream([
+      {
+        id: 'chatcmpl-stream-cache',
+        model: 'deepseek/deepseek-v4.1-flash',
+        choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop', logprobs: null }],
+        usage: null,
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+      {
+        id: 'chatcmpl-stream-cache',
+        model: 'deepseek/deepseek-v4.1-flash',
+        choices: [],
+        usage: {
+          prompt_tokens: 5000,
+          completion_tokens: 40,
+          total_tokens: 5040,
+          prompt_tokens_details: { cached_tokens: 4000, cache_write_tokens: 600 },
+        },
+        object: 'chat.completion.chunk',
+        created: 1700000000,
+      },
+    ]));
+    const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+    const events = await collectStream(provider.stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: 'deepseek/deepseek-v4.1-flash',
+    }));
+    const end = events.at(-1);
+    expect(end?.type).toBe('message_end');
+    if (end?.type !== 'message_end') return;
+    expect(end.usage).toEqual({
+      inputTokens: 400,
+      outputTokens: 40,
+      cacheCreationInputTokens: 600,
+      cacheReadInputTokens: 4000,
+      reasoningTokens: 0,
+    });
+  });
+});
+
 describe('OpenRouterProvider — stream', () => {
   beforeEach(() => {
     mockCreate.mockReset();
@@ -518,7 +685,7 @@ describe('OpenRouterProvider — stream', () => {
       {
         type: 'message_end',
         content: 'hello',
-        usage: { inputTokens: 12, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        usage: { inputTokens: 12, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, reasoningTokens: 0 },
         provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-123' },
       },
     ]);
@@ -586,8 +753,95 @@ describe('OpenRouterProvider — stream', () => {
       type: 'tool_use',
       toolCalls: [{ id: 'call_1', name: 'search', input: { query: 'curia' } }],
       content: 'Checking. ',
-      usage: { inputTokens: 22, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      usage: { inputTokens: 22, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, reasoningTokens: 0 },
       provenance: { requestedModel: 'openai/gpt-4o', actualModel: 'openai/gpt-4o', providerRequestId: 'chatcmpl-stream-tool' },
+    });
+  });
+
+  describe('temperature', () => {
+    it('sends temperature on chat when options.temperature is a finite number', async () => {
+      const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      await provider.chat({
+        model: 'google/gemini-2.0-flash-001',
+        messages: [{ role: 'user', content: 'Hello' }],
+        options: { temperature: 0 },
+      });
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params.temperature).toBe(0);
+    });
+
+    it('omits temperature on chat when options.temperature is unset', async () => {
+      const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      await provider.chat({
+        model: 'google/gemini-2.0-flash-001',
+        messages: [{ role: 'user', content: 'Hello' }],
+      });
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params).not.toHaveProperty('temperature');
+    });
+
+    it('warns and omits temperature when options.temperature is non-numeric', async () => {
+      const logger = createSilentLogger();
+      const warn = vi.spyOn(logger, 'warn');
+      const provider = new OpenRouterProvider('test-key', logger, new ModelRegistry(createSilentLogger()));
+      await provider.chat({
+        model: 'google/gemini-2.0-flash-001',
+        messages: [{ role: 'user', content: 'Hello' }],
+        options: { temperature: 'hot' },
+      });
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params).not.toHaveProperty('temperature');
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ temperature: 'hot' }),
+        expect.stringContaining('non-numeric options.temperature'),
+      );
+    });
+
+    it('sends temperature on the streaming path when set', async () => {
+      mockCreate.mockResolvedValue(makeStream([
+        {
+          id: 'chatcmpl-temp',
+          model: 'openai/gpt-4o',
+          choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop', logprobs: null }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          object: 'chat.completion.chunk',
+          created: 1700000000,
+        },
+      ]));
+      const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      await collectStream(provider.stream({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: 'openai/gpt-4o',
+        options: { temperature: 0 },
+      }));
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params.temperature).toBe(0);
+      expect(params.stream).toBe(true);
+    });
+
+    it('omits temperature on the streaming path when unset', async () => {
+      mockCreate.mockResolvedValue(makeStream([
+        {
+          id: 'chatcmpl-temp-unset',
+          model: 'openai/gpt-4o',
+          choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: 'stop', logprobs: null }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          object: 'chat.completion.chunk',
+          created: 1700000000,
+        },
+      ]));
+      const provider = new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+      await collectStream(provider.stream({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: 'openai/gpt-4o',
+      }));
+
+      const params = mockCreate.mock.calls[0]![0];
+      expect(params).not.toHaveProperty('temperature');
     });
   });
 
@@ -679,5 +933,261 @@ describe('OpenRouterProvider — stream', () => {
 
     expect(stream.controller.abort).toHaveBeenCalledTimes(1);
     expect(events.at(-1)).toMatchObject({ type: 'error' });
+  });
+});
+
+const REASONING_MODEL = 'deepseek/deepseek-v4.1-flash';
+
+function reasoningUsage(reasoningTokens: number) {
+  return {
+    prompt_tokens: 10,
+    completion_tokens: 20,
+    total_tokens: 30,
+    completion_tokens_details: { reasoning_tokens: reasoningTokens },
+  };
+}
+
+function chatCompletion(message: Record<string, unknown>, reasoningTokens: number, finish: 'stop' | 'tool_calls' = 'stop') {
+  return {
+    id: 'chatcmpl-reason',
+    model: REASONING_MODEL,
+    choices: [{
+      index: 0,
+      finish_reason: finish,
+      message: {
+        role: 'assistant',
+        content: 'done',
+        refusal: null,
+        ...message,
+      },
+      logprobs: null,
+    }],
+    usage: reasoningUsage(reasoningTokens),
+    object: 'chat.completion' as const,
+    created: 1700000000,
+  };
+}
+
+function streamChunks(
+  deltas: Array<Record<string, unknown>>,
+  reasoningTokens: number,
+  finish: 'stop' | 'tool_calls',
+) {
+  const contentDeltas = deltas.length > 0 ? deltas : [{}];
+  return makeStream([
+    ...contentDeltas.map((delta, index) => ({
+      id: 'chatcmpl-reason-stream',
+      model: REASONING_MODEL,
+      choices: [{
+        index: 0,
+        delta,
+        finish_reason: index === contentDeltas.length - 1 ? finish : null,
+        logprobs: null,
+      }],
+      usage: null,
+      object: 'chat.completion.chunk',
+      created: 1700000000,
+    })),
+    {
+      id: 'chatcmpl-reason-stream',
+      model: REASONING_MODEL,
+      choices: [],
+      usage: reasoningUsage(reasoningTokens),
+      object: 'chat.completion.chunk',
+      created: 1700000000,
+    },
+  ]);
+}
+
+describe('OpenRouterProvider — reasoning (#2042)', () => {
+  const provider = () => new OpenRouterProvider('test-key', createSilentLogger(), new ModelRegistry(createSilentLogger()));
+
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  describe.each(['text', 'tool_use'] as const)('%s', (kind) => {
+    const toolMessage = kind === 'tool_use'
+      ? {
+          content: 'Checking the thread.',
+          tool_calls: [{
+            id: 'call_reason',
+            type: 'function',
+            function: { name: 'email-send', arguments: '{"to":"a@b.test"}' },
+          }],
+        }
+      : { content: 'The answer is 4.' };
+
+    const toolDeltas = kind === 'tool_use'
+      ? [
+          { content: 'Checking the thread.' },
+          {
+            tool_calls: [{
+              index: 0,
+              id: 'call_reason',
+              type: 'function',
+              function: { name: 'email-send', arguments: '{"to":"a@b.test"}' },
+            }],
+          },
+        ]
+      : [{ content: 'The answer is 4.' }];
+
+    const finish = kind === 'tool_use' ? 'tool_calls' as const : 'stop' as const;
+
+    async function read(extras: Array<Record<string, unknown>>, reasoningTokens: number) {
+      mockCreate.mockResolvedValueOnce(chatCompletion({ ...toolMessage, ...extras[0] }, reasoningTokens, finish));
+      const chat = await provider().chat({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: REASONING_MODEL,
+      });
+      mockCreate.mockResolvedValueOnce(streamChunks(
+        toolDeltas.map((delta, index) => ({ ...delta, ...(extras[index] ?? {}) })),
+        reasoningTokens,
+        finish,
+      ));
+      const events = await collectStream(provider().stream({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: REASONING_MODEL,
+      }));
+      const streamed = events.at(-1);
+      return { chat, streamed };
+    }
+
+    it('reads message.reasoning and the reasoning-token count on chat and stream', async () => {
+      const reasoningDelta = kind === 'tool_use'
+        ? [{ reasoning: 'Look up ' }, { reasoning: 'the address.' }]
+        : [{ reasoning: 'Add the numbers.' }];
+      const { chat, streamed } = await read(
+        kind === 'tool_use'
+          ? [{ reasoning: 'Look up the address.' }, {}]
+          : [{ reasoning: 'Add the numbers.' }],
+        11,
+      );
+      // Re-run stream with split reasoning deltas. The shared helper puts the
+      // whole string on the first chat message and the first stream delta.
+      mockCreate.mockReset();
+      mockCreate.mockResolvedValueOnce(streamChunks(
+        toolDeltas.map((delta, index) => ({ ...delta, ...(reasoningDelta[index] ?? {}) })),
+        11,
+        finish,
+      ));
+      const split = await collectStream(provider().stream({
+        messages: [{ role: 'user', content: 'Hello' }],
+        model: REASONING_MODEL,
+      }));
+
+      for (const result of [chat, streamed, split.at(-1)]) {
+        expect(result && 'reasoning' in result ? result.reasoning : undefined).toBe(
+          kind === 'tool_use' ? 'Look up the address.' : 'Add the numbers.',
+        );
+        expect(result && 'usage' in result ? result.usage?.reasoningTokens : undefined).toBe(11);
+        expect(result && 'reasoningOmitted' in result ? result.reasoningOmitted : undefined).toBeUndefined();
+      }
+      if (kind === 'tool_use') {
+        expect(chat).toMatchObject({ type: 'tool_use', content: 'Checking the thread.' });
+        expect(streamed).toMatchObject({ type: 'tool_use', content: 'Checking the thread.' });
+      } else {
+        expect(chat).toMatchObject({ type: 'text', content: 'The answer is 4.' });
+        expect(streamed).toMatchObject({ type: 'message_end', content: 'The answer is 4.' });
+      }
+    });
+
+    it('falls back to reasoning_details text and summary when message.reasoning is absent', async () => {
+      const details = [
+        { type: 'reasoning.summary', summary: 'Short version.', id: 'sum-1' },
+        { type: 'reasoning.text', text: 'Longer trace.', id: 'txt-1' },
+      ];
+      const { chat, streamed } = await read(
+        [{ reasoning_details: details }, { reasoning_details: [{ type: 'reasoning.text', text: ' continues', id: 'txt-1' }] }],
+        6,
+      );
+      expect(chat).toMatchObject({
+        reasoning: 'Short version.\nLonger trace.',
+        usage: { reasoningTokens: 6 },
+      });
+      // Tool-use streams a second delta that continues the same text block.
+      // A text response has one delta, so it keeps the two complete entries.
+      expect(streamed).toMatchObject({
+        reasoning: kind === 'tool_use'
+          ? 'Short version.\nLonger trace. continues'
+          : 'Short version.\nLonger trace.',
+        usage: { reasoningTokens: 6 },
+      });
+    });
+
+    it('records encrypted-only details without storing the ciphertext', async () => {
+      const { chat, streamed } = await read(
+        [{
+          reasoning_details: [{ type: 'reasoning.encrypted', data: 'CIPHERTEXT-DO-NOT-STORE', id: 'enc-1' }],
+        }],
+        8,
+      );
+      for (const result of [chat, streamed]) {
+        expect(result).toMatchObject({ reasoningOmitted: 'encrypted', usage: { reasoningTokens: 8 } });
+        expect(result && 'reasoning' in result ? result.reasoning : undefined).toBeUndefined();
+        expect(JSON.stringify(result)).not.toContain('CIPHERTEXT-DO-NOT-STORE');
+      }
+    });
+
+    it('records nothing when the model returned no reasoning', async () => {
+      const { chat, streamed } = await read([{}], 0);
+      for (const result of [chat, streamed]) {
+        expect(result && 'reasoning' in result ? result.reasoning : undefined).toBeUndefined();
+        expect(result && 'reasoningOmitted' in result ? result.reasoningOmitted : undefined).toBeUndefined();
+        expect(result && 'usage' in result ? result.usage?.reasoningTokens : undefined).toBe(0);
+      }
+    });
+  });
+
+  it('records an empty omission when reasoning tokens arrive with no text', async () => {
+    mockCreate.mockResolvedValue(streamChunks([{ content: 'ok' }], 5, 'stop'));
+    const events = await collectStream(provider().stream({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: REASONING_MODEL,
+    }));
+    const end = events.at(-1);
+    expect(end).toMatchObject({ type: 'message_end', reasoningOmitted: 'empty', usage: { reasoningTokens: 5 } });
+    expect(end && 'reasoning' in end ? end.reasoning : undefined).toBeUndefined();
+  });
+
+  it('prefers message.reasoning over reasoning_details', async () => {
+    mockCreate.mockResolvedValue(chatCompletion({
+      content: '4',
+      reasoning: 'from the field',
+      reasoning_details: [{ type: 'reasoning.text', text: 'from the details', id: 'txt-1' }],
+    }, 3));
+    const result = await provider().chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      model: REASONING_MODEL,
+    });
+    expect(result).toMatchObject({ reasoning: 'from the field' });
+  });
+
+  it('warns once per model when reasoning tokens come back with no readable text', async () => {
+    const warn = vi.fn();
+    const logger = {
+      debug: vi.fn(), info: vi.fn(), warn, error: vi.fn(), fatal: vi.fn(), trace: vi.fn(),
+      child() { return logger; },
+    } as unknown as import('../../../../src/logger.js').Logger;
+    const omitting = new OpenRouterProvider('test-key', logger, new ModelRegistry(logger));
+    const empty = chatCompletion({ content: 'ok' }, 4);
+    empty.model = 'deepseek/deepseek-v4-pro-0813';
+    mockCreate.mockResolvedValue(empty);
+    await omitting.chat({ messages: [{ role: 'user', content: 'Hello' }], model: 'deepseek/deepseek-v4-pro-0813' });
+    await omitting.chat({ messages: [{ role: 'user', content: 'Hello' }], model: 'deepseek/deepseek-v4-pro-0813' });
+    const encrypted = chatCompletion({
+      content: 'ok',
+      reasoning_details: [{ type: 'reasoning.encrypted', data: 'sealed' }],
+    }, 2);
+    encrypted.model = 'deepseek/deepseek-v4-pro';
+    mockCreate.mockResolvedValue(encrypted);
+    await omitting.chat({ messages: [{ role: 'user', content: 'Hello' }], model: 'deepseek/deepseek-v4-pro' });
+
+    const omissionWarns = warn.mock.calls.filter((call) =>
+      String(call[1]).includes('no readable reasoning'),
+    );
+    expect(omissionWarns).toHaveLength(2);
+    expect(omissionWarns[0]?.[0]).toMatchObject({ model: 'deepseek/deepseek-v4-pro-0813', reasoningOmitted: 'empty' });
+    expect(omissionWarns[1]?.[0]).toMatchObject({ model: 'deepseek/deepseek-v4-pro', reasoningOmitted: 'encrypted' });
   });
 });

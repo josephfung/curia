@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateReport } from '../../smoke/report.js';
 import type { RunResult, HistoricalEntry } from '../../smoke/types.js';
+import { emptyBreakdown } from '../../shared/usage.js';
 
 describe('Report generator', () => {
   const mockRun: RunResult = {
@@ -12,6 +13,10 @@ describe('Report generator', () => {
     durationMs: 45000,
     overallScore: 0.65,
     passed: false,
+    concurrency: 4,
+    today: 'Wednesday, March 25, 2026 (America/Toronto)',
+    usage: { ...emptyBreakdown(), total: { calls: 3, inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, estimatedCostUsd: 1.5 } },
+    overheadUsage: emptyBreakdown(),
     cases: [
       {
         testCase: {
@@ -39,6 +44,8 @@ describe('Report generator', () => {
         agentCalls: [],
         passed: true,
         failures: [],
+        usage: emptyBreakdown(),
+        providerRetries: [],
       },
       {
         testCase: {
@@ -59,6 +66,8 @@ describe('Report generator', () => {
         agentCalls: [],
         passed: false,
         failures: ['did not complete: Timeout'],
+        usage: emptyBreakdown(),
+        providerRetries: [],
       },
     ],
   };
@@ -67,6 +76,10 @@ describe('Report generator', () => {
     const html = generateReport(mockRun);
     expect(html).toContain('did not complete: Timeout');
     expect(html).toContain('contact-lookup (failed)');
+  });
+
+  it('shows the run\'s estimated model spend', () => {
+    expect(generateReport(mockRun)).toContain('Estimated model spend: $1.50');
   });
 
   it('labels each case with the gate verdict, including retries and known failures', () => {

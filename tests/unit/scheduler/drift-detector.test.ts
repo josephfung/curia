@@ -65,6 +65,24 @@ describe('DriftDetector', () => {
       expect(result).toEqual({ drifted: false, reason: 'Task is aligned with original intent.', confidence: 'high' });
     });
 
+    it('requests temperature 0 so the provider builds a deterministic verdict call (#2038)', async () => {
+      const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
+      vi.mocked(provider.chat).mockResolvedValueOnce({
+        type: 'text',
+        content: '{"drifted":false,"reason":"Aligned.","confidence":"high"}',
+        usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: { requestedModel: 'test', actualModel: 'test', providerRequestId: 'test' },
+      });
+
+      await detector.check(params);
+
+      expect(provider.chat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          options: expect.objectContaining({ temperature: 0 }),
+        }),
+      );
+    });
+
     it('returns the verdict when LLM says drift detected', async () => {
       const detector = new DriftDetector(provider, defaultConfig, logger as unknown as Logger);
       vi.mocked(provider.chat).mockResolvedValueOnce({

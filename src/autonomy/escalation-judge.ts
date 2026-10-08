@@ -15,10 +15,11 @@
 // decision='escalate' and a reason string suitable for audit logging.
 
 import { createHash } from 'node:crypto';
-import type { LLMProvider, LLMUsage, LLMCallProvenance } from '../agents/llm/provider.js';
+import type { LLMProvider, LLMUsage, LLMCallProvenance, ReasoningOmission } from '../agents/llm/provider.js';
 import type { ModelRegistry } from '../agents/llm/model-registry.js';
 import type { EventBus } from '../bus/bus.js';
 import type { Logger } from '../logger.js';
+import { buildLlmArchiveResponse } from '../audit/llm-archive-response.js';
 import { createLlmCall } from '../bus/events.js';
 import { createEstimateCostUsd } from '../agents/llm/pricing.js';
 import type { ContactTier } from '../contacts/types.js';
@@ -85,6 +86,9 @@ export interface EscalationVerdict {
 
 const TIMEOUT = Symbol('escalation-judge-timeout');
 
+/** Deterministic verdict sampling — used for both the chat() call and llm.call audit. */
+const JUDGE_TEMPERATURE = 0;
+
 type LlmKind = 'disclosure' | 'action';
 
 interface LlmCallResult {
@@ -92,6 +96,8 @@ interface LlmCallResult {
   usage: LLMUsage;
   provenance: LLMCallProvenance;
   latencyMs: number;
+  reasoning?: string;
+  reasoningOmitted?: ReasoningOmission;
 }
 
 export class EscalationJudge {
@@ -222,7 +228,7 @@ export class EscalationJudge {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        options: { temperature: 0, max_tokens: maxTokens, signal: controller.signal },
+        options: { temperature: JUDGE_TEMPERATURE, max_tokens: maxTokens, signal: controller.signal },
       });
       // Suppress unhandled-rejection for post-timeout orphaned provider calls.
       // The primary error path is the outer catch; this handles the late-rejection race edge case.
@@ -257,6 +263,8 @@ export class EscalationJudge {
         usage: raced.usage,
         provenance: raced.provenance,
         latencyMs: Date.now() - start,
+        reasoning: raced.reasoning,
+        reasoningOmitted: raced.reasoningOmitted,
       };
     } catch (err) {
       // Provider threw despite the non-throwing contract — treat as a gate failure and escalate.
@@ -290,13 +298,20 @@ export class EscalationJudge {
         providerRequestId: result.provenance.providerRequestId,
         promptHash: createHash('sha256').update(userPrompt).digest('hex'),
         responseHash: createHash('sha256').update(result.content).digest('hex'),
+        temperature: JUDGE_TEMPERATURE,
         parentEventId: 'system',
         archive: {
           prompt: {
             system: kind === 'disclosure' ? DISCLOSURE_SYSTEM_PROMPT : ACTION_SYSTEM_PROMPT,
             user: userPrompt,
           },
-          response: { type: 'text', content: result.content },
+          response: buildLlmArchiveResponse({
+            type: 'text',
+            content: result.content,
+            usage: result.usage,
+            reasoning: result.reasoning,
+            reasoningOmitted: result.reasoningOmitted,
+          }),
         },
       });
       await this.bus.publish('agent', event);

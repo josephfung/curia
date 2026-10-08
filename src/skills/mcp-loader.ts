@@ -17,6 +17,7 @@ import type { ToolManifest, ToolHandler, ToolContext, ToolResult } from './types
 import type { ToolRegistry } from './registry.js';
 import type { SkillRegistry } from './skill-registry.js';
 import { connectStdio, connectSse } from './mcp-client.js';
+import { discoverSkillResources } from './skill-resources.js';
 import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
@@ -26,52 +27,19 @@ import type {
   McpStdioServerEntry,
   SkillsConfig,
 } from './mcp-config-types.js';
-import {
-  GOOGLE_WORKSPACE_CALENDAR_TOOLS,
-  GOOGLE_WORKSPACE_CALENDARISH_TOOL,
-  guardMcpCalendarIdentity,
-} from './_shared/calendar-identity-guard.js';
+
+// No per-tool holdback at registration (#1957). Which google-workspace services load is
+// decided by the server's `--tools` allowlist in config/skills.yaml, guarded by
+// tests/unit/config.google-workspace-allowlist.test.ts. Calendar is never on it (#1853).
 
 /**
- * google-workspace MCP calendar tools held back from registration / projection (#1853).
- *
- * Re-exports the shared list from calendar-identity-guard (#1854). Primary gate:
- * `config/skills.yaml` omits `calendar` from `--tools`. This list is the in-process
- * backstop if a calendar tool still appears. Re-enable only when #1330 lands and
- * tools are renamed/scoped — the identity guard still fail-closes principal-scoped
- * reads even after re-registration.
+ * Calendar-shaped google-workspace tool names, matched by underscore segment so it
+ * covers upstream's whole calendar module (list_calendars, get_events, manage_event,
+ * query_freebusy, manage_out_of_office, ...) and renamed tools, without matching
+ * Drive/Docs/Sheets names. Used only to raise the drift alarm in loadMcpServers.
  */
-export const GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK = GOOGLE_WORKSPACE_CALENDAR_TOOLS;
-
-const HELD_BACK_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['google-workspace', new Set(GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK)],
-]);
-
-/** True when an MCP tool must not be registered or projected for this server (#1853). */
-export function isMcpToolHeldBack(serverName: string, toolName: string): boolean {
-  return HELD_BACK_BY_SERVER.get(serverName)?.has(toolName) === true;
-}
-
-/** Drop held-back tools from a live MCP membership list (defense in depth for projection). */
-export function filterHeldBackMcpTools(serverName: string, tools: readonly string[]): string[] {
-  return tools.filter((t) => !isMcpToolHeldBack(serverName, t));
-}
-
-/**
- * Warn when google-workspace advertises a calendar-looking tool that is not on the
- * holdback list — silent denylist drift when upstream adds an eighth calendar tool.
- */
-export function warnIfUnexpectedGoogleWorkspaceCalendarTool(
-  toolName: string,
-  logger: Logger,
-): void {
-  if (isMcpToolHeldBack('google-workspace', toolName)) return;
-  if (!GOOGLE_WORKSPACE_CALENDARISH_TOOL.test(toolName)) return;
-  logger.warn(
-    { server: 'google-workspace', tool: toolName },
-    'google-workspace advertised a calendar-shaped tool not on the #1853 holdback list — add it to GOOGLE_WORKSPACE_CALENDAR_TOOLS (calendar-identity-guard) and omit calendar from --tools in config/skills.yaml',
-  );
-}
+export const GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME =
+  /(^|_)(events?|calendars?|freebusy|out_of_office|focus_time)($|_)/;
 
 /** Result of loading MCP servers: live sessions + tools registered per server. */
 export type McpServerLoadStatus =
@@ -339,7 +307,7 @@ export async function resolveSecretsBlock(
 /** The subset of an {@link McpSession} the tool handler needs: a `callTool`-capable
  *  client plus the server id for logs. Narrowed so unit tests can pass a mock
  *  client without constructing a full SDK `Client`. */
-type McpToolSession = {
+export type McpToolSession = {
   serverId: string;
   client: Pick<McpSession['client'], 'callTool'>;
 };
@@ -368,17 +336,9 @@ export function buildMcpToolHandler(params: {
   const { session, toolName, resolvedFixedInputs, timeoutMs, logger } = params;
   return {
     async execute(ctx: ToolContext): Promise<ToolResult> {
-      // Principal-scoped calendar reads via google-workspace always resolve to
-      // Curia's identity — fail closed before the MCP call (#1854). Held-back
-      // tools never reach here in normal boots (#1853); this is the backstop
-      // for re-registration (#1330) or holdback bypass.
-      const identityGuard = guardMcpCalendarIdentity({
-        serverId: session.serverId,
-        toolName,
-        ctx,
-        resolvedOwnerEmail: resolvedFixedInputs.user_google_email,
-      });
-      if (identityGuard) return identityGuard;
+      // No call-time calendar identity guard here (#1957): Calendar is never on the
+      // google-workspace --tools allowlist, so its tools are never registered. If #1330
+      // ever puts them back on purpose, restore guardMcpCalendarIdentity from history.
 
       // Abort the MCP request if it outlives the execution-layer timeout (#1666).
       const controller = new AbortController();
@@ -682,100 +642,13 @@ export async function loadMcpServers(
       continue;
     }
 
-    let registered = 0;
-    const registeredNames: string[] = [];
-    for (const tool of tools) {
-      if (serverEntry.name === 'google-workspace') {
-        warnIfUnexpectedGoogleWorkspaceCalendarTool(tool.name, logger);
-      }
-      if (isMcpToolHeldBack(serverEntry.name, tool.name)) {
-        logger.info(
-          { server: serverEntry.name, tool: tool.name },
-          'MCP tool held back from registration — never enters ToolRegistry; principal calendar belongs to @calendar (#1853)',
-        );
-        continue;
-      }
-
-      // Build a minimal ToolManifest from the tool's metadata.
-      // inputs is left empty ({}) because toToolDefinitions() uses mcpInputSchema
-      // instead of the shorthand inputs notation for MCP-sourced tools.
-      const manifest: ToolManifest = {
-        name: tool.name,
-        description: tool.description ?? `Tool '${tool.name}' from MCP server '${serverEntry.name}'`,
-        version: '1.0.0',
-        sensitivity: serverEntry.sensitivity ?? 'normal',
-        action_risk: serverEntry.action_risk,
-        inputs: {},
-        outputs: {},
-        permissions: [],
-        secrets: [],
-        timeout: serverEntry.timeout_ms ?? 30000,
-      };
-
-      // Passing `session` as an argument captures it per-tool, so the reference
-      // stays valid across the async loop even as the outer `session` is reassigned.
-      const handler = buildMcpToolHandler({
-        session,
-        toolName: tool.name,
-        resolvedFixedInputs,
-        timeoutMs: manifest.timeout,
-        logger,
-      });
-
-      // Build the raw MCP input schema for the fast-path in toToolDefinitions.
-      // The MCP SDK returns `inputSchema` as a full JSON Schema object; we cast
-      // it to the ToolDefinition input_schema shape which shares the same structure.
-      //
-      // When fixed_inputs are configured, strip those keys from the schema so
-      // agents never see them as tool parameters. The values are injected
-      // server-side in the execute handler below.
-      let mcpInputSchema = tool.inputSchema as import('./types.js').ToolDefinition['input_schema'];
-      const fixedKeys = Object.keys(resolvedFixedInputs);
-      if (fixedKeys.length > 0) {
-        // Warn if a fixed_inputs key doesn't match any parameter in this tool's
-        // schema — likely means the upstream MCP server renamed the parameter and
-        // the config is stale. The tool call will still work (extra keys are
-        // ignored by most MCP servers) but the intended parameter won't be set.
-        for (const key of fixedKeys) {
-          if (mcpInputSchema.properties && !(key in mcpInputSchema.properties)) {
-            logger.warn(
-              { server: serverEntry.name, tool: tool.name, fixedInputKey: key },
-              'fixed_inputs key not found in tool schema — the MCP server may not recognize this parameter',
-            );
-          }
-        }
-        mcpInputSchema = stripFixedInputsFromSchema(mcpInputSchema, fixedKeys);
-      }
-
-      try {
-        registry.register(manifest, handler, mcpInputSchema);
-        registered++;
-        registeredNames.push(tool.name);
-        logger.debug(
-          { server: serverEntry.name, tool: tool.name },
-          'MCP tool registered',
-        );
-      } catch (err) {
-        const isDuplicate = err instanceof Error && err.message.toLowerCase().includes('already registered');
-        if (isDuplicate) {
-          // Duplicate name — another local skill or MCP server registered this tool first.
-          logger.warn(
-            { server: serverEntry.name, tool: tool.name },
-            'MCP tool name collision with existing skill — skipping; first registration wins',
-          );
-        } else {
-          // Unexpected error — likely a bug or a malformed manifest derived from the tool metadata.
-          logger.error(
-            { err, server: serverEntry.name, tool: tool.name },
-            'Unexpected error registering MCP tool — skipping',
-          );
-        }
-      }
-    }
+    const registeredNames = registerMcpServerTools({
+      serverEntry, session, tools, resolvedFixedInputs, registry, logger,
+    });
 
     projectedTools.set(serverEntry.name, registeredNames);
     logger.info(
-      { server: serverEntry.name, registered, total: tools.length, tools: registeredNames },
+      { server: serverEntry.name, registered: registeredNames.length, total: tools.length, tools: registeredNames },
       'MCP server tools registered',
     );
     sessions.push(session);
@@ -785,6 +658,120 @@ export async function loadMcpServers(
   return { sessions, projectedTools, serverStatuses };
 }
 
+/** One entry of an MCP server's tools/list result: what registration reads from it. */
+export interface McpListedTool {
+  name: string;
+  description?: string;
+  inputSchema: unknown;
+}
+
+/**
+ * Register one server's listed tools in the ToolRegistry, the way boot does: a
+ * manifest from the server entry, a handler that calls `session`, and the input
+ * schema minus the server's fixed inputs. Returns the names that registered.
+ *
+ * Extracted from loadMcpServers so the test-mode stack can register a server from a
+ * tools/list snapshot with a canned session (#2024) through the same code.
+ */
+export function registerMcpServerTools(params: {
+  serverEntry: McpServerEntry;
+  session: McpToolSession;
+  tools: readonly McpListedTool[];
+  resolvedFixedInputs: Record<string, string>;
+  registry: ToolRegistry;
+  logger: Logger;
+}): string[] {
+  const { serverEntry, session, tools, resolvedFixedInputs, registry, logger } = params;
+  const registeredNames: string[] = [];
+  for (const tool of tools) {
+    // The `--tools` allowlist keeps Calendar out (#1957); nothing here filters it.
+    // If a calendar tool appears anyway, the config has drifted. Say so at error
+    // level: the old holdback corrected this at info, which is how a deployment
+    // ran with no allowlist for months unnoticed. Nothing else stands between such
+    // a tool and an agent (#1957), so this must stay loud.
+    if (serverEntry.name === 'google-workspace' && GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(tool.name)) {
+      logger.error(
+        { server: serverEntry.name, tool: tool.name },
+        'google-workspace advertised a Calendar tool — the --tools allowlist in config/skills.yaml has drifted; remove calendar from it (#1853, #1957)',
+      );
+    }
+
+    // Build a minimal ToolManifest from the tool's metadata.
+    // inputs is left empty ({}) because toToolDefinitions() uses mcpInputSchema
+    // instead of the shorthand inputs notation for MCP-sourced tools.
+    const manifest: ToolManifest = {
+      name: tool.name,
+      description: tool.description ?? `Tool '${tool.name}' from MCP server '${serverEntry.name}'`,
+      version: '1.0.0',
+      sensitivity: serverEntry.sensitivity ?? 'normal',
+      action_risk: serverEntry.action_risk,
+      inputs: {},
+      outputs: {},
+      permissions: [],
+      secrets: [],
+      timeout: serverEntry.timeout_ms ?? 30000,
+    };
+
+    const handler = buildMcpToolHandler({
+      session,
+      toolName: tool.name,
+      resolvedFixedInputs,
+      timeoutMs: manifest.timeout,
+      logger,
+    });
+
+    // Build the raw MCP input schema for the fast-path in toToolDefinitions.
+    // The MCP SDK returns `inputSchema` as a full JSON Schema object; we cast
+    // it to the ToolDefinition input_schema shape which shares the same structure.
+    //
+    // When fixed_inputs are configured, strip those keys from the schema so
+    // agents never see them as tool parameters. The values are injected
+    // server-side in the execute handler below.
+    let mcpInputSchema = tool.inputSchema as import('./types.js').ToolDefinition['input_schema'];
+    const fixedKeys = Object.keys(resolvedFixedInputs);
+    if (fixedKeys.length > 0) {
+      // Warn if a fixed_inputs key doesn't match any parameter in this tool's
+      // schema — likely means the upstream MCP server renamed the parameter and
+      // the config is stale. The tool call will still work (extra keys are
+      // ignored by most MCP servers) but the intended parameter won't be set.
+      for (const key of fixedKeys) {
+        if (mcpInputSchema.properties && !(key in mcpInputSchema.properties)) {
+          logger.warn(
+            { server: serverEntry.name, tool: tool.name, fixedInputKey: key },
+            'fixed_inputs key not found in tool schema — the MCP server may not recognize this parameter',
+          );
+        }
+      }
+      mcpInputSchema = stripFixedInputsFromSchema(mcpInputSchema, fixedKeys);
+    }
+
+    try {
+      registry.register(manifest, handler, mcpInputSchema);
+      registeredNames.push(tool.name);
+      logger.debug(
+        { server: serverEntry.name, tool: tool.name },
+        'MCP tool registered',
+      );
+    } catch (err) {
+      const isDuplicate = err instanceof Error && err.message.toLowerCase().includes('already registered');
+      if (isDuplicate) {
+        // Duplicate name — another local skill or MCP server registered this tool first.
+        logger.warn(
+          { server: serverEntry.name, tool: tool.name },
+          'MCP tool name collision with existing skill — skipping; first registration wins',
+        );
+      } else {
+        // Unexpected error — likely a bug or a malformed manifest derived from the tool metadata.
+        logger.error(
+          { err, server: serverEntry.name, tool: tool.name },
+          'Unexpected error registering MCP tool — skipping',
+        );
+      }
+    }
+  }
+  return registeredNames;
+}
+
 /**
  * Project each connected MCP server as a skill into SkillRegistry (ADR-032).
  *
@@ -792,12 +779,19 @@ export async function loadMcpServers(
  * between restarts). Pinning the server name (e.g. `google-workspace`) expands
  * to those tools. Individual MCP tool pins remain first-class via polymorphic pins.
  *
+ * An upstream server's tool descriptions are not ours to edit, so how-to notes for
+ * its tools live on disk instead: when `skillsDir` has a directory named after the
+ * server, its `references/` and `assets/` files attach to the projected skill and
+ * load on demand through skill-activate (#1960). The directory holds no SKILL.md —
+ * that would make it a native bundle, and this projection would then be skipped.
+ *
  * Returns the number of skills registered.
  */
 export function registerMcpProjectedSkills(
   projectedTools: Map<string, string[]>,
   skillRegistry: SkillRegistry,
   logger: Logger,
+  skillsDir?: string,
 ): number {
   let added = 0;
   for (const [serverName, tools] of projectedTools) {
@@ -808,7 +802,27 @@ export function registerMcpProjectedSkills(
       );
       continue;
     }
-    const membership = filterHeldBackMcpTools(serverName, tools);
+    // Membership is exactly what registered; the server's --tools allowlist is the
+    // only gate on it (#1957).
+    const membership = tools;
+    const resourceDir = skillsDir ? path.join(skillsDir, serverName) : '';
+    // References are optional, so an unreadable directory must not abort boot:
+    // register the skill without them and say why.
+    let hasResourceDir = false;
+    let resources: ReturnType<typeof discoverSkillResources> | null = null;
+    if (resourceDir !== '') {
+      try {
+        hasResourceDir = fs.statSync(resourceDir, { throwIfNoEntry: false })?.isDirectory() === true;
+        resources = hasResourceDir ? discoverSkillResources(resourceDir) : null;
+      } catch (err) {
+        logger.warn(
+          { err, server: serverName, resourceDir },
+          'MCP skill resource discovery failed — projecting without references',
+        );
+        hasResourceDir = false;
+        resources = null;
+      }
+    }
     skillRegistry.register(
       {
         name: serverName,
@@ -816,11 +830,20 @@ export function registerMcpProjectedSkills(
         version: '1.0.0',
         tools: membership,
         instructions: '',
+        references: resources && resources.references.length > 0 ? resources.references : undefined,
+        assets: resources && resources.assets.length > 0 ? resources.assets : undefined,
       },
-      '', // no on-disk SKILL.md — membership is live from tools/list
+      // Membership is live from tools/list; the directory only carries references.
+      hasResourceDir ? resourceDir : '',
     );
     logger.info(
-      { skill: serverName, tools: membership, kind: 'mcp' },
+      {
+        skill: serverName,
+        tools: membership,
+        kind: 'mcp',
+        references: resources?.references.length ?? 0,
+        assets: resources?.assets.length ?? 0,
+      },
       'MCP server projected as skill',
     );
     added++;

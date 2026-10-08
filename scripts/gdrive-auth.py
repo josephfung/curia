@@ -21,9 +21,16 @@ import webbrowser
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Authenticate Workspace services Curia actually loads (calendar omitted — #1853;
-# principal calendar is Nylas). Keep in sync with --tools in config/skills.yaml.
-SERVICES = ["gmail", "drive", "docs", "sheets"]
+# The Workspace services Curia loads (#1957). Keep in sync with --tools in
+# config/skills.yaml. Calendar is never on it (#1853; principal calendar is Nylas),
+# and Gmail goes through Curia's own email tools.
+#
+# These are passed to the server as --tools, and that is what limits the grant:
+# workspace-mcp builds the consent request from the scopes of every service it has
+# enabled, whatever `service_name` start_google_auth is given (that is only a log
+# label). Without --tools it enables every service and asks for Calendar and Gmail
+# scopes too. For the same reason one consent covers all of them.
+SERVICES = ["drive", "docs", "sheets"]
 
 
 async def auth_service(session: ClientSession, service: str, email: str) -> None:
@@ -70,7 +77,7 @@ async def main() -> None:
 
     params = StdioServerParameters(
         command="uvx",
-        args=["workspace-mcp", "--single-user"],
+        args=["workspace-mcp", "--single-user", "--tool-tier", "complete", "--tools", *SERVICES],
         env={
             "GOOGLE_OAUTH_CLIENT_ID": client_id,
             "GOOGLE_OAUTH_CLIENT_SECRET": client_secret,
@@ -80,16 +87,15 @@ async def main() -> None:
     )
 
     print(f"Starting workspace-mcp and authenticating {email}...\n")
-    print("You will be prompted to log in once per service.")
+    print(f"One consent covers {', '.join(SERVICES)}.")
     print("Use the browser that opens — log in as Curia's Gmail account.\n")
 
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            for service in SERVICES:
-                await auth_service(session, service, email)
+            await auth_service(session, SERVICES[0], email)
 
-    print("\nAll services authenticated.")
+    print(f"\nAuthenticated: {', '.join(SERVICES)}.")
     print(f"Tokens saved to: ~/.google_workspace_mcp/credentials/{email}.json")
     print("\nNext step — copy tokens to the VPS (see docs/dev/google-drive.md Step 5).")
 

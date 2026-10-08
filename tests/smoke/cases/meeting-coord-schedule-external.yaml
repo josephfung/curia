@@ -1,9 +1,35 @@
 name: Schedule External Meeting
-description: Agent should handle a meeting scheduling request with an external party, checking availability, proposing times, and offering to send the request email
+description: >
+  The principal asks for a 30-minute intro call with an external contact sometime next
+  week and gives her email. Curia should do the planning itself: find open times on the
+  principal's calendar, then either hold a couple of them and email the contact asking
+  which one works (preferred) or book one and invite her. The principal delegated the
+  scheduling, so Curia must not hand the choice of times back to them (#2049).
 tags:
   - meeting-coordination
   - scheduling
   - single-turn
+judge_tool_calls: true
+
+tool_stubs:
+  # Smoke disables send skills unless a case stubs them, so without this a send to Jamie
+  # comes back as a test-mode capability refusal and the judge scores how the model
+  # narrates the refusal instead of whether it chose to send (#2049).
+  # A stub answers before the handler, so the handler's recipient checks don't run. The
+  # entries below refuse the calls production refuses, in its words, so a malformed send
+  # can't count as reaching Jamie. First match wins; null means the argument is absent.
+  email-send:
+    - match: { to: "jamie@stripe.com" }
+      error: 'to takes a contact ID or "principal", not "jamie@stripe.com". Send to a known person by their contact ID; the address is looked up for you. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
+    - match: { to: null }
+      error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.'
+    - match: {}
+      return: { message_id: smoke-sent-0001, to: "{{input:to}}", subject: "{{input:subject}}" }
+  # contact-create is deliberately left real. Stubbing it hands back an id that isn't in
+  # the database, so the contacts agent's follow-up identity writes fail and the reply
+  # reports a contact-store fault that only the stub caused. The cost: the gated retry
+  # runs on the same database copy, so it finds Jamie already a contact and skips the
+  # create-and-link path. Read a PASS* here with that in mind.
 
 turns:
   - role: user
@@ -12,21 +38,40 @@ turns:
       Her email is jamie@stripe.com. Sometime next week works for me.
 
 expected_behaviors:
-  - id: acknowledge-with-details
-    description: Acknowledges the scheduling request and confirms all captured details (Jamie Rodriguez, Stripe, 30 min, next week)
+  - id: uses-real-availability
+    description: >
+      Picks times from the principal's actual calendar for next week (the calendar's free
+      windows), not invented ones, and each is 30 minutes long
     weight: critical
-  - id: check-availability
-    description: Proposes checking the CEO's calendar for available slots next week
+  - id: plans-without-the-principal
+    description: >
+      Chooses the times itself and goes ahead, rather than listing options for the
+      principal to pick from or asking the principal whether to contact Jamie
     weight: critical
-  - id: offer-to-send
-    description: Offers to send the meeting request email on the CEO's behalf
-    weight: important
-  - id: proper-format
-    description: Uses professional meeting request format (who, purpose, proposed times)
+  - id: reaches-jamie
+    description: >
+      Contacts Jamie Rodriguez about the call: the tool calls include a successful
+      email-send to her (to her contact id) or a
+      calendar-create-event with jamie@stripe.com as an attendee. A failed send, or a
+      reply or specialist report that only says the email went out, does not count
+    weight: critical
+  - id: holds-and-offers-choice
+    description: >
+      Places holds on two or more of the open slots and emails Jamie offering those
+      times, asking which one works best, rather than booking a single time she has not
+      agreed to
+    # Booking one slot and inviting Jamie is acceptable (#2049); holding and offering a
+    # choice is preferred. nice-to-have keeps a booked run at 92%, clear of the gate.
+    weight: nice-to-have
+  - id: reports-back
+    description: >
+      Tells the principal what it did: which times it held or booked, and that Jamie was
+      contacted
     weight: important
 
 failure_modes:
-  - Drops the email address or gets the name wrong
-  - Doesn't propose checking calendar availability first
-  - Sends an email without confirming times with the CEO
-  - Treats this as informational rather than actionable
+  - Asks the principal to choose between proposed times
+  - Asks the principal for permission before contacting Jamie
+  - Offers or books a time that conflicts with an event on the principal's calendar
+  - Drops or mistypes jamie@stripe.com, or gets Jamie's name wrong
+  - Says an email or invite went out when no send succeeded

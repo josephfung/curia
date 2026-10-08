@@ -11,10 +11,12 @@ import { createHash } from 'node:crypto';
 import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, Message, ToolDefinition, ToolResult } from './provider.js';
 import type { EventBus } from '../../bus/bus.js';
 import type { ModelRegistry } from './model-registry.js';
+import { buildLlmArchiveResponse } from '../../audit/llm-archive-response.js';
 import { createLlmCall, createLlmError } from '../../bus/events.js';
 import { createEstimateCostUsd } from './pricing.js';
 import { classifyError } from '../../errors/classify.js';
 import type { Logger } from '../../logger.js';
+import { parseTemperature } from './sampling-options.js';
 
 export class TelemetryLlmProvider implements LLMProvider {
   readonly id: string;
@@ -37,6 +39,7 @@ export class TelemetryLlmProvider implements LLMProvider {
     tools?: ToolDefinition[];
     toolResults?: ToolResult[];
     model?: string;
+    options?: Record<string, unknown>;
   }, response: Exclude<LLMResponse, { type: 'error' }> | Extract<LLMStreamEvent, { type: 'message_end' | 'tool_use' }>, latencyMs: number): Promise<void> {
     try {
       const promptHash = createHash('sha256')
@@ -50,6 +53,10 @@ export class TelemetryLlmProvider implements LLMProvider {
         ? JSON.stringify(response.toolCalls)
         : response.content;
       const responseHash = createHash('sha256').update(responseText).digest('hex');
+      // Pure parse (no warn) — the inner provider already warned on invalid values.
+      // null means the request omitted temperature.
+      const parsed = parseTemperature(params.options);
+      const temperature = parsed.kind === 'set' ? parsed.value : null;
 
       const event = createLlmCall({
         agentId: `system:${this.serviceId}`,
@@ -66,15 +73,14 @@ export class TelemetryLlmProvider implements LLMProvider {
         providerRequestId: response.provenance.providerRequestId,
         promptHash,
         responseHash,
+        temperature,
         parentEventId: 'system',
         archive: {
           prompt: {
             messages: params.messages,
             toolResults: params.toolResults ?? [],
           },
-          response: response.type === 'tool_use'
-            ? { type: 'tool_use', toolCalls: response.toolCalls }
-            : { type: 'text', content: response.content },
+          response: buildLlmArchiveResponse(response),
           toolDefinitions: params.tools ?? [],
         },
       });

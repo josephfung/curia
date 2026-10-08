@@ -198,6 +198,14 @@ Valid capability names and what they grant:
 
 Services NOT in this list (`contactService`, `entityContextAssembler`, `agentPersona`) are **universal** — available to every skill without declaration. Omit `capabilities` entirely if your skill only uses universal services.
 
+#### `optional_capabilities` (optional)
+
+The same names, for a service the skill uses when the deployment has it and can do without. A required capability that is not configured refuses the call; an optional one is simply not injected, so the handler must check for it (`if (ctx.taskRepo) …`). The allowlist rules above still apply. A name may not appear in both lists. `skill-activate` declares `taskRepo` here: it persists a task's active skills when a task store exists, and still activates skills where none does (the test-mode stack).
+
+```json
+"optional_capabilities": ["taskRepo"]
+```
+
 #### `inputs` (required)
 
 Declares the input parameters the handler will receive. The execution layer validates inputs against this schema before calling the handler — invalid inputs return an error without reaching the handler.
@@ -576,6 +584,13 @@ servers:
 ```
 
 At startup, Curia connects to each MCP server, discovers its tools via `tools/list`, and registers them in the skill registry alongside local skills. Agents don't know or care whether a tool is local or MCP.
+
+An MCP server's tool descriptions come from upstream, so they can't be edited here. To give
+its tools how-to notes, put them in `skills/<server-name>/references/` (no `SKILL.md`: that
+would make the directory a native bundle and skip the projection). The files attach to the
+projected skill, an agent pinning it sees them listed, and it loads one with
+`skill-activate({ skill: "<server-name>", reference: "<file>" })`.
+`skills/google-workspace/references/drive-files.md` is the example (#1960).
 
 See [Tools & Execution Spec](../specs/03-tools-and-execution.md#mcp-skills-external-servers) for recommended MCP servers.
 

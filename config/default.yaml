@@ -324,6 +324,10 @@ audit:
   llmCallArchive:
     enabled: true
     hotRetentionDays: 90
+    # Reasoning text can be most of a row (one production call spent ~4k output
+    # tokens on reasoning for a single tool call, #2033). false keeps the token
+    # count and drops the text, without turning the archive off.
+    includeReasoning: true
 
 # Dream engine — background knowledge graph maintenance (issue #27).
 # The decay pass runs on a configurable interval and reduces the confidence of
@@ -531,6 +535,11 @@ autonomy:
   bypass_ladder:
     same_task: 70      # posture B floor — must not drop below 60
     derived_child: 90  # posture D floor
+
+  # Expires pending approvals past expires_at and emails the principal about
+  # high/critical ones (#2013). A system interval: no agent turn, no LLM call.
+  approval_expiry:
+    sweep_interval_minutes: 60
 
   # Emoji → approval intent for inbound.reaction (#1479). Channel-agnostic —
   # Slack shortcodes and unicode glyphs both listed. Adapters never map intent.

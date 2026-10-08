@@ -99,6 +99,15 @@ interface AgentTaskPayload {
    * Absent means the agent's normal tool set.
    */
   toolAllowlist?: string[];
+  /**
+   * Trigger guidance for this turn (#1959): which blocks of
+   * src/agents/prompts/turn-guidance.ts apply, set by the dispatcher from what it already
+   * knows about the inbound (principal or not, outbound context injected, email, CC'd).
+   * The runtime renders them at the head of the user message for this turn only. They are
+   * never part of `content`, so working memory and every other reader of the content stay
+   * free of them. Absent means none.
+   */
+  turnGuidance?: import('../agents/prompts/turn-guidance.js').TurnGuidanceKey[];
 }
 
 /** Coarse failure reason propagated on agent.response when isError is true.
@@ -311,7 +320,7 @@ interface OutboundNoReplyPayload {
 //   - 'blocked_content': principal alert that an outbound message was blocked by the content filter
 //   - 'contact_rate_limited': principal alert that contact auto-creation was throttled due to rate limits
 //   - 'approval_requested':   principal alert that an autonomy gate blocked a skill and approval is needed
-//   - 'approval_expired':     principal alert that pending approvals expired without response (approval-expiry-sweep)
+//   - 'approval_expired':     principal alert that pending approvals expired without response (ApprovalExpirySweep, #2013)
 //   - 'schedule_suspended': principal alert that a scheduled job was auto-suspended after consecutive failures (#538)
 //   - 'schedule_recovered': principal alert that a stuck job was auto-recovered (reset to pending or suspended) (#207)
 //   - 'learning_proposal':  principal alert surfacing a learning-digest item (voice-guide proposal or sent-mail
@@ -323,7 +332,7 @@ export interface OutboundNotificationPayload {
     | 'blocked_content'
     | 'contact_rate_limited'
     | 'approval_requested'
-    | 'approval_expired'        // batched expiry notification (approval-expiry-sweep)
+    | 'approval_expired'        // batched expiry notification (ApprovalExpirySweep, #2013)
     | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
     | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
     | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
@@ -604,6 +613,14 @@ interface LlmCallPayload {
   // full prompts/responses go in llm_call_archive, see spec 10)
   promptHash: string;
   responseHash: string;
+  /**
+   * Sampling temperature actually sent on the provider request.
+   * `null` means the caller left it unset (provider default). Optional for
+   * test fixtures; every `createLlmCall` site in `src/` sets it. Making this
+   * required (`temperature: number | null`) is a follow-up so absent vs. null
+   * cannot become ambiguous in audit_log.
+   */
+  temperature?: number | null;
 }
 
 // ModelFallbackEngagedPayload — emitted by the agent runtime when the primary

@@ -102,7 +102,9 @@ export function formatDelegationRetryWakeContent(wake: DelegationRetryWake): str
   return [
     'A specialist was already working in this conversation, so this request was queued instead of dropped.',
     'Delegate it now, to the specialist named below, using the brief as given.',
-    'If delegate reports that specialist is still in flight, tell the user the request is queued. Do not start another run.',
+    // The retry cap means a re-queue can fail, so defer to the refusal's next_step, which
+    // branches on whether this brief was really saved again (#1958 review).
+    'If delegate reports that specialist is still in flight, do not start another run; follow the result\'s next_step.',
     '',
     `Specialist: ${wake.targetAgent}`,
     '',

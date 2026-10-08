@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { createJudge, extractJsonObject, formatJudgeInput, judgeRun, parseJudgeResponse } from '../../scenarios/judge.js';
+import { describe, expect, it, vi } from 'vitest';
+import { emptyBreakdown, UsageLedger } from '../../shared/usage.js';
+import { createJudge, extractJsonObject, formatJudgeInput, judgeRun, meterJudgeResponse, parseJudgeResponse } from '../../scenarios/judge.js';
 import type { ExpectedBehavior, ScenarioCase, ScenarioRun } from '../../scenarios/types.js';
 
 const behaviors: ExpectedBehavior[] = [
@@ -42,7 +43,7 @@ describe('formatJudgeInput', () => {
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
   };
   const run: ScenarioRun = {
-    runIndex: 0, inboundContent: 'How is the research going?', refs: {}, durationMs: 1, unstubbedCalls: 0,
+    runIndex: 0, inboundContent: 'How is the research going?', refs: {}, durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [],
     reply: 'Still working — 3 of 8 done.',
     toolCalls: [
       { name: 'delegate', input: { agent: 'research-analyst' }, disposition: 'stubbed', result: { success: true, data: { paused: true, done: 3, total: 8 } } },
@@ -77,7 +78,7 @@ describe('judgeRun', () => {
     inbound: { from: 'principal', content: 'hi' },
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   } as ScenarioCase;
-  const run: ScenarioRun = { runIndex: 0, inboundContent: 'hi', refs: {}, toolCalls: [], reply: 'ok', durationMs: 1, unstubbedCalls: 0 };
+  const run: ScenarioRun = { runIndex: 0, inboundContent: 'hi', refs: {}, toolCalls: [], reply: 'ok', durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [] };
   const error = (type: string) => ({ type: 'error' as const, error: { type, source: 'openrouter', message: 'x', retryable: false, context: {}, timestamp: new Date() } });
 
   it('throws on an error that would repeat every run', async () => {
@@ -95,7 +96,36 @@ describe('judgeRun', () => {
 });
 
 describe('createJudge', () => {
+  const openrouter = new Map([['openrouter', { id: 'openrouter', chat: async () => { throw new Error('no calls expected'); } } as never]]);
+
   it('needs the OpenRouter provider and says how to get it', () => {
     expect(() => createJudge(new Map())).toThrow(/openrouter_api_key/);
+  });
+
+  // #1980: an unpriced judge would throw on its first (already paid) response, and a
+  // prefix match would price 'openai/gpt-4o-mini' as 'openai/gpt-4o'.
+  it('refuses a judge model without its own registry entry, before any call', () => {
+    expect(() => createJudge(openrouter, undefined, { model: 'openai/gpt-4o-mini' })).toThrow(/no entry in src\/agents\/llm\/model-registry.ts/);
+    expect(() => createJudge(openrouter, undefined, { model: 'vendor/unknown' })).toThrow(/no entry/);
+  });
+
+  it('prices the judge\'s responses from the registry', () => {
+    const judge = createJudge(openrouter, undefined, { model: 'openai/gpt-4o' });
+    const usage = { inputTokens: 1_000_000, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
+    expect(judge.estimateCostUsd!('openai/gpt-4o-2024-08-06', usage)).toBeCloseTo(2.5);
+  });
+});
+
+describe('meterJudgeResponse', () => {
+  it('adds a response\'s tokens and price, and never throws on a pricing failure', () => {
+    const ledger = new UsageLedger();
+    const usage = { inputTokens: 10, outputTokens: 2, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
+    const response = { type: 'text', content: '{}', usage, provenance: { requestedModel: 'm', actualModel: 'm', providerRequestId: 'r' } } as never;
+    meterJudgeResponse({ provider: {} as never, model: 'm', estimateCostUsd: () => 0.5 }, response, ledger);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    meterJudgeResponse({ provider: {} as never, model: 'm', estimateCostUsd: () => { throw new Error('no price'); } }, response, ledger);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('could not price a judge call'));
+    stderr.mockRestore();
+    expect(ledger.snapshot().judge).toMatchObject({ calls: 2, inputTokens: 20, estimatedCostUsd: 0.5 });
   });
 });

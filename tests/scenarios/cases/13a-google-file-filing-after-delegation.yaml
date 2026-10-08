@@ -1,0 +1,204 @@
+# Case 13a (#2024): a specialist's result hands back a Google Doc saved to Drive root.
+# The coordinator no longer pins google-workspace, so filing the Doc means activating the
+# skill first, then moving it into the folder the result names and making sure the
+# principal can edit it. In production this was 8 of the 15 tasks that used these tools
+# over 60 days, and the principal never mentioned a Google file. Rule:
+# agents/coordinator.yaml, "Google Workspace" (a specialist's result that involves a
+# Google file → skill-activate google-workspace).
+name: google file filing after delegation
+description: >
+  The principal asks to have research write up a comparison of two CRM vendors.
+  research-analyst returns a Google Doc it created in Drive root, says it belongs in the
+  principal's "CRM evaluation" folder, and says the principal has no access to it yet.
+  The coordinator activates its Google Drive tools, moves the Doc into that folder, gives
+  the principal edit access, and tells the principal it is ready.
+tags: [google-workspace, skill-activation]
+timeout_seconds: 300
+inbound:
+  from: principal
+  content: Can you get research to write up a short comparison of Northwind and Contoso for the CRM decision?
+tool_stubs:
+  delegate:
+    - match: {}
+      return:
+        agent: research-analyst
+        response: >
+          Done. The comparison is written up as a Google Doc, "CRM comparison: Northwind
+          vs Contoso" (document ID 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic). It was
+          created in Drive root, not in the principal's "CRM evaluation" folder (folder ID
+          1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd), and the principal does not have access to it
+          yet. Northwind comes out ahead on price and onboarding; Contoso on reporting.
+  get_drive_file_permissions:
+    - match: {}
+      return: |
+        File: CRM comparison: Northwind vs Contoso
+        ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic
+        MIME type: application/vnd.google-apps.document
+        Parents: 0AKqRootFolderPlaceholderUk9PVA
+        Owner: assistant@example.test
+        Permissions:
+          - assistant@example.test: owner
+  list_drive_items:
+    - match: {}
+      return: |
+        Items in folder 'root':
+        - Name: "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic, Type: application/vnd.google-apps.document)
+        - Name: "CRM evaluation" (ID: 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd, Type: application/vnd.google-apps.folder)
+  search_drive_files:
+    - match: {}
+      return: |
+        Found 2 files:
+        - Name: "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic, Type: application/vnd.google-apps.document)
+        - Name: "CRM evaluation" (ID: 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd, Type: application/vnd.google-apps.folder)
+  update_drive_file:
+    - match: {}
+      return: |
+        Successfully updated file "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic).
+        Parents: 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd
+  # Reading, searching for or inspecting the Doc, and fetching its link to pass on, are all
+  # reasonable; each answers as Drive would. inspect_doc_structure and search_docs were
+  # the case's unstubbed calls (about 1 run in 5, on main's prompt and trim PR 1's alike),
+  # which failed the gate on the harness rather than the model. Siblings 13c and 13d stub
+  # the same lookups.
+  search_docs:
+    - match: {}
+      return: |
+        Found 1 Google Doc:
+        - "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic)
+  check_drive_file_public_access:
+    - match: {}
+      return: '"CRM comparison: Northwind vs Contoso" is not shared publicly. Link sharing: restricted.'
+  inspect_doc_structure:
+    - match: {}
+      return: |
+        Document structure for 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic:
+        {
+          "title": "CRM comparison: Northwind vs Contoso",
+          "total_elements": 4,
+          "total_length": 312,
+          "tables": 1,
+          "table_details": [
+            { "index": 0, "start_index": 38, "end_index": 268, "rows": 4, "columns": 3 }
+          ],
+          "headers": {},
+          "footers": {}
+        }
+  get_doc_as_markdown:
+    - match: {}
+      return: &comparison |
+        # CRM comparison: Northwind vs Contoso
+
+        | | Northwind | Contoso |
+        |---|---|---|
+        | Price (25 seats) | $18k/yr | $24k/yr |
+        | Onboarding | 2 weeks | 6 weeks |
+        | Reporting | Basic | Strong |
+
+        **Recommendation:** Northwind, unless custom reporting is a must-have.
+  get_doc_content:
+    - match: {}
+      return: *comparison
+  # The rest of the read-only Drive and Docs surface that can touch this Doc, so every
+  # read path answers (the Sheets reads don't apply: the case has no spreadsheet).
+  get_drive_file_content:
+    - match: {}
+      return: *comparison
+  get_drive_file_download_url:
+    - match: {}
+      return: "https://drive.google.com/uc?id=1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic&export=download"
+  list_document_comments:
+    - match: {}
+      return: 'No comments on "CRM comparison: Northwind vs Contoso".'
+  debug_table_structure:
+    - match: {}
+      return: |
+        Table 0: 4 rows x 3 columns, start_index 38, end_index 268.
+        Header row: "", "Northwind", "Contoso"
+  get_drive_shareable_link:
+    - match: {}
+      return: "https://docs.google.com/document/d/1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic/edit?usp=sharing"
+  list_docs_in_folder:
+    - match: {}
+      return: |
+        Docs in folder 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd:
+        - "CRM comparison: Northwind vs Contoso" (ID: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic)
+  # Runs also tried the folder's ID as a spreadsheet, and rewrote the Doc's text (#2050).
+  # The first fails in Sheets as it would for real. Editing the Doc is not asked for, but
+  # it succeeds, so leaves_research_text scores the choice rather than a refusal.
+  get_spreadsheet_info:
+    - match: {}
+      error: 'API error in get_spreadsheet_info: <HttpError 404 when requesting https://sheets.googleapis.com/v4/spreadsheets/1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd?alt=json returned "Requested entity was not found.">'
+  batch_update_doc:
+    - match: {}
+      return: Successfully executed the batch operations on document 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic.
+  manage_drive_access:
+    - match: {}
+      return: 'Permission granted on "CRM comparison: Northwind vs Contoso" (ID 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic).'
+  # Saving the comparison to the working-docs workspace as well is a reasonable side step
+  # (1 run in 10). Test mode has no workspace, so both calls were refused; they answer here.
+  doc-place:
+    - match: {}
+      return:
+        action: create_folder
+        slug: crm-evaluation
+        directory_prefix: /projects/crm-evaluation/
+        path: /projects/crm-evaluation/vendor-comparison.md
+        reason: No existing project folder covers the CRM decision.
+        catalog: []
+        displayTimezone: America/Toronto
+  doc-write:
+    - match: {}
+      return:
+        action: created
+        version: 1
+        displayTimezone: America/Toronto
+expected_behaviors:
+  - id: activates_google_workspace
+    weight: critical
+    description: Activates the google-workspace skill to get its Drive tools.
+    check:
+      called: skill-activate
+      with: { skill: google-workspace }
+  - id: moves_into_folder
+    weight: critical
+    description: Moves the Doc into the CRM evaluation folder with update_drive_file.
+    check:
+      called: update_drive_file
+      with: { file_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic, add_parents: 1FoLdCrmEvalQ8wZr2Tn5Ky7Vb3Mx9Pd }
+  - id: principal_can_edit
+    weight: critical
+    description: Grants edit (writer) access on the Doc.
+    check:
+      any_of:
+        - called: manage_drive_access
+          with: { file_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic, role: writer }
+        - called: manage_drive_access
+          with: { file_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic }
+          contains: { recipients: writer }
+  - id: activates_before_using
+    weight: important
+    description: Activates the skill before the first Drive call.
+    check:
+      order: [skill-activate, update_drive_file]
+  - id: removed_from_root
+    weight: nice-to-have
+    description: >
+      The move takes the Doc out of Drive root (update_drive_file also sets
+      remove_parents to the root folder), so it is not left in two places.
+  - id: tells_principal
+    weight: important
+    description: >
+      Tells the principal the comparison is ready in their CRM evaluation folder and that
+      they can edit it, with the gist of the findings. Does not say it was unable to file
+      or share the document.
+  # batch_update_doc is stubbed to succeed, so a rewrite is scored here, not hidden (#2050).
+  - id: leaves_research_text
+    weight: important
+    description: Files and shares the research Doc without rewriting its content.
+    check:
+      not_called: [batch_update_doc]
+      with: { document_id: 1Gq7CrmCmpXv0dW3nRtL5sYb8kPz2HaJf4MeQx9Uo6Ic }
+failure_modes:
+  - Tells the principal the Doc is in Drive root and leaves the filing to them
+  - Says it has no Google Drive access instead of activating the skill
+  - Shares the Doc but never moves it

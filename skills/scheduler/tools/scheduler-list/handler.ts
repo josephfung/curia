@@ -16,6 +16,8 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { JobRow } from '../../../../src/scheduler/scheduler-service.js';
 import { toLocalIso, formatDisplayTimezone } from '../../../../src/time/timestamp.js';
 
+/** Characters of each job's task text returned as taskPreview. */
+const TASK_PREVIEW_CHARS = 160;
 /** Default number of jobs returned when the caller doesn't specify a limit. */
 const DEFAULT_LIST_LIMIT = 50;
 /** Hard ceiling on the limit, even if the caller asks for more. */
@@ -41,6 +43,9 @@ interface JobSummary {
   lastError: string | null;
   timezone: string;
   taskTitle: string | null;
+  /** First TASK_PREVIEW_CHARS of the job's task text, so a routine with no linked
+   *  task (no taskTitle) can still be told apart (#1960). */
+  taskPreview: string | null;
   intentAnchor: string | null;
   taskTags: string[] | null;
   agentTaskId: string | null;
@@ -53,6 +58,13 @@ interface JobSummary {
 function toLocalDisplay(iso: string | null, tz: string | undefined): string | null {
   if (!iso) return null;
   return toLocalIso(Math.floor(new Date(iso).getTime() / 1000), tz);
+}
+
+function taskPreview(job: JobRow): string | null {
+  const task = job.taskPayload?.task;
+  if (typeof task !== 'string') return null;
+  const flat = task.trim().replace(/\s+/g, ' ');
+  return flat.length > TASK_PREVIEW_CHARS ? `${flat.slice(0, TASK_PREVIEW_CHARS)}…` : flat;
 }
 
 function toJobSummary(job: JobRow, tz: string | undefined): JobSummary {
@@ -69,6 +81,7 @@ function toJobSummary(job: JobRow, tz: string | undefined): JobSummary {
     lastError: job.lastError,
     timezone: job.timezone,
     taskTitle: job.taskTitle,
+    taskPreview: taskPreview(job),
     intentAnchor: job.intentAnchor,
     taskTags: job.taskTags,
     agentTaskId: job.agentTaskId,

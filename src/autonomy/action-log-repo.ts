@@ -27,8 +27,8 @@ export class ActionLogRepo {
       columns:
         '(task_id, conversation_id, skill_name, action_risk, outcome, task_summary, ' +
         'payload, expires_at, short_ref, description, parent_action_id, ' +
-        'competence_flag, commitment_flag, compatibility, scored_by)',
-      values: 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)',
+        'competence_flag, commitment_flag, compatibility, scored_by, send_resolution)',
+      values: 'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)',
       params: [
         row.taskId,
         row.conversationId ?? null,
@@ -47,6 +47,7 @@ export class ActionLogRepo {
         null,
         null,
         row.scoredBy ?? null,
+        row.sendResolution && row.sendResolution.length > 0 ? JSON.stringify(row.sendResolution) : null,
       ],
     };
   }
@@ -257,7 +258,7 @@ export class ActionLogRepo {
   /**
    * Return all pending_approval rows that have passed their expiry time.
    * These are the inverse of findAllPending() — rows where expires_at <= now().
-   * Used by the approval-expiry-sweep skill to transition stale requests.
+   * Used by ApprovalExpirySweep (src/autonomy/approval-expiry-sweep.ts) to transition stale requests.
    */
   async findExpired(): Promise<ActionLogRow[]> {
     const result = await this.pool.query(
@@ -398,6 +399,25 @@ export class ActionLogRepo {
       this.logger.warn({ id, outcome, resolvedBy }, 'action-log-repo: resolveRow affected 0 rows — row may have been resolved concurrently');
     } else {
       this.logger.debug({ id, outcome, resolvedBy }, 'action-log-repo: row resolved');
+    }
+    return updated;
+  }
+
+  /**
+   * Close a pending approval because the hinted recipient no longer matches
+   * the identity that was shown. `scored_by` is set so the scoring pass does
+   * not treat the contact change as an agent failure (#2047).
+   */
+  async rejectStaleApproval(id: number): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE autonomy_action_log
+       SET outcome = 'rejected', resolved_at = now(), resolved_by = 'system', scored_by = 'system'
+       WHERE id = $1 AND outcome = 'pending_approval'`,
+      [id],
+    );
+    const updated = (result.rowCount ?? 0) > 0;
+    if (!updated) {
+      this.logger.warn({ id }, 'action-log-repo: rejectStaleApproval affected 0 rows — row may have been resolved concurrently');
     }
     return updated;
   }
@@ -586,6 +606,22 @@ function mapRow(row: Record<string, unknown>): ActionLogRow {
     parentActionId: row.parent_action_id as number | null,
     shortRef: row.short_ref as string | null,
     description: row.description as string | null,
+    sendResolution: readSendResolution(row.send_resolution),
     createdAt: new Date(row.created_at as string),
   };
+}
+
+function readSendResolution(value: unknown): ActionLogRow['sendResolution'] {
+  if (value == null) return null;
+  if (!Array.isArray(value)) return null;
+  const pins: NonNullable<ActionLogRow['sendResolution']> = [];
+  for (const item of value) {
+    if (item === null || typeof item !== 'object') return null;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec.ref !== 'string' || typeof rec.identityId !== 'string' || typeof rec.identityName !== 'string') {
+      return null;
+    }
+    pins.push({ ref: rec.ref, identityId: rec.identityId, identityName: rec.identityName });
+  }
+  return pins;
 }

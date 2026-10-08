@@ -1,5 +1,5 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { CeoNylasClient, NYLAS_MAX_LIST_LIMIT, type NylasMessageSummary } from '../../../_shared/ceo-nylas-client.js';
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
@@ -9,6 +9,12 @@ const DEFAULT_LIMIT = 20;
 // (issue #1000), so we detect the drafts folder and route to listDrafts instead.
 // Both the Gmail UI name ("DRAFTS") and the API label ("DRAFT") map here.
 const DRAFTS_FOLDER_NAMES = new Set(['DRAFT', 'DRAFTS']);
+
+// How many Nylas pages to walk when Curia-self mail empties a page. The first
+// page asks for limit+1 so has_more can be decided in one round-trip. Later
+// pages ask for the Nylas list cap. 25 pages therefore cover about 500
+// messages, and a cursor that never ends cannot loop forever.
+const LIST_PAGE_CAP = 25;
 
 export class CeoInboxListHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -67,50 +73,83 @@ export class CeoInboxListHandler implements ToolHandler {
     ctx.log.info({ limit, folder, unreadOnly }, 'ceo-inbox-list: listing messages');
 
     try {
-      // Fetch one extra so we can report `has_more` without a second round-trip.
-      // The ceo-inbox agent triages the inbox in fixed-size batches and uses
-      // `has_more` to decide whether to schedule a self-wake and continue
-      // draining. There is no server-side watermark: the unread set IS the
-      // not-yet-triaged set, because every triaged message is either archived
+      // Fetch one extra so a single full page can report `has_more` without
+      // another round-trip. The ceo-inbox agent triages in fixed-size batches
+      // and uses `has_more` to decide whether to schedule a self-wake. There
+      // is no server-side watermark: the unread set IS the not-yet-triaged
+      // set, because every triaged message is either archived
       // (Cleared/Handled/Drafted) or marked read (Seen/Urgent/Stuck) and thus
       // drops out of the unread-INBOX query for the next batch.
-      const raw = await client.listMessages({
-        limit: limit + 1,
-        folder,
-        unread: unreadOnly || undefined,
-      });
+      //
+      // Curia-self mail is removed after the fetch. When that empties a page,
+      // keep paging until a real message turns up or the mailbox is exhausted.
+      // `has_more` is computed from the filtered results. An empty batch must
+      // not report has_more: nothing gets archived, so the next run would see
+      // the same page and reschedule forever (#2035).
+      const collected: NylasMessageSummary[] = [];
+      let droppedSelf = 0;
+      let pageToken: string | undefined;
+      let hasMore = false;
+      let scanIncomplete = false;
 
-      // Drop messages sent by Curia itself — the agent should never triage,
-      // archive, or draft replies to its own outbound emails arriving in the
-      // principal's inbox.
-      const filtered = curiaEmail
-        ? raw.filter(
-            (msg) => !msg.from.some((p) => p.email.toLowerCase() === curiaEmail),
-          )
-        : raw;
+      for (let page = 0; page < LIST_PAGE_CAP; page++) {
+        const { messages: raw, nextCursor } = await client.listMessagesPage({
+          // Follow-up pages use the full list cap. limit+1 (often 6) would
+          // leave real mail past ~150 messages under-reported on every run,
+          // because Curia-self mail is never marked read.
+          limit: pageToken ? NYLAS_MAX_LIST_LIMIT : limit + 1,
+          folder,
+          unread: unreadOnly || undefined,
+          ...(pageToken ? { pageToken } : {}),
+        });
 
-      if (filtered.length < raw.length) {
+        const pageFiltered = curiaEmail
+          ? raw.filter(
+              (msg) => !msg.from.some((p) => p.email.toLowerCase() === curiaEmail),
+            )
+          : raw;
+        droppedSelf += raw.length - pageFiltered.length;
+        collected.push(...pageFiltered);
+
+        if (collected.length > limit) {
+          hasMore = true;
+          break;
+        }
+        if (!nextCursor || raw.length === 0) {
+          break;
+        }
+        if (page === LIST_PAGE_CAP - 1) {
+          ctx.log.error(
+            { pages: LIST_PAGE_CAP, kept: collected.length },
+            'ceo-inbox-list: paging cap reached before the mailbox was exhausted',
+          );
+          // count 0 + has_more true spins the agent: an empty page archives
+          // nothing, so the next run repeats it. Stop instead, and say the
+          // scan stopped early so older mail is not silently abandoned.
+          hasMore = collected.length > 0;
+          scanIncomplete = true;
+          break;
+        }
+        pageToken = nextCursor;
+      }
+
+      if (droppedSelf > 0) {
         ctx.log.info(
-          { filtered: raw.length - filtered.length },
+          { filtered: droppedSelf },
           'ceo-inbox-list: filtered out messages from Curia',
         );
       }
 
-      // `has_more` is computed from the RAW probe (limit + 1), not the filtered
-      // set, so the Curia-self filter can never make it under-report a real
-      // backlog. Under-reporting would silently abandon real unread mail until
-      // the next cron tick; over-reporting only costs at most one extra empty
-      // self-wake. So: if Nylas had more than `limit` matching unread, signal
-      // more. (Pathological edge: a batch that is ENTIRELY Curia-self returns
-      // count 0 with has_more true — the caller's "count 0 → finish/exit" rule
-      // terminates cleanly there, since this read-only skill never marks the
-      // Curia-self messages read. Acceptable: Curia does not bulk-email the principal.)
-      const hasMore = raw.length > limit;
-      const messages = filtered.slice(0, limit);
+      const messages = collected.slice(0, limit);
 
       return {
         success: true,
-        data: { messages, count: messages.length, has_more: hasMore },
+        data: {
+          messages,
+          count: messages.length,
+          has_more: hasMore,
+          ...(scanIncomplete ? { scan_incomplete: true } : {}),
+        },
       };
     } catch (err) {
       ctx.log.error({ err }, 'ceo-inbox-list: failed to list messages');

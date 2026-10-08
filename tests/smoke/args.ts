@@ -4,6 +4,7 @@
 // `--tag calendar` ignored would run the suite on the dev config's routing, or the whole
 // suite, and still print "Gate passed". Unknown flags, `--flag=value` and missing values
 // are errors.
+import { DEFAULT_CONCURRENCY, parseConcurrency } from '../shared/case-scope.js';
 
 export interface SmokeArgs {
   /** Route every agent to this model (the release gate passes the production standard tier). */
@@ -16,13 +17,16 @@ export interface SmokeArgs {
   showCalls: boolean;
   /** Allow a DATABASE_URL that is not on this machine. */
   allowRemoteDb: boolean;
+  /** Cases run at once (#1980). 1 runs them one after another. */
+  concurrency: number;
 }
 
-const VALUE_FLAGS = new Set(['--model', '--tags', '--case']);
+const VALUE_FLAGS = new Set(['--model', '--tags', '--case', '--concurrency']);
 const BOOLEAN_FLAGS = new Set(['--show-calls', '--allow-remote-db']);
 
 export function parseSmokeArgs(argv: string[]): SmokeArgs {
-  const args: SmokeArgs = { cases: [], showCalls: false, allowRemoteDb: false };
+  const args: SmokeArgs = { cases: [], showCalls: false, allowRemoteDb: false, concurrency: DEFAULT_CONCURRENCY };
+  let concurrencyGiven = false;
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]!;
     if (flag.includes('=')) throw new Error(`write '${flag.split('=')[0]} <value>', not '${flag}'`);
@@ -32,7 +36,7 @@ export function parseSmokeArgs(argv: string[]): SmokeArgs {
       continue;
     }
     if (!VALUE_FLAGS.has(flag)) {
-      throw new Error(`unknown argument '${flag}' — expected --model, --case, --tags, --show-calls or --allow-remote-db`);
+      throw new Error(`unknown argument '${flag}' — expected --model, --case, --tags, --concurrency, --show-calls or --allow-remote-db`);
     }
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--') || value.trim() === '') throw new Error(`${flag} needs a value`);
@@ -40,6 +44,10 @@ export function parseSmokeArgs(argv: string[]): SmokeArgs {
     if (flag === '--model') {
       if (args.model !== undefined) throw new Error('--model given twice');
       args.model = value;
+    } else if (flag === '--concurrency') {
+      if (concurrencyGiven) throw new Error('--concurrency given twice');
+      concurrencyGiven = true;
+      args.concurrency = parseConcurrency(value);
     } else if (flag === '--tags') {
       args.tags = [...(args.tags ?? []), ...value.split(',').map(t => t.trim()).filter(Boolean)];
     } else {

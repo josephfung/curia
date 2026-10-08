@@ -26,7 +26,7 @@ This is a **deliberate red team tool**, not a CI gate. Real Anthropic API calls 
 pnpm render-coordinator-prompt > tests/redteam/coordinator-system-prompt.txt
 ```
 
-This builds the coordinator through the production assembly path (the same builder `src/index.ts` uses, in test mode with offline LLM providers) and writes the exact system string the runtime sends on a principal chat turn: identity, security, pinned SKILL.md bodies, specialists, autonomy, date guardrail, contact details and turn budget. The file is gitignored. No LLM key is needed; with `SECRET_ENCRYPTION_KEY` set, vault-held contact details (the Signal number, email grants) are included too.
+This builds the coordinator through the production assembly path (the same builder `src/index.ts` uses, in test mode with offline LLM providers) and writes the exact system string the runtime sends on a principal chat turn: identity, security, contact details (own, then Who you serve), the YAML body with its pinned SKILL.md bodies, specialists, autonomy, date guardrail and turn budget. The file is gitignored. No LLM key is needed; with `SECRET_ENCRYPTION_KEY` set, vault-held contact details (the Signal number, email grants) are included too.
 
 Re-run this step whenever any of the inputs change (see `scripts/render-coordinator-prompt.ts` header for the full list).
 

@@ -203,6 +203,15 @@ describe('extractDestinationFromInput', () => {
     const dest = extractDestinationFromInput('create_sheet', { title: 'Budget' });
     expect(dest).toEqual({ kind: 'spreadsheet', spreadsheetId: '(new)' });
   });
+
+  it('reads the reference inputs of email-send and signal-send only (#2041)', () => {
+    expect(extractDestinationFromInput('email-send', { to: 'principal' })).toEqual({ kind: 'email', address: 'principal' });
+    expect(extractDestinationFromInput('signal-send', { recipient: 'principal' })).toEqual({ kind: 'signal', address: 'principal' });
+    // Retired raw inputs are not read (the pre-gate check refuses them first).
+    expect(extractDestinationFromInput('email-send', { to_address: 'new@cold.example' })).toBeNull();
+    expect(extractDestinationFromInput('email-send', { to: '  ', to_address: 'new@cold.example' })).toBeNull();
+    expect(extractDestinationFromInput('signal-send', { recipient_number: '+15551234567' })).toBeNull();
+  });
 });
 
 describe('allowlist prefix boundaries', () => {

@@ -1,0 +1,24 @@
+{
+  "name": "email-get-thread",
+  "description": "Fetch every message in an email thread, with full bodies, oldest first. Takes the threadId returned by email-list or email-get. Use this instead of calling email-get once per message.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "none",
+  "inputs": {
+    "thread_id": "string (threadId of the thread to fetch, from email-list or email-get)",
+    "account": "string? (named account to read from, as configured under Settings → Channels → Email → Email accounts. Defaults to the primary account.)"
+  },
+  "outputs": {
+    "threadId": "string",
+    "count": "number",
+    "truncated": "boolean (true when the thread exceeded the 50-message cap or the size budget; the oldest messages were left out, the newest are always included)",
+    "omittedOldest": "number (how many of the oldest messages were left out)",
+    "messages": "object[] (oldest first; each { id, threadId, subject, from, to, cc, body, date, unread, folders, attachments: [{ id, filename, contentType, size }] })"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 20000,
+  "capabilities": [
+    "outboundGateway"
+  ]
+}

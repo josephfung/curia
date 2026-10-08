@@ -4,6 +4,7 @@
 // the code check's verdicts on representative replies, and the judge seeing the rule.
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { emptyBreakdown } from '../../shared/usage.js';
 import { evaluateCheck } from '../../scenarios/assertions.js';
 import { formatJudgeInput } from '../../scenarios/judge.js';
 import { loadScenarioCase } from '../../scenarios/loader.js';
@@ -20,7 +21,7 @@ const behavior = (id: string) => {
 
 const runWith = (reply: string): ScenarioRun => ({
   runIndex: 0, inboundContent: scenario.inbound.content, refs: {}, toolCalls: [],
-  reply, durationMs: 1, unstubbedCalls: 0,
+  reply, durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [],
 });
 
 // The shape of a reply the judge rated PARTIAL in #1989: one assistant throughout,

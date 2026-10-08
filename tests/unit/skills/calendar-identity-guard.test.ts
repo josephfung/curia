@@ -1,13 +1,11 @@
-// calendar-identity-guard.test.ts — #1854 fail-closed wrong-identity calendar reads
+// calendar-identity-guard.test.ts — #1854 fail-closed wrong-identity calendar reads (Nylas path)
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import {
   CALENDAR_IDENTITY_MISMATCH_CODE,
   calendarIdentityMismatchResult,
-  guardMcpCalendarIdentity,
   guardNylasExplicitCalendarIdentity,
-  isGoogleWorkspaceCalendarTool,
   isPrincipalScopedCalendarTask,
 } from '../../../src/skills/_shared/calendar-identity-guard.js';
 import type { ToolContext } from '../../../src/skills/types.js';
@@ -20,9 +18,9 @@ function makeCtx(
 ): ToolContext {
   const { originator, taskMetadata, ...rest } = overrides ?? {};
   return {
-    toolName: 'get_events',
+    toolName: 'calendar-list-events',
     toolVersion: '1.0.0',
-    input: { calendar_id: 'primary' },
+    input: { calendarId: 'cal-1' },
     secret: () => {
       throw new Error('no secrets');
     },
@@ -31,17 +29,6 @@ function makeCtx(
     ...rest,
   };
 }
-
-describe('isGoogleWorkspaceCalendarTool', () => {
-  it('matches the holdback list and calendarish names', () => {
-    expect(isGoogleWorkspaceCalendarTool('get_events')).toBe(true);
-    expect(isGoogleWorkspaceCalendarTool('list_calendars')).toBe(true);
-    expect(isGoogleWorkspaceCalendarTool('query_freebusy')).toBe(true);
-    expect(isGoogleWorkspaceCalendarTool('create_focus_time_event')).toBe(true);
-    expect(isGoogleWorkspaceCalendarTool('search_drive_files')).toBe(false);
-    expect(isGoogleWorkspaceCalendarTool('create_doc')).toBe(false);
-  });
-});
 
 describe('isPrincipalScopedCalendarTask', () => {
   it('is true for system and principal originators', () => {
@@ -66,87 +53,6 @@ describe('isPrincipalScopedCalendarTask', () => {
       }),
     ).toBe(false);
     expect(isPrincipalScopedCalendarTask(undefined)).toBe(false);
-  });
-});
-
-describe('guardMcpCalendarIdentity', () => {
-  it('fails closed when principal-scoped get_events resolves to Curia identity', () => {
-    const result = guardMcpCalendarIdentity({
-      serverId: 'google-workspace',
-      toolName: 'get_events',
-      ctx: makeCtx({ originator: makeSystemOriginator() }),
-      resolvedOwnerEmail: 'nathancuria1@gmail.com',
-    });
-
-    expect(result).not.toBeNull();
-    expect(result!.success).toBe(false);
-    if (!result!.success) {
-      expect(result!.errorType).toBe('IDENTITY_MISMATCH');
-      expect(result!.error).toContain(CALENDAR_IDENTITY_MISMATCH_CODE);
-      expect(result!.error).toContain('nathancuria1@gmail.com');
-      expect(result!.error).toContain('requestedCalendarId=primary');
-      expect(result!.error).toMatch(/Do not report the principal/i);
-    }
-  });
-
-  it('does not return success+empty for a principal-scoped wrong-identity read', () => {
-    const result = guardMcpCalendarIdentity({
-      serverId: 'google-workspace',
-      toolName: 'get_events',
-      ctx: makeCtx({
-        originator: makePrincipalOriginator('11111111-1111-1111-1111-111111111111', 'signal'),
-        input: { calendar_id: 'primary' },
-      }),
-      resolvedOwnerEmail: 'curia-service@example.com',
-    });
-
-    expect(result).toEqual(
-      expect.objectContaining({
-        success: false,
-        errorType: 'IDENTITY_MISMATCH',
-      }),
-    );
-    // Explicitly not the silent-lie shape from #1853 / #1854.
-    expect(result).not.toEqual(
-      expect.objectContaining({ success: true, data: expect.anything() }),
-    );
-  });
-
-  it('allows agent-originated google-workspace calendar reads (#1330 path)', () => {
-    const result = guardMcpCalendarIdentity({
-      serverId: 'google-workspace',
-      toolName: 'get_events',
-      ctx: makeCtx({
-        originator: {
-          contactId: 'agent',
-          systemRole: 'agent',
-          channel: 'internal',
-          initiatedAt: new Date().toISOString(),
-          tier: null,
-        },
-      }),
-      resolvedOwnerEmail: 'nathancuria1@gmail.com',
-    });
-    expect(result).toBeNull();
-  });
-
-  it('ignores non-calendar google-workspace tools and other servers', () => {
-    expect(
-      guardMcpCalendarIdentity({
-        serverId: 'google-workspace',
-        toolName: 'search_drive_files',
-        ctx: makeCtx({ originator: makeSystemOriginator() }),
-        resolvedOwnerEmail: 'x@y.com',
-      }),
-    ).toBeNull();
-
-    expect(
-      guardMcpCalendarIdentity({
-        serverId: 'other-mcp',
-        toolName: 'get_events',
-        ctx: makeCtx({ originator: makeSystemOriginator() }),
-      }),
-    ).toBeNull();
   });
 });
 
@@ -246,13 +152,13 @@ describe('identityMismatchFromToolResult', () => {
     const { identityMismatchFromToolResult } = await import(
       '../../../src/skills/_shared/calendar-identity-guard.js'
     );
-    const err = identityMismatchFromToolResult('get_events', {
+    const err = identityMismatchFromToolResult('calendar-list-events', {
       success: false,
       errorType: 'IDENTITY_MISMATCH',
       error: 'mismatch',
     });
     expect(err?.type).toBe('IDENTITY_MISMATCH');
-    expect(err?.source).toBe('skill:get_events');
+    expect(err?.source).toBe('skill:calendar-list-events');
   });
 
   it('detects delegate soft-failures carrying IDENTITY_MISMATCH', async () => {
@@ -278,11 +184,11 @@ describe('identityMismatchFromToolResult', () => {
 describe('calendarIdentityMismatchResult', () => {
   it('emits a queryable IDENTITY_MISMATCH ToolResult', () => {
     const result = calendarIdentityMismatchResult({
-      toolName: 'get_events',
-      resolvedIdentity: 'svc@curia.example',
+      toolName: 'calendar-list-events',
+      resolvedIdentity: 'cal-agent',
       expectedSubject: 'principal',
-      requestedCalendarId: 'primary',
-      source: 'mcp_google_workspace',
+      requestedCalendarId: 'cal-agent',
+      source: 'nylas_agent_registry',
     });
     expect(result.success).toBe(false);
     if (!result.success) {

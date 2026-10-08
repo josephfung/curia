@@ -107,6 +107,32 @@ describe('SchedulerListHandler', () => {
       expect(job).not.toHaveProperty('lastRunSummary');
       expect(job).not.toHaveProperty('taskErrorBudget');
       expect(job).not.toHaveProperty('originator');
+      // No string task in this payload, so there is nothing to preview.
+      expect(job['taskPreview']).toBeNull();
+    }
+  });
+
+  it('previews the start of each job task, flattened and capped (#1960)', async () => {
+    const longTask = `Send the weekly\n  pipeline review. ${'More detail. '.repeat(30)}`;
+    const schedulerService = {
+      createJob: vi.fn(),
+      listJobs: vi.fn().mockResolvedValue([
+        makeJob('job-1', { taskPayload: { task: 'Scan the inbox  for receipts' } }),
+        makeJob('job-2', { taskPayload: { task: longTask } }),
+      ]),
+      cancelJob: vi.fn(),
+    };
+
+    const result = await handler.execute(makeCtx({}, { schedulerService: schedulerService as never }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const jobs = (result.data as { jobs: Array<Record<string, unknown>> }).jobs;
+      expect(jobs[0]!['taskPreview']).toBe('Scan the inbox for receipts');
+      const preview = jobs[1]!['taskPreview'] as string;
+      expect(preview.startsWith('Send the weekly pipeline review.')).toBe(true);
+      expect(preview).toHaveLength(161); // 160 chars + ellipsis
+      expect(preview.endsWith('…')).toBe(true);
     }
   });
 

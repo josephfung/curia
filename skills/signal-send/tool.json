@@ -1,17 +1,18 @@
 {
   "name": "signal-send",
-  "description": "Send a Signal message to a person (by their E.164 phone number) or a group (by group ID). For 1:1 sends, use the contact's verified Signal phone number from contact-lookup — display names are not trusted for Signal identity. For group sends, all group members must be verified contacts; unverified groups are refused with a list of which members need verification.",
-  "version": "1.1.3",
+  "description": "Send a Signal message to a person or a group (by group ID). recipient takes a contact ID, or \"principal\" for the principal; you choose the person and the number comes from their verified Signal identity. A #label (principal#personal) is a hint for which labelled identity, not a phone number. For group sends, all group members must be verified contacts; unverified groups are refused with a list of which members need verification.",
+  "version": "1.4.0",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
-    "recipient": "string?",
+    "recipient": "string? (contact ID or \"principal\", optional #label hint such as principal#personal — a hint, not a phone number. Not a contact yet: contact-create first)",
     "group_id": "string?",
     "message": "string",
-    "context_bridge": "string? (JSON — optional context bridge registration that adds a delegation hint so the agent can route any reply faster. Tracking is automatic but best-effort even without it: registration happens after the send and can fail, and what it registers expires — unless you set expires_in_hours, about 24 hours when this parameter is valid and about 6 hours when it is absent or malformed (malformed metadata is dropped silently and falls back to the bare-send window, so a typo here costs the longer window without telling you). A valid expires_in_hours replaces that default outright, in either direction: a smaller number gives a shorter window, not a longer one (a deployment may configure different defaults). Set expires_in_hours whenever the reply may land after that — anything the recipient will answer after a night, a weekend, or a trip. If the entry expired or was never registered, the reply arrives as an unrecognised cold inbound. Shape: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?}. delegation_hint must be the agent id of the specialist that owns the reply (e.g. calendar); a hint naming no registered specialist is dropped. Example: {\"agent_id\":\"coordinator\",\"delegation_hint\":\"calendar\",\"expected_reply\":\"confirmation or reschedule request\"})"
+    "context_bridge": "string? (JSON — optional context bridge registration that adds a delegation hint so the agent can route any reply faster. Tracking is automatic but best-effort even without it: registration happens after the send and can fail, and what it registers expires — unless you set expires_in_hours, about 24 hours when this parameter is usable and about 6 hours when it is absent or unusable (on a task-wake turn, about 7 days either way). Unusable means invalid JSON, not an object, or no agent_id: the whole bridge is dropped without telling you and the send gets the 6-hour window, so a typo here costs the longer window. An invalid optional field (e.g. an expires_in_hours that is not a positive number) is dropped on its own, also without telling you, and the rest of the bridge still registers. A valid expires_in_hours replaces that default outright, in either direction: a smaller number gives a shorter window, not a longer one (a deployment may configure different defaults). Set expires_in_hours whenever the reply may land after that — anything the recipient will answer after a night, a weekend, or a trip. Err on the longer side: a stale entry costs a little noise, while an expired one loses the thread. If the entry expired or was never registered, the reply arrives as an unrecognised cold inbound. Shape: {agent_id, expected_reply?, delegation_hint?, metadata?, expires_in_hours?}. delegation_hint must be the agent id of the specialist that owns the reply (e.g. calendar); a hint naming no registered specialist is dropped. Example: {\"agent_id\":\"coordinator\",\"delegation_hint\":\"calendar\",\"expected_reply\":\"confirmation or reschedule request\"})"
   },
   "outputs": {
     "delivered_to": "string",
+    "recipient_identity": "string? (label of the number used for a reference, or \"primary\" or \"unlabelled\")",
     "channel": "string"
   },
   "permissions": [],

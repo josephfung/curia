@@ -3,7 +3,7 @@
 # tool_stubs, so a case overrides any of it. The people named here are seeded as real
 # contacts (fixtures/people.yaml).
 #
-# Dates are relative to the day the suite runs (date-placeholders.ts), and list/search
+# Dates are relative to the day the suite runs (tests/shared/date-placeholders.ts), and list/search
 # results are narrowed to the call's time range or query (stub-filters.ts), so one
 # fixture answers "today", "Wednesday" and "mail from Priya" alike. Writes succeed and
 # echo their inputs ({{input:…}}). Without this office the specialists find every
@@ -134,7 +134,10 @@ ceo-inbox-list:
         - { id: 18f0c8e3a6d2b154, threadId: 18f0c8e3a6d2b154, from: [{ name: Acme Logistics Billing, email: billing@acmelogistics.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Invoice 4471 — due in 30 days, date: "{{time:today-2 09:12}}", snippet: "Please find attached invoice 4471 for September services.", unread: true, folders: [INBOX], attachments: [{ id: ANGjdJ9k1V0aW52b2lj, filename: invoice-4471.pdf, contentType: application/pdf, size: 88211 }] }
         - { id: 18f0d4a7c2e9b386, threadId: 18f0d4a7c2e9b386, from: [{ name: Sarah Johnson, email: sarah.johnson@lumen.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Follow-up after the demo?, date: "{{time:today-2 11:30}}", snippet: "Could we find 30 minutes next week to go through pricing?", unread: true, folders: [INBOX], attachments: [] }
         - { id: 18f1a9e5d3c7b042, threadId: 18f1a9e5d3c7b042, from: [{ name: SaaS Weekly, email: newsletter@saasweekly.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "SaaS Weekly: pricing pages that convert", date: "{{time:today-1 06:00}}", snippet: "This week: five pricing page teardowns.", unread: true, folders: [INBOX], attachments: [] }
-      count: 7
+        # Already read, so triage never lists it; search finds it. The only place Maya
+        # Fischer's address appears (her contact has none, fixtures/people.yaml) (#2014).
+        - { id: 18eff2b6a1d8c530, threadId: 18eff2b6a1d8c530, from: [{ name: Maya Fischer, email: maya.fischer@techto.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Speaking at TechTO in April?", date: "{{time:today-8 14:05}}", snippet: "We'd love to have you on the main stage at our April event: a 20-minute talk on building AI products in Toronto.", unread: false, folders: [INBOX], attachments: [] }
+      count: 8
 ceo-inbox-search:
   - match: { folder: DRAFTS }
     return: { folder: DRAFTS, drafts: [], count: 0 }
@@ -142,19 +145,99 @@ ceo-inbox-search:
     return: *inbox
 
 ceo-inbox-read:
+  # One entry per message ceo-inbox-list returns. A listed message the agent cannot open
+  # turns triage into a retry loop that exhausts the specialist's error budget, so the
+  # case measures the harness instead of the model.
   - match: { message_id: 18f2d9e40b6c1a73 }
     return: { id: 18f2d9e40b6c1a73, threadId: 18f2d9e40b6c1a73, from: [{ name: Elena Ruiz, email: elena.ruiz@northstar.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Need to talk today — board matter, body_plain: "Hi {{principal:first}},\n\nSomething came up on the board side that I'd rather not put in writing. Can you get on a call with me today? Any time after 1pm works.\n\nElena", date: 0, labels: [INBOX, UNREAD], attachments: [] }
   - match: { message_id: 18f2a1c7d93e5b08 }
     return: { id: 18f2a1c7d93e5b08, threadId: 18f2a1c7d93e5b08, from: [{ name: Priya Sharma, email: priya.sharma@curiatech.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Q2 board deck — final for your review, body_plain: "Hi {{principal:first}},\n\nAttached is the final Q2 board deck. Pages 4 (ARR bridge) and 9 (hiring plan) changed since the draft.\n\nPriya", date: 0, labels: [INBOX, UNREAD], attachments: [{ id: ANGjdJ8x2Q4fQ2RlY2s, filename: Q2-board-deck-final.pdf, contentType: application/pdf, size: 2481152 }] }
+  - match: { message_id: 18eff2b6a1d8c530 }
+    return: { id: 18eff2b6a1d8c530, threadId: 18eff2b6a1d8c530, from: [{ name: Maya Fischer, email: maya.fischer@techto.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Speaking at TechTO in April?", body_plain: "Hi {{principal:first}},\n\nWe'd love to have you on the main stage at our April event: a 20-minute talk on building AI products in Toronto, followed by a short Q&A. About 400 founders and engineers attend.\n\nWould you be up for it? Happy to jump on a call if that's easier.\n\nMaya Fischer\nProgramming Lead, TechTO", date: 0, labels: [INBOX], attachments: [] }
+  - match: { message_id: 18f1f6b2e8a4c917 }
+    return: { id: 18f1f6b2e8a4c917, threadId: 18f1f6b2e8a4c917, from: [{ name: Contracts Desk, email: contracts@globex.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Contract renewal — signature needed by {{weekday:next-friday}}", body_plain: "Hello,\n\nYour Globex master agreement renews on {{date:next-friday}}. Please countersign the renewal order by end of day {{weekday:next-friday}}. After that the current terms lapse and service moves to month-to-month at list price.\n\nGlobex Contracts Desk", date: 0, labels: [INBOX, UNREAD], attachments: [] }
+  - match: { message_id: 18f2b5d81c7e4a29 }
+    return: { id: 18f2b5d81c7e4a29, threadId: 18f2b5d81c7e4a29, from: [{ name: Daniel Okafor, email: daniel.okafor@curiatech.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Fwd: Unacceptable outage response", body_plain: "{{principal:first}}, forwarding below. Northwind's COO is unhappy with how we handled Tuesday's outage, and they renew this quarter. I think this needs a call from you this week.\n\nDaniel\n\n---------- Forwarded message ----------\nFrom: Northwind COO <coo@northwind.example>\nSubject: Unacceptable outage response\n\nWe were down for four hours on Tuesday and heard nothing from your team for the first two. That is not the partnership we signed up for, and it will come up at renewal.", date: 0, labels: [INBOX, UNREAD], attachments: [] }
+  - match: { message_id: 18f0c8e3a6d2b154 }
+    return: { id: 18f0c8e3a6d2b154, threadId: 18f0c8e3a6d2b154, from: [{ name: Acme Logistics Billing, email: billing@acmelogistics.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Invoice 4471 — due in 30 days, body_plain: "Hello,\n\nPlease find attached invoice 4471 for September services. Payment is due within 30 days.\n\nAcme Logistics Billing", date: 0, labels: [INBOX, UNREAD], attachments: [{ id: ANGjdJ9k1V0aW52b2lj, filename: invoice-4471.pdf, contentType: application/pdf, size: 88211 }] }
+  - match: { message_id: 18f0d4a7c2e9b386 }
+    return: { id: 18f0d4a7c2e9b386, threadId: 18f0d4a7c2e9b386, from: [{ name: Sarah Johnson, email: sarah.johnson@lumen.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: Follow-up after the demo?, body_plain: "Hi {{principal:first}},\n\nThanks again for the September demo. Could we find 30 minutes next week to go through pricing? Tuesday or Thursday afternoon works best on our side.\n\nSarah Johnson\nFounder and CEO, Lumen Analytics", date: 0, labels: [INBOX, UNREAD], attachments: [] }
+  - match: { message_id: 18f1a9e5d3c7b042 }
+    return: { id: 18f1a9e5d3c7b042, threadId: 18f1a9e5d3c7b042, from: [{ name: SaaS Weekly, email: newsletter@saasweekly.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "SaaS Weekly: pricing pages that convert", body_plain: "This week: five pricing page teardowns, and why an annual-plan toggle converts better than you'd think.\n\nYou are receiving this because you subscribed to SaaS Weekly. Unsubscribe: https://saasweekly.example/unsubscribe", date: 0, labels: [INBOX, UNREAD], attachments: [] }
   - match: {}
     error: Message not found in this mailbox.
 
+# Production's temp-file path: a short file:// URL the agent passes to file-parse, which
+# is what the real tool returns when temporary storage works. Base64 would have the
+# model re-type a kilobyte of it, and it corrupts it (seen here). Matched on the message
+# too, as the real tool checks the attachment belongs to it.
+ceo-inbox-download-attachment:
+  - match: { attachment_id: null }
+    error: attachment_id is required
+  - match: { message_id: null }
+    error: message_id is required
+  - match: { message_id: 18f0c8e3a6d2b154, attachment_id: ANGjdJ9k1V0aW52b2lj }
+    return: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", filename: invoice-4471.pdf, content_type: application/pdf, size: 88211 }
+  - match: { message_id: 18f2a1c7d93e5b08, attachment_id: ANGjdJ8x2Q4fQ2RlY2s }
+    return: { temp_file_url: "file:///tmp/curia-smoke/Q2-board-deck-final.pdf", filename: Q2-board-deck-final.pdf, content_type: application/pdf, size: 2481152 }
+  - match: {}
+    error: "Attachment not found on that message"
+
 ceo-inbox-draft-reply:
+  # The real skill reports the reply-all recipients; a bare `to: []` reads as "addressed to nobody".
+  - match: { reply_to_message_id: 18eff2b6a1d8c530 }
+    return: { draft_id: draft-0001, subject: "Re: Speaking at TechTO in April?", to: [{ name: Maya Fischer, email: maya.fischer@techto.example }], cc: [] }
   - match: {}
     return: { draft_id: draft-0001, subject: Re, to: [], cc: [] }
 ceo-inbox-draft-compose:
   - match: {}
     return: { draft_id: draft-0002, subject: "{{input:subject}}", to: "{{input:to}}", cc: [] }
+# Triage writes (ceo-inbox SKILL.md). Test mode withholds the mailbox credentials, so the
+# real tools would fail. These succeed the way production does, and fail where the real
+# handler would: a missing argument, or a message that is not in this mailbox.
+# Any message id: cases define their own messages (the branch-a cases read ids the
+# office never lists), so "only listed ids" would fail real ones.
+ceo-inbox-label:
+  - match: { message_id: null }
+    error: message_id is required
+  - match: { labels: null }
+    error: labels array is required and must contain at least one label
+  - match: { labels: [] }
+    error: labels array is required and must contain at least one label
+  - match: {}
+    return: { success: true, message_id: "{{input:message_id}}", applied: "{{input:labels}}", created: [], folders: [] }
+# Any message id, as for labels. A string "false" lands on the type error.
+ceo-inbox-mark-starred:
+  - match: { message_id: null }
+    error: message_id is required
+  - match: { starred: false }
+    return: { success: true, message_id: "{{input:message_id}}", starred: false }
+  - match: { starred: true }
+    return: { success: true, message_id: "{{input:message_id}}", starred: true }
+  - match: { starred: null }
+    return: { success: true, message_id: "{{input:message_id}}", starred: true }
+  - match: {}
+    error: starred must be a boolean
+# In test mode the real tool fails (no working-docs repo, which would feed the real
+# instance's learning signal). This answers as production does when the draft is kept.
+ceo-inbox-shadow-draft:
+  - match: { source_message_id: null }
+    error: source_message_id and body are required
+  - match: { body: null }
+    error: source_message_id and body are required
+  - match: {}
+    return: { captured: true }
+# Only the drafts this office's draft stubs create. Returns just the id: echoing the
+# fields a body-only edit leaves out would read as "subject and recipients cleared".
+ceo-inbox-draft-edit:
+  - match: { draft_id: null }
+    error: draft_id is required
+  - match: { draft_id: draft-0001 }
+    return: { draft_id: draft-0001 }
+  - match: { draft_id: draft-0002 }
+    return: { draft_id: draft-0002 }
+  - match: {}
+    error: Failed to update draft in principal inbox
 ceo-inbox-mark-read:
   - match: {}
     return: { marked_read: true }
@@ -165,6 +248,22 @@ ceo-inbox-archive:
 ceo-inbox-update-folders:
   - match: {}
     return: { success: true, message_id: "{{input:message_id}}", folders: [], created: [], removed_unresolved: [] }
+
+# ── Attachments ────────────────────────────────────────────────────────────
+
+# file-parse needs infraLlm, which test mode does not provide. These answer only for the
+# files ceo-inbox-download-attachment returns above, as PDFs, so any other file still
+# gets test mode's missing-capability error. The structured invoice follows the real
+# schema (skills/file-parse/prompts.ts); the handler lowercases extract_as.
+file-parse:
+  - match: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", mime_type: application/pdf, extract_as: invoice }
+    return: &invoice-structured { type: pdf, raw_text: "Acme Logistics Inc. - INVOICE 4471\nInvoice date: {{date:today-2}}\nBill to: CuriaTech\nSeptember freight and warehousing services: USD 18,450.00\nTotal due: USD 18,450.00\nDue date: {{date:today+28}} (Net 30)\nRemit to: billing@acmelogistics.example", structured: { vendor: Acme Logistics Inc., invoice_number: "4471", line_items: [{ description: September freight and warehousing services, quantity: null, unit_price: null, amount: 18450.00 }], subtotal: 18450.00, tax: null, total: 18450.00, currency: USD, due_date: "{{date:today+28}}" }, confidence: 0.95 }
+  - match: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", mime_type: application/pdf, extract_as: Invoice }
+    return: *invoice-structured
+  - match: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", mime_type: application/pdf }
+    return: { type: pdf, raw_text: "Acme Logistics Inc. - INVOICE 4471\nInvoice date: {{date:today-2}}\nBill to: CuriaTech\nSeptember freight and warehousing services: USD 18,450.00\nTotal due: USD 18,450.00\nDue date: {{date:today+28}} (Net 30)\nRemit to: billing@acmelogistics.example", structured: null, confidence: 1.0 }
+  - match: { temp_file_url: "file:///tmp/curia-smoke/Q2-board-deck-final.pdf", mime_type: application/pdf }
+    return: { type: pdf, raw_text: "Q2 Board Deck - FINAL\np.4 ARR bridge: updated since the draft\np.9 Hiring plan: updated since the draft\nPrepared by Priya Sharma", structured: null, confidence: 1.0 }
 
 # The coordinator's own mailbox (Curia's), separate from the principal's.
 email-list:

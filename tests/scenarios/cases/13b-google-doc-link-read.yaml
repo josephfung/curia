@@ -1,0 +1,173 @@
+# Case 13b (#2024): the principal sends a Google Docs link and asks about it. The Docs
+# tools are no longer pinned, so the coordinator activates google-workspace and reads the
+# Doc with a Docs tool. web-fetch and web-browser have no Google credentials and only get
+# a sign-in page; both are stubbed to succeed with one, so the wrong path is available.
+# Rule: agents/coordinator.yaml, "Google Workspace".
+name: google doc link read
+description: >
+  The principal pastes a Google Docs link to the Q3 offsite plan and asks for the gist.
+  The coordinator activates its Google Workspace tools and reads the Doc with a Docs or
+  Drive tool, never web-fetch or web-browser, then summarises it.
+tags: [google-workspace, skill-activation]
+inbound:
+  from: principal
+  content: "What's the gist of this? https://docs.google.com/document/d/1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga/edit?usp=sharing"
+tool_stubs:
+  get_doc_as_markdown:
+    - match: {}
+      return: &offsite_doc |
+        # Q3 leadership offsite: plan
+
+        **When:** the second week of next month, two days. **Where:** Halifax.
+
+        ## Goals
+        1. Agree the FY27 hiring plan (target: 12 roles, 4 in engineering).
+        2. Pick one of two pricing models for the enterprise tier.
+        3. Decide whether to open a Montreal office.
+
+        ## Open questions
+        - Budget is capped at $40k; travel is still unbooked.
+        - Dana wants a customer panel on day 2.
+  get_doc_content:
+    - match: {}
+      return: *offsite_doc
+  get_drive_file_content:
+    - match: {}
+      return: *offsite_doc
+  # Some runs read the Doc's comments too (#2050). workspace-mcp 2.0.1's format; the
+  # comments add detail without changing the gist.
+  list_document_comments:
+    - match: {}
+      return: |
+        Found 2 comments in document 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga:
+
+        Comment ID: AAABkq3Zr7c
+        Author: Dana Whitfield
+        Created: {{time:today-3 14:12}}
+        Quoted text: Dana wants a customer panel on day 2.
+        Content: Two customers have said yes in principle. I'll confirm names next week.
+
+        Comment ID: AAABkq4Lm2w
+        Author: Marcus Lee
+        Created: {{time:today-2 09:40}} [RESOLVED]
+        Quoted text: Budget is capped at $40k
+        Content: Finance confirmed the cap.
+          Replies (1):
+            Reply ID: AAABkq4Np8s
+            Author: Dana Whitfield
+            Created: {{time:today-2 10:05}}
+            Content: Thanks, resolving.
+  # The rest of the read-only Drive and Docs surface that can touch this Doc, as in 13a,
+  # so a run that wanders onto another read path still gets an answer (#2050).
+  inspect_doc_structure:
+    - match: {}
+      return: |
+        Document structure for 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga:
+        {
+          "title": "Q3 leadership offsite: plan",
+          "total_elements": 11,
+          "total_length": 402,
+          "tables": 0,
+          "table_details": [],
+          "headers": {},
+          "footers": {}
+        }
+  # The Doc has no tables; this is the real tool's answer for one without.
+  debug_table_structure:
+    - match: {}
+      return: "Error: Table index 0 not found. Document has 0 table(s)."
+  list_drive_items:
+    - match: {}
+      return: &listing |
+        Found 1 item:
+        - Name: "Q3 leadership offsite: plan" (ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga, Type: application/vnd.google-apps.document)
+  list_docs_in_folder:
+    - match: {}
+      return: *listing
+  get_drive_file_permissions:
+    - match: {}
+      return: |
+        File: Q3 leadership offsite: plan
+        ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga
+        Type: application/vnd.google-apps.document
+        Owners: Dana Whitfield (dana.whitfield@example.test)
+
+        Sharing Status:
+          Shared: True
+          Number of permissions: 2
+          Permissions:
+            - user: dana.whitfield@example.test (owner)
+            - user: assistant@example.test (writer)
+  check_drive_file_public_access:
+    - match: {}
+      return: '"Q3 leadership offsite: plan" is not shared publicly. Link sharing: restricted.'
+  get_drive_shareable_link:
+    - match: {}
+      return: "https://docs.google.com/document/d/1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga/edit?usp=sharing"
+  get_drive_file_download_url:
+    - match: {}
+      return: |
+        File downloaded successfully!
+        File: Q3 leadership offsite: plan
+        File ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga
+        Size: 48.3 KB (49460 bytes)
+        MIME Type: application/pdf
+
+        📎 Saved to: /tmp/.workspace-mcp/attachments/Q3_leadership_offsite_plan_6c2e9b14-3d7a-4f08-b1e5-90a4d8c2f377.pdf
+
+        The file has been saved to disk and can be accessed directly via the file path.
+
+        Note: Google native file exported to application/pdf format.
+  search_docs:
+    - match: {}
+      return: |
+        Found 1 Google Doc:
+        - "Q3 leadership offsite: plan" (ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga)
+  search_drive_files:
+    - match: {}
+      return: |
+        Found 1 file:
+        - Name: "Q3 leadership offsite: plan" (ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga, Type: application/vnd.google-apps.document)
+  web-fetch:
+    - match: {}
+      return:
+        url: https://accounts.google.com/v3/signin/identifier
+        title: Sign in - Google Accounts
+        content: "Sign in. Use your Google Account. Email or phone. Forgot email? Next."
+  web-browser:
+    - match: {}
+      return:
+        url: https://accounts.google.com/v3/signin/identifier
+        title: Sign in - Google Accounts
+        text: "Sign in. Use your Google Account. Email or phone. Forgot email? Next."
+expected_behaviors:
+  - id: activates_google_workspace
+    weight: critical
+    description: Activates the google-workspace skill to get its Docs tools.
+    check:
+      called: skill-activate
+      with: { skill: google-workspace }
+  - id: reads_with_docs_tool
+    weight: critical
+    description: Reads the linked Doc by its ID with a Docs or Drive tool.
+    check:
+      any_of:
+        - called: get_doc_as_markdown
+          with: { document_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
+        - called: get_doc_content
+          with: { document_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
+        - called: get_drive_file_content
+          with: { file_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
+  - id: no_web_tools_on_google_url
+    weight: critical
+    description: Never fetches the Google URL with web-fetch or web-browser.
+    check:
+      not_called: [web-fetch, web-browser]
+  - id: summarises_doc
+    weight: important
+    description: >
+      Gives the gist from the Doc: a two-day Halifax offsite whose goals are the hiring
+      plan, the enterprise pricing model and a possible Montreal office.
+failure_modes:
+  - Fetches the link with web-fetch and reports a Google sign-in page
+  - Says it cannot open Google Docs

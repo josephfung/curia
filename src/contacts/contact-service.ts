@@ -25,7 +25,10 @@ import type {
   ContactServiceOptions,
   CreateContactOptions,
   DedupConfidence,
+  DuplicateCandidate,
+  DuplicateCheck,
   DuplicatePair,
+  DuplicateReason,
   GrantRecommendation,
   GrantRecommendationStatus,
   LinkIdentityOptions,
@@ -37,10 +40,11 @@ import type {
   IdentityStatus,
   SystemRole,
 } from './types.js';
-import type { DedupService } from './dedup-service.js';
+import { jaroWinkler, normalizeDisplayName, type DedupService } from './dedup-service.js';
 import type { ContactCalendar, CreateCalendarLinkOptions, ResolvedCalendar } from './calendar-types.js';
 import { normalizeExclusionPair, type ExclusionPair } from './dedup-exclusions.js';
 import { canonicalPairKey } from './dedup-pair-key.js';
+import { comparableChannels, isNearMiss, sameIdentifier } from './identifier-near-miss.js';
 
 /** Outcome of re-pointing a merged-away contact's dedup exclusions onto the survivor. */
 export interface ReattachExclusionsResult {
@@ -162,6 +166,8 @@ interface ContactServiceBackend {
   createIdentity(identity: ChannelIdentity): Promise<void>;
   getIdentity(identityId: string): Promise<ChannelIdentity | null>;
   getIdentitiesForContact(contactId: string): Promise<ChannelIdentity[]>;
+  /** Every identity on any of these channels, for the duplicate check (#2041). */
+  listIdentitiesOnChannels(channels: string[]): Promise<ChannelIdentity[]>;
   resolveByChannelIdentity(channel: string, channelIdentifier: string): Promise<ResolvedSender | null>;
   unlinkIdentity(identityId: string): Promise<boolean>;
   setIdentityStatus(identityId: string, status: IdentityStatus): Promise<ChannelIdentity>;
@@ -268,9 +274,16 @@ interface ContactServiceBackend {
 // email (no header spoofing), so we trust the source number at the same level as email_participant.
 // slack_participant is auto-verified — Slack user ids from the principal's workspace (ADR-033).
 // sms_participant is NOT auto-verified — SMS From is spoofable (ADR-036); principal must verify.
-// agent_called is auto-verified — the agent extracted the identifier mechanically from the channel
-// (e.g. an email sender address), not from LLM-generated content. Same trust level as email_participant.
-// Only self_claimed starts unverified and cannot be force-verified.
+// agent_called is auto-verified — contact-register records it, callable by ceo-inbox only, for a sender
+// ceo-inbox read from mail. The identifier is still tool input and gets no duplicate check; whether it
+// should is an open question, tracked in #2061 (#2041, ADR-047).
+// agent_stated is auto-verified — contact-create and contact-link-identity write it only after the
+// duplicate check passes (findLikelyDuplicates), and every send reaches it by reference afterwards,
+// so the agent types it once, in a checked place (#2041, ADR-047).
+// outbound_recipient is NOT auto-verified — the address came from LLM-generated tool input on a
+// first-time send, the opposite of a mechanical extraction (#2033, ADR-047). An agent re-stating it
+// with contact-link-identity verifies it (#2041).
+// Only self_claimed cannot be force-verified.
 const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'ceo_stated',
   'email_participant',
@@ -279,7 +292,35 @@ const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'crm_import',
   'calendar_attendee',
   'agent_called',
+  'agent_stated',
 ]);
+
+/**
+ * Jaro-Winkler score (0-1, on names normalized by normalizeDisplayName) at which a
+ * display name counts as a likely mistyping of an existing contact's (#2041). The
+ * check lists the contact as a `similar_name` candidate; the agent can still name it
+ * in distinct_from.
+ *
+ * Why 0.95. The scores sit in two groups with a gap between them:
+ *   typos of one person:  Priya Natarajan / Priya Natrajan  0.958
+ *                         Jenna Torres / Jena Torres        0.981
+ *                         Michael O'Connor / Micheal O'Connor  0.987
+ *   two people who share a first name or a surname:
+ *                         David Kim / David King            0.938
+ *                         Sarah Johnson / Sarah Jones       0.936
+ *                         Alex Morgan / Alex Martin         0.905
+ *                         Pat Principal / Sam Principal     0.852
+ * 0.95 is inside the gap. It catches a one-letter typo after the first letter in a
+ * name of about eight or more characters; shorter names and first-letter typos can
+ * fall below it, and a few different people with one-letter-apart names of 8+
+ * characters can land above it (Wei Chen / Wei Chan, 0.95). Raising it to 0.96
+ * would miss "Natrajan"; lowering it
+ * to 0.93 would list Sarah Jones and David King. The dedup scan's cut-offs (0.7 and
+ * 0.9, dedup-service.ts) apply to a combined score and are too loose for a check
+ * that interrupts an agent's write. Some different people still score above 0.95
+ * (Michael Brown / Michelle Brown, 0.956); distinct_from clears those.
+ */
+export const NAME_NEAR_MISS_THRESHOLD = 0.95;
 
 /**
  * ContactService manages the lifecycle of contacts and their channel identities.
@@ -919,6 +960,97 @@ export class ContactService {
       this.logger?.error({ err }, 'findDuplicates() failed during contact scan');
       throw err;
     }
+  }
+
+  /**
+   * Contacts that an agent-entered contact or address may duplicate (#2041).
+   * contact-create and contact-link-identity call this before writing anything.
+   *
+   * - taken: an identifier is already on another contact on the same channel (email
+   *   ignoring case, numbers by digits). The write is refused outright.
+   * - candidates: the same number on a sibling phone channel, a near-miss identifier
+   *   (identifier-near-miss.ts), the same display name ignoring case and spacing, or a
+   *   near-miss display name (Jaro-Winkler at or above NAME_NEAR_MISS_THRESHOLD).
+   *   The write is refused until the agent names each one in distinct_from.
+   *
+   * `identities` must already be normalized (normalizeAgentIdentifier).
+   * `excludeContactId` is the contact being added to, which is never its own duplicate.
+   * Errors propagate: callers refuse the write rather than skip the check.
+   */
+  async findLikelyDuplicates(input: {
+    displayName?: string;
+    identities: ReadonlyArray<{ channel: string; identifier: string }>;
+    excludeContactId?: string;
+  }): Promise<DuplicateCheck> {
+    const channels = new Set(input.identities.flatMap((wanted) => comparableChannels(wanted.channel)));
+    const onFile = channels.size > 0 ? await this.backend.listIdentitiesOnChannels([...channels]) : [];
+
+    const takenChannel = new Map<string, string>();
+    const reasons = new Map<string, DuplicateReason[]>();
+    const addReason = (contactId: string, reason: DuplicateReason): void => {
+      const list = reasons.get(contactId) ?? [];
+      const key = (r: DuplicateReason): string => `${r.kind}:${'channel' in r ? r.channel : ''}`;
+      if (!list.some((existing) => key(existing) === key(reason))) list.push(reason);
+      reasons.set(contactId, list);
+    };
+
+    for (const wanted of input.identities) {
+      const family = comparableChannels(wanted.channel);
+      for (const held of onFile) {
+        if (held.contactId === input.excludeContactId || !family.includes(held.channel)) continue;
+        if (sameIdentifier(wanted.channel, wanted.identifier, held.channelIdentifier)) {
+          if (held.channel === wanted.channel) {
+            if (!takenChannel.has(held.contactId)) takenChannel.set(held.contactId, wanted.channel);
+          } else {
+            addReason(held.contactId, { kind: 'same_number', channel: held.channel });
+          }
+        } else if (isNearMiss(wanted.channel, wanted.identifier, held.channelIdentifier)) {
+          addReason(held.contactId, { kind: 'similar_address', channel: held.channel });
+        }
+      }
+    }
+
+    if (input.displayName !== undefined) {
+      const comparable = (name: string): string => name.toLowerCase().replace(/\s+/g, ' ').trim();
+      const wantedName = comparable(sanitizeDisplayName(input.displayName));
+      if (wantedName) {
+        // findContactByName is a substring match; keep exact (normalized) names only.
+        const sameName = new Set<string>();
+        for (const contact of await this.backend.findContactByName(wantedName)) {
+          if (contact.id !== input.excludeContactId && comparable(contact.displayName) === wantedName) {
+            addReason(contact.id, { kind: 'same_name' });
+            sameName.add(contact.id);
+          }
+        }
+
+        // A typo ("Priya Natrajan" for "Priya Natarajan") is not a substring of the real
+        // name, so it needs a scan. listContacts() with no filters reads every contact,
+        // and a principal's store is hundreds to low thousands, created at a low rate.
+        const wantedNormalized = normalizeDisplayName(sanitizeDisplayName(input.displayName));
+        if (wantedNormalized) {
+          for (const contact of await this.backend.listContacts()) {
+            if (contact.id === input.excludeContactId || sameName.has(contact.id)) continue;
+            if (jaroWinkler(wantedNormalized, normalizeDisplayName(contact.displayName)) >= NAME_NEAR_MISS_THRESHOLD) {
+              addReason(contact.id, { kind: 'similar_name' });
+            }
+          }
+        }
+      }
+    }
+
+    const taken: DuplicateCheck['taken'] = [];
+    for (const [contactId, channel] of takenChannel) {
+      // A taken contact is reported once, as taken.
+      reasons.delete(contactId);
+      const contact = await this.backend.getContact(contactId);
+      if (contact) taken.push({ contact, channel });
+    }
+    const candidates: DuplicateCandidate[] = [];
+    for (const [contactId, list] of reasons) {
+      const contact = await this.backend.getContact(contactId);
+      if (contact) candidates.push({ contact, reasons: list });
+    }
+    return { taken, candidates };
   }
 
   /**
@@ -2341,6 +2473,28 @@ class PostgresContactBackend implements ContactServiceBackend {
     return result.rows.map((row) => this.rowToIdentity(row));
   }
 
+  async listIdentitiesOnChannels(channels: string[]): Promise<ChannelIdentity[]> {
+    if (channels.length === 0) return [];
+    const result = await this.pool.query<{
+      id: string;
+      contact_id: string;
+      channel: string;
+      channel_identifier: string;
+      label: string | null;
+      verified: boolean;
+      verified_at: Date | null;
+      status: string;
+      source: string;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT id, contact_id, channel, channel_identifier, label, verified, verified_at, status, source, created_at, updated_at
+       FROM contact_channel_identities WHERE channel = ANY($1::text[])`,
+      [channels],
+    );
+    return result.rows.map((row) => this.rowToIdentity(row));
+  }
+
   async resolveByChannelIdentity(
     channel: string,
     channelIdentifier: string,
@@ -3179,6 +3333,11 @@ class InMemoryContactBackend implements ContactServiceBackend {
       }
     }
     return results;
+  }
+
+  async listIdentitiesOnChannels(channels: string[]): Promise<ChannelIdentity[]> {
+    const wanted = new Set(channels);
+    return [...this.identities.values()].filter((identity) => wanted.has(identity.channel));
   }
 
   async resolveByChannelIdentity(

@@ -87,6 +87,8 @@ describe('AsyncOfframpHandler', () => {
     expect(task.payload.content).toContain('Voice async off-ramp');
     expect(task.payload.content).toContain('Draft a research deck');
     expect(task.payload.content).toContain('email-send');
+    // The follow-up names the alias, not the address list (#2033).
+    expect(task.payload.content).toContain('passing "principal" as the recipient');
     expect(task.payload.metadata).toMatchObject({
       voiceOfframp: true,
       followUpChannel: 'email',

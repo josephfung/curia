@@ -170,6 +170,10 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 1. Create `agents/<name>.yaml` with required fields (name, description, model, system_prompt)
 2. Optionally add `handler: ./<name>.handler.ts` for custom logic
 
+### Fixing agent behavior
+
+Don't append a paragraph to `system_prompt`. Put the rule on the highest rung that works: code enforcement → injection with its trigger → tool description → lazy playbook → always-on prompt. See [ADR-046](docs/adr/046-agent-behavior-fix-placement.md). `tests/unit/agents/prompt-budget.test.ts` fails CI when the coordinator's always-on prompt or local tool definitions grow past budget. Prefer a behavioral test (scenario, smoke, or a unit test of the code) over one that pins prompt text.
+
 ### Setup wizard — keep the catalog current
 
 When adding a **significant new capability** — a new channel adapter, a new
@@ -194,11 +198,19 @@ task.
 
 ### Reaching the principal
 
-The runtime injects a **`## Principal Contact Details`** block into every agent's
-effective system prompt on each task turn. The block lists the principal's verified
-channel identities (email, Signal, phone, etc.) loaded from `contact_channel_identities`
-at startup. Agents should use those values when they need to reach the principal —
-they are authoritative and labelled as such in the block.
+The runtime injects a **`## Who you serve`** section into every agent's effective
+system prompt on each task turn, ahead of the YAML body. Its **`### Principal Contact
+Details`** block lists the principal's verified channel identities (email, Signal,
+phone, etc.) loaded from `contact_channel_identities` at startup. They are
+authoritative and labelled as such in the block.
+
+To **send** to the principal, agents pass the reserved alias `principal` as the
+recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`; the skill looks
+the address up from those verified identities (#2033,
+[ADR-047](docs/adr/047-send-skills-address-recipients-by-reference.md)). A model with
+the right address in context still mistypes it, so no prompt or task payload should
+ask an agent to copy the principal's address into a send skill. The block's values are
+for tools that need a literal address.
 
 The `${principal_contact_id}` placeholder is also injected at bootstrap by
 `interpolateRuntimeContext()` for agents that reference it. Use the contact ID
@@ -208,7 +220,9 @@ the platform resolves the ID once at bootstrap.
 
 For **other contacts** (third parties, external people), use `${principal_contact_id}`
 with `entity-context` or resolve via the contacts specialist — do not hardcode
-their addresses.
+their addresses. Send skills and `email-draft-save` take the contact's UUID; there is no
+raw-address path. Someone with no contact record is added first with `contact-create`,
+which returns the UUID (#2041, ADR-047).
 
 #### Where the placeholder resolves — and where it does not
 
@@ -386,9 +400,11 @@ Run both behavior suites against the **same `main` commit as the security gate**
 
 ```bash
 docker stop curia-curia-1                       # scenarios refuses to run beside a live instance
-pnpm smoke --model <standard-tier model>        # ~40 min; docs/dev/smoke-tests.md
-pnpm scenarios --model <standard-tier model>    # ~25 min; tests/scenarios/README.md
+pnpm smoke --model <standard-tier model>        # terminal 1; docs/dev/smoke-tests.md
+pnpm scenarios --model <standard-tier model>    # terminal 2, once smoke prints "Database: throwaway copy"; tests/scenarios/README.md
 ```
+
+Run them side by side, smoke first: smoke copies the dev database, and Postgres copies a database only while nothing else is connected to it, so scenarios must start after the copy. Each suite runs 4 cases at a time (`--concurrency`). Measured on 2026-10-05 (#1980): **both suites together took 12 min and OpenRouter billed $2.10**. Each summary prints the run's own spend by agent and judge. On that run the estimate priced cached input as uncached and ran about 2× the bill (estimated $4.39: smoke $2.84, scenarios $1.55, the judge about 10%); #1962 has since fixed the cache accounting; see `docs/dev/smoke-tests.md`.
 
 - **Block the release** if either command exits non-zero: any smoke case fails its gate, or any critical scenario behavior is below threshold. Judge errors and errored runs also fail the gate; re-run those rather than waving them through. A case marked `known_failure` (smoke shows it as `KNOWN`; scenarios list it under known failures) is reported but not gated: confirm each one's issue is still open, because a marker on a closed issue would wave a regression through.
 - **Record the results with the gate SHA.** Each suite prints the `Commit:` it ran on, and it must equal `<gate-sha>` exactly — a `-dirty` suffix means uncommitted changes were tested, so the run does not count. Note both suites' outcomes next to the security gate's (smoke: cases passed, any `PASS*` retries and `KNOWN` known failures; scenarios: gate passed, plus any known failures).

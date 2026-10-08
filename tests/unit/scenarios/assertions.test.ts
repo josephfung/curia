@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { emptyBreakdown } from '../../shared/usage.js';
 import { evaluateCheck, internalNamesFor } from '../../scenarios/assertions.js';
 import type { CapturedToolCall, ScenarioRun } from '../../scenarios/types.js';
 
@@ -7,7 +8,7 @@ function call(name: string, input: Record<string, unknown> = {}): CapturedToolCa
 }
 
 function run(toolCalls: CapturedToolCall[], reply: string | null = 'ok'): ScenarioRun {
-  return { runIndex: 0, inboundContent: 'hi', refs: {}, toolCalls, reply, durationMs: 1, unstubbedCalls: 0 };
+  return { runIndex: 0, inboundContent: 'hi', refs: {}, toolCalls, reply, durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [] };
 }
 
 const ctx = { internalNames: [] as string[] };

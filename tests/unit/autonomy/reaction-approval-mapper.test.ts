@@ -154,6 +154,43 @@ describe('ReactionApprovalMapper', () => {
     expect(actionLogRepo.resolveRow).toHaveBeenCalledWith(42, 'approved', 'ceo');
   });
 
+  it('refuses a hinted approval when the pinned identity no longer matches', async () => {
+    const pins = [{ ref: 'principal#personal', identityId: 'id-personal', identityName: 'personal' }];
+    const row = makeRow({
+      toolName: 'email-send',
+      conversationId: 'slack:D123',
+      payload: { to: 'principal#personal', subject: 'x', body: 'y' },
+      sendResolution: pins,
+    });
+    actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(row);
+    const rejectStaleApproval = vi.fn().mockResolvedValue(true);
+    (actionLogRepo as unknown as { rejectStaleApproval: ReturnType<typeof vi.fn> }).rejectStaleApproval = rejectStaleApproval;
+    const confirmPinnedSendResolution = vi.fn().mockResolvedValue({ ok: false, error: 'stale' });
+    (executionLayer as unknown as { confirmPinnedSendResolution: ReturnType<typeof vi.fn> }).confirmPinnedSendResolution = confirmPinnedSendResolution;
+
+    await mapper.handleReaction(createInboundReaction({
+      conversationId: 'slack:D123',
+      channelId: 'slack',
+      senderId: 'U_CEO',
+      emoji: 'thumbsup',
+      targetMessageId: '1710000000.000100',
+    }));
+
+    expect(confirmPinnedSendResolution).toHaveBeenCalledWith('email-send', pins);
+    expect(rejectStaleApproval).toHaveBeenCalledWith(42);
+    expect(actionLogRepo.resolveRow).not.toHaveBeenCalled();
+    expect(executionLayer.invoke).not.toHaveBeenCalled();
+    expect(bus.publish).toHaveBeenCalledWith(
+      'dispatch',
+      expect.objectContaining({
+        type: 'outbound.message',
+        payload: expect.objectContaining({
+          content: expect.stringContaining('no longer matches the address'),
+        }),
+      }),
+    );
+  });
+
   it('approves skin-toned unicode 👍🏽', async () => {
     actionLogRepo.findPendingByDeliveryMessage.mockResolvedValue(
       makeRow({ conversationId: 'signal:+15551234567' }),

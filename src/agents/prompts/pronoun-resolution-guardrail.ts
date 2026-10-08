@@ -3,7 +3,10 @@
 
 /**
  * Require explicit entity identities before `delegate` calls.
- * Extracted from agents/coordinator.yaml "### Resolving pronouns before delegating".
+ * Extracted from agents/coordinator.yaml "### Resolving pronouns before delegating",
+ * which #1958 removed from the coordinator (scenario case 12 covers the behavior).
+ * Kept for the voice-brain-parity spike that imports it; not composed into any
+ * production prompt.
  */
 export const PRONOUN_RESOLUTION_GUARDRAIL = [
   '### Resolving pronouns before delegating',

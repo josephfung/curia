@@ -1,7 +1,7 @@
 {
   "name": "scheduler-create",
-  "description": "Create a scheduled job. Supports cron expressions for recurring jobs and ISO 8601 timestamps for one-shot jobs. Provide intent_anchor to create a persistent multi-burst task.",
-  "version": "1.1.1",
+  "description": "Create a new scheduled job: cron_expr for a recurring job, run_at (ISO 8601) for a one-shot. For a recurring operational routine pass only cron_expr and task; intent_anchor creates a persistent multi-burst task and is not for operational sweeps. Only for a job that does not exist yet. A change to an existing routine (new time, reworded task) is scheduler-update action=edit on that job: creating instead leaves the old job running, so the task fires twice. An additional run alongside an existing routine (\"also on Fridays\") is a new job and belongs here. Check scheduler-list first. An exact copy of an active job (same agent, task and schedule; for a cron, in the same timezone) is refused. When an active job for the same agent runs the same task on another schedule, the job is created and similar_active_jobs lists the others; if the request was to change one of them rather than add a run, cancel the new job and edit the existing one.",
+  "version": "1.2.0",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {
@@ -15,7 +15,9 @@
   },
   "outputs": {
     "jobId": "string",
-    "agentTaskId": "string?"
+    "agentTaskId": "string?",
+    "similar_active_jobs": "object[]? (present when other active jobs for the same agent run the same task on a different schedule — {jobId, status, cronExpr, runAt} each)",
+    "warning": "string? (present with similar_active_jobs)"
   },
   "permissions": [],
   "secrets": [],

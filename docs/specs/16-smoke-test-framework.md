@@ -51,7 +51,6 @@ tests/smoke/
   stub-layer.ts   — answers stubbed tool calls for any agent; the rest run for real
   stub-filters.ts — narrows stubbed list/search results to the call's range or query
   fixtures.ts     — seeds the fixture office's people; principal placeholders
-  date-placeholders.ts — dates relative to the run day, in the principal's timezone
   evaluator.ts    — sends transcripts to the GPT-4o judge and parses judgment
   gate.ts         — the pass/fail rule for a case, known failures, retries
   report.ts       — generates self-contained HTML reports with trend charts
@@ -62,6 +61,9 @@ tests/smoke/
   results/        — JSON run results, one file per run (historical tracking)
   reports/        — HTML reports, one file per run
 ```
+
+Dates relative to the run day, in the principal's timezone, come from
+`tests/shared/date-placeholders.ts`, which the scenario suite also uses.
 
 The pipeline is linear:
 
@@ -109,7 +111,14 @@ model registry, so this selects Anthropic or OpenRouter.
   runs on a copy, but the scenario suite and the prompt render do not). The ExecutionLayer gets no scheduler, task repo, action log,
   context-bridge, bullpen or working-docs service. Agents get read-only views of the autonomy
   score and office identity, and runtimes never write bullpen read watermarks. Tools that need a
-  missing service fail with a missing-capability error.
+  missing service fail with a missing-capability error. (A tool may declare such a service in
+  `optional_capabilities` instead and run without it: `skill-activate` persists a task's active
+  skills when a task repo exists, and still activates skills here, #2024.)
+- No MCP server process is spawned. Each configured server with a tools/list snapshot in
+  `tests/fixtures/mcp/` is registered from it through production's registration, so its tools
+  and projected skill (google-workspace) are production's, but its session answers every call
+  with a canned "nothing to return" result and reaches no account (`src/startup/test-mode-mcp.ts`,
+  #2024). A configured server with no snapshot is absent and listed in the stack's `warnings`.
 
 `tests/unit/startup/test-mode-stack.test.ts` and `tests/integration/test-mode-stack.test.ts`
 assert these guarantees.

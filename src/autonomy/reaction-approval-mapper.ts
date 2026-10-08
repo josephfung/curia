@@ -35,6 +35,9 @@ const REFERENCE_RE = /\bReference:\s*([0-9a-f]{8})\b/i;
 export const UNRECOGNIZED_REACTION_HINT =
   "That reaction isn't recognized for approvals. React 👍 to approve or 👎 to reject.";
 
+const STALE_SEND_APPROVAL_NOTICE =
+  'That approval no longer matches the address that was shown, so nothing was sent. Ask again if you still want it sent.';
+
 export interface ReactionApprovalMapperConfig {
   bus: EventBus;
   logger: Logger;
@@ -162,6 +165,30 @@ export class ReactionApprovalMapper {
     }
   }
 
+  /** The hinted identity changed after the approval was filed. Nothing was sent. */
+  private async sendStaleSendNotice(
+    channelId: string,
+    recipientId: string,
+    conversationId: string | null,
+    parentEventId: string,
+  ): Promise<void> {
+    if (!conversationId) return;
+    try {
+      await this.bus.publish(
+        'dispatch',
+        createOutboundMessage({
+          conversationId,
+          channelId,
+          recipientId,
+          content: STALE_SEND_APPROVAL_NOTICE,
+          parentEventId,
+        }),
+      );
+    } catch (err) {
+      this.log.warn({ err, channelId }, 'reaction-approval: failed to publish stale-approval notice');
+    }
+  }
+
   /**
    * Tell the principal how to approve/reject when they used an unmapped emoji
    * on a real pending-approval message. Routes through outbound.message so
@@ -204,6 +231,20 @@ export class ReactionApprovalMapper {
       return;
     }
 
+    const pins = row.sendResolution;
+    if (pins && pins.length > 0) {
+      const still = await this.executionLayer.confirmPinnedSendResolution(row.toolName, pins);
+      if (!still.ok) {
+        this.log.info(
+          { rowId: row.id, shortRef: row.shortRef },
+          'reaction-approval: hinted recipient changed — refusing the approved send',
+        );
+        await this.actionLogRepo.rejectStaleApproval(row.id);
+        await this.sendStaleSendNotice(channelId, deciderId, row.conversationId, parentEventId);
+        return;
+      }
+    }
+
     const transitioned = await this.actionLogRepo.resolveRow(row.id, 'approved', 'ceo');
     if (!transitioned) {
       this.log.warn(
@@ -219,6 +260,7 @@ export class ReactionApprovalMapper {
       { contactId: deciderId, role: 'ceo', channel: channelId },
       {
         humanApproved: true,
+        sendResolution: pins ?? undefined,
         taskEventId: row.taskId,
         conversationId: row.conversationId ?? undefined,
         liveTurn: true,

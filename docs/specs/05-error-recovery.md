@@ -334,7 +334,7 @@ type ErrorType =
   | 'UNKNOWN';
 ```
 
-Provider-specific errors are mapped to `ErrorType` inside the provider implementation — never leaked as raw strings to the agent runtime. This prevents the fragile string-matching pattern Zora suffered from. Database connection failures (pg SQLSTATE class `08` / `57P0x`, Node `ECONNREFUSED` / `ETIMEDOUT`, pool acquire timeouts) map to `DATABASE_UNAVAILABLE` rather than `PROVIDER_ERROR`. `IDENTITY_MISMATCH` is raised when a calendar read resolves to a non-principal identity while serving a principal-scoped task (e.g. google-workspace MCP authenticated as Curia's service account during a morning brief) — the runtime hard-fails the task so `scheduled_jobs.last_run_outcome` is not `completed` and the agent cannot report a silent empty day (#1854).
+Provider-specific errors are mapped to `ErrorType` inside the provider implementation — never leaked as raw strings to the agent runtime. This prevents the fragile string-matching pattern Zora suffered from. Database connection failures (pg SQLSTATE class `08` / `57P0x`, Node `ECONNREFUSED` / `ETIMEDOUT`, pool acquire timeouts) map to `DATABASE_UNAVAILABLE` rather than `PROVIDER_ERROR`. `IDENTITY_MISMATCH` is raised when a calendar read resolves to a non-principal identity while serving a principal-scoped task (e.g. `calendar-list-events` given a calendarId registered to the agent's own contact during a morning brief) — the runtime hard-fails the task so `scheduled_jobs.last_run_outcome` is not `completed` and the agent cannot report a silent empty day (#1854).
 
 ---
 

@@ -4,6 +4,7 @@
 // stubbed tools, run N times on the production prompt. Behaviors are scored per
 // run, either in code (`check`) or by the LLM judge (no `check`).
 import type { ObservedToolCall } from '../shared/turn-capture.js';
+import type { UsageBreakdown } from '../shared/usage.js';
 
 // ── Case definition (loaded from YAML) ─────────────────────────────────────
 
@@ -100,6 +101,8 @@ export interface SeedBullpenThread {
  * any other channel uses the principal's own identity on it). `from: <contact key>`
  * uses that seeded contact's channel identity. `from: bullpen` wakes the coordinator
  * on a seeded thread the way BullpenDispatcher does, with `content` as the new message.
+ * `from: scheduler` fires a recurring job with no linked task the way the scheduler
+ * does: an agent.task on the `scheduler` channel whose content is `{"task": content}`.
  */
 export interface ScenarioInbound {
   from: string;
@@ -156,11 +159,12 @@ export interface ScenarioCase {
 /** A bus-observed call (tests/shared/turn-capture.ts) plus how the harness answered it. */
 export interface CapturedToolCall extends ObservedToolCall {
   /**
-   * stubbed = answered by a stub; passthrough = real read-only tool; refused = fail-closed
-   * by the stub layer; runtime = the runtime answered it without the ExecutionLayer (a
-   * tool outside the turn's allowlist, a delegation its guard blocked).
+   * stubbed = answered by a stub; passthrough = real read-only tool; canned = an
+   * unstubbed snapshot-served MCP tool, answered with an empty stand-in (#2024);
+   * refused = fail-closed by the stub layer; runtime = the runtime answered it without
+   * the ExecutionLayer (a tool outside the turn's allowlist, a delegation its guard blocked).
    */
-  disposition: 'stubbed' | 'passthrough' | 'refused' | 'runtime';
+  disposition: 'stubbed' | 'passthrough' | 'canned' | 'refused' | 'runtime';
 }
 
 export interface ScenarioRun {
@@ -172,6 +176,11 @@ export interface ScenarioRun {
    * name a seeded row ({{entry:x}}) are resolved against it at rating time.
    */
   refs: Record<string, string>;
+  /**
+   * The instant and timezone this run resolved its date placeholders against (#1958).
+   * Absent on transcripts saved before it existed.
+   */
+  clock?: { now: string; timezone: string };
   toolCalls: CapturedToolCall[];
   /** The coordinator's agent.response content (NO_REPLY included verbatim). */
   reply: string | null;
@@ -184,6 +193,16 @@ export interface ScenarioRun {
   error?: string;
   /** Set when removing the run's rows failed; leftovers may be in the database. */
   cleanupError?: string;
+  /**
+   * Model spend on this run (#1980): the agents' calls, from every attempt (provider
+   * retries included); the judge's are added when the run is rated.
+   */
+  usage: UsageBreakdown;
+  /**
+   * Attempts thrown away for a provider failure (stall, provider error, model fallback)
+   * and run again, one reason each. The run above is the last attempt.
+   */
+  providerRetries: string[];
 }
 
 // ── Scoring ───────────────────────────────────────────────────────────────
@@ -227,6 +246,8 @@ export interface CaseResult {
   knownFailure?: { issue: string; reason: string };
   /** Runs where the judge itself failed (not the model) — reported as a gate failure. */
   judgeErrors: number;
+  /** Model spend on the case: its runs' agents and judge calls. */
+  usage: UsageBreakdown;
 }
 
 export interface SuiteResult {
@@ -249,6 +270,12 @@ export interface SuiteResult {
   /** Non-behavioral reasons the suite failed (coverage gate, errored runs). */
   gateFailures: string[];
   durationMs: number;
+  /** Cases run at once (--concurrency). A case's own runs are always one at a time. */
+  concurrency: number;
+  /** Estimated model spend: every case's plus `overheadUsage` (tests/shared/usage.ts). */
+  usage: UsageBreakdown;
+  /** Spend outside every run (should be ~0). */
+  overheadUsage: UsageBreakdown;
 }
 
 /**

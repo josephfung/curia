@@ -1,6 +1,6 @@
 // handler.ts — signal-send skill implementation.
 //
-// Sends a Signal message to a 1:1 recipient (by E.164 phone number) or to a
+// Sends a Signal message to a 1:1 recipient (by contact reference) or to a
 // group (by base64 group ID). Before dispatching a group send, all members are
 // checked against the contact system — unknown members are listed explicitly so
 // the caller knows who needs verification. Blocked members are reported without
@@ -9,11 +9,22 @@
 // The OutboundGateway enforces the content filter and blocked-contact check
 // for the final send, so this handler focuses on Signal-specific validation
 // and the group trust pre-check.
+//
+// 1:1 recipients are references (#2033, #2041, ADR-047): `recipient` takes a contact ID
+// or "principal", resolved to that contact's verified Signal number. Someone who is not
+// a contact yet is added first with contact-create. The retired raw input
+// (recipient_number) is refused, never ignored.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import { hasPresentValue } from '../../src/contacts/principal-carveout-parse.js';
+import {
+  RECIPIENT_REFERENCE_SKILLS,
+  findRetiredRecipientField,
+  retiredRecipientFieldError,
+} from '../../src/skills/_shared/recipient-reference.js';
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -23,6 +34,10 @@ const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
 export class SignalSendHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
+    const skill = RECIPIENT_REFERENCE_SKILLS['signal-send']!;
+    const retired = findRetiredRecipientField(skill, ctx.input);
+    if (retired) return { success: false, error: retiredRecipientFieldError(skill, retired) };
+
     const { recipient, group_id, message, context_bridge: contextBridgeRaw } = ctx.input as {
       recipient?: string;
       group_id?: string;
@@ -36,21 +51,22 @@ export class SignalSendHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message (string)' };
     }
 
-    // Exactly one of recipient / group_id must be provided.
-    if (!recipient && !group_id) {
-      return { success: false, error: 'Either recipient or group_id is required' };
-    }
-
-    if (recipient && group_id) {
-      return { success: false, error: 'Provide either recipient or group_id, not both' };
-    }
-
-    // Validate E.164 format for 1:1 sends.
-    if (recipient && !E164_REGEX.test(recipient)) {
+    // Exactly one of recipient / group_id must be provided. A blank or
+    // whitespace-only value is filler, not a destination — the same rule as the
+    // retired field above and the Gate C parser.
+    const groupId = hasPresentValue(group_id) ? group_id : undefined;
+    const destinations = [recipient, group_id].filter(hasPresentValue);
+    if (destinations.length === 0) {
       return {
         success: false,
-        error: `recipient must be a valid E.164 phone number (e.g. +14155552671), got: ${recipient}`,
+        error: 'Missing destination: pass recipient (a contact ID, or "principal" for the principal), or group_id. Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.',
       };
+    }
+    if (destinations.length > 1) {
+      return { success: false, error: 'Provide exactly one of recipient or group_id' };
+    }
+    if (recipient !== undefined && typeof recipient !== 'string') {
+      return { success: false, error: 'recipient must be a string' };
     }
 
     if (message.length > MAX_MESSAGE_LENGTH) {
@@ -74,7 +90,7 @@ export class SignalSendHandler implements ToolHandler {
     // provide actionable error messages (listing which members need verification)
     // rather than a generic failure from the gateway.
 
-    if (group_id) {
+    if (groupId) {
       if (!ctx.contactService) {
         return {
           success: false,
@@ -84,7 +100,7 @@ export class SignalSendHandler implements ToolHandler {
 
       let memberPhones: string[];
       try {
-        memberPhones = await ctx.outboundGateway.getSignalGroupMembers(group_id);
+        memberPhones = await ctx.outboundGateway.getSignalGroupMembers(groupId);
       } catch (err) {
         const errMessage = err instanceof Error ? err.message : String(err);
         ctx.log.warn({ err, groupId: '[redacted]' }, 'signal-send: failed to fetch group members');
@@ -132,7 +148,7 @@ export class SignalSendHandler implements ToolHandler {
       try {
         const result = await ctx.outboundGateway.send({
           channel: 'signal',
-          groupId: group_id,
+          groupId,
           message,
         }, {
           taskEventId: ctx.taskEventId,
@@ -152,7 +168,7 @@ export class SignalSendHandler implements ToolHandler {
           boundTask: boundTaskFromMetadata(ctx.taskMetadata as Record<string, unknown> | undefined),
         });
 
-        return { success: true, data: { delivered_to: group_id, channel: 'signal' } };
+        return { success: true, data: { delivered_to: groupId, channel: 'signal' } };
       } catch (err) {
         const errMessage = err instanceof Error ? err.message : String(err);
         ctx.log.error({ err, destinationType: 'group' }, 'signal-send: gateway threw unexpectedly');
@@ -160,14 +176,37 @@ export class SignalSendHandler implements ToolHandler {
       }
     }
 
+    // --- Resolve the 1:1 recipient (#2033) ---
+    // A reference fails closed: no contact, or no verified Signal number, means no send.
+
+    // recipient is the destination here: a group send returned above.
+    const resolved = await ctx.outboundGateway.resolveRecipientReference('signal', recipient as string, {
+      field: 'recipient',
+    });
+    if (!resolved.ok) return { success: false, error: resolved.error };
+    if (!E164_REGEX.test(resolved.identifier)) {
+      // A stored identity that signal-cli cannot address: a data defect. Refuse rather
+      // than guess, and log the contact for an operator (the ID may be the principal's).
+      ctx.log.warn({ contactId: resolved.contactId }, 'signal-send: verified Signal identity is not E.164 — refusing (#2033)');
+      return {
+        success: false,
+        error: `The contact's verified Signal identity is not an E.164 number, so nothing was sent. It needs correcting in Contacts.`,
+      };
+    }
+    const destination = resolved.identifier;
+    // Echo the contact ID only for a UUID the agent passed. For the alias it is the
+    // principal's, which spec 09 keeps out of the model's context.
+    const contactId = resolved.kind === 'contact' ? resolved.contactId : undefined;
+    const identityName = resolved.identityName;
+
     // --- Dispatch via gateway (1:1) ---
 
-    ctx.log.info({ destinationType: '1:1' }, 'signal-send: dispatching Signal message via gateway');
+    ctx.log.info({ destinationType: '1:1', byReference: true }, 'signal-send: dispatching Signal message via gateway');
 
     try {
       const result = await ctx.outboundGateway.send({
         channel: 'signal',
-        recipient: recipient,
+        recipient: destination,
         message,
       }, {
         taskEventId: ctx.taskEventId,
@@ -193,7 +232,10 @@ export class SignalSendHandler implements ToolHandler {
       return {
         success: true,
         data: {
-          delivered_to: recipient,
+          // The resolved number. Reply-lock reads this field.
+          delivered_to: destination,
+          ...(contactId ? { contact_id: contactId } : {}),
+          ...(identityName ? { recipient_identity: identityName } : {}),
           channel: 'signal',
         },
       };

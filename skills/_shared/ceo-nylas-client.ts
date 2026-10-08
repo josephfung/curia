@@ -6,7 +6,10 @@
 const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
 
 // Nylas guidance: requests with limit > 20 on list endpoints trigger concurrent-user 429s.
-const NYLAS_MAX_LIST_LIMIT = 20;
+export const NYLAS_MAX_LIST_LIMIT = 20;
+// Ceiling for listFolders. Nylas pages folders (default 50); a cursor that never
+// ends must not loop. 500 is the same scan cap listAllDrafts uses.
+const FOLDER_SCAN_LIMIT = 500;
 // Maximum number of retry attempts for 429 / 5xx responses before giving up.
 const NYLAS_MAX_RETRIES = 3;
 // Base backoff delay in ms — doubles each attempt (plus ±25% jitter).
@@ -176,9 +179,22 @@ export class CeoNylasClient {
   // ── Messages ────────────────────────────────────────────────────────────
 
   async listMessages(options: ListMessagesOptions = {}): Promise<NylasMessageSummary[]> {
+    const { messages } = await this.listMessagesPage(options);
+    return messages;
+  }
+
+  // One page of listMessages, plus Nylas's `next_cursor` so callers can keep
+  // paging. A follow-up page sends only `page_token` (and limit): the cursor
+  // already encodes the original query, and re-sending filters is rejected
+  // when the first request used search_query_native.
+  async listMessagesPage(
+    options: ListMessagesOptions & { pageToken?: string } = {},
+  ): Promise<{ messages: NylasMessageSummary[]; nextCursor?: string }> {
     const params = new URLSearchParams();
     params.set('limit', String(Math.min(options.limit ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT)));
-    if (options.query) {
+    if (options.pageToken) {
+      params.set('page_token', options.pageToken);
+    } else if (options.query) {
       // Nylas v3: search_query_native cannot be combined with any other filter
       // param except limit and page_token — sending in/unread/received_after
       // alongside it returns HTTP 400 "invalid_request_error".
@@ -206,9 +222,9 @@ export class CeoNylasClient {
     }
 
     const url = `${this.baseUrl}/messages?${params}`;
-    const data = await this.request<NylasApiMessage[]>('GET', url, 'listMessages');
+    const { data, nextCursor } = await this.requestWithCursor<NylasApiMessage[]>('GET', url, 'listMessages');
 
-    return data.map(normalizeMessageSummary);
+    return { messages: data.map(normalizeMessageSummary), nextCursor };
   }
 
   // Exhaustively list messages by following Nylas's `next_cursor`, up to `maxScan`
@@ -367,7 +383,12 @@ export class CeoNylasClient {
   // draft doesn't exist" failure this work is fixing (issue #1000). `truncated`
   // is true when the ceiling was hit with more pages still available.
   async listAllDrafts(
-    options: { maxScan?: number; pageSize?: number } = {},
+    options: {
+      maxScan?: number;
+      pageSize?: number;
+      /** Return after the page that contains a matching draft. The match is included. */
+      stopWhen?: (draft: NylasDraftSummary) => boolean;
+    } = {},
   ): Promise<{ drafts: NylasDraftSummary[]; truncated: boolean }> {
     const maxScan = options.maxScan ?? 500;
     const pageSize = Math.min(options.pageSize ?? NYLAS_MAX_LIST_LIMIT, NYLAS_MAX_LIST_LIMIT);
@@ -383,7 +404,16 @@ export class CeoNylasClient {
       const url = `${this.baseUrl}/drafts?${params}`;
 
       const { data, nextCursor } = await this.requestWithCursor<NylasApiDraftFull[]>('GET', url, 'listAllDrafts');
+      const pageStart = drafts.length;
       drafts.push(...data.map(normalizeDraftSummary));
+
+      // Stop on the page that contains the caller's match so a thread lookup
+      // does not scan the rest of the mailbox. truncated stays false: the match
+      // was found, the unread remainder was not a ceiling hit.
+      const stopWhen = options.stopWhen;
+      if (stopWhen && drafts.slice(pageStart).some((draft) => stopWhen(draft))) {
+        return { drafts, truncated: false };
+      }
 
       // An empty page with a cursor would otherwise spin forever — bail out.
       if (data.length === 0) break;
@@ -444,9 +474,30 @@ export class CeoNylasClient {
   // ── Folders ─────────────────────────────────────────────────────────────
 
   async listFolders(): Promise<NylasFolder[]> {
-    const url = `${this.baseUrl}/folders`;
-    const data = await this.request<NylasApiFolder[]>('GET', url, 'listFolders');
-    return data.map((f) => ({ id: f.id, name: f.name ?? '' }));
+    const folders: NylasFolder[] = [];
+    let pageToken: string | undefined;
+
+    for (;;) {
+      const params = new URLSearchParams();
+      params.set('limit', String(NYLAS_MAX_LIST_LIMIT));
+      if (pageToken) params.set('page_token', pageToken);
+      const url = `${this.baseUrl}/folders?${params}`;
+      const { data, nextCursor } = await this.requestWithCursor<NylasApiFolder[]>('GET', url, 'listFolders');
+      folders.push(...data.map((f) => ({ id: f.id, name: f.name ?? '' })));
+
+      // An empty page with a cursor would otherwise spin forever.
+      if (data.length === 0 || !nextCursor) break;
+      if (folders.length >= FOLDER_SCAN_LIMIT) {
+        this.log.warn(
+          { cap: FOLDER_SCAN_LIMIT },
+          'nylas: listFolders hit the scan cap with more pages remaining',
+        );
+        break;
+      }
+      pageToken = nextCursor;
+    }
+
+    return folders;
   }
 
   async createFolder(name: string): Promise<NylasFolder> {

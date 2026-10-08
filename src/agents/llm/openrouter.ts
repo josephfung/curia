@@ -8,18 +8,21 @@
 //      chat format. Multiple system messages are joined with double newlines.
 //   2. Curia's ContentBlock types are mapped to OpenAI SDK shapes (text,
 //      image_url, tool messages). Images use data URIs for base64 sources.
-//   3. Cache tokens are always 0 — OpenRouter doesn't support Anthropic-style
-//      prompt caching.
+//   3. Usage is normalized to Anthropic semantics: OpenRouter's prompt_tokens
+//      includes cache reads and writes, so they are split out of inputTokens
+//      (see usageFromOpenRouter).
 //   4. Errors are caught and returned as LLMResponse { type: 'error' } so
 //      callers never need try/catch around chat().
 //   5. Streaming uses OpenRouter's OpenAI-compatible chunk protocol.
 
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool, ChatCompletion } from 'openai/resources/chat/completions/completions.js';
-import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvenance, Message, ContentBlock, ToolCall, ToolDefinition, ToolResult } from './provider.js';
+import type { CompletionUsage } from 'openai/resources/completions.js';
+import type { LLMProvider, LLMResponse, LLMStreamEvent, LLMUsage, LLMCallProvenance, LLMReasoning, Message, ContentBlock, ToolCall, ToolDefinition, ToolResult, ReasoningOmission } from './provider.js';
 import type { Logger } from '../../logger.js';
 import { classifyError } from '../../errors/classify.js';
 import type { ModelRegistry } from './model-registry.js';
+import { resolveTemperature } from './sampling-options.js';
 
 /**
  * Best-effort message extraction, mirroring classify.ts's own logic so the
@@ -91,6 +94,134 @@ function extractOpenRouterProviderError(
   }
 
   return { providerName, detail };
+}
+
+/** Non-negative integer count, or 0 for anything else (absent, null, malformed). */
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
+ * Map an OpenRouter usage object onto LLMUsage, which follows Anthropic's
+ * semantics: inputTokens counts only uncached input, and cache reads/writes are
+ * reported separately. OpenRouter follows OpenAI instead — prompt_tokens is the
+ * whole prompt, with the cached share broken out in prompt_tokens_details:
+ *   cached_tokens      — read from the cache (OpenAI's own field)
+ *   cache_write_tokens — written to the cache (OpenRouter addition, absent from
+ *                        the SDK type, so read defensively)
+ * Subtracting both keeps pricing.ts from charging cached tokens twice.
+ */
+export function usageFromOpenRouter(usage: CompletionUsage | null | undefined): LLMUsage {
+  const promptTokens = tokenCount(usage?.prompt_tokens);
+  const details: Record<string, unknown> = { ...usage?.prompt_tokens_details };
+  const cacheReadInputTokens = tokenCount(details.cached_tokens);
+  const cacheCreationInputTokens = tokenCount(details.cache_write_tokens);
+  // reasoning_tokens is a subset of completion_tokens, so it stays inside
+  // outputTokens. The split is what lets an archive explain a large bill.
+  const reasoningTokens = tokenCount(usage?.completion_tokens_details?.reasoning_tokens);
+  return {
+    inputTokens: Math.max(0, promptTokens - cacheReadInputTokens - cacheCreationInputTokens),
+    outputTokens: tokenCount(usage?.completion_tokens),
+    cacheCreationInputTokens,
+    cacheReadInputTokens,
+    reasoningTokens,
+  };
+}
+
+interface ReasoningBlock {
+  type: string;
+  id: string | null;
+  text: string;
+}
+
+interface ReasoningDetailState {
+  blocks: ReasoningBlock[];
+  sawEncrypted: boolean;
+}
+
+function emptyReasoningState(): ReasoningDetailState {
+  return { blocks: [], sawEncrypted: false };
+}
+
+/**
+ * Fold one reasoning_details entry into the accumulator.
+ * Consecutive fragments of the same type and id are concatenated — that is
+ * how streaming deltas arrive. A new type or id starts another block.
+ * Encrypted entries are noted and never copied: the ciphertext is not readable
+ * and must not land in the archive.
+ */
+function absorbReasoningDetail(state: ReasoningDetailState, detail: unknown): void {
+  if (typeof detail !== 'object' || detail === null) return;
+  const record = detail as Record<string, unknown>;
+  const type = typeof record.type === 'string' ? record.type : '';
+  if (type === 'reasoning.encrypted') {
+    state.sawEncrypted = true;
+    return;
+  }
+  let text = '';
+  if (type === 'reasoning.text' && typeof record.text === 'string') text = record.text;
+  else if (type === 'reasoning.summary' && typeof record.summary === 'string') text = record.summary;
+  if (!text) return;
+  const id = typeof record.id === 'string' && record.id ? record.id : null;
+  const last = state.blocks[state.blocks.length - 1];
+  const continues = last !== undefined
+    && last.type === type
+    && (last.id === id || last.id === null || id === null);
+  if (continues && last) {
+    last.text += text;
+    if (last.id === null && id !== null) last.id = id;
+    return;
+  }
+  state.blocks.push({ type, id, text });
+}
+
+function absorbReasoningDetails(state: ReasoningDetailState, details: unknown): void {
+  if (!Array.isArray(details)) return;
+  for (const detail of details) absorbReasoningDetail(state, detail);
+}
+
+/** Models already warned for returning reasoning tokens without readable text. */
+const reasoningOmissionWarned = new Set<string>();
+
+/**
+ * Prefer a direct reasoning string. Fall back to text and summary blocks.
+ * When usage reports reasoning tokens and nothing readable came back, say why
+ * and warn once per model per process.
+ */
+function reasoningFieldsFromParts(
+  direct: string,
+  state: ReasoningDetailState,
+  usage: LLMUsage,
+  model: string,
+  logger: Logger,
+): LLMReasoning {
+  const detailText = state.blocks.map((block) => block.text).join('\n');
+  const text = direct.trim() ? direct : detailText;
+  if (text.trim()) return { reasoning: text };
+  const tokens = usage.reasoningTokens ?? 0;
+  if (tokens <= 0) return {};
+  const reasoningOmitted: ReasoningOmission = state.sawEncrypted ? 'encrypted' : 'empty';
+  if (model && !reasoningOmissionWarned.has(model)) {
+    reasoningOmissionWarned.add(model);
+    logger.warn(
+      { model, reasoningOmitted, reasoningTokens: tokens },
+      'OpenRouter reported reasoning tokens but returned no readable reasoning',
+    );
+  }
+  return { reasoningOmitted };
+}
+
+function reasoningFromCarrier(
+  carrier: object,
+  usage: LLMUsage,
+  model: string,
+  logger: Logger,
+): LLMReasoning {
+  const raw = carrier as { reasoning?: unknown; reasoning_details?: unknown };
+  const direct = typeof raw.reasoning === 'string' ? raw.reasoning : '';
+  const state = emptyReasoningState();
+  absorbReasoningDetails(state, raw.reasoning_details);
+  return reasoningFieldsFromParts(direct, state, usage, model, logger);
 }
 
 export class OpenRouterProvider implements LLMProvider {
@@ -284,6 +415,13 @@ export class OpenRouterProvider implements LLMProvider {
       messages: conversationMessages,
     };
 
+    // Forward a finite caller temperature; omit the key otherwise so the
+    // upstream model keeps its default (judges pass 0 for stable verdicts).
+    const temperature = resolveTemperature(options, this.logger);
+    if (temperature !== undefined) {
+      createParams.temperature = temperature;
+    }
+
     // Only attach the tools array when tools are provided — the API rejects
     // an empty tools array, so we omit the key entirely when there are none.
     if (tools && tools.length > 0) {
@@ -304,12 +442,7 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   private usageFromCompletion(response: ChatCompletion): LLMUsage {
-    return {
-      inputTokens: response.usage?.prompt_tokens ?? 0,
-      outputTokens: response.usage?.completion_tokens ?? 0,
-      cacheCreationInputTokens: 0,
-      cacheReadInputTokens: 0,
-    };
+    return usageFromOpenRouter(response.usage);
   }
 
   private provenanceFromCompletion(response: ChatCompletion, requestedModel: string): LLMCallProvenance {
@@ -411,6 +544,12 @@ export class OpenRouterProvider implements LLMProvider {
 
       const usage = this.usageFromCompletion(response);
       const provenance = this.provenanceFromCompletion(response, model);
+      const reasoning = reasoningFromCarrier(
+        choice.message,
+        usage,
+        provenance.actualModel || model,
+        this.logger,
+      );
 
       // Check for tool calls in the response.
       const toolCalls = choice.message.tool_calls;
@@ -434,6 +573,7 @@ export class OpenRouterProvider implements LLMProvider {
           content: choice.message.content ?? undefined,
           usage,
           provenance,
+          ...reasoning,
         };
       }
 
@@ -451,6 +591,7 @@ export class OpenRouterProvider implements LLMProvider {
         content,
         usage,
         provenance,
+        ...reasoning,
       };
     } catch (err) {
       this.logger.error({ err, model }, 'OpenRouter API call failed');
@@ -502,12 +643,15 @@ export class OpenRouterProvider implements LLMProvider {
         outputTokens: 0,
         cacheCreationInputTokens: 0,
         cacheReadInputTokens: 0,
+        reasoningTokens: 0,
       };
       let providerRequestId = '';
       let actualModel = model;
       let seenChunk = false;
       let finishReason: string | null = null;
       const toolCallDeltas = new Map<number, PendingToolCall>();
+      let reasoningDirect = '';
+      const reasoningState = emptyReasoningState();
 
       for await (const chunk of stream) {
         seenChunk = true;
@@ -515,12 +659,7 @@ export class OpenRouterProvider implements LLMProvider {
         actualModel = chunk.model || actualModel;
 
         if (chunk.usage) {
-          usage = {
-            inputTokens: chunk.usage.prompt_tokens ?? 0,
-            outputTokens: chunk.usage.completion_tokens ?? 0,
-            cacheCreationInputTokens: 0,
-            cacheReadInputTokens: 0,
-          };
+          usage = usageFromOpenRouter(chunk.usage);
         }
 
         for (const choice of chunk.choices) {
@@ -530,6 +669,10 @@ export class OpenRouterProvider implements LLMProvider {
             content += textDelta;
             yield { type: 'text_delta', text: textDelta };
           }
+
+          const delta = choice.delta as { reasoning?: unknown; reasoning_details?: unknown };
+          if (typeof delta.reasoning === 'string') reasoningDirect += delta.reasoning;
+          absorbReasoningDetails(reasoningState, delta.reasoning_details);
 
           for (const toolCallDelta of choice.delta.tool_calls ?? []) {
             const pending = toolCallDeltas.get(toolCallDelta.index) ?? { name: '', arguments: '' };
@@ -571,6 +714,13 @@ export class OpenRouterProvider implements LLMProvider {
         actualModel,
         providerRequestId,
       };
+      const reasoning = reasoningFieldsFromParts(
+        reasoningDirect,
+        reasoningState,
+        usage,
+        actualModel || model,
+        this.logger,
+      );
       const toolCalls: ToolCall[] = Array.from(toolCallDeltas.entries())
         .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
         .map(([index, pending]) => {
@@ -594,6 +744,7 @@ export class OpenRouterProvider implements LLMProvider {
           content: content || undefined,
           usage,
           provenance,
+          ...reasoning,
         };
         return;
       }
@@ -609,6 +760,7 @@ export class OpenRouterProvider implements LLMProvider {
         content,
         usage,
         provenance,
+        ...reasoning,
       };
     } catch (err) {
       this.logger.error({ err, model }, 'OpenRouter streaming API call failed');

@@ -1,7 +1,7 @@
 {
   "name": "contact-update",
-  "description": "Update canonical profile attributes (job title, organization, timezone, phone, LinkedIn, etc.) on an existing contact. contact_id must be a UUID from contact-lookup or entity-context — do not invent IDs. For a new email or phone not yet associated with the contact, use contact-link-identity first; setting primaryEmail or primaryPhone requires the address to already be registered as a contact identity.",
-  "version": "0.2.0",
+  "description": "Update canonical profile attributes (job title, organization, timezone, phone, LinkedIn, etc.) on an existing contact. contact_id must be a UUID from contact-lookup or entity-context — do not invent IDs. For a new email or phone not yet associated with the contact, use contact-link-identity first; setting primaryEmail or primaryPhone requires the address to already be registered as a contact identity. primaryPhone is normalized to E.164; a number that cannot be normalized, or an address that is not registered, returns an error. Note it and do not retry, and do not fall back to memory-store for the same field.",
+  "version": "0.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

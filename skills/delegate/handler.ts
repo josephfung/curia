@@ -53,6 +53,7 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
+import { CLARIFICATION_NEXT_STEP, PAUSED_NEXT_STEP } from '../../src/agents/prompts/delegate-result-guidance.js';
 import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
 import {
   parseSpecialistDeclineMarker,
@@ -135,11 +136,31 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
       open_handle_age_ms: openHandleAgeMs(hit.createdAt),
       ...(hit.status !== undefined && { handle_status: hit.status }),
       ...(hit.expiresAt !== undefined && { handle_expires_at: hit.expiresAt.toISOString() }),
-      // Principal-safe. Directives to the coordinator live in its prompt, not here —
-      // the prompt tells the model this sentence is safe to relay.
+      // Neutral status, free of directives. It names the agent id, so next_step tells
+      // the model to paraphrase it rather than relay it: on a non-principal turn the
+      // reply goes to an outside sender unreviewed.
       message: `Specialist '${agent}' is already working on an open request in this conversation.`,
+      // Directives for the calling agent. This refusal is not a failure, so the turn
+      // keeps going and the model needs to know what to do instead of retrying. The
+      // guidance used to live only in the coordinator prompt (#1958); here it arrives
+      // exactly when it applies, for any agent that delegates.
+      next_step: inFlightNextStep(agent),
     },
   };
+}
+
+function inFlightNextStep(agent: string): string {
+  return [
+    `Do not delegate to '${agent}' again this turn: a reworded brief is the same open request and will be refused too.`,
+    // The runtime tries to save this refused brief for a later wake and stamps `queued` on
+    // this result before the model sees it. Saving can be capped or fail, so the model
+    // promises a later run only when `queued` says it was saved (#1958 review).
+    'Tell the requester (the principal, on a scheduled or system turn) that the earlier request is still in progress.',
+    'If `queued` is true, add that this one will run after it. If `queued` is false or absent, do not promise that it will run; offer to try again later.',
+    'Say it in your own words, without naming who is doing the work; do not relay `message`, which names an internal agent.',
+    'Do not quote delegate_event_id, and do not say how long the work has been running or when it will finish: open_handle_age_ms is the age of a tracking record, not a progress measure.',
+    'Do not send a second copy of a draft that request already produced.',
+  ].join(' ');
 }
 
 /**
@@ -813,6 +834,9 @@ export class DelegateHandler implements ToolHandler {
                 question,
                 context: ctxValue,
                 resume_token: resumeToken,
+                // What to do with it, delivered with the result rather than kept in the
+                // always-on coordinator prompt (#1959).
+                next_step: CLARIFICATION_NEXT_STEP,
               },
             };
           }
@@ -848,6 +872,8 @@ export class DelegateHandler implements ToolHandler {
                 next,
                 message,
                 ...(typeof parsed.task_id === 'string' && { task_id: parsed.task_id }),
+                // Not a failure: tells the caller not to re-delegate (#1959).
+                next_step: PAUSED_NEXT_STEP,
               },
             };
           }

@@ -97,6 +97,8 @@ export function unifiedToolSearch(options: {
   const pushSkill = (skill: RegisteredSkill) => {
     if (skill.synthetic) return;
     if (seenSkills.has(skill.manifest.name)) return;
+    // Activation would refuse it, so offering it only costs the agent a round (#1958).
+    if (skillReservedForOtherAgents(skill, toolRegistry, agentId)) return;
     seenSkills.add(skill.manifest.name);
     results.push({
       name: skill.manifest.name,
@@ -135,6 +137,30 @@ export function unifiedToolSearch(options: {
   return results;
 }
 
+/**
+ * Whether every member tool the agent could otherwise use is withheld from it by
+ * allowed_callers: at least one registered member names other callers, and none is
+ * callable by this agent.
+ *
+ * Such a bundle belongs to other agents (the calendar bundle to @calendar). Activating it
+ * would add no tools and splice in instructions written for its owner, and searching it
+ * up would invite exactly that. A bundle whose members are merely unregistered (an MCP
+ * server that is down) is a different failure and does not count.
+ */
+export function skillReservedForOtherAgents(
+  skill: RegisteredSkill,
+  toolRegistry: ToolRegistry,
+  agentId: string,
+): boolean {
+  let withheld = false;
+  for (const toolName of skill.manifest.tools) {
+    if (!toolRegistry.get(toolName)) continue;
+    if (agentMayCallTool(toolRegistry, toolName, agentId)) return false;
+    withheld = true;
+  }
+  return withheld;
+}
+
 /** Whether the agent may call this tool given allowed_callers. */
 export function agentMayCallTool(
   toolRegistry: ToolRegistry,
@@ -171,6 +197,14 @@ export function resolveSkillActivation(options: {
   if (!skill) return { error: `Unknown skill: ${name}` };
   if (skill.synthetic) {
     return { error: `Cannot activate synthetic skill '${name}' — pin or discover a real bundle` };
+  }
+
+  if (skillReservedForOtherAgents(skill, toolRegistry, agentId)) {
+    return {
+      error:
+        `Skill '${name}' has no tools you can call: they are reserved for other agents. `
+        + 'Delegate the work to the agent that owns this capability instead.',
+    };
   }
 
   const tools: string[] = [];

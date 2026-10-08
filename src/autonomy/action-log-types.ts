@@ -1,4 +1,5 @@
 // action-log-types.ts — TypeScript types for the autonomy_action_log table.
+import type { SendRecipientPin } from '../skills/_shared/recipient-reference.js';
 //
 // These mirror the Postgres schema from migration 031. The scoring engine,
 // approval lifecycle skills (#427/#428), and the DreamEngine scoring pass
@@ -55,6 +56,11 @@ export interface ActionLogRow {
   parentActionId: number | null;
   shortRef: string | null;
   description: string | null;
+  /**
+   * Hinted recipients pinned at approval time. Null on older rows and on
+   * approvals that did not use a label hint. Not skill input (#2047).
+   */
+  sendResolution?: SendRecipientPin[] | null;
 
   createdAt: Date;
 }
@@ -75,6 +81,8 @@ export interface ActionLogInsert {
   description?: string;
   /** Links a re-execution row back to the approved row. Used by approve-action (#428). */
   parentActionId?: number;
+  /** Hinted-recipient pin. Stored beside the skill payload, never inside it. */
+  sendResolution?: SendRecipientPin[] | null;
 
   /**
    * Pre-scored flags (shadow-reconciler / #1426). When scoredBy is set, findUnscoredTerminal

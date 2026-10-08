@@ -20,7 +20,7 @@
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { runner } from 'node-pg-migrate';
-import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveIdentityGateMode } from './config.js';
+import { loadConfig, loadYamlConfig, resolveTasksConfig, resolveHealthConfig, resolveLateDeliveryConfig, resolveApprovalExpiryConfig, resolveIdentityGateMode } from './config.js';
 import { createLogger } from './logger.js';
 import { HttpAdapter } from './channels/http/http-adapter.js';
 import { resolveMemoryRetentionSnapshot } from './channels/http/routes/memory-retention.js';
@@ -96,6 +96,7 @@ import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
 import { OutboundContentFilter } from './dispatch/outbound-filter.js';
 import { extractPromptExfiltrationMarkers } from './dispatch/prompt-exfiltration-markers.js';
+import { TRIGGER_GUIDANCE_MARKER_SOURCES } from './agents/prompts/trigger-guidance-sources.js';
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
 import { EscalationJudge } from './autonomy/escalation-judge.js';
@@ -165,6 +166,7 @@ import { collectPinnedByBundle } from './skills/pin-resolution.js';
 import {
   AgentAssemblyError,
   assembleAgent,
+  principalIdentitySnapshotGaps,
   readPrincipalIdentitySnapshot,
   registerAgentRoster,
   type AgentAssemblyContext,
@@ -180,6 +182,7 @@ import {
   releaseRunningDelegation,
 } from './db/queries/pending-delegations.js';
 import { LateDelegationSweep } from './agents/late-delegation-sweep.js';
+import { ApprovalExpirySweep } from './autonomy/approval-expiry-sweep.js';
 import { PlanFrontierSubscriber } from './agents/plan-frontier-subscriber.js';
 import {
   DeliverableKgPromotionSubscriber,
@@ -394,6 +397,7 @@ async function main(): Promise<void> {
   const llmCallArchiveCfg = yamlConfig.audit?.llmCallArchive;
   const auditLogger = new AuditLogger(pool, logger, {
     llmCallArchiveEnabled: llmCallArchiveCfg?.enabled !== false,
+    llmCallArchiveIncludeReasoning: llmCallArchiveCfg?.includeReasoning !== false,
   });
 
   // 3a. Confirm hash-chain schema + log head (spec 10). Chain state lives in the
@@ -786,6 +790,12 @@ async function main(): Promise<void> {
     principalEmail.current =
       principalIdentities.find((id) => id.channel === 'email')?.channelIdentifier ?? '';
     principalPrimaryEmail.current = snapshot.primaryEmail;
+    // The prompt builder drops an unmatched primary and an empty identity set quietly
+    // (it must never render an unverified address or a complete-set claim over
+    // nothing), so every agent's prompt changes with no signal. Say so here instead.
+    for (const gap of principalIdentitySnapshotGaps(snapshot)) {
+      logger.warn({ contactId: principalContact.id, identityCount: principalIdentities.length }, gap);
+    }
     logger.info(
       {
         contactId: principalContact.id,
@@ -1249,7 +1259,7 @@ async function main(): Promise<void> {
   // ADR-032: each connected MCP server projects a skill into SkillRegistry so
   // agents can pin `google-workspace` (etc.) instead of listing every MCP tool.
   // Must run before synthetic singletons so projected members are not re-wrapped.
-  const mcpSkillCount = registerMcpProjectedSkills(mcpProjectedTools, skillRegistry, logger);
+  const mcpSkillCount = registerMcpProjectedSkills(mcpProjectedTools, skillRegistry, logger, skillsDir);
   if (mcpSkillCount > 0) {
     logger.info({ mcpSkillCount }, 'MCP servers projected as skills');
   }
@@ -1344,9 +1354,12 @@ async function main(): Promise<void> {
     // instructions — the highest-value exfiltration target). Deriving from the live
     // prompt means the markers track any operator customization instead of drifting
     // from a hardcoded guess.
+    // Trigger guidance moved out of the prompt into injected blocks and tool results is
+    // scanned too (#1959), so a rule does not lose coverage by moving to its trigger.
     const systemPromptMarkers = extractPromptExfiltrationMarkers(
       officeIdentity,
       coordinatorConfig.system_prompt,
+      TRIGGER_GUIDANCE_MARKER_SOURCES,
     );
     // The principal's email — used to allow their address in outbound content without
     // triggering the contact-data-leak rule. Resolved from the principal contact (#1049),
@@ -2129,6 +2142,7 @@ async function main(): Promise<void> {
       scratchTtlDays: yamlConfig.documentWorkspace?.scratchTtlDays ?? DEFAULT_SCRATCH_DOC_TTL_DAYS,
       scratchTtlFromConfig: yamlConfig.documentWorkspace?.scratchTtlDays !== undefined,
       llmCallArchiveEnabled: llmCallArchiveCfg?.enabled !== false,
+      llmCallArchiveIncludeReasoning: llmCallArchiveCfg?.includeReasoning !== false,
       llmCallArchiveRetentionDays,
     },
     'DreamEngine configured',
@@ -2904,6 +2918,20 @@ async function main(): Promise<void> {
     );
   }
 
+  // Approval expiry — marks pending approvals past expires_at as expired and emails the
+  // principal about high/critical ones (#2013). Deterministic, so it runs as a system
+  // interval rather than the hourly coordinator turn it replaced. outboundGateway may be
+  // absent (setup-required mode, no outbound client): expiry still runs, the notification
+  // is skipped with a warning. ceoEmail is the live ref so a post-boot email bind applies.
+  const approvalExpirySweep = new ApprovalExpirySweep({
+    actionLogRepo,
+    outboundGateway,
+    ceoEmail: principalEmail,
+    logger,
+    intervalMinutes: resolveApprovalExpiryConfig(yamlConfig.autonomy).sweepIntervalMinutes,
+  });
+  approvalExpirySweep.start();
+
   // Conversation checkpoint processor — System Layer subscriber that runs background
   // memory skills (extract-relationships, etc.) at end of each conversation.
   const checkpointProcessor = new ConversationCheckpointProcessor(
@@ -3088,6 +3116,11 @@ async function main(): Promise<void> {
       } catch (err) {
         logger.error({ err }, 'Error stopping late delegation sweep during shutdown');
       }
+    }
+    try {
+      approvalExpirySweep.stop();
+    } catch (err) {
+      logger.error({ err }, 'Error stopping approval expiry sweep during shutdown');
     }
     if (browserService) {
       try {

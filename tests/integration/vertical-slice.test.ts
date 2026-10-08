@@ -118,11 +118,14 @@ describe('Vertical Slice: CLI → Dispatch → Coordinator → Response', () => 
     // Use arrayContaining since the runtime may inject additional system messages
     // (e.g. sender context for unknown senders). This test verifies the pipeline
     // shape, not the exact system message count.
+    // The user message ends with the sender's text: a principal turn without an
+    // [ACTIVE OUTBOUND CONTEXT] block gets the `principal-reply-shaped` turn
+    // guidance prepended to it (#1959), so match the suffix, not the whole string.
     expect(mockProvider.chat).toHaveBeenCalledWith(
       expect.objectContaining({
         messages: expect.arrayContaining([
           { role: 'system', content: expect.stringContaining('You are a helpful assistant.') },
-          { role: 'user', content: 'Good morning!' },
+          { role: 'user', content: expect.stringMatching(/Good morning!$/) },
         ]),
       }),
     );

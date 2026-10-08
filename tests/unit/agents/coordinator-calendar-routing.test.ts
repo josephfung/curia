@@ -2,7 +2,7 @@
 // Asserted at the tool-selection / config layer — no LLM.
 
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
 import { parseSkillMd } from '../../../src/skills/skill-md.js';
@@ -10,8 +10,9 @@ import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { resolvePinnedSkills } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
+import { resolveSkillActivation, unifiedToolSearch } from '../../../src/skills/skill-activation.js';
 import {
-  GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK,
+  GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME,
   registerMcpProjectedSkills,
 } from '../../../src/skills/mcp-loader.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
@@ -62,39 +63,76 @@ function extractPrincipalCalendarSection(prompt: string): string {
 }
 
 describe('coordinator principal-calendar routing (#1853)', () => {
-  it('has an explicit principal calendar → @calendar borrow-then-answer rule', () => {
+  it('has the prompt-only parts of the principal-calendar rule: route, who replies, failure line', () => {
+    // "I never read or mutate the principal's calendar myself" is gone from the prompt
+    // (prompt trim PR 2): allowed_callers enforces it, and the discovery and pin tests
+    // below assert that. The route, who composes the reply and the failure handling have
+    // no code home yet. "I compose the reply" is pinned because dropping it was a measured
+    // regression: scenario 10 handed external scheduling requests to @calendar as
+    // transfer-ownership and replied NO_REPLY in 2 of 5 runs (prompt trim PR 2).
     const section = extractPrincipalCalendarSection(loadCoordinator().system_prompt);
-    expect(section).toMatch(/delegated to `@calendar`/);
-    expect(section).toMatch(/never\s+read or mutate the principal's calendar myself/i);
-    expect(section).toMatch(/never present the brief/i);
+    expect(section).toMatch(/borrow-then-answer through `@calendar`/);
+    expect(section).toMatch(/I compose the reply/);
     expect(section).toMatch(/could not be read/i);
-    expect(section).toMatch(/do not search\s+tool-registry/i);
   });
 
-  it('drops calendar from handle-directly (no Curia calendar path)', () => {
+  it('handle-directly does not claim the calendar (no Curia calendar path)', () => {
     const handleDirectly = extractHandleDirectlySection(loadCoordinator().system_prompt);
-    expect(handleDirectly).toMatch(/Calendar is never handle-directly/i);
-    expect(handleDirectly).toMatch(/@calendar/);
-    expect(handleDirectly).not.toMatch(/my own email\/calendar\/workspace/);
+    expect(handleDirectly).not.toMatch(/calendar/i);
     expect(handleDirectly).not.toMatch(/Curia's identity only/);
+  });
+
+  it('states the @calendar route only in the calendar section (#1958)', () => {
+    // It was once repeated in nine places. Each copy is rule density with no added protection.
+    const prompt = loadCoordinator().system_prompt;
+    const outside = prompt.replace(extractPrincipalCalendarSection(prompt), '');
+    expect(outside).not.toMatch(/@calendar/);
+  });
+
+  it('the coordinator can neither discover nor activate the calendar bundle (#1958)', () => {
+    // This replaced a prompt sentence ("do not search tool-registry or skill-activate for
+    // calendar"). The calendar tools exclude the coordinator by allowed_callers, and a
+    // bundle every one of whose tools is withheld is neither offered by search nor
+    // activatable (skillReservedForOtherAgents). Loaded from disk, so a calendar tool that
+    // drops its allowed_callers, or a new tool under skills/calendar/tools the coordinator
+    // may call, fails here. (A SKILL.md entry for a tool living elsewhere is not loaded.)
+    const tools = new ToolRegistry();
+    const skills = new SkillRegistry();
+    const toolsDir = resolve(skillsDir, 'calendar', 'tools');
+    for (const name of readdirSync(toolsDir)) {
+      const manifest = JSON.parse(readFileSync(resolve(toolsDir, name, 'tool.json'), 'utf-8')) as ToolManifest;
+      tools.register(manifest, noopHandler);
+    }
+    const parsed = parseSkillMd(readFileSync(resolve(skillsDir, 'calendar', 'SKILL.md'), 'utf-8'));
+    skills.register(
+      { name: parsed.name, description: parsed.description, version: parsed.version, tools: parsed.tools ?? [], instructions: parsed.instructions },
+      resolve(skillsDir, 'calendar'),
+    );
+
+    for (const query of ['calendar', 'free time', 'calendar-list-events', 'events']) {
+      const hits = unifiedToolSearch({ query, toolRegistry: tools, skillRegistry: skills, agentId: 'coordinator' });
+      expect(hits, `search '${query}'`).toEqual([]);
+    }
+    expect(resolveSkillActivation({ skillName: 'calendar', skillRegistry: skills, toolRegistry: tools, agentId: 'coordinator' }))
+      .toEqual({ error: expect.stringContaining('reserved for other agents') });
+    // The owner is unaffected.
+    expect(resolveSkillActivation({ skillName: 'calendar', skillRegistry: skills, toolRegistry: tools, agentId: 'calendar' }))
+      .not.toHaveProperty('error');
   });
 
   it('does not pin principal-scoped calendar tools or the calendar bundle', () => {
     const pins = loadCoordinator().pinned_skills ?? [];
-    expect(pins).toContain('google-workspace');
     expect(pins).not.toContain('calendar');
     expect(pins).not.toContain('calendar-list-events');
     expect(pins).not.toContain('calendar-check-conflicts');
-    for (const heldBack of GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK) {
-      expect(pins).not.toContain(heldBack);
-    }
+    expect(pins.filter((p) => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(p))).toEqual([]);
   });
 
-  it('projected google-workspace membership leaves no unresolved calendar pins', () => {
-    // Simulates post-holdback projection: ToolRegistry has Drive tools but not the
-    // held-back calendar names. If projection still listed held-back members,
-    // resolvePinnedSkills would record member_tools_missing and
-    // reportScheduledPinGaps would error-log every coordinator boot.
+  it('pins resolve cleanly, and activating google-workspace brings no calendar tools', () => {
+    // The server's --tools allowlist (drive, docs, sheets) is the only gate on its
+    // membership (#1957); projection passes the advertised set through unfiltered.
+    // A clean resolution here means reportScheduledPinGaps stays quiet on boot. The
+    // coordinator no longer pins google-workspace; it activates it on demand (#2024).
     const config = loadCoordinator();
     const tools = new ToolRegistry();
     const skills = new SkillRegistry();
@@ -150,7 +188,6 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       'drive-download-file',
       'signal-send',
       'activity-log',
-      'approval-expiry-sweep',
       'secret-capture-request',
       'list-user-secrets',
       'create_doc',
@@ -162,8 +199,7 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       if (!tools.get(name)) tools.register(toolManifest(name), noopHandler);
     }
 
-    // Pass the RAW advertised set (including held-back names). registerMcpProjectedSkills
-    // must filter them — that is what this assertion guards.
+    // What an allowlisted server advertises: Drive/Docs/Sheets tools only.
     const logger = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -174,7 +210,7 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       new Map([
         [
           'google-workspace',
-          ['create_doc', 'search_drive_files', ...GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK],
+          ['create_doc', 'search_drive_files'],
         ],
       ]),
       skills,
@@ -184,11 +220,18 @@ describe('coordinator principal-calendar routing (#1853)', () => {
 
     const resolution = resolvePinnedSkills(config.pinned_skills ?? [], skills, tools);
     expect(resolution.unresolvedPins).toEqual([]);
-    for (const heldBack of GOOGLE_WORKSPACE_CALENDAR_TOOLS_HELD_BACK) {
-      expect(resolution.toolNames).not.toContain(heldBack);
-    }
+    expect(resolution.toolNames.filter((t) => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(t))).toEqual([]);
     expect(resolution.toolNames).not.toContain('calendar-list-events');
     expect(resolution.toolNames).toContain('delegate');
-    expect(resolution.toolNames).toContain('create_doc');
+    expect(resolution.toolNames).not.toContain('create_doc');
+
+    const activation = resolveSkillActivation({
+      skillName: 'google-workspace', skillRegistry: skills, toolRegistry: tools, agentId: 'coordinator',
+    });
+    expect(activation).not.toHaveProperty('error');
+    if (!('error' in activation)) {
+      expect(activation.tools).toContain('create_doc');
+      expect(activation.tools.filter((t) => GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(t))).toEqual([]);
+    }
   });
 });

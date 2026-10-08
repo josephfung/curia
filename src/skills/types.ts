@@ -63,6 +63,11 @@ export interface ToolManifest {
    *  Services NOT listed here (contactService, entityContextAssembler, agentPersona)
    *  are universal — available to every skill without declaration. */
   capabilities?: string[];
+  /** Capabilities the skill uses when the deployment has them and works without
+   *  (#2024). Same names as `capabilities`; injected when the service is configured,
+   *  skipped otherwise, and never a reason to refuse the call. A name may not appear
+   *  in both lists. Frozen after loading like `capabilities`. */
+  optional_capabilities?: string[];
   /** Declares that the execution layer should automatically assemble entity context
    *  before invoking this skill's handler. The assembled EntityContext[] is injected
    *  into ctx.entityContext so the handler doesn't need to call entity-context directly.

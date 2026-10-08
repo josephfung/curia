@@ -61,6 +61,7 @@ const catalog: AgentPinCatalog = {
   mcpServers: ['google-workspace'],
   unresolvedPins: [],
   missingPinnedTools: [],
+  configuredMcpServers: ['google-workspace'],
   localToolNames: ['email-get', 'delegate', 'web-search'],
 };
 
@@ -213,7 +214,7 @@ describe('SQL safety', () => {
     expect(() => assertReadOnlySelect("SELECT 'delete' FROM audit_log")).not.toThrow();
   });
 
-  it('builds five single SELECTs, with the offered-tool join before WHERE', () => {
+  it('builds seven single SELECTs, with the offered-tool join before WHERE', () => {
     const statements = contextReportStatements({
       agent: 'coordinator',
       since: new Date('2026-09-01T00:00:00.000Z'),
@@ -221,7 +222,7 @@ describe('SQL safety', () => {
       localToolNames: ['email-get'],
     });
     expect(statements.map(statement => statement.name)).toEqual([
-      'archive', 'offered', 'tokens', 'budget', 'invocations',
+      'archive', 'offered', 'tokens', 'budget', 'tasks', 'activations', 'invocations',
     ]);
     for (const statement of statements) {
       expect(() => assertReadOnlySelect(statement.sql)).not.toThrow();
@@ -230,7 +231,10 @@ describe('SQL safety', () => {
     expect(offered.sql.indexOf('CROSS JOIN')).toBeGreaterThan(offered.sql.indexOf('FROM'));
     expect(offered.sql.indexOf('CROSS JOIN')).toBeLessThan(offered.sql.search(/\bWHERE\b/));
     expect(offered.sql).not.toContain('skill.invoke');
-    const invocations = statements[4]!;
+    const activations = statements[5]!;
+    expect(activations.sql).toContain("'skill-activate'");
+    expect(activations.sql).toContain('count(DISTINCT');
+    const invocations = statements[6]!;
     expect(invocations.sql).toContain("'tool.invoke'");
     expect(invocations.sql).toContain("'skill.invoke'");
     expect(invocations.sql).toContain("'[EXTRACTION_FAILED]'");
@@ -293,7 +297,7 @@ describe('runAgentContextReport', () => {
       ],
     });
 
-    expect(sql).toHaveLength(5);
+    expect(sql).toHaveLength(7);
     expect(report.archiveCalls).toBe(2);
     expect(report.systemChars).toEqual({ n: 2, p50: 110, p95: 119 });
     expect(report.inputTokens).toEqual({ n: 4, p50: 2500, p95: 3850 });
@@ -361,6 +365,51 @@ describe('runAgentContextReport', () => {
   });
 });
 
+describe('an agent that activates an MCP server instead of pinning it (#2024)', () => {
+  const since = new Date('2026-09-01T00:00:00.000Z');
+  const until = new Date('2026-10-01T00:00:00.000Z');
+  const unpinned: AgentPinCatalog = { ...catalog, mcpServers: [] };
+
+  it('charges activated tools to the configured server, not as pinned, and reports the activation share', async () => {
+    const db = scriptedDb({
+      archive: [archiveRow({
+        latest_tools: [
+          { name: 'email-get', bytes: 40 },
+          { name: 'search_drive_files', bytes: 50 },
+        ],
+      })],
+      offered: [{ tool_name: 'email-get' }, { tool_name: 'search_drive_files' }, { tool_name: 'list_drive_items' }],
+      tasks: [{ tasks: '2204' }],
+      activations: [{ skill: 'google-workspace', tasks: '15' }, { skill: 'tasks', tasks: '3' }],
+      invocations: [{ tool_name: 'search_drive_files', calls: '2' }],
+    });
+    const report = await runAgentContextReport(db, { agent: 'coordinator', since, until, catalog: unpinned });
+
+    expect(report.latest?.sources.map(source => source.source)).toEqual(['local', 'mcp:google-workspace']);
+    expect(report.invocations.find(row => row.toolName === 'search_drive_files')).toMatchObject({
+      pinned: false,
+      source: 'mcp:google-workspace',
+    });
+    // An activated server's unused tools are not pinned tools with zero calls.
+    expect(report.pinnedZeroCalls.map(row => row.toolName)).toEqual(['delegate', 'email-get']);
+    expect(report.tasks).toBe(2204);
+    expect(report.skillActivations).toEqual([
+      { skill: 'google-workspace', tasks: 15 },
+      { skill: 'tasks', tasks: 3 },
+    ]);
+    expect(formatReport(report)).toContain('15 of 2204 tasks (0.7%)');
+    expect(formatReportMarkdown(report)).toContain('| `google-workspace` | 15 of 2204 tasks (0.7%) |');
+  });
+
+  it('says so when no task activated anything', async () => {
+    const report = await runAgentContextReport(scriptedDb({ tasks: [{ tasks: '40' }] }), {
+      agent: 'coordinator', since, until, catalog: unpinned,
+    });
+    expect(report.skillActivations).toEqual([]);
+    expect(formatReport(report)).toContain('(none in 40 tasks)');
+  });
+});
+
 describe('parsers', () => {
   it('rejects a context.budget tier that is not an object', () => {
     expect(() => parseBudgetTiers(['nope'])).toThrow(/not an object/);
@@ -404,6 +453,8 @@ describe('modal tool count', () => {
       budgetEvents: 0,
       tierSamples: [],
       invocations: [],
+      tasks: 0,
+      skillActivations: [],
     });
     expect(report.modalToolCount).toBe(1);
     expect(report.modalCalls).toBe(2);
@@ -423,7 +474,8 @@ describe('loadAgentPinCatalog', () => {
   it('expands the real coordinator pins without leaving any unresolved', () => {
     const repoRoot = path.resolve(import.meta.dirname, '..');
     const loaded = loadAgentPinCatalog(repoRoot, 'coordinator');
-    expect(loaded.mcpServers).toEqual(['google-workspace']);
+    // The coordinator pins no MCP server: it activates google-workspace on demand (#2024).
+    expect(loaded.mcpServers).toEqual([]);
     expect(loaded.unresolvedPins).toEqual([]);
     expect(loaded.missingPinnedTools).toEqual([]);
     expect(loaded.localPinnedTools).toContain('email-get');
@@ -484,6 +536,7 @@ describe('loadAgentPinCatalog', () => {
     expect(loaded.localPinnedTools).toEqual(['email-get', 'email-gone', 'delegate']);
     expect(loaded.missingPinnedTools).toEqual(['email-gone']);
     expect(loaded.mcpServers).toEqual(['google-workspace']);
+    expect(loaded.configuredMcpServers).toEqual(['google-workspace']);
     expect(loaded.unresolvedPins).toEqual(['missing-pin']);
     expect(loaded.localToolNames).toContain('email-gone');
   });

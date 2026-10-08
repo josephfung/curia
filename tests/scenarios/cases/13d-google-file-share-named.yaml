@@ -1,0 +1,219 @@
+# Case 13d (#2024): the principal asks to share a file they name, with no link, with a
+# contact. Nothing in the message is a Google URL, so only the prompt's "any Google file,
+# link or not" tells the coordinator to activate google-workspace. With the tools
+# unloaded, the failure to watch for is "I can't share files". Rule:
+# agents/coordinator.yaml, "Google Workspace".
+name: google file share named
+description: >
+  The principal asks to share their latest pitch deck with Kevin Osei, a known contact,
+  without a link. The coordinator activates its Google Drive tools, finds the latest
+  deck, and shares it with Kevin, by Drive access or by emailing him a PDF. It never says
+  it cannot share files.
+tags: [google-workspace, skill-activation]
+timeout_seconds: 300
+# Letting Kevin know by email is reasonable after sharing; sends succeed.
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: kevin
+      display_name: Kevin Osei
+      tier: known
+      kind: person
+      channel: email
+      identifier: kevin.osei@example.test
+inbound:
+  from: principal
+  content: Share my latest pitch deck with Kevin Osei.
+tool_stubs:
+  # Resolving Kevin through the contacts specialist is a fine path too. The briefing
+  # format of agents/contacts.yaml: prose, then the contact ID a send skill takes (#2050).
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: |
+          Kevin Osei is a known contact. His verified email is kevin.osei@example.test.
+          No recent meetings or notes on file.
+
+          <resolved_entities>
+            <contact name="Kevin Osei" id="{{contact:kevin}}"/>
+          </resolved_entities>
+    - match: {}
+      return: { agent: ceo-inbox, response: Done. }
+  search_drive_files:
+    - match: {}
+      return: &decks |
+        Found 2 files:
+        - Name: "Pitch deck: Series A (v7)" (ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc, Type: application/vnd.google-apps.presentation, Modified: 3 days ago)
+        - Name: "Pitch deck: Seed round (2025)" (ID: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty, Type: application/vnd.google-apps.presentation, Modified: 14 months ago)
+  list_drive_items:
+    - match: {}
+      return: *decks
+  # The stubs that take a file ID are keyed by deck, so a run that picks the seed deck
+  # sees the seed deck rather than being steered back to v7 (#2050).
+  get_drive_file_permissions:
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+      return: |
+        File: Pitch deck: Series A (v7)
+        ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc
+        Owner: assistant@example.test
+        Permissions:
+          - assistant@example.test: owner
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: |
+        File: Pitch deck: Seed round (2025)
+        ID: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty
+        Owner: assistant@example.test
+        Permissions:
+          - assistant@example.test: owner
+  search_docs:
+    - match: {}
+      return: No Google Docs matched; the decks are Slides presentations.
+  check_drive_file_public_access:
+    - match: {}
+      return: '"Pitch deck: Series A (v7)" is not shared publicly. Link sharing: restricted.'
+  manage_drive_access:
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+      return: 'Permission granted on "Pitch deck: Series A (v7)".'
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: 'Permission granted on "Pitch deck: Seed round (2025)".'
+  get_drive_shareable_link:
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+      return: "https://docs.google.com/presentation/d/1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc/edit?usp=sharing"
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: "https://docs.google.com/presentation/d/1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty/edit?usp=sharing"
+  # Attaching the deck to an email to Kevin goes through drive-download-file, which puts
+  # it in the temp store email-send reads attachments from (its tool.json). Each deck has
+  # one fixed file name there, which the checks below look for (#2050).
+  drive-download-file:
+    - match: { file_id_or_url: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+      return:
+        temp_file_url: file:///run/curia-tempfiles/5b1e7c3a-94d2-4f6b-8a0e-c2d9f4a7e316.pdf
+        filename: "Pitch deck: Series A (v7).pdf"
+        content_type: application/pdf
+        size: 2909798
+    - match: { file_id_or_url: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return:
+        temp_file_url: file:///run/curia-tempfiles/8d41e0b6-27c3-4f19-a6e2-5b90c3d7f184.pdf
+        filename: "Pitch deck: Seed round (2025).pdf"
+        content_type: application/pdf
+        size: 1980621
+  # Some runs read the deck or download it with workspace-mcp's own tools (#2050), whose
+  # 2.0.1 formats these follow (over stdio, as Curia runs it). email-send refuses a file
+  # outside the temp store, so the workspace-mcp download is not a way to attach it.
+  get_drive_file_content:
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+      return: |
+        File: "Pitch deck: Series A (v7)" (ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc, Type: application/vnd.google-apps.presentation)
+        Link: https://docs.google.com/presentation/d/1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc/edit?usp=drivesdk
+
+        --- CONTENT ---
+        Series A
+        Raising $8M to scale enterprise sales
+
+        Traction
+        $1.2M ARR, 3x year over year. 41 paying customers.
+
+        The ask
+        $8M Series A. 18 months of runway. 12 hires, 4 in engineering.
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: |
+        File: "Pitch deck: Seed round (2025)" (ID: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty, Type: application/vnd.google-apps.presentation)
+        Link: https://docs.google.com/presentation/d/1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty/edit?usp=drivesdk
+
+        --- CONTENT ---
+        Seed round
+        Raising $2M to reach product-market fit
+
+        Traction
+        $180k ARR. 9 design partners.
+
+        The ask
+        $2M seed. 24 months of runway.
+  get_drive_file_download_url:
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+      return: |
+        File downloaded successfully!
+        File: Pitch deck: Series A (v7)
+        File ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc
+        Size: 2841.6 KB (2909798 bytes)
+        MIME Type: application/pdf
+
+        📎 Saved to: /tmp/.workspace-mcp/attachments/Pitch_deck_Series_A_v7_3f9c2a71-6b0e-4d8a-9c55-2e1f7a4b8d10.pdf
+
+        The file has been saved to disk and can be accessed directly via the file path.
+
+        Note: Google native file exported to application/pdf format.
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: |
+        File downloaded successfully!
+        File: Pitch deck: Seed round (2025)
+        File ID: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty
+        Size: 1934.2 KB (1980621 bytes)
+        MIME Type: application/pdf
+
+        📎 Saved to: /tmp/.workspace-mcp/attachments/Pitch_deck_Seed_round_2025_8d41e0b6-27c3-4f19-a6e2-5b90c3d7f184.pdf
+
+        The file has been saved to disk and can be accessed directly via the file path.
+
+        Note: Google native file exported to application/pdf format.
+  # The real tool exports only Google Docs; both decks are Slides presentations.
+  export_doc_to_pdf:
+    - match: { document_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+      return: "Error: File 'Pitch deck: Series A (v7)' is not a Google Doc (MIME type: application/vnd.google-apps.presentation). Only native Google Docs can be exported to PDF."
+    - match: { document_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: "Error: File 'Pitch deck: Seed round (2025)' is not a Google Doc (MIME type: application/vnd.google-apps.presentation). Only native Google Docs can be exported to PDF."
+expected_behaviors:
+  - id: activates_google_workspace
+    weight: critical
+    description: Activates the google-workspace skill to get its Drive tools.
+    check:
+      called: skill-activate
+      with: { skill: google-workspace }
+  # Emailing Kevin a PDF of the v7 deck is a fair reading of "share" too (#2050): the
+  # case tests that the Drive tools get used, not which way the deck reaches him. The
+  # attachment must be the temp-store file the v7 drive-download-file stub returns; a
+  # workspace-mcp download path would be refused by email-send in production.
+  # Known gap: human-channels' email-send stub accepts that path too, so a run attaching
+  # it is told "sent" and never gets production's refusal to recover from. It misses here
+  # for that reason, not because it chose a worse route. The stub matcher compares values
+  # exactly, so it cannot single out a path outside the temp store.
+  - id: shares_latest_deck_with_kevin
+    weight: critical
+    description: >
+      Gets the Series A (v7) deck to Kevin: grants his email access with
+      manage_drive_access, or emails him the deck's PDF by his contact ID.
+    check:
+      any_of:
+        - called: manage_drive_access
+          with: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+          contains: { share_with: kevin.osei@example.test }
+        - called: manage_drive_access
+          with: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+          contains: { recipients: kevin.osei@example.test }
+        - called: email-send
+          with: { to: "{{contact:kevin}}" }
+          contains: { attachments: 5b1e7c3a-94d2-4f6b-8a0e-c2d9f4a7e316 }
+  - id: not_the_old_deck
+    weight: important
+    description: Does not share the 2025 seed deck.
+    check:
+      not_called: [manage_drive_access]
+      with: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+  # The seed deck's two download stubs share one UUID, so trying to send the wrong deck
+  # counts by either route, even the one production would refuse.
+  - id: not_the_old_deck_by_email
+    weight: important
+    description: Does not email the 2025 seed deck's PDF.
+    check:
+      not_called: [email-send]
+      contains: { attachments: 8d41e0b6-27c3-4f19-a6e2-5b90c3d7f184 }
+  - id: never_says_cannot
+    weight: critical
+    description: >
+      Confirms the latest deck is shared with Kevin. Never says it cannot share files, has
+      no Google Drive access, or asks the principal to share it themselves.
+failure_modes:
+  - '"I don''t have access to your Google Drive"'
+  - Asks for a link to the deck instead of searching for it
+  - Shares the older seed deck

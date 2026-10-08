@@ -10,12 +10,29 @@
 // Capture (tests/shared/turn-capture.ts) listens as the `system` layer, so a NO_REPLY
 // turn, or a reply Gate C holds for a non-principal sender, still ends the run instead
 // of timing out.
+//
+// Runs of different cases overlap (#1980). Each attempt runs inside its own case context
+// (tests/shared/case-scope.ts): the seeded-state views, the model-call guard and the cost
+// meter all find the calling run through it. A run that times out is cancelled, so its
+// abandoned turn stops calling the model.
 import { randomUUID } from 'node:crypto';
-import { createAgentDiscuss, createInboundMessage } from '../../src/bus/events.js';
+import { createAgentDiscuss, createAgentTask, createInboundMessage } from '../../src/bus/events.js';
 import { loadConfig } from '../../src/config.js';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
+import {
+  closeAttempt,
+  createCaseContext,
+  guardProvider,
+  meterAgentCalls,
+  newAttempt,
+  PROVIDER_RETRIES,
+  providerFailure,
+  stalledCallMs,
+  type CaseAttempt,
+} from '../shared/case-scope.js';
+import { sumBreakdowns, UsageLedger, type UsageBreakdown } from '../shared/usage.js';
 import {
   cleanupConversation,
   createTurnCapture,
@@ -24,7 +41,9 @@ import {
   type TurnOutcome,
 } from '../shared/turn-capture.js';
 import { internalNamesFor } from './assertions.js';
-import { resolvePlaceholders } from './loader.js';
+import { discoverableTools } from './discovery.js';
+import { resolvePlaceholders, type RunClock } from './loader.js';
+import { resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import {
   cleanupRun,
   createOutboundContextService,
@@ -67,6 +86,19 @@ export function parseTimeout(raw: string | undefined): number {
 /** How long shutdown waits for turns that outlived their run's timeout. */
 const LATE_TURN_GRACE_MS = 60_000;
 
+/**
+ * After a run ends and is cancelled, how long to wait for its leftover work to wind down
+ * before removing its rows and reading its spend. A cancelled turn ends at its next model
+ * call; one that runs longer is left to shutdown, its spend counted outside any run.
+ */
+const CANCEL_SETTLE_MS = 30_000;
+
+/** One attempt at a run: what the case context carries. */
+interface ScenarioRunState extends CaseAttempt {
+  /** The rows this attempt seeded, which are all its views show. */
+  scope: SeedScope;
+}
+
 export interface ScenarioHarness {
   stack: TestModeStack;
   stubs: StubController;
@@ -74,9 +106,23 @@ export interface ScenarioHarness {
   internalNames: string[];
   /** Tool names the coordinator is offered (for stub validation). */
   coordinatorTools: Set<string>;
+  /**
+   * What the coordinator is offered plus what it can load mid-turn with skill-activate
+   * (#2024): a case may stub and check those too, since activation is the behavior
+   * under test.
+   */
+  reachableTools: Set<string>;
   /** Tools test mode cannot serve; the stub layer refuses them unless a case stubs them. */
   unavailableTools: ReadonlySet<string>;
-  runOnce(scenario: ScenarioCase, runIndex: number): Promise<ScenarioRun>;
+  /** Tools served from an MCP snapshot; the stub layer runs them unstubbed (#2024). */
+  inertTools: ReadonlySet<string>;
+  /**
+   * One run of a case. An attempt that fails for a provider reason is run again, up to
+   * PROVIDER_RETRIES times, and the run records why (#1980).
+   */
+  runOnce(scenario: ScenarioCase, runIndex: number, options?: { onProviderRetry?: (reason: string) => void }): Promise<ScenarioRun>;
+  /** Model spend no run's figure includes: outside every run, or billed after its run ended. */
+  unattributedUsage(): UsageBreakdown;
   /** Remove rows an interrupted run left behind (by the suite's own markers). */
   sweep(): Promise<Record<string, number>>;
   shutdown(): Promise<void>;
@@ -141,7 +187,8 @@ export async function acquireSuiteLock(stack: TestModeStack): Promise<(() => Pro
 }
 
 export async function createScenarioHarness(options: { model?: string } = {}): Promise<ScenarioHarness> {
-  const scope = new SeedScope();
+  const context = createCaseContext<ScenarioRunState>();
+  const currentScope = (): SeedScope | undefined => context.current()?.scope;
   const config = loadConfig();
   // The registry exists only once the stack is built; the stub layer reads it lazily.
   let booted: TestModeStack | undefined;
@@ -152,13 +199,16 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       return booted.toolRegistry;
     },
     () => unavailable,
+    () => booted?.snapshotMcpTools ?? new Set(),
   );
 
   const stack = await createTestModeStack({
     config: { ...config, databaseUrl: withApplicationName(config.databaseUrl) },
     model: options.model,
     wrapExecutionLayer: (layer) => controller.wrap(layer),
-    wrapBullpenService: (bullpen) => scopedBullpen(bullpen, scope),
+    wrapBullpenService: (bullpen) => scopedBullpen(bullpen, currentScope),
+    // Times each model call against its run, and refuses a cancelled run's calls.
+    wrapLlmProvider: (provider) => guardProvider(provider, context.current),
     // No contact recent history: every case starts from a clean slate.
     wrapWorkingMemory: withoutRecentHistory,
   });
@@ -176,14 +226,36 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     logger,
     contactResolver: stack.contactResolver,
     channelPolicies: undefined,
-    outboundContextService: scopedOutboundContext(outboundContext, scope),
+    outboundContextService: scopedOutboundContext(outboundContext, currentScope),
   }).register();
   // Bullpen mentions reach the coordinator the way they do in production.
   new BullpenDispatcher(bus, logger, stack.bullpenService, stack.agentRegistry).register();
 
   const capture = createTurnCapture(bus);
+  // Every model call billed to the run it was made in (#1980).
+  const unattributed = new UsageLedger();
+  meterAgentCalls(bus, context.current, unattributed);
   const coordinator = stack.agent(COORDINATOR);
   const coordinatorTools = new Set(coordinator.toolDefs.map(t => t.name));
+  // Production's own activation check, per skill: what skill-activate would hand the
+  // coordinator. Only while the coordinator has a skill-activate test mode can run;
+  // otherwise a case could stub and check tools no run can ever load.
+  const reachableTools = new Set(coordinatorTools);
+  if (coordinatorTools.has('skill-activate') && !unavailable.has('skill-activate')) {
+    for (const skill of stack.skillRegistry.list()) {
+      const activation = stack.executionLayer.resolveSkillActivationForAgent(skill.manifest.name, COORDINATOR);
+      if (!('error' in activation)) for (const tool of activation.tools) reachableTools.add(tool);
+    }
+  }
+  // And what a tool-registry call would hand it (#2050). A discovered tool test mode
+  // cannot serve is refused like an offered one, so an unstubbed call counts as a stub
+  // hole instead of passing through to a missing-capability error production never shows.
+  if (coordinatorTools.has('tool-registry') && !unavailable.has('tool-registry')) {
+    const discovered = discoverableTools(stack.toolRegistry, stack.skillRegistry, COORDINATOR);
+    for (const tool of discovered) reachableTools.add(tool);
+    const discoveredUnavailable = discovered.filter(t => stack.executionLayer.unavailableCapabilities(t).length > 0);
+    unavailable = new Set([...unavailable, ...discoveredUnavailable]);
+  }
   const internalNames = internalNamesFor({
     tools: [...stack.toolRegistry.list().map(t => t.manifest.name)],
     agents: stack.agentRegistry.list().map(a => a.name),
@@ -197,10 +269,10 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
    * conversation rows are cleaned again (it wrote turns after the run's cleanup), and
    * shutdown waits for them before closing the pool.
    */
-  const lateTurns = new Set<Promise<void>>();
+  const lateTurns = new Map<Promise<void>, ScenarioRunState | undefined>();
 
   function trackDelivery(delivery: Promise<void>, conversationId: string): void {
-    const settled = delivery
+    const settled: Promise<void> = delivery
       .catch((err: unknown) => {
         // The run has its outcome already (via capture.fail or its timeout); this only
         // records that the late turn ended in an error.
@@ -212,11 +284,55 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         process.stderr.write(`  [WARN] late cleanup failed for ${conversationId}: ${err instanceof Error ? err.message : String(err)}\n`);
       })
       .finally(() => { lateTurns.delete(settled); });
-    lateTurns.add(settled);
+    lateTurns.set(settled, context.current());
   }
 
-  async function runOnce(scenario: ScenarioCase, runIndex: number): Promise<ScenarioRun> {
+  /** Wait (up to `maxMs`) for `state`'s turns still running; false if some still are. */
+  async function settle(state: ScenarioRunState, maxMs: number): Promise<boolean> {
+    const own = (): Array<Promise<void>> => [...lateTurns].filter(([, s]) => s === state).map(([p]) => p);
+    if (own().length === 0) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(own()),
+      new Promise(resolve => { timer = setTimeout(resolve, maxMs); timer.unref(); }),
+    ]);
+    clearTimeout(timer);
+    return own().length === 0;
+  }
+
+  async function runOnce(
+    scenario: ScenarioCase,
+    runIndex: number,
+    options: { onProviderRetry?: (reason: string) => void } = {},
+  ): Promise<ScenarioRun> {
+    const providerRetries: string[] = [];
+    const spent: UsageBreakdown[] = [];
+    for (;;) {
+      const { run, providerReason } = await attempt(scenario, runIndex);
+      spent.push(run.usage);
+      if (providerReason && providerRetries.length < PROVIDER_RETRIES) {
+        providerRetries.push(providerReason);
+        options.onProviderRetry?.(providerReason);
+        continue;
+      }
+      return { ...run, usage: sumBreakdowns(spent), providerRetries };
+    }
+  }
+
+  /** One attempt at a run, in a fresh case context with its own seeded rows. */
+  async function attempt(scenario: ScenarioCase, runIndex: number): Promise<{ run: ScenarioRun; providerReason?: string }> {
+    const state: ScenarioRunState = { ...newAttempt(`${scenario.name} run ${runIndex + 1}`), scope: new SeedScope() };
+    return context.run(state, () => attemptInContext(scenario, runIndex, state));
+  }
+
+  async function attemptInContext(
+    scenario: ScenarioCase,
+    runIndex: number,
+    state: ScenarioRunState,
+  ): Promise<{ run: ScenarioRun; providerReason?: string }> {
+    const { scope } = state;
     const started = Date.now();
+    let providerReason: string | undefined;
     // Set once seeding succeeds. seedRun removes its own partial rows when it throws, so
     // a failed seed becomes this run's error instead of aborting the suite.
     let seeded: SeededRun | undefined;
@@ -226,10 +342,21 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     let cleanupError: string | undefined;
     // Filled by the try/catch, finished after cleanup so a cleanup failure can be attached.
     let result: ScenarioRun;
+    // One clock per run (#1958). The inbound, the stubs and the seeded rows must agree on
+    // what "next week" is, and rating re-resolves the behaviors against this same instant
+    // (resolveRunPlaceholders), even if it happens after midnight.
+    const clock: RunClock = { now: new Date().toISOString(), timezone: stack.config.timezone };
+    const resolveDates = <T>(value: T): T => resolveDatePlaceholders(value, clock.timezone, new Date(clock.now));
+    const dated: ScenarioCase = {
+      ...scenario,
+      seed: resolveDates(scenario.seed),
+      inbound: resolveDates(scenario.inbound),
+      toolStubs: resolveDates(scenario.toolStubs),
+    };
     try {
-      seeded = await seedRun(scenario, { stack, outboundContext, scope });
-      const stubTable = resolvePlaceholders(scenario.toolStubs, seeded.refs);
-      const inbound = resolvePlaceholders(scenario.inbound, seeded.refs);
+      seeded = await seedRun(dated, { stack, outboundContext, scope });
+      const stubTable = resolvePlaceholders(dated.toolStubs, seeded.refs);
+      const inbound = resolvePlaceholders(dated.inbound, seeded.refs);
       inboundContent = inbound.content;
 
       const sender = await resolveSender(scenario, stack);
@@ -237,9 +364,11 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       const thread = sender === 'bullpen' ? seeded.threads.get(inbound.thread!)! : undefined;
       const runConversationId = thread
         ? thread.threadId // BullpenDispatcher uses the thread id as the conversation
-        : sender !== 'bullpen' && sender.channelId === 'email'
-          ? `email:scenario-${randomUUID()}`
-          : `scenario-${randomUUID()}`;
+        : sender === 'scheduler'
+          ? `scheduler:scenario-${randomUUID()}:${randomUUID()}` // scheduler:<job>:<run>
+          : sender !== 'bullpen' && sender.channelId === 'email'
+            ? `email:scenario-${randomUUID()}`
+            : `scenario-${randomUUID()}`;
       conversationId = runConversationId;
 
       controller.beginRun(stubTable, runConversationId);
@@ -263,6 +392,17 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
             content: inbound.content,
             parentEventId: randomUUID(),
           }));
+        } else if (sender === 'scheduler') {
+          // What Scheduler.fireJob publishes for a recurring job with no linked task: an
+          // agent.task straight to the agent, no Dispatcher, content = the payload JSON.
+          delivery = bus.publish('system', createAgentTask({
+            agentId: COORDINATOR,
+            conversationId: runConversationId,
+            channelId: 'scheduler',
+            senderId: 'scheduler',
+            content: JSON.stringify({ task: inbound.content }),
+            parentEventId: randomUUID(),
+          }));
         } else if (sender !== 'bullpen') {
           delivery = bus.publish('channel', createInboundMessage({
             conversationId: runConversationId,
@@ -280,7 +420,21 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         trackDelivery(delivery, runConversationId);
         outcome = await waiter;
       } finally {
-        stubbedCalls = controller.endRun();
+        stubbedCalls = controller.endRun(runConversationId);
+      }
+      if (outcome.error) {
+        // Measured before cancelling, while a stalled call is still in flight.
+        providerReason = providerFailure({
+          ...(outcome.errorKind ? { kind: outcome.errorKind } : {}),
+          ...(outcome.errorType ? { errorType: outcome.errorType } : {}),
+          stalledCallMs: stalledCallMs(state),
+        });
+      }
+      // The run has its outcome, passed or not; whatever it still has running must stop
+      // spending. Waited for (bounded) so nothing is still acting while its rows are removed.
+      state.cancelled = true;
+      if (!(await settle(state, CANCEL_SETTLE_MS))) {
+        process.stderr.write(`  [WARN] ${state.label}: a turn was still running ${CANCEL_SETTLE_MS / 1000}s after the run ended; its later spend is counted outside any run\n`);
       }
 
       const merged = mergeCalls(outcome.calls, stubbedCalls);
@@ -290,23 +444,29 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         runIndex,
         inboundContent,
         refs: Object.fromEntries(seeded.refs),
+        clock,
         toolCalls: merged,
         reply: outcome.reply,
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
         durationMs: Date.now() - started,
         unstubbedCalls: countHoles(merged),
         ...(outcome.error ?? premiseError ? { error: outcome.error ?? premiseError } : {}),
+        usage: state.usage.snapshot(),
+        providerRetries: [],
       };
     } catch (err) {
       result = {
         runIndex,
         inboundContent,
         refs: seeded ? Object.fromEntries(seeded.refs) : {},
+        clock,
         toolCalls: [],
         reply: null,
         durationMs: Date.now() - started,
-        unstubbedCalls: stubbedCalls.filter(c => c.disposition === 'refused' && c.agentId === COORDINATOR).length,
+        unstubbedCalls: stubbedCalls.filter(c => (c.disposition === 'refused' || c.disposition === 'canned') && c.agentId === COORDINATOR).length,
         error: describeError(err),
+        usage: state.usage.snapshot(),
+        providerRetries: [],
       };
     } finally {
       if (seeded) {
@@ -320,7 +480,10 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         }
       }
     }
-    return cleanupError ? { ...result, cleanupError } : result;
+    // Spend billed from here on is no longer this run's figure (case-scope.ts: closeAttempt).
+    closeAttempt(state);
+    const run = cleanupError ? { ...result, cleanupError } : result;
+    return { run, ...(providerReason ? { providerReason } : {}) };
   }
 
   return {
@@ -328,15 +491,18 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     stubs: controller,
     internalNames,
     coordinatorTools,
+    reachableTools,
     unavailableTools: unavailable,
+    inertTools: stack.snapshotMcpTools,
     runOnce,
+    unattributedUsage: () => unattributed.snapshot(),
     sweep: () => sweepLeftovers(stack),
     shutdown: async () => {
       // Late turns still hold the pool; wait (bounded) so their writes and cleanup land.
       if (lateTurns.size > 0) {
         process.stderr.write(`  waiting up to ${LATE_TURN_GRACE_MS / 1000}s for ${lateTurns.size} timed-out turn(s) to finish...\n`);
         await Promise.race([
-          Promise.allSettled([...lateTurns]),
+          Promise.allSettled([...lateTurns.keys()]),
           new Promise(resolve => setTimeout(resolve, LATE_TURN_GRACE_MS)),
         ]);
       }
@@ -353,8 +519,9 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
 export function countHoles(calls: CapturedToolCall[]): number {
   // A passthrough read that fails is a real outcome (e.g. date-resolve rejecting
   // "next week"): production returns the same. Tools test mode cannot serve are refused
-  // up front (see mustStub's `unavailable`), so they land here as refusals.
-  return calls.filter(c => c.disposition === 'refused').length;
+  // up front (see mustStub's `unavailable`), so they land here as refusals. An
+  // unstubbed snapshot MCP call got an empty stand-in result the case never chose (#2024).
+  return calls.filter(c => c.disposition === 'refused' || c.disposition === 'canned').length;
 }
 
 /** The metadata the email adapter attaches, minus anything a scenario cannot know. */

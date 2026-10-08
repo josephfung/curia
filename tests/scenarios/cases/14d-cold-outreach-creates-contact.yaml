@@ -1,0 +1,61 @@
+# Case 14d (#2041): cold outreach creates a contact first. Rule: the `to` description in
+# skills/email/tools/email-send/tool.json and contact-create's description
+# (skills/contacts/tools/contact-create/tool.json): the send skills take a contact ID only,
+# so someone who is not a contact yet is added with contact-create and sent to by the
+# contact_id it returns. Both routes to an ID are stubbed to return the same one: the
+# coordinator's own contact-create, and the contacts specialist. The contact-create stub
+# matches only a call carrying Dana's address, so a create without it is a stub hole.
+name: cold outreach creates a contact
+description: >
+  The principal asks the coordinator to email someone who is not in contacts yet, giving
+  the address. The coordinator sends from its own account with email-send, which takes
+  only a contact ID.
+tags: [email, recipient, contacts]
+stub_sets: [human-channels]
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Email Dana Whitfield at dana.whitfield@newco.example.test from your account. Tell her
+    I'd like 30 minutes next week to talk about the pilot, and ask which times work for her.
+tool_stubs:
+  contact-create:
+    - match: { email: dana.whitfield@newco.example.test }
+      return:
+        contact_id: 6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b
+        display_name: Dana Whitfield
+        role: null
+        kg_node_id: 0b1c2d3e-4f50-4617-8a9b-0c1d2e3f4a5b
+        identities_added: 1
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: |
+          Dana Whitfield was not in contacts, so I added her with the email you gave.
+
+          <resolved_entities>
+            <contact name="Dana Whitfield" id="6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"/>
+          </resolved_entities>
+    - match: {}
+      return: { agent: ceo-inbox, response: Done. }
+expected_behaviors:
+  - id: sends_to_new_contact_id
+    weight: critical
+    description: Calls email-send with `to` set to the contact ID that contact-create, or the contacts specialist, returned.
+    check:
+      called: email-send
+      with: { to: 6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b }
+  - id: no_address_in_to
+    weight: critical
+    description: Does not type Dana's address into `to`, which the skill refuses.
+    check:
+      not_called: [email-send]
+      contains: { to: dana.whitfield@newco.example.test }
+  - id: message_in_body
+    weight: important
+    description: The email asks Dana for 30 minutes next week about the pilot and asks which times work.
+failure_modes:
+  - Passes Dana's address in `to`, which the skill refuses
+  - Tells the principal it cannot email someone who is not a contact
+  - Delegates to ceo-inbox to draft from the principal's account

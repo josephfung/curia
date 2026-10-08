@@ -116,8 +116,27 @@ describe('unifiedToolSearch', () => {
       skillRegistry: skills,
       agentId: 'research-analyst',
     });
-    // Skill itself may still appear (activation will skip disallowed tools)
     expect(hits.some((h) => h.name === 'secret-admin')).toBe(false);
+  });
+
+  // #1958: the bundle used to appear anyway (only its tools were filtered), so the
+  // coordinator could find and activate the calendar bundle with zero tools.
+  it('hides a bundle whose tools are all reserved for other agents', () => {
+    const { tools, skills } = setup();
+    const forOthers = unifiedToolSearch({
+      query: 'Admin',
+      toolRegistry: tools,
+      skillRegistry: skills,
+      agentId: 'research-analyst',
+    });
+    expect(forOthers.some((h) => h.name === 'admin-bundle')).toBe(false);
+    const forOwner = unifiedToolSearch({
+      query: 'Admin',
+      toolRegistry: tools,
+      skillRegistry: skills,
+      agentId: 'coordinator',
+    });
+    expect(forOwner.some((h) => h.name === 'admin-bundle')).toBe(true);
   });
 
   it('excludes tool-registry, skill-activate, and async-offramp from results', () => {
@@ -154,16 +173,57 @@ describe('resolveSkillActivation', () => {
 
   it('does not widen authority — skips tools the agent cannot call', () => {
     const { tools, skills } = setup();
+    skills.register(
+      {
+        name: 'mixed-bundle',
+        description: 'Some tools for everyone, one for the coordinator',
+        tools: ['task-list', 'secret-admin'],
+        instructions: 'Mixed.',
+      },
+      '/tmp/mixed',
+    );
     const result = resolveSkillActivation({
-      skillName: 'admin-bundle',
+      skillName: 'mixed-bundle',
       skillRegistry: skills,
       toolRegistry: tools,
       agentId: 'research-analyst',
     });
     expect('error' in result).toBe(false);
     if ('error' in result) return;
-    expect(result.tools).toEqual([]);
+    expect(result.tools).toEqual(['task-list']);
     expect(result.skippedTools).toEqual(['secret-admin']);
+  });
+
+  // #1958: activating a bundle whose every tool is reserved for other agents used to
+  // succeed with zero tools and splice its instructions (written for those agents) into
+  // the turn. The coordinator could do that to the calendar bundle.
+  it('refuses a bundle whose tools are all reserved for other agents', () => {
+    const { tools, skills } = setup();
+    const result = resolveSkillActivation({
+      skillName: 'admin-bundle',
+      skillRegistry: skills,
+      toolRegistry: tools,
+      agentId: 'research-analyst',
+    });
+    expect(result).toEqual({ error: expect.stringContaining("reserved for other agents") });
+    if (!('error' in result)) return;
+    expect(result.error).toMatch(/delegate/i);
+  });
+
+  it('still activates a bundle whose tools are merely unregistered', () => {
+    // A down MCP server, for example: a different failure, unchanged here.
+    const { tools, skills } = setup();
+    skills.register(
+      { name: 'offline-bundle', description: 'Offline', tools: ['not-registered'], instructions: 'Offline.' },
+      '/tmp/offline',
+    );
+    const result = resolveSkillActivation({
+      skillName: 'offline-bundle',
+      skillRegistry: skills,
+      toolRegistry: tools,
+      agentId: 'research-analyst',
+    });
+    expect('error' in result).toBe(false);
   });
 
   it('rejects synthetic skills', () => {

@@ -1,12 +1,27 @@
 import { describe, it, expect, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { registerMcpProjectedSkills } from '../../../src/skills/mcp-loader.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
 import { resolvePinnedSkills } from '../../../src/skills/pin-resolution.js';
-import type { ToolManifest } from '../../../src/skills/types.js';
+import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
+import skillActivate from '../../../skills/skill-activate/handler.js';
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };
+
+const REPO_SKILLS_DIR = path.resolve(import.meta.dirname, '../../../skills');
+
+function silentLogger(): import('../../../src/logger.js').Logger {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  } as unknown as import('../../../src/logger.js').Logger;
+}
 
 function toolManifest(name: string): ToolManifest {
   return {
@@ -57,6 +72,114 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
     expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
   });
 
+  // #1960: upstream MCP tool descriptions are not ours to edit, so their how-to notes
+  // live in skills/<server>/references/ and load on demand through skill-activate.
+  describe('on-disk references', () => {
+    function project(skillsDir?: string): { skills: SkillRegistry; tools: ToolRegistry } {
+      const skills = new SkillRegistry();
+      const tools = new ToolRegistry();
+      tools.register(toolManifest('update_drive_file'), noopHandler);
+      tools.register(toolManifest('create_drive_file'), noopHandler);
+      registerMcpProjectedSkills(
+        new Map([['google-workspace', ['update_drive_file', 'create_drive_file']]]),
+        skills,
+        silentLogger(),
+        skillsDir,
+      );
+      return { skills, tools };
+    }
+
+    it('attaches the repo google-workspace references to the projected skill', () => {
+      const { skills } = project(REPO_SKILLS_DIR);
+      const gw = skills.get('google-workspace');
+      expect(gw?.dir).toBe(path.join(REPO_SKILLS_DIR, 'google-workspace'));
+      expect(gw?.manifest.references).toEqual(['drive-files.md']);
+      // Membership still comes from tools/list, not the directory.
+      expect(gw?.manifest.tools).toEqual(['update_drive_file', 'create_drive_file']);
+    });
+
+    it('lists the reference in the pinned skill block so the agent knows it exists', () => {
+      const { skills, tools } = project(REPO_SKILLS_DIR);
+      const r = resolvePinnedSkills(['google-workspace'], skills, tools);
+      const block = r.instructionBlocks.join('\n');
+      expect(block).toContain('skill-activate({ skill: "google-workspace", reference: "<path>" })');
+      expect(block).toContain('- drive-files.md');
+    });
+
+    it('loads drive-files.md through skill-activate', async () => {
+      const { skills, tools } = project(REPO_SKILLS_DIR);
+      const result = await skillActivate.execute({
+        input: { skill: 'google-workspace', reference: 'drive-files.md' },
+        toolName: 'skill-activate',
+        toolVersion: '0.1.1',
+        agentId: 'coordinator',
+        skillRegistry: skills,
+        toolRegistry: tools,
+        log: silentLogger(),
+        secret: () => { throw new Error('no secrets'); },
+      } as unknown as ToolContext);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const data = result.data as {
+        skill: string;
+        referenceContent?: { path: string; content: string; truncated: boolean };
+      };
+      expect(data.skill).toBe('google-workspace');
+      expect(data.referenceContent?.path).toBe('references/drive-files.md');
+      expect(data.referenceContent?.truncated).toBe(false);
+      // The mechanics that moved out of the coordinator prompt.
+      expect(data.referenceContent?.content).toContain('add_parents');
+      expect(data.referenceContent?.content).toContain('fileUrl');
+      expect(data.referenceContent?.content).toContain('export_items');
+    });
+
+    // References are optional: discovery that throws must not abort boot (review on
+    // #2019). An unreadable references/ makes readdirSync throw EACCES; root ignores
+    // the mode, so the case is skipped there.
+    it.skipIf(process.getuid?.() === 0)('registers without references and warns when discovery throws', () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-refs-'));
+      const refs = path.join(tmp, 'google-workspace', 'references');
+      fs.mkdirSync(refs, { recursive: true });
+      fs.writeFileSync(path.join(refs, 'notes.md'), 'x');
+      fs.chmodSync(refs, 0o000);
+      try {
+        const skills = new SkillRegistry();
+        const logger = silentLogger();
+        const added = registerMcpProjectedSkills(
+          new Map([['google-workspace', ['update_drive_file']]]),
+          skills,
+          logger,
+          tmp,
+        );
+        expect(added).toBe(1);
+        const gw = skills.get('google-workspace');
+        expect(gw?.dir).toBe('');
+        expect(gw?.manifest.references).toBeUndefined();
+        expect(gw?.manifest.tools).toEqual(['update_drive_file']);
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ server: 'google-workspace' }),
+          expect.stringContaining('resource discovery failed'),
+        );
+      } finally {
+        fs.chmodSync(refs, 0o755);
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('registers with no directory when the server has none on disk', () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-refs-'));
+      try {
+        const { skills } = project(tmp);
+        const gw = skills.get('google-workspace');
+        expect(gw?.dir).toBe('');
+        expect(gw?.manifest.references).toBeUndefined();
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('skips projection when a skill name is already taken', () => {
     const skills = new SkillRegistry();
     skills.register(
@@ -82,45 +205,5 @@ describe('registerMcpProjectedSkills (ADR-032)', () => {
     );
     expect(added).toBe(0);
     expect(warn).toHaveBeenCalled();
-  });
-
-  it('strips held-back google-workspace calendar tools from projected membership (#1853)', () => {
-    const skills = new SkillRegistry();
-    const tools = new ToolRegistry();
-    tools.register(toolManifest('create_doc'), noopHandler);
-    tools.register(toolManifest('search_drive_files'), noopHandler);
-    // Held-back tools are NOT registered — matching loadMcpServers skip path.
-
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      debug: vi.fn(),
-      error: vi.fn(),
-    } as unknown as import('../../../src/logger.js').Logger;
-    const projected = new Map<string, string[]>([
-      [
-        'google-workspace',
-        [
-          'create_doc',
-          'get_events',
-          'list_calendars',
-          'manage_event',
-          'create_calendar',
-          'query_freebusy',
-          'manage_out_of_office',
-          'manage_focus_time',
-          'search_drive_files',
-        ],
-      ],
-    ]);
-    registerMcpProjectedSkills(projected, skills, logger);
-
-    const gw = skills.get('google-workspace');
-    expect(gw?.manifest.tools).toEqual(['create_doc', 'search_drive_files']);
-
-    const r = resolvePinnedSkills(['google-workspace'], skills, tools);
-    expect(r.toolNames).toEqual(['create_doc', 'search_drive_files']);
-    expect(r.toolNames).not.toContain('get_events');
-    expect(r.toolNames).not.toContain('manage_event');
   });
 });

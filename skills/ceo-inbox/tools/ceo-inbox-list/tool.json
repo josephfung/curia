@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-list",
   "description": "List recent messages from the principal's personal email inbox. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "sensitivity": "normal",
   "action_risk": "none",
   "inputs": {
@@ -13,7 +13,8 @@
     "messages": "array of { id, threadId, from, to, cc, subject, date, snippet, unread, folders, attachments: [{ id, filename, contentType, size, isCalendarInvite? }] } (for non-draft folders)",
     "drafts": "array of { id, threadId, subject, to, cc, snippet, date } (returned instead of messages when folder is DRAFTS, alongside folder: 'DRAFTS')",
     "count": "number of items returned",
-    "has_more": "boolean — true when more unread messages remain beyond this batch (lets the caller drain the inbox in batches); absent for DRAFTS"
+    "has_more": "boolean — true when more unread messages remain beyond this batch (lets the caller drain the inbox in batches); absent for DRAFTS",
+    "scan_incomplete": "boolean? — true when paging stopped at the cap while more messages may remain. Absent when the scan finished. An empty batch still has has_more false, so the drain loop does not spin"
   },
   "permissions": [],
   "secrets": ["nylas_api_key", "ceo_nylas_grant_id", "nylas_self_email"],

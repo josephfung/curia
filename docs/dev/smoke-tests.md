@@ -17,6 +17,8 @@ Each test is a YAML file describing a conversation and a list of expected behavi
 5. Scores each expected behavior as `PASS`, `PARTIAL`, or `MISS`
 6. Applies the gate (below), retries each failing case once, writes an HTML report with the judge's justifications, exits `1` if any case still fails, and drops the copy
 
+Cases run four at a time by default, and the summary prints what the run spent on model calls (see [Concurrency, cost and provider failures](#concurrency-cost-and-provider-failures)).
+
 The judge provides a reasoning trace for every behavior rating — useful for debugging why a test passes or fails.
 
 ---
@@ -38,6 +40,9 @@ pnpm smoke --tags email-triage,briefing
 
 # Print every agent's tool calls per case (what to stub when writing a case)
 pnpm smoke --case "urgent" --show-calls
+
+# One case at a time (default: 4 at once)
+pnpm smoke --concurrency 1
 ```
 
 Flags are parsed strictly: an unknown flag, a missing value or `--model=x` stops the run instead of being ignored. The database needs a principal contact, and `DATABASE_URL` must point at this machine (`--allow-remote-db` overrides). Before any case runs, every stub is checked against the tool registry: a misspelt tool name or input is an error, since such a stub would never fire. The `Commit:` line ends in `-dirty` when tracked files have uncommitted changes.
@@ -59,7 +64,40 @@ A case **passes** when all of these hold:
 
 A case that fails is **run once more**, and it fails the gate only if the retry fails too. The same case on the same code can score 94% one run and 38% the next, and a release gate that blocks at random teaches people to ignore it. A case that passed only on its retry is marked `PASS*` in the summary. If the same case keeps needing a retry, it is flaky, so tighten it.
 
+A **provider failure** is not a model failure, so it does not use that retry. An attempt that hits one is thrown away and run again, up to twice, before the gate sees it. Provider failures are:
+
+- a model fallback (some agent ran on another model than the run is labelled with);
+- an agent error of a provider type (`PROVIDER_ERROR`, `TIMEOUT`, `RATE_LIMIT`);
+- a timeout that fired while a model call had made no progress for 90 seconds (no response, or no streamed event). Calls on the standard tier normally take seconds, so that means the provider stalled. A model that loops until the timeout makes many quick calls instead, and a slow call that finished earlier in the case does not count: those timeouts stay the model's.
+
+Each re-run is printed as it happens (`[provider] …`) and listed under the case in the summary and in the results JSON (`providerRetries`), so a provider having a bad day is visible rather than hidden.
+
 The run **passes** when every case passes, apart from cases marked `known_failure` (below). Otherwise `pnpm smoke` exits `1` and lists each failing case with its reasons. A run narrowed with `--case` or `--tags` says so, because it is not a full-suite result.
+
+### Concurrency, cost and provider failures
+
+**Concurrency.** `--concurrency N` (default 4) sets how many cases run at once. A case's turns still run in order. Everything a case owns is kept per case, not per run: its stubs, the calendar writes it has made, the bullpen threads its agents are shown, model fallbacks and spend. The harness finds which case a tool call or model call belongs to through an `AsyncLocalStorage` context that follows the case's work across the bus, so a specialist the coordinator delegates to (in its own conversation) is still that case's (`tests/shared/case-scope.ts`). What concurrency cannot separate is real database writes from unstubbed tools: cases share the throwaway copy, as they already did one after another, but a write can now show up mid-case rather than only between cases. Higher concurrency also risks OpenRouter rate limits; the judge retries a 429 with a longer backoff.
+
+**Finished cases stop their work.** When a case ends, passed or timed out, it is cancelled: its later model calls fail at once and its tool calls are refused. The runtime has no way to cancel a turn, so before this an abandoned turn kept spending until it finished on its own, and its retry paid again. The harness waits up to 30 seconds for the case's leftover work to wind down before reading its spend; anything billed after that is printed as spend outside any case.
+
+**Work that escapes its case fails the run.** Test mode runs no scheduler, so every tool call and model fallback should belong to some case. One that does not was answered without that case's stubs, or ran on another model, so the CLI lists it under `[ISOLATION]` and exits `1` even when every case passed.
+
+**Cost.** The summary prints the run's estimated spend, split by agent and judge, and each case's total. The results JSON holds the same split per case (`usage`), for the run (`usage`), and for work outside every case such as the warm-up (`overheadUsage`). Agents' figures come from the runtime's `llm.call` events (token counts priced by the model registry). The judge publishes no event, so it prices its own responses. The figures are **estimates**, not OpenRouter's bill:
+
+- Cache reads and writes come from OpenRouter's `prompt_tokens_details` (#1962) and are priced at the registry's cache rates. When the registry records no cache rate for a model, those tokens are priced at its input rate.
+- A call that fails after the provider billed it publishes no `llm.call`, so it is missing.
+
+To see the real figure, note OpenRouter's credit balance (or the activity page) before and after a full run.
+
+**Estimate vs. bill.** One full run of both suites (2026-10-05, 02:03:56–02:16:17 UTC) was estimated at **$4.39**; OpenRouter billed **$2.10** for that window. The estimate ran about 2.1× the bill, which is what pricing every input token as uncached would do (#1962): the registry's cache-read rate for the standard tier is 2% of its input rate, and input is ~97% of the estimate. That run predates #1962, which reports OpenRouter's cache reads; the estimate has not been compared with a bill since. (The window also fell in DeepSeek's weekday 01:00–04:00 UTC peak, which the registry does not price; if it was billed at peak rates, caching saved even more than the gap shows.)
+
+**Changing the judge.** The judge (`openai/gpt-4o`) costs more per token than the production standard tier. A cheaper one can be tried on transcripts a run already saved, without running any model:
+
+```bash
+pnpm rejudge --judge google/gemini-3.1-flash-lite tests/smoke/results/<run>.json tests/scenarios/results/<run>.json
+```
+
+It re-judges every judged case (scenario runs too), prints how many verdicts and ratings match, lists every verdict change with both judges' reasons, and prices the candidate's calls. A new judge needs the same pass/fail verdict on at least 95% of cases, and every disagreement read by a person, before `JUDGE_MODEL` (`tests/scenarios/judge.ts`) changes.
 
 ---
 

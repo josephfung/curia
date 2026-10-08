@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { ApproveActionHandler } from './handler.js';
+import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipient-reference.js';
 import type { ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { ActionLogRepo } from '../../../../src/autonomy/action-log-repo.js';
 import type { EventBus } from '../../../../src/bus/bus.js';
@@ -228,5 +229,36 @@ describe('ApproveActionHandler', () => {
     }));
     expect(result.success).toBe(false);
     expect(result).toHaveProperty('error', expect.stringContaining('payload'));
+  });
+
+  it('does not run the skill when the pinned recipient no longer matches', async () => {
+    const pins = [{ ref: 'principal#personal', identityId: 'id-personal', identityName: 'personal' }];
+    const rejectStaleApproval = vi.fn().mockResolvedValue(true);
+    const repo = makeMockRepo({
+      resolvePending: vi.fn().mockResolvedValue({
+        found: true,
+        row: {
+          ...PENDING_ROW,
+          toolName: 'email-send',
+          payload: { to: 'principal#personal', subject: 'x', body: 'y' },
+          sendResolution: pins,
+        },
+      }),
+      rejectStaleApproval,
+    });
+    const invoke = vi.fn();
+    const confirmPinnedSendResolution = vi.fn().mockResolvedValue({ ok: false, error: STALE_SEND_APPROVAL_ERROR });
+    const execLayer = { invoke, confirmPinnedSendResolution } as unknown as ExecutionLayer;
+    const handler = new ApproveActionHandler();
+    const result = await handler.execute(makeCtx({
+      actionLogRepo: repo,
+      bus: makeMockBus(),
+      executionLayer: execLayer,
+    }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toBe(STALE_SEND_APPROVAL_ERROR);
+    expect(rejectStaleApproval).toHaveBeenCalledWith(10);
+    expect(repo.resolveRow).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

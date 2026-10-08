@@ -110,7 +110,8 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 
 | Source | Meaning | Verified? |
 |---|---|---|
-| `ceo_stated` | CEO explicitly provided the identifier ("Jenna's email is jenna@acme.com") | Yes |
+| `ceo_stated` | CEO explicitly provided the identifier, through the console or setup ("Jenna's email is jenna@acme.com") | Yes |
+| `agent_stated` | An agent entered the identifier with contact-create or contact-link-identity, after the duplicate check before the write (#2041, ADR-047) | Yes |
 | `email_participant` | Extracted from To/CC on an email the CEO sent or was part of | Yes |
 | `signal_participant` | Extracted from a Signal sender (E.164) on inbound | Yes |
 | `slack_participant` | Extracted from a Slack user id (`U…`) on inbound DM/@mention/thread/reaction | Yes |
@@ -118,8 +119,9 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 | `crm_import` | Pulled from the CEO's CRM during an action | Yes |
 | `calendar_attendee` | Extracted from a calendar event | Yes |
 | `self_claimed` | The sender identified themselves ("Hi, it's Jenna") | No |
+| `outbound_recipient` | First-time recipient of a send, recorded by the outbound gateway after delivery: an address an agent typed into a raw send before #2041, or a gateway send (send-draft, email-reply) to an address with no contact (ADR-047) | No; verified when the principal confirms it or an agent re-states it (after the duplicate check) |
 
-CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
+CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Agent-stated identities are verified because the duplicate check runs before they are written; see ADR-047. Agents cannot change the principal's identities. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
 
 ### contact_auth_overrides
 
@@ -260,7 +262,7 @@ The CEO mentions a person in conversation. The Coordinator extracts entities and
 **Full identifier provided:**
 > CEO: "Jenna Torres is my CFO. Her email is jenna@acme.com and she's on Signal at +15550001111."
 
-→ Creates KG person node, contact record, and two verified channel identities (source: `ceo_stated`).
+→ Creates KG person node, contact record, and two verified channel identities (source: `agent_stated`, after the duplicate check; ADR-047).
 
 **Partial mention (no identifiers):**
 > CEO: "My CFO Jenna attends all board meetings."
@@ -274,7 +276,7 @@ An unknown sender messages on a channel. Under the default `allow` policy the me
 **Flow:**
 1. Contact resolver finds no match for `(channel, sender_id)`
 2. Per-channel unknown sender policy applies (see [Unknown Sender Policy](#unknown-sender-policy)): `allow` auto-creates a `tier='unknown'` contact and routes to the coordinator; `ignore` drops the message
-3. The coordinator (or the CEO) identifies the sender → channel identity linked to existing or new contact (source: `ceo_stated`, verified: `true`)
+3. The coordinator (or the CEO) identifies the sender. Their identity is already on the auto-created contact: a new person's details go on that contact, and an existing contact is merged with it (`contact-merge`; into the principal, only in the console)
 4. Subsequent messages from that sender resolve to the now-known contact; the CEO can elevate the tier with `contact-set-tier`
 
 ### Path 3: External Source (CRM, calendar, address book)
@@ -314,7 +316,7 @@ If `findContactBySystemRole('principal')` returns nothing (fresh deployment, bef
 Three distinct things, with three distinct rules:
 
 1. **The principal's `contacts.id`** — resolved once at bootstrap and cached. Exposed to agents as the opt-in `${principal_contact_id}` placeholder (above).
-2. **The principal's verified channel identities** (email, phone, Signal, loaded from `contact_channel_identities` at startup) — appended to **every** agent's system prompt on each task as a `## Principal Contact Details` block (`principalIdentities` in `src/agents/runtime.ts`, wired in `src/index.ts`; #786, #1950). The block states that the list is complete: an identifier that is not rendered is not the principal's and must not be used. Each identity's `label` is shown when set. The email that matches `contacts.primary_email` is marked `[primary]`. The block is omitted entirely when the principal has no verified active identities, rather than rendered empty. It is the one piece of principal data the platform does inject universally — see the note in the next section.
+2. **The principal's verified channel identities** (email, phone, Signal, loaded from `contact_channel_identities` at startup) — rendered into **every** agent's system prompt on each task as `### Principal Contact Details`, inside a `## Who you serve` section near the top of the system string, ahead of the YAML body (`principalIdentities` in `src/agents/runtime.ts`, wired in `src/index.ts`; #786, #1950, coordinator prompt trim PR 11). The section first defines "the principal" as the person the agent works for. The block states that the list is complete: an address that is not listed is not the principal's. Each identity's `label` is shown when set. The email that matches `contacts.primary_email` is listed on its own under "Primary email", apart from the other addresses; a `primary_email` that matches no listed identity is not shown, and the identity refresh logs a warning. The section is omitted entirely when the principal has no verified active identities, rather than rendered empty. It is the one piece of principal data the platform does inject universally — see the note in the next section.
 3. **Everything else** — calendar IDs, `timezone`, and the other canonical/mutable [contact attributes](#canonical-attributes) — is **not** injected. It can change within a deployment lifetime, so an agent that needs it calls `entity-context` with `${principal_contact_id}` at the start of its run. As of v0.33 the canonical attributes come back as structured fields on `EntityContext.contact` rather than confidence-scored KG facts, so the agent reads a typed value instead of reasoning over a fact list. This keeps the live values fresh and consolidates "how do I reach the principal and what do I know about them?" into a single skill call per run.
 
 ### Why the contact-ID *handle* is opt-in
@@ -324,7 +326,15 @@ The `${principal_contact_id}` placeholder (the UUID handle, item 1 above) is del
 1. **Attack surface.** Agents that have no business resolving the principal's calendar or attributes (specialist agents like research-analyst that should report through the coordinator) are not handed a key to do so. The opt-in pattern keeps the surface narrow.
 2. **Consistency.** The same opt-in pattern is established for `${agent_contact_id}`. Two handles with two different injection rules would be confusing.
 
-This is distinct from the `## Principal Contact Details` block (item 2 above), which **is** injected universally. The split is deliberate: the *reach-the-principal* channel identities are injected everywhere because hallucinated addresses are a correctness-and-safety problem the `Reaching the principal` convention alone did not prevent (#786), whereas the *contact-ID handle* that unlocks calendar lookups and arbitrary attribute reads stays opt-in to keep each agent's capability surface minimal.
+This is distinct from the `### Principal Contact Details` block (item 2 above), which **is** injected universally. The split is deliberate: the *reach-the-principal* channel identities are injected everywhere because hallucinated addresses are a correctness-and-safety problem the `Reaching the principal` convention alone did not prevent (#786), whereas the *contact-ID handle* that unlocks calendar lookups and arbitrary attribute reads stays opt-in to keep each agent's capability surface minimal.
+
+### Sending to the principal and other contacts (#2033)
+
+Send skills (`email-send`, `signal-send`, `sms-send`, `slack-send`) take a contact reference, not an address: a contact UUID, or the reserved alias `principal`. The address comes from that contact's verified, active identities on the skill's channel (the primary when it is one of them, otherwise the oldest). An optional `#label` hint on the reference (`principal#personal`, or a contact ID followed by `#work`, including each `cc` entry) selects that labelled identity when the hint identifies exactly one. A hint that matches none or more than one sends nothing, as does a hint when several addresses are unlabelled; a single unlabelled address still sends. A reference that matches no contact, or a contact with no verified identity on the channel, fails closed. See [ADR-047](../adr/047-send-skills-address-recipients-by-reference.md).
+
+The alias stays within the split above. It resolves only to the verified identities the `### Principal Contact Details` block already shows every agent, and the block tells agents to pass `principal` instead of typing an address. The contact-ID handle stays opt-in. For anyone else, the handle is the contact UUID from `<resolved_entities>` or the contacts specialist.
+
+There is no raw-address path (#2041). Someone with no contact record is added first with `contact-create`, which refuses an address another contact holds and lists contacts that may be the same person until the agent names them in `distinct_from`. The send skills then take the returned contact ID. `email-draft-save` takes a reference too.
 
 ### Operating on the principal's calendar (#1217)
 

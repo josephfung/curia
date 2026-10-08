@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxListHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { Logger } from '../../../../src/logger.js';
@@ -67,6 +67,10 @@ describe('CeoInboxListHandler — batch listing (no watermark)', () => {
 
   beforeEach(() => {
     handler = new CeoInboxListHandler();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('never sends a received_after param (the watermark is gone)', async () => {
@@ -144,21 +148,112 @@ describe('CeoInboxListHandler — batch listing (no watermark)', () => {
     expect(data.has_more).toBe(false);
   });
 
-  it('keeps has_more=true (probe-based) even when a Curia-self message is in a full window', async () => {
-    // limit 5 → fetch 6. One of the 6 is Curia-self (filtered out), but the raw
-    // probe still had > limit results, so real backlog must not be under-reported.
+  it('reports has_more from filtered results when the probe slot is Curia-self and nothing follows', async () => {
+    // limit 5 → fetch 6. One of the 6 is Curia-self, so exactly `limit` real
+    // messages remain and Nylas reports no further page. has_more follows the
+    // filtered set, not the raw probe.
     const self = 'curia@example.com';
     const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
     const real = unreadMessages(5) as Array<{ from: Array<{ email: string; name: string }> }>;
     const curia = { id: 'mc', threadId: 'tc', date: 99, subject: 'self', from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '', unread: true, folders: ['INBOX'], attachments: [] };
-    const fetchSpy = mockFetchReturning([curia, ...real]); // 6 raw, 1 filtered
+    const fetchSpy = mockFetchReturning([curia, ...real]); // 6 raw, 1 filtered, no cursor
     vi.stubGlobal('fetch', fetchSpy);
 
     const result = await handler.execute(ctx);
     if (!result.success) throw new Error(result.error);
     const data = result.data as { count: number; has_more: boolean };
-    expect(data.count).toBe(5); // 5 real returned
-    expect(data.has_more).toBe(true); // raw.length (6) > limit (5)
+    expect(data.count).toBe(5);
+    expect(data.has_more).toBe(false);
+  });
+
+  it('pages past an all-Curia-self page to the next real unread message (#2035)', async () => {
+    const self = 'curia@example.com';
+    const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
+    const curiaPage = Array.from({ length: 6 }, (_, i) => ({
+      id: `c${i}`, threadId: `tc${i}`, date: i, subject: 'self',
+      from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '',
+      unread: true, folders: ['INBOX'], attachments: [],
+    }));
+    const real = {
+      id: 'real-1', threadId: 'tr', date: 50, subject: 'from a person',
+      from: [{ email: 'person@x.com', name: 'Person' }], to: [], cc: [], snippet: '',
+      unread: true, folders: ['INBOX'], attachments: [],
+    };
+    const fetchSpy = vi.fn().mockImplementation(async (url: string) => {
+      const page = new URL(url).searchParams.get('page_token');
+      if (!page) {
+        return { ok: true, json: async () => ({ data: curiaPage, next_cursor: 'p2' }) };
+      }
+      return { ok: true, json: async () => ({ data: [real] }) };
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean; messages: Array<{ id: string }> };
+    expect(data.count).toBe(1);
+    expect(data.has_more).toBe(false);
+    expect(data.messages.map((m) => m.id)).toEqual(['real-1']);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const second = new URL(fetchSpy.mock.calls[1]![0] as string);
+    expect(second.searchParams.get('page_token')).toBe('p2');
+    // The cursor already carries the first page's filters.
+    expect(second.searchParams.get('in')).toBeNull();
+    expect(second.searchParams.get('unread')).toBeNull();
+    expect(second.searchParams.get('limit')).toBe('20');
+  });
+
+  it('returns count 0 and has_more false when the mailbox of Curia-self mail is exhausted (#2035)', async () => {
+    const self = 'curia@example.com';
+    const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
+    const curiaPage = (prefix: string) => Array.from({ length: 6 }, (_, i) => ({
+      id: `${prefix}${i}`, threadId: `t${prefix}${i}`, date: i, subject: 'self',
+      from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '',
+      unread: true, folders: ['INBOX'], attachments: [],
+    }));
+    const fetchSpy = vi.fn().mockImplementation(async (url: string) => {
+      const page = new URL(url).searchParams.get('page_token');
+      if (!page) {
+        return { ok: true, json: async () => ({ data: curiaPage('a'), next_cursor: 'p2' }) };
+      }
+      return { ok: true, json: async () => ({ data: curiaPage('b') }) };
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean; scan_incomplete?: boolean };
+    expect(data.count).toBe(0);
+    expect(data.has_more).toBe(false);
+    expect(data.scan_incomplete).toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(ctx.log.error).not.toHaveBeenCalled();
+  });
+
+  it('stops at the page cap and reports scan_incomplete when the cursor never ends (#2035)', async () => {
+    const self = 'curia@example.com';
+    const ctx = makeCtx({ unread_only: true, limit: 5 }, { selfEmail: self });
+    const curiaPage = Array.from({ length: 6 }, (_, i) => ({
+      id: `c${i}`, threadId: `tc${i}`, date: i, subject: 'self',
+      from: [{ email: self, name: 'Curia' }], to: [], cc: [], snippet: '',
+      unread: true, folders: ['INBOX'], attachments: [],
+    }));
+    const fetchSpy = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({ data: curiaPage, next_cursor: 'again' }),
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await handler.execute(ctx);
+    if (!result.success) throw new Error(result.error);
+    const data = result.data as { count: number; has_more: boolean; scan_incomplete?: boolean };
+    expect(data.count).toBe(0);
+    expect(data.has_more).toBe(false);
+    expect(data.scan_incomplete).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(25);
+    expect(ctx.log.error).toHaveBeenCalled();
+    const followUp = new URL(fetchSpy.mock.calls[1]![0] as string);
+    expect(followUp.searchParams.get('limit')).toBe('20');
   });
 });
 

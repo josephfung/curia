@@ -10,6 +10,7 @@
 // only runs in a live principal turn. executionLayer capability is restricted to this skill.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { STALE_SEND_APPROVAL_ERROR } from '../../../../src/skills/_shared/recipient-reference.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 
@@ -44,6 +45,19 @@ export class ApproveActionHandler implements ToolHandler {
         return { success: false, error: `Cannot approve request '${row.shortRef}': no stored payload for re-execution` };
       }
 
+      const pins = row.sendResolution;
+      if (pins && pins.length > 0) {
+        const still = await ctx.executionLayer.confirmPinnedSendResolution(row.toolName, pins);
+        if (!still.ok) {
+          ctx.log.info(
+            { rowId: row.id, shortRef: row.shortRef },
+            'approve-action: hinted recipient changed — refusing the approved send',
+          );
+          await ctx.actionLogRepo.rejectStaleApproval(row.id);
+          return { success: false, error: STALE_SEND_APPROVAL_ERROR };
+        }
+      }
+
       // Step 1: Transition to approved — returns false if another actor resolved first.
       // We MUST check this before re-executing to prevent running a skill that was
       // concurrently denied or dismissed.
@@ -65,6 +79,7 @@ export class ApproveActionHandler implements ToolHandler {
         ctx.caller,
         {
           humanApproved: true,
+          sendResolution: pins ?? undefined,
           taskEventId: ctx.taskEventId,
           conversationId: row.conversationId ?? undefined,
           taskMetadata: ctx.taskMetadata,

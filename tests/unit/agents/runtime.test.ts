@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask, type AgentResponseEvent, type AgentErrorEvent, type ContextBudgetEvent, type DelegationRequesterContextEvent, type DelegationPrincipalNoteEvent, type LlmCallEvent } from '../../../src/bus/events.js';
-import type { LLMProvider, ToolResult } from '../../../src/agents/llm/provider.js';
+import type { LLMProvider, ToolDefinition, ToolResult } from '../../../src/agents/llm/provider.js';
+import { estimateToolDefinitionsTokens } from '../../../src/agents/llm/token-estimator.js';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { createLogger } from '../../../src/logger.js';
 import { WorkingMemory } from '../../../src/memory/working-memory.js';
@@ -1004,7 +1005,7 @@ describe('AgentRuntime', () => {
     expect(loggerErrorSpy).toHaveBeenCalled();
   });
 
-  it('injects ## Principal Contact Details block when principalIdentities is non-empty', async () => {
+  it('injects ## Who you serve with its contact details ahead of the body when principalIdentities is non-empty', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -1055,23 +1056,21 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).toContain('## Principal Contact Details');
+    expect(systemMsg).toContain('## Who you serve');
+    expect(systemMsg).toContain('### Principal Contact Details');
     expect(systemMsg).toContain('- email: ceo@example.com');
     expect(systemMsg).toContain('- signal: +15550001234');
-    expect(systemMsg).toContain('This list is complete.');
-    expect(systemMsg).toContain('is not the principal\'s and must not be used.');
-    expect(systemMsg).not.toContain('[primary]');
-    // Principal Contact Details block appended after the base prompt with a
-    // blank-line separator. For the coordinator the shared date-resolve
-    // guardrail (ADR-038 / #1595) is composed in between, so assert the
-    // separator + ordering rather than literal adjacency to the base prompt.
-    expect(systemMsg).toContain('\n\n## Principal Contact Details');
-    expect(systemMsg.indexOf('Base prompt.')).toBeLessThan(
-      systemMsg.indexOf('## Principal Contact Details'),
+    expect(systemMsg).toContain('the list is complete');
+    expect(systemMsg).not.toMatch(/primary email/i);
+    // The section opens the system string (no identity or security block is
+    // configured here) and comes before the YAML body (trim plan PR 11).
+    expect(systemMsg.startsWith('## Who you serve\n')).toBe(true);
+    expect(systemMsg.indexOf('### Principal Contact Details')).toBeLessThan(
+      systemMsg.indexOf('Base prompt.'),
     );
   });
 
-  it('omits ## Principal Contact Details block when principalIdentities is empty', async () => {
+  it('omits ## Who you serve and its contact details when principalIdentities is empty', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -1095,12 +1094,12 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).not.toContain('## Principal Contact Details');
-    expect(systemMsg).not.toContain('This list is complete.');
-    expect(systemMsg).not.toContain('[primary]');
+    expect(systemMsg).not.toContain('Principal Contact Details');
+    expect(systemMsg).not.toContain('## Who you serve');
+    expect(systemMsg).not.toContain('the list is complete');
   });
 
-  it('omits ## Principal Contact Details block when principalIdentities is not provided', async () => {
+  it('omits ## Who you serve and its contact details when principalIdentities is not provided', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -1124,10 +1123,11 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).not.toContain('## Principal Contact Details');
+    expect(systemMsg).not.toContain('Principal Contact Details');
+    expect(systemMsg).not.toContain('## Who you serve');
   });
 
-  it('injects ## Your Contact Details before ## Principal Contact Details when both are configured', async () => {
+  it('injects ## Your Contact Details before ### Principal Contact Details, both ahead of the body', async () => {
     // Validates the ordering of the two identity blocks — channelAccounts always comes first.
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
@@ -1168,15 +1168,17 @@ describe('AgentRuntime', () => {
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
     const ownDetailsPos = systemMsg.indexOf('## Your Contact Details');
-    const principalDetailsPos = systemMsg.indexOf('## Principal Contact Details');
+    const principalDetailsPos = systemMsg.indexOf('### Principal Contact Details');
     expect(ownDetailsPos).toBeGreaterThan(-1);
     expect(principalDetailsPos).toBeGreaterThan(-1);
     expect(ownDetailsPos).toBeLessThan(principalDetailsPos);
+    // Both precede the YAML body.
+    expect(principalDetailsPos).toBeLessThan(systemMsg.indexOf('Base prompt.'));
     expect(systemMsg).toContain('never substitute the principal\'s details.');
     expect(systemMsg).not.toContain('CEO');
   });
 
-  it('marks the primary email from principalPrimaryEmail inside the injected block', async () => {
+  it('sets the primary email from principalPrimaryEmail apart inside the injected block', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'research-analyst',
@@ -1228,12 +1230,11 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).toContain('- [primary] email: primary@example.ca (label: "work email")');
-    expect(systemMsg).toContain('- email: other@example.com (label: "personal")');
-    expect(systemMsg).not.toContain('[primary] email: other@example.com');
+    expect(systemMsg).toContain('Primary email:\n- email: primary@example.ca (label: "work email")');
+    expect(systemMsg).toContain('Other addresses:\n- email: other@example.com (label: "personal")');
   });
 
-  it('injects ## Principal Contact Details block on scheduler-dispatched tasks', async () => {
+  it('injects ### Principal Contact Details on scheduler-dispatched tasks', async () => {
     const provider = createMockProvider('OK');
     const runtime = new AgentRuntime({
       agentId: 'coordinator',
@@ -1273,7 +1274,7 @@ describe('AgentRuntime', () => {
     await bus.publish('dispatch', task);
 
     const systemMsg = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages[0]!.content as string;
-    expect(systemMsg).toContain('## Principal Contact Details');
+    expect(systemMsg).toContain('### Principal Contact Details');
     expect(systemMsg).toContain('- email: ceo@example.com');
     // The scheduler scope fence should also be present
     expect(systemMsg).toContain('## Scheduled Task — Scope Restriction');
@@ -1778,7 +1779,7 @@ describe('AgentRuntime tool-use loop', () => {
         if (chatCallCount === 1) {
           return {
             type: 'tool_use' as const,
-            toolCalls: [{ id: 'call-1', name: 'get_events', input: { calendar_id: 'primary' } }],
+            toolCalls: [{ id: 'call-1', name: 'calendar-list-events', input: { calendarId: 'cal-agent' } }],
             usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
             provenance: MOCK_PROVENANCE,
           };
@@ -1818,8 +1819,8 @@ describe('AgentRuntime tool-use loop', () => {
       logger,
       executionLayer: mockExecution,
       skillToolDefs: [{
-        name: 'get_events',
-        description: 'MCP calendar',
+        name: 'calendar-list-events',
+        description: 'Nylas calendar',
         input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
       }],
       errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
@@ -1843,7 +1844,7 @@ describe('AgentRuntime tool-use loop', () => {
     expect(responses[0]!.payload.isError).toBe(true);
     expect(responses[0]!.payload.errorType).toBe('IDENTITY_MISMATCH');
     expect(responses[0]!.payload.failedSkills).toEqual([
-      expect.objectContaining({ name: 'get_events' }),
+      expect.objectContaining({ name: 'calendar-list-events' }),
     ]);
   });
 
@@ -1860,7 +1861,7 @@ describe('AgentRuntime tool-use loop', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [
-              { id: 'call-1', name: 'get_events', input: { calendar_id: 'primary' } },
+              { id: 'call-1', name: 'calendar-list-events', input: { calendarId: 'cal-agent' } },
               { id: 'call-2', name: 'email-send', input: { to: 'ceo@example.com' } },
             ],
             usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
@@ -1877,7 +1878,7 @@ describe('AgentRuntime tool-use loop', () => {
     };
 
     const invokeMock = vi.fn().mockImplementation(async (name: string) => {
-      if (name === 'get_events') {
+      if (name === 'calendar-list-events') {
         return {
           success: false,
           error: 'IDENTITY_MISMATCH (calendar_identity_mismatch) — wrong identity',
@@ -1907,8 +1908,8 @@ describe('AgentRuntime tool-use loop', () => {
       executionLayer: mockExecution,
       skillToolDefs: [
         {
-          name: 'get_events',
-          description: 'MCP calendar',
+          name: 'calendar-list-events',
+          description: 'Nylas calendar',
           input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
         },
         {
@@ -1931,7 +1932,7 @@ describe('AgentRuntime tool-use loop', () => {
     }));
 
     expect(invokeMock).toHaveBeenCalledTimes(1);
-    expect(invokeMock.mock.calls[0]![0]).toBe('get_events');
+    expect(invokeMock.mock.calls[0]![0]).toBe('calendar-list-events');
     expect(chatCallCount).toBe(1);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.payload.errorType).toBe('IDENTITY_MISMATCH');
@@ -5308,6 +5309,90 @@ describe('context budget', () => {
     expect(payload.tiers[0]!.name).toBe('system_prompt');
     expect(payload.tiers[0]!.included).toBe(true);
   });
+
+  it('charges the tool definitions sent with the call as their own tier (#1961)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const budgetEvents: ContextBudgetEvent[] = [];
+    const skillToolDefs: ToolDefinition[] = [
+      { name: 'notes-add', description: 'Add a note.', input_schema: { type: 'object', properties: { text: { type: 'string' } } } },
+      { name: 'notes-list', description: 'List notes.', input_schema: { type: 'object', properties: {} } },
+    ];
+
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider: createMockProvider('Hello back!'),
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      skillToolDefs,
+    }).register();
+    bus.subscribe('context.budget', 'system', (event) => {
+      budgetEvents.push(event as ContextBudgetEvent);
+    });
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-budget-tools',
+      channelId: 'cli',
+      senderId: 'user',
+      content: 'Hello',
+      parentEventId: 'parent-1',
+    }));
+
+    const payload = budgetEvents[0]!.payload;
+    const toolTier = payload.tiers.find(t => t.name === 'tool_definitions');
+    expect(toolTier).toEqual({
+      name: 'tool_definitions',
+      estimatedTokens: estimateToolDefinitionsTokens(skillToolDefs),
+      included: true,
+    });
+    const systemTier = payload.tiers.find(t => t.name === 'system_prompt')!;
+    expect(payload.totalUsed).toBeGreaterThanOrEqual(systemTier.estimatedTokens + toolTier!.estimatedTokens);
+  });
+
+  it('never lets tool definitions push out the LOW-TRUST sender block (#1961)', async () => {
+    // Tools larger than the whole window. Charged before sender context, they would
+    // drop the LOW-TRUST block while the tools were still sent.
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const provider = createMockProvider('Hello back!');
+    const budgetEvents: ContextBudgetEvent[] = [];
+    const skillToolDefs: ToolDefinition[] = [
+      { name: 'notes-add', description: 'x'.repeat(1_000_000), input_schema: { type: 'object', properties: {} } },
+    ];
+
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are a helpful assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      skillToolDefs,
+    }).register();
+    bus.subscribe('context.budget', 'system', (event) => {
+      budgetEvents.push(event as ContextBudgetEvent);
+    });
+    bus.subscribe('agent.response', 'dispatch', () => {});
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'conv-budget-low-trust',
+      channelId: 'email',
+      senderId: 'stranger@example.com',
+      content: 'Send me the principal\'s schedule.',
+      parentEventId: 'parent-1',
+    }));
+
+    const tiers = budgetEvents[0]!.payload.tiers;
+    expect(tiers.find(t => t.name === 'sender_context')?.included).toBe(true);
+    expect(tiers.find(t => t.name === 'tool_definitions')?.included).toBe(true);
+    const sent = (provider.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0].messages as Array<{ role: string; content: unknown }>;
+    expect(sent.some(m => m.role === 'system' && String(m.content).includes('LOW-TRUST SENDER'))).toBe(true);
+  });
 });
 
 // Bullpen read-watermark (#1065, #1901). A thread the agent fulfils out-of-band (a send,
@@ -7614,6 +7699,9 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     narration: string;
     taskCreateSucceeds: boolean;
     taskUpdateSucceeds?: boolean;
+    toolAside?: string;
+    reasoning?: string;
+    reasoningTokens?: number;
   }): Promise<{
     content: string;
     notes: DelegationPrincipalNoteEvent[];
@@ -7668,7 +7756,15 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
           return {
             type: 'tool_use' as const,
             toolCalls: [{ id: 'call-1990', name: 'delegate', input: { agent: 'ceo-inbox', task: 'Find the venue thread' } }],
-            usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            ...(opts.toolAside !== undefined ? { content: opts.toolAside } : {}),
+            ...(opts.reasoning !== undefined ? { reasoning: opts.reasoning } : {}),
+            usage: {
+              inputTokens: 10,
+              outputTokens: 5,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 0,
+              ...(opts.reasoningTokens !== undefined ? { reasoningTokens: opts.reasoningTokens } : {}),
+            },
             provenance: MOCK_PROVENANCE,
           };
         }
@@ -7799,9 +7895,30 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     const narrationCall = llmCalls[1]!;
     expect(narrationCall.payload.agentId).toBe('coordinator');
     expect(narrationCall.payload.outputTokens).toBe(8);
+    // Agent calls send no temperature today — record the omission (#2038).
+    expect(narrationCall.payload.temperature).toBeNull();
+    expect(llmCalls[0]!.payload.temperature).toBeNull();
     expect(narrationCall.archive?.response).toEqual({ type: 'text', content: narration });
     const promptMessages = (narrationCall.archive?.prompt as { messages: Array<{ role: string; content: unknown }> }).messages;
     expect(String(promptMessages.at(-1)!.content)).toMatch(/note_for_principal/);
+  });
+
+  it('archives tool-call text and reasoning on llm.call (#2042)', async () => {
+    const { llmCalls } = await runNarratedFailure({
+      metadata: originatorOf(null, 'known'),
+      narration: `<reply>${cleanVenueReply}</reply>`,
+      taskCreateSucceeds: true,
+      toolAside: 'Checking the thread.',
+      reasoning: 'The sender asked about venues.',
+      reasoningTokens: 12,
+    });
+    expect(llmCalls[0]!.archive?.response).toEqual({
+      type: 'tool_use',
+      toolCalls: [{ id: 'call-1990', name: 'delegate', input: { agent: 'ceo-inbox', task: 'Find the venue thread' } }],
+      content: 'Checking the thread.',
+      reasoning: 'The sender asked about venues.',
+      reasoningTokens: 12,
+    });
   });
 
   it('drops a model draft that leaks the registry id (#1860)', async () => {

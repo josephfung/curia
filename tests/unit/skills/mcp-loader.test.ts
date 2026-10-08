@@ -40,7 +40,9 @@ vi.mock('../../../src/skills/mcp-client.js', () => ({
 }));
 
 // Import the loader AFTER setting up mocks.
-const { loadMcpServers, buildMcpToolHandler, loadSkillsConfig } = await import('../../../src/skills/mcp-loader.js');
+const { loadMcpServers, buildMcpToolHandler, GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME } = await import(
+  '../../../src/skills/mcp-loader.js'
+);
 type BuildHandlerParams = Parameters<typeof buildMcpToolHandler>[0];
 
 // ---------------------------------------------------------------------------
@@ -306,69 +308,58 @@ servers:
     expect(registry.get('tool-t')!.manifest.timeout).toBe(30000);
   });
 
-  it('skips google-workspace calendar tools at registration (#1853)', async () => {
-    const calendarTools = [
-      'list_calendars',
-      'get_events',
-      'manage_event',
-      'create_calendar',
-      'query_freebusy',
-      'manage_out_of_office',
-      'manage_focus_time',
-    ];
-    const gwSession = makeMockSession([
-      { name: 'create_doc', inputSchema: { type: 'object', properties: {}, required: [] } },
-      ...calendarTools.map((name) => ({
-        name,
-        inputSchema: { type: 'object', properties: {}, required: [] },
-      })),
-      { name: 'search_drive_files', inputSchema: { type: 'object', properties: {}, required: [] } },
-    ]);
-    gwSession.serverId = 'google-workspace';
-    mockConnectStdio.mockResolvedValueOnce(gwSession);
-
-    const dir = writeSkillsYaml(`
+  const gwYaml = `
 servers:
   - name: google-workspace
     transport: stdio
     command: uvx
-    args: ["workspace-mcp"]
+    args: ["workspace-mcp", "--tools", "drive", "docs", "sheets"]
     action_risk: low
-`);
-    const registry = new ToolRegistry();
-    const { projectedTools } = await loadMcpServers(dir, registry, logger, secrets);
+`;
+  const toolDef = (name: string) => ({ name, inputSchema: { type: 'object', properties: {}, required: [] } });
 
-    expect(registry.get('create_doc')).toBeDefined();
-    expect(registry.get('search_drive_files')).toBeDefined();
-    for (const name of calendarTools) {
-      expect(registry.get(name)).toBeUndefined();
+  it('registers and projects every tool google-workspace advertises, with no alarm (#1957)', async () => {
+    // No in-process filtering: the server's --tools allowlist is the only gate on which
+    // Workspace tools agents get (config.google-workspace-allowlist.test.ts guards it).
+    const gwSession = makeMockSession(['create_doc', 'search_drive_files', 'read_sheet_values'].map(toolDef));
+    gwSession.serverId = 'google-workspace';
+    mockConnectStdio.mockResolvedValueOnce(gwSession);
+    const error = vi.spyOn(logger, 'error');
+
+    const registry = new ToolRegistry();
+    const { projectedTools } = await loadMcpServers(writeSkillsYaml(gwYaml), registry, logger, secrets);
+
+    for (const name of ['create_doc', 'search_drive_files', 'read_sheet_values']) {
+      expect(registry.get(name)).toBeDefined();
     }
     expect(projectedTools.get('google-workspace')).toEqual([
       'create_doc',
       'search_drive_files',
+      'read_sheet_values',
     ]);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 
-  it('still registers same-named tools on a non-google-workspace server (#1853)', async () => {
-    const otherSession = makeMockSession([
-      { name: 'get_events', inputSchema: { type: 'object', properties: {}, required: [] } },
-      { name: 'manage_event', inputSchema: { type: 'object', properties: {}, required: [] } },
-    ]);
-    otherSession.serverId = 'other-calendar-mcp';
-    mockConnectStdio.mockResolvedValueOnce(otherSession);
+  it('logs an error, but does not filter, when google-workspace advertises a Calendar tool (#1957)', async () => {
+    // A Calendar tool here means the allowlist drifted. The old holdback dropped it at
+    // info, which hid a missing allowlist for months; now it is an error naming the fix.
+    // Nothing else stops such a tool reaching agents (#1957), so the alarm must fire.
+    const gwSession = makeMockSession(['create_doc', 'get_events'].map(toolDef));
+    gwSession.serverId = 'google-workspace';
+    mockConnectStdio.mockResolvedValueOnce(gwSession);
+    const error = vi.spyOn(logger, 'error');
 
-    const dir = writeSkillsYaml(`
-servers:
-  - name: other-calendar-mcp
-    transport: stdio
-    command: npx
-    action_risk: low
-`);
     const registry = new ToolRegistry();
-    await loadMcpServers(dir, registry, logger, secrets);
+    await loadMcpServers(writeSkillsYaml(gwYaml), registry, logger, secrets);
 
     expect(registry.get('get_events')).toBeDefined();
-    expect(registry.get('manage_event')).toBeDefined();
+    expect(error).toHaveBeenCalledWith(
+      { server: 'google-workspace', tool: 'get_events' },
+      expect.stringContaining('--tools allowlist'),
+    );
+    expect(error).toHaveBeenCalledOnce();
+    error.mockRestore();
   });
 
   it('uses connectSse for sse transport', async () => {
@@ -652,84 +643,34 @@ describe('buildMcpToolHandler — request cancellation (#1666)', () => {
   });
 });
 
-describe('google-workspace --tools primary gate (#1853)', () => {
-  it('omits calendar from the committed config/skills.yaml allowlist', () => {
-    const configDir = path.resolve(import.meta.dirname, '../../../config');
-    const gw = loadSkillsConfig(configDir).servers?.find((s) => s.name === 'google-workspace');
-    expect(gw).toBeDefined();
-    expect(gw!.transport).toBe('stdio');
-    if (gw!.transport !== 'stdio') throw new Error('expected stdio');
-    expect(gw!.args).toContain('--tools');
-    expect(gw!.args).not.toContain('calendar');
-    // Sanity: the allowlist still loads the services Curia actually uses.
-    expect(gw!.args).toEqual(expect.arrayContaining(['gmail', 'drive', 'docs', 'sheets']));
-  });
-});
-
-describe('buildMcpToolHandler — calendar identity guard (#1854)', () => {
-  it('rejects principal-scoped get_events before calling MCP (no success+empty)', async () => {
-    const { makeSystemOriginator } = await import('../../../src/contacts/principal.js');
-    const callTool = vi.fn().mockResolvedValue({
-      content: [{
-        type: 'text',
-        text: "No events found in calendar 'primary' for nathancuria1@gmail.com for the specified time range.",
-      }],
-    });
-    const handler = buildMcpToolHandler({
-      session: { serverId: 'google-workspace', client: { callTool } } as unknown as BuildHandlerParams['session'],
-      toolName: 'get_events',
-      resolvedFixedInputs: { user_google_email: 'nathancuria1@gmail.com' },
-      timeoutMs: 30_000,
-      logger,
-    });
-
-    const result = await handler.execute({
-      toolName: 'get_events',
-      toolVersion: '1.0.0',
-      input: { calendar_id: 'primary' },
-      secret: () => '',
-      log: logger,
-      taskMetadata: { originator: makeSystemOriginator() },
-    } as unknown as import('../../../src/skills/types.js').ToolContext);
-
-    expect(callTool).not.toHaveBeenCalled();
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.errorType).toBe('IDENTITY_MISMATCH');
-      expect(result.error).toContain('calendar_identity_mismatch');
-    }
+describe('GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME (drift alarm matcher, #1957)', () => {
+  // The registration alarm is the only runtime signal if Calendar tools ever load, so
+  // pin what it must catch and what it must leave alone.
+  it.each([
+    // upstream workspace-mcp's whole calendar module
+    'list_calendars',
+    'get_events',
+    'manage_event',
+    'create_calendar',
+    'query_freebusy',
+    'manage_out_of_office',
+    'manage_focus_time',
+  ])('matches %s', (name) => {
+    expect(GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(name)).toBe(true);
   });
 
-  it('still calls MCP for agent-originated get_events (#1330 coexistence)', async () => {
-    const callTool = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text: 'two events' }],
-    });
-    const handler = buildMcpToolHandler({
-      session: { serverId: 'google-workspace', client: { callTool } } as unknown as BuildHandlerParams['session'],
-      toolName: 'get_events',
-      resolvedFixedInputs: { user_google_email: 'nathancuria1@gmail.com' },
-      timeoutMs: 30_000,
-      logger,
-    });
-
-    const result = await handler.execute({
-      toolName: 'get_events',
-      toolVersion: '1.0.0',
-      input: { calendar_id: 'primary' },
-      secret: () => '',
-      log: logger,
-      taskMetadata: {
-        originator: {
-          contactId: 'agent',
-          systemRole: 'agent',
-          channel: 'internal',
-          initiatedAt: new Date().toISOString(),
-          tier: null,
-        },
-      },
-    } as unknown as import('../../../src/skills/types.js').ToolContext);
-
-    expect(callTool).toHaveBeenCalledOnce();
-    expect(result).toEqual({ success: true, data: 'two events' });
+  it.each([
+    // real Drive/Docs/Sheets names, including the look-alikes most at risk
+    'search_drive_files',
+    'create_doc',
+    'update_doc_headers_footers',
+    'manage_conditional_formatting',
+    'import_to_google_slides',
+    'list_spreadsheet_comments',
+    'resize_sheet_dimensions',
+    // Curia's own kebab-case calendar skill is not a google-workspace tool
+    'calendar-list-events',
+  ])('does not match %s', (name) => {
+    expect(GOOGLE_WORKSPACE_CALENDAR_TOOL_NAME.test(name)).toBe(false);
   });
 });

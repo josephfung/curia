@@ -29,7 +29,11 @@
 //     read-only views of the autonomy score and office identity (a real instance would
 //     send under a changed score), and no working-docs repo (ceo-inbox shadow drafts
 //     feed the real instance's learning signal).
-//   - No calendar client, MCP servers, browser, scheduler loop or heartbeat.
+//   - No calendar client, browser, scheduler loop or heartbeat, and no MCP server
+//     process. A configured MCP server with a tools/list snapshot (tests/fixtures/mcp)
+//     is registered from it instead, answering every call with a canned result
+//     (test-mode-mcp.ts, #2024): its tools and projected skill are production's, but
+//     nothing reaches an account.
 //
 // The real vault IS read, the way boot reads it (#911): LLM API keys, the Signal
 // number and the email-account grants come from it, so the prompt's contact-details
@@ -39,7 +43,8 @@
 //
 // Known differences from production (none of them change the system prompt):
 //   - The tools above fail closed instead of running.
-//   - MCP-projected tools (google-workspace) are absent from the tool list.
+//   - MCP tools come from a snapshot and return canned results; a configured server
+//     without a snapshot is absent (listed in `warnings`).
 //   - No Dispatcher: the caller wires its own (the smoke harness does).
 //   - Offline mode without SECRET_ENCRYPTION_KEY: no Signal number, and email
 //     self-addresses come from email_accounts without the vault grant check.
@@ -69,6 +74,7 @@ import { resolveEmailAccounts } from '../channels/email/resolve-email-accounts.j
 import { resolvePrincipalCalendarGrant } from '../channels/calendar/resolve-calendar-grant.js';
 import { ContactService } from '../contacts/contact-service.js';
 import { ContactResolver } from '../contacts/contact-resolver.js';
+import { ConfidencePipeline } from '../contacts/confidence-pipeline.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
 import { OutboundContentFilter } from '../dispatch/outbound-filter.js';
 import { bootstrapAgentIdentity } from '../entity-context/bootstrap.js';
@@ -103,12 +109,17 @@ import {
 } from '../skills/skill-loader.js';
 import {
   assembleAgents,
+  principalIdentitySnapshotGaps,
   readPrincipalIdentitySnapshot,
   registerAgentRoster,
   type AssembledAgent,
 } from './agent-assembly.js';
+import { registerSnapshotMcpServers } from './test-mode-mcp.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
+
+/** tools/list snapshots of the configured MCP servers (#2024). */
+const MCP_SNAPSHOT_DIR = path.join(REPO_ROOT, 'tests', 'fixtures', 'mcp');
 
 /**
  * Secrets a skill may still read from env in test mode. Read-only lookups only:
@@ -176,6 +187,13 @@ export interface TestModeStackOptions {
    * principal's) and score on a premise it did not set up.
    */
   wrapWorkingMemory?: (memory: WorkingMemory) => WorkingMemory;
+  /**
+   * Wrap each live LLM provider before agents (and `llmProviders`) receive it. The
+   * behavior suites (#1980) use it to see which case a call belongs to and to refuse
+   * further calls from a case that has timed out, so an abandoned turn stops spending.
+   * Not applied to offline providers, which never make a call.
+   */
+  wrapLlmProvider?: (provider: LLMProvider) => LLMProvider;
   /** Override for fixtures. Default <repo>/agents and <repo>/skills. */
   agentsDir?: string;
   skillsDir?: string;
@@ -218,6 +236,12 @@ export interface TestModeStack {
    * Measured on the unwrapped layer — a stub wrapper may answer some of these.
    */
   disabledTools: Record<string, Array<{ tool: string; missing: string[] }>>;
+  /**
+   * Tools registered from an MCP tools/list snapshot (#2024). Their session answers
+   * with a canned result and reaches no account, so they are safe to run unstubbed
+   * whatever their action_risk says.
+   */
+  snapshotMcpTools: ReadonlySet<string>;
   /**
    * Ways this stack differs from production that change what agents see (no vault
    * key, unresolved pins). Callers print these: the stack's own logger is usually silent.
@@ -526,11 +550,12 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       providerRegistry.set('anthropic', offlineProvider('anthropic'));
       providerRegistry.set('openrouter', offlineProvider('openrouter'));
     } else {
+      const wrapProvider = options.wrapLlmProvider ?? ((p: LLMProvider) => p);
       if (anthropicApiKey) {
-        providerRegistry.set('anthropic', new AnthropicProvider(anthropicApiKey, logger, modelRegistry));
+        providerRegistry.set('anthropic', wrapProvider(new AnthropicProvider(anthropicApiKey, logger, modelRegistry)));
       }
       if (openrouterApiKey) {
-        providerRegistry.set('openrouter', new OpenRouterProvider(openrouterApiKey, logger, modelRegistry));
+        providerRegistry.set('openrouter', wrapProvider(new OpenRouterProvider(openrouterApiKey, logger, modelRegistry)));
       }
     }
 
@@ -558,6 +583,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       const snapshot = await readPrincipalIdentitySnapshot(contactService, principalContact.id);
       principalIdentities.push(...snapshot.identities);
       principalPrimaryEmail.current = snapshot.primaryEmail;
+      // The same gaps production logs at boot, so a smoke, scenario or snapshot run on
+      // a prompt without them says why (shared helper; see agent-assembly.ts).
+      warnings.push(...principalIdentitySnapshotGaps(snapshot));
     } else if (llmMode === 'live') {
       // Production refuses to serve without a principal (setup-required mode), so a
       // live run without one would test a path production never takes.
@@ -567,7 +595,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       );
     } else {
       warnings.push(
-        'No principal contact (system_role=principal): the Principal Contact Details block is absent and ' +
+        'No principal contact (system_role=principal): the Who you serve section is absent and ' +
         '${principal_contact_id} renders empty. Production would not serve this prompt until onboarding.',
       );
     }
@@ -606,6 +634,19 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     const skillRegistry = new SkillRegistry();
     await loadToolsFromDirectory(toolDiscovery, toolRegistry, logger, enabled.tool);
     loadSkillsFromDiscovery(skillDiscovery, skillRegistry, logger, enabled.skill);
+    // Boot's order: MCP tools after local ones, projected before synthetic singletons.
+    const snapshotMcp = registerSnapshotMcpServers({
+      configDir: path.join(REPO_ROOT, 'config'),
+      snapshotDir: MCP_SNAPSHOT_DIR,
+      toolRegistry,
+      skillRegistry,
+      skillsDir,
+      logger,
+    });
+    for (const server of snapshotMcp.serversWithoutSnapshot) {
+      warnings.push(`MCP server '${server}' has no tools/list snapshot in tests/fixtures/mcp, so its tools are absent here.`);
+    }
+    warnings.push(...snapshotMcp.problems);
     registerSyntheticSingletonSkills(toolRegistry, skillRegistry, logger);
 
     const enabledAgents = enabled.agent;
@@ -642,6 +683,10 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       secretsService: createTestModeSecrets(),
       officeIdentityService: agentOfficeIdentity,
       auditLogRepo: new AuditLogRepo(pool, logger),
+      // A synchronous write to the contact row, like contact-create, not deferred work.
+      // Without it contact-register (which declares the capability) fails closed, so
+      // ceo-inbox could never record a sender or a resolved recipient in a test (#2014).
+      confidencePipeline: new ConfidencePipeline(contactService, logger),
       timezone: config.timezone,
       selfEmail: selfEmails[0],
       selfEmails,
@@ -698,8 +743,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     }
 
     // Unresolved pins drop tools and SKILL.md bodies; resolvePinnedSkills only logs
-    // them, and the stack's logger is usually silent. MCP servers are never loaded
-    // here, so an MCP-projected pin (google-workspace) always appears.
+    // them, and the stack's logger is usually silent. A pin on an MCP server without
+    // a snapshot appears here.
     for (const assembled of agents) {
       for (const pin of assembled.pinResolution.unresolvedPins) {
         warnings.push(
@@ -745,6 +790,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       llmProviders: providerRegistry,
       agents,
       disabledTools,
+      snapshotMcpTools: snapshotMcp.tools,
       warnings,
       agent,
       renderSystemPrompt: async (agentName = 'coordinator', renderOpts = {}) => {

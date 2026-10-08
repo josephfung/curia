@@ -245,7 +245,8 @@
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
-            "hotRetentionDays": { "type": "integer", "minimum": 1 }
+            "hotRetentionDays": { "type": "integer", "minimum": 1 },
+            "includeReasoning": { "type": "boolean" }
           }
         }
       }
@@ -470,6 +471,14 @@
               "type": "array",
               "items": { "type": "string", "minLength": 1 }
             }
+          }
+        },
+        "approval_expiry": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "System-interval sweep that expires stale pending approvals (#2013).",
+          "properties": {
+            "sweep_interval_minutes": { "type": "integer", "minimum": 1 }
           }
         }
       }

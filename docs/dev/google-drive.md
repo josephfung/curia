@@ -13,10 +13,16 @@ uses [`taylorwilsdon/google_workspace_mcp`](https://github.com/taylorwilsdon/goo
 as a local stdio subprocess — the MCP loader spawns it via `uvx workspace-mcp` and
 communicates over stdin/stdout.
 
-This gives Curia full access to Drive, Sheets, Docs, Gmail, and more using
-OAuth 2.0 as Curia's own Gmail user. Principal calendar access is **not** via
-this MCP server — it goes through the Nylas-backed `calendar` skill (#1853).
-`config/skills.yaml` omits the `calendar` service from `--tools` for that reason.
+This gives Curia access to Drive, Sheets and Docs using OAuth 2.0 as Curia's own
+Gmail user. `config/skills.yaml` passes `--tools drive docs sheets`, and that
+allowlist is the only thing deciding which services load (#1957), so keep it
+exact: `tests/unit/config.google-workspace-allowlist.test.ts` fails on any change.
+
+- **Calendar is never on it.** Principal calendar access goes through the
+  Nylas-backed `calendar` skill; Workspace Calendar tools would authenticate as
+  Curia's own identity and read an empty calendar (#1853).
+- **Gmail is not on it.** Curia's email tools (the `email` bundle) cover the same
+  mailbox, including whole-thread reads (`email-get-thread`).
 
 ### One-time setup
 
@@ -28,27 +34,28 @@ this MCP server — it goes through the Nylas-backed `calendar` skill (#1853).
    - Google Drive API
    - Google Sheets API
    - Google Docs API
-   - Gmail API
 
    Do **not** enable Google Calendar API for Curia's Workspace OAuth client.
-   Principal calendar traffic uses Nylas; Workspace Calendar tools are withheld
-   (#1853). Enabling Calendar here only widens Curia's grant without a caller.
+   Principal calendar traffic uses Nylas, and Calendar is not in `--tools`
+   (#1853). Enabling it here only widens Curia's grant without a caller. The
+   same goes for the Gmail API: Curia's email runs through Nylas.
 
 #### Step 2 — OAuth consent screen
 
 1. Go to APIs & Services → OAuth consent screen.
 2. Choose **External** (works with any Gmail account, including Curia's).
 3. Fill in the app name and contact email.
-4. Add scopes: Drive, Sheets, Docs, Gmail.
-   Omit Calendar — see Step 1 / #1853.
+4. Add scopes: Drive, Sheets, Docs.
+   Omit Calendar and Gmail — see Step 1.
 5. Under **Test users**, add Curia's Gmail address.
 
 > **Existing deployments:** narrowing `--tools` does not revoke anything already
 > granted. Existing tokens keep working (upstream scope checks are
-> superset-based), but Curia's Calendar scope stays live until you revoke the
-> grant at [myaccount.google.com](https://myaccount.google.com/permissions) and
-> re-run Step 5. Do this at the next convenient window; nothing breaks if you
-> don't — there is simply no caller for that scope after #1853.
+> superset-based), but scopes for services no longer loaded (Calendar, Gmail,
+> and anything else an older allowlist had) stay live until you revoke the grant
+> at [myaccount.google.com](https://myaccount.google.com/permissions) and re-run
+> Step 5. Do this at the next convenient window; nothing breaks if you don't —
+> there is simply no caller for those scopes (#1853, #1957).
 
 > The app can stay in "Testing" mode. If you want non-expiring tokens without having
 > to re-add test users, publish the app (Publish App button). Publishing does not make
@@ -103,12 +110,15 @@ GOOGLE_OAUTH_CLIENT_ID=<...> GOOGLE_OAUTH_CLIENT_SECRET=<...> CURIA_GOOGLE_EMAIL
 
 The script connects to a single persistent `workspace-mcp` process (important — each
 service auth call must happen in the same process so the OAuth state survives the
-callback), opens your browser once per service, and waits for you to complete the login.
+callback) with the same `--tools drive docs sheets` allowlist as runtime, opens your
+browser once, and waits for you to complete the login. The allowlist is what keeps
+Calendar and Gmail scopes out of the consent: workspace-mcp requests the scopes of
+every service it has enabled.
 
-Log in as **Curia's Gmail account** each time.
+Log in as **Curia's Gmail account**.
 
-After all services in the auth script are authenticated (Drive, Sheets, Docs,
-Gmail — not Calendar; #1853), tokens are saved to:
+After all services in the auth script are authenticated (Drive, Sheets and Docs;
+#1957), tokens are saved to:
 ```text
 ~/.google_workspace_mcp/credentials/<curia-gmail>.json
 ```
@@ -157,8 +167,9 @@ repeat Step 5 to re-authenticate and copy fresh tokens to the VPS.
    A non-zero `registered` count means the server connected and tools are available.
 
 2. **Tool discovery**: ask Curia: *"What Google Workspace tools do you have available?"*
-   It should list Drive, Sheets, Docs, and Gmail tools — **not** Calendar
-   (`get_events` / `manage_event` / etc. are withheld; #1853).
+   It should list Drive, Sheets and Docs tools only — no Gmail or Calendar
+   tools (#1957, #1853). The startup log line `Tool tier 'complete' loaded: N
+   tools across 3 services [['docs', 'drive', 'sheets']]` confirms the same.
 
 3. **End-to-end read**: share a test Google Sheet with Curia's Gmail, then ask:
    *"Read the test sheet and summarize what's in it."*

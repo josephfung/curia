@@ -5,7 +5,11 @@
 // the reply. Smoke's judge sees only the reply text, which is why it cannot score
 // "delegated instead of answering". gpt-4o, as in smoke and curia-deploy's eval, so
 // scores stay comparable across the three.
-import type { LLMProvider } from '../../src/agents/llm/provider.js';
+import { ModelRegistry } from '../../src/agents/llm/model-registry.js';
+import { createEstimateCostUsd } from '../../src/agents/llm/pricing.js';
+import type { LLMProvider, LLMResponse } from '../../src/agents/llm/provider.js';
+import { createLogger, type Logger } from '../../src/logger.js';
+import type { UsageLedger } from '../shared/usage.js';
 import { JUDGE_ERROR_PREFIX } from './gate.js';
 import type { BehaviorRating, ExpectedBehavior, RunRating, ScenarioCase, ScenarioRun } from './types.js';
 
@@ -38,7 +42,9 @@ export function formatJudgeInput(
     ? `${principal} (the executive the coordinator works for)`
     : scenario.inbound.from === 'bullpen'
       ? 'another internal agent, on the bullpen (internal agent-to-agent thread)'
-      : (() => {
+      : scenario.inbound.from === 'scheduler'
+        ? 'the scheduler: a recurring scheduled job firing, with no human sender'
+        : (() => {
           const c = scenario.seed.contacts.find(x => x.key === scenario.inbound.from)!;
           return `${c.displayName}, an external contact (not ${principal}), via ${c.channel}`;
         })();
@@ -117,6 +123,41 @@ export interface Judge {
   model: string;
   /** Named in the judge input so "never addresses the principal" is checkable. */
   principalName?: string;
+  /**
+   * Prices a judge response from the model registry (#1980). The judge publishes no
+   * llm.call, so without this its spend would not appear in the run's cost.
+   */
+  estimateCostUsd?: (actualModel: string, usage: NonNullable<LLMResponse['usage']>) => number;
+}
+
+/**
+ * Add one judge response's tokens and estimated cost to `usage`. Error responses count
+ * too when the provider reports usage for them: a failed attempt can still be billed.
+ */
+export function meterJudgeResponse(judge: Judge, response: LLMResponse, usage: UsageLedger | undefined): void {
+  if (!usage || !response.usage) return;
+  const model = response.type === 'error' ? judge.model : response.provenance.actualModel;
+  let cost = 0;
+  try {
+    cost = judge.estimateCostUsd?.(model, response.usage) ?? 0;
+  } catch (err) {
+    // Pricing must never abort judging (the call is already paid for). Say so, though:
+    // a $0 here understates the run.
+    process.stderr.write(`  [WARN] could not price a judge call on ${model}: ${err instanceof Error ? err.message : String(err)} — counted as $0\n`);
+  }
+  usage.addJudgeCall(response.usage, cost);
+}
+
+/** Transient judge failures worth another attempt; anything else would fail the same way every time. */
+export const JUDGE_RETRYABLE: ReadonlySet<string> = new Set(['PROVIDER_ERROR', 'TIMEOUT', 'UNKNOWN', 'RATE_LIMIT']);
+
+/**
+ * Wait before judge attempt `attempt + 1`. A rate limit gets a longer wait: with cases
+ * judged concurrently (#1980) a 429 is a burst, not a dead key, and waiting it out beats
+ * failing every case behind it.
+ */
+export function judgeBackoffMs(errorType: string | undefined, attempt: number): number {
+  return (errorType === 'RATE_LIMIT' ? 5_000 : 1_000) * attempt;
 }
 
 /**
@@ -125,15 +166,37 @@ export interface Judge {
  * the judge. The provider passes no temperature or response_format through, so the
  * prompt asks for JSON and the reply is parsed leniently (a fenced block is unwrapped).
  */
-export function createJudge(providers: ReadonlyMap<string, LLMProvider>, principalName?: string): Judge {
+export function createJudge(
+  providers: ReadonlyMap<string, LLMProvider>,
+  principalName?: string,
+  options: { model?: string; logger?: Logger } = {},
+): Judge {
+  const model = options.model ?? JUDGE_MODEL;
   const provider = providers.get('openrouter');
   if (!provider) {
     throw new Error(
-      `The judge (${JUDGE_MODEL}) runs through OpenRouter, and the vault has no openrouter_api_key. ` +
+      `The judge (${model}) runs through OpenRouter, and the vault has no openrouter_api_key. ` +
       'Seed it (see tests/scenarios/README.md).',
     );
   }
-  return { provider, model: JUDGE_MODEL, ...(principalName ? { principalName } : {}) };
+  const logger = options.logger ?? createLogger('error');
+  const registry = new ModelRegistry(logger);
+  // An exact entry, not a prefix match: 'openai/gpt-4o-mini' would otherwise be priced as
+  // 'openai/gpt-4o', and a model with no entry at all would throw on its first response —
+  // after paying for it. Fail here instead, before any call (#1980).
+  if (!Object.hasOwn(registry.getAllModels(), model)) {
+    throw new Error(
+      `The judge model '${model}' has no entry in src/agents/llm/model-registry.ts, so its spend cannot be priced. ` +
+      'Add it (with its OpenRouter pricing) first.',
+    );
+  }
+  const estimate = createEstimateCostUsd(registry, model);
+  return {
+    provider,
+    model,
+    ...(principalName ? { principalName } : {}),
+    estimateCostUsd: (actual: string, usage: NonNullable<LLMResponse['usage']>) => estimate(actual, usage, logger),
+  };
 }
 
 /** A JSON object out of a model reply that may wrap it in a code fence or prose. */
@@ -145,23 +208,25 @@ export function extractJsonObject(text: string): string {
   return start !== -1 && end > start ? body.slice(start, end + 1) : body;
 }
 
-/** Transient provider failures worth another attempt; anything else fails the same way every run. */
-const RETRYABLE: ReadonlySet<string> = new Set(['PROVIDER_ERROR', 'TIMEOUT', 'UNKNOWN']);
 const JUDGE_ATTEMPTS = 3;
 
 /**
  * Judge one run's prose behaviors.
  *
- * - Auth, rate-limit, not-found (judge model retired) and validation errors throw: they
- *   would repeat on every run, and an all-MISS suite would read as a broken coordinator.
- * - Transient errors are retried, then score the run's judged behaviors MISS with a
- *   JUDGE_ERROR_PREFIX justification, which the gate reports as a judge failure.
+ * - Auth, not-found (judge model retired) and validation errors throw: they would
+ *   repeat on every run, and an all-MISS suite would read as a broken coordinator.
+ * - Transient errors (rate limits included) are retried, then score the run's judged
+ *   behaviors MISS with a JUDGE_ERROR_PREFIX justification, which the gate reports as a
+ *   judge failure.
+ *
+ * Each attempt's tokens and estimated cost go to `usage` when given.
  */
 export async function judgeRun(
   scenario: ScenarioCase,
   run: ScenarioRun,
   behaviors: ExpectedBehavior[],
   judge: Judge,
+  usage?: UsageLedger,
 ): Promise<Map<string, RunRating>> {
   if (behaviors.length === 0) return new Map();
 
@@ -174,6 +239,7 @@ export async function judgeRun(
         { role: 'user', content: formatJudgeInput(scenario, run, behaviors, judge.principalName) },
       ],
     });
+    meterJudgeResponse(judge, response, usage);
 
     if (response.type === 'text') {
       return parseJudgeResponse(extractJsonObject(response.content), behaviors);
@@ -183,12 +249,11 @@ export async function judgeRun(
       continue;
     }
     const { type, message } = response.error;
-    if (!RETRYABLE.has(type)) {
+    if (!JUDGE_RETRYABLE.has(type)) {
       throw new Error(`Judge call failed (${type}): ${message}`);
     }
     lastError = `${type}: ${message}`;
-    // Brief backoff before the next attempt.
-    await new Promise(resolve => setTimeout(resolve, 1_000 * attempt));
+    await new Promise(resolve => setTimeout(resolve, judgeBackoffMs(type, attempt)));
   }
   return new Map(behaviors.map(b => [b.id, {
     rating: 'MISS' as const,

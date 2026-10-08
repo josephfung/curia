@@ -165,6 +165,20 @@ scheduler:
 
 ---
 
+### `autonomy.approval_expiry`
+
+How often pending approvals past their `expires_at` are marked expired.
+
+```yaml
+autonomy:
+  approval_expiry:
+    sweep_interval_minutes: 60
+```
+
+The sweep is a system interval, not a scheduled agent job: no agent turn and no LLM call (#2013). Each tick expires stale `pending_approval` rows and sends the principal one batched email about any high or critical ones. With no principal email on file, or no outbound gateway, the rows still expire and the email is skipped with a warning. The first tick runs a minute after startup, then every interval, so frequent restarts never starve it. Validated at startup as a positive integer within the Node.js timer limit.
+
+---
+
 ### `debrief`
 
 Configures the meeting-debrief specialist agent (see [spec 17](../specs/17-meeting-debrief.md)). The agent itself is defined in `agents/meeting-debrief.yaml`; this block controls the prompt-channel and reply-correlation knobs.

@@ -5,26 +5,30 @@ import type {
   PrincipalChannelRules,
   ProjectedRecipient,
 } from '../../contacts/principal-channel-rules.js';
-import { hasPresentValue } from '../../contacts/principal-carveout-parse.js';
+import { hasPresentValue, parseOneRecipient } from '../../contacts/principal-carveout-parse.js';
 import { isSignalOutboundRequest } from './outbound-request.js';
 
 /**
  * Parse signal-send 1:1 recipient from skill input. Returns null for group sends or
  * when the input contains recipient-shaped keys this parser does not model.
+ *
+ * `recipient` holds a contact reference (#2033); Gate C resolves it before comparing.
  */
 function parseSignalSendRecipients(input: Record<string, unknown>): string[] | null {
-  const unparsedRecipientKeys = ['to', 'cc', 'bcc', 'recipients'] as const;
+  const unparsedRecipientKeys = [
+    'to',
+    'cc',
+    'bcc',
+    'recipients',
+    'recipient_number', // retired raw input (#2041): fail closed
+  ] as const;
   for (const key of unparsedRecipientKeys) {
     if (hasPresentValue(input[key])) return null;
   }
 
-  const recipient = input['recipient'];
   const groupId = input['group_id'] ?? input['groupId'];
-  if (recipient !== undefined && recipient !== null && typeof recipient !== 'string') return null;
   if (hasPresentValue(groupId)) return null;
-  if (!hasPresentValue(recipient)) return null;
-
-  return [(recipient as string).trim()];
+  return parseOneRecipient(input);
 }
 
 /**
