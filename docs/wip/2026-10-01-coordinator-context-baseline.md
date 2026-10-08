@@ -1139,3 +1139,19 @@ stubbed), so every run on both sides gets 4–12 failed reads, and the case part
 how long the agent retries them. PR 11 averaged 6.6 failed reads and main 5.8. 2 of 9
 against 0 of 8 is within chance (Fisher's exact p ≈ 0.47), and the mechanism doesn't depend
 on where the contact blocks sit. Inconclusive until the stub covers every listed message.
+
+**Triage Batch re-A/B on the fixed fixture (2026-10-08).** #2054 stubbed every listed
+message, attachment and triage write. Rebased onto it, PR 11 (`b352e8ae`) against main
+(`31bee28d`), 21 alternating rounds. Rounds lost to an OpenRouter key limit or a judge crash
+are left out:
+
+| | First attempt | After retry |
+|---|---|---|
+| PR 11 | 16 of 20 | 19 of 20 |
+| main | 16 of 19 | 19 of 19 |
+
+Fisher's exact p = 1.0 on both. The first-attempt misses are the same kinds on both sides:
+180s coordinator timeouts (PR 11 2, main 1) and judge misses (PR 11: `prioritize-critical`
+once, 75% once; main: 68% and 75%). PR 11's one final failure was a timeout whose retry scored 62%. No run on either side had
+a failed `ceo-inbox-read`; one main run had `ceo-inbox` call `doc-write`, which test mode
+can't serve. PR 11 doesn't change Triage Batch.

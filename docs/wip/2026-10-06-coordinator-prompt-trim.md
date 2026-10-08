@@ -19,7 +19,7 @@ log.
 | Start (`3155f290`) | — | 20,532 | ~6,673 / 7,000 |
 | 1: restatements and stale sections | Merged (2026-10-07, #2031) | 18,561 | ~6,180 / 6,400 |
 | 2: one home each for voice and contact resolution | Merged (2026-10-07, #2034) | 15,709 | ~5,467 / 5,600 |
-| 11: Who you are / Who you serve preamble | In progress (2026-10-07) | 15,709 (unchanged; code-owned blocks only) | ~5,467 / 5,600 |
+| 11: Who you are / Who you serve preamble | In review (2026-10-08, #2052) | 15,709 (unchanged; code-owned blocks only) | ~5,467 / 5,600 |
 | 3–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
