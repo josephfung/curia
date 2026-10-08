@@ -3,8 +3,9 @@
 # task, working-docs or approval services — answer as a quiet day instead of failing.
 #
 # Without these the model sees tool failures production never shows and spirals (one
-# early run made 29 calls in 131s chasing a broken email-list). Only reads and the
-# harmless task-create belong here; a case that tests a write stubs it itself.
+# early run made 29 calls in 131s chasing a broken email-list). Only reads, the harmless
+# task-create, and follow-ups on the task it returns belong here; a case that tests a
+# write stubs it itself.
 email-list:
   - match: {}
     return: { messages: [], count: 0 }
@@ -73,16 +74,17 @@ email-mark-read:
 email-archive:
   - match: {}
     return: { archived: true }
-# Updating or completing the task task-create above returned (any task id): they go
-# together.
+# Completing the task task-create above returned, and only that one: closing any other
+# task is a write a case must stub itself, so it is still refused and trips the gate.
 task-complete:
-  - match: {}
+  - match: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001 }
     return:
       task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
       title: (completed)
       status: done
       completed_at: "2026-10-01T12:05:00-04:00"
       displayTimezone: America/Toronto
+# Updating the task task-create above returned (any task id): the pair goes together.
 task-update:
   - match: {}
     return:
