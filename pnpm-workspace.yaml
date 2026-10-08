@@ -120,40 +120,26 @@ fetchTimeout: 90000
 #     that still ships a CommonJS build, which the CJS Nylas SDK requires; uuid@12+
 #     is ESM-only and would break `require('uuid')`.
 overrides:
-  # Three MED GHSAs, all fixed in 4.13.5. Consumers are @hono/node-server and
-  # @modelcontextprotocol/sdk, which had both resolved 4.13.1 under the old >=4.12.27 floor:
-  #   - GHSA-crvj-82cr-hjcx: query parser reads parameters after the URL fragment
-  #     (cache-key / proxy interpretation differential)
-  #   - GHSA-g6gw-c38x-mqfc: unbounded dot-notation nesting in parseBody() exhausts memory
-  #   - GHSA-gqvv-2mrq-wpjv: toSSG() still writes outside the output dir (incomplete fix
-  #     for CVE-2026-39408)
   # Raised off >=4.13.5, the follow-up 792fbabe deferred (Refs #1934): that floor admitted
-  # 4.13.5-4.13.10, which carry two more MED advisories, NEITHER in GitHub's global
-  # advisory DB (both 404 on /advisories), so Dependabot raises no alert for them:
+  # 4.13.5-4.13.10, which carry two more MED advisories:
   #   - GHSA-5r4p-p66f-jhc7 (>=4.12.4 <4.13.11): serveStatic decodes the request path a
-  #     second time, so middleware on static paths can be bypassed
+  #     second time, so middleware on static paths can be bypassed. Still absent from
+  #     GitHub's global advisory DB, so Dependabot raises no alert for it.
   #   - GHSA-hxh3-vqpv-xpqv (<4.13.7): hono/jsx renders plain strings unescaped in
   #     boundary components (XSS)
   # 4.13.11, not 4.13.7: the serveStatic advisory runs four patches further up the line.
-  # And 4.13.11, not the newer 4.13.12: 4.13.12 is clean but younger than
-  # minimumReleaseAge, so pinning to it would make the `pnpm install --frozen-lockfile`
-  # in ci.yml and both Dockerfile stages unsatisfiable. Resolution moves up on its own
-  # once the quarantine passes.
   hono: '>=4.13.11'
   # fast-uri ships authority-parser advisories faster than any floor keeps up with, so
   # this pin is deliberately set at the newest published release rather than at the
   # minimum patched version. The prior >=4.1.2 floor was satisfied by 4.1.3, so ajv
   # (fastify's schema compiler, and the MCP SDK's) stayed vulnerable while
-  # @fastify/ajv-compiler had already moved to 4.2.1. Note that >=4.1.4 would NOT have
-  # been enough either: 4.1.4 still carries the two MED advisories below, neither of
-  # which is in GitHub's global advisory DB yet, so Dependabot raises no alert for them.
+  # @fastify/ajv-compiler had already moved to 4.2.1. >=4.1.4 would not have been
+  # enough either: 4.1.4 still carries the two MED advisories below.
   # Moving off 4.1.3 clears four:
   #   - GHSA-58mr-gqgx-xq4g / CVE-2026-84394 (HIGH): host confusion via an unclosed bracket
   #   - GHSA-qw65-cvwx-89v3 / CVE-2026-84292 (HIGH): authority injection via unvalidated port
   #   - GHSA-jvvf-x445-j334 / CVE-2026-86818 (MED, <4.1.5): mailto header injection
   #   - GHSA-hrr3-gc8f-f4qj / CVE-2026-86472 (MED, <4.1.5): inconsistent host case normalization
-  # RE-CHECK against `gh api /repos/fastify/fast-uri/security-advisories`, not just the
-  # Dependabot alert list, which lags the upstream repo advisories.
   fast-uri: '>=4.2.1'
   # Raised off >=8.0.16 (#2032): that floor admitted 8.0.16-8.1.5, 8.2.0-8.2.2
   # and 8.3.0-8.3.2, which carry three advisories published only on vitejs/vite
@@ -181,8 +167,10 @@ overrides:
   # MCP SDK's) kept resolving a vulnerable version even though socks already had 10.7.2:
   #   - GHSA-rpw4-54j3-4h4q / CVE-2026-101913: Address6.isLinkLocal() matches fe80::/64, not fe80::/10
   #   - GHSA-2vr4-cq9g-pvrc / CVE-2026-101910: no classifier recognizes NAT64 local-use 64:ff9b:1::/48
-  # Floored at the newest release (not the 10.5.1 patch) for the same reason as fast-uri:
-  # this package has shipped six advisories across 10.x, each outrunning the last floor.
+  # Stopping at 10.5.1 would still admit <=10.7.0. Two later MED advisories are fixed
+  # in 10.7.1; the floor is 10.7.2, which socks had already resolved:
+  #   - GHSA-j6r3-76f7-8jcv: isInSubnet() compares mixed-family addresses as one space
+  #   - GHSA-h3mg-xc3c-68pw: Address6 builds an unbounded parse diagnostic
   ip-address: '>=10.7.2'
   uuid: '^11.1.1'
   # Security pins for v0.35 release gate (HIGH CVEs flagged by Trivy image scan):
@@ -199,38 +187,28 @@ overrides:
   '@opentelemetry/core': '>=2.8.0'          # GHSA-8988-4f7v-96qf (unbounded baggage header memory allocation)
   # Targeted to onnxruntime-web only, so the 7.x line is what this constrains. >=7.6.3
   # was satisfied by 7.6.3/7.6.4, which carry GHSA-j3f2-48v5-ccww (MED, <=7.6.4).
-  # The untargeted 8.x line needs 8.6.6 (not the 8.6.0 this comment used to claim);
-  # promptfoo resolves 8.8.0, which is clean.
+  # The untargeted 8.x line needs 8.6.6; promptfoo resolves 8.8.0, which is clean.
   'onnxruntime-web>protobufjs': '>=7.6.5 <8'
   # >=0.6.0 was satisfied by 0.6.0, which carries GHSA-7q85-xj36-vmfc (HIGH) as well as
   # GHSA-xcpc-8h2w-3j85, the advisory this pin was added for. 0.6.1 published 2026-09-11
   # and also escapes GHSA-vwc7-r8mq-g2x9 (range caps at <=0.6.0), which the block at the
   # bottom of this file used to list as unfixable. Only consumer is optional onnxruntime-node.
   adm-zip: '>=0.6.1'
-  # HIGH CVEs from Dependabot, 2026-07-24:
-  # GHSA-f88m-g3jw-g9cj (libvips CVEs) is fixed in 0.35.0, but >=0.35.0 then admitted
-  # 0.35.0-0.35.3, which carry GHSA-rgj7-g3m4-5g8c (HIGH, <0.35.4).
   # Raised off >=0.35.4 (#1949): that floor admitted 0.35.4, which carries
-  # GHSA-wq5f-xc86-pv6w (HIGH, <0.35.5), a librsvg CVE in the bundled libvips. It exists
-  # only on lovell/sharp and 404s on GitHub's global advisory DB, so Dependabot raised no
-  # alert. Not a backstop: resolution was 0.35.4, so the exposure was live (dev-only and
+  # GHSA-wq5f-xc86-pv6w (HIGH, <0.35.5), a librsvg CVE in the bundled libvips.
+  # Not a backstop: resolution was 0.35.4, so the exposure was live (dev-only and
   # optional: promptfoo, directly and via @huggingface/transformers).
   # allowBuilds stays false (prebuilt binary).
   sharp: '>=0.35.5'
   find-my-way: '>=9.7.0'                    # GHSA-c96f-x56v-gq3h (HTTP/2 DoS)
-  # Raised off >=1.9.0, which sat INSIDE the vulnerable range of a HIGH published only on
-  # ljharb/shell-quote and absent from GitHub's global advisory DB: GHSA-pqg4-j6r4-53mv
-  # (>=1.8.4 <1.11.0), quote() command injection via a line terminator in a token after a
-  # `{ comment }` token. This one was NOT a backstop: resolution was 1.10.0, inside that
-  # range, so the exposure was live. The trap here is the second one named in the header —
-  # an upstream-only advisory that GitHub's global DB does not carry, so no Dependabot
-  # alert ever contradicted the old floor.
+  # Raised off >=1.9.0, which sat INSIDE the vulnerable range of GHSA-pqg4-j6r4-53mv
+  # (HIGH, >=1.8.4 <1.11.0): quote() command injection via a line terminator in a token
+  # after a `{ comment }` token. Not a backstop: resolution was 1.10.0, inside that
+  # range, so the exposure was live.
   shell-quote: '>=1.11.0'
   # MED/LOW CVEs from Dependabot, 2026-07-24 (#1518):
   body-parser: '>=2.3.0'                    # GHSA-v422-hmwv-36x6 (invalid limit disables size enforcement DoS)
-  # GHSA-frvp-7c67-39w9 (Windows serve-static path traversal via %5C) is fixed in 2.0.5,
-  # but >=2.0.5 then admitted 2.0.5-2.0.9, which carry GHSA-9mqv-5hh9-4cgg (MED, <=2.0.9).
-  # Consumer is @modelcontextprotocol/sdk (^1.19.9).
+  # Consumer is @modelcontextprotocol/sdk.
   # Raised off >=2.0.10: that floor admitted 2.0.10-2.1.2, which carry
   # GHSA-rmxm-3fg6-px4f (MED, >=1.19.10 <2.1.3) — the same serveStatic double-decode
   # middleware bypass as hono's GHSA-5r4p-p66f-jhc7, and likewise not in GitHub's global
@@ -239,19 +217,14 @@ overrides:
   # GHSA-724g-mxrg-4qvm (!!omap) + GHSA-pm4m-ph32-ghv5 (nested flow DoS); targeted —
   # js-yaml@4.x via @apidevtools/json-schema-ref-parser stays on 4.x. Raised off >=5.2.2
   # (#1934): that floor admitted 5.2.2-5.4.0, which carry GHSA-r3ph-w7gj-g6xm (MED,
-  # >=5.0.0 <=5.4.0), published only on nodeca/js-yaml and absent from GitHub's global
-  # advisory DB. Resolution already sits at 5.4.2, so the lockfile does not move — this is
+  # >=5.0.0 <=5.4.0). Resolution already sits at 5.4.2, so the lockfile does not move — this is
   # a backstop against resolution dropping back onto a vulnerable version.
   'promptfoo>js-yaml': '>=5.4.1'
-  # HIGH/MED CVEs from Scorecard + Dependabot, 2026-07-26:
-  # GHSA-mh99-v99m-4gvg (unbounded expansion length OOM DoS) is fixed in 5.0.8, but
-  # >=5.0.8 then admitted 5.0.8 itself, which carries GHSA-rgw5-rvv9-x895 (HIGH, <5.0.9).
   # No 2.x patch exists, hence the 5.x floor rather than a same-major bump.
-  # >=5.0.9 in turn admitted 5.0.9-5.0.11, which carry three more advisories published only
-  # on juliangruber/brace-expansion and absent from the global advisory DB (#1934):
+  # Raised off >=5.0.9 (#1934): that floor admitted 5.0.9-5.0.11, which carry
   # GHSA-6j4f-fj2g-mc7p (HIGH, <5.0.10), GHSA-qhr7-859c-m2p7 (HIGH, <5.0.11) and
-  # GHSA-q2hr-2g5m-vwhr (MED, <5.0.12). Resolution already sits at 5.0.12, so the lockfile
-  # does not move.
+  # GHSA-q2hr-2g5m-vwhr (MED, <5.0.12). Resolution already sits at 5.0.12, so the
+  # lockfile does not move.
   brace-expansion: '>=5.0.12'
   # Drop the only brace-expansion@2.x path (promptfoo→gaxios→rimraf@5→glob@10→minimatch@9).
   # rimraf@6 uses glob@11+/minimatch@10 which consume brace-expansion@5; gaxios only needs
@@ -264,24 +237,20 @@ overrides:
   # fflate above - only consumer is @openai/codex-security via promptfoo (dev-only), which
   # pins an exact 1.6.1, so nothing but an override moves it.
   # Raised off >=1.7.1 (#1934): that floor admitted 1.7.1/1.7.2/1.8.0 and 1.8.0 was what
-  # resolved, all three covered by GHSA-r4xh-jqrq-34v2 (MED, <=1.8.0) — upstream-only, so
-  # no Dependabot alert. This one was invisible to the new auditor at first too: smol-toml
+  # resolved, all three covered by GHSA-r4xh-jqrq-34v2 (MED, <=1.8.0). This one was
+  # invisible to the new auditor at first too: smol-toml
   # publishes `repository: "github:squirrelchat/smol-toml"`, the npm shorthand, which the
   # first repo-URL parser returned null for, silently skipping the upstream-advisory leg.
   smol-toml: '>=1.9.0'
   #
   # Advisories deliberately left WITHOUT a clearing override (re-check before assuming
-  # they were missed — the adm-zip entry that used to sit here was fixed by 0.6.1):
+  # they were missed — the adm-zip entry that used to sit here was fixed by 0.6.1, and
+  # uuid GHSA-qmq6-f8pr-cx5x was withdrawn upstream on 2026-05-05):
   #   - extract-zip GHSA-7pqw-9j4j-h8q3 and GHSA-jmr9-qjv8-65gv (symlink archive entries ->
   #     arbitrary file write, both HIGH). Affect <=2.0.1, the latest publish, so there is
   #     nothing to pin to. Dev-only, reached via promptfoo -> @openai/codex-security, and
   #     the prod image installs with --prod, so this never ships to production.
-  #   - uuid GHSA-qmq6-f8pr-cx5x (missing buffer bounds check in v3/v5/v6, LOW). Only fix
-  #     is 14.0.0, which the deliberate ^11.1.1 cap above cannot reach: uuid@11 is the last
-  #     major shipping a CommonJS build, which the CJS Nylas SDK requires. Accepted: LOW,
-  #     and nothing in this codebase passes a `buf` argument to v3/v5/v6.
-  # These stay as accepted warnings until upstream ships a fix (extract-zip) or the Nylas
-  # SDK stops needing CJS (uuid).
+  # This stays as an accepted warning until upstream ships a fix.
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
