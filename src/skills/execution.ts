@@ -191,6 +191,11 @@ export interface InvokeOptions {
    * Gate C uses it to compare resolved recipients against the initiating sender.
    */
   senderId?: string;
+  /**
+   * Where an identifier an agent enters may have come from (#2061, ADR-047). Built by the
+   * agent runtime per task and forwarded to the skill as `ctx.identifierSources`.
+   */
+  identifierSources?: import('../contacts/identifier-provenance.js').IdentifierSources;
 }
 
 /** Cap on the input rendering passed to the escalation judge — keeps full email bodies and
@@ -518,6 +523,15 @@ export class ExecutionLayer {
   unavailableCapabilities(toolName: string): string[] {
     const caps = this.registry.get(toolName)?.manifest.capabilities ?? [];
     return this.missingCapabilities(caps, this.capabilityServiceMap(this.outboundGateway));
+  }
+
+  /**
+   * Whether `toolName`'s successful output is source text for identifier provenance
+   * (`provenance_source` in its manifest, #2061). The runtime asks after each result,
+   * so a stubbed result in smoke or scenarios is recorded just like a real one.
+   */
+  isProvenanceSource(toolName: string): boolean {
+    return this.registry.get(toolName)?.manifest.provenance_source === true;
   }
 
   /**
@@ -2109,6 +2123,7 @@ export class ExecutionLayer {
       liveTurn: options?.liveTurn,
       delegationGuard: options?.delegationGuard,
       turnDateResolveResults: options?.turnDateResolveResults,
+      identifierSources: options?.identifierSources,
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
       timezone: this.timezone,

@@ -46,6 +46,29 @@ describe('ExecutionLayer', () => {
     }
   });
 
+  describe('identifier provenance (#2061)', () => {
+    it('forwards identifierSources to the skill', async () => {
+      const sources = { has: async () => true };
+      let seen: unknown;
+      registry.register(makeManifest(), {
+        execute: async (ctx: ToolContext) => {
+          seen = ctx.identifierSources;
+          return { success: true, data: 'ran' };
+        },
+      });
+      await execution.invoke('test-skill', { query: 'x' }, undefined, { identifierSources: sources });
+      expect(seen).toBe(sources);
+    });
+
+    it('reports provenance_source from the manifest, false when unset or unknown', () => {
+      registry.register(makeManifest({ name: 'reader', provenance_source: true }), { execute: async () => ({ success: true, data: '' }) });
+      registry.register(makeManifest({ name: 'writer' }), { execute: async () => ({ success: true, data: '' }) });
+      expect(execution.isProvenanceSource('reader')).toBe(true);
+      expect(execution.isProvenanceSource('writer')).toBe(false);
+      expect(execution.isProvenanceSource('no-such-tool')).toBe(false);
+    });
+  });
+
   describe('optional_capabilities (#2024)', () => {
     const seen: { bus?: unknown }[] = [];
     const handler: ToolHandler = {

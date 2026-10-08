@@ -80,6 +80,10 @@
     "skip_secret_redaction": {
       "type": "boolean",
       "description": "When true, this skill's output bypasses ONLY the broad generic-long-hex secret scrub (the structured credential scrubs — API keys, JWT/Bearer, AWS — stay active). For skills whose output legitimately carries a high-entropy hex capability token that must reach the LLM to be relayed (e.g. secret-capture magic links). Tag-stripping and truncation still apply. Gated at startup: a skill setting this must also declare the 'secretCapture' capability."
+    },
+    "provenance_source": {
+      "type": "boolean",
+      "description": "When true, this skill's successful output is source text for identifier provenance (#2061, ADR-047): an address or number in it may be stored as a verified contact identity when an agent enters it. Only for skills whose output is data they read (a web page, a document, a mail listing), never text a model wrote. Default false."
     }
   }
 }

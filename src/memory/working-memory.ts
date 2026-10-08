@@ -61,6 +61,8 @@ interface StorageBackend {
   get(conversationId: string, agentId: string, maxTurns?: number): Promise<ConversationTurn[]>;
   /** Contact-scoped turns from other conversations. See selectContactRecentTurns. */
   getContactRecent(query: ContactRecentHistoryQuery): Promise<ContactRecentTurn[]>;
+  /** Content of the active turns a person sent. See WorkingMemory.getPersonTurns. */
+  getPersonTurns(conversationId: string, agentId: string): Promise<string[]>;
   /** Delete all turns whose expires_at is in the past. Returns the number of rows deleted. */
   purgeExpired(): Promise<number>;
 }
@@ -143,11 +145,33 @@ export class WorkingMemory {
     return rewriteLlmFailureTurns(turns);
   }
 
+  /**
+   * Content of the active `user` turns a person sent in this conversation, newest first,
+   * for identifier provenance (#2061, ADR-047). Excludes turns Curia wrote to itself
+   * (`synthetic`), turns on a channel only agents write to (NON_PERSON_CHANNELS: a
+   * delegation brief, a bullpen post, a scheduled payload), rows with no channel, and
+   * archived turns (their summary is model-written). Content is returned as stored,
+   * dispatcher preambles included.
+   */
+  async getPersonTurns(conversationId: string, agentId: string): Promise<string[]> {
+    return this.backend.getPersonTurns(conversationId, agentId);
+  }
+
   /** Delete all turns whose expires_at is in the past. Called by DreamEngine nightly. */
   async purgeExpired(): Promise<number> {
     return this.backend.purgeExpired();
   }
 }
+
+/**
+ * Channels whose `user` turns an agent wrote: a delegated specialist's brief arrives on
+ * `internal`, a bullpen post on `bullpen`, a scheduled payload on `scheduler`. None is
+ * a message a person sent (#2061).
+ */
+export const NON_PERSON_CHANNELS: readonly string[] = ['internal', 'bullpen', 'scheduler'];
+
+/** Most person turns getPersonTurns reads: the active window is far smaller after summarization. */
+const PERSON_TURNS_LIMIT = 200;
 
 /**
  * Conversations the shared-conversation check removed from this contact's recall,
@@ -340,6 +364,24 @@ class PostgresBackend implements StorageBackend {
         );
       }
     }
+  }
+
+  async getPersonTurns(conversationId: string, agentId: string): Promise<string[]> {
+    const result = await this.pool.query<{ content: string }>(
+      `SELECT content
+       FROM working_memory
+       WHERE conversation_id = $1
+         AND agent_id = $2
+         AND role = 'user'
+         AND archived = false
+         AND synthetic = false
+         AND channel_id IS NOT NULL
+         AND NOT (channel_id = ANY($3::text[]))
+       ORDER BY created_at DESC
+       LIMIT $4`,
+      [conversationId, agentId, NON_PERSON_CHANNELS, PERSON_TURNS_LIMIT],
+    );
+    return result.rows.map((row) => row.content);
   }
 
   async get(conversationId: string, agentId: string, maxTurns?: number): Promise<ConversationTurn[]> {
@@ -775,6 +817,20 @@ class InMemoryBackend implements StorageBackend {
     const rows: ContactRecentSourceTurn[] = [];
     for (const turns of this.store.values()) rows.push(...turns);
     return selectContactRecentTurns(rows, query);
+  }
+
+  async getPersonTurns(conversationId: string, agentId: string): Promise<string[]> {
+    const turns = this.store.get(this.key(conversationId, agentId)) ?? [];
+    return turns
+      .filter((row) =>
+        row.role === 'user'
+        && !row.archived
+        && !row.synthetic
+        && row.channelId !== null
+        && !NON_PERSON_CHANNELS.includes(row.channelId))
+      .reverse()
+      .slice(0, PERSON_TURNS_LIMIT)
+      .map((row) => row.content);
   }
 
   async purgeExpired(): Promise<number> {

@@ -103,6 +103,17 @@ export function delegationOriginTaskEventId(
   return delegationOriginString(metadata, 'taskEventId');
 }
 
+/**
+ * Agent whose conversation a delegated specialist was spawned from — the coordinator,
+ * the only caller of `delegate`. With delegationOriginConversationId it addresses the
+ * origin's working-memory rows, where the person's messages are (#2061).
+ */
+export function delegationOriginAgentId(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  return delegationOriginString(metadata, 'agentId');
+}
+
 function delegationOriginString(
   metadata: Record<string, unknown> | undefined,
   key: string,
