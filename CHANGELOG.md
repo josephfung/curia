@@ -319,6 +319,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **`source-map-js`** — override floor raised to 1.2.2, clearing a HIGH DoS advisory (CVE-2026-93749).
 - **`fast-copy`** — override floor raised to 4.1.0, clearing a MED stack-exhaustion advisory (GHSA-jggr-w7fw-pc2j).
+- **Smoke `clone-db`** — the stale-clone LIKE pattern now escapes backslashes, not just underscores.
 - **Agent-entered contacts** — no longer recorded as principal-stated; near-miss addresses are flagged before storing. (#2041)
 - **Contact skills** — refuse changes to the principal's addresses; only the principal manages them. (#2041)
 - **`vite`** — floor raised to 8.3.3, clearing three upstream-only advisories in the resolved tree. (#2032)

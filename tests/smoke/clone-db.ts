@@ -66,6 +66,14 @@ export function isCloneOf(datname: string, source: string): boolean {
   return datname.startsWith(`${source}${CLONE_INFIX}`) && /^\d+$/.test(datname.slice(source.length + CLONE_INFIX.length));
 }
 
+/**
+ * A LIKE pattern matching names that start with `prefix`. Escapes LIKE's default escape
+ * character `\` as well as its `%` and `_` wildcards, in one pass so none is doubled.
+ */
+export function likePrefix(prefix: string): string {
+  return prefix.replace(/[\\%_]/g, '\\$&') + '%';
+}
+
 /** A connection to the server's maintenance database (`postgres`). */
 async function connectAdmin(databaseUrl: string): Promise<pg.Client> {
   const client = new pg.Client({ connectionString: withDatabase(databaseUrl, MAINTENANCE_DB) });
@@ -93,8 +101,8 @@ export async function cloneDatabase(databaseUrl: string): Promise<DatabaseClone 
       `SELECT d.datname FROM pg_database d
         WHERE d.datname LIKE $1
           AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname)`,
-      // LIKE treats `_` as a wildcard; escaped here, and isCloneOf() below is exact anyway.
-      [`${source}${CLONE_INFIX}`.replace(/_/g, '\\_') + '%'],
+      // isCloneOf() below is exact anyway; the pattern only narrows the scan.
+      [likePrefix(`${source}${CLONE_INFIX}`)],
     );
     removedStale = [];
     for (const { datname } of candidates.rows) {

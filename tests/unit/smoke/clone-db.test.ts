@@ -40,3 +40,13 @@ describe('clone ownership and safety', () => {
     expect(isLocalDatabase('postgresql://u:p@db.example.net:5432/curia')).toBe(false);
   });
 });
+
+describe('likePrefix', () => {
+  it('escapes LIKE wildcards and the escape character itself', async () => {
+    const { likePrefix } = await import('../../smoke/clone-db.js');
+    expect(likePrefix('curia_smoke_')).toBe('curia\\_smoke\\_%');
+    expect(likePrefix('50%')).toBe('50\\%%');
+    // A backslash left unescaped would turn the next character into a literal.
+    expect(likePrefix('a\\_b')).toBe('a\\\\\\_b%');
+  });
+});
