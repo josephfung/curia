@@ -174,6 +174,10 @@ expected_behaviors:
   # case tests that the Drive tools get used, not which way the deck reaches him. The
   # attachment must be the temp-store file the v7 drive-download-file stub returns; a
   # workspace-mcp download path would be refused by email-send in production.
+  # Known gap: human-channels' email-send stub accepts that path too, so a run attaching
+  # it is told "sent" and never gets production's refusal to recover from. It misses here
+  # for that reason, not because it chose a worse route. The stub matcher compares values
+  # exactly, so it cannot single out a path outside the temp store.
   - id: shares_latest_deck_with_kevin
     weight: critical
     description: >
@@ -196,6 +200,8 @@ expected_behaviors:
     check:
       not_called: [manage_drive_access]
       with: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+  # The seed deck's two download stubs share one UUID, so trying to send the wrong deck
+  # counts by either route, even the one production would refuse.
   - id: not_the_old_deck_by_email
     weight: important
     description: Does not email the 2025 seed deck's PDF.
