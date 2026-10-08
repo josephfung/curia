@@ -285,7 +285,7 @@ describe('scenario stub layer', () => {
     const { layer, controller, executed } = setup();
     const job = '7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10';
     const stubs = {
-      'scheduler-list': [{ match: {}, return: { jobs: [{ id: job, status: 'active', cronExpr: '0 9 * * 1', taskTitle: 'Pipeline review' }], count: 1 } }],
+      'scheduler-list': [{ match: {}, return: { jobs: [{ id: job, status: 'pending', cronExpr: '0 9 * * 1', taskTitle: 'Pipeline review' }], count: 1 } }],
       'scheduler-update': [{ match: {}, return: { jobId: job, action: 'edit' } }],
       'scheduler-cancel': [{ match: {}, return: { cancelled: true, jobId: job } }],
       'ceo-inbox-draft-compose': [{ match: {}, return: { draft_id: 'draft-0002', subject: 'Hello', to: ['maya@techto.example'], cc: [] } }],

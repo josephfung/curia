@@ -24,7 +24,7 @@ tool_stubs:
         jobs:
           - id: 7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10
             agentId: coordinator
-            status: active
+            status: pending
             cronExpr: "0 9 * * 1"
             timezone: America/Toronto
             nextRunAt: "{{time:next-monday 09:00}}"
@@ -33,7 +33,7 @@ tool_stubs:
             createdBy: coordinator
           - id: 2b9e6f13-5c4d-4a8e-b7f1-9e0d3c6a1b22
             agentId: coordinator
-            status: active
+            status: pending
             cronExpr: "0 * * * *"
             timezone: America/Toronto
             taskTitle: Approval expiry sweep

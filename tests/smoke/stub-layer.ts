@@ -18,7 +18,8 @@ import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolResult } from '../../src/skills/types.js';
 import { newAttempt, type CaseAttempt, type CaseContext } from '../shared/case-scope.js';
 import { matchToolStub } from '../scenarios/stub-matcher.js';
-import { recordedDraftRead, shapeStubResult, SmokeToolState } from './stub-filters.js';
+import { recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
+import { shapeStubResult } from './stub-filters.js';
 import type { ToolStub } from '../scenarios/types.js';
 
 /**
@@ -48,7 +49,7 @@ export interface SmokeCaseState extends CaseAttempt {
   answers: Map<string, CallAnswer[]>;
   calls: AgentToolCall[];
   /** Stubbed writes replayed onto this case's later reads (calendar, scheduler, tasks, drafts). */
-  tools: SmokeToolState;
+  tools: CaseToolState;
   /** Bullpen threads this case opened: the only ones its agents are shown as pending. */
   threads: Set<string>;
   /** Model fallbacks (any agent) during the case. */
@@ -61,7 +62,7 @@ export function newSmokeCase(label: string): SmokeCaseState {
     stubs: {},
     answers: new Map(),
     calls: [],
-    tools: new SmokeToolState(),
+    tools: new CaseToolState(),
     threads: new Set(),
     fallbacks: [],
   };
@@ -198,7 +199,7 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
       state.stubs = {};
       state.answers = new Map();
       state.calls = [];
-      state.tools = new SmokeToolState();
+      state.tools = new CaseToolState();
       return done;
     },
     get orphanCalls() {

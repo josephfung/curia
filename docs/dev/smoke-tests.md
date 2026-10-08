@@ -203,14 +203,13 @@ A stub is still the answer for one call. For the tools below, the harness also r
 | `task-create`, `task-update`, `task-complete` | `task-list` includes the task, with edits applied and a completion marked `done` |
 | `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`, `ceo-inbox-draft-edit` | `ceo-inbox-read` of that `draft_id` returns the draft, including later edits, and does not run the real tool |
 
-Until the case writes, a list stub is returned as written. After a write:
+A `scheduler-list` or `task-list` call is narrowed by the filters it passes (status, agent, owner, tag, and a task's parent or due-before) whether or not the case has written yet. Seed those rows with a real status: a job is `pending`, `running`, `completed`, `failed`, `suspended`, `cancelled` or `paused`, never `active`. With no filter and no write yet, the list stub is returned as written.
 
 - A job, task or event the stub already lists keeps the stub's fields. That is how a turn scripts the world it starts from, including one that disagrees with an earlier create. An update, completion or cancel during the turn still shows on the next list.
 - A row the stub does not list is added from the create. A second create that would reuse the stub's id gets a new id, so the two rows both appear. Draft ids stay as the stub returned them (`draft-0001`, `draft-0002`), because the office's edit stubs match those ids.
 - A list stub with no `jobs`, `tasks` or `events` array is returned as written. The replay does not apply, which is how a case scripts a result the memory must leave alone.
 - A `ceo-inbox-read` stub whose match names `draft_id` answers that read itself, ahead of the recorded draft.
-- `ceo-inbox-shadow-draft` stores a working-doc shadow, so `ceo-inbox-read` does not return it.
-- Once a scheduler or task write has happened, a later list is narrowed by the arguments the real tool filters on (status, agent, owner, tag, limit).
+- `ceo-inbox-shadow-draft` stores a working-doc shadow, so `ceo-inbox-read` does not return it. An edit of a draft id the case never created does not invent one either.
 
 The scenario suite replays scheduler, task and draft writes the same way for a single run. It still never writes a real scheduler row.
 

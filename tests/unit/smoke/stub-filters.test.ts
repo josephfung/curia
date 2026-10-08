@@ -1,6 +1,7 @@
 // Stubbed list/search results answer the question asked (#1956).
 import { describe, expect, it } from 'vitest';
-import { fillInputPlaceholders, matchesMailQuery, shapeStubResult, SmokeToolState } from '../../smoke/stub-filters.js';
+import { CaseToolState } from '../../shared/tool-state.js';
+import { fillInputPlaceholders, matchesMailQuery, shapeStubResult } from '../../smoke/stub-filters.js';
 
 const events = {
   displayTimezone: 'America/Toronto',
@@ -76,7 +77,7 @@ describe('CalendarState', () => {
   const created = { event: { id: 'evt-created-0001', title: '{{input:title}}', startTime: '{{input:start}}', endTime: '{{input:end}}' } };
 
   it('shows a created event in later listings, with a distinct id per create', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     const first = shapeStubResult('calendar-create-event', created, { title: 'Airport', start: '2026-10-07T06:30:00-04:00', end: '2026-10-07T08:00:00-04:00' }, state) as { event: { id: string } };
     const second = shapeStubResult('calendar-create-event', created, { title: 'Recovery', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T17:00:00-04:00' }, state) as { event: { id: string } };
     expect(first.event.id).not.toBe(second.event.id);
@@ -86,7 +87,7 @@ describe('CalendarState', () => {
   });
 
   it('applies updates and deletes to listed events', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     shapeStubResult('calendar-update-event', { event: {} }, { eventId: 'b', start: '2026-10-07T15:00:00-04:00', end: '2026-10-07T16:00:00-04:00' }, state);
     shapeStubResult('calendar-delete-event', { deleted: true }, { eventId: 'a' }, state);
     const listed = shapeStubResult('calendar-list-events', base, wed, state) as { events: Array<{ id: string; startTime: string }> };
@@ -128,7 +129,7 @@ describe('SchedulerState', () => {
     jobs: [{
       id: JOB_ID,
       agentId: 'coordinator',
-      status: 'active',
+      status: 'pending',
       cronExpr: '0 9 * * 1-5',
       timezone: 'America/Toronto',
       taskTitle: 'Weekday investor inbox check',
@@ -139,7 +140,7 @@ describe('SchedulerState', () => {
   };
 
   it('shows a created job on a later list, and mints a new id when the stub id repeats', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     const first = shapeStubResult('scheduler-create', created, { task: 'Scan investor mail', cron_expr: '0 9 * * 1-5', timezone: 'America/Toronto' }, state) as { jobId: string };
     const second = shapeStubResult('scheduler-create', created, { task: 'Scan investor mail', cron_expr: '0 17 * * 1-5' }, state) as { jobId: string };
     expect(first.jobId).toBe(JOB_ID);
@@ -151,20 +152,41 @@ describe('SchedulerState', () => {
   });
 
   it('merges an edit onto a listed job and marks a cancel', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     shapeStubResult('scheduler-update', { jobId: JOB_ID, action: 'edit' }, { job_id: JOB_ID, action: 'edit', cron_expr: '0 10 * * 1-5' }, state);
     const edited = shapeStubResult('scheduler-list', listed, {}, state) as { jobs: Array<{ id: string; cronExpr: string; taskTitle: string; status: string }> };
-    expect(edited.jobs).toEqual([expect.objectContaining({ id: JOB_ID, cronExpr: '0 10 * * 1-5', taskTitle: 'Weekday investor inbox check', status: 'active' })]);
+    expect(edited.jobs).toEqual([expect.objectContaining({ id: JOB_ID, cronExpr: '0 10 * * 1-5', taskTitle: 'Weekday investor inbox check', status: 'pending' })]);
+    // A status filter still finds the edited job. `pending` is a real status; `active` is not.
+    const pending = shapeStubResult('scheduler-list', listed, { status: 'pending' }, state) as { jobs: Array<{ cronExpr: string }> };
+    expect(pending.jobs).toEqual([expect.objectContaining({ cronExpr: '0 10 * * 1-5' })]);
 
     shapeStubResult('scheduler-cancel', { cancelled: true, jobId: JOB_ID }, { job_id: JOB_ID }, state);
     const after = shapeStubResult('scheduler-list', listed, {}, state) as { jobs: Array<{ status: string; cronExpr: string }> };
     expect(after.jobs).toEqual([expect.objectContaining({ status: 'cancelled', cronExpr: '0 10 * * 1-5' })]);
-    const active = shapeStubResult('scheduler-list', listed, { status: 'active' }, state) as { jobs: unknown[] };
-    expect(active.jobs).toEqual([]);
+    const stillPending = shapeStubResult('scheduler-list', listed, { status: 'pending' }, state) as { jobs: unknown[] };
+    expect(stillPending.jobs).toEqual([]);
+  });
+
+  it('filters a listing by status before the case has written anything', () => {
+    const state = new CaseToolState();
+    const data = {
+      jobs: [
+        { id: 'a', status: 'pending', agentId: 'coordinator', cronExpr: '0 9 * * 1' },
+        { id: 'b', status: 'paused', agentId: 'research', cronExpr: '0 10 * * 1' },
+      ],
+      count: 2,
+      limit: 50,
+    };
+    const paused = shapeStubResult('scheduler-list', data, { status: 'paused' }, state) as { jobs: Array<{ id: string }>; count: number };
+    expect(paused.jobs.map(job => job.id)).toEqual(['b']);
+    expect(paused.count).toBe(1);
+    const research = shapeStubResult('scheduler-list', data, { agent_id: 'research' }, state) as { jobs: Array<{ id: string }> };
+    expect(research.jobs.map(job => job.id)).toEqual(['b']);
+    expect(shapeStubResult('scheduler-list', data, {}, state)).toEqual(data);
   });
 
   it('lets the later of pause and resume set the status', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     shapeStubResult('scheduler-update', {}, { job_id: JOB_ID, action: 'pause' }, state);
     shapeStubResult('scheduler-update', {}, { job_id: JOB_ID, action: 'resume' }, state);
     const jobs = (shapeStubResult('scheduler-list', listed, {}, state) as { jobs: Array<{ status: string }> }).jobs;
@@ -172,7 +194,7 @@ describe('SchedulerState', () => {
   });
 
   it('lets a listing stub override the create, then still applies a later edit', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     shapeStubResult('scheduler-create', created, { task: 'Scan investor mail', cron_expr: '0 8 * * 1-5' }, state);
     const before = shapeStubResult('scheduler-list', listed, {}, state) as { jobs: Array<{ cronExpr: string; taskTitle: string }> };
     // The turn stub's 9am job wins over the create's 8am cron. Its title stays.
@@ -183,7 +205,7 @@ describe('SchedulerState', () => {
   });
 
   it('leaves a listing with no jobs array as scripted', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     shapeStubResult('scheduler-create', created, { task: 'Scan', cron_expr: '0 9 * * 1' }, state);
     expect(shapeStubResult('scheduler-list', { note: 'frozen' }, {}, state)).toEqual({ note: 'frozen' });
   });
@@ -198,7 +220,7 @@ describe('DraftState', () => {
   const compose = { draft_id: 'draft-0002', subject: '{{input:subject}}', to: '{{input:to}}', cc: [] };
 
   it('returns a composed draft, including a later edit, from ceo-inbox-read', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     shapeStubResult('ceo-inbox-draft-compose', compose, { subject: 'Hello', to: ['maya@techto.example'], body: 'See you Tuesday.' }, state);
     shapeStubResult('ceo-inbox-draft-edit', { draft_id: 'draft-0002' }, { draft_id: 'draft-0002', body: 'See you Wednesday.', cc: ['priya@curiatech.example'] }, state);
     expect(state.drafts.read({ draft_id: 'draft-0002' })).toEqual(expect.objectContaining({
@@ -212,7 +234,7 @@ describe('DraftState', () => {
   });
 
   it('records a reply body the stub return does not echo', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     shapeStubResult('ceo-inbox-draft-reply', { draft_id: 'draft-0001', subject: 'Re: Board', to: [{ email: 'elena@northstar.example' }], cc: [] }, { reply_to_message_id: 'm1', body: 'I can talk at 2.' }, state);
     expect(state.drafts.read({ draft_id: 'draft-0001' })).toEqual(expect.objectContaining({
       subject: 'Re: Board',
@@ -222,8 +244,15 @@ describe('DraftState', () => {
   });
 
   it('does not record a shadow draft that returns no draft id', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     shapeStubResult('ceo-inbox-shadow-draft', { captured: true }, { source_message_id: 'm1', body: 'shadow' }, state);
+    shapeStubResult('ceo-inbox-shadow-draft', { captured: true, draft_id: 'draft-0001' }, { source_message_id: 'm1', subject: 'Hi', body: 'shadow' }, state);
+    expect(state.drafts.read({ draft_id: 'draft-0001' })).toBeUndefined();
+  });
+
+  it('does not invent a draft when an edit names an id this case never wrote', () => {
+    const state = new CaseToolState();
+    shapeStubResult('ceo-inbox-draft-edit', { draft_id: 'draft-0001' }, { draft_id: 'draft-0001', body: 'Guessed', subject: 'Hello' }, state);
     expect(state.drafts.read({ draft_id: 'draft-0001' })).toBeUndefined();
   });
 });
@@ -233,7 +262,7 @@ describe('TaskState', () => {
   const empty = { tasks: [], count: 0, displayTimezone: 'America/Toronto' };
 
   it('shows a created task, then an update and a completion', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     const made = shapeStubResult('task-create', created, { title: 'Chase the deck', owner: 'curia' }, state) as { task_id: string };
     shapeStubResult('task-update', { task_id: made.task_id }, { task_id: made.task_id, priority: 1, progress_note: 'Asked Priya' }, state);
     const open = shapeStubResult('task-list', empty, { status: 'open' }, state) as { tasks: Array<{ title: string; priority: number; last_progress_note: string }>; count: number };
@@ -245,8 +274,25 @@ describe('TaskState', () => {
     expect((shapeStubResult('task-list', empty, { status: 'done' }, state) as { tasks: Array<{ status: string }> }).tasks).toEqual([expect.objectContaining({ status: 'done' })]);
   });
 
+  it('filters a listing by owner and tag before the case has written anything', () => {
+    const state = new CaseToolState();
+    const data = {
+      tasks: [
+        { task_id: 'a', title: 'Deck', status: 'open', owner: 'ceo', tags: ['board'] },
+        { task_id: 'b', title: 'Inbox', status: 'open', owner: 'curia', tags: ['mail'] },
+      ],
+      count: 2,
+    };
+    const board = shapeStubResult('task-list', data, { tag: 'board' }, state) as { tasks: Array<{ task_id: string }>; count: number };
+    expect(board.tasks.map(task => task.task_id)).toEqual(['a']);
+    expect(board.count).toBe(1);
+    const curia = shapeStubResult('task-list', data, { owner: 'curia' }, state) as { tasks: Array<{ task_id: string }> };
+    expect(curia.tasks.map(task => task.task_id)).toEqual(['b']);
+    expect(shapeStubResult('task-list', data, {}, state)).toEqual(data);
+  });
+
   it('lets a listing stub override the create, and leaves a list with no tasks array as scripted', () => {
-    const state = new SmokeToolState();
+    const state = new CaseToolState();
     const id = '0e5d6c7b-1a2b-4c3d-8e9f-000000000001';
     shapeStubResult('task-create', created, { title: 'From the create', owner: 'curia' }, state);
     const stub = { tasks: [{ task_id: id, title: 'From the turn', status: 'open', owner: 'ceo', priority: 3, tags: ['board'] }] };

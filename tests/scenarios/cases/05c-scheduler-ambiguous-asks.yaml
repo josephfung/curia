@@ -16,7 +16,7 @@ tool_stubs:
         jobs:
           - id: 7d1c2e44-0b6a-4f0e-9d7e-3a1f5c2b8e10
             agentId: coordinator
-            status: active
+            status: pending
             cronExpr: "0 9 * * 1"
             timezone: America/Toronto
             taskTitle: Weekly sales pipeline review
@@ -24,7 +24,7 @@ tool_stubs:
             createdBy: coordinator
           - id: 4c2a9b71-8e3d-4f6a-a1b0-5d7e9f2c3a44
             agentId: coordinator
-            status: active
+            status: pending
             cronExpr: "0 9 * * 3"
             timezone: America/Toronto
             taskTitle: Weekly hiring pipeline review
