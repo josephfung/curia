@@ -49,11 +49,20 @@ tool_stubs:
   list_drive_items:
     - match: {}
       return: *decks
+  # The stubs that take a file ID are keyed by deck, so a run that picks the seed deck
+  # sees the seed deck rather than being steered back to v7 (#2050).
   get_drive_file_permissions:
-    - match: {}
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
       return: |
         File: Pitch deck: Series A (v7)
         ID: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc
+        Owner: assistant@example.test
+        Permissions:
+          - assistant@example.test: owner
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: |
+        File: Pitch deck: Seed round (2025)
+        ID: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty
         Owner: assistant@example.test
         Permissions:
           - assistant@example.test: owner
@@ -64,14 +73,34 @@ tool_stubs:
     - match: {}
       return: '"Pitch deck: Series A (v7)" is not shared publicly. Link sharing: restricted.'
   manage_drive_access:
-    - match: {}
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
       return: 'Permission granted on "Pitch deck: Series A (v7)".'
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: 'Permission granted on "Pitch deck: Seed round (2025)".'
   get_drive_shareable_link:
-    - match: {}
+    - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
       return: "https://docs.google.com/presentation/d/1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc/edit?usp=sharing"
-  # Some runs read the deck or export it to PDF to attach to an email to Kevin (#2050).
-  # workspace-mcp 2.0.1's formats, over stdio as Curia runs it. Keyed by file, so a run
-  # that opens the seed deck sees the seed deck rather than being steered back to v7.
+    - match: { file_id: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return: "https://docs.google.com/presentation/d/1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty/edit?usp=sharing"
+  # Attaching the deck to an email to Kevin goes through drive-download-file, which puts
+  # it in the temp store email-send reads attachments from (its tool.json). Each deck has
+  # one fixed file name there, which the checks below look for (#2050).
+  drive-download-file:
+    - match: { file_id_or_url: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
+      return:
+        temp_file_url: file:///run/curia-tempfiles/5b1e7c3a-94d2-4f6b-8a0e-c2d9f4a7e316.pdf
+        filename: "Pitch deck: Series A (v7).pdf"
+        content_type: application/pdf
+        size: 2909798
+    - match: { file_id_or_url: 1DckSeed2025Mn4Bv8Cx2Za6Sd0Fg3Hj7Kl1Qw5Er9Ty }
+      return:
+        temp_file_url: file:///run/curia-tempfiles/8d41e0b6-27c3-4f19-a6e2-5b90c3d7f184.pdf
+        filename: "Pitch deck: Seed round (2025).pdf"
+        content_type: application/pdf
+        size: 1980621
+  # Some runs read the deck or download it with workspace-mcp's own tools (#2050), whose
+  # 2.0.1 formats these follow (over stdio, as Curia runs it). email-send refuses a file
+  # outside the temp store, so the workspace-mcp download is not a way to attach it.
   get_drive_file_content:
     - match: { file_id: 1DckSeriesAv7Wq3Er8Ty1Ui5Op9As2Df6Gh0Jk4Lz7Xc }
       return: |
@@ -143,7 +172,8 @@ expected_behaviors:
       with: { skill: google-workspace }
   # Emailing Kevin a PDF of the v7 deck is a fair reading of "share" too (#2050): the
   # case tests that the Drive tools get used, not which way the deck reaches him. The
-  # attachment path is the one the v7 get_drive_file_download_url stub returns.
+  # attachment must be the temp-store file the v7 drive-download-file stub returns; a
+  # workspace-mcp download path would be refused by email-send in production.
   - id: shares_latest_deck_with_kevin
     weight: critical
     description: >
@@ -159,7 +189,7 @@ expected_behaviors:
           contains: { recipients: kevin.osei@example.test }
         - called: email-send
           with: { to: "{{contact:kevin}}" }
-          contains: { attachments: Series_A_v7 }
+          contains: { attachments: 5b1e7c3a-94d2-4f6b-8a0e-c2d9f4a7e316 }
   - id: not_the_old_deck
     weight: important
     description: Does not share the 2025 seed deck.
@@ -171,7 +201,7 @@ expected_behaviors:
     description: Does not email the 2025 seed deck's PDF.
     check:
       not_called: [email-send]
-      contains: { attachments: Seed_round_2025 }
+      contains: { attachments: 8d41e0b6-27c3-4f19-a6e2-5b90c3d7f184 }
   - id: never_says_cannot
     weight: critical
     description: >
