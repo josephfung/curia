@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **ADR-048** — reasoning passes back in tool loops; one per-tier effort setting covers every provider. (#2044)
 - **`tool.json` (public API)** — optional `provenance_source` marks a skill's output as identifier source text. (#2061)
 - **Send skills** — a label hint selects a contact's secondary address; an ambiguous hint sends nothing. (#2047)
 - **LLM call archive** — `includeReasoning` drops reasoning text without disabling the archive. (#2042)
