@@ -72,6 +72,8 @@ tool_stubs:
   doc-write:
     - match: { mode: create, path: "/projects/q3-competitor-brief/brief.md" }
       error: "Document already exists at /projects/q3-competitor-brief/brief.md — use append, replace, or section-edit"
+    # document.path is the saved brief, not the path on the call. leaves_saved_brief
+    # scores any doc-write, so a create of some other path still returns this document.
     - match: { mode: create }
       return:
         action: created
