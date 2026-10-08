@@ -1158,7 +1158,7 @@ can't serve. PR 11 doesn't change Triage Batch.
 
 ### 2026-10-08 — prompt trim PR 3: rewrite pass
 
-YAML 15,667 → 12,560 chars; always-on (YAML + pinned SKILL.md) ~5,456 → ~4,680 tokens,
+YAML 15,667 → 12,727 chars; always-on (YAML + pinned SKILL.md) ~5,456 → ~4,721 tokens,
 budget 5,600 → 4,800. Local tool definitions 76,811 → 76,898 bytes (budget 77,000): the
 `owner` values moved into `task-create`'s description. Headroom was 189 bytes before this
 PR (the `contact-create` pin, #2041), so the other two hints the plan routed to tool
@@ -1193,3 +1193,8 @@ Without the web-dependent case: PR 3 20 of 21, main 18 of 21; first attempts 18 
 against 14 of 21. The long-running case failed every round on both sides while web search
 was down, so it says nothing about the rewritten delegation-acknowledgment text; rerun it
 once search is back.
+
+The runs above are on `c023e4b7` (12,560 chars). Review then added three clauses (167
+chars): the Memory "say so when nothing is stored" guard, "remind me every Monday" on the
+scheduler side, and "remember" routed to `config-store` for standing settings. One round of
+the memory, configuration and scheduler smoke cases checked them (below).
