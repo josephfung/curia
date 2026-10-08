@@ -82,7 +82,8 @@ const err = (line: string): void => { process.stderr.write(`${line}\n`); };
  * before any paid call: a stub for a tool the coordinator can never reach (a typo, or a
  * tool the registry did not load), or a `called` check on a side-effecting tool with no
  * stub — that call would always be refused, so the check could never pass for the
- * right reason. "Reach" includes tools a skill-activate call would load (#2024).
+ * right reason. "Reach" includes tools a skill-activate call would load (#2024) and
+ * tools a tool-registry search would return (#2050).
  */
 function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string[] {
   const problems: string[] = [];

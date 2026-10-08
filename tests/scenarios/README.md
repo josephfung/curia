@@ -180,7 +180,8 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
    The runtime formats the error as production's `<task_error>`.
 3. **No stub, read-only tool test mode can serve:** the real tool runs (memory reads,
    `date-resolve`, `web-fetch`). A read test mode cannot serve (missing capability) is
-   refused instead.
+   refused instead, whether the coordinator is offered it or finds it through
+   `tool-registry` (`drive-download-file` needs the temp store, #2050).
 4. **No stub, MCP tool:** it runs. The stack serves each configured MCP server from a
    tools/list snapshot (`tests/fixtures/mcp/`, #2024) with a session that reaches no
    account, so its `action_risk` does not matter: a call missing a required argument
@@ -209,8 +210,8 @@ wrong path has to be available, or the case tests a refusal instead of the model
 
 Before any paid call the CLI also checks that every tool a check names is registered (a
 typo in `not_called` would otherwise pass forever), that `called`/`order` tools are
-offered to the coordinator or loaded by a `skill-activate` it may call (the
-google-workspace tools, #2024), and that `with`/`contains` keys are real inputs of the
+offered to the coordinator, loaded by a `skill-activate` it may call (the
+google-workspace tools, #2024) or returned by a `tool-registry` search (#2050), and that `with`/`contains` keys are real inputs of the
 tool (for an MCP tool, its JSON Schema properties).
 The loader rejects unknown keys anywhere in a case, so `weigth:` or `checks:` is an error,
 not a silently un-gated behavior. Reply-content checks (`reply_excludes*`) miss on a
