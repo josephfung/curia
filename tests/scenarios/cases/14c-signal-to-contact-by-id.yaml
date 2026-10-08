@@ -44,6 +44,12 @@ expected_behaviors:
     check:
       not_called: [signal-send]
       with: { recipient: null }
+  - id: no_number_in_recipient
+    weight: critical
+    description: Does not type Daniel's number into `recipient` (the skill refuses it; the attempt is the failure).
+    check:
+      not_called: [signal-send]
+      contains: { recipient: "+16135550142" }
   - id: message_says_late
     weight: important
     description: The message tells Daniel the principal is about ten minutes late and to start without them.
