@@ -57,6 +57,60 @@ tool_stubs:
             Author: Dana Whitfield
             Created: {{time:today-2 10:05}}
             Content: Thanks, resolving.
+  # The rest of the read-only Drive and Docs surface that can touch this Doc, as in 13a,
+  # so a run that wanders onto another read path still gets an answer (#2050).
+  inspect_doc_structure:
+    - match: {}
+      return: |
+        Document structure for 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga:
+        {
+          "title": "Q3 leadership offsite: plan",
+          "total_elements": 11,
+          "total_length": 402,
+          "tables": 0,
+          "table_details": [],
+          "headers": {},
+          "footers": {}
+        }
+  get_drive_file_permissions:
+    - match: {}
+      return: |
+        File: Q3 leadership offsite: plan
+        ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga
+        Type: application/vnd.google-apps.document
+        Owners: Dana Whitfield (dana.whitfield@example.test)
+
+        Sharing Status:
+          Shared: True
+          Number of permissions: 2
+          Permissions:
+            - user: dana.whitfield@example.test (owner)
+            - user: assistant@example.test (writer)
+  check_drive_file_public_access:
+    - match: {}
+      return: '"Q3 leadership offsite: plan" is not shared publicly. Link sharing: restricted.'
+  get_drive_shareable_link:
+    - match: {}
+      return: "https://docs.google.com/document/d/1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga/edit?usp=sharing"
+  get_drive_file_download_url:
+    - match: {}
+      return: |
+        File downloaded successfully!
+        File: Q3 leadership offsite: plan
+        File ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga
+        Size: 48.3 KB (49460 bytes)
+        MIME Type: application/pdf
+
+        📎 Saved to: /tmp/.workspace-mcp/attachments/Q3_leadership_offsite_plan_6c2e9b14-3d7a-4f08-b1e5-90a4d8c2f377.pdf
+
+        The file has been saved to disk and can be accessed directly via the file path.
+
+        Note: Google native file exported to application/pdf format.
+  search_docs:
+    - match: {}
+      return: |
+        Found 1 Google Doc:
+        - "Q3 leadership offsite: plan" (ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga)
   search_drive_files:
     - match: {}
       return: |
