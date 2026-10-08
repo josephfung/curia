@@ -61,6 +61,78 @@ describe('ContactService.findLikelyDuplicates', () => {
     expect(check.candidates).toEqual([]);
   });
 
+  // A name typo is a candidate, never blocking: the agent can still name the contact in
+  // distinct_from. The threshold is NAME_NEAR_MISS_THRESHOLD (Jaro-Winkler on the
+  // normalized names), set between the pairs below.
+  describe('near-miss display names', () => {
+    it('reports a one-letter typo as similar_name', async () => {
+      const check = await contacts.findLikelyDuplicates({ displayName: 'Priya Natrajan', identities: [] });
+      expect(check.taken).toEqual([]);
+      expect(check.candidates).toEqual([
+        { contact: expect.objectContaining({ id: priyaId }), reasons: [{ kind: 'similar_name' }] },
+      ]);
+    });
+
+    it.each([
+      ['Jenna Torres', 'Jena Torres'],
+      ["Michael O'Connor", "Micheal O'Connor"],
+      ['Jose Garcia', 'José Garcia'],
+    ])('reports %s / %s as similar_name', async (stored, typed) => {
+      const other = await contacts.createContact({ displayName: stored, source: 'ceo_stated' });
+      const check = await contacts.findLikelyDuplicates({ displayName: typed, identities: [] });
+      expect(check.candidates).toEqual([
+        { contact: expect.objectContaining({ id: other.id }), reasons: [{ kind: 'similar_name' }] },
+      ]);
+    });
+
+    it.each([
+      ['Sarah Johnson', 'Sarah Jones'],
+      ['David Kim', 'David King'],
+      ['Alex Morgan', 'Alex Martin'],
+      ['Pat Principal', 'Sam Principal'],
+    ])('does not report %s / %s: different people with one shared name', async (stored, typed) => {
+      await contacts.createContact({ displayName: stored, source: 'ceo_stated' });
+      const check = await contacts.findLikelyDuplicates({ displayName: typed, identities: [] });
+      expect(check).toEqual({ taken: [], candidates: [] });
+    });
+
+    it('reports an exact match as same_name only, not also similar_name', async () => {
+      const check = await contacts.findLikelyDuplicates({ displayName: 'Priya Natarajan', identities: [] });
+      expect(check.candidates).toHaveLength(1);
+      expect(check.candidates[0]!.reasons).toEqual([{ kind: 'same_name' }]);
+    });
+
+    it('never reports the contact being added to', async () => {
+      const check = await contacts.findLikelyDuplicates({
+        displayName: 'Priya Natrajan',
+        identities: [],
+        excludeContactId: priyaId,
+      });
+      expect(check).toEqual({ taken: [], candidates: [] });
+    });
+
+    it('adds the name to an identity reason on the same contact', async () => {
+      const check = await contacts.findLikelyDuplicates({
+        displayName: 'Priya Natrajan',
+        identities: [{ channel: 'email', identifier: 'priya@exmaple.test' }],
+      });
+      expect(check.candidates).toHaveLength(1);
+      expect(check.candidates[0]!.reasons).toEqual([
+        { kind: 'similar_address', channel: 'email' },
+        { kind: 'similar_name' },
+      ]);
+    });
+
+    it('finds a typo among many contacts, none skipped', async () => {
+      for (let i = 0; i < 300; i++) {
+        await contacts.createContact({ displayName: `Filler Person ${i}`, source: 'ceo_stated' });
+      }
+      const target = await contacts.createContact({ displayName: 'Zoltan Kovacs', source: 'ceo_stated' });
+      const check = await contacts.findLikelyDuplicates({ displayName: 'Zoltan Kovachs', identities: [] });
+      expect(check.candidates.map((c) => c.contact.id)).toEqual([target.id]);
+    });
+  });
+
   it('collects every reason for one contact in one candidate', async () => {
     const check = await contacts.findLikelyDuplicates({
       displayName: 'Priya Natarajan',

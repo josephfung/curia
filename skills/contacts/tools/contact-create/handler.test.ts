@@ -122,6 +122,20 @@ describe('ContactCreateHandler', () => {
     expect(retried.success).toBe(true);
   });
 
+  it('refuses a mistyped name of an existing contact until distinct_from names that contact', async () => {
+    const before = await count();
+    const refused = await handler.execute(makeCtx(contacts, { name: 'Priya Natrajan' }));
+    expect(refused.success).toBe(false);
+    if (!refused.success) {
+      expect(refused.error).toContain(`"Priya Natarajan" (${priyaId}): similar name`);
+      expect(refused.error).toContain('distinct_from');
+    }
+    expect(await count()).toBe(before);
+    const retried = await handler.execute(makeCtx(contacts, { name: 'Priya Natrajan', distinct_from: [priyaId] }));
+    expect(retried.success).toBe(true);
+    expect(await count()).toBe(before + 1);
+  });
+
   it('accepts distinct_from as one comma-separated string', async () => {
     const result = await handler.execute(makeCtx(contacts, {
       name: 'Priya Natarajan', email: 'pn@other.example', distinct_from: ` ${priyaId} `,

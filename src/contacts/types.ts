@@ -398,6 +398,7 @@ export interface DuplicatePair {
 /** Why an existing contact may be the person an agent is about to add (#2041). */
 export type DuplicateReason =
   | { kind: 'same_name' }
+  | { kind: 'similar_name' }
   | { kind: 'similar_address'; channel: string }
   | { kind: 'same_number'; channel: string };
 
