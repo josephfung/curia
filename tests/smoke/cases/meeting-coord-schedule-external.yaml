@@ -21,6 +21,8 @@ tool_stubs:
   email-send:
     - match: { to: "jamie@stripe.com" }
       error: 'to takes a contact ID or "principal", not "jamie@stripe.com". Send to a known person by their contact ID; the address is looked up for you. Only for someone with no contact record, put their address in to_address.'
+    - match: { to: null, to_address: null }
+      error: 'Missing recipient: pass to (a contact ID, or "principal" for the principal). Only for someone with no contact record, pass their address as to_address.'
     - match: { to: null }
       return: { message_id: smoke-sent-0001, to: "{{input:to_address}}", subject: "{{input:subject}}" }
     - match: { to_address: null }
