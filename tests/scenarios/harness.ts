@@ -42,6 +42,7 @@ import {
 } from '../shared/turn-capture.js';
 import { internalNamesFor } from './assertions.js';
 import { discoverableTools } from './discovery.js';
+import { applyReach } from './reach.js';
 import { resolvePlaceholders, type RunClock } from './loader.js';
 import { resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import {
@@ -238,24 +239,25 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   const coordinator = stack.agent(COORDINATOR);
   const coordinatorTools = new Set(coordinator.toolDefs.map(t => t.name));
   // Production's own activation check, per skill: what skill-activate would hand the
-  // coordinator. Only while the coordinator has a skill-activate test mode can run;
-  // otherwise a case could stub and check tools no run can ever load.
-  const reachableTools = new Set(coordinatorTools);
-  if (coordinatorTools.has('skill-activate') && !unavailable.has('skill-activate')) {
-    for (const skill of stack.skillRegistry.list()) {
-      const activation = stack.executionLayer.resolveSkillActivationForAgent(skill.manifest.name, COORDINATOR);
-      if (!('error' in activation)) for (const tool of activation.tools) reachableTools.add(tool);
-    }
+  // coordinator. applyReach counts those tools only while skill-activate itself can
+  // run, so a case cannot stub a tool no run can load. The same for tool-registry
+  // (#2050). A tool either path would add that test mode cannot serve is refused
+  // like an offered one (#2059): an unstubbed call counts as a stub hole instead of
+  // passing through to a missing-capability error production never shows.
+  const activatedTools: string[] = [];
+  for (const skill of stack.skillRegistry.list()) {
+    const activation = stack.executionLayer.resolveSkillActivationForAgent(skill.manifest.name, COORDINATOR);
+    if (!('error' in activation)) activatedTools.push(...activation.tools);
   }
-  // And what a tool-registry call would hand it (#2050). A discovered tool test mode
-  // cannot serve is refused like an offered one, so an unstubbed call counts as a stub
-  // hole instead of passing through to a missing-capability error production never shows.
-  if (coordinatorTools.has('tool-registry') && !unavailable.has('tool-registry')) {
-    const discovered = discoverableTools(stack.toolRegistry, stack.skillRegistry, COORDINATOR);
-    for (const tool of discovered) reachableTools.add(tool);
-    const discoveredUnavailable = discovered.filter(t => stack.executionLayer.unavailableCapabilities(t).length > 0);
-    unavailable = new Set([...unavailable, ...discoveredUnavailable]);
-  }
+  const reach = applyReach({
+    offered: coordinatorTools,
+    unavailable,
+    activated: activatedTools,
+    discovered: discoverableTools(stack.toolRegistry, stack.skillRegistry, COORDINATOR),
+    missingCapabilities: tool => stack.executionLayer.unavailableCapabilities(tool),
+  });
+  const reachableTools = reach.reachable;
+  unavailable = reach.unavailable;
   const internalNames = internalNamesFor({
     tools: [...stack.toolRegistry.list().map(t => t.manifest.name)],
     agents: stack.agentRegistry.list().map(a => a.name),
