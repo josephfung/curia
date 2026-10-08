@@ -105,6 +105,12 @@ export interface ToolManifest {
    *  truncation still apply. Gated at registration to skills declaring the 'secretCapture'
    *  capability. Default false/undefined. */
   skip_secret_redaction?: boolean;
+  /** When true, this skill's successful output is source text for identifier provenance
+   *  (#2061, ADR-047): an email address or number in it may be stored as a verified contact
+   *  identity when an agent enters it. Only for skills whose output is data they read (a web
+   *  page, a document, a mail listing), never text a model wrote (`delegate`, `bullpen`).
+   *  Default false/undefined. */
+  provenance_source?: boolean;
 }
 
 /**
@@ -342,6 +348,11 @@ export interface ToolContext {
   /** Shared sensitivity classifier — available to skills declaring 'sensitivityClassifier'.
    *  Classifies free text against config sensitivity_rules. */
   sensitivityClassifier?: import('../memory/sensitivity.js').SensitivityClassifier;
+  /** Where an identifier an agent enters may have come from (#2061, ADR-047): the messages
+   *  people sent in this task's conversation and the results of source tools read in it.
+   *  Set by the agent runtime; absent on calls outside a task (approval replays, voice). Read
+   *  through `identifierHasSource()` in `src/skills/_shared/identifier-source.ts`. */
+  identifierSources?: import('../contacts/identifier-provenance.js').IdentifierSources;
 }
 
 /**
