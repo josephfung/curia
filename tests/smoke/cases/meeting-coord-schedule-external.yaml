@@ -18,11 +18,9 @@ tool_stubs:
   email-send:
     - match: {}
       return: { message_id: smoke-sent-0001, to: "{{input:to_address}}", subject: "{{input:subject}}" }
-  # Jamie is not a fixture contact, so the coordinator may create one. Stubbed so a gated
-  # retry doesn't inherit it from the first attempt's database writes.
-  contact-create:
-    - match: {}
-      return: { contact_id: 7c1d9e2a-4b3f-4e8a-9d6c-2f5a8b1e0c47, display_name: "{{input:name}}", identities_added: 0 }
+  # contact-create is deliberately left real. Stubbing it hands back an id that isn't in
+  # the database, so the contacts agent's follow-up identity writes fail and the reply
+  # reports a contact-store fault that only the stub caused.
 
 turns:
   - role: user
