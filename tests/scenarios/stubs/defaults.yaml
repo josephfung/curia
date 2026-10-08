@@ -5,8 +5,8 @@
 # Without these the model sees tool failures production never shows and spirals (one
 # early run made 29 calls in 131s chasing a broken email-list). Only reads, the harmless
 # task-create, and follow-ups on the task it returns belong here; a case that tests a
-# write stubs it itself. task-update still answers for any task id (it predates that
-# rule); task-complete answers only for the one task-create returns.
+# write stubs it itself. task-update and task-complete answer only for the one task
+# task-create returns (#2059).
 email-list:
   - match: {}
     return: { messages: [], count: 0 }
@@ -85,9 +85,11 @@ task-complete:
       status: done
       completed_at: "2026-10-01T12:05:00-04:00"
       displayTimezone: America/Toronto
-# Updating the task task-create above returned (any task id): the pair goes together.
+# Updating the task task-create above returned, and only that one. task-update takes
+# status, so a catch-all would close any other task unseen. Editing a different task
+# is a write a case must stub itself; it is refused and counted (#2059).
 task-update:
-  - match: {}
+  - match: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001 }
     return:
       task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001
       title: (updated)

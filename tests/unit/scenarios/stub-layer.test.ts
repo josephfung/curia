@@ -171,6 +171,67 @@ describe('scenario stub layer', () => {
     expect(executed).toEqual([]);
   });
 
+  it('refuses an email attachment outside the temp store with production\'s error (#2059)', async () => {
+    vi.stubEnv('CURIA_TEMPFILE_DIR', '/run/curia-tempfiles');
+    try {
+      const { layer, controller, executed } = setup();
+      const outside = {
+        file_url: 'file:///tmp/.workspace-mcp/attachments/deck.pdf',
+        filename: 'deck.pdf',
+        content_type: 'application/pdf',
+      };
+      const inside = {
+        file_url: 'file:///run/curia-tempfiles/5b1e7c3a-94d2-4f6b-8a0e-c2d9f4a7e316.pdf',
+        filename: 'deck.pdf',
+        content_type: 'application/pdf',
+      };
+      controller.beginRun({
+        'email-send': [{ match: {}, return: { message_id: 'scenario-out-1' } }],
+        'email-reply': [{ match: {}, return: { message_id: 'scenario-out-2' } }],
+      }, 'scenario-1');
+
+      const send = await layer.invoke('email-send', { attachments: [outside] }, undefined, coordinatorCall);
+      const reply = await layer.invoke('email-reply', { attachments: [outside] }, undefined, coordinatorCall);
+      const bare = await layer.invoke('email-send', {
+        attachments: [{ ...outside, file_url: '/tmp/.workspace-mcp/attachments/deck.pdf' }],
+      }, undefined, coordinatorCall);
+      const ok = await layer.invoke('email-send', { attachments: [inside] }, undefined, coordinatorCall);
+      const noFile = await layer.invoke('email-reply', { body: 'hi' }, undefined, coordinatorCall);
+
+      expect(send).toEqual({
+        success: false,
+        error: '<skill_error>Attachment error: Attachment path is outside the allowed temp store directory: file:///tmp/.workspace-mcp/attachments/deck.pdf</skill_error>',
+      });
+      expect(reply.success).toBe(false);
+      if (!reply.success) expect(reply.error).toContain('outside the allowed temp store directory');
+      expect(bare.success).toBe(false);
+      if (!bare.success) expect(bare.error).toContain('must start with file://');
+      expect(ok).toEqual({ success: true, data: { message_id: 'scenario-out-1' } });
+      expect(noFile).toEqual({ success: true, data: { message_id: 'scenario-out-2' } });
+      expect(executed).toEqual([]);
+      // Stubbed, not refused: the model is told production's error and the call is not a hole.
+      expect(controller.endRun('scenario-1').map(c => c.disposition)).toEqual(Array(5).fill('stubbed'));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps a scripted email-send error ahead of the attachment check', async () => {
+    const { layer, controller, executed } = setup();
+    controller.beginRun({
+      'email-send': [{ match: {}, error: 'recipient blocked' }],
+    }, 'scenario-1');
+    const result = await layer.invoke('email-send', {
+      attachments: [{
+        file_url: 'file:///tmp/.workspace-mcp/attachments/deck.pdf',
+        filename: 'deck.pdf',
+        content_type: 'application/pdf',
+      }],
+    }, undefined, coordinatorCall);
+    expect(result).toEqual({ success: false, error: '<skill_error>recipient blocked</skill_error>' });
+    expect(executed).toEqual([]);
+  });
+
   it('returns a scripted error as a skill error', async () => {
     const { layer, controller } = setup();
     controller.beginRun({ delegate: [{ match: {}, error: 'specialist unavailable' }] }, 'scenario-1');

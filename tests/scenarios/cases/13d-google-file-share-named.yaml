@@ -172,12 +172,10 @@ expected_behaviors:
       with: { skill: google-workspace }
   # Emailing Kevin a PDF of the v7 deck is a fair reading of "share" too (#2050): the
   # case tests that the Drive tools get used, not which way the deck reaches him. The
-  # attachment must be the temp-store file the v7 drive-download-file stub returns; a
-  # workspace-mcp download path would be refused by email-send in production.
-  # Known gap: human-channels' email-send stub accepts that path too, so a run attaching
-  # it is told "sent" and never gets production's refusal to recover from. It misses here
-  # for that reason, not because it chose a worse route. The stub matcher compares values
-  # exactly, so it cannot single out a path outside the temp store.
+  # attachment must be the temp-store file the v7 drive-download-file stub returns. A
+  # workspace-mcp download path is outside that store; the stub layer refuses that
+  # email-send with production's error, so the run can recover through
+  # drive-download-file (#2059).
   - id: shares_latest_deck_with_kevin
     weight: critical
     description: >

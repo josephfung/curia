@@ -172,7 +172,11 @@ anything carrying those markers — and nothing else.
 
 The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
 
-1. A **matching stub** answers the call. The real tool never runs.
+1. A **matching stub** answers the call. The real tool never runs. A success stub for
+   `email-send` or `email-reply` still refuses an attachment whose `file_url` is outside
+   the temp store, with the error production's gateway returns (#2059). That call is
+   recorded as stubbed: the model is told what went wrong and can recover, and it is
+   not a stub hole.
 2. **No stub, and the tool must be stubbed** — `action_risk` above `none`, `delegate`, or
    any tool declaring the `executionLayer`, `outboundGateway`, `actionLogRepo` or
    `secretCapture` capability (some of those say `none` but can re-invoke tools, send or
@@ -180,8 +184,9 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
    The runtime formats the error as production's `<task_error>`.
 3. **No stub, read-only tool test mode can serve:** the real tool runs (memory reads,
    `date-resolve`, `web-fetch`). A read test mode cannot serve (missing capability) is
-   refused instead, whether the coordinator is offered it or finds it through
-   `tool-registry` (`drive-download-file` needs the temp store, #2050).
+   refused instead, whether the coordinator is offered it, finds it through
+   `tool-registry`, or loads it with `skill-activate` (`drive-download-file` needs the
+   temp store, #2050, #2059).
 4. **No stub, MCP tool:** it runs. The stack serves each configured MCP server from a
    tools/list snapshot (`tests/fixtures/mcp/`, #2024) with a session that reaches no
    account, so its `action_risk` does not matter: a call missing a required argument
@@ -200,7 +205,9 @@ a tool are matched first.
 
 - `defaults` applies to **every** case. It is an empty office: reads that test mode
   can't serve (`email-list` with no mail client, `task-list`, `doc-search`, …) answer as a
-  quiet day instead of failing in ways production never does.
+  quiet day instead of failing in ways production never does. `task-update` and
+  `task-complete` answer only for the task `task-create` returns; updating any other
+  task is refused and counted (#2059).
 - `human-channels` makes every send succeed. `deferred-work` does the same for creating
   tasks and jobs.
 

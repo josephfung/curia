@@ -26,6 +26,7 @@
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolResult } from '../../src/skills/types.js';
+import { emailAttachmentRefusal } from './attachment-guard.js';
 import { matchToolStub } from './stub-matcher.js';
 import type { ToolStub } from './types.js';
 
@@ -147,6 +148,12 @@ export function createStubController(
     if (stub) {
       record('stubbed');
       if (stub.error !== undefined) return { success: false, error: skillError(stub.error) };
+      // A success stub stands in for the send, not for the attachment check the
+      // gateway runs first. A file_url outside the temp store is refused with
+      // production's error, and recorded as stubbed: the model can recover, and
+      // the miss is not a hole in the stub table (#2059).
+      const attachmentError = emailAttachmentRefusal(toolName, input);
+      if (attachmentError) return { success: false, error: skillError(attachmentError) };
       // Clone so a handler-side mutation in one run cannot leak into the next.
       return { success: true, data: structuredClone(stub.return ?? null) };
     }
