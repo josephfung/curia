@@ -15,9 +15,11 @@ tool_stubs:
   # Smoke disables send skills unless a case stubs them, so without this a send to Jamie
   # comes back as a test-mode capability refusal and the judge scores how the model
   # narrates the refusal instead of whether it chose to send (#2049).
+  # Senders pass either `to` (a contact id, the usual path once Jamie is a contact) or
+  # `to_address`; only one is set, so `to` echoes whichever the call used.
   email-send:
     - match: {}
-      return: { message_id: smoke-sent-0001, to: "{{input:to_address}}", subject: "{{input:subject}}" }
+      return: { message_id: smoke-sent-0001, to: "{{input:to}}{{input:to_address}}", subject: "{{input:subject}}" }
   # contact-create is deliberately left real. Stubbing it hands back an id that isn't in
   # the database, so the contacts agent's follow-up identity writes fail and the reply
   # reports a contact-store fault that only the stub caused.
@@ -41,8 +43,10 @@ expected_behaviors:
     weight: critical
   - id: reaches-jamie
     description: >
-      Contacts Jamie Rodriguez at jamie@stripe.com about the call, by email or by a
-      calendar invite
+      Contacts Jamie Rodriguez about the call: the tool calls include an email-send to
+      her (jamie@stripe.com or her contact id) or a calendar-create-event with
+      jamie@stripe.com as an attendee. A reply or a specialist report that only says the
+      email went out does not count
     weight: critical
   - id: holds-and-offers-choice
     description: >
