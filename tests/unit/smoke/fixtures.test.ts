@@ -103,46 +103,63 @@ describe('the committed suite', () => {
   // A listed message the agent cannot open, or an attachment it cannot download, sends
   // ceo-inbox into a retry loop that can exhaust its error budget. The case then
   // measures the fixture, not the model (Triage Batch of Mixed Emails, trim plan PR 11
-  // A/B). Checked per case through the runner's own merge and matcher, so a case-level
-  // catch-all that shadows an office stub counts as a gap too.
+  // A/B). Checked per turn through the runner's own merge (runner.ts) and matcher, so a
+  // case-level catch-all that shadows an office stub counts as a gap too.
   it('lets ceo-inbox open every message and attachment any case lists or finds', () => {
-    type Listed = { id: string; attachments?: Array<{ id: string; filename: string; size: number }> };
+    type Attachment = { id: string; filename: string; size: number };
+    type Listed = { id: string; attachments?: Attachment[] };
     const office = loadDefaultStubs('tests/smoke/stubs/office.yaml');
     const gaps: string[] = [];
+    let messagesChecked = 0;
+    let attachmentsChecked = 0;
 
     for (const tc of loadTestCases('tests/smoke/cases')) {
-      const turnStubs = tc.turns.map((turn) => turn.toolStubs);
-      const stubs = mergeStubs(...turnStubs, tc.toolStubs, office);
-      const listed = ['ceo-inbox-list', 'ceo-inbox-search']
-        .flatMap((tool) => stubs[tool] ?? [])
-        .flatMap((stub) => ((stub.return as { messages?: Listed[] } | undefined)?.messages ?? []));
+      tc.turns.forEach((turn, t) => {
+        const where = `${tc.name} (turn ${t + 1})`;
+        const stubs = mergeStubs(turn.toolStubs, tc.toolStubs, office);
+        const listed = ['ceo-inbox-list', 'ceo-inbox-search']
+          .flatMap((tool) => stubs[tool] ?? [])
+          .flatMap((stub) => ((stub.return as { messages?: Listed[] } | undefined)?.messages ?? []));
 
-      for (const message of listed) {
-        const read = matchToolStub('ceo-inbox-read', { message_id: message.id }, stubs);
-        if (!read || read.error) gaps.push(`${tc.name}: ceo-inbox-read cannot open ${message.id}`);
-        for (const attachment of message.attachments ?? []) {
-          const download = matchToolStub(
-            'ceo-inbox-download-attachment',
-            { message_id: message.id, attachment_id: attachment.id },
-            stubs,
-          );
-          if (!download || download.error) {
-            gaps.push(`${tc.name}: ceo-inbox-download-attachment cannot fetch ${attachment.filename}`);
+        for (const message of listed) {
+          messagesChecked++;
+          const read = matchToolStub('ceo-inbox-read', { message_id: message.id }, stubs);
+          if (!read || read.error) {
+            gaps.push(`${where}: ceo-inbox-read cannot open ${message.id}`);
             continue;
           }
-          // The download must describe the listed file, and the agent's next step on it
-          // (file-parse, which test mode cannot run) must have an answer for that file.
-          const file = download.return as { filename: string; size: number; temp_file_url?: string };
-          if (file.filename !== attachment.filename || file.size !== attachment.size) {
-            gaps.push(`${tc.name}: ${attachment.filename} download does not match its listing`);
+          // The agent takes attachment ids from the read (the download tool says so), so
+          // check what the read returns as well as what the listing shows.
+          const fromRead = (read.return as { attachments?: Attachment[] } | undefined)?.attachments ?? [];
+          const attachments = new Map([...(message.attachments ?? []), ...fromRead].map((a) => [a.id, a]));
+          for (const attachment of attachments.values()) {
+            attachmentsChecked++;
+            const download = matchToolStub(
+              'ceo-inbox-download-attachment',
+              { message_id: message.id, attachment_id: attachment.id },
+              stubs,
+            );
+            if (!download || download.error) {
+              gaps.push(`${where}: ceo-inbox-download-attachment cannot fetch ${attachment.filename}`);
+              continue;
+            }
+            // The download must describe the listed file, and the agent's next step on it
+            // (file-parse, which test mode cannot run) must have an answer for that file.
+            const file = download.return as { filename: string; size: number; temp_file_url?: string };
+            if (file.filename !== attachment.filename || file.size !== attachment.size) {
+              gaps.push(`${where}: ${attachment.filename} download does not match its listing`);
+            }
+            const parsed = file.temp_file_url
+              ? matchToolStub('file-parse', { temp_file_url: file.temp_file_url, mime_type: 'application/pdf' }, stubs)
+              : undefined;
+            if (!parsed || parsed.error) gaps.push(`${where}: file-parse cannot read ${attachment.filename}`);
           }
-          const parsed = file.temp_file_url
-            ? matchToolStub('file-parse', { temp_file_url: file.temp_file_url, mime_type: 'application/pdf' }, stubs)
-            : undefined;
-          if (!parsed || parsed.error) gaps.push(`${tc.name}: file-parse cannot read ${attachment.filename}`);
         }
-      }
+      });
     }
     expect([...new Set(gaps)]).toEqual([]);
+    // Not vacuous: a renamed `messages` key or a broken YAML anchor would check nothing.
+    expect(messagesChecked).toBeGreaterThan(8);
+    expect(attachmentsChecked).toBeGreaterThan(1);
   });
 });

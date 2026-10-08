@@ -169,15 +169,19 @@ ceo-inbox-read:
 
 # Production's temp-file path: a short file:// URL the agent passes to file-parse, which
 # is what the real tool returns when temporary storage works. Base64 would have the
-# model re-type a kilobyte of it, and it corrupts it (seen here). Any other id is not
-# in this mailbox.
+# model re-type a kilobyte of it, and it corrupts it (seen here). Matched on the message
+# too, as the real tool checks the attachment belongs to it.
 ceo-inbox-download-attachment:
-  - match: { attachment_id: ANGjdJ9k1V0aW52b2lj }
+  - match: { attachment_id: null }
+    error: attachment_id is required
+  - match: { message_id: null }
+    error: message_id is required
+  - match: { message_id: 18f0c8e3a6d2b154, attachment_id: ANGjdJ9k1V0aW52b2lj }
     return: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", filename: invoice-4471.pdf, content_type: application/pdf, size: 88211 }
-  - match: { attachment_id: ANGjdJ8x2Q4fQ2RlY2s }
+  - match: { message_id: 18f2a1c7d93e5b08, attachment_id: ANGjdJ8x2Q4fQ2RlY2s }
     return: { temp_file_url: "file:///tmp/curia-smoke/Q2-board-deck-final.pdf", filename: Q2-board-deck-final.pdf, content_type: application/pdf, size: 2481152 }
   - match: {}
-    error: Attachment not found in this mailbox.
+    error: "Attachment not found on that message"
 
 ceo-inbox-draft-reply:
   # The real skill reports the reply-all recipients; a bare `to: []` reads as "addressed to nobody".
@@ -188,23 +192,67 @@ ceo-inbox-draft-reply:
 ceo-inbox-draft-compose:
   - match: {}
     return: { draft_id: draft-0002, subject: "{{input:subject}}", to: "{{input:to}}", cc: [] }
-# Triage writes (ceo-inbox SKILL.md): test mode withholds the mailbox credentials, so
-# these would fail for real. Shadow drafts have no working-docs repo in test mode, so
-# the stub reports what that path reports: nothing captured, with the reason.
+# Triage writes (ceo-inbox SKILL.md). Test mode withholds the mailbox credentials, so the
+# real tools would fail. These succeed the way production does, and fail where the real
+# handler would: a missing argument, or a message that is not in this mailbox.
 ceo-inbox-label:
+  - match: { message_id: null }
+    error: message_id is required
+  - match: { labels: null }
+    error: labels array is required and must contain at least one label
+  - match: { labels: [] }
+    error: labels array is required and must contain at least one label
+  - match: { message_id: 18f2d9e40b6c1a73 }
+    return: { success: true, message_id: 18f2d9e40b6c1a73, applied: "{{input:labels}}", created: [], folders: [] }
+  - match: { message_id: 18f2a1c7d93e5b08 }
+    return: { success: true, message_id: 18f2a1c7d93e5b08, applied: "{{input:labels}}", created: [], folders: [] }
+  - match: { message_id: 18f1f6b2e8a4c917 }
+    return: { success: true, message_id: 18f1f6b2e8a4c917, applied: "{{input:labels}}", created: [], folders: [] }
+  - match: { message_id: 18f2b5d81c7e4a29 }
+    return: { success: true, message_id: 18f2b5d81c7e4a29, applied: "{{input:labels}}", created: [], folders: [] }
+  - match: { message_id: 18f0c8e3a6d2b154 }
+    return: { success: true, message_id: 18f0c8e3a6d2b154, applied: "{{input:labels}}", created: [], folders: [] }
+  - match: { message_id: 18f0d4a7c2e9b386 }
+    return: { success: true, message_id: 18f0d4a7c2e9b386, applied: "{{input:labels}}", created: [], folders: [] }
+  - match: { message_id: 18f1a9e5d3c7b042 }
+    return: { success: true, message_id: 18f1a9e5d3c7b042, applied: "{{input:labels}}", created: [], folders: [] }
+  - match: { message_id: 18eff2b6a1d8c530 }
+    return: { success: true, message_id: 18eff2b6a1d8c530, applied: "{{input:labels}}", created: [], folders: [] }
   - match: {}
-    return: { success: true, message_id: "{{input:message_id}}", applied: "{{input:labels}}", created: [], folders: [] }
+    error: "Failed to apply labels to principal inbox message: not found"
+# Not narrowed by message id: the matcher can't combine "listed id" with the three
+# `starred` cases without a row per pair. A string "false" lands on the type error.
 ceo-inbox-mark-starred:
+  - match: { message_id: null }
+    error: message_id is required
   - match: { starred: false }
     return: { success: true, message_id: "{{input:message_id}}", starred: false }
-  - match: {}
+  - match: { starred: true }
     return: { success: true, message_id: "{{input:message_id}}", starred: true }
+  - match: { starred: null }
+    return: { success: true, message_id: "{{input:message_id}}", starred: true }
+  - match: {}
+    error: starred must be a boolean
+# In test mode the real tool fails (no working-docs repo, which would feed the real
+# instance's learning signal). This answers as production does when the draft is kept.
 ceo-inbox-shadow-draft:
+  - match: { source_message_id: null }
+    error: source_message_id and body are required
+  - match: { body: null }
+    error: source_message_id and body are required
   - match: {}
-    return: { captured: false, skipped_reason: shadow drafts are not recorded in this office }
+    return: { captured: true }
+# Only the drafts this office's draft stubs create. Returns just the id: echoing the
+# fields a body-only edit leaves out would read as "subject and recipients cleared".
 ceo-inbox-draft-edit:
+  - match: { draft_id: null }
+    error: draft_id is required
+  - match: { draft_id: draft-0001 }
+    return: { draft_id: draft-0001 }
+  - match: { draft_id: draft-0002 }
+    return: { draft_id: draft-0002 }
   - match: {}
-    return: { draft_id: "{{input:draft_id}}", subject: "{{input:subject}}", to: "{{input:to}}", cc: "{{input:cc}}" }
+    error: Failed to update draft in principal inbox
 ceo-inbox-mark-read:
   - match: {}
     return: { marked_read: true }
@@ -219,14 +267,17 @@ ceo-inbox-update-folders:
 # ── Attachments ────────────────────────────────────────────────────────────
 
 # file-parse needs infraLlm, which test mode does not provide. These answer only for the
-# files ceo-inbox-download-attachment returns above, so any other file still gets test
-# mode's missing-capability error.
+# files ceo-inbox-download-attachment returns above, as PDFs, so any other file still
+# gets test mode's missing-capability error. The structured invoice follows the real
+# schema (skills/file-parse/prompts.ts); the handler lowercases extract_as.
 file-parse:
-  - match: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", extract_as: invoice }
-    return: { type: pdf, raw_text: "Acme Logistics Inc. - INVOICE 4471\nBill to: CuriaTech\nPeriod: September freight and warehousing services\nAmount due: USD 18,450.00\nTerms: Net 30 from invoice date\nRemit to: billing@acmelogistics.example", structured: { vendor: Acme Logistics Inc., invoice_number: "4471", amount_due: 18450.00, currency: USD, payment_terms: Net 30 from invoice date, description: September freight and warehousing services }, confidence: 0.95 }
-  - match: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf" }
-    return: { type: pdf, raw_text: "Acme Logistics Inc. - INVOICE 4471\nBill to: CuriaTech\nPeriod: September freight and warehousing services\nAmount due: USD 18,450.00\nTerms: Net 30 from invoice date\nRemit to: billing@acmelogistics.example", structured: null, confidence: 1.0 }
-  - match: { temp_file_url: "file:///tmp/curia-smoke/Q2-board-deck-final.pdf" }
+  - match: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", mime_type: application/pdf, extract_as: invoice }
+    return: &invoice-structured { type: pdf, raw_text: "Acme Logistics Inc. - INVOICE 4471\nInvoice date: {{date:today-2}}\nBill to: CuriaTech\nSeptember freight and warehousing services: USD 18,450.00\nTotal due: USD 18,450.00\nDue date: {{date:today+28}} (Net 30)\nRemit to: billing@acmelogistics.example", structured: { vendor: Acme Logistics Inc., invoice_number: "4471", line_items: [{ description: September freight and warehousing services, quantity: null, unit_price: null, amount: 18450.00 }], subtotal: 18450.00, tax: null, total: 18450.00, currency: USD, due_date: "{{date:today+28}}" }, confidence: 0.95 }
+  - match: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", mime_type: application/pdf, extract_as: Invoice }
+    return: *invoice-structured
+  - match: { temp_file_url: "file:///tmp/curia-smoke/invoice-4471.pdf", mime_type: application/pdf }
+    return: { type: pdf, raw_text: "Acme Logistics Inc. - INVOICE 4471\nInvoice date: {{date:today-2}}\nBill to: CuriaTech\nSeptember freight and warehousing services: USD 18,450.00\nTotal due: USD 18,450.00\nDue date: {{date:today+28}} (Net 30)\nRemit to: billing@acmelogistics.example", structured: null, confidence: 1.0 }
+  - match: { temp_file_url: "file:///tmp/curia-smoke/Q2-board-deck-final.pdf", mime_type: application/pdf }
     return: { type: pdf, raw_text: "Q2 Board Deck - FINAL\np.4 ARR bridge: updated since the draft\np.9 Hiring plan: updated since the draft\nPrepared by Priya Sharma", structured: null, confidence: 1.0 }
 
 # The coordinator's own mailbox (Curia's), separate from the principal's.
