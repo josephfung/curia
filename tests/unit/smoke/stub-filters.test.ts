@@ -1,7 +1,15 @@
 // Stubbed list/search results answer the question asked (#1956).
+import { CronExpressionParser } from 'cron-parser';
 import { describe, expect, it } from 'vitest';
+import { toLocalIso } from '../../../src/time/timestamp.js';
 import { CaseToolState } from '../../shared/tool-state.js';
 import { fillInputPlaceholders, matchesMailQuery, shapeStubResult } from '../../smoke/stub-filters.js';
+
+/** The next fire `scheduler-list` would show: cron in the job's zone, local ISO. */
+function expectedNextRun(cron: string, timezone: string): string {
+  const instant = CronExpressionParser.parse(cron, { tz: timezone }).next().toDate();
+  return toLocalIso(Math.floor(instant.getTime() / 1000), timezone)!;
+}
 
 const events = {
   displayTimezone: 'America/Toronto',
@@ -132,6 +140,8 @@ describe('SchedulerState', () => {
       status: 'pending',
       cronExpr: '0 9 * * 1-5',
       timezone: 'America/Toronto',
+      // Monday 9am, the date a `next-monday` placeholder produces for a weekday cron.
+      nextRunAt: '2026-10-12T09:00:00.000-04:00',
       taskTitle: 'Weekday investor inbox check',
     }],
     count: 1,
@@ -145,17 +155,24 @@ describe('SchedulerState', () => {
     const second = shapeStubResult('scheduler-create', created, { task: 'Scan investor mail', cron_expr: '0 17 * * 1-5' }, state) as { jobId: string };
     expect(first.jobId).toBe(JOB_ID);
     expect(second.jobId).not.toBe(first.jobId);
-    const jobs = (shapeStubResult('scheduler-list', empty, {}, state) as { jobs: Array<{ id: string; cronExpr: string; taskPreview: string }>; count: number }).jobs;
+    const jobs = (shapeStubResult('scheduler-list', empty, {}, state) as { jobs: Array<{ id: string; cronExpr: string; taskPreview: string; nextRunAt: string }>; count: number }).jobs;
     expect(jobs.map(job => job.id)).toEqual([second.jobId, JOB_ID]);
     expect(jobs.map(job => job.cronExpr)).toEqual(['0 17 * * 1-5', '0 9 * * 1-5']);
     expect(jobs[1]!.taskPreview).toBe('Scan investor mail');
+    expect(jobs[1]!.nextRunAt).toBe(expectedNextRun('0 9 * * 1-5', 'America/Toronto'));
+    expect(jobs[1]!.nextRunAt).toMatch(/T09:00:00\.000[+-]/);
+    expect(jobs[0]!.nextRunAt).toEqual(expect.any(String));
   });
 
   it('merges an edit onto a listed job and marks a cancel', () => {
     const state = new CaseToolState();
     shapeStubResult('scheduler-update', { jobId: JOB_ID, action: 'edit' }, { job_id: JOB_ID, action: 'edit', cron_expr: '0 10 * * 1-5' }, state);
-    const edited = shapeStubResult('scheduler-list', listed, {}, state) as { jobs: Array<{ id: string; cronExpr: string; taskTitle: string; status: string }> };
+    const edited = shapeStubResult('scheduler-list', listed, {}, state) as { jobs: Array<{ id: string; cronExpr: string; taskTitle: string; status: string; nextRunAt: string }> };
     expect(edited.jobs).toEqual([expect.objectContaining({ id: JOB_ID, cronExpr: '0 10 * * 1-5', taskTitle: 'Weekday investor inbox check', status: 'pending' })]);
+    // The stored Monday 9am next run is replaced by the next 10am fire, in the job's zone.
+    expect(edited.jobs[0]!.nextRunAt).toBe(expectedNextRun('0 10 * * 1-5', 'America/Toronto'));
+    expect(edited.jobs[0]!.nextRunAt).toMatch(/T10:00:00\.000[+-]/);
+    expect(edited.jobs[0]!.nextRunAt).not.toBe('2026-10-12T09:00:00.000-04:00');
     // A status filter still finds the edited job. `pending` is a real status; `active` is not.
     const pending = shapeStubResult('scheduler-list', listed, { status: 'pending' }, state) as { jobs: Array<{ cronExpr: string }> };
     expect(pending.jobs).toEqual([expect.objectContaining({ cronExpr: '0 10 * * 1-5' })]);
@@ -171,8 +188,8 @@ describe('SchedulerState', () => {
     const state = new CaseToolState();
     const data = {
       jobs: [
-        { id: 'a', status: 'pending', agentId: 'coordinator', cronExpr: '0 9 * * 1' },
-        { id: 'b', status: 'paused', agentId: 'research', cronExpr: '0 10 * * 1' },
+        { id: 'a', status: 'pending', agentId: 'coordinator', cronExpr: '0 9 * * 1', nextRunAt: '2026-10-12T09:00:00.000-04:00' },
+        { id: 'b', status: 'paused', agentId: 'research', cronExpr: '0 10 * * 1', nextRunAt: '2026-10-12T10:00:00.000-04:00' },
       ],
       count: 2,
       limit: 50,
@@ -183,6 +200,26 @@ describe('SchedulerState', () => {
     const research = shapeStubResult('scheduler-list', data, { agent_id: 'research' }, state) as { jobs: Array<{ id: string }> };
     expect(research.jobs.map(job => job.id)).toEqual(['b']);
     expect(shapeStubResult('scheduler-list', data, {}, state)).toEqual(data);
+  });
+
+  it('fills a missing nextRunAt from the cron before any write', () => {
+    const state = new CaseToolState();
+    const data = {
+      jobs: [{ id: 'a', status: 'pending', cronExpr: '0 9 * * 1-5', timezone: 'America/Toronto' }],
+      count: 1,
+    };
+    const listed = shapeStubResult('scheduler-list', data, {}, state) as { jobs: Array<{ nextRunAt: string }>; count: number };
+    expect(listed.jobs[0]!.nextRunAt).toBe(expectedNextRun('0 9 * * 1-5', 'America/Toronto'));
+    expect(listed.jobs[0]!.nextRunAt).toMatch(/T09:00:00\.000[+-]/);
+    expect(listed.count).toBe(1);
+  });
+
+  it('sets nextRunAt to the run_at instant when an edit sets one', () => {
+    const state = new CaseToolState();
+    shapeStubResult('scheduler-update', {}, { job_id: JOB_ID, action: 'edit', run_at: '2026-10-09T10:00:00-04:00' }, state);
+    const jobs = (shapeStubResult('scheduler-list', listed, {}, state) as { jobs: Array<{ nextRunAt: string; runAt: string }> }).jobs;
+    expect(jobs[0]!.runAt).toBe('2026-10-09T10:00:00-04:00');
+    expect(jobs[0]!.nextRunAt).toBe('2026-10-09T10:00:00.000-04:00');
   });
 
   it('lets the later of pause and resume set the status', () => {

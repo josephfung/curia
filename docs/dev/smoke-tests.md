@@ -199,11 +199,11 @@ A stub is still the answer for one call. For the tools below, the harness also r
 | Write | Later read |
 |---|---|
 | `calendar-create-event`, `calendar-update-event`, `calendar-delete-event` | `calendar-list-events` includes the event, with edits applied and deletes removed |
-| `scheduler-create`, `scheduler-update`, `scheduler-cancel` | `scheduler-list` includes the job (id, cron, timezone, task). An edit merges the fields it set. A cancel marks the job `cancelled` |
+| `scheduler-create`, `scheduler-update`, `scheduler-cancel` | `scheduler-list` includes the job (id, cron, timezone, task, next run). An edit merges the fields it set and moves `nextRunAt`. A cancel marks the job `cancelled` |
 | `task-create`, `task-update`, `task-complete` | `task-list` includes the task, with edits applied and a completion marked `done` |
 | `ceo-inbox-draft-compose`, `ceo-inbox-draft-reply`, `ceo-inbox-draft-edit` | `ceo-inbox-read` of that `draft_id` returns the draft, including later edits, and does not run the real tool |
 
-A `scheduler-list` or `task-list` call is narrowed by the filters it passes (status, agent, owner, tag, and a task's parent or due-before) whether or not the case has written yet. Seed those rows with a real status: a job is `pending`, `running`, `completed`, `failed`, `suspended`, `cancelled` or `paused`, never `active`. With no filter and no write yet, the list stub is returned as written.
+A `scheduler-list` or `task-list` call is narrowed by the filters it passes (status, agent, owner, tag, and a task's parent or due-before) whether or not the case has written yet. Seed those rows with a real status: a job is `pending`, `running`, `completed`, `failed`, `suspended`, `cancelled` or `paused`, never `active`. With no filter and no write yet, the list stub is returned as written. A job the stub leaves without `nextRunAt` gets one from its cron or `run_at`, in that job's timezone. An edit that changes either replaces it.
 
 - A job, task or event the stub already lists keeps the stub's fields. That is how a turn scripts the world it starts from, including one that disagrees with an earlier create. An update, completion or cancel during the turn still shows on the next list.
 - A row the stub does not list is added from the create. A second create that would reuse the stub's id gets a new id, so the two rows both appear. Draft ids stay as the stub returned them (`draft-0001`, `draft-0002`), because the office's edit stubs match those ids.
