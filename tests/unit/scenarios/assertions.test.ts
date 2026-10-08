@@ -41,7 +41,10 @@ describe('evaluateCheck: called', () => {
     };
     const ok = call('email-send', { to: 'kevin', attachments: [{ file_url: 'file:///run/curia-tempfiles/5b1e7c3a.pdf' }] });
     const check = { kind: 'called' as const, tool: 'email-send', contains: { attachments: '5b1e7c3a' }, success: true };
-    expect(evaluateCheck(check, run([failed]), ctx).rating).toBe('MISS');
+    const missed = evaluateCheck(check, run([failed]), ctx);
+    expect(missed.rating).toBe('MISS');
+    expect(missed.justification).toContain('"success":true');
+    expect(missed.justification).toContain('email-send [failed]');
     expect(evaluateCheck(check, run([failed, ok]), ctx).rating).toBe('PASS');
     // A refused attempt is still an attempt. not_called does not grow a success filter.
     expect(evaluateCheck({ kind: 'not_called', tools: ['email-send'], contains: { attachments: '5b1e7c3a' } }, run([failed]), ctx).rating).toBe('MISS');

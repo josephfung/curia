@@ -303,13 +303,16 @@ expected_behaviors:
     description: Delegates to ceo-inbox with the entry id.
     check:                                # omit to have the judge score it
       called: delegate                    # or: not_called: [..] | order: [a, b]
-      success: true                       # called only: the tool result succeeded
       with: { agent: ceo-inbox }          #     | reply: no_reply | not_no_reply
       contains: { task: "{{entry:offsite}}" }   # | reply_excludes: [regex]
       max: 1                              #     | reply_excludes_internal_names: true
+      success: true
 failure_modes:
   - Replies "Done!" without delegating
 ```
+
+`success` is only valid on `called`. It keeps calls whose result has that value, and
+`min` / `max` count only those calls. A refused send still counts for `not_called`.
 
 `{{principal_contact_id}}` resolves too. A placeholder that names nothing the case seeds is
 a load error.
