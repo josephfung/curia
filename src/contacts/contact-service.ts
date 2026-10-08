@@ -276,7 +276,7 @@ interface ContactServiceBackend {
 // sms_participant is NOT auto-verified — SMS From is spoofable (ADR-036); principal must verify.
 // agent_called is auto-verified — contact-register records it, callable by ceo-inbox only, for a sender
 // ceo-inbox read from mail. The identifier is still tool input and gets no duplicate check; whether it
-// should is an open question, tracked in #2053 (#2041, ADR-047).
+// should is an open question, tracked in #2061 (#2041, ADR-047).
 // agent_stated is auto-verified — contact-create and contact-link-identity write it only after the
 // duplicate check passes (findLikelyDuplicates), and every send reaches it by reference afterwards,
 // so the agent types it once, in a checked place (#2041, ADR-047).
