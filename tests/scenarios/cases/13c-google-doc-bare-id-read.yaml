@@ -41,6 +41,58 @@ tool_stubs:
   search_docs:
     - match: {}
       return: *found
+  # The rest of the read-only Drive and Docs surface that can touch this Doc, as in 13a,
+  # so a run that wanders onto another read path still gets an answer (#2050).
+  inspect_doc_structure:
+    - match: {}
+      return: |
+        Document structure for 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge:
+        {
+          "title": "Atlas release: launch plan",
+          "total_elements": 9,
+          "total_length": 268,
+          "tables": 0,
+          "table_details": [],
+          "headers": {},
+          "footers": {}
+        }
+  list_document_comments:
+    - match: {}
+      return: No comments found in document 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge
+  get_drive_file_permissions:
+    - match: {}
+      return: |
+        File: Atlas release: launch plan
+        ID: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge
+        Type: application/vnd.google-apps.document
+        Owners: Priya Shah (priya.shah@example.test)
+
+        Sharing Status:
+          Shared: True
+          Number of permissions: 2
+          Permissions:
+            - user: priya.shah@example.test (owner)
+            - user: assistant@example.test (writer)
+  check_drive_file_public_access:
+    - match: {}
+      return: '"Atlas release: launch plan" is not shared publicly. Link sharing: restricted.'
+  get_drive_shareable_link:
+    - match: {}
+      return: "https://docs.google.com/document/d/1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge/edit?usp=sharing"
+  get_drive_file_download_url:
+    - match: {}
+      return: |
+        File downloaded successfully!
+        File: Atlas release: launch plan
+        File ID: 1BidLaunchPlanZr4Qw8Tx2Kn6Mv0Hs3Lp7Yd9Fc5Ub1Ge
+        Size: 39.7 KB (40652 bytes)
+        MIME Type: application/pdf
+
+        📎 Saved to: /tmp/.workspace-mcp/attachments/Atlas_release_launch_plan_a7f3c1e9-52b8-4d6e-8f04-1c9b3e7d2a65.pdf
+
+        The file has been saved to disk and can be accessed directly via the file path.
+
+        Note: Google native file exported to application/pdf format.
 expected_behaviors:
   - id: activates_google_workspace
     weight: critical
