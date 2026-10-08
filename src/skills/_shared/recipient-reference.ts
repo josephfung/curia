@@ -174,12 +174,14 @@ export interface RecipientReferenceSkill {
 }
 
 /**
- * Skills that address a recipient by reference. The execution layer resolves these
- * inputs before any gate and shows the resolved address in an approval. Code that
- * reads one of these skills' recipient inputs uses this map, not hard-coded names.
+ * Skills that address a recipient by reference (the four send skills and
+ * email-draft-save). The execution layer resolves these inputs before any gate and
+ * shows the resolved address in an approval. Code that reads one of these skills'
+ * recipient inputs uses this map, not hard-coded names.
  */
 export const RECIPIENT_REFERENCE_SKILLS: Readonly<Record<string, RecipientReferenceSkill>> = {
   'email-send': { channel: 'email', references: ['to', 'cc'], retired: { to_address: 'to', cc_addresses: 'cc' } },
+  'email-draft-save': { channel: 'email', references: ['to'], retired: {} },
   'signal-send': { channel: 'signal', references: ['recipient'], retired: { recipient_number: 'recipient' } },
   'sms-send': { channel: 'sms', references: ['recipient'], retired: { recipient_number: 'recipient' } },
   'slack-send': { channel: 'slack', references: ['recipient'], retired: { recipient_user_id: 'recipient' } },

@@ -7,8 +7,10 @@ import { createSilentLogger } from '../../../../src/logger.js';
 
 // --- Shared test helpers ---
 
+const ALICE_ID = '11111111-1111-4111-8111-111111111111';
+
 const BASE_INPUT = {
-  to: 'alice@example.com',
+  to: ALICE_ID,
   subject: 'Hello',
   body: 'Hi there',
   account: 'ceo',
@@ -16,9 +18,19 @@ const BASE_INPUT = {
 
 // A mock outboundGateway that returns a successful draft creation result
 function makeMockGateway(overrides?: { createEmailDraft?: ReturnType<typeof vi.fn> }) {
+  const resolveRecipientReference = vi.fn(async (_channel: string, value: string) => {
+    if (value === ALICE_ID) {
+      return { ok: true, kind: 'contact', contactId: ALICE_ID, identifier: 'alice@example.com', displayName: 'Alice', identityName: 'work', identityId: 'id-a' };
+    }
+    if (value === 'principal') {
+      return { ok: true, kind: 'principal', contactId: 'p-1', identifier: 'ceo@example.com', displayName: 'P', identityName: 'primary', identityId: 'id-p' };
+    }
+    return { ok: false, error: `to takes a contact ID or "principal", not "${value}". Someone who is not a contact yet must be added first with contact-create, which returns their contact ID.` };
+  });
   return {
     createEmailDraft: overrides?.createEmailDraft
       ?? vi.fn().mockResolvedValue({ success: true, draftId: 'draft-abc' }),
+    resolveRecipientReference,
     // Other gateway methods are not used by this skill — typed as unknown
   } as unknown as ToolContext['outboundGateway'];
 }
@@ -67,10 +79,18 @@ describe('EmailDraftSaveHandler — baseline', () => {
   });
 
   it('creates a draft and returns draft_id on success', async () => {
+    const create = vi.fn().mockResolvedValue({ success: true, draftId: 'draft-abc' });
     const handler = new EmailDraftSaveHandler();
-    const result = await handler.execute(makeCtx());
+    const result = await handler.execute(makeCtx({
+      outboundGateway: makeMockGateway({ createEmailDraft: create }),
+    }));
     expect(result.success).toBe(true);
-    expect((result as { data: Record<string, unknown> }).data).toEqual({ draft_id: 'draft-abc' });
+    expect((result as { data: Record<string, unknown> }).data).toEqual({
+      draft_id: 'draft-abc',
+      to_identity: 'work',
+      contact_id: ALICE_ID,
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ to: 'alice@example.com' }));
   });
 
   it('returns error when gateway rejects the draft', async () => {
@@ -153,5 +173,32 @@ describe('EmailDraftSaveHandler — attachments', () => {
     expect(result.success).toBe(false);
     expect((result as { error: string }).error).toContain('filename');
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('EmailDraftSaveHandler — recipient reference (#2041)', () => {
+  it('refuses a typed address and saves nothing', async () => {
+    const create = vi.fn();
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({
+      input: { ...BASE_INPUT, to: 'alice@example.com' },
+      outboundGateway: makeMockGateway({ createEmailDraft: create }),
+    }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/contact-create/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses more than one recipient', async () => {
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({ input: { ...BASE_INPUT, to: `${ALICE_ID}, principal` } }));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/single recipient/);
+  });
+
+  it('omits contact_id for the principal alias', async () => {
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({ input: { ...BASE_INPUT, to: 'principal' } }));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({ draft_id: 'draft-abc', to_identity: 'primary' });
+    }
   });
 });
