@@ -1,7 +1,7 @@
 // contact-link-identity (#2041): agent-entered addresses carry agent_stated, pass the
 // duplicate check first, and re-stating an address an agent typed earlier verifies it.
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import pino from 'pino';
 import { ContactLinkIdentityHandler } from './handler.js';
 import { ContactService } from '../../../../src/contacts/contact-service.js';
@@ -76,6 +76,80 @@ describe('ContactLinkIdentityHandler', () => {
     expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
     const identity = (await contacts.getContactWithIdentities(recipient.id))!.identities[0];
     expect(identity).toMatchObject({ source: 'outbound_recipient', verified: true });
+  });
+
+  // Verifying is the risky step: the 2026-10-07 incident address was a gateway-recorded
+  // typo of the principal's. A re-statement runs the same duplicate check a new address does.
+  describe('re-stating an outbound_recipient address runs the duplicate check before verifying', () => {
+    let recipientId: string;
+
+    beforeEach(async () => {
+      const recipient = await contacts.createContact({ displayName: 'Cold Recipient', source: 'outbound_recipient' });
+      recipientId = recipient.id;
+      await contacts.linkIdentity({
+        contactId: recipientId, channel: 'email', channelIdentifier: 'priya@exmaple.test', source: 'outbound_recipient',
+      });
+    });
+
+    const restate = (extra: Record<string, unknown> = {}): Promise<Awaited<ReturnType<ContactLinkIdentityHandler['execute']>>> =>
+      handler.execute(makeCtx(contacts, { contact_id: recipientId, channel: 'email', identifier: 'priya@exmaple.test', ...extra }));
+    const isVerified = async (): Promise<boolean> =>
+      (await contacts.getContactWithIdentities(recipientId))!.identities[0]!.verified;
+
+    it('refuses a near miss of another contact address, naming that contact and no address', async () => {
+      const result = await restate();
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain(`"Priya Natarajan" (${priyaId}): similar email address`);
+        expect(result.error).toMatch(/Nothing was verified/);
+        expect(result.error).toMatch(/distinct_from/);
+        expect(result.error).not.toContain('priya@example.test');
+        expect(result.error).not.toContain('priya@exmaple.test');
+      }
+      expect(await isVerified()).toBe(false);
+    });
+
+    it('verifies it once distinct_from names that contact', async () => {
+      const result = await restate({ distinct_from: [priyaId] });
+      expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
+      expect(await isVerified()).toBe(true);
+    });
+
+    it('refuses, and verifies nothing, when the duplicate check cannot run', async () => {
+      vi.spyOn(contacts, 'findLikelyDuplicates').mockRejectedValueOnce(new Error('connection reset'));
+      const result = await restate({ distinct_from: [priyaId] });
+      expect(result).toEqual({ success: false, error: 'The duplicate check could not run. Nothing was verified. Try again.' });
+      expect(await isVerified()).toBe(false);
+    });
+
+    it('refuses when another contact holds the same number in another format', async () => {
+      const other = await contacts.createContact({ displayName: 'Sam Other', source: 'ceo_stated' });
+      await contacts.linkIdentity({
+        contactId: other.id, channel: 'sms', channelIdentifier: '+1 (416) 555-0188', source: 'ceo_stated',
+      });
+      await contacts.linkIdentity({
+        contactId: recipientId, channel: 'sms', channelIdentifier: '+14165550188', source: 'outbound_recipient',
+      });
+      const result = await handler.execute(makeCtx(contacts, {
+        contact_id: recipientId, channel: 'sms', identifier: '+14165550188', distinct_from: [other.id],
+      }));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain(`"Sam Other" (${other.id})`);
+        expect(result.error).toMatch(/Nothing was verified/);
+        expect(result.error).not.toContain('5550188');
+      }
+      const sms = (await contacts.getContactWithIdentities(recipientId))!.identities.find((i) => i.channel === 'sms');
+      expect(sms!.verified).toBe(false);
+    });
+
+    it('verifies with no check when the address is already verified (nothing changes)', async () => {
+      await contacts.verifyIdentity((await contacts.getContactWithIdentities(recipientId))!.identities[0]!.id);
+      const spy = vi.spyOn(contacts, 'findLikelyDuplicates');
+      const result = await restate();
+      expect(result).toMatchObject({ success: true, data: { verified: true, already_linked: true } });
+      expect(spy).not.toHaveBeenCalled();
+    });
   });
 
   it('finds a stored number when it is re-stated in another format (Review Focus 5)', async () => {

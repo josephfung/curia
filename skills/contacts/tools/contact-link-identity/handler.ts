@@ -9,8 +9,9 @@
 //
 // Re-stating an address already on this contact is how an agent vouches for one it
 // typed earlier. An unverified outbound_recipient identity (recorded by the gateway
-// after a first-time send) is verified in place. Other unverified sources
-// (self_claimed, sms_participant) need the principal.
+// after a first-time send) is verified in place, after the same duplicate check: verifying
+// is the risky step, and the gateway records whatever address the agent typed, typos
+// included. Other unverified sources (self_claimed, sms_participant) need the principal.
 //
 // A structural contact (the principal, an agent, a system contact: isStructuralContact)
 // is never changed here — see structuralContactRefusal.
@@ -31,8 +32,41 @@ import {
 import { structuralContactRefusal } from '../../../../src/skills/_shared/structural-contact-guard.js';
 
 const NOT_LINKED = 'Nothing was linked.';
+const NOT_VERIFIED = 'Nothing was verified.';
 const NEXT =
   'Check the address: it resembles theirs. If it is right, call contact-link-identity again with distinct_from listing every ID above.';
+
+/**
+ * The duplicate check for one address on one contact. Returns the refusal to hand the
+ * agent, or null when the write may go ahead. A check that cannot run refuses: the
+ * write is never made unchecked.
+ * `action` says what did not happen ("Nothing was linked.").
+ */
+async function duplicateRefusal(
+  ctx: ToolContext,
+  contactService: NonNullable<ToolContext['contactService']>,
+  wanted: { contactId: string; channel: string; identifier: string },
+  distinctFrom: ReadonlySet<string>,
+  action: string,
+): Promise<string | null> {
+  let check: DuplicateCheck;
+  try {
+    check = await contactService.findLikelyDuplicates({
+      identities: [{ channel: wanted.channel, identifier: wanted.identifier }],
+      excludeContactId: wanted.contactId,
+    });
+  } catch (err) {
+    ctx.log.error({ err, contact_id: wanted.contactId }, 'contact-link-identity: duplicate check failed — refusing (#2041)');
+    return `The duplicate check could not run. ${action} Try again.`;
+  }
+  const taken = check.taken[0];
+  if (taken) return takenError(taken, action);
+  if (uncoveredCandidates(check.candidates, distinctFrom).length > 0) {
+    ctx.log.info({ candidates: check.candidates.length }, 'contact-link-identity: refused — likely duplicate (#2041)');
+    return candidatesError(check.candidates, action, NEXT);
+  }
+  return null;
+}
 
 export class ContactLinkIdentityHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -108,6 +142,16 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         }
         if (existing.source === 'outbound_recipient') {
           // An agent typed it on a first-time send; an agent re-stating it vouches for it.
+          // The gateway recorded the address as typed, so a typo of someone else's address
+          // is exactly what this can verify: run the check a new address gets first.
+          const restateRefusal = await duplicateRefusal(
+            ctx,
+            ctx.contactService,
+            { contactId: contact_id, channel, identifier: normalized.identifier },
+            distinctFrom.tokens,
+            NOT_VERIFIED,
+          );
+          if (restateRefusal) return { success: false, error: restateRefusal };
           const verified = await ctx.contactService.verifyIdentity(existing.id);
           ctx.log.info(
             { identityId: existing.id, contactId: contact_id },
@@ -121,22 +165,14 @@ export class ContactLinkIdentityHandler implements ToolHandler {
         };
       }
 
-      let check: DuplicateCheck;
-      try {
-        check = await ctx.contactService.findLikelyDuplicates({
-          identities: [{ channel, identifier: normalized.identifier }],
-          excludeContactId: contact_id,
-        });
-      } catch (err) {
-        ctx.log.error({ err, contact_id }, 'contact-link-identity: duplicate check failed — refusing (#2041)');
-        return { success: false, error: `The duplicate check could not run. ${NOT_LINKED} Try again.` };
-      }
-      const taken = check.taken[0];
-      if (taken) return { success: false, error: takenError(taken, NOT_LINKED) };
-      if (uncoveredCandidates(check.candidates, distinctFrom.tokens).length > 0) {
-        ctx.log.info({ candidates: check.candidates.length }, 'contact-link-identity: refused — likely duplicate (#2041)');
-        return { success: false, error: candidatesError(check.candidates, NOT_LINKED, NEXT) };
-      }
+      const refusal = await duplicateRefusal(
+        ctx,
+        ctx.contactService,
+        { contactId: contact_id, channel, identifier: normalized.identifier },
+        distinctFrom.tokens,
+        NOT_LINKED,
+      );
+      if (refusal) return { success: false, error: refusal };
 
       ctx.log.info({ contact_id, channel }, 'Linking identity to contact');
       const identity = await ctx.contactService.linkIdentity({

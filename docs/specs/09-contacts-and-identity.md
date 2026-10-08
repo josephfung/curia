@@ -119,7 +119,7 @@ CREATE INDEX idx_cci_contact ON contact_channel_identities (contact_id);
 | `crm_import` | Pulled from the CEO's CRM during an action | Yes |
 | `calendar_attendee` | Extracted from a calendar event | Yes |
 | `self_claimed` | The sender identified themselves ("Hi, it's Jenna") | No |
-| `outbound_recipient` | First-time recipient of a send, recorded by the outbound gateway after delivery: an address an agent typed into a raw send before #2041, or a gateway send (send-draft, email-reply) to an address with no contact (ADR-047) | No; verified when the principal confirms it or an agent re-states it |
+| `outbound_recipient` | First-time recipient of a send, recorded by the outbound gateway after delivery: an address an agent typed into a raw send before #2041, or a gateway send (send-draft, email-reply) to an address with no contact (ADR-047) | No; verified when the principal confirms it or an agent re-states it (after the duplicate check) |
 
 CEO statements, email participants, and authoritative external sources (CRM, calendar) are verified on creation — they represent the CEO's own data and actions. Agent-stated identities are verified because the duplicate check runs before they are written; see ADR-047. Agents cannot change the principal's identities. Self-claimed identities require explicit CEO confirmation before `verified` flips to `true`. SMS participant identities also start unverified because carrier From can be spoofed; link a verified `sms` identity on the principal for Gate C (distinct from CRM `phone`).
 
