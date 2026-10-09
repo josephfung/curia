@@ -287,6 +287,36 @@ describe('SendDraftHandler', () => {
     expect(result.success).toBe(true);
   });
 
+  // ─── Stage 2.5 principal-directed signal (#1870) ──────────────────────────
+
+  describe('principalDirected', () => {
+    it('is false for principal lineage without a live turn (a woken task passes the origin check)', async () => {
+      // A threshold-clearing wake keeps principal lineage and so passes the handler's
+      // isPrincipalOriginated check, but it must not skip the disclosure gate.
+      const ctx = makeCtx({});
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(ctx.outboundGateway!.sendEmailDraft).toHaveBeenCalledWith(
+        'draft-abc123',
+        'personal',
+        expect.anything(),
+        expect.objectContaining({ humanApproved: true, principalDirected: false }),
+      );
+    });
+
+    it('is true on a live principal turn', async () => {
+      const ctx = makeCtx({});
+      (ctx as { liveTurn?: boolean }).liveTurn = true;
+      await handler.execute(ctx);
+      expect(ctx.outboundGateway!.sendEmailDraft).toHaveBeenCalledWith(
+        'draft-abc123',
+        'personal',
+        expect.anything(),
+        expect.objectContaining({ principalDirected: true }),
+      );
+    });
+  });
+
   // ─── Cross-account draft discovery (#455) ─────────────────────────────────
 
   describe('cross-account draft discovery', () => {

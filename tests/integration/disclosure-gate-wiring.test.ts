@@ -240,7 +240,10 @@ describeIfDb('Stage 2.5 end to end: signal-send → gateway → audit_log (#1870
       'signal-send',
       { recipient: RECIPIENT_ID, message: THIRD_PARTY_BODY },
       undefined,
-      { agentId: 'coordinator', taskEventId: 'task-1870-principal', conversationId: 'conv-1870-principal', taskMetadata: originator('principal') },
+      {
+        agentId: 'coordinator', taskEventId: 'task-1870-principal', conversationId: 'conv-1870-principal',
+        taskMetadata: originator('principal'), liveTurn: true,
+      },
     );
 
     expect(result.success).toBe(true);
@@ -248,5 +251,24 @@ describeIfDb('Stage 2.5 end to end: signal-send → gateway → audit_log (#1870
     expect(provider.chat).not.toHaveBeenCalled();
     expect(published.filter((e) => e.type === 'outbound.blocked')).toHaveLength(0);
     expect(published.filter((e) => e.type === 'outbound.delivered')).toHaveLength(1);
+  });
+
+  it('principal lineage without a live turn (a woken task) is still gated', async () => {
+    // Lineage keeps principal standing for the autonomy gates, but the woken task composed
+    // this content itself, so the disclosure gate applies.
+    const provider = stubProvider('third-party');
+    const { executionLayer, signalClient, published } = buildStack(provider);
+
+    const result = await executionLayer.invoke(
+      'signal-send',
+      { recipient: RECIPIENT_ID, message: THIRD_PARTY_BODY },
+      undefined,
+      { agentId: 'coordinator', taskEventId: 'task-1870-woken', conversationId: 'conv-1870-woken', taskMetadata: originator('principal') },
+    );
+
+    expect(result.success).toBe(false);
+    expect(signalClient.send).not.toHaveBeenCalled();
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+    expect(published.filter((e) => e.type === 'outbound.blocked')).toHaveLength(1);
   });
 });
