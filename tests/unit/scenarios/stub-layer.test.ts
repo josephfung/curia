@@ -8,6 +8,13 @@ import { ToolRegistry } from '../../../src/skills/registry.js';
 import type { ActionRisk, ToolManifest } from '../../../src/skills/types.js';
 import { createStubController, mustStub } from '../../scenarios/stub-layer.js';
 
+// Lets a test force two runs onto the same conversation token; real UUIDs otherwise.
+const uuid = vi.hoisted(() => ({ next: [] as string[] }));
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return { ...actual, randomUUID: () => uuid.next.shift() ?? actual.randomUUID() };
+});
+
 const logger = createLogger('error');
 
 function manifest(name: string, risk: ActionRisk): ToolManifest {
@@ -409,6 +416,24 @@ describe('real delegation (#2027)', () => {
     await delegate('scenario-2', 'thread-7');
     expect(conversation()).not.toBe(first);
     expect(controller.rootOf(conversation()!)).toBe('scenario-2');
+  });
+
+  it('never hands one run a specialist conversation another open run owns', async () => {
+    const { layer, controller, conversation } = delegationSetup([]);
+    // Both runs draw the same token, so both name 'thread-7' identically.
+    uuid.next.push('aaaaaaaa-0000-4000-8000-000000000001', 'aaaaaaaa-0000-4000-8000-000000000002');
+    controller.beginRun({}, 'scenario-1', { realDelegation: true });
+    controller.beginRun({}, 'scenario-2', { realDelegation: true });
+    const delegate = (conversationId: string) =>
+      layer.invoke('delegate', { agent: 'ceo-inbox', task: 'x', conversation_id: 'thread-7' }, undefined, { agentId: 'coordinator', conversationId });
+
+    await delegate('scenario-1');
+    const first = conversation()!;
+    expect(first).toBe('scenario-delegate-aaaaaaaa-thread-7');
+    await delegate('scenario-2');
+    expect(conversation()).toMatch(/^scenario-delegate-[0-9a-f-]{36}$/);
+    expect(controller.rootOf(conversation()!)).toBe('scenario-2');
+    expect(controller.rootOf(first)).toBe('scenario-1');
   });
 
   it('still refuses delegate in a run without real delegation', async () => {

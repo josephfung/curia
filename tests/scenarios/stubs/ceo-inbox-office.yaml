@@ -21,8 +21,10 @@ ceo-inbox-mark-starred:
   - agent: ceo-inbox
     match: {}
     return: { success: true, message_id: scenario-msg, starred: true }
-# The sender is the cases' Sam Rivera, already a contact.
+# The sender is the case's seeded Sam Rivera, already a contact. ceo-inbox threads this
+# contact_id into later calls (entity-context runs for real), so it must be the seeded row:
+# a case using this set must seed contact `sam` (the loader rejects one that does not).
 contact-register:
   - agent: ceo-inbox
     match: {}
-    return: { contact_id: 3c4d5e6f-7081-4923-a4b5-c6d7e8f90a1b, display_name: Sam Rivera, contact_confidence: 0.9, created: false, verified: true }
+    return: { contact_id: "{{contact:sam}}", display_name: Sam Rivera, contact_confidence: 0.9, created: false, verified: true }

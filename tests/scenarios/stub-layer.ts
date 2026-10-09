@@ -181,12 +181,17 @@ export function createStubController(
    * The specialist's conversation: one the layer names, so its rows carry the suite's
    * prefix. A conversation_id the model chose keeps its identity within the run (two
    * delegations that share one still share it), but never across runs: a model that
-   * picks the same id every run must not land in another run's conversation.
+   * picks the same id every run must not land in another run's conversation. This is the
+   * isolation boundary, so an id another open run already owns (a token collision) is never
+   * reused: the specialist gets a fresh conversation instead.
    */
   const specialistConversation = (run: OpenRun, given: unknown): string => {
-    if (typeof given !== 'string' || given.trim() === '') return `${SCENARIO_DELEGATE_PREFIX}${randomUUID()}`;
+    const fresh = (): string => `${SCENARIO_DELEGATE_PREFIX}${randomUUID()}`;
+    if (typeof given !== 'string' || given.trim() === '') return fresh();
     if (run.specialists.has(given)) return given;
-    return `${SCENARIO_DELEGATE_PREFIX}${run.token}-${given}`;
+    const named = `${SCENARIO_DELEGATE_PREFIX}${run.token}-${given}`;
+    const owner = delegated.get(named);
+    return owner === undefined || owner === run ? named : fresh();
   };
 
   const invokeStubbed = async (
@@ -270,7 +275,9 @@ export function createStubController(
       try {
         return await real.invoke(toolName, { ...input, conversation_id: conversationId }, caller, options);
       } finally {
-        run.waiting.splice(run.waiting.indexOf(agent), 1);
+        // indexOf is -1 only on a harness bug; splice(-1) would drop another agent's wait.
+        const i = run.waiting.indexOf(agent);
+        if (i >= 0) run.waiting.splice(i, 1);
       }
     }
     return real.invoke(...args);
