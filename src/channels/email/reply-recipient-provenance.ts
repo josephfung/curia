@@ -21,7 +21,8 @@ export function normalizeMailbox(email: string): string {
 
 /**
  * `email_participant` when To was copied from a header, is not an owned mailbox,
- * and Authentication-Results shows SPF, DKIM, and DMARC all passing.
+ * and the receiving provider's Authentication-Results header shows SPF, DKIM,
+ * and DMARC all passing. A header the sender added does not count.
  * Otherwise undefined: the caller omits the option and the gateway fails closed.
  */
 export function replyRecipientSource(opts: {

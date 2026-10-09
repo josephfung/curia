@@ -13,6 +13,18 @@ describe('replyRecipientSource', () => {
     })).toBe('email_participant');
   });
 
+  it('returns undefined when the provider header fails and a sender header passes', () => {
+    expect(replyRecipientSource({
+      addressFromHeader: true,
+      recipient: 'alice@example.com',
+      selfEmails: [],
+      headers: [
+        { name: 'Authentication-Results', value: 'mx.google.com; spf=fail dkim=fail dmarc=fail' },
+        { name: 'Authentication-Results', value: 'mx.example; spf=pass dkim=pass dmarc=pass' },
+      ],
+    })).toBeUndefined();
+  });
+
   it('returns undefined when headers are missing or auth failed', () => {
     expect(replyRecipientSource({
       addressFromHeader: true,
