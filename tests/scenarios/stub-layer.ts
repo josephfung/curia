@@ -166,6 +166,8 @@ export function createStubController(
     specialists: Set<string>;
     /** Real delegate calls not yet returned, one entry (the target agent) per call. */
     waiting: string[];
+    /** Makes a model-chosen specialist conversation id unique to this run. */
+    token: string;
   }
   const runs = new Map<string, OpenRun>();
   /** A specialist's conversation → the run it works for (#2027). */
@@ -177,12 +179,14 @@ export function createStubController(
 
   /**
    * The specialist's conversation: one the layer names, so its rows carry the suite's
-   * prefix. A conversation_id the model chose keeps its identity under the prefix, so
-   * two delegations that share one still share it.
+   * prefix. A conversation_id the model chose keeps its identity within the run (two
+   * delegations that share one still share it), but never across runs: a model that
+   * picks the same id every run must not land in another run's conversation.
    */
-  const specialistConversation = (given: unknown): string => {
+  const specialistConversation = (run: OpenRun, given: unknown): string => {
     if (typeof given !== 'string' || given.trim() === '') return `${SCENARIO_DELEGATE_PREFIX}${randomUUID()}`;
-    return given.startsWith(SCENARIO_DELEGATE_PREFIX) ? given : `${SCENARIO_DELEGATE_PREFIX}${given}`;
+    if (run.specialists.has(given)) return given;
+    return `${SCENARIO_DELEGATE_PREFIX}${run.token}-${given}`;
   };
 
   const invokeStubbed = async (
@@ -254,7 +258,7 @@ export function createStubController(
     record(inert().has(toolName) ? 'canned' : 'passthrough');
     if (toolName === 'delegate' && run) {
       // Only a real-delegation run gets here: mustStub refuses delegate otherwise.
-      const conversationId = specialistConversation(input['conversation_id']);
+      const conversationId = specialistConversation(run, input['conversation_id']);
       if (!delegated.has(conversationId)) {
         delegated.set(conversationId, run);
         run.specialists.add(conversationId);
@@ -296,6 +300,7 @@ export function createStubController(
         realDelegation: options.realDelegation === true,
         specialists: new Set(),
         waiting: [],
+        token: randomUUID().slice(0, 8),
       });
     },
     endRun(conversationId) {

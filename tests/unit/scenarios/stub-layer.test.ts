@@ -328,3 +328,178 @@ describe('scenario stub layer', () => {
     });
   });
 });
+
+describe('real delegation (#2027)', () => {
+  const SENDS = ['email-send', 'email-reply', 'signal-send', 'sms-send', 'slack-send'] as const;
+
+  /**
+   * A registry whose `delegate` acts like the real one: it runs a "specialist" that makes
+   * `specialistCalls` through the wrapped layer, in the conversation it was given.
+   */
+  function delegationSetup(specialistCalls: Array<{ tool: string; input?: Record<string, unknown> }>) {
+    const registry = new ToolRegistry();
+    const executed: string[] = [];
+    const specialistResults: Array<{ tool: string; success: boolean; data?: unknown }> = [];
+    const started: Array<{ root: string; conversation: string }> = [];
+    let layer: ExecutionLayer | undefined;
+    for (const [name, risk] of [
+      ...SENDS.map(s => [s, 'medium'] as const),
+      ['calendar-list-events', 'none'],
+      ['context-bridge-keep-open', 'low'],
+      ['context-bridge-release', 'low'],
+      ['memory-query', 'none'],
+    ] as const) {
+      registry.register(manifest(name, risk), {
+        execute: async () => {
+          executed.push(name);
+          return { success: true, data: `real ${name}` };
+        },
+      });
+    }
+    let seenConversation: string | undefined;
+    registry.register(manifest('delegate', 'none'), {
+      execute: async (ctx) => {
+        executed.push('delegate');
+        seenConversation = ctx.input['conversation_id'] as string;
+        for (const call of specialistCalls) {
+          const result = await layer!.invoke(call.tool, call.input ?? {}, undefined, { agentId: 'ceo-inbox', conversationId: seenConversation });
+          specialistResults.push({ tool: call.tool, success: result.success, ...(result.success ? { data: result.data } : {}) });
+        }
+        return { success: true, data: { agent: 'ceo-inbox', response: 'done' } };
+      },
+    });
+    const controller = createStubController(() => registry, () => new Set(), () => new Set(), {
+      onDelegate: (root, conversation) => started.push({ root, conversation }),
+    });
+    layer = controller.wrap(new ExecutionLayer(registry, logger));
+    return { layer, controller, executed, specialistResults, started, conversation: () => seenConversation };
+  }
+
+  it('runs delegate in a conversation the layer names, filed under the run', async () => {
+    const { layer, controller, executed, started, conversation } = delegationSetup([{ tool: 'memory-query' }]);
+    controller.beginRun({}, 'scenario-1', { realDelegation: true });
+    const result = await layer.invoke('delegate', { agent: 'ceo-inbox', task: 'x' }, undefined, coordinatorCall);
+    expect(result).toEqual({ success: true, data: { agent: 'ceo-inbox', response: 'done' } });
+    expect(conversation()).toMatch(/^scenario-delegate-[0-9a-f-]{36}$/);
+    expect(started).toEqual([{ root: 'scenario-1', conversation: conversation() }]);
+    expect(executed).toEqual(['delegate', 'memory-query']);
+    expect(controller.endRun('scenario-1').map(c => [c.agentId, c.toolName, c.disposition])).toEqual([
+      ['coordinator', 'delegate', 'passthrough'],
+      ['ceo-inbox', 'memory-query', 'passthrough'],
+    ]);
+    // Once the run is closed, the specialist's conversation is stale like any other.
+    expect(controller.rootOf(conversation()!)).toBeUndefined();
+  });
+
+  it('keeps a conversation_id the model chose within the run, never across runs', async () => {
+    const { layer, controller, conversation } = delegationSetup([]);
+    controller.beginRun({}, 'scenario-1', { realDelegation: true });
+    controller.beginRun({}, 'scenario-2', { realDelegation: true });
+    const delegate = (conversationId: string, given: string) =>
+      layer.invoke('delegate', { agent: 'ceo-inbox', task: 'x', conversation_id: given }, undefined, { agentId: 'coordinator', conversationId });
+
+    await delegate('scenario-1', 'thread-7');
+    const first = conversation()!;
+    expect(first).toMatch(/^scenario-delegate-[0-9a-f]{8}-thread-7$/);
+    expect(controller.rootOf(first)).toBe('scenario-1');
+    // The run's own specialist conversation, passed back, stays itself.
+    await delegate('scenario-1', first);
+    expect(conversation()).toBe(first);
+    // Another run choosing the same id gets a conversation of its own.
+    await delegate('scenario-2', 'thread-7');
+    expect(conversation()).not.toBe(first);
+    expect(controller.rootOf(conversation()!)).toBe('scenario-2');
+  });
+
+  it('still refuses delegate in a run without real delegation', async () => {
+    const { layer, controller, executed } = delegationSetup([]);
+    controller.beginRun({}, 'scenario-1');
+    const result = await layer.invoke('delegate', { agent: 'ceo-inbox', task: 'x' }, undefined, coordinatorCall);
+    expect(result.success).toBe(false);
+    expect(executed).toEqual([]);
+  });
+
+  it('lets no agent in a real-delegation run send unless a stub answers', async () => {
+    // Every send, by the specialist and by the coordinator, unstubbed: all refused.
+    const unstubbed = delegationSetup(SENDS.map(tool => ({ tool, input: { to: 'principal' } })));
+    unstubbed.controller.beginRun({}, 'scenario-1', { realDelegation: true });
+    await unstubbed.layer.invoke('delegate', { agent: 'ceo-inbox', task: 'x' }, undefined, coordinatorCall);
+    for (const tool of SENDS) {
+      expect((await unstubbed.layer.invoke(tool, { to: 'principal' }, undefined, coordinatorCall)).success, tool).toBe(false);
+    }
+    expect(unstubbed.specialistResults.map(r => [r.tool, r.success])).toEqual(SENDS.map(tool => [tool, false]));
+    expect(unstubbed.executed).toEqual(['delegate']);
+    const calls = unstubbed.controller.endRun('scenario-1');
+    expect(calls.filter(c => c.toolName !== 'delegate').every(c => c.disposition === 'refused')).toBe(true);
+    expect(calls.filter(c => c.agentId === 'ceo-inbox')).toHaveLength(SENDS.length);
+
+    // Stubbed: answered by the stub, never by the real tool.
+    const stubbed = delegationSetup(SENDS.map(tool => ({ tool })));
+    stubbed.controller.beginRun(
+      Object.fromEntries(SENDS.map(tool => [tool, [{ match: {}, return: { sent: tool } }]])),
+      'scenario-1',
+      { realDelegation: true },
+    );
+    await stubbed.layer.invoke('delegate', { agent: 'ceo-inbox', task: 'x' }, undefined, coordinatorCall);
+    expect(stubbed.specialistResults.every(r => r.success)).toBe(true);
+    expect(stubbed.executed).toEqual(['delegate']);
+  });
+
+  it('answers a stub scoped to an agent only for that agent', async () => {
+    const { layer, controller, specialistResults } = delegationSetup([{ tool: 'calendar-list-events' }]);
+    controller.beginRun({
+      'calendar-list-events': [{ agent: 'ceo-inbox', match: {}, return: { events: ['specialist'] } }],
+      'email-send': [{ agent: 'ceo-inbox', match: {}, return: { sent: true } }],
+    }, 'scenario-1', { realDelegation: true });
+    await layer.invoke('delegate', { agent: 'ceo-inbox', task: 'x' }, undefined, coordinatorCall);
+    expect(specialistResults).toEqual([{ tool: 'calendar-list-events', success: true, data: { events: ['specialist'] } }]);
+    // The coordinator's read falls through to the real read-only tool; its send is refused.
+    expect(await layer.invoke('calendar-list-events', {}, undefined, coordinatorCall)).toMatchObject({ data: 'real calendar-list-events' });
+    expect((await layer.invoke('email-send', {}, undefined, coordinatorCall)).success).toBe(false);
+  });
+
+  it('runs the outbound-context tools a specialist settles entries with, but not release', async () => {
+    const { layer, controller, specialistResults, executed } = delegationSetup([
+      { tool: 'context-bridge-keep-open', input: { entry_id: 'e-1' } },
+      { tool: 'context-bridge-release', input: { entry_id: 'e-1' } },
+    ]);
+    controller.beginRun({}, 'scenario-1', { realDelegation: true });
+    await layer.invoke('delegate', { agent: 'ceo-inbox', task: 'x' }, undefined, coordinatorCall);
+    expect(specialistResults.map(r => [r.tool, r.success])).toEqual([['context-bridge-keep-open', true], ['context-bridge-release', false]]);
+    expect(executed).toEqual(['delegate', 'context-bridge-keep-open']);
+  });
+
+  it('reports the specialists a run\'s delegate calls are still waiting on', async () => {
+    let release: () => void = () => {};
+    const registry = new ToolRegistry();
+    registry.register(manifest('delegate', 'none'), {
+      execute: () => new Promise(resolve => { release = () => resolve({ success: true, data: { agent: 'calendar' } }); }),
+    });
+    const controller = createStubController(() => registry);
+    const layer = controller.wrap(new ExecutionLayer(registry, logger));
+    controller.beginRun({}, 'scenario-1', { realDelegation: true });
+    const pending = layer.invoke('delegate', { agent: 'calendar', task: 'x' }, undefined, coordinatorCall);
+    await vi.waitFor(() => expect(controller.pendingDelegations('scenario-1')).toEqual(['calendar']));
+    release();
+    await pending;
+    expect(controller.pendingDelegations('scenario-1')).toEqual([]);
+  });
+});
+
+describe('mustStub with real delegation (#2027)', () => {
+  it('lets delegate and the entry-settling tools run, and nothing else', () => {
+    const registry = new ToolRegistry();
+    for (const [name, risk] of [['delegate', 'none'], ['context-bridge-keep-open', 'low'], ['context-bridge-clear', 'low'], ['context-bridge-release', 'low'], ['email-send', 'medium']] as const) {
+      registry.register(manifest(name, risk), { execute: async () => ({ success: true, data: null }) });
+    }
+    const real = { realDelegation: true };
+    expect(mustStub('delegate', registry, new Set(), new Set(), real)).toBe(false);
+    expect(mustStub('context-bridge-keep-open', registry, new Set(), new Set(), real)).toBe(false);
+    expect(mustStub('context-bridge-clear', registry, new Set(), new Set(), real)).toBe(false);
+    expect(mustStub('context-bridge-release', registry, new Set(), new Set(), real)).toBe(true);
+    expect(mustStub('email-send', registry, new Set(), new Set(), real)).toBe(true);
+    // A tool test mode cannot serve is refused whatever the mode.
+    expect(mustStub('context-bridge-keep-open', registry, new Set(['context-bridge-keep-open']), new Set(), real)).toBe(true);
+    expect(mustStub('context-bridge-keep-open', registry)).toBe(true);
+  });
+});

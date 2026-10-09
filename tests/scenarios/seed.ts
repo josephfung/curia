@@ -127,10 +127,11 @@ export function scopedOutboundContext(real: OutboundContextService, currentScope
     // de-duplicated, case-insensitive subject) to the run's entries only.
     clearBySubjects: async (subjects: string[]): Promise<SubjectClearResult> => {
       const scope = currentScope();
-      const cleaned = [...new Map(subjects
-        .map(s => (typeof s === 'string' ? s.trim() : ''))
-        .filter(s => s.length > 0)
-        .map(s => [s.toLowerCase(), s] as const)).values()];
+      const cleaned: string[] = [];
+      for (const raw of subjects) {
+        const subject = typeof raw === 'string' ? raw.trim() : '';
+        if (subject && !cleaned.some(c => c.toLowerCase() === subject.toLowerCase())) cleaned.push(subject);
+      }
       const result: SubjectClearResult = { totalReleased: 0, perSubject: [], unmatched: [] };
       const active = scope ? await activeEntries(scope) : [];
       for (const subject of cleaned) {

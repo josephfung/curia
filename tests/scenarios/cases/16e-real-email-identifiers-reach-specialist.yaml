@@ -10,10 +10,13 @@ description: >
   Dana Whitfield, an external contact, emails Curia's ops mailbox asking for 30 minutes
   next week. The coordinator checks the principal's availability through the calendar
   specialist, which really runs. The specialist's brief carries the email's Message ID and
-  Account lines. The coordinator replies to Dana as the response text, not through an email
-  tool.
+  Account lines. The coordinator answers Dana as the response text, not through an email
+  tool; letting the principal know about the request is fine.
 tags: [real-delegation, delegation, email, calendar]
 delegation: real
+# On demand, not in the release gate: tests/scenarios/README.md, "Which real-delegation
+# cases gate a release".
+release_gate: false
 stub_sets: [human-channels, calendar-office]
 seed:
   contacts:
@@ -78,12 +81,28 @@ expected_behaviors:
     check:
       briefed: calendar
       brief_contains: ["Message ID: scenario-msg-dana-renewal", "Account: ops"]
-  - id: replies_as_text
+  # Telling the principal about the request (email-send to "principal") is fine; a tool
+  # email to Dana would start a new thread instead of answering hers.
+  - id: no_reply_tool
     weight: critical
-    description: Answers Dana as the response text; no agent calls email-reply or email-send.
+    description: No agent calls email-reply.
     check:
-      not_called: [email-reply, email-send]
+      not_called: [email-reply]
       agent: any
+  - id: no_new_thread_to_dana
+    weight: critical
+    description: No agent emails Dana with email-send by contact reference.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: "{{contact:dana}}" }
+  - id: no_new_thread_to_dana_by_address
+    weight: critical
+    description: No agent emails Dana with email-send by typing her address into `to`.
+    check:
+      not_called: [email-send]
+      agent: any
+      contains: { to: dana.whitfield@harbour.example.test }
   - id: replies
     weight: critical
     description: Returns a reply (not NO_REPLY).
@@ -101,5 +120,5 @@ expected_behaviors:
       from the principal's availability (Tuesday or Thursday afternoon), or says it will
       confirm a time. It does not show the principal's other meetings.
 failure_modes:
-  - Calls email-reply or email-send instead of replying with text
+  - Calls email-reply, or emails Dana with email-send, instead of replying with text
   - Lists the principal's meetings to an external contact

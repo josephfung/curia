@@ -13,7 +13,10 @@ description: >
   agent also sends it on another channel, and the reply does not narrate a send.
 tags: [real-delegation, delegation, ceo-inbox, relay]
 delegation: real
-stub_sets: [human-channels]
+# On demand, not in the release gate: tests/scenarios/README.md, "Which real-delegation
+# cases gate a release".
+release_gate: false
+stub_sets: [human-channels, ceo-inbox-office, calendar-office]
 seed:
   contacts:
     - key: sam
@@ -109,11 +112,6 @@ tool_stubs:
         body_html: ""
         labels: []
         attachments: []
-  # Reading the message is fine; changing the principal's inbox is not this job.
-  ceo-inbox-mark-read:
-    - agent: ceo-inbox
-      match: {}
-      return: { success: true, message_id: scenario-msg-sam-reply }
 expected_behaviors:
   - id: asks_ceo_inbox
     weight: critical

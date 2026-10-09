@@ -405,7 +405,8 @@ async function main(): Promise<void> {
       // One block per case, printed at once, so concurrent cases do not interleave inside it.
       // Real delegation multiplies model calls (#2027): show whose they were.
       const agents = Object.entries(result.usage.byAgent).sort((a, b) => b[1].estimatedCostUsd - a[1].estimatedCostUsd);
-      const split = agents.length > 1 ? ` (${agents.map(([a, t]) => `${a} ${formatUsd(t.estimatedCostUsd)}`).join(', ')})` : '';
+      const parts = [...agents, ['judge', result.usage.judge] as const];
+      const split = agents.length > 1 ? ` (${parts.map(([a, t]) => `${a} ${formatUsd(t.estimatedCostUsd)}`).join(', ')})` : '';
       const lines = [`   == ${scenario.name}: ${formatUsd(result.usage.total.estimatedCostUsd)}${split}`];
       for (const b of result.behaviors) {
         const flag = result.criticalFailures.includes(b.behavior.id)

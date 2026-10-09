@@ -99,3 +99,16 @@ describe('known failures', () => {
     expect(staleKnownFailures([result])).toHaveLength(1);
   });
 });
+
+describe('gateFailures: a slow specialist (#2027)', () => {
+  it('reports a run that timed out on a delegate wait apart from a stuck run', () => {
+    const slow = runs(2).map((r, i) => (i === 0 ? { ...r, error: 'Timeout — calendar still working', timeoutKind: 'delegate_wait' as const } : r));
+    const failures = gateFailures([scoreCase('c', [minor], slow, new Map([['tone', [P, P]]]))]);
+    expect(failures).toEqual(['c: 1 run(s) timed out on a slow specialist, not a stuck run — Timeout — calendar still working']);
+
+    const stuck = runs(2, 'Timeout waiting for the coordinator (180s)');
+    expect(gateFailures([scoreCase('c', [minor], stuck, new Map([['tone', [P, P]]]))])).toEqual([
+      'c: 1 run(s) errored — Timeout waiting for the coordinator (180s)',
+    ]);
+  });
+});

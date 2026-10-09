@@ -45,6 +45,68 @@ describe('scoped views with overlapping runs', () => {
   });
 });
 
+describe('scopedOutboundContext: the ExecutionLayer\'s view (#2027)', () => {
+  const context = createCaseContext<RunState>();
+  const currentScope = () => context.current()?.scope;
+  const row = (id: string, subject?: string) =>
+    ({ id, createdAt: new Date(), metadata: subject ? { subject } : null }) as unknown as OutboundContextRow;
+
+  function fakeService() {
+    const active = new Map<string, OutboundContextRow>([['e-a', row('e-a', 'Offsite')], ['e-real', row('e-real', 'Offsite')]]);
+    const released: string[] = [];
+    const real = {
+      getEntry: async (id: string) => active.get(id) ?? null,
+      register: async () => { active.set('e-new', row('e-new')); return 'e-new'; },
+      release: async (id: string) => { released.push(id); active.delete(id); },
+      releaseEntry: async (id: string) => { released.push(id); active.delete(id); },
+      markExchangeOpen: async () => true,
+      releaseUnlessKeptOpen: async (id: string) => { released.push(id); active.delete(id); return 'released' as const; },
+      clearBySubjects: async () => { throw new Error('the real clearBySubjects scans every instance\'s entries'); },
+    } as unknown as OutboundContextService;
+    return { view: scopedOutboundContext(real, currentScope), released };
+  }
+
+  it('acts only on the run\'s own entries; any other id reads as no active entry', async () => {
+    const { view, released } = fakeService();
+    const state = run('A', [], ['e-a']);
+    await context.run(state, async () => {
+      expect(await view.getEntry('e-real')).toBeNull();
+      expect(await view.markExchangeOpen('e-real', { agentId: 'x', taskEventId: 't' })).toBe(false);
+      expect(await view.releaseUnlessKeptOpen('e-real', 't')).toBe('not_active');
+      await view.release('e-real');
+      await view.releaseEntry('e-real');
+      expect(released).toEqual([]);
+
+      expect(await view.markExchangeOpen('e-a', { agentId: 'x', taskEventId: 't' })).toBe(true);
+      expect(await view.releaseUnlessKeptOpen('e-a', 't')).toBe('released');
+      expect(released).toEqual(['e-a']);
+    });
+  });
+
+  it('adds an entry an agent registers to the run, and refuses one outside every run', async () => {
+    const { view } = fakeService();
+    const state = run('A', [], []);
+    const entry = { conversationId: 'scenario-delegate-x', channelId: 'signal', agentId: 'ceo-inbox', content: 'Draft ready?' };
+    await context.run(state, async () => {
+      expect(await view.register(entry)).toBe('e-new');
+    });
+    expect(state.scope.entryIds.has('e-new')).toBe(true);
+    await expect(view.register(entry)).rejects.toThrow(/outside every run/);
+  });
+
+  it('clears by subject among the run\'s entries only', async () => {
+    const { view, released } = fakeService();
+    const result = await context.run(run('A', [], ['e-a']), () => view.clearBySubjects([' offsite ', 'OFFSITE', 'Budget', '']));
+    expect(result).toEqual({ totalReleased: 1, perSubject: [{ subject: 'offsite', released: 1 }], unmatched: ['Budget'] });
+    expect(released).toEqual(['e-a']);
+  });
+
+  it('refuses the table-wide cleanup', async () => {
+    const { view } = fakeService();
+    await expect(view.cleanupExpired()).rejects.toThrow(/every instance/);
+  });
+});
+
 describe('seedConflictKeys', () => {
   const scenario = (contacts: Array<{ displayName: string; identifier: string }>) => ({
     seed: { contacts: contacts.map((c, i) => ({ key: `c${i}`, tier: 'known', channel: 'email', ...c })), outboundContext: [], bullpen: [] },

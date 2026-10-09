@@ -82,7 +82,9 @@ function returned(call: CapturedToolCall, returns: Record<string, unknown> | und
 }
 
 export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: CheckContext): RunRating {
-  const calls = 'agent' in check && check.kind !== 'briefed' ? callsFor(run.toolCalls, check.agent) : run.toolCalls;
+  const calls = check.kind === 'called' || check.kind === 'not_called' || check.kind === 'order'
+    ? callsFor(run.toolCalls, check.agent)
+    : run.toolCalls;
   switch (check.kind) {
     case 'called': {
       const tools = calledTools(check);

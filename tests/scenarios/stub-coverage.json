@@ -99,45 +99,45 @@
     },
     "real delegation calendar borrow": {
       "unstubbed": 0,
-      "runs": 1,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T15:39:44.170Z"
+      "recordedAt": "2026-10-09T15:54:11.365Z"
     },
     "real delegation calendar read fails": {
       "unstubbed": 0,
-      "runs": 1,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T15:39:44.170Z"
+      "recordedAt": "2026-10-09T15:54:11.365Z"
     },
     "real delegation clarification resume": {
       "unstubbed": 0,
-      "runs": 1,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T15:39:44.170Z"
+      "recordedAt": "2026-10-09T15:54:11.365Z"
     },
     "real delegation email identifiers reach specialist": {
-      "unstubbed": 0,
-      "runs": 1,
+      "unstubbed": 2,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T15:39:44.170Z"
+      "recordedAt": "2026-10-09T15:54:11.365Z"
     },
     "real delegation one message per item": {
-      "unstubbed": 0,
-      "runs": 2,
+      "unstubbed": 2,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T15:43:03.317Z"
+      "recordedAt": "2026-10-09T15:54:11.365Z"
     },
     "real delegation principal request over email": {
       "unstubbed": 0,
-      "runs": 1,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T15:39:44.170Z"
+      "recordedAt": "2026-10-09T15:54:11.365Z"
     },
     "real delegation transfer ownership": {
-      "unstubbed": 0,
-      "runs": 1,
+      "unstubbed": 3,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T15:39:44.170Z"
+      "recordedAt": "2026-10-09T15:54:11.365Z"
     },
     "relayed follow-up routes to owner": {
       "unstubbed": 0,

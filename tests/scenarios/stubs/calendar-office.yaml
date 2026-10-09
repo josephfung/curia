@@ -1,8 +1,9 @@
-# The calendar specialist's world, for cases that run it for real (#2027). Scoped to
-# `agent: calendar`, so the coordinator never reads the calendar through these. Test mode
-# has no calendar client, so every one of these would otherwise be refused. A case's own
+# The calendar specialist's world, for cases that run it for real (#2027). Test mode has no
+# calendar client, so every one of these would otherwise be refused. A case's own
 # calendar-list-events (or find-free-time) stub comes first and says what the day holds;
-# the catch-alls here are a quiet calendar.
+# the catch-alls here are a quiet calendar. Scoped to `agent: calendar`, except the event
+# list: another specialist reading the principal's calendar (contacts looks up past
+# meetings with a person) gets the same quiet calendar.
 calendar-list-calendars:
   - agent: calendar
     match: {}
@@ -19,8 +20,7 @@ calendar-list-calendars:
           contactId: "{{principal_contact_id}}"
           registryLabel: primary
 calendar-list-events:
-  - agent: calendar
-    match: {}
+  - match: {}
     return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
 calendar-find-free-time:
   - agent: calendar
