@@ -17,7 +17,7 @@ type AutonomyBand = 'full' | 'spot-check' | 'approval-required' | 'draft-only' |
 const BAND_META: Record<AutonomyBand, { label: string; color: string; description: string }> = {
   'full':              { label: 'Full',              color: '#5E9E6B', description: 'Curia acts independently with no confirmation required for any standard operation.' },
   'spot-check':        { label: 'Spot-check',        color: '#6BAED6', description: 'Curia proceeds with most actions and flags a small random sample for your review.' },
-  'approval-required': { label: 'Approval Required', color: '#C9874A', description: 'Curia drafts and plans, then pauses for your explicit approval before acting.' },
+  'approval-required': { label: 'Approval Required', color: '#C9874A', description: 'Curia carries out your direct instructions, and asks before acting on its own initiative.' },
   'draft-only':        { label: 'Draft Only',        color: '#7E6BA8', description: 'Curia prepares drafts and summaries but does not send, schedule, or commit anything.' },
   'restricted':        { label: 'Restricted',        color: '#E86040', description: 'Curia operates in read-only mode. No writes, sends, or external actions.' },
 };

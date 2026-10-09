@@ -80,6 +80,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Approval Required autonomy band** — a direct principal instruction now counts as approval; Curia still asks before acting unprompted. (#2068, spec 14)
 - **`EmailSendRequest` (public API)** — optional `recipientSource` records reply provenance and is not sent. (#2071)
 - **`ceo-inbox-draft-compose` (breaking `tool.json`)** — `to`/`cc` take contact IDs; `to_addresses` must appear in mail or a person's message. (#2053)
 - **`ceo-inbox-draft-edit` (breaking `tool.json`)** — recipients change one at a time with `add_*` and `remove`; whole-list `to`/`cc` retired. (#2053)

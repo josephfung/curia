@@ -3,6 +3,15 @@
 # link or not" tells the coordinator to activate google-workspace. With the tools
 # unloaded, the failure to watch for is "I can't share files". Rule:
 # agents/coordinator.yaml, "Google Workspace".
+#
+# Sharing without asking first is intended (#2068). Scenarios run at the default autonomy
+# score, 75 (Approval Required). That band's text used to say to confirm any consequential
+# action, so every run found the deck and then asked before sharing it, even though the
+# principal had given a full instruction. The band now treats a direct instruction as
+# approval: open details such as access level take the conservative default. It asks only
+# about actions on Curia's own initiative, or when the context cannot tell which file or
+# person is meant. Neither applies here: Kevin is a known contact, and v7 is clearly the
+# latest deck. Rule: src/autonomy/autonomy-service.ts, BAND_DESCRIPTIONS.
 name: google file share named
 description: >
   The principal asks to share their latest pitch deck with Kevin Osei, a known contact,
