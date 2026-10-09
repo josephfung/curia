@@ -4,6 +4,7 @@ Date: 2026-10-07
 Status: Accepted
 Amended: 2026-10-07 — no raw-address path; agent-entered contacts (#2041)
 Amended: 2026-10-08 — agent-entered identifiers are verified by provenance (#2061)
+Amended: 2026-10-08 — the principal's mailbox drafts address recipients by reference; a raw address needs a source (#2053)
 
 ## Context
 
@@ -72,7 +73,23 @@ The send skills take references only. `to_address`, `cc_addresses`, `recipient_n
 
 A call that still passes a retired input is refused, not ignored. A dropped `cc_addresses` would send to fewer people than asked and report success. The pre-gate check refuses it, the handler refuses it, and the Gate C parsers treat it as an unparsed recipient key and fail closed. The message names the input, the reference input that replaced it, and `contact-create`. A blank value (`""`, `[]`, null) is not present: models fill unused optional inputs with one.
 
-`send-draft` is unchanged. It sends a draft's envelope as stored, behind its principal-origin gate (ADR-017). Once `email-draft-save` addresses drafts by reference, every draft it sends was addressed by reference or by a person in their own mail client. `ceo-inbox-draft-compose` and `ceo-inbox-draft-edit` still take typed addresses. Their drafts sit in the principal's Gmail and Curia cannot send them. #2053 covers them.
+`send-draft` is unchanged. It sends a draft's envelope as stored, behind its principal-origin gate (ADR-017). Once `email-draft-save` addresses drafts by reference, every draft it sends was addressed by reference or by a person in their own mail client. The principal's mailbox drafts follow their own rule, below.
+
+### Drafts in the principal's mailbox (#2053)
+
+`ceo-inbox-draft-compose` and `ceo-inbox-draft-edit` write drafts into the principal's personal Gmail, which the principal reviews and sends. Each recipient used to pass through two model copies: the coordinator copied the address from `<resolved_entities>` into its brief, and ceo-inbox copied it into the tool call. An edit replaced a whole recipient list, so changing one cc meant retyping every other one.
+
+**Recipient rule.**
+- `to` and `cc` take contact references, resolved by the same resolver as the send skills (`ToolContext.resolveRecipientReference`, which the execution layer sets for every skill when a contact service is wired, so the draft tools need no `outboundGateway` capability). A reference that matches no contact, a blocked contact, or a contact with no verified email refuses the call, and nothing is saved. A resolved recipient is saved with the contact's display name, unless the name looks like an address (`isAddressLikeName`).
+- `to_addresses` and `cc_addresses` take an address for someone who is not a contact: a sender found in the principal's mail, a mailing list, an address the principal wrote. One is accepted only when it has a source under the #2061 rule: a message a person sent in the conversation, or a source tool's result (`ceo-inbox-search`, `ceo-inbox-list` and `ceo-inbox-read` are sources; reads of drafts are not). Anything else fails closed and nothing is saved. An address that belongs to a blocked contact is refused, as its reference would be, and so is any address when that lookup fails. A raw entry is saved with no display name, so a typo cannot appear under a familiar one.
+- `ceo-inbox-draft-edit` changes recipients one at a time. `remove` takes an entry off both lines: a contact reference matches any of that contact's email addresses, and an address must be on the draft as shown (ignoring case), so a typo matches nothing. `add_to` / `add_cc` (references) and `add_to_addresses` / `add_cc_addresses` (raw) put one on. A raw address already on the draft needs no source. Adding someone who is on the other line, under any of their addresses, moves their stored entry; adding someone already on the line changes nothing. Everyone not named keeps their stored entry, display name included. An edit that empties a To line is refused; a draft the principal started with no To can still have its Cc changed. The whole-list `to` and `cc` inputs are retired and refused, not ignored, a blank `cc: []` included (it used to mean "clear the CC line").
+- The coordinator briefs ceo-inbox with contact IDs from `<resolved_entities>`, not addresses. Smoke case `cold-compose-existing-contact` covers it.
+
+**Why not contact-first, as for the send skills.** Most cold-compose recipients are not contacts and never will be: people found once in mail history, mailing lists. Making each a contact first adds a record per draft for someone the principal may never write to again, and ceo-inbox does not hold `contact-create`. The provenance check gives the raw path the property that matters: a mistyped address fails closed.
+
+**Why the #2061 source rule, not a mailbox search.** #2053 proposed accepting a raw address only when it appears in a header of a message in the principal's mailbox, and named two ways to check: a Nylas `from:`/`to:`/`cc:` search, or the headers of messages already read in the task. The second is what #2061 built. A per-call Nylas search was rejected for `contact-register` and is rejected here for the same reasons: an API call per address, and the smoke and scenario stubs replace the mailbox tools by name, so a search would always miss in tests. The sources are slightly wider than mail headers: a message the principal wrote counts, so "draft to jordan@quillfeather.example" works without a lookup, and so does a page a tool read. Neither can carry a typo the model introduced, which is the failure this closes.
+
+**Curia cannot send these drafts.** `send-draft` looks a draft up only in the gateway's email accounts, the `email_accounts` rows configured under Settings → Channels → Email, each with its own Nylas grant. The principal's grant (`ceo_nylas_grant_id`) is not one of them. An operator who adds an email account bound to the principal's grant would let `send-draft` find and send these drafts on a principal-originated task (ADR-017). Until then the principal is the last check on every recipient. A mistyped recipient here costs a wrong address in a draft the principal reads before sending, not a delivered message.
 
 ### Agent-entered addresses: `agent_stated`, verified after a duplicate check and a provenance check (#2041, #2061)
 
