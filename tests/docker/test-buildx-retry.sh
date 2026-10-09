@@ -163,12 +163,14 @@ chmod +x "$d/cmd"
 BUILDX_RETRY_DELAY=0 BUILDX_RETRY_ATTEMPTS=3 "$WRAPPER" "$d/cmd" >/dev/null 2>&1
 check_eq "permanent 401 is not retried" "1" "$(cat "$d/count")"
 
-# 7. Rate limit and an apt mirror timeout are the other two transients the step
-#    retry is supposed to cover. Each must take a second attempt. The apt line
+# 7. Rate limit, a Docker Hub token-endpoint 504 (#2095) and an apt mirror timeout
+#    are the other transients the step retry is supposed to cover. Each must take a
+#    second attempt. The apt line
 #    still starts with "E: Failed to fetch" — that prefix is NOT the signature
 #    (a 404 uses it too). "Connection timed out" is.
 for label_pat in \
   "toomanyrequests: You have reached your pull rate limit" \
+  "#3 ERROR: failed to authorize: failed to fetch oauth token: unexpected status from POST request to https://auth.docker.io/token: 504 Gateway Timeout: error code: 504" \
   "E: Failed to fetch http://deb.debian.org/debian/pool/main/ Connection timed out"
 do
   d="$tmpdir/t7-$pass"; mkdir -p "$d"

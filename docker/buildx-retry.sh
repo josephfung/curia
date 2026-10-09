@@ -81,6 +81,13 @@ TRANSIENT_PATTERNS=(
   'unexpected HTTP status: 502'
   'unexpected HTTP status: 503'
   'unexpected HTTP status: 504'
+  # The same gateway errors as BuildKit reports them from the token endpoint:
+  # "unexpected status from POST request to https://auth.docker.io/token:
+  # 504 Gateway Timeout" (#2095). Status phrases, not "failed to fetch oauth
+  # token", so a permanent 401 still is not retried.
+  '502 Bad Gateway'
+  '503 Service Unavailable'
+  '504 Gateway Timeout'
   'use of closed network connection'
   'http2: client connection lost'
   'http2: server sent GOAWAY'
