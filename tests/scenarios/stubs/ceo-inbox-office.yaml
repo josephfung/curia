@@ -1,6 +1,6 @@
 # ceo-inbox's housekeeping on a message it handled, for cases that run it for real
-# (#2027): labelling, filing, archiving, marking read. Scoped to ceo-inbox. Each succeeds
-# and echoes the message id; a case that scores one of these stubs it itself.
+# (#2027): labelling, filing, archiving, marking read, recording the sender. Scoped to
+# ceo-inbox. Each succeeds; a case that scores one of these stubs it itself.
 ceo-inbox-label:
   - agent: ceo-inbox
     match: {}
@@ -21,3 +21,8 @@ ceo-inbox-mark-starred:
   - agent: ceo-inbox
     match: {}
     return: { success: true, message_id: scenario-msg, starred: true }
+# The sender is the cases' Sam Rivera, already a contact.
+contact-register:
+  - agent: ceo-inbox
+    match: {}
+    return: { contact_id: 3c4d5e6f-7081-4923-a4b5-c6d7e8f90a1b, display_name: Sam Rivera, contact_confidence: 0.9, created: false, verified: true }
