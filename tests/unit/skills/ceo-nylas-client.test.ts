@@ -18,6 +18,8 @@ beforeEach(async () => {
   const mod = await import('../../../skills/_shared/ceo-nylas-client.js');
   CeoNylasClient = mod.CeoNylasClient;
   NylasApiError = mod.NylasApiError;
+  // listFolders results are cached per grant; each test starts cold.
+  mod.clearFolderCache();
 });
 
 function mockFetchSuccess(data: unknown = []) {

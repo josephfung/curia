@@ -1,11 +1,12 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxMarkReadHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -17,6 +18,11 @@ export class CeoInboxMarkReadHandler implements ToolHandler {
       return { success: false, error: 'message_id is required' };
     }
 
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
+    }
+
     ctx.log.info({ messageId }, 'ceo-inbox-mark-read: marking as read');
 
     try {
@@ -24,7 +30,7 @@ export class CeoInboxMarkReadHandler implements ToolHandler {
       return { success: true, data: { message_id: messageId } };
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-mark-read: failed');
-      return { success: false, error: 'Failed to mark message as read' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to mark message as read') };
     }
   }
 }

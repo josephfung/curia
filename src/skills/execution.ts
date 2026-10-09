@@ -27,6 +27,7 @@ import { ReplyToMessageIdShapeError } from '../channels/email/principal-rules.js
 import {
   looksLikeOutboundContextEntryId,
   replyToMessageIdLooksLikeEntryIdError,
+  validateNylasMessageId,
 } from '../channels/email/nylas-message-id.js';
 import type { ChannelIdentity } from '../contacts/types.js';
 import { provenanceSourceText } from '../contacts/identifier-provenance.js';
@@ -1735,6 +1736,19 @@ export class ExecutionLayer {
                   error: this.wrapSkillError(replyToMessageIdLooksLikeEntryIdError()),
                 };
               }
+              // Placeholder text or a malformed Gmail ID would otherwise reach
+              // Gate C's message fetch and come back as a 404 escalation (#2083).
+              const shapeError =
+                typeof replyTo === 'string' && replyTo.trim()
+                  ? validateNylasMessageId(replyTo, 'reply_to_message_id')
+                  : null;
+              if (shapeError) {
+                skillLogger.info(
+                  { toolName },
+                  'autonomy gate: email-reply reply_to_message_id failed shape check before Gate C shortcut (#2083)',
+                );
+                return { success: false, error: this.wrapSkillError(shapeError), errorType: 'VALIDATION_ERROR' };
+              }
             }
             // Cheap sync parse only. Async resolveRecipients (Nylas) waits until the
             // third-party axis actually matters — blocked/unknown never pay that round trip.
@@ -2520,15 +2534,23 @@ export class ExecutionLayer {
 
     skillLogger.info({ input: Object.keys(input) }, 'Invoking skill');
 
+    // Losing the race does not stop the handler. The abort signal cancels its
+    // in-flight requests, so a late read-modify-write cannot land after the agent
+    // has moved on and undo a newer call (#2083).
+    const abort = new AbortController();
+    ctx.signal = abort.signal;
+    ctx.deadline = Date.now() + manifest.timeout;
+
     // Track the timeout timer so we can clean it up after the race resolves.
     // Without cleanup, successful skill invocations leak timers that keep the
     // process alive during graceful shutdown.
     let timer: NodeJS.Timeout;
     const timeoutPromise = new Promise<ToolResult>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`Tool '${toolName}' timed out after ${manifest.timeout}ms`)),
-        manifest.timeout,
-      );
+      timer = setTimeout(() => {
+        const err = new Error(`Tool '${toolName}' timed out after ${manifest.timeout}ms`);
+        abort.abort(err);
+        reject(err);
+      }, manifest.timeout);
     });
 
     try {

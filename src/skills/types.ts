@@ -354,6 +354,13 @@ export interface ToolContext {
    *  replays). Read
    *  through `identifierHasSource()` in `src/skills/_shared/identifier-source.ts`. */
   identifierSources?: import('../contacts/identifier-provenance.js').IdentifierSources;
+  /** Aborted when this call hits its manifest timeout. The execution layer stops
+   *  waiting at that point, but the handler keeps running: pass this to network
+   *  requests so they are cancelled too (#2083). Set on every invocation. */
+  signal?: AbortSignal;
+  /** Epoch milliseconds at which this call times out. With `signal`, satisfies
+   *  CallBudget (src/util/call-budget.ts). Set on every invocation. */
+  deadline?: number;
   /** Resolve a recipient reference (a contact UUID or `principal`, optional `#label`) to
    *  the address on that contact's verified, active identity for `channel` (#2053,
    *  ADR-047). The same resolver as OutboundGateway.resolveRecipientReference, without

@@ -37,7 +37,7 @@ describe('EmailMarkReadHandler', () => {
     );
     expect(result.success).toBe(true);
     if (result.success) expect((result.data as { marked_read: boolean }).marked_read).toBe(true);
-    expect(gateway.markEmailAsRead).toHaveBeenCalledWith('msg-1', 'curia');
+    expect(gateway.markEmailAsRead).toHaveBeenCalledWith('msg-1', 'curia', expect.anything());
   });
 
   it('passes undefined accountId when account is absent', async () => {
@@ -46,7 +46,7 @@ describe('EmailMarkReadHandler', () => {
       makeCtx({ message_id: 'msg-1' }, { outboundGateway: gateway as never }),
     );
     expect(result.success).toBe(true);
-    expect(gateway.markEmailAsRead).toHaveBeenCalledWith('msg-1', undefined);
+    expect(gateway.markEmailAsRead).toHaveBeenCalledWith('msg-1', undefined, expect.anything());
   });
 
   it('passes undefined accountId when account is empty string', async () => {
@@ -55,7 +55,7 @@ describe('EmailMarkReadHandler', () => {
       makeCtx({ message_id: 'msg-1', account: '' }, { outboundGateway: gateway as never }),
     );
     expect(result.success).toBe(true);
-    expect(gateway.markEmailAsRead).toHaveBeenCalledWith('msg-1', undefined);
+    expect(gateway.markEmailAsRead).toHaveBeenCalledWith('msg-1', undefined, expect.anything());
   });
 
   it('returns failure when gateway returns an error', async () => {

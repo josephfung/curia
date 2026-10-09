@@ -7,6 +7,7 @@
 // operation, not an outbound communication.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class EmailArchiveHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -20,6 +21,11 @@ export class EmailArchiveHandler implements ToolHandler {
 
     if (!messageId) {
       return { success: false, error: 'Missing required input: message_id (string)' };
+    }
+
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
 
     if (!ctx.outboundGateway) {
@@ -36,9 +42,10 @@ export class EmailArchiveHandler implements ToolHandler {
 
     ctx.log.info({ messageId, accountId }, 'Archiving email');
 
-    let result: { success: boolean; error?: string };
+    let result: Awaited<ReturnType<typeof ctx.outboundGateway.archiveEmailMessage>>;
     try {
-      result = await ctx.outboundGateway.archiveEmailMessage(messageId, accountId);
+      // ctx carries the call's abort signal and deadline (#2083).
+      result = await ctx.outboundGateway.archiveEmailMessage(messageId, accountId, ctx);
     } catch (err) {
       ctx.log.error({ err, messageId, accountId }, 'email-archive: unexpected error from gateway');
       return { success: false, error: 'Archive failed' };
@@ -46,7 +53,7 @@ export class EmailArchiveHandler implements ToolHandler {
 
     if (!result.success) {
       ctx.log.error({ messageId, accountId, error: result.error }, 'Failed to archive email');
-      return { success: false, error: result.error ?? 'Archive failed' };
+      return { success: false, error: result.error ?? 'Archive failed', errorType: result.errorType };
     }
 
     ctx.log.info({ messageId, accountId }, 'Email archived successfully');

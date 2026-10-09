@@ -1,11 +1,12 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxArchiveHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -15,6 +16,11 @@ export class CeoInboxArchiveHandler implements ToolHandler {
 
     if (!messageId) {
       return { success: false, error: 'message_id is required' };
+    }
+
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
 
     ctx.log.info({ messageId }, 'ceo-inbox-archive: archiving message');
@@ -39,7 +45,7 @@ export class CeoInboxArchiveHandler implements ToolHandler {
       return { success: true, data: { message_id: messageId } };
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-archive: failed to archive');
-      return { success: false, error: 'Failed to archive principal inbox message' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to archive principal inbox message') };
     }
   }
 }

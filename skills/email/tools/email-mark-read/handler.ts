@@ -4,6 +4,7 @@
 // processing to prevent re-processing on subsequent polling runs.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class EmailMarkReadHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -18,6 +19,11 @@ export class EmailMarkReadHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message_id (string)' };
     }
 
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
+    }
+
     if (!ctx.outboundGateway) {
       return {
         success: false,
@@ -30,9 +36,10 @@ export class EmailMarkReadHandler implements ToolHandler {
 
     ctx.log.info({ messageId, accountId }, 'Marking email as read');
 
-    let result: { success: boolean; error?: string };
+    let result: Awaited<ReturnType<typeof ctx.outboundGateway.markEmailAsRead>>;
     try {
-      result = await ctx.outboundGateway.markEmailAsRead(messageId, accountId);
+      // ctx carries the call's abort signal and deadline (#2083).
+      result = await ctx.outboundGateway.markEmailAsRead(messageId, accountId, ctx);
     } catch (err) {
       ctx.log.error({ err, messageId, accountId }, 'email-mark-read: unexpected error from gateway');
       return { success: false, error: 'Mark as read failed' };
@@ -40,7 +47,7 @@ export class EmailMarkReadHandler implements ToolHandler {
 
     if (!result.success) {
       ctx.log.error({ messageId, accountId, error: result.error }, 'Failed to mark email as read');
-      return { success: false, error: result.error ?? 'Mark as read failed' };
+      return { success: false, error: result.error ?? 'Mark as read failed', errorType: result.errorType };
     }
 
     return { success: true, data: { marked_read: true } };

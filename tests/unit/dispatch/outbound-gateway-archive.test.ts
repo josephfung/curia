@@ -36,7 +36,7 @@ describe('OutboundGateway.archiveEmailMessage', () => {
     const result = await gateway.archiveEmailMessage('msg-1', 'joseph');
 
     expect(result.success).toBe(true);
-    expect(mockClient.archiveMessage).toHaveBeenCalledWith('msg-1');
+    expect(mockClient.archiveMessage).toHaveBeenCalledWith('msg-1', undefined);
   });
 
   it('uses the primary client when accountId is omitted', async () => {
@@ -46,7 +46,7 @@ describe('OutboundGateway.archiveEmailMessage', () => {
     const result = await gateway.archiveEmailMessage('msg-1');
 
     expect(result.success).toBe(true);
-    expect(mockClient.archiveMessage).toHaveBeenCalledWith('msg-1');
+    expect(mockClient.archiveMessage).toHaveBeenCalledWith('msg-1', undefined);
   });
 
   it('returns failure when the accountId is not found in the map', async () => {

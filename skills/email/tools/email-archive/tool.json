@@ -1,7 +1,7 @@
 {
   "name": "email-archive",
   "description": "Archive an email by removing it from the inbox. Use for emails that need no action — receipts, newsletters, automated notifications. Silently moves the message out of INBOX.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

@@ -3,6 +3,9 @@
 // This is intentional: the principal's email is a separate data source accessed via
 // dedicated secrets, not through the core's channel account infrastructure.
 
+import { budgetExpired, remainingMs } from '../../src/util/call-budget.js';
+import type { CallBudget } from '../../src/util/call-budget.js';
+
 const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
 
 // Nylas guidance: requests with limit > 20 on list endpoints trigger concurrent-user 429s.
@@ -16,7 +19,21 @@ const NYLAS_MAX_RETRIES = 3;
 const NYLAS_BACKOFF_BASE_MS = 500;
 // Upper cap for any computed backoff delay, including a Retry-After header value.
 // Prevents a rogue or misbehaving Retry-After from hanging a skill indefinitely.
+// A client with a CallBudget also refuses any delay that outlasts the budget.
 const NYLAS_MAX_BACKOFF_MS = 30_000;
+// How long a folder list is reused. Label, update-folders and read all need one,
+// and folders change rarely. Five minutes covers a triage run's burst of calls.
+// createFolder drops the entry, so a label it creates is seen at once (#2083).
+const FOLDER_CACHE_TTL_MS = 5 * 60_000;
+
+// Folder lists by grant id. Module-level because handlers build a fresh client
+// on every call.
+const folderCache = new Map<string, { folders: NylasFolder[]; expiresAt: number }>();
+
+/** Drop every cached folder list. For tests. */
+export function clearFolderCache(): void {
+  folderCache.clear();
+}
 
 // ── Response types ──────────────────────────────────────────────────────────
 
@@ -163,17 +180,26 @@ export class NylasApiError extends Error {
 
 export class CeoNylasClient {
   private readonly baseUrl: string;
+  private readonly grantId: string;
   private readonly headers: Record<string, string>;
   private readonly log: Logger;
+  private readonly budget: CallBudget | undefined;
 
-  constructor(apiKey: string, grantId: string, log: Logger) {
+  /**
+   * @param budget  The tool call's time budget. Handlers pass `ctx`. When it runs
+   *                out, the in-flight request is aborted and no further request
+   *                is sent.
+   */
+  constructor(apiKey: string, grantId: string, log: Logger, budget?: CallBudget) {
     this.baseUrl = `${NYLAS_BASE}/${grantId}`;
+    this.grantId = grantId;
     this.headers = {
       Authorization: `Bearer ${apiKey}`,
       Accept: 'application/json',
       'Content-Type': 'application/json',
     };
     this.log = log;
+    this.budget = budget;
   }
 
   // ── Messages ────────────────────────────────────────────────────────────
@@ -473,7 +499,14 @@ export class CeoNylasClient {
 
   // ── Folders ─────────────────────────────────────────────────────────────
 
+  // Cached per grant for FOLDER_CACHE_TTL_MS. Returns a copy, so a caller that
+  // edits the array cannot change what the next caller sees.
   async listFolders(): Promise<NylasFolder[]> {
+    const cached = folderCache.get(this.grantId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return [...cached.folders];
+    }
+
     const folders: NylasFolder[] = [];
     let pageToken: string | undefined;
 
@@ -497,13 +530,15 @@ export class CeoNylasClient {
       pageToken = nextCursor;
     }
 
-    return folders;
+    folderCache.set(this.grantId, { folders, expiresAt: Date.now() + FOLDER_CACHE_TTL_MS });
+    return [...folders];
   }
 
   async createFolder(name: string): Promise<NylasFolder> {
     const url = `${this.baseUrl}/folders`;
     const payload = { name };
     const data = await this.request<NylasApiFolder>('POST', url, 'createFolder', payload);
+    folderCache.delete(this.grantId);
     return { id: data.id, name: data.name ?? name };
   }
 
@@ -520,6 +555,7 @@ export class CeoNylasClient {
   async downloadAttachment(attachmentId: string, messageId: string): Promise<Buffer> {
     const url = `${this.baseUrl}/attachments/${encodeURIComponent(attachmentId)}/download?message_id=${encodeURIComponent(messageId)}`;
     this.log.debug({ operation: 'downloadAttachment' }, 'nylas: downloadAttachment');
+    this.throwIfCancelled('downloadAttachment');
 
     let res: Response;
     try {
@@ -532,8 +568,10 @@ export class CeoNylasClient {
           Authorization: this.headers.Authorization!,
           Accept: 'application/octet-stream',
         },
+        signal: this.budget?.signal,
       });
     } catch (err) {
+      this.throwIfCancelled('downloadAttachment');
       this.log.error({ err }, 'nylas: downloadAttachment fetch failed');
       throw new NylasApiError(0, 'downloadAttachment', `Fetch failed: ${String(err)}`);
     }
@@ -607,10 +645,17 @@ export class CeoNylasClient {
 
     // Omit Content-Type — fetch sets it automatically with the multipart boundary.
     const { 'Content-Type': _ct, ...headersWithoutContentType } = this.headers;
+    this.throwIfCancelled(operation);
     let res: Response;
     try {
-      res = await fetch(url, { method: 'POST', headers: headersWithoutContentType, body: form });
+      res = await fetch(url, {
+        method: 'POST',
+        headers: headersWithoutContentType,
+        body: form,
+        signal: this.budget?.signal,
+      });
     } catch (err) {
+      this.throwIfCancelled(operation);
       this.log.error({ err, operation }, `nylas: ${operation} fetch failed`);
       throw new NylasApiError(0, operation, `Fetch failed: ${String(err)}`);
     }
@@ -647,6 +692,9 @@ export class CeoNylasClient {
   // falls back to exponential + ±25% jitter. After NYLAS_MAX_RETRIES attempts,
   // a typed NylasApiError is thrown with an explicit message so downstream
   // agents never misread a rate-limit as an auth/credential failure.
+  //
+  // With a budget, a delay that would end after the deadline is not slept: the
+  // call fails at once with the same status, marked transient (#2083).
   private async requestWithCursor<T>(
     method: string,
     url: string,
@@ -655,7 +703,7 @@ export class CeoNylasClient {
   ): Promise<{ data: T; nextCursor?: string }> {
     this.log.debug({ operation, method }, `nylas: ${operation}`);
 
-    const init: RequestInit = { method, headers: this.headers };
+    const init: RequestInit = { method, headers: this.headers, signal: this.budget?.signal };
     if (body !== undefined) {
       init.body = JSON.stringify(body);
     }
@@ -664,10 +712,12 @@ export class CeoNylasClient {
 
     let attempt = 0;
     for (;;) {
+      this.throwIfCancelled(operation);
       let res: Response;
       try {
         res = await fetch(url, init);
       } catch (err) {
+        this.throwIfCancelled(operation);
         this.log.error({ err, operation }, `nylas: ${operation} fetch failed`);
         throw new NylasApiError(0, operation, `Fetch failed: ${String(err)}`);
       }
@@ -701,11 +751,25 @@ export class CeoNylasClient {
         }
         // ±25% jitter to spread concurrent retries from multiple ceo-inbox skills.
         const delayMs = Math.round(baseDelayMs * (0.75 + Math.random() * 0.5));
+        const leftMs = remainingMs(this.budget);
+        if (delayMs >= leftMs) {
+          this.log.warn(
+            { status: res.status, operation, attempt, delayMs, leftMs },
+            `nylas: ${operation} transient error — retry delay outlasts the call's budget, failing fast`,
+          );
+          const what = res.status === 429 ? 'rate limited (HTTP 429)' : `HTTP ${res.status}`;
+          throw new NylasApiError(
+            res.status,
+            operation,
+            `Nylas ${operation}: ${what}. The retry wait (${delayMs}ms) is longer than the ` +
+              `${Math.max(0, leftMs)}ms this call has left. Transient, not an auth/credential failure: retry shortly.`,
+          );
+        }
         this.log.warn(
           { status: res.status, operation, attempt, delayMs },
           `nylas: ${operation} transient error — retrying after ${delayMs}ms`,
         );
-        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        await this.sleep(delayMs);
         attempt++;
         continue;
       }
@@ -737,6 +801,31 @@ export class CeoNylasClient {
       }
       return { data: json.data, nextCursor: json.next_cursor };
     }
+  }
+
+  // Refuse to send once the tool call has timed out. The execution layer has
+  // given up on the call, so a request sent now is a write nobody waits for.
+  private throwIfCancelled(operation: string): void {
+    if (budgetExpired(this.budget)) {
+      this.log.warn({ operation }, `nylas: ${operation} cancelled — the tool call timed out`);
+      throw new NylasApiError(0, operation, `Nylas ${operation}: cancelled because the tool call timed out`);
+    }
+  }
+
+  // A backoff sleep that ends early when the tool call times out. The caller's
+  // next throwIfCancelled() then stops the retry.
+  private sleep(ms: number): Promise<void> {
+    const signal = this.budget?.signal;
+    if (signal?.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      signal?.addEventListener('abort', done, { once: true });
+    });
   }
 }
 

@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { CeoNylasClient, NylasApiError } from './ceo-nylas-client.js';
+import { CeoNylasClient, NylasApiError, clearFolderCache } from './ceo-nylas-client.js';
 import type { Logger } from '../../src/logger.js';
+
+// Several tests drive requests through listFolders, whose result is cached per grant.
+beforeEach(() => {
+  clearFolderCache();
+});
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -56,8 +61,10 @@ describe('CeoNylasClient — 429 retry / backoff', () => {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    // Restore mocks first: one test spies on the fake setTimeout, and restoring
+    // that spy after useRealTimers() would reinstall the fake for later tests.
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('retries on 429 and succeeds when the next attempt returns 200', async () => {
@@ -429,5 +436,154 @@ describe('CeoNylasClient — received_before filter', () => {
     expect(page1.searchParams.get('received_after')).toBe('50');
     expect(page2.searchParams.get('page_token')).toBe('CUR');
     expect(page2.searchParams.has('received_before')).toBe(false);
+  });
+});
+
+// ── Folder cache (#2083) ─────────────────────────────────────────────────────
+
+describe('CeoNylasClient — folder cache', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function folderFetch() {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? successResponse({ id: 'Label_9', name: 'New' })
+        : successResponse([{ id: 'Label_1', name: 'Receipts' }]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const listings = () =>
+      fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'GET').length;
+    return { fetchMock, listings };
+  }
+
+  it('lists folders once for two calls within the TTL, across client instances', async () => {
+    const { listings } = folderFetch();
+
+    // Handlers build a fresh client per call, so the cache must outlive one.
+    await makeClient().listFolders();
+    const second = await makeClient().listFolders();
+
+    expect(second).toEqual([{ id: 'Label_1', name: 'Receipts' }]);
+    expect(listings()).toBe(1);
+  });
+
+  it('lists again once the TTL has passed', async () => {
+    vi.useFakeTimers();
+    const { listings } = folderFetch();
+
+    await makeClient().listFolders();
+    vi.advanceTimersByTime(5 * 60_000 + 1);
+    await makeClient().listFolders();
+
+    expect(listings()).toBe(2);
+  });
+
+  it('lists again after createFolder', async () => {
+    const { listings } = folderFetch();
+
+    await makeClient().listFolders();
+    await makeClient().createFolder('New');
+    await makeClient().listFolders();
+
+    expect(listings()).toBe(2);
+  });
+
+  it('keeps one cache entry per grant', async () => {
+    const { listings } = folderFetch();
+
+    await makeClient().listFolders();
+    await new CeoNylasClient('test-api-key', 'other-grant', makeLogger()).listFolders();
+
+    expect(listings()).toBe(2);
+  });
+
+  it('hands each caller its own array', async () => {
+    folderFetch();
+
+    const first = await makeClient().listFolders();
+    first.push({ id: 'Label_X', name: 'Injected' });
+
+    expect(await makeClient().listFolders()).toHaveLength(1);
+  });
+});
+
+// ── Call budget (#2083) ──────────────────────────────────────────────────────
+
+describe('CeoNylasClient — call budget', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('fails fast when Retry-After is longer than the call has left', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(rateLimitResponse('30'));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new CeoNylasClient('k', 'test-grant-id', makeLogger(), { deadline: Date.now() + 2_000 });
+
+    const started = Date.now();
+    const err = await client.markAsRead('m1').catch((e: unknown) => e);
+
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(err).toBeInstanceOf(NylasApiError);
+    expect((err as NylasApiError).status).toBe(429);
+    expect((err as NylasApiError).message).toMatch(/Transient.*retry shortly/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still waits out a Retry-After that fits in the budget', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitResponse('0.05'))
+      .mockResolvedValue(successResponse({ id: 'm1' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new CeoNylasClient('k', 'test-grant-id', makeLogger(), { deadline: Date.now() + 5_000 });
+
+    await client.markAsRead('m1');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes the abort signal to fetch', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(successResponse({ id: 'm1' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const abort = new AbortController();
+
+    await new CeoNylasClient('k', 'test-grant-id', makeLogger(), { signal: abort.signal }).markAsRead('m1');
+
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).signal).toBe(abort.signal);
+  });
+
+  it('sends nothing once the signal has fired', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const abort = new AbortController();
+    abort.abort();
+
+    const err = await new CeoNylasClient('k', 'test-grant-id', makeLogger(), { signal: abort.signal })
+      .markAsRead('m1')
+      .catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(/cancelled because the tool call timed out/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('stops a backoff sleep when the signal fires mid-wait', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(rateLimitResponse('2'));
+    vi.stubGlobal('fetch', fetchMock);
+    const abort = new AbortController();
+    setTimeout(() => abort.abort(), 20);
+
+    const started = Date.now();
+    const err = await new CeoNylasClient('k', 'test-grant-id', makeLogger(), { signal: abort.signal })
+      .markAsRead('m1')
+      .catch((e: unknown) => e);
+
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect((err as Error).message).toMatch(/cancelled/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,12 +1,13 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
 import type { NylasFolder } from '../../../_shared/ceo-nylas-client.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxUpdateFoldersHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -16,6 +17,11 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
 
     if (!messageId) {
       return { success: false, error: 'message_id is required' };
+    }
+
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
 
     const addFolders = Array.isArray(input.add_folders)
@@ -145,8 +151,7 @@ export class CeoInboxUpdateFoldersHandler implements ToolHandler {
       // Surface the underlying detail (Gmail "Invalid label", auth, network, etc.)
       // so the agent can adapt instead of seeing an opaque message — mirrors
       // ceo-inbox-label's error surfacing.
-      const detail = err instanceof Error ? err.message : String(err);
-      return { success: false, error: `Failed to update principal inbox message folders: ${detail}` };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to update principal inbox message folders') };
     }
   }
 }

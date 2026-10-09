@@ -23,8 +23,23 @@ import type {
   Draft as NylasDraft,
   CreateDraftRequest,
   CreateAttachmentRequest,
+  ListFolderQueryParams,
 } from 'nylas';
 import type { Logger } from '../../logger.js';
+import { budgetExpired, remainingMs } from '../../util/call-budget.js';
+import type { CallBudget } from '../../util/call-budget.js';
+
+/** Per-request SDK options. `timeout` caps one request (see budgetOverrides). */
+interface RequestOverrides {
+  overrides?: { timeout: number };
+}
+
+// How long a folder list is reused. email-label needs one on every call, and
+// folders change rarely. createFolder drops the cache, so a new label is seen
+// at once (#2083).
+const FOLDER_CACHE_TTL_MS = 5 * 60_000;
+// Ceiling for listFolders paging, so a cursor that never ends cannot loop.
+const FOLDER_SCAN_LIMIT = 500;
 
 /**
  * Minimal typed interface for the Nylas SDK instance. We only declare the
@@ -42,7 +57,7 @@ interface NylasLike {
       identifier: string;
       messageId: string;
       queryParams?: { fields?: MessageFields };
-    }): Promise<NylasResponse<NylasSdkMessage>>;
+    } & RequestOverrides): Promise<NylasResponse<NylasSdkMessage>>;
 
     send(params: {
       identifier: string;
@@ -54,7 +69,7 @@ interface NylasLike {
       identifier: string;
       messageId: string;
       requestBody: { folders?: string[]; starred?: boolean; unread?: boolean };
-    }): Promise<NylasResponse<NylasSdkMessage>>;
+    } & RequestOverrides): Promise<NylasResponse<NylasSdkMessage>>;
   };
   drafts: {
     create(params: {
@@ -75,12 +90,13 @@ interface NylasLike {
   folders: {
     list(params: {
       identifier: string;
-    }): Promise<NylasListResponse<NylasSdkFolder>>;
+      queryParams?: ListFolderQueryParams;
+    } & RequestOverrides): Promise<NylasListResponse<NylasSdkFolder>>;
 
     create(params: {
       identifier: string;
       requestBody: CreateFolderRequest;
-    }): Promise<NylasResponse<NylasSdkFolder>>;
+    } & RequestOverrides): Promise<NylasResponse<NylasSdkFolder>>;
   };
   attachments: {
     downloadBytes(params: {
@@ -205,6 +221,8 @@ export class NylasClient {
   private readonly nylas: NylasLike;
   private readonly grantId: string;
   private readonly log: Logger;
+  // This client is long-lived and bound to one grant, so the cache is per grant.
+  private folderCache: { folders: NylasFolder[]; expiresAt: number } | undefined;
 
   constructor(apiKey: string, grantId: string, logger: Logger) {
     this.nylas = new NylasSDK({ apiKey });
@@ -293,7 +311,10 @@ export class NylasClient {
    * `includeHeaders` asks Nylas for Authentication-Results. The gateway's
    * getEmailMessage always sets it so a cached fetch still carries them (#2071).
    */
-  async getMessage(messageId: string, options?: { includeHeaders?: boolean }): Promise<NylasMessage> {
+  async getMessage(
+    messageId: string,
+    options?: { includeHeaders?: boolean; budget?: CallBudget },
+  ): Promise<NylasMessage> {
     this.log.debug({ messageId, includeHeaders: options?.includeHeaders }, 'fetching message');
 
     try {
@@ -301,6 +322,7 @@ export class NylasClient {
         identifier: this.grantId,
         messageId,
         ...(options?.includeHeaders ? { queryParams: { fields: 'include_headers' as MessageFields } } : {}),
+        ...this.budgetOverrides(options?.budget, 'getMessage'),
       });
       return this.normalizeMessage(response.data);
     } catch (err) {
@@ -427,7 +449,7 @@ export class NylasClient {
    * preserves non-INBOX labels (STARRED, IMPORTANT, custom labels) that
    * would be lost if we blindly set folders: [].
    */
-  async archiveMessage(messageId: string): Promise<void> {
+  async archiveMessage(messageId: string, budget?: CallBudget): Promise<void> {
     this.log.debug({ messageId }, 'archiving message');
 
     // Split into two try blocks so log messages accurately identify which API call failed.
@@ -436,7 +458,7 @@ export class NylasClient {
     let currentFolders: string[];
     let hadInbox: boolean;
     try {
-      const current = await this.getMessage(messageId);
+      const current = await this.getMessage(messageId, { budget });
       // Filter by uppercase so we catch 'inbox', 'Inbox', 'INBOX' consistently
       currentFolders = current.folders.filter((f) => f.toUpperCase() !== 'INBOX');
       // True if the filter actually removed something — avoids a no-op API call
@@ -456,6 +478,7 @@ export class NylasClient {
         identifier: this.grantId,
         messageId,
         requestBody: { folders: currentFolders },
+        ...this.budgetOverrides(budget, 'archiveMessage'),
       });
       this.log.info({ messageId, updatedFolders: currentFolders }, 'message archived successfully');
     } catch (err) {
@@ -467,7 +490,7 @@ export class NylasClient {
   /**
    * Mark a message as read by setting its unread flag to false.
    */
-  async markAsRead(messageId: string): Promise<void> {
+  async markAsRead(messageId: string, budget?: CallBudget): Promise<void> {
     this.log.debug({ messageId }, 'marking message as read');
 
     try {
@@ -475,6 +498,7 @@ export class NylasClient {
         identifier: this.grantId,
         messageId,
         requestBody: { unread: false },
+        ...this.budgetOverrides(budget, 'markAsRead'),
       });
       this.log.info({ messageId }, 'message marked as read');
     } catch (err) {
@@ -486,32 +510,58 @@ export class NylasClient {
   /**
    * List all folders/labels in the email account.
    * For Gmail, this returns both system folders (INBOX, SENT, etc.) and user-created labels.
+   *
+   * Follows `next_cursor` to the last page: a label past page 1 used to be
+   * missed, and email-label then created a duplicate (#2083). Cached for
+   * FOLDER_CACHE_TTL_MS; returns a copy so a caller cannot edit the cache.
    */
-  async listFolders(): Promise<NylasFolder[]> {
+  async listFolders(budget?: CallBudget): Promise<NylasFolder[]> {
+    if (this.folderCache && this.folderCache.expiresAt > Date.now()) {
+      return [...this.folderCache.folders];
+    }
     this.log.debug('listing folders');
 
+    const folders: NylasFolder[] = [];
+    let pageToken: string | undefined;
     try {
-      const response = await this.nylas.folders.list({
-        identifier: this.grantId,
-      });
-      return response.data.map((f) => ({ id: f.id, name: f.name }));
+      for (;;) {
+        const response = await this.nylas.folders.list({
+          identifier: this.grantId,
+          ...(pageToken ? { queryParams: { pageToken } } : {}),
+          ...this.budgetOverrides(budget, 'listFolders'),
+        });
+        folders.push(...response.data.map((f) => ({ id: f.id, name: f.name })));
+
+        // An empty page with a cursor would otherwise spin forever.
+        if (response.data.length === 0 || !response.nextCursor) break;
+        if (folders.length >= FOLDER_SCAN_LIMIT) {
+          this.log.warn({ cap: FOLDER_SCAN_LIMIT }, 'nylas: listFolders hit the scan cap with more pages remaining');
+          break;
+        }
+        pageToken = response.nextCursor;
+      }
     } catch (err) {
       this.log.error({ err, grantId: this.grantId }, 'Nylas listFolders failed');
       throw err;
     }
+
+    this.folderCache = { folders, expiresAt: Date.now() + FOLDER_CACHE_TTL_MS };
+    return [...folders];
   }
 
   /**
    * Create a new folder/label. For Gmail, this creates a user label.
    */
-  async createFolder(name: string): Promise<NylasFolder> {
+  async createFolder(name: string, budget?: CallBudget): Promise<NylasFolder> {
     this.log.debug({ name }, 'creating folder');
 
     try {
       const response = await this.nylas.folders.create({
         identifier: this.grantId,
         requestBody: { name },
+        ...this.budgetOverrides(budget, 'createFolder'),
       });
+      this.folderCache = undefined;
       this.log.info({ folderId: response.data.id, name }, 'folder created');
       return { id: response.data.id, name: response.data.name };
     } catch (err) {
@@ -527,7 +577,7 @@ export class NylasClient {
    * existing folders they want to keep. See OutboundGateway.labelEmailMessage()
    * for the higher-level label-resolution-and-merge workflow.
    */
-  async updateMessageFolders(messageId: string, folders: string[]): Promise<NylasMessage> {
+  async updateMessageFolders(messageId: string, folders: string[], budget?: CallBudget): Promise<NylasMessage> {
     this.log.debug({ messageId, folders }, 'updating message folders');
 
     try {
@@ -535,6 +585,7 @@ export class NylasClient {
         identifier: this.grantId,
         messageId,
         requestBody: { folders },
+        ...this.budgetOverrides(budget, 'updateMessageFolders'),
       });
       this.log.info({ messageId, folders }, 'message folders updated');
       return this.normalizeMessage(response.data);
@@ -547,6 +598,24 @@ export class NylasClient {
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * SDK request options for a call made inside a tool call's budget (#2083).
+   *
+   * Throws once the budget is spent, so a timed-out tool call sends no further
+   * request. Otherwise caps the SDK's own request timeout at the time left, which
+   * aborts the request when the tool call times out (SDK 8.4 takes no external
+   * AbortSignal). The SDK reads a timeout of 1000 or more as milliseconds and a
+   * smaller one as seconds, so a sub-second remainder is passed in seconds.
+   */
+  private budgetOverrides(budget: CallBudget | undefined, operation: string): RequestOverrides {
+    if (budgetExpired(budget)) {
+      throw new Error(`Nylas ${operation}: cancelled because the tool call timed out`);
+    }
+    const leftMs = remainingMs(budget);
+    if (!Number.isFinite(leftMs)) return {};
+    return { overrides: { timeout: leftMs >= 1000 ? leftMs : leftMs / 1000 } };
+  }
 
   /**
    * Convert the SDK's Message type (with many optional fields) into our

@@ -308,7 +308,7 @@ export class CeoInboxSentObserveHandler implements ToolHandler {
       : 0;
     const backfillActive = backfillBefore > 0;
 
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
     // Paginate the whole watermark window — a single fixed-limit page silently drops
     // everything past the newest 20 on a busy Sent folder (#1429 review). `truncated`
     // means the maxScan ceiling was hit and older sends remain unseen this run. During a

@@ -37,7 +37,7 @@ describe('EmailArchiveHandler', () => {
     );
     expect(result.success).toBe(true);
     if (result.success) expect((result.data as { archived: boolean }).archived).toBe(true);
-    expect(gateway.archiveEmailMessage).toHaveBeenCalledWith('msg-1', 'joseph');
+    expect(gateway.archiveEmailMessage).toHaveBeenCalledWith('msg-1', 'joseph', expect.anything());
   });
 
   it('passes undefined accountId when account is absent', async () => {
@@ -46,7 +46,7 @@ describe('EmailArchiveHandler', () => {
       makeCtx({ message_id: 'msg-1' }, { outboundGateway: gateway as never }),
     );
     expect(result.success).toBe(true);
-    expect(gateway.archiveEmailMessage).toHaveBeenCalledWith('msg-1', undefined);
+    expect(gateway.archiveEmailMessage).toHaveBeenCalledWith('msg-1', undefined, expect.anything());
   });
 
   it('passes undefined accountId when account is an empty string', async () => {
@@ -55,7 +55,35 @@ describe('EmailArchiveHandler', () => {
       makeCtx({ message_id: 'msg-1', account: '' }, { outboundGateway: gateway as never }),
     );
     expect(result.success).toBe(true);
-    expect(gateway.archiveEmailMessage).toHaveBeenCalledWith('msg-1', undefined);
+    expect(gateway.archiveEmailMessage).toHaveBeenCalledWith('msg-1', undefined, expect.anything());
+  });
+
+  // The two malformed IDs behind the prod 404s in #2083.
+  it.each(['9b359f65-placeholder', '1a102a493eca2fc54'])(
+    'rejects %s before calling the gateway',
+    async (messageId) => {
+      const gateway = { archiveEmailMessage: vi.fn() };
+      const result = await handler.execute(
+        makeCtx({ message_id: messageId }, { outboundGateway: gateway as never }),
+      );
+      expect(result).toMatchObject({ success: false, errorType: 'VALIDATION_ERROR' });
+      if (!result.success) expect(result.error).toContain('is not a valid message ID');
+      expect(gateway.archiveEmailMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("passes the gateway's NOT_FOUND through to the agent", async () => {
+    const gateway = {
+      archiveEmailMessage: vi.fn().mockResolvedValue({
+        success: false,
+        error: 'Message not found: … Do not retry with this ID.',
+        errorType: 'NOT_FOUND',
+      }),
+    };
+    const result = await handler.execute(
+      makeCtx({ message_id: 'msg-1' }, { outboundGateway: gateway as never }),
+    );
+    expect(result).toMatchObject({ success: false, errorType: 'NOT_FOUND' });
   });
 
   it('returns failure when gateway returns an error', async () => {
