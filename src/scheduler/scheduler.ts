@@ -34,6 +34,7 @@ import {
   dispositionReviewNotice,
   dispositionTurnPrompt,
   isUndisposedWake,
+  isParkedStatus,
   progressNotesSnapshot,
 } from './wake-disposition.js';
 import { debriefRecapInstruction } from './debrief-recap.js';
@@ -1475,12 +1476,14 @@ export class Scheduler {
     title: string | null;
     deferredWake: boolean;
     otherActiveWake: boolean;
+    waitsOnDependency: boolean;
   } | null> {
     try {
       const res = await this.pool.query(
         `SELECT t.status,
                 t.progress,
                 t.title,
+                (t.waiting_on_contact_id IS NOT NULL OR t.blocked_by_task_id IS NOT NULL) AS waits_on_dependency,
                 (sj.deferred_wake_at IS NOT NULL) AS deferred_wake,
                 EXISTS (
                   SELECT 1 FROM scheduled_jobs w
@@ -1500,6 +1503,7 @@ export class Scheduler {
         title?: unknown;
         deferred_wake?: unknown;
         other_active_wake?: unknown;
+        waits_on_dependency?: unknown;
       } | undefined;
       if (!row || typeof row.status !== 'string') return null;
       return {
@@ -1508,6 +1512,7 @@ export class Scheduler {
         title: typeof row.title === 'string' ? row.title : null,
         deferredWake: row.deferred_wake === true,
         otherActiveWake: row.other_active_wake === true,
+        waitsOnDependency: row.waits_on_dependency === true,
       };
     } catch (err) {
       this.logger.warn(
@@ -1539,6 +1544,7 @@ export class Scheduler {
       notesAtStart: meta.notesAtStart,
       deferredWake: state.deferredWake,
       otherActiveWake: state.otherActiveWake,
+      waitsOnDependency: state.waitsOnDependency,
     })) {
       return false;
     }
@@ -1564,7 +1570,7 @@ export class Scheduler {
         conversationId: meta.conversationId,
         channelId: 'scheduler',
         senderId: 'scheduler',
-        content: dispositionTurnPrompt(meta.taskId, state.title),
+        content: dispositionTurnPrompt(meta.taskId, state.title, state.status),
         syntheticTurn: true,
         toolAllowlist: [...DISPOSITION_TURN_TOOLS],
         parentEventId,
@@ -1629,7 +1635,17 @@ export class Scheduler {
       notesAtStart: meta.notesAtStart,
       deferredWake: state.deferredWake,
       otherActiveWake: state.otherActiveWake,
+      waitsOnDependency: state.waitsOnDependency,
     })) {
+      return;
+    }
+    if (isParkedStatus(state.status)) {
+      // Not flagged: needs-disposition would drop it from heartbeat revival and send a
+      // review to the principal. A parked task keeps today's backstop instead (#2084).
+      this.logger.warn(
+        { jobId, taskId: meta.taskId, status: state.status },
+        'scheduler: parked task still has no wake after its disposition turn — left to heartbeat revival (staleWaitThresholdHours)',
+      );
       return;
     }
     await this.flagNeedsDisposition(meta.taskId, state.title, jobId, parentEventId);

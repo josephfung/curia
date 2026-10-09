@@ -195,6 +195,72 @@ describe('TaskUpdateHandler', () => {
     expect(calls[0]![1].wakeAt).toBeInstanceOf(Date);
   });
 
+  // #2084: on 2026-10-07 a 2,073-char note made the whole call fail, the retry
+  // dropped wake_at, and a self-re-arming loop lost its next tick.
+  describe('over-long progress_note (#2084)', () => {
+    const longNote = 'x'.repeat(2073);
+
+    it('still applies wake_at and status when the note is over the limit', async () => {
+      const taskRepo = makeTaskRepo();
+      const ctx = makeCtx({
+        input: {
+          task_id: VALID_UUID,
+          status: 'waiting',
+          wake_at: '2026-10-08T01:34:00-04:00',
+          progress_note: longNote,
+        },
+        taskRepo,
+      });
+
+      const result = await new TaskUpdateHandler().execute(ctx);
+
+      expect(result.success).toBe(true);
+      const fields = (taskRepo.updateTask as ReturnType<typeof vi.fn>).mock.calls[0]![1];
+      expect(fields.wakeAt).toEqual(new Date('2026-10-08T05:34:00Z'));
+      expect(fields.status).toBe('waiting');
+    });
+
+    it('saves the note truncated to the limit, with a visible marker', async () => {
+      const taskRepo = makeTaskRepo();
+      const ctx = makeCtx({
+        input: { task_id: VALID_UUID, wake_at: '2026-10-08T01:34:00-04:00', progress_note: longNote },
+        taskRepo,
+      });
+
+      await new TaskUpdateHandler().execute(ctx);
+
+      const note = (taskRepo.updateTask as ReturnType<typeof vi.fn>).mock.calls[0]![1].progressNote as string;
+      expect(note.length).toBeLessThanOrEqual(2000);
+      expect(note.startsWith('x'.repeat(1900))).toBe(true);
+      expect(note).toMatch(/\[truncated: \d+ characters cut\]$/);
+    });
+
+    it('tells the agent the note was cut and the rest of the call was applied', async () => {
+      const ctx = makeCtx({
+        input: { task_id: VALID_UUID, wake_at: '2026-10-08T01:34:00-04:00', progress_note: longNote },
+        taskRepo: makeTaskRepo(),
+      });
+
+      const result = await new TaskUpdateHandler().execute(ctx);
+
+      const data = (result as { success: true; data: { warning?: string } }).data;
+      expect(data.warning).toMatch(/2073 characters/);
+      expect(data.warning).toMatch(/truncated/);
+      expect(data.warning).toMatch(/other fields.*applied/i);
+    });
+
+    it('leaves a note at the limit untouched and adds no warning', async () => {
+      const taskRepo = makeTaskRepo();
+      const exact = 'y'.repeat(2000);
+      const ctx = makeCtx({ input: { task_id: VALID_UUID, progress_note: exact }, taskRepo });
+
+      const result = await new TaskUpdateHandler().execute(ctx);
+
+      expect((taskRepo.updateTask as ReturnType<typeof vi.fn>).mock.calls[0]![1].progressNote).toBe(exact);
+      expect((result as { success: true; data: { warning?: string } }).data.warning).toBeUndefined();
+    });
+  });
+
   it('returns task-not-found error when TaskRepo returns null', async () => {
     const taskRepo = makeTaskRepo({ updateTask: vi.fn().mockResolvedValue(null) });
     const ctx = makeCtx({ input: { task_id: VALID_UUID, status: 'in_progress' }, taskRepo });
