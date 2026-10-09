@@ -20,6 +20,15 @@ tool_stubs:
   contact-create:
     - match: {}
       return: { contact_id: 3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f, display_name: "{{input:name}}", identities_added: 0 }
+  # The name-only contact above has no verified email, so the real draft tool refuses it
+  # (#2053). Without this the office stub would save a draft to it.
+  ceo-inbox-draft-compose:
+    - match: { to: ["3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f"] }
+      error: >-
+        to entry 1: Contact 3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f has no verified, active email address. Nothing was sent.
+        Reach them on another channel, or add (or re-state) an address you are sure of with
+        contact-link-identity. No draft was saved. Someone with no verified email on file can
+        be addressed in to_addresses, with the address copied exactly from the principal's mail.
   ceo-inbox-search:
     - match: { folder: DRAFTS }
       return: { folder: DRAFTS, drafts: [], count: 0 }
@@ -52,7 +61,10 @@ expected_behaviors:
       principal which one they mean
     weight: critical
   - id: no-draft
-    description: Saves no draft to either address (no ceo-inbox-draft-compose or ceo-inbox-draft-reply call)
+    description: >
+      Saves no draft: no ceo-inbox-draft-compose or ceo-inbox-draft-reply call succeeds,
+      whatever its recipients (one with no recipient, or to a placeholder contact, counts
+      as a draft). A call the tool refuses saves nothing
     weight: critical
   - id: offers-to-draft-after-choice
     description: Offers to save the draft once the principal picks

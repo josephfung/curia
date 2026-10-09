@@ -191,9 +191,20 @@ ceo-inbox-draft-reply:
     return: { draft_id: draft-0001, subject: "Re: Speaking at TechTO in April?", to: [{ name: Maya Fischer, email: maya.fischer@techto.example }], cc: [] }
   - match: {}
     return: { draft_id: draft-0001, subject: Re, to: [], cc: [] }
+# No recipients echoed: to holds contact IDs (#2053), which the real tool returns as
+# addresses. The replay records the draft's recipients from the call.
 ceo-inbox-draft-compose:
+  # The real tool refuses a draft with no To recipient, and saves nothing. null is absent.
+  - match: { to: null, to_addresses: null }
+    error: "A draft needs a To recipient: a contact ID (or \"principal\") in to, or an address copied from the principal's mail in to_addresses."
+  - match: { to: [], to_addresses: null }
+    error: "A draft needs a To recipient: a contact ID (or \"principal\") in to, or an address copied from the principal's mail in to_addresses."
+  - match: { to: null, to_addresses: [] }
+    error: "A draft needs a To recipient: a contact ID (or \"principal\") in to, or an address copied from the principal's mail in to_addresses."
+  - match: { to: [], to_addresses: [] }
+    error: "A draft needs a To recipient: a contact ID (or \"principal\") in to, or an address copied from the principal's mail in to_addresses."
   - match: {}
-    return: { draft_id: draft-0002, subject: "{{input:subject}}", to: "{{input:to}}", cc: [] }
+    return: { draft_id: draft-0002, subject: "{{input:subject}}" }
 # Triage writes (ceo-inbox SKILL.md). Test mode withholds the mailbox credentials, so the
 # real tools would fail. These succeed the way production does, and fail where the real
 # handler would: a missing argument, or a message that is not in this mailbox.

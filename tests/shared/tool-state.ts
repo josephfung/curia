@@ -112,6 +112,22 @@ function taskPreview(task: string): string {
   return flat.length > TASK_PREVIEW_CHARS ? `${flat.slice(0, TASK_PREVIEW_CHARS)}…` : flat;
 }
 
+/** A participant's address, lowercased: how drafts compare recipients. */
+function participantKey(participant: Json): string {
+  return String(participant['email']).trim().toLowerCase();
+}
+
+/** Participants with repeats (by address) removed; the first one wins. */
+function uniqueByKey(participants: Json[]): Json[] {
+  const seen = new Set<string>();
+  return participants.filter((p) => {
+    const key = participantKey(p);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function asParticipants(value: unknown): Json[] {
   if (typeof value === 'string') {
     const email = value.trim();
@@ -370,12 +386,18 @@ export class DraftState {
     if (!id) return data;
     const prev = this.drafts.get(id);
     // Returned fields win, then the call's arguments, then whatever this id already held.
+    // A compose names recipients by contact ID (to, cc) and by address (to_addresses,
+    // cc_addresses), so the draft holds both, as written (#2053).
     let to: unknown = prev?.to ?? [];
     if (input['recipients'] !== undefined) to = input['recipients'];
-    if (input['to'] !== undefined) to = input['to'];
+    if (input['to'] !== undefined || input['to_addresses'] !== undefined) {
+      to = [...asParticipants(input['to']), ...asParticipants(input['to_addresses'])];
+    }
     if (data['to'] !== undefined) to = data['to'];
     let cc: unknown = prev?.cc ?? [];
-    if (input['cc'] !== undefined) cc = input['cc'];
+    if (input['cc'] !== undefined || input['cc_addresses'] !== undefined) {
+      cc = [...asParticipants(input['cc']), ...asParticipants(input['cc_addresses'])];
+    }
     if (data['cc'] !== undefined) cc = data['cc'];
     const subject = typeof data['subject'] === 'string' ? data['subject']
       : typeof input['subject'] === 'string' ? input['subject']
@@ -396,8 +418,22 @@ export class DraftState {
     const next: DraftRecord = { ...prev, id };
     if (typeof input['subject'] === 'string') next.subject = input['subject'];
     if (typeof input['body'] === 'string') next.body = input['body'];
-    if (input['to'] !== undefined) next.to = input['to'];
-    if (input['cc'] !== undefined) next.cc = input['cc'];
+    // Recipients change one at a time (#2053): remove takes entries off both lines, and
+    // an addition goes on its line and off the other. Entries are compared as written.
+    const removed = new Set(asParticipants(input['remove']).map(participantKey));
+    const addTo = [...asParticipants(input['add_to']), ...asParticipants(input['add_to_addresses'])];
+    const addCc = [...asParticipants(input['add_cc']), ...asParticipants(input['add_cc_addresses'])];
+    if (removed.size > 0 || addTo.length > 0 || addCc.length > 0) {
+      const addToKeys = new Set(addTo.map(participantKey));
+      const addCcKeys = new Set(addCc.map(participantKey));
+      const keep = (list: unknown, other: ReadonlySet<string>): Json[] =>
+        asParticipants(list).filter((p) => !removed.has(participantKey(p)) && !other.has(participantKey(p)));
+      const to = uniqueByKey([...keep(prev.to, addCcKeys), ...addTo]);
+      const toKeys = new Set(to.map(participantKey));
+      next.to = to;
+      // Someone on the To line is not repeated on Cc, as in the real tool.
+      next.cc = uniqueByKey([...keep(prev.cc, addToKeys), ...addCc]).filter((p) => !toKeys.has(participantKey(p)));
+    }
     this.drafts.set(id, next);
     return data;
   }

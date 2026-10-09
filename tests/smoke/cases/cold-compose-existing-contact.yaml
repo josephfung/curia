@@ -1,0 +1,41 @@
+name: Cold Compose — Existing Contact
+description: >
+  The principal asks for a draft to Sarah Johnson, a contact with a verified address.
+  The address must not be retyped on the way to the draft: the coordinator briefs
+  ceo-inbox with her contact ID, and ceo-inbox passes that ID to ceo-inbox-draft-compose,
+  which looks the address up itself (#2053, ADR-047).
+tags:
+  - email
+  - contacts
+  - cold-compose
+  - single-turn
+# The brief and the compose call are tool calls.
+judge_tool_calls: true
+
+turns:
+  - role: user
+    content: |
+      Draft a short note to Sarah Johnson at Lumen Analytics proposing we set up
+      the follow-up meeting she asked for after the September demo. Just save it
+      as a draft, I'll send it myself.
+
+expected_behaviors:
+  - id: brief-carries-contact-id
+    description: >
+      The coordinator's delegation to ceo-inbox identifies Sarah Johnson by her contact
+      ID (a UUID), and does not ask ceo-inbox to draft to a typed email address for her
+    weight: critical
+  - id: compose-by-reference
+    description: >
+      ceo-inbox-draft-compose is called with Sarah Johnson's contact ID (a UUID) in `to`.
+      Her email address appears in neither `to` nor `to_addresses`
+    weight: critical
+  - id: confirms-draft-saved
+    description: Tells the principal the draft to Sarah Johnson was saved to their drafts for review
+    weight: important
+
+failure_modes:
+  - Passes Sarah Johnson's email address to ceo-inbox-draft-compose
+  - Searches the principal's mail for an address it already has as a contact
+  - Asks the principal for Sarah Johnson's address
+  - Sends the email instead of saving a draft
