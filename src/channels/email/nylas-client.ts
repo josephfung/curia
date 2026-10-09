@@ -28,6 +28,7 @@ import type {
 import type { Logger } from '../../logger.js';
 import { budgetExpired, remainingMs } from '../../util/call-budget.js';
 import type { CallBudget } from '../../util/call-budget.js';
+import { markMessageRequestError } from './nylas-message-id.js';
 
 /** Per-request SDK options. `timeout` caps one request (see budgetOverrides). */
 interface RequestOverrides {
@@ -327,7 +328,7 @@ export class NylasClient {
       return this.normalizeMessage(response.data);
     } catch (err) {
       this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas getMessage failed');
-      throw err;
+      throw markMessageRequestError(err);
     }
   }
 
@@ -483,7 +484,7 @@ export class NylasClient {
       this.log.info({ messageId, updatedFolders: currentFolders }, 'message archived successfully');
     } catch (err) {
       this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas messages.update failed during archive');
-      throw err;
+      throw markMessageRequestError(err);
     }
   }
 
@@ -503,7 +504,7 @@ export class NylasClient {
       this.log.info({ messageId }, 'message marked as read');
     } catch (err) {
       this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas markAsRead failed');
-      throw err;
+      throw markMessageRequestError(err);
     }
   }
 
@@ -591,7 +592,7 @@ export class NylasClient {
       return this.normalizeMessage(response.data);
     } catch (err) {
       this.log.error({ err, grantId: this.grantId, messageId }, 'Nylas updateMessageFolders failed');
-      throw err;
+      throw markMessageRequestError(err);
     }
   }
 

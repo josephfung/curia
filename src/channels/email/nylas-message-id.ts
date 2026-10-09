@@ -32,6 +32,9 @@ export function replyToMessageIdLooksLikeEntryIdError(): string {
   );
 }
 
+// `.` and `..` pass the character check but are URL dot segments: `/messages/..`
+// normalizes to another endpoint. No provider issues an ID made only of dots.
+const DOTS_ONLY = /^\.+$/;
 // Characters any provider's ID is built from: hex (Google), base64 and base64url
 // (Microsoft, EWS), digits (IMAP UIDs), plus `:` and `.` as separators. Anything
 // else (spaces, quotes, `<>@` from an RFC 822 Message-ID header, `{}$` from a
@@ -68,6 +71,9 @@ export function validateNylasMessageId(value: string, field = 'message_id'): str
   if (PLACEHOLDER_WORDS.test(id)) {
     return reject('it contains placeholder text');
   }
+  if (DOTS_ONLY.test(id)) {
+    return reject('it is only dots, which a URL path reads as a directory reference');
+  }
   if (!ID_CHARSET.test(id)) {
     return reject('it contains characters no mail provider uses in an ID (spaces, quotes, <, >, @, braces or $)');
   }
@@ -85,6 +91,22 @@ export function messageNotFoundError(messageId: string): string {
   );
 }
 
+// Errors from requests that addressed the message itself (read, update, mark).
+// A 404 from one of those means the ID is wrong. A 404 from a folder or draft
+// request in the same tool call does not, so only tagged errors become
+// "message not found".
+const messageRequestErrors = new WeakSet<object>();
+
+/**
+ * Record that `err` came from a request on the message itself, and return it
+ * for rethrowing. The error is not changed. Clients call this in their
+ * message read/update paths.
+ */
+export function markMessageRequestError(err: unknown): unknown {
+  if (typeof err === 'object' && err !== null) messageRequestErrors.add(err);
+  return err;
+}
+
 // The HTTP status of a Nylas failure: `status` on CeoNylasClient's NylasApiError,
 // `statusCode` on the SDK's.
 function nylasStatus(err: unknown): number | undefined {
@@ -97,9 +119,10 @@ function nylasStatus(err: unknown): number | undefined {
 /**
  * Agent-facing failure for a Nylas call about one message.
  *
- * A 404 says the ID is wrong and must not be retried. A 429 is marked
- * RATE_LIMIT so the runtime treats it as transient. Anything else is the
- * summary plus the error's own message.
+ * A 404 from a request on the message (see markMessageRequestError) says the
+ * ID is wrong and must not be retried. Any other 404 keeps its own detail. A
+ * 429 is marked RATE_LIMIT so the runtime treats it as transient. Anything
+ * else is the summary plus the error's own message.
  */
 export function nylasMessageFailure(
   err: unknown,
@@ -107,10 +130,13 @@ export function nylasMessageFailure(
   summary: string,
 ): { error: string; errorType?: ErrorType } {
   const status = nylasStatus(err);
-  if (status === 404) {
+  if (status === 404 && typeof err === 'object' && err !== null && messageRequestErrors.has(err)) {
     return { error: messageNotFoundError(messageId), errorType: 'NOT_FOUND' };
   }
   const detail = err instanceof Error ? err.message : String(err);
+  if (status === 404) {
+    return { error: `${summary}: ${detail}`, errorType: 'NOT_FOUND' };
+  }
   if (status === 429) {
     return { error: `${summary}: ${detail}`, errorType: 'RATE_LIMIT' };
   }
