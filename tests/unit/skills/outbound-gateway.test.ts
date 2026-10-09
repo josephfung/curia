@@ -837,10 +837,51 @@ describe('OutboundGateway', () => {
         conversationId: '',
         channelId: baseRequest.channel,
         recipientTier: 'unknown',
+        recipientTierUnresolved: false,
+        principalDirected: false,
         recipients: [{ email: baseRequest.to, isPrincipal: false }],
         principalIncluded: false,
         principalIsSoleRecipient: false,
       });
+    });
+
+    it('forwards principalDirected to the content filter (#1870)', async () => {
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({ passed: true, findings: [] });
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+
+      await gateway.send(baseRequest, { principalDirected: true });
+
+      expect(mocks.contentFilter.check).toHaveBeenCalledWith(
+        expect.objectContaining({ principalDirected: true }),
+      );
+    });
+
+    it('flags recipientTierUnresolved when contact resolution throws, and still filters (#1870)', async () => {
+      // The gateway fails open on the lookup error (the send proceeds) but tells the
+      // filter the 'unknown' tier came from an outage, not a genuinely unknown recipient.
+      (mocks.contactService.resolveByChannelIdentity as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({ passed: true, findings: [] });
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+
+      await gateway.send(baseRequest);
+
+      expect(mocks.contentFilter.check).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientTier: 'unknown', recipientTierUnresolved: true }),
+      );
     });
 
     it('forwards recipientTier=trusted to contentFilter when contact has tier=trusted', async () => {
@@ -880,6 +921,8 @@ describe('OutboundGateway', () => {
         conversationId: '',
         channelId: baseRequest.channel,
         recipientTier: 'trusted',
+        recipientTierUnresolved: false,
+        principalDirected: false,
         recipients: [{ email: baseRequest.to, isPrincipal: false }],
         principalIncluded: false,
         principalIsSoleRecipient: false,

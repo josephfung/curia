@@ -1,7 +1,7 @@
 {
   "name": "signal-send",
   "description": "Send a Signal message to a person or a group (by group ID). recipient takes a contact ID, or \"principal\" for the principal; you choose the person and the number comes from their verified Signal identity. A #label (principal#personal) is a hint for which labelled identity, not a phone number. For group sends, all group members must be verified contacts; unverified groups are refused with a list of which members need verification.",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {

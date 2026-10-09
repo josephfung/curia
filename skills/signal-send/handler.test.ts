@@ -243,7 +243,23 @@ describe('SignalSendHandler', () => {
     }
     expect(gateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'signal', recipient: '+14155551234', message: 'hello' }),
-      { taskEventId: undefined, conversationId: undefined },
+      { taskEventId: undefined, conversationId: undefined, principalDirected: false },
+    );
+  });
+
+  it('marks the send principalDirected when the task is principal-originated (#1870)', async () => {
+    const gateway = { send: vi.fn().mockResolvedValue({ success: true }) };
+    const ctx = makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway });
+    (ctx as { taskMetadata?: Record<string, unknown> }).taskMetadata = {
+      originator: { contactId: 'p1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-09-17T14:00:00Z', tier: 'principal' },
+    };
+
+    const result = await handler.execute(ctx);
+
+    expect(result.success).toBe(true);
+    expect(gateway.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ principalDirected: true }),
     );
   });
 
@@ -275,7 +291,7 @@ describe('SignalSendHandler', () => {
     }
     expect(gateway.send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'signal', groupId: 'grpABC==', message: 'team update' }),
-      { taskEventId: undefined, conversationId: undefined },
+      { taskEventId: undefined, conversationId: undefined, principalDirected: false },
     );
   });
 

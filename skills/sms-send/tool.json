@@ -1,7 +1,7 @@
 {
   "name": "sms-send",
   "description": "Send an SMS text message to a person via the office Telnyx DID. recipient takes a contact ID, or \"principal\" for the principal; you choose the person and the number comes from their verified SMS identity. A #label (principal#personal) is a hint for which labelled identity, not a phone number. 1:1 only (no groups/MMS in v1). If Telnyx returns a carrier STOP (error 40300), treat the recipient as opted out and record a contact KG fact — do not retry.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {
