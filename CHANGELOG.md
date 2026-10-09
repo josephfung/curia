@@ -189,6 +189,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Skill timeouts** — a timed-out call now aborts its Nylas requests instead of writing late. (#2083)
 - **`ceo-inbox` retries** — a `Retry-After` longer than the call's remaining time fails fast as retryable. (#2083)
 - **Mail message IDs** — `ceo-inbox-*` and `email-*` reject malformed IDs; a 404 says not to retry. (#2083)
+- **`task-update`** — an over-long progress note is truncated with a warning; `wake_at` and status still apply. (#2084)
+- **Task-wake disposition** — a wake that parks its task with nothing to wake it gets the follow-up. (#2084)
 - **Delegated sends** — the coordinator no longer reports a specialist's composed email as sent. (#2055)
 - **`email-reply`** — verifies a reply recipient only when mail auth passes and it is not ours. (#2071)
 - **Smoke and scenario stubs** — scheduler, task and draft reads replay writes from the same case. (#2074)

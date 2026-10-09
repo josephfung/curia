@@ -21,9 +21,15 @@ export const WAKE_DISPOSITION_INSTRUCTION =
   'call task-update with status cancelled if it should stop, ' +
   'or park it with task-update status waiting or blocked, a progress note, and wake_at. ' +
   'scheduler-report records this job run and does not close the task. ' +
-  'Ending while the task is still open, with no new note and no wake, is a bug.';
+  'Ending while the task is still open with no new note and no wake, or parked with no wake, is a bug.';
 
 const ACTIVE_STATUSES = new Set(['open', 'in_progress']);
+const PARKED_STATUSES = new Set(['waiting', 'blocked']);
+
+/** A parked status: waiting or blocked. Undisposed only when nothing will wake it. */
+export function isParkedStatus(status: string): boolean {
+  return PARKED_STATUSES.has(status);
+}
 
 /** Stable snapshot of progress.notes. Other progress blocks (active skills, plans) do not count. */
 export function progressNotesSnapshot(progress: unknown): string {
@@ -41,16 +47,21 @@ export interface WakeDispositionView {
   deferredWake: boolean;
   /** Some other task-wake row for this task is pending or running. */
   otherActiveWake: boolean;
+  /** The task waits on a contact (waiting_on_contact_id) or a blocking task (blocked_by_task_id). */
+  waitsOnDependency: boolean;
 }
 
 /**
- * True when the task is still open or in progress, its progress notes did not
- * change, and nothing scheduled a new wake. Done, cancelled, and parked
- * (waiting / blocked) are dispositions. A new note or a new wake is too.
+ * Done and cancelled are always dispositions. Open or in progress is undisposed
+ * unless the run added a progress note or scheduled a wake. Parked (waiting /
+ * blocked) is undisposed only when nothing will wake it: no wake and no contact
+ * or task it waits on. A note does not count there — a parked loop with a fresh
+ * note and no wake_at is exactly how a re-arming loop stops (#2084).
  */
 export function isUndisposedWake(view: WakeDispositionView): boolean {
-  if (!ACTIVE_STATUSES.has(view.status)) return false;
   if (view.deferredWake || view.otherActiveWake) return false;
+  if (isParkedStatus(view.status)) return !view.waitsOnDependency;
+  if (!ACTIVE_STATUSES.has(view.status)) return false;
   return progressNotesSnapshot(view.progress) === view.notesAtStart;
 }
 
@@ -61,7 +72,14 @@ function taskLabel(taskId: string, title: string | null): string {
 }
 
 /** User-message for the single disposition follow-up. Same conversation as the wake. */
-export function dispositionTurnPrompt(taskId: string, title: string | null): string {
+export function dispositionTurnPrompt(taskId: string, title: string | null, status: string): string {
+  if (isParkedStatus(status)) {
+    return [
+      `Task ${taskLabel(taskId, title)} is parked as ${status}, but nothing will wake it: it has no wake_at and does not wait on a contact or another task.`,
+      'Call task-update with wake_at for when it should next run or be checked. If the work is finished, task-complete it, or set status cancelled if it should stop.',
+      'Do not repeat the task\'s actions.',
+    ].join(' ');
+  }
   return [
     `Task ${taskLabel(taskId, title)} is still open after this run.`,
     'Based on what you just did, choose one: task-complete (with a note), task-update status to cancelled, or park it with status waiting or blocked, a progress note, and wake_at.',

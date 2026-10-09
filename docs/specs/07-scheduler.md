@@ -210,9 +210,16 @@ That pairing is load-bearing: every runtime failure path must emit both events i
 
 An ordinary task wake (`task_payload.type = 'task-wake'`, not a delegation-retry brief) carries a disposition instruction in its `agent.task` body: before the run finishes, `task-complete` the task, cancel it, or park it (`waiting`/`blocked` plus a progress note and `wake_at`).
 
-If that run **succeeds** and the task is still undisposed — status `open` or `in_progress`, progress notes unchanged, no new wake — the scheduler publishes **one** follow-up `agent.task` to the same agent on the same `scheduler:<job>:<run>` conversation. `toolAllowlist` is `task-complete` and `task-update`, so the follow-up cannot repeat the wake's sends. The job stays `running` until that follow-up ends, and `tasks.updated_at` is touched when the follow-up is asked for, so BacklogHeartbeat cannot select the task in the gap. A failed or timed-out wake does not get a follow-up. A wake with `created_by = resumable-continuation` (a paused-slice continuation or a plan-parent wake) does not get one either: those runs are meant to leave the task open. The hourly heartbeat remains the backstop, and a heartbeat wake of the same task still gets the follow-up.
+If that run **succeeds** and the task is still undisposed, the scheduler publishes **one** follow-up `agent.task` to the same agent on the same `scheduler:<job>:<run>` conversation. `toolAllowlist` is `task-complete` and `task-update`, so the follow-up cannot repeat the wake's sends. The job stays `running` until that follow-up ends, and `tasks.updated_at` is touched when the follow-up is asked for, so BacklogHeartbeat cannot select the task in the gap. A failed or timed-out wake does not get a follow-up. A wake with `created_by = resumable-continuation` (a paused-slice continuation or a plan-parent wake) does not get one either: those runs are meant to leave the task open. The hourly heartbeat remains the backstop, and a heartbeat wake of the same task still gets the follow-up.
 
-If the follow-up also leaves the task undisposed, the scheduler tags it `needs-disposition` (heartbeat selection excludes that tag), logs a warning, notifies the coordinator with a review-only notice parented on that follow-up event, and files a CEO backlog row tagged `needs-attention`. It does not auto-complete the task and it does not ask again.
+Undisposed means either of:
+
+- status `open` or `in_progress`, progress notes unchanged, no new wake;
+- status `waiting` or `blocked` with nothing to wake it: no new or other pending wake, and no `waiting_on_contact_id` or `blocked_by_task_id` (#2084). A progress note does not count here. A re-arming loop that parks its tick task with a note but no `wake_at` has stopped, and the parked follow-up prompt asks for `wake_at` by name.
+
+If the follow-up leaves a **parked** task with still nothing to wake it, the scheduler logs a warning and leaves it to heartbeat revival after `staleWaitThresholdHours`. It is not tagged and no review is filed: the tag would remove that backstop.
+
+If the follow-up leaves an **open** task undisposed, the scheduler tags it `needs-disposition` (heartbeat selection excludes that tag), logs a warning, notifies the coordinator with a review-only notice parented on that follow-up event, and files a CEO backlog row tagged `needs-attention`. It does not auto-complete the task and it does not ask again.
 
 `enqueueTaskWake` keeps `last_run_outcome` when it revives a `completed` row, so the next fire still receives `[Prior run context]`. `consecutive_failures` still resets. Delegation-retry tasks stay closed at fire time (`closeDelegationRetryTask`) and do not use this follow-up.
 

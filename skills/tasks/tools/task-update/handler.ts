@@ -10,6 +10,9 @@ import { isUuid } from '../../../../src/util/uuid.js';
 
 const VALID_STATUSES = new Set(['open', 'in_progress', 'blocked', 'waiting', 'done', 'cancelled']);
 const VALID_OWNERS = new Set(['curia', 'ceo', 'external']);
+const MAX_PROGRESS_NOTE = 2000;
+// Room for " [truncated: N characters cut]" (29 chars + digits) inside the limit.
+const TRUNCATION_MARKER_RESERVE = 40;
 
 // Strict ISO-8601 datetime with timezone offset. Rejects loose strings that new Date() would accept.
 const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -52,8 +55,19 @@ export class TaskUpdateHandler implements ToolHandler {
     if (input.tags && !Array.isArray(input.tags)) {
       return { success: false, error: 'tags must be an array of strings' };
     }
-    if (input.progress_note && input.progress_note.length > 2000) {
-      return { success: false, error: 'progress_note must be 2000 characters or fewer' };
+    // An over-long note is truncated, not refused. Refusing threw away wake_at and status
+    // from the same call, and a retry that dropped wake_at ended a re-arming loop (#2084).
+    let progressNote = input.progress_note;
+    let noteWarning: string | undefined;
+    if (progressNote && progressNote.length > MAX_PROGRESS_NOTE) {
+      const originalLength = progressNote.length;
+      const keep = MAX_PROGRESS_NOTE - TRUNCATION_MARKER_RESERVE;
+      progressNote = progressNote.slice(0, keep) + ` [truncated: ${originalLength - keep} characters cut]`;
+      noteWarning =
+        `progress_note was ${originalLength} characters, over the ${MAX_PROGRESS_NOTE} limit. ` +
+        `It was truncated and saved; all other fields in this call were applied. ` +
+        `Keep future notes shorter rather than re-sending the cut text.`;
+      ctx.log.warn({ taskId: input.task_id, originalLength }, 'task-update: progress_note truncated');
     }
     if (input.blocked_by_task_id !== undefined && input.blocked_by_task_id !== null) {
       if (typeof input.blocked_by_task_id !== 'string' || !isUuid(input.blocked_by_task_id)) {
@@ -111,7 +125,7 @@ export class TaskUpdateHandler implements ToolHandler {
           dueAt,
           wakeAt,
           tags: input.tags,
-          progressNote: input.progress_note,
+          progressNote,
           blockedByTaskId: input.blocked_by_task_id,
         },
         ctx.agentId,
@@ -136,6 +150,7 @@ export class TaskUpdateHandler implements ToolHandler {
           tags: updated.tags,
           updated_at: toLocalIso(Math.floor(new Date(updated.updatedAt).getTime() / 1000), tz) ?? updated.updatedAt,
           displayTimezone: tz ? formatDisplayTimezone(tz, new Date()) : 'UTC',
+          ...(noteWarning && { warning: noteWarning }),
         },
       };
     } catch (err) {

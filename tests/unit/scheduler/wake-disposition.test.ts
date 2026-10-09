@@ -68,6 +68,7 @@ function dispositionRow(overrides: Record<string, unknown> = {}) {
     title: 'Preply lesson',
     deferred_wake: false,
     other_active_wake: false,
+    waits_on_dependency: false,
     ...overrides,
   };
 }
@@ -98,6 +99,7 @@ describe('isUndisposedWake', () => {
     notesAtStart: '[]',
     deferredWake: false,
     otherActiveWake: false,
+    waitsOnDependency: false,
   };
 
   it('is undisposed when the task is still open and nothing was recorded', () => {
@@ -105,10 +107,34 @@ describe('isUndisposedWake', () => {
     expect(isUndisposedWake({ ...base, status: 'in_progress' })).toBe(true);
   });
 
-  it('treats done, cancelled, and parked statuses as dispositions', () => {
-    for (const status of ['done', 'cancelled', 'waiting', 'blocked']) {
+  it('treats done and cancelled as dispositions', () => {
+    for (const status of ['done', 'cancelled']) {
       expect(isUndisposedWake({ ...base, status })).toBe(false);
     }
+  });
+
+  // #2084: a parked task with nothing to wake it is not parked, it is lost.
+  describe('parked (waiting / blocked)', () => {
+    const noted = { notes: [{ at: '2026-10-07T17:25:42Z', note: 'ran the tick' }] };
+
+    it('is undisposed with no wake and nothing it waits on, even with a new note', () => {
+      for (const status of ['waiting', 'blocked']) {
+        expect(isUndisposedWake({ ...base, status, progress: noted })).toBe(true);
+      }
+    });
+
+    it('is disposed once a wake is scheduled', () => {
+      for (const status of ['waiting', 'blocked']) {
+        expect(isUndisposedWake({ ...base, status, deferredWake: true })).toBe(false);
+        expect(isUndisposedWake({ ...base, status, otherActiveWake: true })).toBe(false);
+      }
+    });
+
+    it('is disposed when it waits on a contact or a blocking task', () => {
+      for (const status of ['waiting', 'blocked']) {
+        expect(isUndisposedWake({ ...base, status, waitsOnDependency: true })).toBe(false);
+      }
+    });
   });
 
   it('treats a new progress note or a new wake as a disposition', () => {
@@ -251,19 +277,21 @@ describe('Scheduler task-wake disposition (#1951)', () => {
     expect(followUp.payload.content).toContain('Do not repeat');
   });
 
-  it('does not ask when the run already completed, cancelled, or parked the task', async () => {
+  it('does not ask when the run already completed, cancelled, or parked the task with a wake', async () => {
     const handler = responseHandler();
     for (const status of ['done', 'cancelled', 'waiting', 'blocked']) {
       bus.publish.mockClear();
       pool.query.mockReset();
       schedulerService.completeJobRun.mockClear();
       const task = await fire();
+      const parked = status === 'waiting' || status === 'blocked';
       pool.query.mockResolvedValueOnce({
         rows: [dispositionRow({
           status,
-          progress: status === 'waiting' || status === 'blocked'
+          progress: parked
             ? { notes: [{ at: '2026-10-01T00:01:00Z', note: 'parked' }] }
             : { notes: [] },
+          deferred_wake: parked,
         })],
       });
       respond(handler, task.id, 'Handled it');
@@ -383,6 +411,93 @@ describe('Scheduler task-wake disposition (#1951)', () => {
     await Promise.resolve();
     expect(schedulerService.completeJobRun).toHaveBeenCalledTimes(callsBefore);
     expect(agentTasks(bus).filter((event) => event.payload.agentId === 'meeting-debrief')).toHaveLength(2);
+  });
+
+  // #2084: 2026-10-07 17:25 UTC, social-media parked its tick task as waiting with a
+  // note and no wake_at. Nothing asked, and the loop was down until the daily cron.
+  describe('parked with nothing to wake it (#2084)', () => {
+    const parkedNoWake = {
+      status: 'waiting',
+      progress: { notes: [{ at: '2026-10-07T17:25:42Z', note: 'ran the tick' }] },
+    };
+
+    it('asks once for a wake, naming the problem', async () => {
+      const task = await fire();
+      pool.query.mockResolvedValueOnce({ rows: [dispositionRow(parkedNoWake)] });
+      pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+      const handler = responseHandler();
+      respond(handler, task.id, 'Ran the tick');
+
+      await vi.waitFor(() => {
+        expect(agentTasks(bus)).toHaveLength(2);
+      });
+      expect(schedulerService.completeJobRun).not.toHaveBeenCalled();
+      const followUp = agentTasks(bus)[1]!;
+      expect(followUp.payload.conversationId).toBe(task.payload.conversationId);
+      expect(followUp.payload.toolAllowlist).toEqual(['task-complete', 'task-update']);
+      expect(followUp.payload.content).toContain('waiting');
+      expect(followUp.payload.content).toContain('nothing will wake it');
+      expect(followUp.payload.content).toContain('wake_at');
+      expect(followUp.payload.content).not.toContain('still open');
+    });
+
+    it('does not ask when the parked task waits on a contact or a blocking task', async () => {
+      const task = await fire();
+      pool.query.mockResolvedValueOnce({
+        rows: [dispositionRow({ ...parkedNoWake, waits_on_dependency: true })],
+      });
+      const handler = responseHandler();
+      respond(handler, task.id, 'Waiting on their reply');
+      await vi.waitFor(() => {
+        expect(schedulerService.completeJobRun).toHaveBeenCalled();
+      });
+      expect(agentTasks(bus)).toHaveLength(1);
+    });
+
+    it('reads whether the task waits on a contact or a blocking task', async () => {
+      const task = await fire();
+      pool.query.mockResolvedValueOnce({ rows: [dispositionRow({ status: 'done' })] });
+      const handler = responseHandler();
+      respond(handler, task.id, 'Done');
+      await vi.waitFor(() => {
+        expect(schedulerService.completeJobRun).toHaveBeenCalled();
+      });
+      const sql = pool.query.mock.calls.map((call) => String(call[0])).find((s) => s.includes('deferred_wake'));
+      expect(sql).toContain('waiting_on_contact_id');
+      expect(sql).toContain('blocked_by_task_id');
+    });
+
+    it('leaves it to the heartbeat, without a review notice, if the follow-up still sets no wake', async () => {
+      const task = await fire();
+      pool.query.mockResolvedValueOnce({ rows: [dispositionRow(parkedNoWake)] });
+      pool.query.mockResolvedValueOnce({ rowCount: 0, rows: [] });
+      const handler = responseHandler();
+      respond(handler, task.id, 'Ran the tick');
+      await vi.waitFor(() => {
+        expect(agentTasks(bus)).toHaveLength(2);
+      });
+      const followUp = agentTasks(bus)[1]!;
+
+      pool.query.mockResolvedValueOnce({ rows: [dispositionRow(parkedNoWake)] });
+      respond(handler, followUp.id, 'Still waiting');
+
+      await vi.waitFor(() => {
+        expect(schedulerService.completeJobRun).toHaveBeenCalledTimes(1);
+      });
+      // A parked task keeps today's backstop, staleWaitThresholdHours revival.
+      // needs-disposition would exclude it from that and send the principal a review.
+      const tagged = pool.query.mock.calls.some((call) => {
+        const params = call[1] as unknown[] | undefined;
+        return Array.isArray(params) && params.includes('needs-disposition');
+      });
+      expect(tagged).toBe(false);
+      expect(agentTasks(bus).filter((event) => event.payload.agentId === 'coordinator')).toHaveLength(0);
+      expect(taskRepo.createTask).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: 'task-abc', jobId: 'job-1', status: 'waiting' }),
+        expect.stringContaining('left to heartbeat revival'),
+      );
+    });
   });
 
   it('completes without flagging when the follow-up disposes the task', async () => {
