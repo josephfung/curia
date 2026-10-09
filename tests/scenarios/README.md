@@ -426,8 +426,8 @@ was scored.
 **Cost.** Each specialist turn is several more model calls, and the specialists' spend is
 reported per agent: per case in the run output, per run and case in the results JSON
 (`usage.byAgent`), and for the suite in the summary. On the 2026-10-09 baseline (below), a
-real-delegation run cost $0.01 to $0.03 with its judging, two to five times a stubbed run,
-and took 9 to 64 seconds on average. The three gated cases add about $0.25 and two minutes
+real-delegation run cost $0.01 to $0.04 with its judging, two to five times a stubbed run,
+and took 11 to 118 seconds on average. The three gated cases add about $0.25 and two minutes
 to a release gate run.
 
 ### Which real-delegation cases gate a release
@@ -450,19 +450,30 @@ Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before cha
 specialist prompt or the delegate handler, run `--tags real-delegation`.
 
 Baseline: `deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each,
-2026-10-09, commit `c7ce8c8f` (16a re-measured at `d0e7b1bb`, after stubbing ceo-inbox's
-`contact-register`). Every critical behavior met the gate. Spend is for the five runs,
-judge included.
+2026-10-09, on this branch: 16a at `8b90df44`, 16b at `fdd51732`, 16c and 16e to 16g at
+`8b90df44`, 16d at `0ef4754e` (the tree differed from it only in this README and
+`stub-coverage.json`). Every critical behavior passed all five runs, with no stub holes.
+Spend is for the five runs, judge included.
 
 | Case | Score | Below 100% | Avg run | Spend |
 |---|---|---|---|---|
-| 16a transfer ownership | 97% | `platform_released_entry` 4/5: once, ceo-inbox called `context-bridge-keep-open` after drafting, so the entry stayed open | 61s | $0.09 |
-| 16b calendar borrow | 98% | `one_read` 4/5: delegated a second time once | 9s | $0.05 |
-| 16c calendar read fails | 100% | | 27s | $0.08 |
-| 16d clarification resume | 96% | `resumes_with_token` 4/5: once, the model miscopied a character of the 700-character token | 24s | $0.10 |
-| 16e email identifiers | 100% | | 64s | $0.14 |
-| 16f principal request over email | 100% | | 18s | $0.06 |
-| 16g one message per item | 100% | | 23s | $0.08 |
+| 16a transfer ownership | 100% | | 28s | $0.08 |
+| 16b calendar borrow | 98% | `one_read` 4/5: delegated a second time once | 11s | $0.05 |
+| 16c calendar read fails | 100% | | 45s | $0.10 |
+| 16d clarification resume | 97% | `resumes_with_token` 4/5: once, the model miscopied a character of the 700-character token, and the brief was still rebuilt | 34s | $0.11 |
+| 16e email identifiers | 100% | | 118s | $0.19 |
+| 16f principal request over email | 100% | | 21s | $0.06 |
+| 16g one message per item | 100% | | 41s | $0.10 |
 
-The earlier measurement of 16a (`c7ce8c8f`) had `no_second_release` at 4/5: once, ceo-inbox
-released the entry itself although the platform had.
+Two checks are scored but deliberately not critical, because each was measured at 4/5,
+exactly on the 80% line, where one more miss in a sample of five fails the release:
+
+- 16a `platform_released_entry`. In an earlier measurement ceo-inbox called
+  `context-bridge-keep-open` after drafting, once in five runs, so the entry stayed open
+  (15/15 since). In another, it released the entry itself although the platform had
+  (`no_second_release`, also `important`).
+- 16d `resumes_with_token`. It is an exact match on the token, so a transcription slip fails
+  it even when the resume works (as above). `specialist_gets_resumed_brief` is the check
+  that gates the resume.
+
+Raise either to `critical` only once a larger sample clears 80% with room.
