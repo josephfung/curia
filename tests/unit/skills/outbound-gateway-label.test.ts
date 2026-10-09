@@ -97,6 +97,16 @@ describe('OutboundGateway.labelEmailMessage', () => {
     expect(result.error).toMatch(/Message not found.*Do not retry with this ID/);
   });
 
+  it('does not blame the message for a 404 from the folder listing', async () => {
+    mockFolders.list.mockRejectedValue(sdkError(404));
+
+    const result = await makeGateway().labelEmailMessage('msg-1', ['Receipts']);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Label operation failed: Nylas API 404');
+    expect(result.error).not.toMatch(/Message not found/);
+  });
+
   it('caps each SDK request at the time the tool call has left', async () => {
     await makeGateway().labelEmailMessage('msg-1', ['Receipts'], undefined, { deadline: Date.now() + 5_000 });
 

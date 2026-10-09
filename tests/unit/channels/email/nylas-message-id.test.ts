@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  markMessageRequestError,
   messageNotFoundError,
   nylasMessageFailure,
   validateNylasMessageId,
@@ -33,6 +34,8 @@ describe('validateNylasMessageId', () => {
     ['text with a space', '19a2b3c4 d5e6f708', /characters no mail provider uses/],
     ['a template token', '${message_id}', /placeholder text|characters/],
     ['a hex ID of 31 digits', 'a'.repeat(31), /31 hex digits/],
+    ['a URL dot segment', '..', /only dots/],
+    ['a single dot', '.', /only dots/],
   ])('rejects %s', (_label, id, problem) => {
     expect(validateNylasMessageId(id)).toMatch(problem);
   });
@@ -52,17 +55,26 @@ describe('validateNylasMessageId', () => {
 });
 
 describe('nylasMessageFailure', () => {
-  it('turns a CeoNylasClient 404 (status) into a final not-found error', () => {
-    const err = Object.assign(new Error('HTTP 404'), { status: 404 });
+  it('turns a CeoNylasClient 404 (status) on the message into a final not-found error', () => {
+    const err = markMessageRequestError(Object.assign(new Error('HTTP 404'), { status: 404 }));
     expect(nylasMessageFailure(err, 'm1', 'Archive failed')).toEqual({
       error: messageNotFoundError('m1'),
       errorType: 'NOT_FOUND',
     });
   });
 
-  it('turns an SDK 404 (statusCode) into the same error', () => {
-    const err = Object.assign(new Error('not found'), { statusCode: 404 });
-    expect(nylasMessageFailure(err, 'm1', 'Archive failed').errorType).toBe('NOT_FOUND');
+  it('turns an SDK 404 (statusCode) on the message into the same error', () => {
+    const err = markMessageRequestError(Object.assign(new Error('not found'), { statusCode: 404 }));
+    expect(nylasMessageFailure(err, 'm1', 'Archive failed').error).toBe(messageNotFoundError('m1'));
+  });
+
+  it('keeps the detail of a 404 from a request that did not address the message', () => {
+    // e.g. listFolders or createFolder inside a label call.
+    const err = Object.assign(new Error('Nylas listFolders: HTTP 404'), { status: 404 });
+    expect(nylasMessageFailure(err, 'm1', 'Label failed')).toEqual({
+      error: 'Label failed: Nylas listFolders: HTTP 404',
+      errorType: 'NOT_FOUND',
+    });
   });
 
   it('says not to retry the ID', () => {

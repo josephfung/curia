@@ -5,6 +5,7 @@
 
 import { budgetExpired, remainingMs } from '../../src/util/call-budget.js';
 import type { CallBudget } from '../../src/util/call-budget.js';
+import { markMessageRequestError } from '../../src/channels/email/nylas-message-id.js';
 
 const NYLAS_BASE = 'https://api.us.nylas.com/v3/grants';
 
@@ -326,7 +327,9 @@ export class CeoNylasClient {
 
   async getMessage(messageId: string): Promise<NylasMessageFull> {
     const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
-    const data = await this.request<NylasApiMessage>('GET', url, 'getMessage');
+    const data = await this.request<NylasApiMessage>('GET', url, 'getMessage').catch((err: unknown) => {
+      throw markMessageRequestError(err);
+    });
     return normalizeMessageFull(data);
   }
 
@@ -479,12 +482,16 @@ export class CeoNylasClient {
 
   async markAsRead(messageId: string): Promise<void> {
     const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
-    await this.request<NylasApiMessage>('PUT', url, 'markAsRead', { unread: false });
+    await this.request<NylasApiMessage>('PUT', url, 'markAsRead', { unread: false }).catch((err: unknown) => {
+      throw markMessageRequestError(err);
+    });
   }
 
   async markAsStarred(messageId: string, starred = true): Promise<void> {
     const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
-    await this.request<NylasApiMessage>('PUT', url, 'markAsStarred', { starred });
+    await this.request<NylasApiMessage>('PUT', url, 'markAsStarred', { starred }).catch((err: unknown) => {
+      throw markMessageRequestError(err);
+    });
   }
 
   async updateMessageFolders(
@@ -493,7 +500,11 @@ export class CeoNylasClient {
   ): Promise<{ id: string; folders: string[] }> {
     const url = `${this.baseUrl}/messages/${encodeURIComponent(messageId)}`;
     const payload = { folders };
-    const data = await this.request<NylasApiMessage>('PUT', url, 'updateMessageFolders', payload);
+    const data = await this.request<NylasApiMessage>('PUT', url, 'updateMessageFolders', payload).catch(
+      (err: unknown) => {
+        throw markMessageRequestError(err);
+      },
+    );
     return { id: data.id, folders: data.folders ?? [] };
   }
 
