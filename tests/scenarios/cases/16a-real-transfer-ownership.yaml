@@ -1,0 +1,144 @@
+# Case 16a (#2027, starter case 1): transfer-ownership end to end, with ceo-inbox really
+# running. The stubbed cases (01a-01c) stop at the coordinator's delegate call; this one
+# follows the reply across it. Rules: agents/coordinator.yaml "The transfer-ownership reply
+# rule"; delegate's entry settlement (skills/delegate/outbound-entry.ts, #1972), which
+# releases the entry when the specialist returns; ceo-inbox's "Closing a multi-turn
+# exchange", which tells it to leave the release to the platform.
+# context-bridge-release cannot run in test mode (it needs the task repo), so a second
+# release by either agent is scored as a call, against a stub that succeeds.
+name: real delegation transfer ownership
+description: >
+  ceo-inbox asked the principal whether to draft a yes to Sam Rivera's email about the Q3
+  offsite planning session. The principal answers yes. The coordinator hands the answer to
+  ceo-inbox with the entry id, ceo-inbox (really running) drafts the reply, and the platform
+  releases the entry when the delegation returns. The coordinator tells the principal the
+  reply is drafted, in its own words, and neither agent releases the entry a second time.
+tags: [real-delegation, outbound-context, transfer-ownership, ceo-inbox]
+delegation: real
+runs: 5
+stub_sets: [human-channels, voice-profile]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      tier: known
+      channel: email
+      identifier: sam@northwind.example.test
+  outbound_context:
+    - key: sam_offsite
+      channel: signal
+      agent: ceo-inbox
+      content: >
+        Sam Rivera (Northwind) asked whether Thursday at 10 works for the Q3 offsite planning
+        session. Want me to draft a reply saying it works?
+      expected_reply: whether to draft a yes to Sam
+      delegation_hint: ceo-inbox
+      metadata: { message_id: scenario-msg-sam-offsite, subject: "Q3 offsite planning" }
+      sent_minutes_ago: 20
+inbound:
+  from: principal
+  content: "Yes, Thursday at 10 works. Go ahead and draft it."
+tool_stubs:
+  ceo-inbox-read:
+    - agent: ceo-inbox
+      match: {}
+      return:
+        id: scenario-msg-sam-offsite
+        threadId: scenario-thread-sam-offsite
+        from: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: Q3 offsite planning
+        body_plain: |
+          Hi,
+
+          Does Thursday at 10 work for the Q3 offsite planning session? We'd host at our
+          office.
+
+          Sam
+        body_html: ""
+        labels: []
+        attachments: []
+  ceo-inbox-search:
+    - agent: ceo-inbox
+      match: {}
+      return:
+        messages:
+          - id: scenario-msg-sam-offsite
+            threadId: scenario-thread-sam-offsite
+            from: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+            subject: Q3 offsite planning
+            snippet: Does Thursday at 10 work for the Q3 offsite planning session?
+            unread: false
+            folders: [INBOX]
+        count: 1
+  # Before drafting, ceo-inbox looks for a draft it may already have on the thread: none.
+  ceo-inbox-list:
+    - agent: ceo-inbox
+      match: {}
+      return: { drafts: [], folder: DRAFTS, count: 0 }
+  ceo-inbox-draft-reply:
+    - agent: ceo-inbox
+      match: {}
+      return:
+        draft_id: scenario-draft-sam-offsite
+        subject: "Re: Q3 offsite planning"
+        to: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+        cc: []
+        already_exists: false
+  # A second release is the wrong path (the platform already released the entry). It
+  # cannot run in test mode, so it is stubbed to succeed for every agent.
+  context-bridge-release:
+    - match: {}
+      return: { released: "{{entry:sam_offsite}}" }
+expected_behaviors:
+  - id: routes_to_owner
+    weight: critical
+    description: Delegates the answer to ceo-inbox with the entry id.
+    check:
+      any_of:
+        - called: delegate
+          with: { agent: ceo-inbox, outbound_entry_id: "{{entry:sam_offsite}}" }
+        - called: delegate
+          with: { agent: ceo-inbox }
+          contains: { task: "{{entry:sam_offsite}}" }
+  - id: platform_released_entry
+    weight: critical
+    description: The delegation's result reports that the platform released the entry.
+    check:
+      called: delegate
+      returns: { outbound_entry: { id: "{{entry:sam_offsite}}", status: released } }
+  - id: specialist_drafts_reply
+    weight: critical
+    description: ceo-inbox drafts the reply to Sam's message.
+    check:
+      called: ceo-inbox-draft-reply
+      agent: ceo-inbox
+      success: true
+  - id: no_second_release
+    weight: important
+    description: Neither agent calls context-bridge-release for the entry.
+    check:
+      not_called: [context-bridge-release]
+      agent: any
+  - id: nothing_sent
+    weight: critical
+    description: No agent sends anything; the principal asked for a draft.
+    check:
+      not_called: [email-send, email-reply, signal-send, sms-send, slack-send]
+      agent: any
+  - id: names_no_internals
+    weight: important
+    description: The reply names no tool, agent or system identifier.
+    check:
+      reply_excludes_internal_names: true
+  - id: relays_draft_honestly
+    weight: critical
+    description: >
+      Tells the principal the reply to Sam is drafted (or saved as a draft) for Thursday at
+      10, in its own first-person voice. It does not say the reply was sent, and does not
+      describe the hand-off ("I asked my inbox specialist", "ceo-inbox reports").
+failure_modes:
+  - Says the reply to Sam was sent
+  - Relays the specialist's report verbatim, internals included
+  - Calls context-bridge-release after the delegation already released the entry

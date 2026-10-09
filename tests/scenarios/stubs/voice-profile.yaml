@@ -1,0 +1,24 @@
+# The principal's writing voice, for any agent that drafts in it (#2027). A real
+# specialist calls executive-profile-get before drafting; test mode has no profile service.
+executive-profile-get:
+  - match: {}
+    return:
+      profile:
+        writingVoice:
+          tone: [direct, warm]
+          formality: 50
+          patterns:
+            - Concise and to the point
+            - Professional but approachable
+          vocabulary:
+            prefer: []
+            avoid: []
+          signOff: ""
+          guide: ""
+      summary: |-
+        Tone: direct, warm
+        Formality: 50/100
+
+        Writing patterns:
+          - Concise and to the point
+          - Professional but approachable

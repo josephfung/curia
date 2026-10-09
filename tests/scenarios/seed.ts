@@ -5,13 +5,22 @@
 // outbound-context entries and bullpen threads. Seeded state is written through the
 // real services, so the Dispatcher's block formatting and the runtime's bullpen
 // injection are production's; but every read path an agent sees is narrowed to the
-// rows this run created, and every row is deleted when the run ends.
+// rows this run created, and every row is deleted when the run ends. With real
+// delegation (#2027) that includes what the specialists write: their conversations,
+// the dispatch claims in pending_delegations, and changes to the run's entries.
 import { randomUUID } from 'node:crypto';
-import { OutboundContextService, type OutboundContextRow } from '../../src/dispatch/outbound-context.js';
+import { encodeResumeToken } from '../../src/agents/resume-token.js';
+import {
+  OutboundContextService,
+  type OutboundContextEntry,
+  type OutboundContextRow,
+  type SubjectClearResult,
+} from '../../src/dispatch/outbound-context.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
 import type { TestModeStack } from '../../src/startup/test-mode-stack.js';
 import { cleanupConversation, sweepConversations } from '../shared/turn-capture.js';
 import { resolvePlaceholders } from './loader.js';
+import { SCENARIO_DELEGATE_PREFIX } from './stub-layer.js';
 import type { ScenarioCase, SeedContact } from './types.js';
 
 /**
@@ -39,8 +48,11 @@ const PRINCIPAL_LOCAL_CHANNELS = new Set(['cli', 'smoke-test', 'web']);
  * (tests/shared/case-scope.ts), so one view built at boot serves every run.
  */
 export class SeedScope {
+  /** Entries the run seeded, plus any an agent registered during it. */
   readonly entryIds = new Set<string>();
   readonly threadIds = new Set<string>();
+  /** Conversations real specialists ran in for this run (#2027); cleaned with the run's own. */
+  readonly specialistConversations = new Set<string>();
   /**
    * Failures inside the scoped views. The Dispatcher and runtime log such a failure
    * and carry on WITHOUT the block — a case would then be scored on a premise it never
@@ -51,6 +63,7 @@ export class SeedScope {
   clear(): void {
     this.entryIds.clear();
     this.threadIds.clear();
+    this.specialistConversations.clear();
     this.errors.length = 0;
   }
 }
@@ -59,26 +72,84 @@ export class SeedScope {
 export type CurrentScope = () => SeedScope | undefined;
 
 /**
- * The Dispatcher's outbound-context service, narrowed to the calling run's entries.
- * `getActive()` keeps production's contract (active only, newest first, limit) but
- * reads each seeded entry through the real `getEntry` SQL, so a released or expired
- * entry drops out exactly as it would in production.
+ * The outbound-context service narrowed to the calling run's entries: what the
+ * Dispatcher reads for the [ACTIVE OUTBOUND CONTEXT] block, and what the ExecutionLayer
+ * hands `delegate` and the context-bridge tools (#2027). Each method keeps production's
+ * contract and SQL, applied only to the run's own entries. An id outside them reads as
+ * no active entry, the way production treats an unknown id. An entry an agent registers
+ * joins the run's scope (and its cleanup). Outside every run there is nothing to read,
+ * and nothing may be written.
  */
 export function scopedOutboundContext(real: OutboundContextService, currentScope: CurrentScope): OutboundContextService {
+  /** The run's scope, or undefined when `entryId` is not one of its entries. */
+  const owning = (entryId: string): SeedScope | undefined => {
+    const scope = currentScope();
+    return scope?.entryIds.has(entryId) ? scope : undefined;
+  };
+  const activeEntries = async (scope: SeedScope): Promise<OutboundContextRow[]> => {
+    const rows = await Promise.all([...scope.entryIds].map(id => real.getEntry(id)));
+    return rows.filter((r): r is OutboundContextRow => r !== null);
+  };
+
   return Object.assign(Object.create(real) as OutboundContextService, {
     getActive: async (limit = 10): Promise<OutboundContextRow[]> => {
       const scope = currentScope();
       if (!scope) return [];
       try {
-        const rows = await Promise.all([...scope.entryIds].map(id => real.getEntry(id)));
-        return rows
-          .filter((r): r is OutboundContextRow => r !== null)
+        return (await activeEntries(scope))
           .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
           .slice(0, limit);
       } catch (err) {
         scope.errors.push(`outbound-context read failed: ${err instanceof Error ? err.message : String(err)}`);
         throw err;
       }
+    },
+    getEntry: async (entryId: string): Promise<OutboundContextRow | null> =>
+      owning(entryId) ? real.getEntry(entryId) : null,
+    register: async (entry: OutboundContextEntry): Promise<string> => {
+      const scope = currentScope();
+      if (!scope) throw new Error('scenario harness: an outbound-context entry was registered outside every run');
+      const id = await real.register(entry);
+      scope.entryIds.add(id);
+      return id;
+    },
+    release: async (entryId: string, conversationId?: string): Promise<void> => {
+      if (owning(entryId)) await real.release(entryId, conversationId);
+    },
+    releaseEntry: async (entryId: string): Promise<void> => {
+      if (owning(entryId)) await real.releaseEntry(entryId);
+    },
+    markExchangeOpen: async (entryId: string, mark: { agentId: string; taskEventId: string; reason?: string }): Promise<boolean> =>
+      owning(entryId) ? real.markExchangeOpen(entryId, mark) : false,
+    releaseUnlessKeptOpen: async (entryId: string, taskEventId: string): Promise<'released' | 'kept_open' | 'not_active'> =>
+      owning(entryId) ? real.releaseUnlessKeptOpen(entryId, taskEventId) : 'not_active',
+    // Production's scans the whole active table; this applies the same match (trimmed,
+    // de-duplicated, case-insensitive subject) to the run's entries only.
+    clearBySubjects: async (subjects: string[]): Promise<SubjectClearResult> => {
+      const scope = currentScope();
+      const cleaned = [...new Map(subjects
+        .map(s => (typeof s === 'string' ? s.trim() : ''))
+        .filter(s => s.length > 0)
+        .map(s => [s.toLowerCase(), s] as const)).values()];
+      const result: SubjectClearResult = { totalReleased: 0, perSubject: [], unmatched: [] };
+      const active = scope ? await activeEntries(scope) : [];
+      for (const subject of cleaned) {
+        const matched = active.filter(e => {
+          const value = e.metadata?.['subject'];
+          return typeof value === 'string' && value.toLowerCase() === subject.toLowerCase();
+        });
+        for (const e of matched) await real.release(e.id);
+        if (matched.length > 0) {
+          result.perSubject.push({ subject, released: matched.length });
+          result.totalReleased += matched.length;
+        } else {
+          result.unmatched.push(subject);
+        }
+      }
+      return result;
+    },
+    cleanupExpired: async (): Promise<number> => {
+      throw new Error('scenario harness: cleanupExpired would delete every instance\'s released entries');
     },
   });
 }
@@ -133,6 +204,9 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
 
     for (const raw of scenario.seed.outboundContext) {
       const entry = resolvePlaceholders(raw, seeded.refs);
+      // A relayed clarification (#2027): production's token, where the relay send's
+      // context_bridge puts it.
+      const resumeToken = entry.resume ? encodeResumeToken(entry.resume) : undefined;
       const id = await outboundContext.register({
         conversationId: `${SCENARIO_ENTRY_ORIGIN}${entry.key}`,
         channelId: entry.channelId,
@@ -140,9 +214,10 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
         content: entry.content,
         expectedReply: entry.expectedReply,
         delegationHint: entry.delegationHint,
-        metadata: entry.metadata,
+        metadata: resumeToken ? { ...entry.metadata, resume_token: resumeToken } : entry.metadata,
         expiresInHours: entry.expiresInHours ?? 6,
       });
+      if (resumeToken) seeded.refs.set(`resume_token:${entry.key}`, resumeToken);
       seeded.entryIds.push(id);
       scope.entryIds.add(id);
       seeded.refs.set(`entry:${entry.key}`, id);
@@ -297,9 +372,17 @@ export async function sweepLeftovers(stack: TestModeStack): Promise<Record<strin
     `DELETE FROM kg_nodes n WHERE n.source = $1
        AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.kg_node_id = n.id)`,
     [SCENARIO_KG_SOURCE]);
+  // Seeded entries (scenario-origin-…), and any an agent registered from a run's own
+  // conversation or a specialist's (#2027).
   await count('outbound_context',
-    `DELETE FROM outbound_context WHERE conversation_id LIKE $1`,
-    [`${SCENARIO_ENTRY_ORIGIN}%`]);
+    `DELETE FROM outbound_context WHERE conversation_id LIKE ANY($1::text[])`,
+    [[`${SCENARIO_ENTRY_ORIGIN}%`, ...SCENARIO_CONVERSATION_PREFIXES.map(p => `${p}%`)]]);
+  // Dispatch claims of real delegations: a real instance's late-delivery sweep would
+  // otherwise act on them. Every specialist conversation carries the suite's prefix.
+  await count('pending_delegations',
+    `DELETE FROM pending_delegations
+      WHERE delegate_conversation_id LIKE $1 OR origin_conversation_id LIKE ANY($2::text[])`,
+    [`${SCENARIO_DELEGATE_PREFIX}%`, SCENARIO_CONVERSATION_PREFIXES.map(p => `${p}%`)]);
   await count('bullpen_threads',
     `DELETE FROM bullpen_threads WHERE source_message_id LIKE $1`,
     [`${SCENARIO_THREAD_MARKER}%`]);
@@ -341,8 +424,10 @@ export async function cleanupRun(
     }
   };
 
-  if (seeded.entryIds.length > 0) {
-    await attempt(() => stack.pool.query(`DELETE FROM outbound_context WHERE id = ANY($1::uuid[])`, [seeded.entryIds]));
+  // The seeded entries, and any an agent registered during the run.
+  const entryIds = [...new Set([...seeded.entryIds, ...scope.entryIds])];
+  if (entryIds.length > 0) {
+    await attempt(() => stack.pool.query(`DELETE FROM outbound_context WHERE id = ANY($1::uuid[])`, [entryIds]));
   }
   const threadIds = [...seeded.threads.values()].map(t => t.threadId);
   if (threadIds.length > 0) {
@@ -352,6 +437,15 @@ export async function cleanupRun(
   if (conversationId) {
     await attempt(() => cleanupConversation(stack.pool, conversationId));
   }
+  const specialists = [...scope.specialistConversations];
+  for (const specialist of specialists) {
+    await attempt(() => cleanupConversation(stack.pool, specialist));
+  }
+  if (conversationId || specialists.length > 0) {
+    // A dispatch claim a timed-out delegation kept (#1893): nothing in test mode promotes
+    // or sweeps it, and a real instance's sweep would act on it.
+    await attempt(() => deletePendingDelegations(stack, conversationId ? [conversationId] : [], specialists));
+  }
   for (const contact of seeded.contacts) {
     await attempt(() => deleteContact(stack, contact.id, contact.kgNodeId));
   }
@@ -360,6 +454,19 @@ export async function cleanupRun(
   if (errors.length > 0) {
     throw new AggregateError(errors, `Scenario cleanup failed for ${errors.length} item(s) — check the database for leftovers`);
   }
+}
+
+/** pending_delegations rows a run's coordinator opened, or that a specialist of the run ran under. */
+export async function deletePendingDelegations(
+  stack: TestModeStack,
+  originConversations: string[],
+  specialistConversations: string[],
+): Promise<void> {
+  await stack.pool.query(
+    `DELETE FROM pending_delegations
+      WHERE origin_conversation_id = ANY($1::text[]) OR delegate_conversation_id = ANY($2::text[])`,
+    [originConversations, specialistConversations],
+  );
 }
 
 /** An error's message, including every inner error of an AggregateError (its stack omits them). */

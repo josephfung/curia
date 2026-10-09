@@ -1,0 +1,114 @@
+# Case 16d (#2027, starter case 3): clarification resume. Earlier, research-analyst paused
+# with request-clarification, and the coordinator relayed its question to the principal
+# with the resume_token on the send's context_bridge (CLARIFICATION_NEXT_STEP,
+# src/agents/prompts/delegate-result-guidance.ts). The seeded entry is that relay, its
+# token encoded by production's encodeResumeToken. The principal answers. The coordinator
+# re-delegates with the token, delegate rebuilds the brief from it (skills/delegate/
+# handler.ts, "Resume flow"), and the specialist really runs the rest. Rules: turn
+# guidance `outbound-context-clarification` (src/agents/prompts/turn-guidance.ts);
+# delegate's entry settlement (#1972).
+name: real delegation clarification resume
+description: >
+  research-analyst was researching acquisition targets for the principal and paused to ask
+  which angle matters most: valuation, talent or technology. That question went to the
+  principal, who now answers "technology". The coordinator resumes research-analyst with
+  the resume token, research-analyst finishes the brief with a technology focus, and the
+  coordinator relays the findings in its own words.
+tags: [real-delegation, delegation, clarification, outbound-context, research]
+delegation: real
+stub_sets: [human-channels]
+seed:
+  outbound_context:
+    - key: targets
+      channel: signal
+      agent: research-analyst
+      content: >
+        On the acquisition-target research: I found three candidates, Brightline Analytics,
+        Corvid Systems and Tessellate Labs. Which angle matters most for the brief:
+        valuation, talent, or technology?
+      expected_reply: which angle to focus the acquisition-target brief on
+      delegation_hint: research-analyst
+      resume:
+        agent: research-analyst
+        original_task: >
+          Research potential acquisition targets in mid-market data-infrastructure software
+          for the principal, and write a short brief on the strongest candidates.
+        context: >
+          Searched recent coverage and funding announcements. Three credible candidates:
+          Brightline Analytics (streaming ETL, ~120 staff), Corvid Systems (data
+          observability, ~80 staff), Tessellate Labs (vector storage engine, ~45 staff).
+          Asked the principal which angle to prioritise before writing the brief.
+      sent_minutes_ago: 25
+inbound:
+  from: principal
+  content: Technology. Focus on what each of them has actually built.
+tool_stubs:
+  web-search:
+    - agent: research-analyst
+      match: {}
+      return:
+        count: 3
+        results:
+          - title: Brightline Analytics launches exactly-once streaming connectors
+            url: https://news.example.test/brightline-connectors
+            content: Brightline's engine offers exactly-once delivery across 40 source connectors and a SQL transform layer.
+            score: 0.91
+          - title: Corvid Systems adds column-level lineage to its observability platform
+            url: https://news.example.test/corvid-lineage
+            content: Corvid traces data quality incidents to the upstream column, with anomaly detection on freshness and volume.
+            score: 0.88
+          - title: Tessellate Labs open-sources its vector storage engine
+            url: https://news.example.test/tessellate-oss
+            content: Tessellate's disk-based vector index serves billion-scale search on commodity hardware; the core is Apache-2.0.
+            score: 0.86
+  web-fetch:
+    - agent: research-analyst
+      match: {}
+      return:
+        status: 200
+        content_type: text/html
+        body: The company's engineering blog describes the architecture in more detail; no figures beyond the announcement.
+  memory-store:
+    - agent: research-analyst
+      match: {}
+      return: { stored: true, action: created, node_id: 9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f, sensitivity: internal }
+expected_behaviors:
+  - id: resumes_with_token
+    weight: critical
+    description: Re-delegates to research-analyst with the entry's resume_token.
+    check:
+      called: delegate
+      with: { agent: research-analyst, resume_token: "{{resume_token:targets}}" }
+  - id: specialist_gets_resumed_brief
+    weight: critical
+    description: research-analyst receives the rebuilt brief, carrying its earlier progress.
+    check:
+      briefed: research-analyst
+      brief_contains: ["Principal's Direction", "Tessellate Labs"]
+  - id: platform_released_entry
+    weight: important
+    description: The delegation's result reports that the platform released the entry.
+    check:
+      called: delegate
+      returns: { outbound_entry: { id: "{{entry:targets}}", status: released } }
+  - id: no_fresh_start
+    weight: important
+    description: Does not start the research over with a new brief and no token.
+    check:
+      not_called: [delegate]
+      with: { resume_token: null }
+  - id: names_no_internals
+    weight: important
+    description: The reply names no tool, agent or system identifier.
+    check:
+      reply_excludes_internal_names: true
+  - id: relays_technology_brief
+    weight: critical
+    description: >
+      Gives the principal a technology-focused summary of the three candidates (what
+      Brightline, Corvid and Tessellate have built), in its own voice, without describing
+      the pause, the resume or who did the research.
+failure_modes:
+  - Answers "technology" itself without resuming the research
+  - Starts a fresh delegation without the resume_token, so the research restarts
+  - Asks the principal the same question again

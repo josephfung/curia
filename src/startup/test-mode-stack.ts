@@ -25,6 +25,10 @@
 //     need them fail with a missing-capability error; scenario tests stub them.
 //     `disabledTools` lists them per agent. Runtimes see pending bullpen threads but
 //     never write read watermarks, which would hide threads from the real agent.
+//     Two of these a caller can opt into when it owns the rows they write (the
+//     scenario suite's real delegation, #2027): `wrapOutboundContext` wires an
+//     outbound-context service the caller narrows, and `delegationClaims` wires
+//     production's pending_delegations claims for `delegate`.
 //   - No shared-setting writes. Smoke turns run with principal standing, so agents get
 //     read-only views of the autonomy score and office identity (a real instance would
 //     send under a changed score), and no working-docs repo (ceo-inbox shadow drafts
@@ -76,7 +80,14 @@ import { ContactService } from '../contacts/contact-service.js';
 import { ContactResolver } from '../contacts/contact-resolver.js';
 import { ConfidencePipeline } from '../contacts/confidence-pipeline.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
+import { OutboundContextService } from '../dispatch/outbound-context.js';
 import { OutboundContentFilter } from '../dispatch/outbound-filter.js';
+import {
+  acquireRunningDelegation,
+  findInFlightPendingDelegation,
+  releaseRunningDelegation,
+  type OpenDelegationLookup,
+} from '../db/queries/pending-delegations.js';
 import { bootstrapAgentIdentity } from '../entity-context/bootstrap.js';
 import { EntityContextAssembler } from '../entity-context/assembler.js';
 import { ConversationEntityState } from '../entity-context/conversation-entities.js';
@@ -194,6 +205,28 @@ export interface TestModeStackOptions {
    * Not applied to offline providers, which never make a call.
    */
   wrapLlmProvider?: (provider: LLMProvider) => LLMProvider;
+  /**
+   * Give the ExecutionLayer an outbound-context service, narrowed by this wrapper. Without
+   * it the layer has none (see header). The scenario suite (#2027) narrows it to the
+   * calling run's entries, so `delegate` can link and settle the entry a reply answers and
+   * a specialist's context-bridge-keep-open can hold it, without touching a real entry.
+   */
+  wrapOutboundContext?: (service: OutboundContextService) => OutboundContextService;
+  /**
+   * Wire production's `delegate` dispatch claims (pending_delegations: the in-flight
+   * refusal and the running claim, #1858 / #1893), as src/index.ts does when late
+   * delivery is enabled. Off by default: the rows name the caller's conversations, and
+   * the caller must delete them. Nothing here promotes or sweeps them (no late-delivery
+   * subscriber or sweep), so a claim a timed-out wait keeps stays `running` until removed.
+   */
+  delegationClaims?: boolean;
+  /**
+   * Called with the bus before any subscriber is registered. The bus delivers an event to
+   * its subscribers in order, awaiting each, so an observer that must see an agent.task
+   * before the agent acts on it (the scenario suite's delegation capture, #2027)
+   * subscribes here.
+   */
+  observeBus?: (bus: EventBus) => void;
   /** Override for fixtures. Default <repo>/agents and <repo>/skills. */
   agentsDir?: string;
   skillsDir?: string;
@@ -491,6 +524,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       (event) => auditLogger.log(event),
       (eventId) => auditLogger.markAcknowledged(eventId),
     );
+    options.observeBus?.(bus);
 
     // ── Vault (boot's view of it) ──────────────────────────────────────────
     // Same resolution as src/index.ts: bootstrap secrets (LLM keys) and channel secrets
@@ -670,8 +704,21 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     });
     const lateDelivery = resolveLateDeliveryConfig(yamlConfig.delegate);
     // Deliberately absent (see header — deferred work a real instance would act on):
-    // schedulerService, taskRepo, actionLogRepo, outboundContextService, bullpenService,
-    // workingDocsRepo, approvalTrigger, nylasCalendarClient, browserService.
+    // schedulerService, taskRepo, actionLogRepo, bullpenService, workingDocsRepo,
+    // approvalTrigger, nylasCalendarClient, browserService; and, unless the caller opts
+    // in, outboundContextService and openDelegationLookup.
+    const outboundContextService = options.wrapOutboundContext
+      ? options.wrapOutboundContext(new OutboundContextService(pool, logger))
+      : undefined;
+    // The same lookup src/index.ts builds.
+    const openDelegationLookup: OpenDelegationLookup | undefined = options.delegationClaims
+      ? {
+          findInFlight: (targetAgent, originConversationId) =>
+            findInFlightPendingDelegation(pool, { targetAgent, originConversationId }),
+          acquireRunning: (params) => acquireRunningDelegation(pool, params),
+          releaseRunning: (delegateEventId) => releaseRunningDelegation(pool, delegateEventId),
+        }
+      : undefined;
     const baseExecutionLayer = new ExecutionLayer(toolRegistry, logger, {
       bus,
       agentRegistry,
@@ -697,6 +744,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
       resumableCeilings: resolveTasksConfig(yamlConfig.tasks).resumableCeilings,
       principalIdentities,
       skillRegistry,
+      ...(outboundContextService ? { outboundContextService } : {}),
+      ...(openDelegationLookup ? { openDelegationLookup } : {}),
     });
     const executionLayer = options.wrapExecutionLayer
       ? options.wrapExecutionLayer(baseExecutionLayer)

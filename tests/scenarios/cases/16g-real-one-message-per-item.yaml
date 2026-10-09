@@ -1,0 +1,153 @@
+# Case 16g (#2027, starter case 6): one message to the principal per delegated item.
+# #1917: the principal got two confirmations of one delegated item, 31 seconds apart.
+# #1860: a Signal send was followed by a reply narrating it. On a live principal turn the
+# reply is the message, so any send to the principal on top of it is the duplicate. Here
+# ceo-inbox really runs and finds Sam's answer; every send is stubbed to succeed for every
+# agent, so the duplicate is available. Rules: agents/coordinator.yaml on relaying
+# specialist results; delegate's `sent` field and its next_step (#2055).
+name: real delegation one message per item
+description: >
+  The principal asks whether Sam Rivera has answered about the Q3 offsite planning session.
+  ceo-inbox really runs and finds Sam's reply (Thursday at 10 works, at Northwind's office
+  on King St). The principal gets exactly one message with it: the coordinator's reply. No
+  agent also sends it on another channel, and the reply does not narrate a send.
+tags: [real-delegation, delegation, ceo-inbox, relay]
+delegation: real
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      tier: known
+      role: Partnerships, Northwind
+      channel: email
+      identifier: sam@northwind.example.test
+inbound:
+  from: principal
+  content: Has Sam Rivera got back to us about the Q3 offsite planning session?
+tool_stubs:
+  # Sent holds the principal's original note to Sam; Drafts is empty; every other search
+  # finds Sam's reply. Timestamps are left out: a fixed one goes stale.
+  ceo-inbox-search:
+    - agent: ceo-inbox
+      match: { folder: SENT }
+      return:
+        messages:
+          - id: scenario-msg-to-sam
+            threadId: scenario-thread-sam-offsite
+            from: [{ email: principal@example.test }]
+            subject: Q3 offsite planning
+            snippet: Would Thursday at 10 work for the Q3 offsite planning session?
+            unread: false
+            folders: [SENT]
+        count: 1
+    - agent: ceo-inbox
+      match: { folder: DRAFTS }
+      return: { drafts: [], folder: DRAFTS, count: 0 }
+    - agent: ceo-inbox
+      match: {}
+      return:
+        messages:
+          - id: scenario-msg-sam-reply
+            threadId: scenario-thread-sam-offsite
+            from: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+            subject: "Re: Q3 offsite planning"
+            snippet: Thursday at 10 works. We'll host at our office on King St.
+            unread: true
+            folders: [INBOX]
+        count: 1
+  ceo-inbox-list:
+    - agent: ceo-inbox
+      match: { folder: SENT }
+      return:
+        messages:
+          - id: scenario-msg-to-sam
+            threadId: scenario-thread-sam-offsite
+            from: [{ email: principal@example.test }]
+            to: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+            cc: []
+            subject: Q3 offsite planning
+            snippet: Would Thursday at 10 work for the Q3 offsite planning session?
+            unread: false
+            folders: [SENT]
+            attachments: []
+        count: 1
+        has_more: false
+    - agent: ceo-inbox
+      match: { folder: DRAFTS }
+      return: { drafts: [], folder: DRAFTS, count: 0 }
+    - agent: ceo-inbox
+      match: {}
+      return:
+        messages:
+          - id: scenario-msg-sam-reply
+            threadId: scenario-thread-sam-offsite
+            from: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            subject: "Re: Q3 offsite planning"
+            snippet: Thursday at 10 works. We'll host at our office on King St.
+            unread: true
+            folders: [INBOX]
+            attachments: []
+        count: 1
+        has_more: false
+  ceo-inbox-read:
+    - agent: ceo-inbox
+      match: {}
+      return:
+        id: scenario-msg-sam-reply
+        threadId: scenario-thread-sam-offsite
+        from: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: "Re: Q3 offsite planning"
+        body_plain: |
+          Thursday at 10 works. We'll host at our office on King St, 4th floor.
+
+          Sam
+        body_html: ""
+        labels: []
+        attachments: []
+  # Reading the message is fine; changing the principal's inbox is not this job.
+  ceo-inbox-mark-read:
+    - agent: ceo-inbox
+      match: {}
+      return: { success: true, message_id: scenario-msg-sam-reply }
+expected_behaviors:
+  - id: asks_ceo_inbox
+    weight: critical
+    description: Delegates the inbox check to ceo-inbox.
+    check:
+      called: delegate
+      with: { agent: ceo-inbox }
+  - id: no_extra_message
+    weight: critical
+    description: >
+      No agent sends the principal (or anyone) a message on any channel: the reply is the
+      one message.
+    check:
+      not_called: [signal-send, email-send, email-reply, sms-send, slack-send]
+      agent: any
+  - id: replies
+    weight: critical
+    description: Answers the principal (not NO_REPLY).
+    check:
+      reply: not_no_reply
+  - id: names_no_internals
+    weight: important
+    description: The reply names no tool, agent or system identifier.
+    check:
+      reply_excludes_internal_names: true
+  - id: reports_answer
+    weight: critical
+    description: >
+      Tells the principal Sam said Thursday at 10 works, at Northwind's office on King St.
+  - id: no_send_narration
+    weight: important
+    description: >
+      Does not say it sent, messaged or emailed anyone, and does not describe the hand-off
+      to another agent. Offering to draft or send a reply to Sam is fine.
+failure_modes:
+  - Sends the principal a Signal or email copy of the answer as well as replying
+  - Says "I've sent you a message" or "I emailed Sam" when nothing was sent

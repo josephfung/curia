@@ -150,7 +150,7 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
       }
     }
 
-    const stub = matchToolStub(toolName, input, state.stubs);
+    const stub = matchToolStub(toolName, input, state.stubs, options?.agentId);
     // A draft this case already wrote answers ceo-inbox-read, ahead of the office
     // catch-all error. A stub that names draft_id is scripting that read, so it wins.
     const draft = recordedDraftRead(toolName, input, state.tools, stub?.match);

@@ -91,10 +91,15 @@ export function gateFailures(cases: CaseResult[]): string[] {
     }
     // A run that errored (timeout, agent.error) was rated MISS on every behavior, so it
     // already counts against the pass rate. Report it as well: "the model got it wrong"
-    // and "the run never finished" need different fixes.
-    const errored = c.runs.filter(r => r.error);
+    // and "the run never finished" need different fixes. So do a stuck run and one whose
+    // wait ran out while a real specialist was still working (#2027).
+    const errored = c.runs.filter(r => r.error && r.timeoutKind !== 'delegate_wait');
     if (errored.length > 0) {
       failures.push(`${c.name}: ${errored.length} run(s) errored — ${errored[0]!.error}`);
+    }
+    const slow = c.runs.filter(r => r.error && r.timeoutKind === 'delegate_wait');
+    if (slow.length > 0) {
+      failures.push(`${c.name}: ${slow.length} run(s) timed out on a slow specialist, not a stuck run — ${slow[0]!.error}`);
     }
   }
   return failures;
