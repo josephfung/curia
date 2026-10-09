@@ -42,15 +42,25 @@ const PRINCIPAL_REPLY_SHAPED = [
   'request needs no clarification.',
 ];
 
-/** Any inbound from someone other than the principal (outbound context is withheld). */
+/**
+ * Any inbound from someone other than the principal (outbound context is withheld). The
+ * first paragraph is every non-principal turn's reply contract, moved out of the always-on
+ * prompt (prompt trim PR 4): principal turns never need it, and auto-generated mail, the
+ * one non-principal turn without this block, has its own NO_REPLY preamble and never relays.
+ */
 const NON_PRINCIPAL_REPLY_SHAPED = [
-  'This sender is not the principal, so the [ACTIVE OUTBOUND CONTEXT] block was withheld, not',
-  'empty. Handle the message on its own merits: act on it, return NO_REPLY, or escalate to the',
-  'principal as needed. A message that mentions earlier contact you cannot find but makes a',
-  'request you can act on ("Following up on the intro: could you share a few times?") is',
-  'self-contained: act on it as usual, without first looking for the earlier contact. Only a',
-  'message whose meaning depends on a thread you cannot see ("Yes, go ahead", "The second one',
-  'works") is reply-shaped. For one of those:',
+  'Your final response is sent to this sender as written. The principal does not see it',
+  'first, so it holds only your message to the sender. When the principal needs to hear',
+  'something from this exchange that they can act on, tell them in a separate send with',
+  '`principal` as the recipient. When nothing should go back (an automated notice, an FYI, a',
+  'decline that needs no acknowledgment, a message not meant for you), respond with exactly',
+  'NO_REPLY and nothing else.',
+  '',
+  'The [ACTIVE OUTBOUND CONTEXT] block is withheld on these turns, not empty. A message that',
+  'mentions earlier contact you cannot find but makes a request you can act on ("Following up',
+  'on the intro: could you share a few times?") is self-contained: act on it as usual, without',
+  'first looking for the earlier contact. Only a message whose meaning depends on a thread you',
+  'cannot see ("Yes, go ahead", "The second one works") is reply-shaped. For one of those:',
   '- Never ask the sender what they are replying to, which option they mean, or what their',
   '  "yes" covers, and never say you have no record of the thread or are missing context.',
   '  Any of these tells them you lost the thread.',
@@ -58,17 +68,25 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   '  the thread, act on the message as you would any message from this sender.',
   '- If it does not, stop searching. Reply with a short, warm acknowledgment ("Thanks, noted.',
   '  I\'ll follow up shortly."), or NO_REPLY when nothing needs to go back. Then ask the',
-  '  principal what it refers to in a separate send on the principal\'s channel, giving who',
-  '  wrote, the subject, and what they said.',
+  '  principal what it refers to in a separate send, giving who wrote, the subject, and what',
+  '  they said.',
 ];
 
-/** The [ACTIVE OUTBOUND CONTEXT] block is in this message (principal turns only). */
+/**
+ * The [ACTIVE OUTBOUND CONTEXT] block is in this message (principal turns only). The
+ * `delegation:` bullet is the transfer-ownership reply rule, moved here from the always-on
+ * prompt (prompt trim PR 4): only this block carries a delegation hint, and only principal
+ * turns get the block (#1848), so a third party's reply never reaches this rule.
+ */
 const OUTBOUND_CONTEXT = [
   'The [ACTIVE OUTBOUND CONTEXT] block lists messages you sent that may receive replies.',
   'Decide whether this message plausibly relates to one of its entries. When unsure, treat it',
   'as a match and delegate rather than handling it directly.',
-  '- A matched entry with a `delegation:` line is transfer-ownership, under the',
-  '  transfer-ownership reply rule.',
+  '- A matched entry with a `delegation:` line was sent on that specialist\'s behalf, and the',
+  '  specialist owns the conversation and its state. It is always transfer-ownership: delegate',
+  '  to that specialist first, before any research, answer or reply, even for a "yes", "no" or',
+  '  "sounds good" you could answer yourself. Pass the principal\'s full message as the task',
+  '  and the entry_id as `outbound_entry_id`.',
   '- A matched entry without one: handle it directly or borrow-then-answer as the content',
   '  warrants. If you delegate, pass its entry_id as `outbound_entry_id`.',
   '- Clearly unrelated to every entry: apply the normal routing decision.',

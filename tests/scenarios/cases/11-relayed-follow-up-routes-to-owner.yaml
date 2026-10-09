@@ -4,7 +4,8 @@
 # entry. Since #1972 the platform attributes that entry to ceo-inbox (agent and
 # delegation_hint) whatever the coordinator wrote. This case seeds that entry and checks
 # that the principal's answer goes back to ceo-inbox, not to the coordinator's own
-# handling. Rule: agents/coordinator.yaml, "The transfer-ownership reply rule".
+# handling. Rule: the `delegation:` bullet of the outbound-context turn guidance
+# (src/agents/prompts/turn-guidance.ts), anchored in the coordinator's Routing Decision.
 name: relayed follow-up routes to owner
 description: >
   Dana answered the principal's counter-proposal by suggesting Wednesday at 2pm instead.
