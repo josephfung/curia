@@ -157,19 +157,9 @@ export async function checkRawRecipients(
       return { ok: false, error: `${position} must be an email address (name@domain). ${consequence}` };
     }
     const address = normalized.identifier;
-    const existing = onDraft?.get(address);
-    if (existing) {
-      participants.push(existing);
-      continue;
-    }
-    if (!(await identifierHasSource(ctx, 'email', address))) {
-      ctx.log.info({ field: fields.raw, position: index + 1 }, 'draft recipients: raw address has no source — refusing (#2053)');
-      return {
-        ok: false,
-        error: `${position}: ${unsourcedIdentifierError('email', `${consequence} If they are a contact, pass their contact ID in ${fields.reference}.`)}`,
-      };
-    }
-    // A blocked contact is refused by reference, so its address is refused here too.
+    // A blocked contact is refused by reference, so its address is refused here too,
+    // before the on-draft shortcut: being on the draft exempts an address from the source
+    // check only, so a blocked address there cannot be moved.
     // A lookup that fails refuses as well: the check cannot be skipped by an outage.
     if (ctx.contactService) {
       try {
@@ -182,6 +172,18 @@ export async function checkRawRecipients(
         ctx.log.warn({ err, field: fields.raw }, 'draft recipients: blocked-contact check failed — refusing (fail-closed)');
         return { ok: false, error: `The contact lookup failed, so ${position} could not be checked. ${consequence} Try again.` };
       }
+    }
+    const existing = onDraft?.get(address);
+    if (existing) {
+      participants.push(existing);
+      continue;
+    }
+    if (!(await identifierHasSource(ctx, 'email', address))) {
+      ctx.log.info({ field: fields.raw, position: index + 1 }, 'draft recipients: raw address has no source — refusing (#2053)');
+      return {
+        ok: false,
+        error: `${position}: ${unsourcedIdentifierError('email', `${consequence} If they are a contact, pass their contact ID in ${fields.reference}.`)}`,
+      };
     }
     participants.push({ email: address });
   }

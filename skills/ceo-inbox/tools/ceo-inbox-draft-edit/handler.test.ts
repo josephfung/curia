@@ -297,6 +297,14 @@ describe('CeoInboxDraftEditHandler (#1000)', () => {
       expect(sent.cc).toEqual([]);
     });
 
+    it("refuses to move a blocked contact's address that is already on the draft", async () => {
+      serveDraft({ to: [STORED.to[0]], cc: [{ email: 'blake@example.com' }] });
+      const error = refusedUnchanged(await handler.execute(buildCtx({
+        draft_id: 'draft-1', add_to_addresses: ['blake@example.com'],
+      })));
+      expect(error).toContain('blocked contact');
+    });
+
     it('moves a To recipient to Cc by reference', async () => {
       serveDraft();
       const result = await handler.execute(buildCtx({ draft_id: 'draft-1', add_cc: [fixture.aliceId] }));
