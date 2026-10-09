@@ -143,8 +143,9 @@ export class EmailReplyHandler implements ToolHandler {
       }
 
       // To is original.from. Pass email_participant only when that address is not
-      // an owned mailbox and Authentication-Results shows SPF, DKIM, and DMARC
-      // all passing. Otherwise omit the option and the gateway records an
+      // an owned mailbox and the receiving provider's Authentication-Results
+      // shows SPF, DKIM, and DMARC all passing. A header the sender wrote does
+      // not count. Otherwise omit the option and the gateway records an
       // unverified outbound_recipient (#2071). The gateway cannot infer this
       // from replyToMessageId: email-send sets that field too.
       const provenance = replyRecipientSource({

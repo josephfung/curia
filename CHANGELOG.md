@@ -177,6 +177,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Google Workspace calendar tools** — no longer loaded; principal calendar belongs to `@calendar`. (#1853, #1957)
 - **MCP calendar holdback and identity guard** — removed; the `--tools` allowlist keeps Calendar tools out. (#1957)
 
+### Security
+
+- **Sender verification** — a sender-written Authentication-Results header no longer counts as a pass. (#2071)
+
 ### Fixed
 
 - **Delegated sends** — the coordinator no longer reports a specialist's composed email as sent. (#2055)

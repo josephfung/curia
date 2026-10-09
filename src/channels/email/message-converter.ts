@@ -32,8 +32,10 @@ export interface ConvertedEmail {
     participants: EmailParticipant[];
     receivedAt: Date;
     /**
-     * True if SPF, DKIM, and DMARC all passed in the provider's Authentication-Results
-     * header. False if any check failed or the headers were absent.
+     * True if SPF, DKIM, and DMARC all passed on the receiving provider's
+     * Authentication-Results header (the first one). A later header the sender
+     * added does not count, and an explicit fail on any header is unverified.
+     * False when a check failed or the headers were absent.
      * Defense-in-depth: email From headers are trivially spoofable; this surfaces
      * provider-level validation results so the Coordinator can apply extra skepticism
      * to messages that failed sender verification.
@@ -82,38 +84,53 @@ function formatFileSize(bytes: number): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
 }
 
+function authenticationResultsHeaders(
+  headers: Array<{ name: string; value: string }>,
+): Array<{ name: string; value: string }> {
+  // Header names are case-insensitive (RFC 7601 §2.2).
+  return headers.filter((h) => h.name.toLowerCase() === 'authentication-results');
+}
+
+/** SPF, DKIM, and DMARC each reported as pass on this one header. */
+function authenticationMechanismsPass(value: string): boolean {
+  // \b after "pass" guards against hypothetical tokens like "spf=passthrough".
+  return /\bspf=pass\b/i.test(value) && /\bdkim=pass\b/i.test(value) && /\bdmarc=pass\b/i.test(value);
+}
+
+/** An explicit fail for SPF, DKIM, or DMARC. softfail and other results are not this. */
+function authenticationMechanismFailed(value: string): boolean {
+  return /\bspf=fail\b/i.test(value) || /\bdkim=fail\b/i.test(value) || /\bdmarc=fail\b/i.test(value);
+}
+
 /**
- * Parse the Authentication-Results header (RFC 7601) and return true only if
- * SPF, DKIM, and DMARC all carry a "pass" result.
+ * Parse Authentication-Results (RFC 7601) and return true only when the
+ * receiving provider authenticated the message.
+ *
+ * The receiving MTA prepends its header, so the first Authentication-Results
+ * header is the provider's. A later header is ordinary message text: a sender
+ * can add `spf=pass dkim=pass dmarc=pass` under some other authserv-id, and
+ * RFC 7601 §5 only says the receiver SHOULD remove headers that claim its own
+ * id. Trusting any header would let that forgery win (#2071).
+ *
+ * An explicit spf, dkim, or dmarc fail on any header also returns false, so a
+ * provider failure still blocks when the header list is reversed.
  *
  * Returns false when:
- * - headers are absent (listMessages was not called with fields: 'include_headers')
- * - the Authentication-Results header is missing (provider didn't include it)
- * - any of SPF, DKIM, or DMARC are absent from the header
- * - any of SPF, DKIM, or DMARC report a non-pass result (fail, softfail, neutral, etc.)
+ * - headers are absent (the fetch did not ask for fields: 'include_headers')
+ * - the Authentication-Results header is missing
+ * - the provider header lacks a pass for SPF, DKIM, or DMARC
+ * - any header reports spf=fail, dkim=fail, or dmarc=fail
  *
  * Fails closed: absent information is treated as unverified, not as verified.
  */
 export function parseSenderVerified(headers?: Array<{ name: string; value: string }>): boolean {
   if (!headers || headers.length === 0) return false;
 
-  // RFC 7601 allows multiple Authentication-Results headers — each MTA in the relay chain
-  // may add one. Collect ALL of them rather than stopping at the first (find()), since an
-  // attacker who controls an intermediate relay could prepend a forged header before the
-  // legitimate provider's header. Header names are case-insensitive (RFC 7601 §2.2).
-  const authHeaders = headers.filter((h) => h.name.toLowerCase() === 'authentication-results');
-  if (authHeaders.length === 0) return false;
-
-  // Return true if ANY Authentication-Results header shows all three mechanisms passing.
-  // The final receiving MTA (Gmail, Outlook) prepends its header, making it appear first
-  // in the list; checking all headers with some() ensures we find it regardless of ordering.
-  //
-  // Match each mechanism as `mechname=pass`. \b after "pass" guards against hypothetical
-  // future tokens like "spf=passthrough", though RFC 7601 result tokens don't include any.
-  return authHeaders.some((h) => {
-    const v = h.value;
-    return /\bspf=pass\b/i.test(v) && /\bdkim=pass\b/i.test(v) && /\bdmarc=pass\b/i.test(v);
-  });
+  const authHeaders = authenticationResultsHeaders(headers);
+  const providerHeader = authHeaders[0];
+  if (!providerHeader) return false;
+  if (authHeaders.some((h) => authenticationMechanismFailed(h.value))) return false;
+  return authenticationMechanismsPass(providerHeader.value);
 }
 
 /**

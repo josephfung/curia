@@ -346,17 +346,32 @@ describe('parseSenderVerified', () => {
     expect(parseSenderVerified(headers)).toBe(false);
   });
 
-  it('returns true when a second Authentication-Results header (e.g. from final MTA) has all passing', () => {
-    // Multiple headers are common in relay scenarios. Each hop prepends its own.
-    // The final receiving MTA's header (last added, first in array) should be
-    // authoritative. Checking with some() means true if any header has all three passing.
+  it('returns true when the provider header passes and a later relay header is partial', () => {
+    // The receiving MTA prepends its header, so the first one is authoritative.
+    // A later relay header that only carried SPF does not undo that pass.
     const headers = [
-      // Final MTA header — all pass (this is the authoritative one)
       { name: 'Authentication-Results', value: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass' },
-      // Intermediate relay header — only SPF (no DKIM/DMARC in scope)
       { name: 'Authentication-Results', value: 'relay.isp.com; spf=pass' },
     ];
     expect(parseSenderVerified(headers)).toBe(true);
+  });
+
+  it('returns false when the provider header fails and a later sender header passes (#2071)', () => {
+    // A sender can add their own all-pass Authentication-Results. The provider
+    // prepends a failing one and does not have to strip a foreign authserv-id.
+    const headers = [
+      { name: 'Authentication-Results', value: 'mx.google.com; spf=fail; dkim=fail; dmarc=fail' },
+      { name: 'Authentication-Results', value: 'mx.example; spf=pass; dkim=pass; dmarc=pass' },
+    ];
+    expect(parseSenderVerified(headers)).toBe(false);
+  });
+
+  it('returns false when a sender pass is listed first and the provider header fails (#2071)', () => {
+    const headers = [
+      { name: 'Authentication-Results', value: 'mx.example; spf=pass; dkim=pass; dmarc=pass' },
+      { name: 'Authentication-Results', value: 'mx.google.com; spf=fail; dkim=pass; dmarc=pass' },
+    ];
+    expect(parseSenderVerified(headers)).toBe(false);
   });
 
   it('returns false when all Authentication-Results headers are present but none has all three passing', () => {
