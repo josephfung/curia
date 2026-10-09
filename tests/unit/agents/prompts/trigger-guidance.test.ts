@@ -12,6 +12,8 @@ import {
 import { BULLPEN_REPLY_RULE } from '../../../../src/agents/prompts/bullpen-reply-rule.js';
 import {
   CLARIFICATION_NEXT_STEP_LINES,
+  DRAFT_EMAIL_NEXT_STEP_LINES,
+  NOTHING_SENT_NEXT_STEP_LINES,
   PAUSED_NEXT_STEP_LINES,
 } from '../../../../src/agents/prompts/delegate-result-guidance.js';
 import {
@@ -87,6 +89,8 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     ...TURN_GUIDANCE_TEXTS.map((text, i): [string, string] => [`turn guidance ${TURN_GUIDANCE_ORDER[i]}`, text]),
     ['delegate clarification next_step', CLARIFICATION_NEXT_STEP_LINES.join('\n')],
     ['delegate paused next_step', PAUSED_NEXT_STEP_LINES.join('\n')],
+    ['delegate draft-email next_step', DRAFT_EMAIL_NEXT_STEP_LINES.join('\n')],
+    ['delegate nothing-sent next_step', NOTHING_SENT_NEXT_STEP_LINES.join('\n')],
     ['bullpen reply rule', BULLPEN_REPLY_RULE],
     ['daily debrief recap', DAILY_DEBRIEF_RECAP_LINES.join('\n')],
     ['weekly debrief recap', WEEKLY_DEBRIEF_RECAP_LINES.join('\n')],

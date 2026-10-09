@@ -54,11 +54,19 @@ import {
 } from '../../src/agents/resumable-task.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
 import { CLARIFICATION_NEXT_STEP, PAUSED_NEXT_STEP } from '../../src/agents/prompts/delegate-result-guidance.js';
+import { shapeSpecialistAnswer } from '../../src/agents/specialist-answer.js';
 import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
 import {
   parseSpecialistDeclineMarker,
   SPECIALIST_DECLINE_REASON,
 } from '../../src/agents/specialist-decline.js';
+
+/** What the response promise resolves with: the specialist's text, and the message sends its
+ *  runtime recorded (`agent.response.sends`; absent on a paused result). */
+interface SpecialistReply {
+  content: string;
+  sends?: string[];
+}
 
 /** Sentinel shape rejected by the response promise when a specialist returns isError with
  *  structured failure fields — caught in execute() and turned into a typed delegate result. */
@@ -697,7 +705,7 @@ export class DelegateHandler implements ToolHandler {
       // persists after the delegation completes. The settled guard makes it
       // a near-zero-cost no-op after resolution. Phase 5 should add
       // bus.unsubscribe() or a one-shot subscription pattern.
-      const responsePromise = new Promise<string>((resolve, reject) => {
+      const responsePromise = new Promise<SpecialistReply>((resolve, reject) => {
         let settled = false;
 
         timeoutHandle = setTimeout(() => {
@@ -748,7 +756,7 @@ export class DelegateHandler implements ToolHandler {
               } else {
                 const pausedPayload = parseExecutionPausedPayload(responseEvent.payload.content, ctx.log);
                 if (pausedPayload) {
-                  resolve(JSON.stringify({
+                  resolve({ content: JSON.stringify({
                     _curia_protocol: EXECUTION_PAUSED_PROTOCOL,
                     agent,
                     task_id: pausedPayload.task_id,
@@ -760,10 +768,10 @@ export class DelegateHandler implements ToolHandler {
                       total: pausedPayload.total,
                       next: pausedPayload.next,
                     }),
-                  }));
+                  }) });
                   return;
                 }
-                resolve(responseEvent.payload.content);
+                resolve({ content: responseEvent.payload.content, sends: responseEvent.payload.sends });
               }
             }
           } catch (err) {
@@ -792,7 +800,7 @@ export class DelegateHandler implements ToolHandler {
       // rejection carries delegateEventId, which is what the runtime promotes.
       // A specialist that reports reason 'timeout' does not, and retaining the
       // claim would block the conversation until the sweep re-delivered the answer.
-      const [response] = await Promise.all([
+      const [{ content: response, sends }] = await Promise.all([
         responsePromise,
         ctx.bus.publish('dispatch', taskEvent),
       ]);
@@ -915,10 +923,18 @@ export class DelegateHandler implements ToolHandler {
       // <resolved_entities> tags. The structured field survives sanitization;
       // the markup in `response` does not (#1818).
       const resolvedContactIds = parseResolvedContactIds(response);
+      // What it actually sent, and any composed email, as facts beside the prose (#2055).
+      const answer = shapeSpecialistAnswer(response, sends, task);
+      if (answer.next_step !== undefined) {
+        ctx.log.info(
+          { targetAgent: agent, sent: answer.sent, draftEmails: answer.draft_emails?.length ?? 0 },
+          'Specialist result carries composed text that was not sent — attaching next_step',
+        );
+      }
       return {
         success: true,
         data: {
-          response,
+          ...answer,
           agent,
           ...(resolvedContactIds.length > 0 ? { resolvedContactIds } : {}),
         },

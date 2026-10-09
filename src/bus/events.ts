@@ -143,6 +143,14 @@ interface AgentResponsePayload {
   // paths where the runtime never entered / finished the loop.
   skillsCalled?: string[];
   /**
+   * Skills whose successful call sent a message or calendar notification to someone, in
+   * call order (see `isMessageSend` in src/agents/message-sends.ts). Set on responses that
+   * end the tool-use loop without an error; absent on paused and `isError` responses.
+   * `[]` means the task sent nothing. The delegate skill reports it to the caller so
+   * composed text is not mistaken for a send (#2055).
+   */
+  sends?: string[];
+  /**
    * Skills that returned `{ success: false }` during the tool-use loop.
    * Populated alongside `skillsCalled` so the scheduler can persist visibility
    * into `last_run_context` without flipping job health (#1830). Absent when

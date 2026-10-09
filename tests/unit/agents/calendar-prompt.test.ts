@@ -277,7 +277,8 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     // pre-2026-09-20 p99 (#1857).
     // 0.9.0 = answers a generic PEER REQUEST, a new capability, so minor.
     // 0.9.1 = principal vocabulary in the prompt (#1950).
-    expect(config.version).toBe('0.9.1');
+    // 0.9.2 = composed email is always a draft block, never reported as sent (#2055).
+    expect(config.version).toBe('0.9.2');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {

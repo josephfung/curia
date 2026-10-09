@@ -8,7 +8,12 @@
 
 import { BULLPEN_REPLY_RULE } from './bullpen-reply-rule.js';
 import { DAILY_DEBRIEF_RECAP_LINES, WEEKLY_DEBRIEF_RECAP_LINES } from './debrief-recap-instruction.js';
-import { CLARIFICATION_NEXT_STEP_LINES, PAUSED_NEXT_STEP_LINES } from './delegate-result-guidance.js';
+import {
+  CLARIFICATION_NEXT_STEP_LINES,
+  DRAFT_EMAIL_NEXT_STEP_LINES,
+  NOTHING_SENT_NEXT_STEP_LINES,
+  PAUSED_NEXT_STEP_LINES,
+} from './delegate-result-guidance.js';
 import { TURN_GUIDANCE_TEXTS } from './turn-guidance.js';
 
 /** Newline-joined guidance texts, one marker per line once extracted. */
@@ -16,6 +21,8 @@ export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   ...TURN_GUIDANCE_TEXTS,
   CLARIFICATION_NEXT_STEP_LINES.join('\n'),
   PAUSED_NEXT_STEP_LINES.join('\n'),
+  DRAFT_EMAIL_NEXT_STEP_LINES.join('\n'),
+  NOTHING_SENT_NEXT_STEP_LINES.join('\n'),
   BULLPEN_REPLY_RULE,
   DAILY_DEBRIEF_RECAP_LINES.join('\n'),
   WEEKLY_DEBRIEF_RECAP_LINES.join('\n'),

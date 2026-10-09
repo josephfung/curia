@@ -46,6 +46,7 @@ import {
   type EscalationRequester,
 } from './task-escalation.js';
 import { LATE_SPECIALIST_RESULT_MARKER } from '../memory/synthetic-user-turn.js';
+import { sendsFromPayload, shapeSpecialistAnswer } from './specialist-answer.js';
 
 /** Mirrors CLARIFICATION_PROTOCOL in skills/request-clarification/handler.ts. Duplicated as a
  *  literal rather than imported so src/ does not depend on a tool handler module — the same
@@ -430,6 +431,10 @@ export interface LateResultBriefParams {
   maxResultChars: number;
   /** Scheduled job behind the originating turn, when there was one. */
   schedulerJobId?: string;
+  /** The specialist's successful sends (`agent.response.sends`), when the payload carries them. */
+  sends?: string[];
+  /** The original brief. Only decides whether a nothing-sent note applies; never rendered (#1064). */
+  delegateTask?: string;
 }
 
 /**
@@ -448,6 +453,16 @@ export interface LateResultBriefParams {
  */
 export function buildLateResultBrief(params: LateResultBriefParams): string {
   const { targetAgent, content, deliveredAtDisplay, maxResultChars, schedulerJobId } = params;
+  // Same facts the delegate result carries, so a late "email sent" is not taken at its word (#2055).
+  const answer = shapeSpecialistAnswer(content, params.sends, params.delegateTask ?? '');
+  const sentLines: string[] = [];
+  for (const draft of answer.draft_emails ?? []) {
+    sentLines.push('', 'Draft email it composed (not sent):', ...(draft.subject !== undefined ? [`Subject: ${draft.subject}`] : []), draft.body);
+  }
+  if (answer.sent !== undefined) {
+    sentLines.push('', answer.sent.length > 0 ? `Sent in that task: ${answer.sent.join(', ')}.` : 'Sent in that task: nothing.');
+  }
+  if (answer.next_step !== undefined) sentLines.push(answer.next_step);
 
   // One complete sentence per element — never hard-wrapped mid-sentence. A model reads either
   // shape, but an unbroken sentence survives being grepped for, quoted in a log, or asserted on.
@@ -458,7 +473,8 @@ export function buildLateResultBrief(params: LateResultBriefParams): string {
     '',
     `The work you delegated to '${targetAgent}' timed out from your side, but the specialist kept running, finished, and returned this result:`,
     '',
-    capResult(content, maxResultChars),
+    capResult(answer.response, maxResultChars),
+    ...sentLines,
     '',
     `This is the real result. Do NOT delegate this work again — a repeat delegation to '${targetAgent}' is blocked for this turn.`,
     '',
@@ -569,6 +585,7 @@ export async function handleLateResponse(
   });
 
   const content = typeof responsePayload['content'] === 'string' ? responsePayload['content'] : '';
+  const sends = sendsFromPayload(responsePayload);
   const deliveredAtDisplay = formatDeliveredAt(opts.respondedAt, opts.timezone, logger);
 
   // The deliver branch hands the result back to the originating agent and closes the review task
@@ -597,6 +614,8 @@ export async function handleLateResponse(
         deliveredAtDisplay,
         maxResultChars: opts.maxResultChars,
         ...(handle.schedulerJobId !== null && { schedulerJobId: handle.schedulerJobId }),
+        ...(sends !== undefined && { sends }),
+        delegateTask: handle.delegateTask,
       }),
       closeReviewTask: true,
       ...(opts.registerRouting !== undefined && { registerRouting: opts.registerRouting }),

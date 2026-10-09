@@ -1646,6 +1646,85 @@ describe('AgentRuntime tool-use loop', () => {
     expect(payload.failedSkillsOmitted).toBeUndefined();
   });
 
+  it('reports only successful message sends as sends (#2055)', async () => {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+
+    let chatCallCount = 0;
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => {
+        chatCallCount++;
+        if (chatCallCount === 1) {
+          return {
+            type: 'tool_use' as const,
+            toolCalls: [
+              { id: 'call-hold', name: 'calendar-create-hold', input: { title: 'HOLD (TBC)' } },
+              { id: 'call-send', name: 'email-send', input: { to: 'c1', body: 'Hi Jamie' } },
+              {
+                id: 'call-invite',
+                name: 'calendar-create-event',
+                input: { title: 'Intro', attendees: [{ email: 'jamie@stripe.com' }] },
+              },
+            ],
+            usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            provenance: MOCK_PROVENANCE,
+          };
+        }
+        return {
+          type: 'text' as const,
+          content: 'Held two slots and invited Jamie.',
+          usage: { inputTokens: 100, outputTokens: 30, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+          provenance: MOCK_PROVENANCE,
+        };
+      }),
+    };
+
+    const mockExecution = {
+      invoke: vi.fn().mockImplementation(async (name: string) => {
+        if (name === 'email-send') return { success: false, error: 'capability not configured' };
+        return { success: true, data: { ok: true } };
+      }),
+    } as unknown as ExecutionLayer;
+
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => {
+      responses.push(event as AgentResponseEvent);
+    });
+
+    const toolDef = (name: string) => ({
+      name,
+      description: name,
+      input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
+    });
+    const agent = new AgentRuntime({
+      agentId: 'calendar',
+      systemPrompt: 'You are the calendar specialist.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      executionLayer: mockExecution,
+      skillToolDefs: [toolDef('calendar-create-hold'), toolDef('email-send'), toolDef('calendar-create-event')],
+      errorBudget: { maxTurns: 10, maxConsecutiveErrors: 5 },
+    });
+    agent.register();
+
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'calendar',
+      conversationId: 'conv-sends',
+      channelId: 'internal',
+      senderId: 'coordinator',
+      content: 'Set up an intro call with Jamie',
+      parentEventId: 'parent-sends',
+    }));
+
+    expect(responses).toHaveLength(1);
+    const payload = responses[0]!.payload;
+    expect(payload.skillsCalled).toEqual(['calendar-create-hold', 'email-send', 'calendar-create-event']);
+    expect(payload.sends).toEqual(['calendar-create-event']);
+  });
+
   it('caps failedSkills to distinct names and counts overflow (#1830)', async () => {
     const logger = createLogger('error');
     const bus = new EventBus(logger);

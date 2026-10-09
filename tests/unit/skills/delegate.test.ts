@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Writable } from 'node:stream';
 import { DelegateHandler } from '../../../skills/delegate/handler.js';
-import { CLARIFICATION_NEXT_STEP, PAUSED_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
+import {
+  CLARIFICATION_NEXT_STEP,
+  DRAFT_EMAIL_NEXT_STEP,
+  NOTHING_SENT_NEXT_STEP,
+  PAUSED_NEXT_STEP,
+} from '../../../src/agents/prompts/delegate-result-guidance.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { DelegationGuard, delegationKey } from '../../../src/agents/delegation-guard.js';
@@ -836,6 +841,99 @@ describe('DelegateHandler', () => {
       expect(data.agent).toBe('research-analyst');
       expect(data.response).toContain('research findings');
     }
+  });
+
+  describe('what the specialist sent (#2055)', () => {
+    async function delegateToCalendar(
+      task: string,
+      content: string,
+      sends: string[] | undefined,
+    ): Promise<Record<string, unknown>> {
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+      agentRegistry.register('calendar', { role: 'specialist', description: 'Calendar' });
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.task', 'agent', async (event) => {
+        if (event.type === 'agent.task' && event.payload.agentId === 'calendar') {
+          const { createAgentResponse } = await import('../../../src/bus/events.js');
+          await bus.publish('agent', createAgentResponse({
+            agentId: 'calendar',
+            conversationId: event.payload.conversationId,
+            content,
+            ...(sends !== undefined && { sends }),
+            parentEventId: event.id,
+          }));
+        }
+      });
+      const result = await handler.execute(makeCtx(
+        { agent: 'calendar', task, conversation_id: 'conv-sends' },
+        { bus, agentRegistry },
+      ));
+      expect(result.success).toBe(true);
+      return (result as { success: true; data: Record<string, unknown> }).data;
+    }
+
+    // The incident: calendar was asked to send, placed holds, and wrote the email up as sent.
+    const INCIDENT_REPLY = [
+      'Placed two holds on your calendar.',
+      '',
+      '## Email sent to Jamie',
+      '',
+      'Subject: Intro call',
+      'Hi Jamie, would Tuesday at 10:30 or Wednesday at 11:00 work for a 30-minute intro?',
+    ].join('\n');
+
+    it('says nothing was sent when the specialist wrote an email up as sent', async () => {
+      const data = await delegateToCalendar(
+        'Find two slots next week, hold them, and send the intro-call meeting request email to Jamie',
+        INCIDENT_REPLY,
+        [],
+      );
+      expect(data['sent']).toEqual([]);
+      expect(data['next_step']).toBe(NOTHING_SENT_NEXT_STEP);
+      expect(data['response']).toBe(INCIDENT_REPLY);
+    });
+
+    it('lifts a scheduling_email block into draft_emails, whatever else was sent', async () => {
+      const data = await delegateToCalendar(
+        'Find a time with Jamie and draft a meeting request',
+        'Booked it.\n<scheduling_email subject="Meeting: Intro">Hi Jamie,\nTuesday works.</scheduling_email>',
+        ['calendar-create-event'],
+      );
+      expect(data['draft_emails']).toEqual([{ subject: 'Meeting: Intro', body: 'Hi Jamie,\nTuesday works.' }]);
+      expect(data['response']).toBe('Booked it.\n');
+      expect(data['sent']).toEqual(['calendar-create-event']);
+      expect(data['next_step']).toBe(DRAFT_EMAIL_NEXT_STEP);
+    });
+
+    it('adds no next_step when an email did go out', async () => {
+      const data = await delegateToCalendar('Send Jamie the times', 'Email sent to Jamie.', ['email-send']);
+      expect(data['sent']).toEqual(['email-send']);
+      expect(data['next_step']).toBeUndefined();
+    });
+
+    it('still flags a false email claim when only a calendar invite went out', async () => {
+      // A calendar send in `sent` must not vouch for an email calendar cannot send.
+      const data = await delegateToCalendar(
+        'Book it and email Jamie the details',
+        'Booked it and invited Jamie.\n\n## Email sent to Jamie\n\nHi Jamie, see you Tuesday.',
+        ['calendar-create-event'],
+      );
+      expect(data['sent']).toEqual(['calendar-create-event']);
+      expect(data['next_step']).toBe(NOTHING_SENT_NEXT_STEP);
+    });
+
+    it('adds no next_step when nothing was sent and nobody talked about sending', async () => {
+      const data = await delegateToCalendar('List my scheduling rules', 'One rule: mornings only.', []);
+      expect(data['sent']).toEqual([]);
+      expect(data['next_step']).toBeUndefined();
+    });
+
+    it('omits sent when the runtime did not report it', async () => {
+      const data = await delegateToCalendar('Send Jamie the times', 'Email sent to Jamie.', undefined);
+      expect(data).not.toHaveProperty('sent');
+      expect(data['next_step']).toBeUndefined();
+    });
   });
 
   it('forwards originator from taskMetadata into the specialist task metadata', async () => {

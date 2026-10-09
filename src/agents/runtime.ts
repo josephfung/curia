@@ -122,6 +122,7 @@ import {
 } from './delegation-failure-reply.js';
 import { computeDelegateTimeoutMs } from './delegate-timeout.js';
 import { escalationRequester } from './task-escalation.js';
+import { isMessageSend } from './message-sends.js';
 import {
   DEFAULT_DEFERRED_WAKE_MS,
   enqueueUndispatchedDelegation,
@@ -713,6 +714,8 @@ export class AgentRuntime {
     // Accumulate skill names across all tool-use turns so we can report them
     // on the agent.response event for audit and monitoring.
     const skillsCalled: string[] = [];
+    // Successful calls that sent a message or calendar notification (#2055).
+    const sends: string[] = [];
     // Skills that returned success:false — surfaced to the scheduler as
     // last_run_context.failedSkills without flipping job health (#1830).
     // Cap to distinct skill names so a flailing DB/API loop cannot bloat the
@@ -1626,6 +1629,7 @@ export class AgentRuntime {
                 conversationId,
                 content: clarificationContent,
                 skillsCalled,
+                sends,
                 ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });
@@ -1686,6 +1690,7 @@ export class AgentRuntime {
                 conversationId,
                 content: escalationContent,
                 skillsCalled,
+                sends,
                 ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });
@@ -2055,6 +2060,7 @@ export class AgentRuntime {
           if (result.success) {
             // Success: reset consecutive error counter
             budget.consecutiveErrors = 0;
+            if (isMessageSend(toolCall.name, skillInput)) sends.push(toolCall.name);
 
             // Delegate soft-failures (`success: true, data.failed`) still carry
             // IDENTITY_MISMATCH from @calendar — hard-fail the coordinating turn
@@ -2629,6 +2635,7 @@ export class AgentRuntime {
       ...(isResponseError && { isError: true }),
       ...(prepared.suppressDelivery && { suppressDelivery: true }),
       skillsCalled,
+      ...(!isResponseError && { sends }),
       ...failedSkillsPayload(),
       parentEventId: taskEvent.id,
     });

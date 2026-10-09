@@ -21,6 +21,7 @@ import {
   type LateResponseFacts,
   type RecordedDisposition,
 } from '../../../src/agents/late-delegation.js';
+import { DRAFT_EMAIL_NEXT_STEP, NOTHING_SENT_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
 
 /** renderLateNote only covers the recorded dispositions; a delivered result has its own note. */
 function recorded(
@@ -306,6 +307,34 @@ describe('buildLateResultBrief (#1799)', () => {
   it('caps an oversized result', () => {
     const brief = buildLateResultBrief({ ...base, content: 'z'.repeat(900), maxResultChars: 50 });
     expect(brief).toContain('truncated 850 chars');
+  });
+
+  it('says nothing went out when a late result claims an email it never sent (#2055)', () => {
+    const brief = buildLateResultBrief({
+      ...base,
+      content: 'Placed two holds.\n\n## Email sent to Jamie\n\nHi Jamie, would Tuesday work?',
+      sends: [],
+      delegateTask: 'Hold two slots and send Jamie the meeting request',
+    });
+    expect(brief).toContain('Sent in that task: nothing.');
+    expect(brief).toContain(NOTHING_SENT_NEXT_STEP);
+    expect(brief).not.toContain('Hold two slots and send Jamie'); // #1064: the brief is never restated
+  });
+
+  it('lifts a late draft out of the result and marks it unsent (#2055)', () => {
+    const brief = buildLateResultBrief({
+      ...base,
+      content: 'Booked it.\n<scheduling_email subject="Intro">Hi Jamie</scheduling_email>',
+      sends: ['calendar-create-event'],
+    });
+    expect(brief).toContain('Draft email it composed (not sent):\nSubject: Intro\nHi Jamie');
+    expect(brief).toContain('Sent in that task: calendar-create-event.');
+    expect(brief).toContain(DRAFT_EMAIL_NEXT_STEP);
+    expect(brief).not.toContain('<scheduling_email');
+  });
+
+  it('adds no send facts when the payload did not carry them', () => {
+    expect(buildLateResultBrief(base)).not.toContain('Sent in that task');
   });
 });
 
