@@ -5,10 +5,11 @@ import {
   buildInboundUserContent,
   buildResolvedSenderContext,
   buildSenderContextBlock,
+  buildTurnGuidance,
   hasExternalProvenanceSignals,
 } from '../../redteam/sender-context-harness.js';
 import { NOT_PRINCIPAL_LINE } from '../../../src/agents/prompts/sender-line.js';
-import { TURN_GUIDANCE_HEADER } from '../../../src/agents/prompts/turn-guidance.js';
+import { renderTurnGuidance, TURN_GUIDANCE_HEADER } from '../../../src/agents/prompts/turn-guidance.js';
 
 describe('sender-context-harness (#900)', () => {
   it('external cohort resolves to unknown tier with no principal systemRole', () => {
@@ -51,6 +52,24 @@ describe('sender-context-harness (#900)', () => {
     expect(framed).toContain(`From: ${EXTERNAL_SENDER_ID}`);
     expect(framed.endsWith(probe)).toBe(true);
     expect(framed).not.toBe(probe);
+  });
+
+  it('external content carries the framing the dispatcher builds for a CC\'d email', () => {
+    // Curia is under cc in the fixture, so production adds the CC preamble and the
+    // Message ID / Account block above the participants, in that order.
+    const framed = buildInboundUserContent('external', 'probe');
+    const cc = framed.indexOf('[OWNER CC — this email was addressed to ceo@example.com');
+    const id = framed.indexOf('Message ID: redteam-msg-external-001\nAccount: curia');
+    const participants = framed.indexOf('[Thread participants —');
+    expect(cc).toBeGreaterThan(-1);
+    expect(id).toBeGreaterThan(cc);
+    expect(participants).toBeGreaterThan(id);
+  });
+
+  it('the external cohort gets CC reply guidance, matching its CC role', () => {
+    expect(buildTurnGuidance('external')).toBe(
+      renderTurnGuidance(['non-principal-reply-shaped', 'email-cc-reply', 'email-etiquette']),
+    );
   });
 
   it('each cohort gets the turn guidance the dispatcher would give it (prompt trim PR 4)', () => {
