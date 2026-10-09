@@ -646,6 +646,12 @@ export class OutboundGateway {
        * An address is not a name; omit it and the duplicate check is identifier-only.
        */
       recipientDisplayName?: string;
+      /**
+       * The principal directed this send. Send skills compute it with
+       * isPrincipalDirectedSend(). It lifts only the Stage 2.5 disclosure gate;
+       * every other check still runs. Omitted means the gate applies (#1870).
+       */
+      principalDirected?: boolean;
     },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
@@ -942,6 +948,9 @@ export class OutboundGateway {
     // Fail-open on DB errors: an infra failure should not silently prevent
     // sending. We warn so the anomaly is visible in logs/alerting.
     let recipientTier: ContactTier = 'unknown';
+    // Set when the lookup threw, so the disclosure gate can label an outage-caused
+    // 'unknown' tier rather than treat it as a genuinely unknown recipient (#1870).
+    let recipientTierUnresolved = false;
     let recipientContactId: string | undefined;
     try {
       const contact = await this.contactService.resolveByChannelIdentity(request.channel, recipientId);
@@ -963,6 +972,9 @@ export class OutboundGateway {
     } catch (err) {
       // DB or service error — log at warn and proceed.
       // recipientTier stays 'unknown', which is the safe/conservative fallback.
+      // The Stage 2.5 disclosure gate still evaluates at 'unknown' (fail-closed); see
+      // FilterCheckInput.recipientTierUnresolved for why.
+      recipientTierUnresolved = true;
       this.log.warn(
         { err, channel: request.channel, recipientId: redactId(recipientId) },
         'outbound-gateway: contact resolution failed, proceeding without blocked check',
@@ -1201,6 +1213,8 @@ export class OutboundGateway {
         conversationId: '',
         channelId: request.channel,
         recipientTier,
+        recipientTierUnresolved,
+        principalDirected: options?.principalDirected === true,
         recipients,
         principalIncluded,
         principalIsSoleRecipient,
@@ -2445,12 +2459,14 @@ export class OutboundGateway {
    * @param accountId      Which named account to use. Defaults to the primary account.
    * @param draftMeta      Draft content for safety checks — caller must pre-fetch the draft.
    * @param options        humanApproved: true skips Step 0 only (principal in the loop).
+   *                       principalDirected: true lifts the Stage 2.5 disclosure gate only,
+   *                       as in send() (#1870).
    */
   async sendEmailDraft(
     draftId: string,
     accountId: string | undefined,
     draftMeta: { recipientEmail: string; body: string; subject: string; allRecipients?: string[] },
-    options?: { humanApproved?: boolean; conversationId?: string; taskEventId?: string; parentEventId?: string },
+    options?: { humanApproved?: boolean; principalDirected?: boolean; conversationId?: string; taskEventId?: string; parentEventId?: string },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
     // Step 0: Autonomy gate
@@ -2507,6 +2523,7 @@ export class OutboundGateway {
     // Step 1: Blocked-contact check
     // ------------------------------------------------------------------
     let recipientTierForDraft: ContactTier = 'unknown';
+    let recipientTierUnresolvedForDraft = false;
     let recipientContactIdForDraft: string | undefined;
     try {
       const contact = await this.contactService.resolveByChannelIdentity('email', recipientEmail);
@@ -2525,6 +2542,7 @@ export class OutboundGateway {
     } catch (err) {
       // Fail-open on DB errors — log at warn so anomalies are visible, but don't
       // silently block a principal-authorized send due to a transient infrastructure error.
+      recipientTierUnresolvedForDraft = true;
       this.log.warn(
         { err, draftId, recipientId: redactId(recipientEmail) },
         'outbound-gateway: contact resolution failed, proceeding without blocked check',
@@ -2577,6 +2595,8 @@ export class OutboundGateway {
         conversationId: '',
         channelId: 'email',
         recipientTier: recipientTierForDraft,
+        recipientTierUnresolved: recipientTierUnresolvedForDraft,
+        principalDirected: options?.principalDirected === true,
         recipients: draftRecipients,
         principalIncluded: draftPrincipalIncluded,
         principalIsSoleRecipient: draftPrincipalSole,

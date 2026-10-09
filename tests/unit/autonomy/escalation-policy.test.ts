@@ -4,7 +4,13 @@
 // this file pins the manifest action_risk → consequence-class mapping and Gate C policy carve-outs.
 
 import { describe, it, expect } from 'vitest';
-import { mapActionRiskToConsequenceClass, applyActionPolicy } from '../../../src/autonomy/escalation-policy.js';
+import {
+  mapActionRiskToConsequenceClass,
+  applyActionPolicy,
+  applyDisclosurePolicy,
+  tierPermitsAllDisclosure,
+  type DisclosureClass,
+} from '../../../src/autonomy/escalation-policy.js';
 import type { ContactTier } from '../../../src/contacts/types.js';
 
 describe('mapActionRiskToConsequenceClass', () => {
@@ -56,5 +62,30 @@ describe('applyActionPolicy — principal-only carve-out (#1301)', () => {
       expect(applyActionPolicy(tier, 'none', true, true)).toBe('allow');
       expect(applyActionPolicy(tier, 'reversible-internal', true, true)).toBe('allow');
     }
+  });
+});
+
+describe('tierPermitsAllDisclosure (#1870)', () => {
+  const ALL_CLASSES: DisclosureClass[] = ['public', 'principal-context', 'third-party', 'confidential'];
+
+  it('is true only for tiers the policy table leaves unrestricted', () => {
+    expect(tierPermitsAllDisclosure('principal')).toBe(true);
+    expect(tierPermitsAllDisclosure('trusted')).toBe(true);
+    expect(tierPermitsAllDisclosure('known')).toBe(false);
+    expect(tierPermitsAllDisclosure('unknown')).toBe(false);
+    expect(tierPermitsAllDisclosure('blocked')).toBe(false);
+  });
+
+  it('agrees with applyDisclosurePolicy for every tier', () => {
+    // The short-circuit must never skip a tier the policy would escalate for.
+    const tiers: ContactTier[] = ['blocked', 'unknown', 'known', 'trusted', 'principal'];
+    for (const tier of tiers) {
+      const allowsAll = ALL_CLASSES.every((c) => applyDisclosurePolicy(tier, c) === 'allow');
+      expect(tierPermitsAllDisclosure(tier), tier).toBe(allowsAll);
+    }
+  });
+
+  it('fails closed for an unrecognized tier', () => {
+    expect(tierPermitsAllDisclosure('bogus' as ContactTier)).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 {
   "name": "email-send",
   "description": "Send a new email. to and cc take a contact ID, or \"principal\" for the principal; you choose the person and the address comes from their verified identities. A #label (principal#personal, or on each cc entry) is a hint for which labelled identity, not an address. Emails are sent from the agent's configured email address. Pass account only together with reply_to_message_id, to read and send a threaded reply from that mailbox. A new email always goes from the primary account.",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {

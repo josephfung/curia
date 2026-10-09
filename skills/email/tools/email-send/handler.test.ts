@@ -92,7 +92,7 @@ describe('EmailSendHandler', () => {
     }
     expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'email', to: 'alice@example.com', subject: 'Hello', body: 'Hi there' }),
-      { taskEventId: undefined, conversationId: undefined },
+      { taskEventId: undefined, conversationId: undefined, principalDirected: false },
     );
   });
 

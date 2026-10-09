@@ -1,7 +1,7 @@
 {
   "name": "slack-send",
   "description": "Send a 1:1 Slack DM to a person. recipient takes a contact ID, or \"principal\" for the principal; you choose the person and the user id comes from their verified Slack identity. A #label (principal#personal) is a hint for which labelled identity, not a user id. 1:1 DM only (no channel/group proactive posting in v1). Enterprise Grid workspace user ids (W…) are out of scope and rejected.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sensitivity": "normal",
   "action_risk": "medium",
   "inputs": {

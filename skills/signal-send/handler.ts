@@ -19,6 +19,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/type
 import { checkGroupMemberTrust } from '../../src/channels/signal/group-trust.js';
 import { registerOutboundContext } from '../../src/dispatch/context-bridge-parse.js';
 import { boundTaskFromMetadata } from '../../src/agents/resumable-task.js';
+import { isPrincipalDirectedSend } from '../../src/skills/_shared/principal-directed.js';
 import { hasPresentValue } from '../../src/contacts/principal-carveout-parse.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
@@ -153,6 +154,7 @@ export class SignalSendHandler implements ToolHandler {
         }, {
           taskEventId: ctx.taskEventId,
           conversationId: ctx.conversationId,
+          principalDirected: isPrincipalDirectedSend(ctx),
         });
 
         if (!result.success) {
@@ -211,6 +213,7 @@ export class SignalSendHandler implements ToolHandler {
       }, {
         taskEventId: ctx.taskEventId,
         conversationId: ctx.conversationId,
+        principalDirected: isPrincipalDirectedSend(ctx),
       });
 
       if (!result.success) {

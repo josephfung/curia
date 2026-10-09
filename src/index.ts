@@ -96,13 +96,13 @@ import { deleteVoiceRoom, listVoiceRooms } from './channels/voice/livekit/token.
 import { SignalCallBridge } from './channels/voice/signal/signal-call-bridge.js';
 import { loadAuthConfig } from './contacts/config-loader.js';
 import { AuthorizationService } from './contacts/authorization.js';
-import { OutboundContentFilter } from './dispatch/outbound-filter.js';
+import type { OutboundContentFilter } from './dispatch/outbound-filter.js';
+import { buildEscalationJudge, buildOutboundContentFilter, EscalationJudgeConfigError } from './dispatch/outbound-filter-wiring.js';
 import { extractPromptExfiltrationMarkers } from './dispatch/prompt-exfiltration-markers.js';
 import { TRIGGER_GUIDANCE_MARKER_SOURCES } from './agents/prompts/trigger-guidance-sources.js';
 import { OutboundLlmJudge } from './dispatch/outbound-judge.js';
 import type { JudgeConfig } from './dispatch/outbound-judge.js';
-import { EscalationJudge } from './autonomy/escalation-judge.js';
-import type { EscalationJudgeConfig } from './autonomy/escalation-judge.js';
+import type { EscalationJudge } from './autonomy/escalation-judge.js';
 import { OutboundGateway } from './skills/outbound-gateway.js';
 import { OutboundQueueRepo } from './skills/outbound-queue-repo.js';
 import { ExportControlService, resolveExportControls } from './security/export-controls.js';
@@ -1348,6 +1348,31 @@ async function main(): Promise<void> {
     }
   });
 
+  // The EscalationJudge serves two gates, so it is built before the outbound filter that
+  // consumes it (#1870):
+  //  - #950 Gate C (action gate) decides deterministically when the tier × action_risk outcome
+  //    is obvious, and consults the judge only when the decision hinges on whether the action
+  //    is third-party-facing — a runtime property the manifest's action_risk cannot encode
+  //    (e.g. a `known` contact's reply to the sender is allowed, but emailing a third party
+  //    must escalate).
+  //  - #949 Stage 2.5 of the outbound filter classifies each send's disclosure class.
+  // The judge is fail-closed; a disabled/unconfigured judge makes Gate C escalate on ambiguous
+  // actions and leaves Stage 2.5 inactive.
+  let escalationJudge: EscalationJudge | undefined;
+  try {
+    escalationJudge = buildEscalationJudge({
+      yaml: yamlConfig.escalation?.judge,
+      modelRegistry,
+      providerRegistry,
+      bus,
+      logger,
+    });
+  } catch (err) {
+    if (!(err instanceof EscalationJudgeConfigError)) throw err;
+    logger.fatal(err.detail, err.message);
+    process.exit(1);
+  }
+
   let outboundFilter: OutboundContentFilter | undefined;
   if (coordinatorConfig) {
     // Extract exfiltration markers from BOTH the office identity (name, constraints,
@@ -1430,62 +1455,14 @@ async function main(): Promise<void> {
       logger.info('Outbound Stage 2 LLM judge disabled via config (filter.llmJudge.enabled=false)');
     }
 
-    outboundFilter = new OutboundContentFilter({
+    outboundFilter = buildOutboundContentFilter({
       systemPromptMarkers,
       ceoEmail: principalEmail,
       judge: outboundJudge,
+      escalationJudge,
       logger,
     });
-    logger.info({ markerCount: systemPromptMarkers.length }, 'Outbound content filter initialized');
   }
-  // #950 (action gate): Gate C decides deterministically when the tier × action_risk outcome
-  // is obvious, and consults the EscalationJudge only when the decision hinges on whether the
-  // action is third-party-facing — a runtime property the manifest's action_risk cannot encode
-  // (e.g. a `known` contact's reply to the sender is allowed, but emailing a third party must
-  // escalate). Construct the judge here from the escalation.judge config block, mirroring the
-  // outbound judge above. The judge is fail-closed; a disabled/unconfigured judge makes Gate C
-  // escalate on ambiguous actions.
-  let escalationJudge: EscalationJudge | undefined;
-  const escalationJudgeYaml = yamlConfig.escalation?.judge;
-  const escalationJudgeEnabled = escalationJudgeYaml?.enabled ?? true;
-  if (escalationJudgeEnabled) {
-    const escalationJudgeConfig: EscalationJudgeConfig = {
-      enabled: true,
-      model: escalationJudgeYaml?.model ?? 'claude-haiku-4-5',
-      timeoutMs: escalationJudgeYaml?.timeout_ms ?? 5000,
-    };
-    // Validate the same way as the outbound judge — a typo'd model or bad timeout should fail
-    // fast at startup rather than silently escalate every ambiguous Gate C decision later.
-    if (!Number.isInteger(escalationJudgeConfig.timeoutMs) || escalationJudgeConfig.timeoutMs < 250) {
-      logger.fatal(
-        { timeoutMs: escalationJudgeConfig.timeoutMs },
-        'escalation.judge.timeout_ms must be an integer >= 250 (ms) — fix config (default.yaml or local.yaml)',
-      );
-      process.exit(1);
-    }
-    if (!modelRegistry.isKnownModel(escalationJudgeConfig.model)) {
-      logger.fatal(
-        { model: escalationJudgeConfig.model },
-        'escalation.judge.model is not in the model registry — fix config (default.yaml or local.yaml)',
-      );
-      process.exit(1);
-    }
-    const escalationProviderName = modelRegistry.getProvider(escalationJudgeConfig.model);
-    if (!escalationProviderName || !providerRegistry.has(escalationProviderName)) {
-      logger.fatal(
-        { model: escalationJudgeConfig.model, provider: escalationProviderName },
-        'escalation.judge.model maps to a provider that is not registered — set the corresponding API key or change the model',
-      );
-      process.exit(1);
-    }
-    // Dedicated stateless router (same rationale as the outbound judge above).
-    const escalationJudgeRouter = new LLMProviderRouter(modelRegistry, providerRegistry);
-    escalationJudge = new EscalationJudge(escalationJudgeRouter, escalationJudgeConfig, bus, logger, modelRegistry);
-    logger.info({ model: escalationJudgeConfig.model }, 'Escalation judge enabled (Gate C third-party-facing classifier)');
-  } else {
-    logger.info('Escalation judge disabled via config (escalation.judge.enabled=false) — Gate C fails closed on ambiguous actions');
-  }
-
   // PII scrubbing for LLM-facing error strings — loads extra patterns from
   // config/default.yaml pii.extra_patterns and injects them into classify.ts.
   // An invalid extra pattern is treated as fatal: the operator's intent was to

@@ -6,6 +6,9 @@
 //   Stage 2: LLM review (contextual appropriateness) — catches subtle leakage.
 //   Stage 2.5: Escalation judge (tier-sensitive disclosure gate) — classifies content
 //     by disclosure class and checks it against the recipient's tier policy table.
+//     Active only when an escalation judge is wired and enabled; disclosureGateStatus()
+//     reports which, and bootstrap logs it (#1870). Skipped for sends the principal
+//     directed — see FilterCheckInput.principalDirected.
 //
 // Security principle: each stage is an independent boundary. Stage 1 failures
 // short-circuit immediately; Stages 2 and 2.5 only run on clean Stage 1 output.
@@ -22,6 +25,7 @@ import type { Logger } from '../logger.js';
 import { normalizeFragmentText } from './prompt-exfiltration-markers.js';
 import type { OutboundJudge, JudgeInput } from './outbound-judge.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
+import { tierPermitsAllDisclosure } from '../autonomy/escalation-policy.js';
 
 /**
  * A single resolved outbound recipient. `isPrincipal` is determined structurally
@@ -43,6 +47,25 @@ export interface FilterCheckInput {
   // Governs the contact-data-leak rule (third-party email disclosure) and the
   // Stage 2.5 escalation-judge disclosure gate.
   recipientTier: ContactTier;
+  /**
+   * True when recipientTier is 'unknown' because contact resolution FAILED (DB or
+   * service error), not because the recipient has no contact record. The gateway
+   * fails open on that error so the send can still proceed. Stage 2.5 does not
+   * follow it: it evaluates at 'unknown' (fail-closed), because the gate is an
+   * allow-list keyed on tier. Skipping it would treat an unresolved recipient as
+   * trusted. The flag labels the finding so a block caused by the outage can be told
+   * apart from a block on the merits (#1870).
+   */
+  recipientTierUnresolved?: boolean;
+  /**
+   * True when the principal directed this send. Senders set it when the task's
+   * effective standing is principal (isPrincipalOriginated, the same notion Gate C
+   * uses) or the principal approved the exact action (humanApproved). Stage 2.5 does
+   * not block a principal-directed send: the principal may tell a `known` contact
+   * something about a third party. Absent means the gate applies, so a sender that
+   * omits it fails closed (#1870).
+   */
+  principalDirected?: boolean;
   /**
    * Full recipient set (To + CC), each tagged isPrincipal structurally. Used by
    * Stage 2 (LLM judge). Optional: when absent (legacy callers / Stage-1-only unit
@@ -66,6 +89,12 @@ export interface FilterResult {
   // Omitting stage on a pass avoids confusion ("which stage passed?")
   stage?: 'deterministic' | 'llm-review' | 'disclosure-gate';
 }
+
+/**
+ * Whether Stage 2.5 can run. 'no-judge' means no escalation judge was wired;
+ * 'judge-disabled' means one was wired but the escalation.judge kill switch is off.
+ */
+export type DisclosureGateStatus = 'active' | 'no-judge' | 'judge-disabled';
 
 export interface OutboundContentFilterConfig {
   // Phrases from the system prompt. If any appear in outbound content, it's
@@ -190,6 +219,15 @@ export class OutboundContentFilter {
     this.judge = config.judge;
     this.escalationJudge = config.escalationJudge;
     this.logger = config.logger;
+  }
+
+  /**
+   * Whether Stage 2.5 is reachable. Bootstrap logs this so an unwired gate shows up
+   * at boot, not only as an absence from the audit log (#1870).
+   */
+  disclosureGateStatus(): DisclosureGateStatus {
+    if (!this.escalationJudge) return 'no-judge';
+    return this.escalationJudge.isEnabled() ? 'active' : 'judge-disabled';
   }
 
   /**
@@ -536,12 +574,25 @@ export class OutboundContentFilter {
     // every message (which is what classifyDisclosure returns when enabled=false).
     if (!this.escalationJudge || !this.escalationJudge.isEnabled()) return [];
 
-    // Principal tier allows all disclosure classes (see DISCLOSURE_ALLOWED in escalation-policy.ts).
-    // Calling the LLM is unnecessary and risky: classifyDisclosure() is fail-closed, so a transient
-    // LLM failure would return decision='escalate' without ever reaching applyDisclosurePolicy —
-    // incorrectly blocking a principal-bound message that the policy unconditionally permits.
-    // Mirrors Stage 2's principalIsSoleRecipient short-circuit in OutboundLlmJudge.review().
-    if (input.recipientTier === 'principal') return [];
+    // Tiers whose policy entry allows every disclosure class (principal, trusted). Calling
+    // the LLM is unnecessary and risky: classifyDisclosure() is fail-closed, so a transient
+    // LLM failure would return decision='escalate' without ever reaching applyDisclosurePolicy,
+    // incorrectly blocking a message the policy unconditionally permits (#1225, #1870).
+    if (tierPermitsAllDisclosure(input.recipientTier)) return [];
+
+    // Structural principal-sole recipient, mirroring Stage 2. Unlike recipientTier this does
+    // not depend on the contact DB, so principal-bound mail still passes when contact
+    // resolution failed and left the tier at 'unknown'.
+    if (input.principalIsSoleRecipient) return [];
+
+    // The principal directed this send, so it is not an autonomous disclosure (#1870).
+    if (input.principalDirected) {
+      this.logger?.info(
+        { recipientTier: input.recipientTier, channelId: input.channelId },
+        'Stage 2.5 disclosure gate skipped — send directed by the principal',
+      );
+      return [];
+    }
 
     const verdict = await this.escalationJudge.classifyDisclosure({
       content: input.content,
@@ -555,9 +606,14 @@ export class OutboundContentFilter {
       // logger but must not be forwarded to the principal notification email — the disclosure
       // judge prompt does not explicitly prohibit quoting from the evaluated content,
       // so verdict.reason could theoretically echo sensitive fragments.
+      // Same rule either way; the suffix lets the audit trail separate an outage-caused
+      // block from a block on the merits (#1870).
+      const unresolved = input.recipientTierUnresolved
+        ? ' (recipient tier unresolved: contact lookup failed)'
+        : '';
       return [{
         rule: 'disclosure-tier-gate',
-        detail: `Disclosure class '${verdict.disclosureClass ?? 'unknown'}' not permitted for tier '${input.recipientTier}'`,
+        detail: `Disclosure class '${verdict.disclosureClass ?? 'unknown'}' not permitted for tier '${input.recipientTier}'${unresolved}`,
       }];
     }
 

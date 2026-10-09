@@ -131,7 +131,8 @@ export class SendDraftHandler implements ToolHandler {
       draftId,
       resolvedAccount,
       { recipientEmail: recipient, body: draft.body, subject: draft.subject, allRecipients },
-      { humanApproved: true, conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
+      // principalDirected: the isPrincipalOriginated check above already admitted this send.
+      { humanApproved: true, principalDirected: true, conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
     );
 
     if (!sendResult.success) {

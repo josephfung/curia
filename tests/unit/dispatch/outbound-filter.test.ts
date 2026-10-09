@@ -3,6 +3,7 @@ import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js'
 import type { OutboundJudge } from '../../../src/dispatch/outbound-judge.js';
 import type { FilterRecipient } from '../../../src/dispatch/outbound-filter.js';
 import type { EscalationJudge, EscalationVerdict } from '../../../src/autonomy/escalation-judge.js';
+import { applyDisclosurePolicy } from '../../../src/autonomy/escalation-policy.js';
 import { createSilentLogger } from '../../../src/logger.js';
 
 const armin: FilterRecipient = { email: 'armin@external.com', isPrincipal: false };
@@ -799,27 +800,129 @@ describe('Stage 2.5 escalation judge delegation', () => {
     const filter = filterWithEscalationJudge(judge);
     await filter.check({
       ...BASE_INPUT,
-      recipientTier: 'trusted',
+      recipientTier: 'known',
       content: 'Here is the contract draft.',
     });
     expect(judge.classifyDisclosure).toHaveBeenCalledWith(
-      expect.objectContaining({ recipientTier: 'trusted' }),
+      expect.objectContaining({ recipientTier: 'known' }),
     );
   });
 
-  it('does not call the judge for principal recipients — policy always allows, LLM call is unnecessary and risky', async () => {
-    // A fail-closed LLM failure in classifyDisclosure() returns decision='escalate' without
-    // reaching applyDisclosurePolicy. For principal recipients the policy allows all classes,
-    // so calling the LLM can only cause spurious blocks. The guard short-circuits before the call.
+  it.each(['principal', 'trusted'] as const)(
+    'does not call the judge for %s recipients — the policy allows every class, so the LLM call can only add a fail-closed block (#1225, #1870)',
+    async (recipientTier) => {
+      // A fail-closed LLM failure in classifyDisclosure() returns decision='escalate' without
+      // reaching applyDisclosurePolicy. For these tiers the policy allows all classes, so the
+      // guard short-circuits before the call.
+      const judge = makeEscalationJudge({ decision: 'escalate', reason: 'would block if called' });
+      const filter = filterWithEscalationJudge(judge);
+      const result = await filter.check({
+        ...BASE_INPUT,
+        recipientTier,
+        content: 'Here is your daily recap: 3 open tasks, 1 pending approval.',
+      });
+      expect(result.passed).toBe(true);
+      expect(judge.classifyDisclosure).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not call the judge when the principal is the sole recipient, even if the tier lookup failed (#1870)', async () => {
+    // principalIsSoleRecipient is structural (verified channel identities), so it holds
+    // when a contact-DB failure left recipientTier at 'unknown'.
     const judge = makeEscalationJudge({ decision: 'escalate', reason: 'would block if called' });
     const filter = filterWithEscalationJudge(judge);
     const result = await filter.check({
       ...BASE_INPUT,
-      recipientTier: 'principal',
-      content: 'Here is your daily recap: 3 open tasks, 1 pending approval.',
+      recipientTier: 'unknown',
+      recipientTierUnresolved: true,
+      principalIsSoleRecipient: true,
+      content: 'Your 3pm moved to 4pm.',
     });
     expect(result.passed).toBe(true);
     expect(judge.classifyDisclosure).not.toHaveBeenCalled();
+  });
+
+  describe('principal-directed sends (#1870)', () => {
+    // The 2026-09-17 case: over Signal, the principal told Curia to give an external
+    // `known` contact a third party's surname. The judge here applies the REAL policy
+    // table to a third-party classification, so it escalates for `known`.
+    const THIRD_PARTY_TO_KNOWN = "Sarah's surname is Okafor — she'll be joining the call.";
+    function thirdPartyJudge(): EscalationJudge {
+      return {
+        isEnabled: vi.fn(() => true),
+        classifyDisclosure: vi.fn(async ({ recipientTier }: { recipientTier: Parameters<typeof applyDisclosurePolicy>[0] }) => ({
+          decision: applyDisclosurePolicy(recipientTier, 'third-party'),
+          disclosureClass: 'third-party' as const,
+          reason: 'names another contact',
+        })),
+      } as unknown as EscalationJudge;
+    }
+
+    it('does not block a third-party disclosure to a known contact that the principal directed', async () => {
+      const judge = thirdPartyJudge();
+      const filter = filterWithEscalationJudge(judge);
+      const result = await filter.check({
+        ...BASE_INPUT,
+        recipientTier: 'known',
+        principalDirected: true,
+        content: THIRD_PARTY_TO_KNOWN,
+      });
+      expect(result.passed).toBe(true);
+      expect(judge.classifyDisclosure).not.toHaveBeenCalled();
+    });
+
+    it('blocks the same disclosure when it is autonomous (not principal-directed)', async () => {
+      const judge = thirdPartyJudge();
+      const filter = filterWithEscalationJudge(judge);
+      const result = await filter.check({
+        ...BASE_INPUT,
+        recipientTier: 'known',
+        content: THIRD_PARTY_TO_KNOWN,
+      });
+      expect(result.passed).toBe(false);
+      expect(result.stage).toBe('disclosure-gate');
+      expect(result.findings).toEqual([{
+        rule: 'disclosure-tier-gate',
+        detail: "Disclosure class 'third-party' not permitted for tier 'known'",
+      }]);
+    });
+  });
+
+  it('labels a block whose unknown tier came from a failed contact lookup (#1870)', async () => {
+    // Decision: an unresolved tier is evaluated as 'unknown' (fail-closed). The finding
+    // says so, so the audit trail can tell an outage-caused block from one on the merits.
+    const judge = makeEscalationJudge({
+      decision: 'escalate',
+      disclosureClass: 'principal-context',
+      reason: 'availability to an unknown recipient',
+    });
+    const filter = filterWithEscalationJudge(judge);
+    const result = await filter.check({
+      ...BASE_INPUT,
+      recipientTier: 'unknown',
+      recipientTierUnresolved: true,
+      content: 'Joseph is free on Thursday afternoon.',
+    });
+    expect(result.passed).toBe(false);
+    expect(result.findings[0]!.detail).toBe(
+      "Disclosure class 'principal-context' not permitted for tier 'unknown' (recipient tier unresolved: contact lookup failed)",
+    );
+  });
+
+  describe('disclosureGateStatus()', () => {
+    it("is 'no-judge' when no escalation judge is wired", () => {
+      expect(createTestFilter().disclosureGateStatus()).toBe('no-judge');
+    });
+
+    it("is 'judge-disabled' when the judge's kill switch is off", () => {
+      const judge = makeEscalationJudge({ decision: 'allow', reason: 'x' }, false);
+      expect(filterWithEscalationJudge(judge).disclosureGateStatus()).toBe('judge-disabled');
+    });
+
+    it("is 'active' when an enabled judge is wired", () => {
+      const judge = makeEscalationJudge({ decision: 'allow', reason: 'x' });
+      expect(filterWithEscalationJudge(judge).disclosureGateStatus()).toBe('active');
+    });
   });
 
   it('still calls the judge and blocks for non-principal recipients when the judge escalates', async () => {

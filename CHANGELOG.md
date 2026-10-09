@@ -181,6 +181,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **Outbound disclosure gate (Stage 2.5)** — now runs in production; principal-directed sends and trusted recipients skip it. (#1870)
 - **Sender verification** — a sender-written Authentication-Results header no longer counts as a pass. (#2071)
 
 ### Fixed

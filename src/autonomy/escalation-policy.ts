@@ -32,6 +32,16 @@ export type DisclosureClass =
   // Financials, legal, private-thread content.
   | 'confidential';
 
+// Keyed by DisclosureClass so the compiler rejects this table if a class is added to the
+// union and not here — tierPermitsAllDisclosure() depends on it being complete.
+const DISCLOSURE_CLASS_KEYS: Record<DisclosureClass, true> = {
+  'public': true,
+  'principal-context': true,
+  'third-party': true,
+  'confidential': true,
+};
+const ALL_DISCLOSURE_CLASSES = Object.keys(DISCLOSURE_CLASS_KEYS) as DisclosureClass[];
+
 // ---------------------------------------------------------------------------
 // Action-consequence classes
 // ---------------------------------------------------------------------------
@@ -98,6 +108,20 @@ export function applyDisclosurePolicy(
   // Belt-and-suspenders: unrecognized tier not in the table → fail closed.
   if (!allowed) return 'escalate';
   return allowed.has(disclosureClass) ? 'allow' : 'escalate';
+}
+
+/**
+ * True when the tier's DISCLOSURE_ALLOWED entry covers every DisclosureClass, so the
+ * disclosure gate can only ever allow. Callers skip classification for such tiers: the
+ * judge is fail-closed, so calling it could only add a spurious block on a timeout or a
+ * malformed verdict (#1870). Derived from the table rather than a tier list, so a tier
+ * added later is short-circuited exactly when its policy entry is unrestricted.
+ */
+export function tierPermitsAllDisclosure(tier: ContactTier): boolean {
+  const allowed = DISCLOSURE_ALLOWED[tier];
+  // Unrecognized tier → not unrestricted (fail closed, mirrors applyDisclosurePolicy).
+  if (!allowed) return false;
+  return ALL_DISCLOSURE_CLASSES.every((c) => allowed.has(c));
 }
 
 // ---------------------------------------------------------------------------
