@@ -450,9 +450,12 @@ Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before cha
 specialist prompt or the delegate handler, run `--tags real-delegation`.
 
 Baseline: `deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each,
-2026-10-09, on this branch: 16a at `8b90df44`, 16b at `fdd51732`, 16c and 16e to 16g at
-`8b90df44`, 16d at `0ef4754e` (the tree differed from it only in this README and
-`stub-coverage.json`). Every critical behavior passed all five runs, with no stub holes.
+2026-10-09. Measured before the rebase onto main `1bff67c7`: 16a, 16c and 16e–16g at
+`8b90df44`, 16b at `fdd51732`, 16d at `0ef4754e` (that tree differed from the commit only
+in this README and `stub-coverage.json`). Those commits are the pre-rebase versions of
+`5b1de635`, `dddb4853` and `5bb7d5ab` on this branch. The rebase brings the coordinator
+prompt trim (#1954); these seven cases and the scenario harness are the trees the runs
+measured. Every critical behavior passed all five runs, with no stub holes.
 Spend is for the five runs, judge included.
 
 | Case | Score | Below 100% | Avg run | Spend |
