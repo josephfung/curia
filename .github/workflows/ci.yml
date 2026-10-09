@@ -24,6 +24,13 @@ jobs:
     services:
       postgres:
         image: pgvector/pgvector:pg16
+        # Authenticated pull (#2095): anonymous Docker Hub pulls are rate-limited per
+        # runner IP. Where the secrets are absent (fork PRs; Dependabot PRs unless the
+        # Dependabot secrets are set too), the runner skips the login and pulls
+        # anonymously, as before.
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_DB: curia_test
           POSTGRES_USER: curia
@@ -88,8 +95,23 @@ jobs:
     # postgres service uses the stock pgvector image, so the custom image is
     # otherwise never exercised on PRs — which is exactly how #1350 shipped.
     runs-on: ubuntu-latest
+    # Read by the login step's `if:`, which cannot read `secrets` directly.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The build pulls pgvector/pgvector from Docker Hub; authenticate it (#2095).
+      # Skipped where the secrets are absent (fork and Dependabot PRs), which then
+      # pull anonymously as before. Unlike docker-publish, this is a PR check, so it
+      # degrades rather than failing on a missing token.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build + boot curia-postgres (fresh-init regression)
         run: bash tests/docker/test-postgres-init.sh

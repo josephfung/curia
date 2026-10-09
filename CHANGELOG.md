@@ -189,7 +189,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
-- **Image publish** — Docker Hub pulls are authenticated, so shared-runner rate limits no longer fail publishes. (#2095)
+- **Image publish and CI** — Docker Hub pulls are authenticated, so shared-runner rate limits no longer fail them. (#2095)
 - **Nylas folder lookups** — label and read calls reuse a per-grant folder list; email labels past page one resolve. (#2083)
 - **Skill timeouts** — a timed-out call now aborts its Nylas requests instead of writing late. (#2083)
 - **`ceo-inbox` retries** — a `Retry-After` longer than the call's remaining time fails fast as retryable. (#2083)

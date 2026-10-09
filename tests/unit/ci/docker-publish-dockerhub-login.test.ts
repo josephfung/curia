@@ -17,6 +17,7 @@ const ROOT = join(import.meta.dirname, '../../..');
 
 interface Step {
   id?: string;
+  run?: string;
   name?: string;
   uses?: string;
   if?: string;
@@ -28,9 +29,29 @@ interface Workflow {
   jobs: { build: { steps: Step[] } };
 }
 
-const workflow = yaml.load(
-  readFileSync(join(ROOT, '.github/workflows/docker-publish.yml'), 'utf8'),
-) as Workflow;
+const load = <T>(name: string): T =>
+  yaml.load(readFileSync(join(ROOT, '.github/workflows', name), 'utf8')) as T;
+
+const workflow = load<Workflow>('docker-publish.yml');
+
+const SECRETS = {
+  username: '${{ secrets.DOCKERHUB_USERNAME }}',
+  password: '${{ secrets.DOCKERHUB_TOKEN }}',
+};
+
+interface ContainerSpec {
+  image: string;
+  credentials?: Record<string, string>;
+}
+
+interface CheckJob {
+  container?: ContainerSpec;
+  services?: Record<string, ContainerSpec>;
+  env?: Record<string, string>;
+  steps: Step[];
+}
+
+type CheckWorkflow = { jobs: Record<string, CheckJob> };
 
 describe('docker-publish Docker Hub login (#2095)', () => {
   const steps = workflow.jobs.build.steps;
@@ -61,5 +82,42 @@ describe('docker-publish Docker Hub login (#2095)', () => {
       expect(index).toBeGreaterThan(-1);
       expect(loginIndex).toBeLessThan(index);
     }
+  });
+});
+
+// The PR checks pull from Docker Hub too, and failed on the same rate limit. They
+// authenticate where the secrets exist and pull anonymously where they do not
+// (fork and Dependabot PRs): the runner skips a container login whose credentials
+// are empty, and the postgres-image login step is skipped by its `if:`.
+describe('PR-check Docker Hub pulls (#2095)', () => {
+  const ci = load<CheckWorkflow>('ci.yml');
+
+  it.each([
+    ['ci.yml', 'ci', 'postgres'],
+    ['dast.yml', 'zap-baseline', 'postgres'],
+  ])('%s authenticates its %s job\'s %s service', (file, job, service) => {
+    const spec = load<CheckWorkflow>(file).jobs[job]!.services![service]!;
+    expect(spec.image).toMatch(/^pgvector\//);
+    expect(spec.credentials).toEqual(SECRETS);
+  });
+
+  it('semgrep authenticates its container', () => {
+    const container = load<CheckWorkflow>('semgrep.yml').jobs.semgrep!.container!;
+    expect(container.image).toBe('semgrep/semgrep');
+    expect(container.credentials).toEqual(SECRETS);
+  });
+
+  it('ci postgres-image logs in before the build, only where the secret exists', () => {
+    const job = ci.jobs['postgres-image']!;
+    const loginIndex = job.steps.findIndex(
+      (step) => step.uses?.startsWith('docker/login-action@') && step.with?.registry === 'docker.io',
+    );
+    const buildIndex = job.steps.findIndex((step) => step.run?.includes('test-postgres-init.sh'));
+    expect(loginIndex).toBeGreaterThan(-1);
+    expect(loginIndex).toBeLessThan(buildIndex);
+    const login = job.steps[loginIndex]!;
+    expect(login.with).toMatchObject({ username: SECRETS.username, password: SECRETS.password });
+    expect(login.if).toBe("env.DOCKERHUB_USERNAME != ''");
+    expect(job.env?.DOCKERHUB_USERNAME).toBe(SECRETS.username);
   });
 });

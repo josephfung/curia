@@ -36,6 +36,13 @@ jobs:
     services:
       postgres:
         image: pgvector/pgvector:pg16
+        # Authenticated pull (#2095): anonymous Docker Hub pulls are rate-limited per
+        # runner IP. Where the secrets are absent (fork PRs; Dependabot PRs unless the
+        # Dependabot secrets are set too), the runner skips the login and pulls
+        # anonymously, as before.
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_DB: curia_test
           POSTGRES_USER: curia
