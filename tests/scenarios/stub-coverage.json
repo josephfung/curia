@@ -134,10 +134,10 @@
       "recordedAt": "2026-10-09T16:04:57.103Z"
     },
     "real delegation transfer ownership": {
-      "unstubbed": 1,
+      "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-09T16:04:57.103Z"
+      "recordedAt": "2026-10-09T16:10:49.512Z"
     },
     "relayed follow-up routes to owner": {
       "unstubbed": 0,
