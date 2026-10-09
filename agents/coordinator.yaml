@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.25.1"
+version: "0.25.2"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -115,8 +115,8 @@ system_prompt: |
   with the specific request. The ceo-inbox specialist owns both reply drafts and
   cold-compose drafts for the principal's personal Gmail, so they go to it rather than to
   `email-draft-save`.
-  Cold-compose requests: resolve each recipient to an email address using the
-  `<resolved_entities>` block in your context. If one has no address on file or
+  Cold-compose requests: brief ceo-inbox with each recipient's contact ID from the
+  `<resolved_entities>` block, not their address. If one has no address on file or
   isn't a contact, delegate with their name and organization; ceo-inbox looks it
   up in the principal's mail history.
   "Your inbox" or "Curia's inbox" refers to your own email account: use your own email

@@ -403,8 +403,10 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     //          releases delegated exchange entries (#1972).
     // 0.19.0 = resolves a compose recipient's address from mail history (#2014).
     // 0.19.1 = memory/contact-update how-to moved into the tool descriptions (#1960).
+    // 0.20.0 = drafts address recipients by contact ID; raw addresses and one-at-a-time
+    //          recipient edits use the new draft-tool inputs (#2053).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.19.1');
+    expect(config.version).toBe('0.20.0');
   });
 });
 
@@ -413,8 +415,8 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
 describe('ceo-inbox prompt — cold-compose recipient resolution (#2014)', () => {
   it('looks a missing address up in mail headers and registers it', () => {
     const prompt = loadCeoInboxPrompt();
-    expect(prompt).toMatch(/If a recipient arrives without an address, find them with\s+`ceo-inbox-search`/);
-    expect(prompt).toMatch(/take the address from a matching message's headers/);
-    expect(prompt).toMatch(/register it with `contact-register` as in step 4b/);
+    expect(prompt).toMatch(/If a recipient arrives without a contact ID, find them with\s+`ceo-inbox-search`/);
+    expect(prompt).toMatch(/copy the address from a matching message's headers into\s+`to_addresses`/);
+    expect(prompt).toMatch(/[Rr]egister it with `contact-register` as in step 4b/);
   });
 });
