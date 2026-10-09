@@ -14,6 +14,7 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import type { NylasMessage } from '../../../../src/channels/email/nylas-client.js';
 import { createHumanDecision } from '../../../../src/bus/events.js';
 import { isPrincipalOriginated } from '../../../../src/contacts/principal.js';
+import { isPrincipalDirectedSend } from '../../../../src/skills/_shared/principal-directed.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 
 /** Result of findDraftById — either the draft + owning account, or a structured error. */
@@ -131,8 +132,9 @@ export class SendDraftHandler implements ToolHandler {
       draftId,
       resolvedAccount,
       { recipientEmail: recipient, body: draft.body, subject: draft.subject, allRecipients },
-      // principalDirected: the isPrincipalOriginated check above already admitted this send.
-      { humanApproved: true, principalDirected: true, conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
+      // principalDirected needs a live principal turn or explicit approval. The lineage check
+      // above is not enough: a woken principal-lineage task passes it too (#1870).
+      { humanApproved: true, principalDirected: isPrincipalDirectedSend(ctx), conversationId: ctx.conversationId, taskEventId: ctx.taskEventId },
     );
 
     if (!sendResult.success) {

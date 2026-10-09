@@ -257,9 +257,10 @@ export interface ToolContext {
   taskMetadata?: Record<string, unknown>;
   /** Live-principal-turn signal (#1126) — true when the current turn originated from a fresh
    *  principal inbound (directly, or via a SYNCHRONOUS delegation that forwarded it). Distinct
-   *  from taskMetadata so it is never persisted. Only `delegate` reads this (to forward it to a
-   *  synchronously-delegated specialist); other skills can ignore it. The elevated-skill gate is
-   *  the real consumer, in the execution layer. */
+   *  from taskMetadata so it is never persisted. `delegate` reads this (to forward it to a
+   *  synchronously-delegated specialist), and send skills read it through
+   *  isPrincipalDirectedSend() for the Stage 2.5 bypass (#1870); other skills can ignore it.
+   *  The elevated-skill gate is the main consumer, in the execution layer. */
   liveTurn?: boolean;
   /** IANA timezone name (e.g. "America/Toronto") for formatting user-facing timestamps.
    *  Populated from the global config timezone. Skills returning timestamps for display

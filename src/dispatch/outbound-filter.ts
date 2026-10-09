@@ -58,12 +58,12 @@ export interface FilterCheckInput {
    */
   recipientTierUnresolved?: boolean;
   /**
-   * True when the principal directed this send. Senders set it when the task's
-   * effective standing is principal (isPrincipalOriginated, the same notion Gate C
-   * uses) or the principal approved the exact action (humanApproved). Stage 2.5 does
-   * not block a principal-directed send: the principal may tell a `known` contact
-   * something about a third party. Absent means the gate applies, so a sender that
-   * omits it fails closed (#1870).
+   * True when the principal directed this send. Senders set it for a live principal
+   * turn (isLivePrincipalTurn) or when the principal approved the exact action
+   * (humanApproved). Principal lineage alone does not count: a woken task composes its
+   * content autonomously. Stage 2.5 does not block a principal-directed send: the
+   * principal may tell a `known` contact something about a third party. Absent means
+   * the gate applies, so a sender that omits it fails closed (#1870).
    */
   principalDirected?: boolean;
   /**

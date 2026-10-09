@@ -247,12 +247,15 @@ describe('SignalSendHandler', () => {
     );
   });
 
-  it('marks the send principalDirected when the task is principal-originated (#1870)', async () => {
+  it('marks the send principalDirected on a live principal turn (#1870)', async () => {
     const gateway = { send: vi.fn().mockResolvedValue({ success: true }) };
     const ctx = makeCtx({ input: { recipient: BOB_ID, message: 'hello' }, gateway });
-    (ctx as { taskMetadata?: Record<string, unknown> }).taskMetadata = {
-      originator: { contactId: 'p1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-09-17T14:00:00Z', tier: 'principal' },
-    };
+    Object.assign(ctx, {
+      taskMetadata: {
+        originator: { contactId: 'p1', systemRole: 'principal', channel: 'signal', initiatedAt: '2026-09-17T14:00:00Z', tier: 'principal' },
+      },
+      liveTurn: true,
+    });
 
     const result = await handler.execute(ctx);
 
