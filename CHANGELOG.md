@@ -179,6 +179,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Delegated sends** — the coordinator no longer reports a specialist's composed email as sent. (#2055)
+- **`email-reply`** — records a new recipient as verified `email_participant`, so later sends resolve. (#2071)
 - **Smoke and scenario stubs** — scheduler, task and draft reads replay writes from the same case. (#2074)
 - **Smoke scheduler stubs** — a schedule edit refreshes `nextRunAt`, and a missing one is filled from the cron. (#2074)
 - **Smoke scheduler list** — omitting `agentId` on a turn stub keeps the agent from the create. (#2074)

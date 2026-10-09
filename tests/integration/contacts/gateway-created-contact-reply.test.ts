@@ -1,8 +1,10 @@
-// A reply from a contact the outbound gateway created (#2040, ADR-047).
+// A reply from a contact the outbound gateway created (#2040, #2071, ADR-047).
 //
-// After a send reaches an address with no contact (send-draft, email-reply), the
-// gateway records a `known` contact with an unverified `outbound_recipient`
-// identity. These tests take that contact through the real chain:
+// After a send reaches an address with no contact, the gateway records a `known`
+// contact. send-draft leaves an unverified `outbound_recipient` identity.
+// email-reply passes `email_participant`, which is verified, because its To is
+// the From header of the message being answered. These tests take that contact
+// through the real chain:
 //   1. the gateway creates it after a send;
 //   2. the dispatcher routes the person's reply, even on a channel whose
 //      unknown_sender policy is `ignore`;
@@ -83,6 +85,8 @@ describeIf('Reply from a gateway-created contact (#2040)', () => {
   const creationPaths = [
     {
       name: 'send-draft',
+      source: 'outbound_recipient' as const,
+      verified: false,
       send: (gateway: OutboundGateway, address: string) =>
         gateway.sendEmailDraft(
           `draft-${runId}`,
@@ -93,6 +97,9 @@ describeIf('Reply from a gateway-created contact (#2040)', () => {
     },
     {
       name: 'email-reply',
+      // The handler passes this option. replyToMessageId alone does not (#2071).
+      source: 'email_participant' as const,
+      verified: true,
       send: (gateway: OutboundGateway, address: string) =>
         gateway.send({
           channel: 'email',
@@ -100,7 +107,7 @@ describeIf('Reply from a gateway-created contact (#2040)', () => {
           subject: 'Re: Venue',
           body: 'Thanks, the 14th works.',
           replyToMessageId: `msg-${runId}`,
-        }),
+        }, { recipientSource: 'email_participant' }),
     },
   ] as const;
 
@@ -184,14 +191,14 @@ describeIf('Reply from a gateway-created contact (#2040)', () => {
   }
 
   for (const path of creationPaths) {
-    it(`${path.name}: the gateway creates a known contact with an unverified identity`, async () => {
+    it(`${path.name}: the gateway creates a known contact with source ${path.source}`, async () => {
       const address = `venue-${path.name}-${runId}@example.com`;
       const resolved = await createViaGateway(path, address);
 
       expect(resolved.tier).toBe('known');
       const identities = await stack.contactService.getIdentitiesForContact(resolved.contactId);
       expect(identities).toHaveLength(1);
-      expect(identities[0]).toMatchObject({ source: 'outbound_recipient', verified: false });
+      expect(identities[0]).toMatchObject({ source: path.source, verified: path.verified });
     });
 
     it(`${path.name}: the reply is routed under unknown_sender=ignore, and a relay to the principal is allowed`, async () => {
