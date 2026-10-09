@@ -2,8 +2,10 @@
 //
 // After a send reaches an address with no contact, the gateway records a `known`
 // contact. send-draft leaves an unverified `outbound_recipient` identity.
-// email-reply passes `email_participant`, which is verified, because its To is
-// the From header of the message being answered. These tests take that contact
+// The email-reply handler passes `email_participant` only after it has checked
+// that the From is not an owned mailbox and that SPF, DKIM, and DMARC passed.
+// This file calls send() with that option directly; the gateway then verifies
+// the identity when the duplicate check is clear. These tests take that contact
 // through the real chain:
 //   1. the gateway creates it after a send;
 //   2. the dispatcher routes the person's reply, even on a channel whose

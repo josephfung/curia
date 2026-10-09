@@ -149,6 +149,58 @@ describe('EmailAdapter — sendOutboundReply', () => {
     );
   });
 
+  it('passes email_participant when the latest From authenticated and is not Curia (#2071)', async () => {
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL, name: 'Pat CEO' }],
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    expect(mocks.outboundGateway.listEmailMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'thread-abc', fields: 'include_headers' }),
+      'curia',
+    );
+    expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
+      expect.not.objectContaining({ recipientSource: 'email_participant' }),
+      expect.objectContaining({
+        recipientSource: 'email_participant',
+        recipientDisplayName: 'Pat CEO',
+      }),
+    );
+  });
+
+  it('does not pass email_participant when the latest message is ours (#2071)', async () => {
+    const curiaMessage = makeMockMessage({
+      from: [{ email: SELF_EMAIL, name: 'Curia' }],
+      to: [{ email: CEO_EMAIL, name: 'Pat CEO' }],
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([curiaMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    expect(mocks.outboundGateway.send).toHaveBeenCalledWith(
+      expect.objectContaining({ to: CEO_EMAIL }),
+      expect.any(Object),
+    );
+    const options = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as Record<string, unknown>;
+    expect(options).not.toHaveProperty('recipientSource');
+  });
+
+  it('does not pass email_participant when the sender is not authenticated (#2071)', async () => {
+    const humanMessage = makeMockMessage({
+      from: [{ email: CEO_EMAIL, name: 'Pat CEO' }],
+    });
+    (mocks.outboundGateway.listEmailMessages as ReturnType<typeof vi.fn>).mockResolvedValue([humanMessage]);
+
+    await triggerOutbound(makeOutboundEvent('email:thread-abc'));
+
+    const options = (mocks.outboundGateway.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as Record<string, unknown>;
+    expect(options).not.toHaveProperty('recipientSource');
+  });
+
   it('sends reply to the to address when the latest thread message is from Curia (self)', async () => {
     // Latest message is FROM Curia (we sent the last reply) — the human's address
     // is in the to field, not the from field.

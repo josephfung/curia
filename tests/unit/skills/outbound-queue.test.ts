@@ -349,6 +349,7 @@ describe('OutboundGateway queue (#1380)', () => {
       resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
       createContact: vi.fn().mockResolvedValue({ id: 'reply-contact' }),
       linkIdentity: vi.fn().mockResolvedValue(undefined),
+      findLikelyDuplicates: vi.fn().mockResolvedValue({ taken: [], candidates: [] }),
     };
     const flushNylas = { sendMessage: vi.fn().mockResolvedValue({ id: 'sent-reply' }) };
     const flushQueue = {
@@ -395,6 +396,53 @@ describe('OutboundGateway queue (#1380)', () => {
     // The stored field is provenance, not a Nylas option.
     const sent = flushNylas.sendMessage.mock.calls[0]![0] as Record<string, unknown>;
     expect(sent).not.toHaveProperty('recipientSource');
+    expect(sent).not.toHaveProperty('recipientDisplayName');
+  });
+
+  it('fails closed when a queued payload names a source other than email_participant (#2071)', async () => {
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      createContact: vi.fn().mockResolvedValue({ id: 'reply-contact' }),
+      linkIdentity: vi.fn().mockResolvedValue(undefined),
+      findLikelyDuplicates: vi.fn(),
+    };
+    const flushNylas = { sendMessage: vi.fn().mockResolvedValue({ id: 'sent-reply' }) };
+    const flushQueue = {
+      enqueue: vi.fn(),
+      listPending: vi.fn().mockResolvedValue([{
+        id: 'q-reply',
+        channel: 'email',
+        recipient: 'alice@example.com',
+        payload: {
+          channel: 'email' as const,
+          to: 'alice@example.com',
+          subject: 'Re: Venue',
+          body: 'The 14th works.',
+          recipientSource: 'ceo_stated',
+          recipientDisplayName: 'Alice',
+        },
+        enqueuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      }]),
+      deleteByIds: vi.fn().mockResolvedValue(1),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+    const flushGateway = new OutboundGateway({
+      nylasClients: new Map([['curia', flushNylas as never]]),
+      contactService: contactService as unknown as ContactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: flushQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['email', () => true]]),
+    });
+
+    await flushGateway.flushChannel('email');
+    expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'outbound_recipient',
+    }));
+    expect(contactService.findLikelyDuplicates).not.toHaveBeenCalled();
   });
 
   it('flushes queued Signal messages incrementally (delete after each success)', async () => {
