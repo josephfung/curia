@@ -1,0 +1,75 @@
+# Case 16b (#2027, starter case 2): borrow-then-answer with @calendar, the specialist
+# really running. The coordinator reads the principal's calendar only through the calendar
+# specialist and answers in its own voice. Rules: agents/coordinator.yaml "Principal
+# calendar requests (borrow-then-answer)" and "Borrow-then-answer"; the requester-identity
+# block a delegated specialist gets from the forwarded originator (#1871: calendar must
+# not refuse a principal-originated read). The day is fixed for tomorrow, three meetings.
+name: real delegation calendar borrow
+description: >
+  The principal asks what is on their calendar tomorrow. The coordinator borrows the
+  answer from the calendar specialist, which really runs and reads three meetings. The
+  coordinator tells the principal those meetings, with their times, in its own words:
+  no calendar ids, tool names or talk of a specialist.
+tags: [real-delegation, delegation, calendar, voice]
+delegation: real
+stub_sets: [human-channels, calendar-office]
+inbound:
+  from: principal
+  content: What's on my calendar tomorrow?
+tool_stubs:
+  calendar-list-events:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 3
+        events:
+          - { id: evt-scen-standup, title: Leadership standup, location: Zoom, startTime: "{{time:today+1 08:30}}", endTime: "{{time:today+1 09:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+          - { id: evt-scen-northwind, title: Customer call — Northwind renewal, location: Zoom, startTime: "{{time:today+1 11:00}}", endTime: "{{time:today+1 11:45}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: sam@northwind.example.test, name: Sam Rivera, status: yes }] }
+          - { id: evt-scen-board, title: Board deck review, location: Boardroom, startTime: "{{time:today+1 14:00}}", endTime: "{{time:today+1 15:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+expected_behaviors:
+  - id: borrows_from_calendar
+    weight: critical
+    description: Delegates the read to the calendar specialist.
+    check:
+      called: delegate
+      with: { agent: calendar }
+  - id: specialist_reads_calendar
+    weight: critical
+    description: The calendar specialist reads the events.
+    check:
+      called: calendar-list-events
+      agent: calendar
+      success: true
+  - id: specialist_does_not_decline
+    weight: critical
+    description: The calendar specialist does not decline the principal's request (#1871).
+    check:
+      not_called: [delegate]
+      returns: { declined: true }
+  - id: one_read
+    weight: important
+    description: Delegates once; a refused or reworded retry is the #1871 loop.
+    check:
+      called: delegate
+      max: 1
+  - id: names_no_internals
+    weight: critical
+    description: The reply names no tool, agent or system identifier.
+    check:
+      reply_excludes_internal_names: true
+  - id: reports_the_day
+    weight: critical
+    description: >
+      Lists the three meetings tomorrow (leadership standup at 8:30, the Northwind renewal
+      call at 11, the board deck review at 2) with their times.
+  - id: own_voice
+    weight: important
+    description: >
+      Answers in its own first-person voice, as if it read the calendar itself. It does not
+      describe a hand-off ("my calendar specialist says", "I checked with calendar") and
+      does not show event or calendar ids.
+failure_modes:
+  - Says it cannot see the calendar, or that the specialist refused
+  - Relays the specialist's report with its ids and headings intact
+  - Delegates again with a reworded brief after the first answer

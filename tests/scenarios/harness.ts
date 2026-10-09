@@ -15,8 +15,19 @@
 // (tests/shared/case-scope.ts): the seeded-state views, the model-call guard and the cost
 // meter all find the calling run through it. A run that times out is cancelled, so its
 // abandoned turn stops calling the model.
+//
+// A case with `delegation: real` (#2027) lets `delegate` run: production's handler starts
+// the specialist (agent.task, requester identity, the pending_delegations claim, the
+// wait and its timeout), and the specialist works under the same stub layer, in the same
+// case context. Its calls, brief and response are captured beside the coordinator's
+// (delegation-capture.ts), and its rows are cleaned with the run's.
 import { randomUUID } from 'node:crypto';
 import { createAgentDiscuss, createAgentTask, createInboundMessage } from '../../src/bus/events.js';
+import {
+  clampDelegateWaitTimeoutMs,
+  computeDelegateTimeoutMs,
+  DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS,
+} from '../../src/agents/delegate-timeout.js';
 import { loadConfig } from '../../src/config.js';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
@@ -41,6 +52,7 @@ import {
   type TurnOutcome,
 } from '../shared/turn-capture.js';
 import { internalNamesFor } from './assertions.js';
+import { createDelegationCapture, type DelegationCapture, type DelegationTrace } from './delegation-capture.js';
 import { discoverableTools } from './discovery.js';
 import { applyReach } from './reach.js';
 import { resolvePlaceholders, type RunClock } from './loader.js';
@@ -48,6 +60,7 @@ import { resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import {
   cleanupRun,
   createOutboundContextService,
+  deletePendingDelegations,
   resolveSender,
   scopedBullpen,
   scopedOutboundContext,
@@ -61,6 +74,12 @@ import { createStubController, type StubController, type StubbedCall } from './s
 import type { CapturedToolCall, ScenarioCase, ScenarioRun } from './types.js';
 
 const COORDINATOR = 'coordinator';
+
+/**
+ * What a real-delegation run waits beyond the longest delegate wait: the coordinator's own
+ * turn around it. The delegate wait must time out first, so its result is what gets scored.
+ */
+const DELEGATION_RUN_MARGIN_MS = 120_000;
 
 /** Prefix of the application_name every suite process sets on its connections. */
 export const SCENARIO_APPLICATION_PREFIX = 'curia-scenarios';
@@ -113,6 +132,13 @@ export interface ScenarioHarness {
    * under test.
    */
   reachableTools: Set<string>;
+  /** The same, for every agent in the stack (#2027): what a real specialist can call. */
+  reachableByAgent: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * A real-delegation run's default wait: the longest delegate wait any specialist gets,
+   * plus a margin for the coordinator's own turn.
+   */
+  delegationRunTimeoutMs: number;
   /** Tools test mode cannot serve; the stub layer refuses them unless a case stubs them. */
   unavailableTools: ReadonlySet<string>;
   /** Tools served from an MCP snapshot; the stub layer runs them unstubbed (#2024). */
@@ -194,6 +220,8 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   // The registry exists only once the stack is built; the stub layer reads it lazily.
   let booted: TestModeStack | undefined;
   let unavailable: ReadonlySet<string> = new Set();
+  /** Open runs by the coordinator's conversation, so a specialist's conversation lands in its run's scope. */
+  const openRuns = new Map<string, ScenarioRunState>();
   const controller = createStubController(
     () => {
       if (!booted) throw new Error('scenario harness: tool call before the stack finished booting');
@@ -201,7 +229,14 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     },
     () => unavailable,
     () => booted?.snapshotMcpTools ?? new Set(),
+    {
+      onDelegate: (root, specialistConversation) => {
+        openRuns.get(root)?.scope.specialistConversations.add(specialistConversation);
+      },
+    },
   );
+  // Built in observeBus, ahead of every agent runtime (see delegation-capture.ts).
+  let delegationCapture: DelegationCapture | undefined;
 
   const stack = await createTestModeStack({
     config: { ...config, databaseUrl: withApplicationName(config.databaseUrl) },
@@ -212,6 +247,29 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     wrapLlmProvider: (provider) => guardProvider(provider, context.current),
     // No contact recent history: every case starts from a clean slate.
     wrapWorkingMemory: withoutRecentHistory,
+    // For real delegation (#2027): delegate links and settles the run's own entries, and
+    // its dispatch claims are production's. Both only ever see this suite's rows.
+    wrapOutboundContext: (service) => scopedOutboundContext(service, currentScope),
+    delegationClaims: true,
+    observeBus: (bus) => {
+      delegationCapture = createDelegationCapture(
+        bus,
+        (conversationId) => controller.rootOf(conversationId),
+        // A specialist the run abandoned (its delegate wait timed out) finished after the
+        // run's cleanup: remove what it wrote since.
+        (conversationId) => {
+          if (!booted) return;
+          const { pool, logger } = booted;
+          void Promise.all([
+            cleanupConversation(pool, conversationId),
+            deletePendingDelegations(booted, [], [conversationId]),
+          ]).catch((err: unknown) => {
+            logger.error({ err, conversationId }, 'scenario harness: late specialist cleanup failed');
+            process.stderr.write(`  [WARN] late cleanup failed for ${conversationId}: ${err instanceof Error ? err.message : String(err)}\n`);
+          });
+        },
+      );
+    },
   });
   booted = stack;
   // Tools any agent is offered that test mode refuses for a missing capability.
@@ -233,31 +291,41 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   new BullpenDispatcher(bus, logger, stack.bullpenService, stack.agentRegistry).register();
 
   const capture = createTurnCapture(bus);
+  const delegations = delegationCapture!;
   // Every model call billed to the run it was made in (#1980).
   const unattributed = new UsageLedger();
   meterAgentCalls(bus, context.current, unattributed);
   const coordinator = stack.agent(COORDINATOR);
   const coordinatorTools = new Set(coordinator.toolDefs.map(t => t.name));
   // Production's own activation check, per skill: what skill-activate would hand the
-  // coordinator. applyReach counts those tools only while skill-activate itself can
-  // run, so a case cannot stub a tool no run can load. The same for tool-registry
-  // (#2050). A tool either path would add that test mode cannot serve is refused
-  // like an offered one (#2059): an unstubbed call counts as a stub hole instead of
-  // passing through to a missing-capability error production never shows.
-  const activatedTools: string[] = [];
-  for (const skill of stack.skillRegistry.list()) {
-    const activation = stack.executionLayer.resolveSkillActivationForAgent(skill.manifest.name, COORDINATOR);
-    if (!('error' in activation)) activatedTools.push(...activation.tools);
+  // agent. applyReach counts those tools only while skill-activate itself can run, so a
+  // case cannot stub a tool no run can load. The same for tool-registry (#2050). A tool
+  // either path would add that test mode cannot serve is refused like an offered one
+  // (#2059): an unstubbed call counts as a stub hole instead of passing through to a
+  // missing-capability error production never shows. Every agent's reach counts: a
+  // real specialist (#2027) can activate a tool the coordinator never would.
+  const reachableByAgent = new Map<string, Set<string>>();
+  const unservable = new Set(unavailable);
+  for (const assembled of stack.agents) {
+    const name = assembled.agentConfig.name;
+    const activatedTools: string[] = [];
+    for (const skill of stack.skillRegistry.list()) {
+      const activation = stack.executionLayer.resolveSkillActivationForAgent(skill.manifest.name, name);
+      if (!('error' in activation)) activatedTools.push(...activation.tools);
+    }
+    const reach = applyReach({
+      offered: new Set(assembled.toolDefs.map(t => t.name)),
+      unavailable,
+      activated: activatedTools,
+      discovered: discoverableTools(stack.toolRegistry, stack.skillRegistry, name),
+      missingCapabilities: tool => stack.executionLayer.unavailableCapabilities(tool),
+    });
+    reachableByAgent.set(name, reach.reachable);
+    for (const tool of reach.unavailable) unservable.add(tool);
   }
-  const reach = applyReach({
-    offered: coordinatorTools,
-    unavailable,
-    activated: activatedTools,
-    discovered: discoverableTools(stack.toolRegistry, stack.skillRegistry, COORDINATOR),
-    missingCapabilities: tool => stack.executionLayer.unavailableCapabilities(tool),
-  });
-  const reachableTools = reach.reachable;
-  unavailable = reach.unavailable;
+  const reachableTools = reachableByAgent.get(COORDINATOR)!;
+  unavailable = unservable;
+  const delegationRunTimeoutMs = longestDelegateWaitMs(stack) + DELEGATION_RUN_MARGIN_MS;
   const internalNames = internalNamesFor({
     tools: [...stack.toolRegistry.list().map(t => t.manifest.name)],
     agents: stack.agentRegistry.list().map(a => a.name),
@@ -340,6 +408,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     let seeded: SeededRun | undefined;
     let conversationId: string | undefined;
     let stubbedCalls: StubbedCall[] = [];
+    let trace: DelegationTrace | undefined;
     let inboundContent = '';
     let cleanupError: string | undefined;
     // Filled by the try/catch, finished after cleanup so a cleanup failure can be attached.
@@ -362,7 +431,10 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       inboundContent = inbound.content;
 
       const sender = await resolveSender(scenario, stack);
-      const timeoutMs = scenario.timeoutSeconds ? scenario.timeoutSeconds * 1000 : RUN_TIMEOUT_MS;
+      const realDelegation = scenario.delegation === 'real';
+      const timeoutMs = scenario.timeoutSeconds
+        ? scenario.timeoutSeconds * 1000
+        : realDelegation ? Math.max(RUN_TIMEOUT_MS, delegationRunTimeoutMs) : RUN_TIMEOUT_MS;
       const thread = sender === 'bullpen' ? seeded.threads.get(inbound.thread!)! : undefined;
       const runConversationId = thread
         ? thread.threadId // BullpenDispatcher uses the thread id as the conversation
@@ -373,8 +445,12 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
             : `scenario-${randomUUID()}`;
       conversationId = runConversationId;
 
-      controller.beginRun(stubTable, runConversationId);
+      controller.beginRun(stubTable, runConversationId, { realDelegation });
+      openRuns.set(runConversationId, state);
+      delegations.begin(runConversationId);
       let outcome: TurnOutcome;
+      // Specialists still working when the run's own wait ran out (#2027).
+      let stillWorking: string[] = [];
       try {
         const waiter = capture.waitFor(runConversationId, timeoutMs);
         let delivery: Promise<void>;
@@ -411,6 +487,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
             channelId: sender.channelId,
             senderId: sender.senderId,
             content: inbound.content,
+            ...(inbound.email?.account ? { accountId: inbound.email.account } : {}),
             ...(sender.channelId === 'email' ? { metadata: emailMetadata(sender.senderId, inbound.email) } : {}),
           }));
         } else {
@@ -421,8 +498,11 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         delivery.catch((err: unknown) => capture.fail(runConversationId, err));
         trackDelivery(delivery, runConversationId);
         outcome = await waiter;
+        if (outcome.errorKind === 'timeout') stillWorking = controller.pendingDelegations(runConversationId);
       } finally {
         stubbedCalls = controller.endRun(runConversationId);
+        trace = delegations.end(runConversationId);
+        openRuns.delete(runConversationId);
       }
       if (outcome.error) {
         // Measured before cancelling, while a stalled call is still in flight.
@@ -439,9 +519,16 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         process.stderr.write(`  [WARN] ${state.label}: a turn was still running ${CANCEL_SETTLE_MS / 1000}s after the run ended; its later spend is counted outside any run\n`);
       }
 
-      const merged = mergeCalls(outcome.calls, stubbedCalls);
+      const merged = mergeCalls(inRunOrder(outcome.calls, trace), stubbedCalls);
       // A scoped view failing means the case ran without its premise (no block, no thread).
       const premiseError = scope.errors.length > 0 ? `seeded state was not visible: ${scope.errors.join('; ')}` : undefined;
+      // A slow specialist is not a stuck coordinator (#2027): say which it was.
+      const timeoutKind = outcome.errorKind === 'timeout'
+        ? (stillWorking.length > 0 ? 'delegate_wait' as const : 'run' as const)
+        : undefined;
+      const error = timeoutKind === 'delegate_wait'
+        ? `${outcome.error} — a specialist was still working (${[...new Set(stillWorking)].join(', ')}): the run's wait ran out before the delegate wait did`
+        : outcome.error ?? premiseError;
       result = {
         runIndex,
         inboundContent,
@@ -452,7 +539,9 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
         durationMs: Date.now() - started,
         unstubbedCalls: countHoles(merged),
-        ...(outcome.error ?? premiseError ? { error: outcome.error ?? premiseError } : {}),
+        ...(error ? { error } : {}),
+        ...(timeoutKind ? { timeoutKind } : {}),
+        ...(realDelegation ? { delegations: trace?.delegations ?? [] } : {}),
         usage: state.usage.snapshot(),
         providerRetries: [],
       };
@@ -465,7 +554,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         toolCalls: [],
         reply: null,
         durationMs: Date.now() - started,
-        unstubbedCalls: stubbedCalls.filter(c => (c.disposition === 'refused' || c.disposition === 'canned') && c.agentId === COORDINATOR).length,
+        unstubbedCalls: stubbedCalls.filter(c => c.disposition === 'refused' || c.disposition === 'canned').length,
         error: describeError(err),
         usage: state.usage.snapshot(),
         providerRetries: [],
@@ -494,6 +583,8 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     internalNames,
     coordinatorTools,
     reachableTools,
+    reachableByAgent,
+    delegationRunTimeoutMs,
     unavailableTools: unavailable,
     inertTools: stack.snapshotMcpTools,
     runOnce,
@@ -537,15 +628,48 @@ function emailMetadata(senderEmail: string, email: ScenarioCase['inbound']['emai
 }
 
 /**
+ * The coordinator's calls (turn capture) and the specialists' (#2027), each tagged with
+ * its agent, in the order they were made. Without specialists, the coordinator's order.
+ */
+export function inRunOrder(
+  coordinatorCalls: ObservedToolCall[],
+  trace: Pick<DelegationTrace, 'seqByInvoke' | 'calls'> | undefined,
+): Array<ObservedToolCall & { agentId: string }> {
+  const own = coordinatorCalls.map(c => ({ ...c, agentId: COORDINATOR }));
+  if (!trace || trace.calls.length === 0) return own;
+  const seqOf = (c: ObservedToolCall): number =>
+    (c.invokeEventId ? trace.seqByInvoke.get(c.invokeEventId) : undefined) ?? Number.MAX_SAFE_INTEGER;
+  const specialists = trace.calls.map(({ seq: _seq, ...call }) => call);
+  // A stable sort: a coordinator call with no recorded order keeps its place among its own.
+  return [...own, ...specialists].sort((a, b) => seqOf(a) - seqOf(b));
+}
+
+/**
  * The bus view (what the model saw) joined with the stub layer's view (how it was
  * answered), by tool.invoke event id. A bus call with no stub-layer record never reached
  * the ExecutionLayer: the runtime answered it itself (a tool outside the turn's
  * allowlist, a delegation its guard blocked). That is the model's doing, not a hole.
  */
-function mergeCalls(observed: ObservedToolCall[], stubbed: StubbedCall[]): CapturedToolCall[] {
+function mergeCalls<C extends ObservedToolCall>(observed: C[], stubbed: StubbedCall[]): Array<C & CapturedToolCall> {
   const byInvoke = new Map(stubbed.filter(s => s.invokeEventId).map(s => [s.invokeEventId!, s]));
   return observed.map(call => {
     const s = call.invokeEventId ? byInvoke.get(call.invokeEventId) : undefined;
     return { ...call, disposition: s ? s.disposition : 'runtime' };
   });
+}
+
+/**
+ * The longest a coordinator's `delegate` waits for any specialist in this stack: the
+ * runtime's wait from a specialist's expected_duration_seconds, or the configured
+ * default (src/agents/runtime.ts, skills/delegate/handler.ts).
+ */
+function longestDelegateWaitMs(stack: TestModeStack): number {
+  let longest = clampDelegateWaitTimeoutMs(stack.yamlConfig.delegate?.defaultTimeoutMs ?? DELEGATE_DEFAULT_TIMEOUT_FLOOR_MS);
+  for (const specialist of stack.agentRegistry.listSpecialists()) {
+    const seconds = specialist.expectedDurationSeconds;
+    if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) {
+      longest = Math.max(longest, computeDelegateTimeoutMs(seconds));
+    }
+  }
+  return longest;
 }

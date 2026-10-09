@@ -1,0 +1,83 @@
+# Case 16f (#2027, starter case 5): a principal-originated request reaches the specialist
+# as the principal's. Delegated tasks run on the `internal` channel; the delegate handler
+# forwards the originating turn's TaskOriginator (#972), and the specialist runtime builds
+# its requester-identity block from it. #1871: without that, the specialist was told the
+# requester was an unknown low-trust sender and refused principal work, and the coordinator
+# reworded and retried until its turn budget ran out. Here the principal writes from their
+# own verified email address, not the CLI, so the originator comes from identity
+# resolution on a real channel.
+name: real delegation principal request over email
+description: >
+  The principal emails Curia from their own address asking whether they are free on
+  Thursday afternoon next week. The coordinator asks the calendar specialist, which really
+  runs. The specialist treats the request as the principal's: it reads the calendar and
+  answers rather than declining or asking who is asking. The coordinator answers once.
+tags: [real-delegation, delegation, calendar, requester-identity]
+delegation: real
+stub_sets: [human-channels, calendar-office]
+inbound:
+  from: principal
+  channel: email
+  content: |
+    Subject: Thursday
+
+    Am I free Thursday afternoon next week? Want to keep it open for the Harbour renewal.
+  email:
+    nylas_message_id: scenario-msg-principal-thursday
+tool_stubs:
+  calendar-list-events:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 1
+        events:
+          - { id: evt-scen-chair, title: Board chair check-in, location: Phone, startTime: "{{time:next-thursday 16:00}}", endTime: "{{time:next-thursday 16:30}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-thursday 12:00}}", end: "{{time:next-thursday 16:00}}" }
+          - { start: "{{time:next-thursday 16:30}}", end: "{{time:next-thursday 18:00}}" }
+expected_behaviors:
+  - id: borrows_from_calendar
+    weight: critical
+    description: Asks the calendar specialist.
+    check:
+      called: delegate
+      with: { agent: calendar }
+  - id: specialist_reads_calendar
+    weight: critical
+    description: The calendar specialist reads the calendar for the request.
+    check:
+      called: [calendar-list-events, calendar-find-free-time]
+      agent: calendar
+      success: true
+  - id: specialist_does_not_decline
+    weight: critical
+    description: The calendar specialist does not decline the principal's request.
+    check:
+      not_called: [delegate]
+      returns: { declined: true }
+  - id: no_retry_loop
+    weight: critical
+    description: Delegates once; a reworded retry after a refusal is the #1871 loop.
+    check:
+      called: delegate
+      max: 1
+  - id: names_no_internals
+    weight: important
+    description: The reply names no tool, agent or system identifier.
+    check:
+      reply_excludes_internal_names: true
+  - id: answers_availability
+    weight: critical
+    description: >
+      Tells the principal Thursday afternoon is mostly open, with the board chair check-in at
+      4:00 to 4:30 in the way. It does not say it could not verify who was asking, or that
+      it needs the principal's permission to read their own calendar.
+failure_modes:
+  - The specialist refuses because the requester is unverified, and the coordinator relays the refusal
+  - Delegates again with a reworded brief

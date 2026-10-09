@@ -3,6 +3,7 @@
 //   pnpm scenarios --model deepseek/deepseek-v4.1-flash          # release gate
 //   pnpm scenarios --case transfer --runs 3                       # iterate on one case
 //   pnpm scenarios --concurrency 1                                # one case at a time
+//   pnpm scenarios --on-demand                                    # also the release_gate: false cases
 //
 // Cases run --concurrency at a time (default 4); a case's own runs stay one at a time,
 // and cases that seed the same contact never overlap (seed.ts: seedConflictKeys). The
@@ -13,7 +14,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { evaluateCheck, leafChecks } from './assertions.js';
+import { calledTools, evaluateCheck, leafChecks } from './assertions.js';
 import { formatPct, gateFailures, knownFailureLines, scoreCase, staleKnownFailures } from './gate.js';
 import {
   acquireSuiteLock,
@@ -30,6 +31,7 @@ import { formatUsageLines, formatUsd, sumBreakdowns, UsageLedger } from '../shar
 import { mustStub } from './stub-layer.js';
 import { coverageViolations, mergeCoverage, readCoverage, writeCoverage } from './stub-coverage.js';
 import {
+  ANY_AGENT,
   CRITICAL_PASS_THRESHOLD,
   DEFAULT_RUNS,
   type CaseResult,
@@ -38,6 +40,8 @@ import {
   type ScenarioRun,
   type SuiteResult,
 } from './types.js';
+
+const COORDINATOR = 'coordinator';
 
 const CASES_DIR = path.resolve(import.meta.dirname, 'cases');
 const RESULTS_DIR = path.resolve(import.meta.dirname, 'results');
@@ -50,6 +54,7 @@ interface Args {
   runs?: number;
   concurrency: number;
   allowOtherConnections: boolean;
+  onDemand: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -71,6 +76,7 @@ function parseArgs(argv: string[]): Args {
     runs,
     concurrency: concurrencyRaw === undefined ? DEFAULT_CONCURRENCY : parseConcurrency(concurrencyRaw),
     allowOtherConnections: argv.includes('--allow-other-connections'),
+    onDemand: argv.includes('--on-demand'),
   };
 }
 
@@ -79,45 +85,78 @@ const err = (line: string): void => { process.stderr.write(`${line}\n`); };
 
 /**
  * Problems that would make a case measure the harness instead of the model, found
- * before any paid call: a stub for a tool the coordinator can never reach (a typo, or a
+ * before any paid call: a stub for a tool no agent in the run can reach (a typo, or a
  * tool the registry did not load), or a `called` check on a side-effecting tool with no
  * stub — that call would always be refused, so the check could never pass for the
  * right reason. "Reach" includes tools a skill-activate call would load (#2024) and
- * tools a tool-registry search would return (#2050).
+ * tools a tool-registry search would return (#2050). The agents in a run are the
+ * coordinator, plus every specialist when the case delegates for real (#2027); a stub or
+ * check scoped to one agent is held to that agent's reach.
  */
 function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string[] {
   const problems: string[] = [];
   const registry = harness.stack.toolRegistry;
-  const reachable = harness.reachableTools;
-  const mustStubHere = (tool: string): boolean =>
-    mustStub(tool, registry, harness.unavailableTools, harness.inertTools);
+  const byAgent = harness.reachableByAgent;
   for (const c of cases) {
-    for (const tool of c.explicitStubTools) {
-      if (!reachable.has(tool)) {
-        problems.push(`${c.name}: stubs '${tool}', which the coordinator is neither offered nor can activate in this stack`);
+    const real = c.delegation === 'real';
+    const runAgents = real ? [...byAgent.keys()] : [COORDINATOR];
+    /** The agents a stub's or check's `agent` names: undefined is the coordinator for a check, every run agent for a stub. */
+    const agentsFor = (agent: string | undefined, forStub: boolean): string[] =>
+      agent === undefined ? (forStub ? runAgents : [COORDINATOR]) : agent === ANY_AGENT ? runAgents : [agent];
+    const reachable = (tool: string, agents: string[]): boolean => agents.some(a => byAgent.get(a)?.has(tool));
+    const unreachableBy = (agents: string[]): string => (agents.length === 1
+      ? `${agents[0] === COORDINATOR ? 'the coordinator' : `'${agents[0]}'`} is neither offered nor can activate`
+      : 'no agent in the run is offered or can activate');
+    const mustStubHere = (tool: string): boolean =>
+      mustStub(tool, registry, harness.unavailableTools, harness.inertTools, { realDelegation: real });
+    /** Stubs for `tool` that can answer a call by one of `agents`. */
+    const stubsFor = (tool: string, agents: string[]) =>
+      (c.toolStubs[tool] ?? []).filter(st => st.agent === undefined || agents.includes(st.agent));
+
+    for (const [tool, stubs] of Object.entries(c.toolStubs)) {
+      for (const agent of new Set(stubs.map(st => st.agent).filter((a): a is string => a !== undefined))) {
+        if (!byAgent.has(agent)) problems.push(`${c.name}: a '${tool}' stub is scoped to '${agent}', which is not an agent in this stack`);
+        else if (!reachable(tool, [agent])) problems.push(`${c.name}: a '${tool}' stub is scoped to '${agent}', which can neither be offered nor activate it`);
       }
     }
-    const hasSuccessStub = (tool: string): boolean => (c.toolStubs[tool] ?? []).some(st => st.error === undefined);
-    const needsStub = (tool: string): boolean =>
-      reachable.has(tool) && !c.toolStubs[tool] && mustStubHere(tool);
+    for (const tool of c.explicitStubTools) {
+      const unscoped = (c.toolStubs[tool] ?? []).some(st => st.agent === undefined);
+      if (unscoped && !reachable(tool, runAgents)) {
+        problems.push(`${c.name}: stubs '${tool}', which ${unreachableBy(runAgents)} in this stack`);
+      }
+    }
+    const hasSuccessStub = (tool: string, agents: string[]): boolean => stubsFor(tool, agents).some(st => st.error === undefined);
+    const needsStub = (tool: string, agents: string[]): boolean =>
+      reachable(tool, agents) && stubsFor(tool, agents).length === 0 && mustStubHere(tool);
 
     for (const b of c.expectedBehaviors) {
       if (!b.check) continue;
       const where = `${c.name}: behavior '${b.id}'`;
       // any_of alternatives are validated like top-level checks (#1972).
       for (const check of leafChecks(b.check)) {
-        const named = check.kind === 'called' ? [check.tool]
+        const named = check.kind === 'called' ? calledTools(check)
           : check.kind === 'not_called' || check.kind === 'order' ? check.tools : [];
+        const checkAgent = 'agent' in check ? check.agent : undefined;
+        if (checkAgent !== undefined && checkAgent !== ANY_AGENT && !byAgent.has(checkAgent)) {
+          problems.push(`${where} reads agent '${checkAgent}', which is not an agent in this stack`);
+          continue;
+        }
+        if (check.kind === 'briefed') continue;
+        const agents = agentsFor(checkAgent, false);
 
         // A check on a tool that does not exist can never fail (not_called) or never pass
         // (called) — either way it measures a typo.
         for (const tool of named) {
           if (!registry.get(tool)) problems.push(`${where} names '${tool}', which is not a registered tool`);
         }
-        if ((check.kind === 'called' || check.kind === 'order')) {
-          for (const tool of named.filter(t => registry.get(t) && !reachable.has(t))) {
-            problems.push(`${where} expects '${tool}', which the coordinator is neither offered nor can activate, so it can never pass`);
+        if (check.kind === 'order') {
+          for (const tool of named.filter(t => registry.get(t) && !reachable(t, agents))) {
+            problems.push(`${where} expects '${tool}', which ${unreachableBy(agents)}, so it can never pass`);
           }
+        }
+        // A list counts its tools together: it can pass while at least one is reachable.
+        if (check.kind === 'called' && !named.some(t => !registry.get(t) || reachable(t, agents))) {
+          problems.push(`${where} expects '${named.join(' | ')}', which ${unreachableBy(agents)}, so it can never pass`);
         }
         // Argument keys must exist on the tool, or `with`/`contains` silently never match.
         // An MCP tool's inputs are its JSON Schema properties; its manifest `inputs` is empty.
@@ -134,15 +173,15 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
             }
           }
         }
-        if (check.kind === 'called' && needsStub(check.tool)) {
-          problems.push(`${where} expects ${check.tool}, which has no stub and would be refused`);
+        if (check.kind === 'called' && named.every(t => needsStub(t, agents))) {
+          problems.push(`${where} expects ${named.join(' | ')}, which has no stub and would be refused`);
         }
         // A forbidden tool must be stubbed to SUCCEED: the wrong path has to be available,
         // or the case tests a refusal rather than the model's choice — and a refusal there
         // would also trip the coverage gate, blaming the harness for the model's mistake.
         if (check.kind === 'not_called') {
           for (const tool of check.tools) {
-            if (reachable.has(tool) && mustStubHere(tool) && !hasSuccessStub(tool)) {
+            if (reachable(tool, agents) && mustStubHere(tool) && !hasSuccessStub(tool, agents)) {
               problems.push(`${where} forbids ${tool}; give it a succeeding stub so the wrong path is available`);
             }
           }
@@ -222,6 +261,11 @@ async function main(): Promise<void> {
   let cases = loadScenarioCases(CASES_DIR);
   if (args.caseFilter) cases = cases.filter(c => c.name.toLowerCase().includes(args.caseFilter!.toLowerCase()));
   if (args.tags) cases = cases.filter(c => c.tags.some(t => args.tags!.includes(t)));
+  // An unfiltered run is the release gate: on-demand cases join it only when asked (#2027).
+  // A --case or --tags selection runs whatever it names.
+  const selected = args.caseFilter !== undefined || args.tags !== undefined;
+  const onDemandSkipped = selected || args.onDemand ? [] : cases.filter(c => !c.releaseGate).map(c => c.name);
+  cases = cases.filter(c => !onDemandSkipped.includes(c.name));
   if (cases.length === 0) {
     err('No scenario cases match the filters.');
     process.exit(1);
@@ -230,6 +274,11 @@ async function main(): Promise<void> {
   out('\nCoordinator scenario suite');
   out(`   ${cases.length} case(s); runs per case: ${args.runs ?? `per case, default ${DEFAULT_RUNS}`}`);
   out(`   Per-run timeout: ${Math.round(RUN_TIMEOUT_MS / 1000)}s (SCENARIO_TIMEOUT_MS)`);
+  const realCases = cases.filter(c => c.delegation === 'real').length;
+  if (realCases > 0) out(`   Real delegation: ${realCases} case(s) run their specialists`);
+  if (onDemandSkipped.length > 0) {
+    out(`   On demand, not run: ${onDemandSkipped.length} case(s) marked release_gate: false (--on-demand runs them)`);
+  }
   out(`   Concurrency: ${args.concurrency} case(s) at a time (--concurrency)`);
   out('   Booting the test-mode stack...');
 
@@ -252,6 +301,9 @@ async function main(): Promise<void> {
     const judge = createJudge(harness.stack.llmProviders, principal?.displayName, { logger: harness.stack.logger });
     out(`   Model: ${model}`);
     out(`   Judge: ${judge.model} (OpenRouter)`);
+    if (cases.some(c => c.delegation === 'real')) {
+      out(`   Real-delegation per-run timeout: ${Math.round(Math.max(RUN_TIMEOUT_MS, harness.delegationRunTimeoutMs) / 1000)}s (the longest delegate wait, plus a margin)`);
+    }
     for (const warning of harness.stack.warnings) out(`   [WARN] ${warning}`);
 
     // A running instance would act on the entries and threads a run seeds.
@@ -331,12 +383,16 @@ async function main(): Promise<void> {
         // `name!` = refused by the stub layer (a hole in the stub table);
         // `name~` = an unstubbed snapshot MCP tool answered with a stand-in (also a hole);
         // `name?` = a real read-only tool that failed (e.g. no mail client in test mode).
-        const calls = run.toolCalls.map(c =>
-          c.disposition === 'refused' ? `${c.name}!`
-            : c.disposition === 'canned' ? `${c.name}~`
-              : c.disposition === 'passthrough' && c.result?.success === false ? `${c.name}?`
-                : c.name).join(', ') || 'no tools';
-        out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `ERROR ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}`}`);
+        // A real specialist's call is prefixed with its name: `calendar:calendar-list-events`.
+        const calls = run.toolCalls.map(c => {
+          const name = c.agentId !== undefined && c.agentId !== COORDINATOR ? `${c.agentId}:${c.name}` : c.name;
+          return c.disposition === 'refused' ? `${name}!`
+            : c.disposition === 'canned' ? `${name}~`
+              : c.disposition === 'passthrough' && c.result?.success === false ? `${name}?`
+                : name;
+        }).join(', ') || 'no tools';
+        const failed = run.timeoutKind === 'delegate_wait' ? 'SLOW SPECIALIST' : 'ERROR';
+        out(`   ${scenario.name} [${i + 1}/${n}] ${run.error ? `${failed} ${run.error}` : `${Math.round(run.durationMs / 1000)}s — ${calls}`}`);
       }
       let rated: Awaited<ReturnType<typeof rateRuns>>;
       try {
@@ -347,7 +403,10 @@ async function main(): Promise<void> {
       }
       const result = scoreCase(scenario.name, scenario.expectedBehaviors, rated.runs, rated.ratings, scenario.knownFailure);
       // One block per case, printed at once, so concurrent cases do not interleave inside it.
-      const lines = [`   == ${scenario.name}: ${formatUsd(result.usage.total.estimatedCostUsd)}`];
+      // Real delegation multiplies model calls (#2027): show whose they were.
+      const agents = Object.entries(result.usage.byAgent).sort((a, b) => b[1].estimatedCostUsd - a[1].estimatedCostUsd);
+      const split = agents.length > 1 ? ` (${agents.map(([a, t]) => `${a} ${formatUsd(t.estimatedCostUsd)}`).join(', ')})` : '';
+      const lines = [`   == ${scenario.name}: ${formatUsd(result.usage.total.estimatedCostUsd)}${split}`];
       for (const b of result.behaviors) {
         const flag = result.criticalFailures.includes(b.behavior.id)
           ? (result.knownFailure ? 'KNWN' : 'FAIL')
@@ -400,6 +459,7 @@ async function main(): Promise<void> {
       timestamp: new Date(started).toISOString(),
       model,
       commit,
+      ...(onDemandSkipped.length > 0 ? { onDemandSkipped } : {}),
       runsPerCase: Object.fromEntries(results.map(r => [r.name, r.runs.length])),
       cases: results,
       passed: failures.length === 0,

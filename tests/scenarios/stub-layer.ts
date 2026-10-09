@@ -4,9 +4,11 @@
 // The stack is booted once and reused across every case and run, so the stubs live
 // on a controller: beginRun(stubs, conversationId) installs a run's stubs, endRun()
 // returns how each call was answered and clears them. Several runs can be open at once
-// (#1980): each call is answered by the run whose conversation made it. A run's calls all
-// come from its own conversation, because `delegate` is always stubbed — no specialist
-// ever works on a run's behalf in another one.
+// (#1980): each call is answered by the run whose conversation made it. With stubbed
+// delegation (the default) that is the run's own conversation. With real delegation
+// (#2027) `delegate` runs, and each specialist works in a conversation the layer names
+// for it (scenario-delegate-…) and files under the run: the specialist's calls get the
+// same stubs and the same fail-closed policy as the coordinator's.
 //
 // Policy for a call:
 //   1. A matching stub answers it. The real tool never runs.
@@ -19,10 +21,13 @@
 //      So does a tool the stack serves from an MCP snapshot (#2024): its session returns
 //      a canned result and reaches no account, whatever its action_risk says. The call
 //      is recorded as `canned`, a stub hole like a refusal: the model acted on an empty
-//      stand-in result, not on data the case chose.
+//      stand-in result, not on data the case chose. In a real-delegation run, so do
+//      `delegate` and the outbound-context tools in REAL_IN_DELEGATION.
 //
-// Everything other than invoke() goes to the real layer, so tool definitions, skill
-// activation and the runtime's <task_error> formatting are production's.
+// Stubs can be scoped to an agent (`agent: calendar`); an unscoped stub answers every
+// agent. Everything other than invoke() goes to the real layer, so tool definitions,
+// skill activation and the runtime's <task_error> formatting are production's.
+import { randomUUID } from 'node:crypto';
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolResult } from '../../src/skills/types.js';
@@ -37,6 +42,26 @@ import type { ToolStub } from './types.js';
  * real specialist, and the suite tests the coordinator's decisions, not a specialist's.
  */
 const ALWAYS_STUB: ReadonlySet<string> = new Set(['delegate']);
+
+/**
+ * Tools that run for real, unstubbed, in a real-delegation run (#2027). `delegate` is the
+ * point of the mode. The two outbound-context tools are how a specialist holds or clears
+ * an entry the run seeded; they write only `outbound_context`, and the harness hands the
+ * ExecutionLayer a view narrowed to the run's own entries (seed.ts:
+ * scopedOutboundContext), so they cannot touch a real one. A stub still wins.
+ * (context-bridge-release also needs the task repo, which test mode never has.)
+ */
+export const REAL_IN_DELEGATION: ReadonlySet<string> = new Set([
+  'delegate',
+  'context-bridge-keep-open',
+  'context-bridge-clear',
+]);
+
+/**
+ * conversation_id prefix of every specialist conversation in a real-delegation run. It
+ * starts with `scenario-`, so the start-up sweep finds a crashed run's rows by it.
+ */
+export const SCENARIO_DELEGATE_PREFIX = 'scenario-delegate-';
 
 /**
  * Capabilities that let a tool act beyond its own inputs: re-invoke other tools
@@ -57,15 +82,19 @@ const DANGEROUS_CAPABILITIES: ReadonlySet<string> = new Set([
  * `unavailable` names tools test mode cannot serve (missing capabilities): running one
  * only produces a failure production never shows, so it is refused — and counted as a
  * stub hole — instead. `inert` names tools whose real handler reaches nothing (the
- * stack's snapshot-served MCP tools, #2024), so they run.
+ * stack's snapshot-served MCP tools, #2024), so they run. `realDelegation` lets the
+ * REAL_IN_DELEGATION tools run.
  */
 export function mustStub(
   toolName: string,
   registry: ToolRegistry,
   unavailable: ReadonlySet<string> = new Set(),
   inert: ReadonlySet<string> = new Set(),
+  options: { realDelegation?: boolean } = {},
 ): boolean {
-  if (ALWAYS_STUB.has(toolName) || unavailable.has(toolName)) return true;
+  if (unavailable.has(toolName)) return true;
+  if (options.realDelegation && REAL_IN_DELEGATION.has(toolName)) return false;
+  if (ALWAYS_STUB.has(toolName)) return true;
   if (inert.has(toolName)) return false;
   const tool = registry.get(toolName);
   // Not registered: the real layer answers "not found", which is what production does.
@@ -92,11 +121,18 @@ export interface StubController {
    * Install a run's stubs for its conversation. Throws if that conversation already has
    * an open run. A call from a conversation with no open run — a timed-out turn from a
    * run already closed — is refused and not recorded: it must never be answered by
-   * another run's stubs.
+   * another run's stubs. `realDelegation` runs `delegate` for real (#2027).
    */
-  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string): void;
-  /** Close the conversation's run and return its calls in order. */
+  beginRun(stubs: Record<string, ToolStub[]>, conversationId: string, options?: { realDelegation?: boolean }): void;
+  /** Close the conversation's run (and its specialists' conversations) and return its calls in order. */
   endRun(conversationId: string): StubbedCall[];
+  /** The conversation of the open run `conversationId` belongs to: itself, or a specialist's run's root. */
+  rootOf(conversationId: string): string | undefined;
+  /**
+   * The specialists an open run's `delegate` calls are still waiting on (#2027): a run
+   * that times out with one is waiting on a slow specialist, not stuck.
+   */
+  pendingDelegations(conversationId: string): string[];
   /** Calls refused because they came from a conversation with no open run. */
   readonly staleCalls: number;
 }
@@ -115,16 +151,46 @@ export function createStubController(
   registry: () => ToolRegistry,
   unavailable: () => ReadonlySet<string> = () => new Set(),
   inert: () => ReadonlySet<string> = () => new Set(),
+  hooks: {
+    /** A real-delegation run started a specialist in `delegateConversationId` (#2027). */
+    onDelegate?: (rootConversationId: string, delegateConversationId: string) => void;
+  } = {},
 ): StubController {
-  const runs = new Map<string, { stubs: Record<string, ToolStub[]>; calls: StubbedCall[]; tools: CaseToolState }>();
+  interface OpenRun {
+    root: string;
+    stubs: Record<string, ToolStub[]>;
+    calls: StubbedCall[];
+    tools: CaseToolState;
+    realDelegation: boolean;
+    /** Specialist conversations this run started, each also a key of `delegated`. */
+    specialists: Set<string>;
+    /** Real delegate calls not yet returned, one entry (the target agent) per call. */
+    waiting: string[];
+  }
+  const runs = new Map<string, OpenRun>();
+  /** A specialist's conversation → the run it works for (#2027). */
+  const delegated = new Map<string, OpenRun>();
   let staleCalls = 0;
+
+  const runFor = (conversationId: string | undefined): OpenRun | undefined =>
+    conversationId === undefined ? undefined : runs.get(conversationId) ?? delegated.get(conversationId);
+
+  /**
+   * The specialist's conversation: one the layer names, so its rows carry the suite's
+   * prefix. A conversation_id the model chose keeps its identity under the prefix, so
+   * two delegations that share one still share it.
+   */
+  const specialistConversation = (given: unknown): string => {
+    if (typeof given !== 'string' || given.trim() === '') return `${SCENARIO_DELEGATE_PREFIX}${randomUUID()}`;
+    return given.startsWith(SCENARIO_DELEGATE_PREFIX) ? given : `${SCENARIO_DELEGATE_PREFIX}${given}`;
+  };
 
   const invokeStubbed = async (
     real: ExecutionLayer,
     args: Parameters<ExecutionLayer['invoke']>,
   ): Promise<ToolResult> => {
     const [toolName, input, , options] = args;
-    const run = options?.conversationId !== undefined ? runs.get(options.conversationId) : undefined;
+    const run = runFor(options?.conversationId);
 
     if (!run && runs.size > 0) {
       staleCalls++;
@@ -145,7 +211,7 @@ export function createStubController(
       });
     };
 
-    const stub = stubs ? matchToolStub(toolName, input, stubs) : undefined;
+    const stub = stubs ? matchToolStub(toolName, input, stubs, options?.agentId) : undefined;
     // Same write-then-read replay as smoke (#2074). A stub that names draft_id
     // still answers that ceo-inbox-read itself.
     if (run) {
@@ -172,7 +238,7 @@ export function createStubController(
       return { success: true, data };
     }
 
-    if (stubs === null || mustStub(toolName, registry(), unavailable(), inert())) {
+    if (stubs === null || mustStub(toolName, registry(), unavailable(), inert(), { realDelegation: run?.realDelegation })) {
       record('refused');
       return {
         success: false,
@@ -186,6 +252,23 @@ export function createStubController(
     }
 
     record(inert().has(toolName) ? 'canned' : 'passthrough');
+    if (toolName === 'delegate' && run) {
+      // Only a real-delegation run gets here: mustStub refuses delegate otherwise.
+      const conversationId = specialistConversation(input['conversation_id']);
+      if (!delegated.has(conversationId)) {
+        delegated.set(conversationId, run);
+        run.specialists.add(conversationId);
+        hooks.onDelegate?.(run.root, conversationId);
+      }
+      const [, , caller] = args;
+      const agent = typeof input['agent'] === 'string' ? input['agent'] : '(unnamed agent)';
+      run.waiting.push(agent);
+      try {
+        return await real.invoke(toolName, { ...input, conversation_id: conversationId }, caller, options);
+      } finally {
+        run.waiting.splice(run.waiting.indexOf(agent), 1);
+      }
+    }
     return real.invoke(...args);
   };
 
@@ -203,14 +286,29 @@ export function createStubController(
         },
       });
     },
-    beginRun(next, conversationId) {
+    beginRun(next, conversationId, options = {}) {
       if (runs.has(conversationId)) throw new Error(`StubController.beginRun: conversation ${conversationId} already has an open run`);
-      runs.set(conversationId, { stubs: next, calls: [], tools: new CaseToolState() });
+      runs.set(conversationId, {
+        root: conversationId,
+        stubs: next,
+        calls: [],
+        tools: new CaseToolState(),
+        realDelegation: options.realDelegation === true,
+        specialists: new Set(),
+        waiting: [],
+      });
     },
     endRun(conversationId) {
       const run = runs.get(conversationId);
       runs.delete(conversationId);
+      for (const specialist of run?.specialists ?? []) delegated.delete(specialist);
       return run?.calls ?? [];
+    },
+    rootOf(conversationId) {
+      return runFor(conversationId)?.root;
+    },
+    pendingDelegations(conversationId) {
+      return [...(runs.get(conversationId)?.waiting ?? [])];
     },
     get staleCalls() {
       return staleCalls;

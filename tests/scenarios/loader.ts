@@ -7,22 +7,26 @@ import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { hasDatePlaceholders, resolveDatePlaceholders } from '../shared/date-placeholders.js';
-import type {
-  BehaviorCheck,
-  BehaviorWeight,
-  ExpectedBehavior,
-  ScenarioCase,
-  ScenarioInbound,
-  SeedBullpenThread,
-  SeedContact,
-  SeedOutboundEntry,
-  ToolStub,
+import { leafChecks } from './assertions.js';
+import {
+  ANY_AGENT,
+  type BehaviorCheck,
+  type BehaviorWeight,
+  type DelegationMode,
+  type ExpectedBehavior,
+  type ScenarioCase,
+  type ScenarioInbound,
+  type SeedBullpenThread,
+  type SeedContact,
+  type SeedOutboundEntry,
+  type ToolStub,
 } from './types.js';
 
 const WEIGHTS: readonly BehaviorWeight[] = ['critical', 'important', 'nice-to-have'];
 // Not 'trusted': that tier is a grant made after creation, and createContact refuses it.
 const CONTACT_TIERS = ['known', 'unknown'] as const;
 const CONTACT_KINDS = ['person', 'organization', 'automated'] as const;
+const DELEGATION_MODES: readonly DelegationMode[] = ['stubbed', 'real'];
 
 /** `{{kind:key}}` or `{{principal_contact_id}}`. */
 const PLACEHOLDER = /\{\{\s*([a-z_]+)(?::([A-Za-z0-9_-]+))?\s*\}\}/g;
@@ -51,22 +55,24 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen'] as const;
 const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier'] as const;
-const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'sent_minutes_ago', 'expires_in_hours'] as const;
+const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'sent_minutes_ago', 'expires_in_hours', 'resume'] as const;
+const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
 const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'email'] as const;
-const EMAIL_KEYS = ['nylas_message_id', 'auto_generated', 'auto_generated_signals'] as const;
-const STUB_KEYS = ['match', 'return', 'error'] as const;
+const EMAIL_KEYS = ['nylas_message_id', 'account', 'auto_generated', 'auto_generated_signals'] as const;
+const STUB_KEYS = ['match', 'agent', 'return', 'error'] as const;
 const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check'] as const;
 const CHECK_KEYS: Record<string, readonly string[]> = {
-  called: ['called', 'with', 'contains', 'min', 'max', 'success'],
-  not_called: ['not_called', 'with', 'contains'],
-  order: ['order'],
+  called: ['called', 'agent', 'with', 'contains', 'min', 'max', 'success', 'returns'],
+  not_called: ['not_called', 'agent', 'with', 'contains', 'returns'],
+  order: ['order', 'agent'],
   reply: ['reply'],
   reply_excludes: ['reply_excludes'],
   reply_excludes_internal_names: ['reply_excludes_internal_names'],
+  briefed: ['briefed', 'brief_contains'],
   any_of: ['any_of'],
 };
 
@@ -99,6 +105,12 @@ function optNum(raw: Raw, key: string, file: string, where: string): number | un
   return v;
 }
 
+function mapping(raw: Raw, key: string, file: string, where: string): Raw {
+  const v = raw[key];
+  if (!isObject(v)) throw new CaseError(file, `${where}: '${key}' must be a mapping`);
+  return v;
+}
+
 function strList(raw: Raw, key: string, file: string, where: string, required = false): string[] {
   const v = raw[key];
   if (v === undefined && !required) return [];
@@ -117,10 +129,10 @@ function list(raw: Raw, key: string, file: string): Raw[] {
 
 function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
   if (!isObject(raw)) throw new CaseError(file, `${where}: check must be a mapping`);
-  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'any_of']
+  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'briefed', 'any_of']
     .filter(k => k in raw);
   if (kinds.length !== 1) {
-    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names, any_of (got ${kinds.join(', ') || 'none'})`);
+    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names, briefed, any_of (got ${kinds.join(', ') || 'none'})`);
   }
   onlyKeys(raw, CHECK_KEYS[kinds[0]!]!, file, where);
   const withArgs = raw['with'];
@@ -129,7 +141,10 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
   if (contains !== undefined && (!isObject(contains) || Object.values(contains).some(v => typeof v !== 'string'))) {
     throw new CaseError(file, `${where}: 'contains' must map argument names to strings`);
   }
+  const agent = optStr(raw, 'agent', file, where);
+  if (agent !== undefined && agent.trim() === '') throw new CaseError(file, `${where}: 'agent' must be an agent id or '${ANY_AGENT}'`);
   const filters = {
+    ...(agent !== undefined ? { agent } : {}),
     ...(withArgs ? { with: withArgs } : {}),
     ...(contains ? { contains: contains as Record<string, string> } : {}),
   };
@@ -138,16 +153,26 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
     case 'called':
       return {
         kind: 'called',
-        tool: str(raw, 'called', file, where),
+        tool: Array.isArray(raw['called']) ? strList(raw, 'called', file, where, true) : str(raw, 'called', file, where),
         ...filters,
         ...(optNum(raw, 'min', file, where) !== undefined ? { min: raw['min'] as number } : {}),
         ...(optNum(raw, 'max', file, where) !== undefined ? { max: raw['max'] as number } : {}),
         ...(optBool(raw, 'success', file, where) !== undefined ? { success: raw['success'] as boolean } : {}),
+        ...(raw['returns'] !== undefined ? { returns: mapping(raw, 'returns', file, where) } : {}),
       };
     case 'not_called':
-      return { kind: 'not_called', tools: strList(raw, 'not_called', file, where, true), ...filters };
+      return {
+        kind: 'not_called',
+        tools: strList(raw, 'not_called', file, where, true),
+        ...filters,
+        ...(raw['returns'] !== undefined ? { returns: mapping(raw, 'returns', file, where) } : {}),
+      };
+    case 'briefed':
+      if (agent !== undefined) throw new CaseError(file, `${where}: 'briefed' names its agent itself; drop 'agent'`);
+      if (raw['briefed'] === ANY_AGENT) throw new CaseError(file, `${where}: 'briefed' names one agent`);
+      return { kind: 'briefed', agent: str(raw, 'briefed', file, where), contains: strList(raw, 'brief_contains', file, where, true) };
     case 'order':
-      return { kind: 'order', tools: strList(raw, 'order', file, where, true) };
+      return { kind: 'order', tools: strList(raw, 'order', file, where, true), ...(agent !== undefined ? { agent } : {}) };
     case 'reply': {
       const is = raw['reply'];
       if (is !== 'no_reply' && is !== 'not_no_reply') {
@@ -201,8 +226,9 @@ export function parseStubs(raw: unknown, file: string): Record<string, ToolStub[
       const hasReturn = 'return' in e;
       const hasError = 'error' in e;
       if (hasReturn === hasError) throw new CaseError(file, `${where}: give exactly one of 'return' or 'error'`);
-      if (hasError) return { match, error: str(e, 'error', file, where) };
-      return { match, return: e['return'] };
+      const scope = e['agent'] === undefined ? {} : { agent: str(e, 'agent', file, where) };
+      if (hasError) return { match, ...scope, error: str(e, 'error', file, where) };
+      return { match, ...scope, return: e['return'] };
     });
   }
   return stubs;
@@ -259,6 +285,20 @@ function parseOutbound(raw: Raw, file: string): SeedOutboundEntry[] {
     onlyKeys(e, ENTRY_KEYS, file, where);
     const metadata = e['metadata'];
     if (metadata !== undefined && !isObject(metadata)) throw new CaseError(file, `${where}: 'metadata' must be a mapping`);
+    const resumeRaw = e['resume'];
+    let resume: SeedOutboundEntry['resume'];
+    if (resumeRaw !== undefined) {
+      if (!isObject(resumeRaw)) throw new CaseError(file, `${where}: 'resume' must be a mapping {agent, original_task, context}`);
+      onlyKeys(resumeRaw, RESUME_KEYS, file, `${where}.resume`);
+      if (metadata && 'resume_token' in metadata) {
+        throw new CaseError(file, `${where}: give 'resume' or metadata.resume_token, not both`);
+      }
+      resume = {
+        agent: str(resumeRaw, 'agent', file, `${where}.resume`),
+        originalTask: str(resumeRaw, 'original_task', file, `${where}.resume`),
+        context: str(resumeRaw, 'context', file, `${where}.resume`),
+      };
+    }
     return {
       key: str(e, 'key', file, where),
       channelId: str(e, 'channel', file, where),
@@ -269,6 +309,7 @@ function parseOutbound(raw: Raw, file: string): SeedOutboundEntry[] {
       ...(metadata ? { metadata } : {}),
       sentMinutesAgo: optNum(e, 'sent_minutes_ago', file, where),
       expiresInHours: optNum(e, 'expires_in_hours', file, where),
+      ...(resume ? { resume } : {}),
     };
   });
 }
@@ -306,6 +347,7 @@ function parseInbound(raw: unknown, file: string): ScenarioInbound {
       ? {
           email: {
             nylasMessageId: optStr(email, 'nylas_message_id', file, 'inbound.email'),
+            account: optStr(email, 'account', file, 'inbound.email'),
             autoGenerated: email['auto_generated'] === true,
             autoGeneratedSignals: strList(email, 'auto_generated_signals', file, 'inbound.email'),
           },
@@ -456,11 +498,17 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   if (timeoutSeconds !== undefined && timeoutSeconds < 10) {
     throw new CaseError(file, `'timeout_seconds' must be at least 10`);
   }
+  const delegation = (raw['delegation'] ?? 'stubbed') as DelegationMode;
+  if (!DELEGATION_MODES.includes(delegation)) {
+    throw new CaseError(file, `'delegation' must be one of ${DELEGATION_MODES.join(', ')}`);
+  }
   const stubSets = mergeStubSets(raw, parseStubs(raw['tool_stubs'], file), file, options.stubsDir ?? DEFAULT_STUBS_DIR);
   const scenario: ScenarioCase = {
     name: str(raw, 'name', file, 'case'),
     description: optStr(raw, 'description', file, 'case') ?? '',
     tags: strList(raw, 'tags', file, 'case'),
+    delegation,
+    releaseGate: optBool(raw, 'release_gate', file, 'case') ?? true,
     ...(runs !== undefined ? { runs } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(knownFailure ? { knownFailure } : {}),
@@ -474,7 +522,36 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   };
 
   validateReferences(scenario, file);
+  validateDelegation(scenario, file);
   return scenario;
+}
+
+/**
+ * Rules that only make sense for one delegation mode (#2027). In a real-delegation case a
+ * `delegate` stub would silently replace the specialist the case exists to run. In a
+ * stubbed one no specialist runs, so a check or stub scoped to one could never see a call.
+ */
+function validateDelegation(scenario: ScenarioCase, file: string): void {
+  const real = scenario.delegation === 'real';
+  if (real && scenario.toolStubs['delegate']) {
+    throw new CaseError(file, `delegation: real runs the specialist; remove the 'delegate' stubs`);
+  }
+  if (real) return;
+  for (const [tool, stubs] of Object.entries(scenario.toolStubs)) {
+    if (stubs.some(s => s.agent !== undefined && s.agent !== 'coordinator')) {
+      throw new CaseError(file, `tool_stubs.${tool}: a stub scoped to a specialist needs delegation: real`);
+    }
+  }
+  for (const b of scenario.expectedBehaviors) {
+    for (const check of b.check ? leafChecks(b.check) : []) {
+      if (check.kind === 'briefed') {
+        throw new CaseError(file, `behavior '${b.id}': a 'briefed' check needs delegation: real`);
+      }
+      if ('agent' in check && check.agent !== undefined && check.agent !== 'coordinator') {
+        throw new CaseError(file, `behavior '${b.id}': a check on agent '${check.agent}' needs delegation: real`);
+      }
+    }
+  }
 }
 
 function validateReferences(scenario: ScenarioCase, file: string): void {
@@ -482,6 +559,7 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
     ['contact', new Set()],
     ['entry', new Set()],
     ['thread', new Set()],
+    ['resume_token', new Set()],
   ]);
   const add = (kind: string, key: string): void => {
     const set = keys.get(kind)!;
@@ -490,6 +568,7 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   };
   scenario.seed.contacts.forEach(c => add('contact', c.key));
   scenario.seed.outboundContext.forEach(e => add('entry', e.key));
+  scenario.seed.outboundContext.filter(e => e.resume).forEach(e => add('resume_token', e.key));
   scenario.seed.bullpen.forEach(t => add('thread', t.key));
 
   // failure_modes go to the judge as written; a placeholder there would reach it raw.

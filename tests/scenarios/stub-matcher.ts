@@ -20,11 +20,16 @@ export function argsMatch(pattern: Record<string, unknown>, args: Record<string,
   });
 }
 
-/** The first stub for `toolName` whose match fits `args`, or undefined. */
+/**
+ * The first stub for `toolName` whose match fits `args`, or undefined. A stub scoped to an
+ * agent (#2027) fits only that agent's calls; `agentId` undefined matches unscoped stubs only.
+ */
 export function matchToolStub(
   toolName: string,
   args: Record<string, unknown>,
   stubs: Record<string, ToolStub[]>,
+  agentId?: string,
 ): ToolStub | undefined {
-  return stubs[toolName]?.find(stub => argsMatch(stub.match, args));
+  return stubs[toolName]?.find(stub =>
+    (stub.agent === undefined || stub.agent === agentId) && argsMatch(stub.match, args));
 }

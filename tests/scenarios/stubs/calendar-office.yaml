@@ -1,0 +1,41 @@
+# The calendar specialist's world, for cases that run it for real (#2027). Scoped to
+# `agent: calendar`, so the coordinator never reads the calendar through these. Test mode
+# has no calendar client, so every one of these would otherwise be refused. A case's own
+# calendar-list-events (or find-free-time) stub comes first and says what the day holds;
+# the catch-alls here are a quiet calendar.
+calendar-list-calendars:
+  - agent: calendar
+    match: {}
+    return:
+      calendars:
+        - id: cal-principal-work
+          name: Work
+          description: ""
+          timezone: "{{timezone}}"
+          isPrimary: true
+          readOnly: false
+          isOwnedByUser: true
+          registered: true
+          contactId: "{{principal_contact_id}}"
+          registryLabel: primary
+calendar-list-events:
+  - agent: calendar
+    match: {}
+    return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
+calendar-find-free-time:
+  - agent: calendar
+    match: {}
+    return: { freeWindows: [], displayTimezone: "{{timezone}}" }
+calendar-check-conflicts:
+  - agent: calendar
+    match: {}
+    return: { conflicts: [], clear: true, displayTimezone: "{{timezone}}" }
+# The principal's stored scheduling rules (agents/calendar.yaml loads them at task start):
+# none. A write is the case's to stub.
+config-store:
+  - agent: calendar
+    match: { action: retrieve }
+    return: { namespace: calendar, entries: [], message: No entries in namespace 'calendar' yet. }
+  - agent: calendar
+    match: { action: list_namespaces }
+    return: { namespaces: [] }

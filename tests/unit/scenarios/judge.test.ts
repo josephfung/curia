@@ -37,7 +37,7 @@ describe('parseJudgeResponse', () => {
 
 describe('formatJudgeInput', () => {
   const scenario: ScenarioCase = {
-    name: 'paused', description: 'Delegate returns paused.', tags: [], sourceFile: 'x.yaml',
+    name: 'paused', description: 'Delegate returns paused.', tags: [], delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: 'How is the research going?' },
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
@@ -73,7 +73,7 @@ describe('extractJsonObject', () => {
 
 describe('judgeRun', () => {
   const scenario = {
-    name: 'x', description: '', tags: [], sourceFile: 'x.yaml',
+    name: 'x', description: '', tags: [], delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: 'hi' },
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],

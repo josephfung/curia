@@ -4,7 +4,8 @@
 // the inbound, every tool call with its arguments and the result handed back, and
 // the reply. Smoke's judge sees only the reply text, which is why it cannot score
 // "delegated instead of answering". gpt-4o, as in smoke and curia-deploy's eval, so
-// scores stay comparable across the three.
+// scores stay comparable across the three. With real delegation (#2027) it also sees
+// each specialist's brief, its calls (labelled with its name) and its response.
 import { ModelRegistry } from '../../src/agents/llm/model-registry.js';
 import { createEstimateCostUsd } from '../../src/agents/llm/pricing.js';
 import type { LLMProvider, LLMResponse } from '../../src/agents/llm/provider.js';
@@ -27,6 +28,8 @@ Rate each behavior:
 - MISS: not demonstrated, or contradicted
 
 Judge only what is in the transcript. Tool calls count as actions taken; a tool result marked FAILED means that action did not happen.
+
+When "Specialist runs" is present, the specialists the coordinator delegated to really ran: each run lists the brief the specialist received and the response it returned, and the specialist's own tool calls appear in the tool call list labelled with its name in brackets. Unlabelled calls are the coordinator's. The final reply is always the coordinator's.
 
 Respond with ONLY a JSON object:
 {"scores": [{"behaviorId": "<id>", "rating": "PASS|PARTIAL|MISS", "justification": "<one sentence>"}]}`;
@@ -57,8 +60,27 @@ export function formatJudgeInput(
           : c.result.success
             ? JSON.stringify(c.result.data, null, 2)
             : `FAILED: ${c.result.error}`;
-        return `${i + 1}. ${c.name}\nArguments: ${JSON.stringify(c.input, null, 2)}\nResult: ${result}`;
+        const who = c.agentId !== undefined && c.agentId !== 'coordinator' ? `[${c.agentId}] ` : '';
+        return `${i + 1}. ${who}${c.name}\nArguments: ${JSON.stringify(c.input, null, 2)}\nResult: ${result}`;
       }).join('\n---\n');
+
+  const specialists = run.delegations === undefined
+    ? []
+    : [
+        ``,
+        `## Specialist runs`,
+        run.delegations.length === 0
+          ? '(the coordinator started no specialist)'
+          : run.delegations.map((d, i) => [
+              `### ${i + 1}. ${d.agentId}`,
+              `Brief received:`,
+              d.brief,
+              ``,
+              d.outcome === 'in_flight'
+                ? `Response: (none: still working when the run ended)`
+                : `Response${d.outcome === 'error' ? ' (an error)' : ''}:\n${d.response ?? ''}`,
+            ].join('\n')).join('\n\n'),
+      ];
 
   return [
     `## Scenario`,
@@ -72,6 +94,7 @@ export function formatJudgeInput(
     ``,
     `## Tool calls`,
     calls,
+    ...specialists,
     ``,
     `## Final reply`,
     run.reply === null ? '(none)' : run.reply,

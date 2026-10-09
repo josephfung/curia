@@ -1,0 +1,105 @@
+# Case 16e (#2027, starter case 4): the inbound email's identifiers reach the specialist
+# (#1909). The Dispatcher stamps the sanitized Nylas message id and the receiving account
+# into trusted task metadata, and delegate writes them at the top of the specialist's
+# brief, replacing any copy the coordinator typed (skills/delegate/handler.ts). A stubbed
+# delegate never builds that brief, so only real delegation can check it. The mail came in
+# on a secondary mailbox, the case #1909 broke. The coordinator answers the email itself,
+# as text (case 7's rule: turn guidance `email-direct-reply`).
+name: real delegation email identifiers reach specialist
+description: >
+  Dana Whitfield, an external contact, emails Curia's ops mailbox asking for 30 minutes
+  next week. The coordinator checks the principal's availability through the calendar
+  specialist, which really runs. The specialist's brief carries the email's Message ID and
+  Account lines. The coordinator replies to Dana as the response text, not through an email
+  tool.
+tags: [real-delegation, delegation, email, calendar]
+delegation: real
+stub_sets: [human-channels, calendar-office]
+seed:
+  contacts:
+    - key: dana
+      display_name: Dana Whitfield
+      tier: known
+      role: Partnerships lead, Harbour Logistics
+      channel: email
+      identifier: dana.whitfield@harbour.example.test
+inbound:
+  from: dana
+  content: |
+    Subject: Renewal check-in
+
+    Hi,
+
+    Could we find 30 minutes next week to go over the renewal terms? Any afternoon works
+    on my side.
+
+    Thanks,
+    Dana
+  email:
+    nylas_message_id: scenario-msg-dana-renewal
+    account: ops
+tool_stubs:
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        freeWindows:
+          - { start: "{{time:next-tuesday 14:00}}", end: "{{time:next-tuesday 17:00}}" }
+          - { start: "{{time:next-thursday 13:00}}", end: "{{time:next-thursday 15:30}}" }
+  calendar-list-events:
+    - agent: calendar
+      match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-scen-exec, title: Weekly exec team, location: Boardroom, startTime: "{{time:next-monday 13:00}}", endTime: "{{time:next-monday 17:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+          - { id: evt-scen-offsite, title: Offsite, location: Offsite, startTime: "{{time:next-wednesday 09:00}}", endTime: "{{time:next-wednesday 18:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [] }
+  # A hold is a fair next step; stubbed so it is available and does not count as a hole.
+  calendar-create-hold:
+    - agent: calendar
+      match: {}
+      return:
+        holdEventId: evt-scen-hold-1
+        held: true
+        display: "{{time:next-tuesday 14:00}} -- {{time:next-tuesday 14:30}}"
+        displayTimezone: "{{timezone}}"
+expected_behaviors:
+  - id: borrows_from_calendar
+    weight: critical
+    description: Checks availability through the calendar specialist.
+    check:
+      called: delegate
+      with: { agent: calendar }
+  - id: brief_carries_identifiers
+    weight: critical
+    description: The calendar specialist's brief carries the inbound's Message ID and Account lines.
+    check:
+      briefed: calendar
+      brief_contains: ["Message ID: scenario-msg-dana-renewal", "Account: ops"]
+  - id: replies_as_text
+    weight: critical
+    description: Answers Dana as the response text; no agent calls email-reply or email-send.
+    check:
+      not_called: [email-reply, email-send]
+      agent: any
+  - id: replies
+    weight: critical
+    description: Returns a reply (not NO_REPLY).
+    check:
+      reply: not_no_reply
+  - id: names_no_internals
+    weight: important
+    description: The reply names no tool, agent or system identifier.
+    check:
+      reply_excludes_internal_names: true
+  - id: answers_dana
+    weight: important
+    description: >
+      The reply is written to Dana and answers her: it offers afternoon times next week
+      from the principal's availability (Tuesday or Thursday afternoon), or says it will
+      confirm a time. It does not show the principal's other meetings.
+failure_modes:
+  - Calls email-reply or email-send instead of replying with text
+  - Lists the principal's meetings to an external contact
