@@ -426,8 +426,9 @@ was scored.
 **Cost.** Each specialist turn is several more model calls, and the specialists' spend is
 reported per agent: per case in the run output, per run and case in the results JSON
 (`usage.byAgent`), and for the suite in the summary. On the 2026-10-09 baseline (below), a
-real-delegation run cost $0.01 to $0.04 and took 15 to 120 seconds, about twice a stubbed
-run.
+real-delegation run cost $0.01 to $0.03 with its judging, two to five times a stubbed run,
+and took 9 to 64 seconds on average. The three gated cases add about $0.25 and two minutes
+to a release gate run.
 
 ### Which real-delegation cases gate a release
 
@@ -449,6 +450,19 @@ Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before cha
 specialist prompt or the delegate handler, run `--tags real-delegation`.
 
 Baseline: `deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each,
-2026-10-09, commit BASELINE_COMMIT.
+2026-10-09, commit `c7ce8c8f` (16a re-measured at `d0e7b1bb`, after stubbing ceo-inbox's
+`contact-register`). Every critical behavior met the gate. Spend is for the five runs,
+judge included.
 
-BASELINE_TABLE
+| Case | Score | Below 100% | Avg run | Spend |
+|---|---|---|---|---|
+| 16a transfer ownership | 97% | `platform_released_entry` 4/5: once, ceo-inbox called `context-bridge-keep-open` after drafting, so the entry stayed open | 61s | $0.09 |
+| 16b calendar borrow | 98% | `one_read` 4/5: delegated a second time once | 9s | $0.05 |
+| 16c calendar read fails | 100% | | 27s | $0.08 |
+| 16d clarification resume | 96% | `resumes_with_token` 4/5: once, the model miscopied a character of the 700-character token | 24s | $0.10 |
+| 16e email identifiers | 100% | | 64s | $0.14 |
+| 16f principal request over email | 100% | | 18s | $0.06 |
+| 16g one message per item | 100% | | 23s | $0.08 |
+
+The earlier measurement of 16a (`c7ce8c8f`) had `no_second_release` at 4/5: once, ceo-inbox
+released the entry itself although the platform had.
