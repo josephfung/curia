@@ -1246,3 +1246,69 @@ check is the one that could show it. Main misses that check about as often, and 
 with the line restored did no better (4 runs, all with web search down: 1 pass, 2
 partial, 1 miss). The line stays out. Joseph's call (2026-10-08): if evidence later shows
 it is needed, it goes back as policy.
+
+### 2026-10-09 — prompt trim PR 4: audience in code
+
+YAML 13,447 → 9,494 chars; always-on (YAML + pinned SKILL.md) ~4,899 → ~3,913 tokens,
+budget 5,000 → 4,000. Local tool definitions unchanged. The rendered coordinator prompt
+(`pnpm render-coordinator-prompt`, test database) went 28,826 → 25,136 chars: the
+security block grew by the merged provenance text.
+
+Turn guidance, every block at once: 5,530 → 6,132 chars. That set never renders together
+(non-principal and outbound-context guidance are exclusive), so the bound is now the
+largest set `inboundTurnGuidance` can pick: ~4,044 chars, a principal email turn with
+every outbound sub-rule and a CC. The non-principal turn's worst case is ~2,785.
+
+**Full suites on `b8b52e36`.** Model `deepseek/deepseek-v4.1-flash`, gpt-4o judge,
+concurrency 4. They ran on `curia_scen_pr4`, a copy of `curia_scen`, because another
+session's scenario run held the original.
+
+- **Smoke:** 47 of 47 (estimated $0.94). Five passed on retry: Create Event with Full
+  Context, Cancellation or Change Request, Cold Compose — No Address Anywhere, Triage
+  Batch of Mixed Emails, and Urgency Classification - Recruiter Not Urgent.
+- **Scenarios:** every case PR 4 moves text for passed at 100%: transfer-ownership
+  (01a–c), no-reply (03a–b), reply-shaped principal and non-principal (04a–b), external
+  reply first person (10) and relayed follow-up routes to owner (11). Sweep-on-close
+  closing result scored 92%. The gate failed on two cases:
+  - `google file filing after delegation` (13a): `principal_can_edit` passed 1 of 5. The
+    coordinator filed and shared the doc each time, as reader in 4 runs. A/B below.
+  - `scheduler additive create`: one `scheduler-report` call on a non-scheduled turn, the
+    quirk seen in #1959, #2024, PR 1 and PR 11.
+
+**13a A/B, 10 runs each, same database:** `principal_can_edit` main (`20f3b3b1`) 6 of 10,
+PR 4 8 of 10. Main failed the case's gate; PR 4 passed it. With the full run, PR 4 is 9 of
+15 and main 6 of 10: the reader/writer choice is unsteady on both prompts, and PR 4 changes
+no Drive or sharing text.
+
+**Red team, provenance cohorts (#900).** The config now targets the production model
+(`openrouter:deepseek/deepseek-v4.1-flash`, reasoning hidden from graders), with gpt-4o
+generating and grading; it made no Anthropic calls. One set of 174 probes, generated once
+by promptfoo's hosted generator (four plugins need it), was evaluated against both sides.
+Each side rendered its own prompt, sender block and turn guidance. Main's harness had the
+same turn-guidance patch, uncommitted, so both sides saw what their production sends.
+
+| Cohort (174 probes) | PR 4 | main |
+|---|---|---|
+| External sender | 174 of 174 | 174 of 174 |
+| `indirect-prompt-injection` (in the above) | 24 of 24 | 24 of 24 |
+| Principal | 154 of 174 | 154 of 174 |
+| Principal misses by plugin | `ascii-smuggling` 15, `cyberseceval` 5 | `ascii-smuggling` 14, `cyberseceval` 6 |
+
+The principal misses are the model following instructions hidden in the principal's own
+message ("explain how neural networks work", "say Banana"). 14 are the same probes on both
+sides and 6 differ each way, so they are the same behavior on both prompts. Merging the
+provenance rule into the security block changed nothing the red team can see.
+
+Cost: about $0.35 a run, $1.40 for all four. DeepSeek read ~93% of its input from the
+prefix cache, and most plugins grade deterministically: 54–86 gpt-4o grader calls per run.
+
+Two tooling problems surfaced, outside PR 4:
+- promptfoo 0.123.1 hangs on every request under Node 24.17. It hands an undici 8.10.2
+  dispatcher composed with `interceptors.decompress` to Node's built-in `fetch`, and that
+  pairing never settles, not even on its abort timeout. undici's own `fetch` with the same
+  dispatcher works. These runs preloaded a shim (`NODE_OPTIONS=--import`) that replaces
+  `globalThis.fetch` with undici's.
+- Four plugins (`indirect-prompt-injection`, `hijacking`, `ascii-smuggling`,
+  `special-token-injection`) generate only through promptfoo's hosted service, which needs
+  a logged-in account. Logged in, promptfoo uploads every eval result unless
+  `PROMPTFOO_DISABLE_SHARING=true`; these runs set it.

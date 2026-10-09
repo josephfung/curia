@@ -20,8 +20,9 @@ log.
 | 1: restatements and stale sections | Merged (2026-10-07, #2031) | 18,561 | ~6,180 / 6,400 |
 | 2: one home each for voice and contact resolution | Merged (2026-10-07, #2034) | 15,709 | ~5,467 / 5,600 |
 | 11: Who you are / Who you serve preamble | Merged (2026-10-08, #2052) | 15,709 (unchanged; code-owned blocks only; #2041 then took it to 15,667) | ~5,456 / 5,600 |
-| 3: rewrite pass | In review (2026-10-08, #2073) | 13,439 | ~4,899 / 5,000 |
-| 4–10, final phase | Not started | — | — |
+| 3: rewrite pass | Merged (2026-10-08, #2073) | 13,439 | ~4,899 / 5,000 |
+| 4: audience in code | In review (2026-10-09) | 9,494 | ~3,913 / 4,000 |
+| 5–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
@@ -92,6 +93,30 @@ from the plan:
 
 Behavior held otherwise: scenarios passed every case, and the smoke A/B showed no regression
 (baseline log).
+
+**PR 4 (2026-10-09).** The sender line states the audience: the principal keeps
+`(principal)`, and every other sender, resolved or not, gets "This sender is not the
+principal." A descriptive role renders as `(role: …)`, so a contact titled "Principal" no
+longer reads like the principal (`src/agents/prompts/sender-line.ts`, shared with the
+red-team harness). Draft D opens the `non-principal-reply-shaped` guidance, the reply rule
+is the `delegation:` bullet of the `outbound-context` guidance with a one-line anchor in
+the routing decision, and provenance merged into the security block's Prompt Injection
+Defense. Audience awareness is gone; its principal line ("tell them what you know") joined
+How you speak. Three choices differ from the plan:
+- **The lower-trust channel bullet did not move.** The "Blocked by channel trust" line never
+  renders for the principal: their tier rank (3) outranks every permission's sensitivity
+  (high is 2), so `trustBlocked` is always empty for them. Its remaining point is one
+  clause in How you speak.
+- **The reply rule's "external party" clause went.** Since #1848 only principal turns get the
+  outbound-context block, so a third party's reply never meets a delegation hint. Fix B of
+  #1848, if it lands, brings its own guidance.
+- **The turn-guidance cap is the worst real turn.** Every block together is 6,132 chars, but
+  that set never renders. The test enumerates `inboundTurnGuidance` and caps the largest
+  real set (~4,044) at 4,500.
+
+Behavior: smoke 47 of 47; every scenario PR 4 moves text for passed at 100%. 13a's
+`principal_can_edit` miss recurred on main (6 of 10 against PR 4's 8 of 10). Red-team A/B
+in the baseline log: external cohort 174 of 174 on both sides.
 
 ### Lessons so far
 
@@ -185,7 +210,7 @@ cost. The payoff is fewer rules to weigh at once:
    whole passage removed a judgment that scenario case 10 relied on, and only the A/B
    caught it.
 7. **Lower the budget** in `tests/unit/agents/prompt-budget.test.ts` in every PR that
-   shrinks the prompt. Record the new size in the baseline log.
+   shrinks the prompt. Record the new size in the baseline log: external cohort 174 of 174 on both sides.
 
 ## Findings
 
