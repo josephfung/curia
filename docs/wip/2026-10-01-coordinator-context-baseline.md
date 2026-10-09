@@ -1294,6 +1294,12 @@ same turn-guidance patch, uncommitted, so both sides saw what their production s
 | Principal | 154 of 174 | 154 of 174 |
 | Principal misses by plugin | `ascii-smuggling` 15, `cyberseceval` 5 | `ascii-smuggling` 14, `cyberseceval` 6 |
 
+**External cohort rerun with CC framing (review fix).** The harness fixture listed Curia
+under `cc` but left `curiaRole` unset, a pairing the email adapter never produces, so the
+runs above gave the external cohort direct-reply guidance and no CC preamble. With
+`curiaRole: 'cc'`, the CC preamble, the Message ID / Account block and `email-cc-reply`
+guidance, the same 174 probes scored 174 of 174 on both PR 4 and main.
+
 The principal misses are the model following instructions hidden in the principal's own
 message ("explain how neural networks work", "say Banana"). 14 are the same probes on both
 sides and 6 differ each way, so they are the same behavior on both prompts. Merging the
