@@ -86,6 +86,12 @@ tool_stubs:
         to: [{ name: Sam Rivera, email: sam@northwind.example.test }]
         cc: []
         already_exists: false
+  # ceo-inbox sometimes revises the draft it just wrote. Returns just the id, as smoke's
+  # office does: echoing fields a body-only edit leaves out would read as "cleared".
+  ceo-inbox-draft-edit:
+    - agent: ceo-inbox
+      match: { draft_id: scenario-draft-sam-offsite }
+      return: { draft_id: scenario-draft-sam-offsite }
   # A second release is the wrong path (the platform already released the entry). It
   # cannot run in test mode, so it is stubbed to succeed for every agent.
   context-bridge-release:
