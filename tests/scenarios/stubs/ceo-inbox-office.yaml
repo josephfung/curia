@@ -1,6 +1,6 @@
 # ceo-inbox's housekeeping on a message it handled, for cases that run it for real
-# (#2027): labelling, filing, archiving, marking read, recording the sender. Scoped to
-# ceo-inbox. Each succeeds; a case that scores one of these stubs it itself.
+# (#2027): labelling, filing, archiving, marking read, recording the sender and what it
+# learned. Scoped to ceo-inbox. Each succeeds; a case that scores one of these stubs it itself.
 ceo-inbox-label:
   - agent: ceo-inbox
     match: {}
@@ -21,6 +21,10 @@ ceo-inbox-mark-starred:
   - agent: ceo-inbox
     match: {}
     return: { success: true, message_id: scenario-msg, starred: true }
+memory-store:
+  - agent: ceo-inbox
+    match: {}
+    return: { stored: true, action: created, node_id: 4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8, sensitivity: internal }
 # The sender is the case's seeded Sam Rivera, already a contact. ceo-inbox threads this
 # contact_id into later calls (entity-context runs for real), so it must be the seeded row:
 # a case using this set must seed contact `sam` (the loader rejects one that does not).
