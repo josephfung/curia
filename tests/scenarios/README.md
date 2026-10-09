@@ -438,7 +438,7 @@ answer.
 
 | Case | In the gate | Why |
 |---|---|---|
-| 16a transfer ownership | yes | The entry's lifecycle across two agents (#1972): the platform releases it, neither agent does it again. |
+| 16a transfer ownership | yes | The answer reaches the entry's owner and the owner acts on it, across two agents (#1972). Whether the platform then releases the entry is scored but not gated (below). |
 | 16d clarification resume | yes | The resume token round trip: only the real handler rebuilds the brief (#1858, #1893). |
 | 16f principal request over email | yes | The specialist treats the principal's request as the principal's (#1871, a P1 outage). |
 | 16b calendar borrow | on demand | The relay half is covered by stubbed cases; the identity half by 16f. |
