@@ -208,7 +208,7 @@ That pairing is load-bearing: every runtime failure path must emit both events i
 
 ### Task-wake disposition (#1951)
 
-An ordinary task wake (`task_payload.type = 'task-wake'`, not a delegation-retry brief) carries a disposition instruction in its `agent.task` body: before the run finishes, `task-complete` the task, cancel it, or park it (`waiting`/`blocked` plus a progress note and `wake_at`).
+An ordinary task wake (`task_payload.type = 'task-wake'`, not a delegation-retry brief) carries a disposition instruction in its `agent.task` body: before the run finishes, `task-complete` the task, cancel it, or park it (`waiting`/`blocked` plus a progress note and `wake_at`; `wake_at` is optional only when the task waits on a contact or a blocking task).
 
 If that run **succeeds** and the task is still undisposed, the scheduler publishes **one** follow-up `agent.task` to the same agent on the same `scheduler:<job>:<run>` conversation. `toolAllowlist` is `task-complete` and `task-update`, so the follow-up cannot repeat the wake's sends. The job stays `running` until that follow-up ends, and `tasks.updated_at` is touched when the follow-up is asked for, so BacklogHeartbeat cannot select the task in the gap. A failed or timed-out wake does not get a follow-up. A wake with `created_by = resumable-continuation` (a paused-slice continuation or a plan-parent wake) does not get one either: those runs are meant to leave the task open. The hourly heartbeat remains the backstop, and a heartbeat wake of the same task still gets the follow-up.
 
