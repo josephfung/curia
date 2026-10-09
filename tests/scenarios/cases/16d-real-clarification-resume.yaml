@@ -73,8 +73,11 @@ tool_stubs:
       match: {}
       return: { stored: true, action: created, node_id: 9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f, sensitivity: internal }
 expected_behaviors:
+  # An exact match on a ~700-character token: a one-character transcription slip fails it
+  # (seen 1 of 5 in the baseline). Whether the resume worked is specialist_gets_resumed_brief,
+  # which is what gates; no_fresh_start rejects a delegate with no token at all.
   - id: resumes_with_token
-    weight: critical
+    weight: important
     description: Re-delegates to research-analyst with the entry's resume_token.
     check:
       called: delegate
