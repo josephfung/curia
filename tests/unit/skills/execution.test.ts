@@ -4,6 +4,7 @@ import { ToolRegistry } from '../../../src/skills/registry.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import type { BusEvent } from '../../../src/bus/events.js';
 import type { ToolManifest, ToolHandler, ToolContext } from '../../../src/skills/types.js';
+import { ContactService } from '../../../src/contacts/contact-service.js';
 import pino from 'pino';
 
 const logger = pino({ level: 'silent' });
@@ -44,6 +45,38 @@ describe('ExecutionLayer', () => {
     if (result.success) {
       expect(result.data).toBe('got: hello');
     }
+  });
+
+  describe('recipient references for draft skills (#2053)', () => {
+    it('gives every skill a resolver that maps "principal" through the identity snapshot', async () => {
+      const contacts = ContactService.createInMemory();
+      const principal = await contacts.createContact({ displayName: 'Pat Principal', source: 'ceo_stated', tier: 'known' });
+      await contacts.linkIdentity({ contactId: principal.id, channel: 'email', channelIdentifier: 'pat@home.example', source: 'ceo_stated' });
+      const principalIdentities = (await contacts.getContactWithIdentities(principal.id))?.identities ?? [];
+      execution = new ExecutionLayer(registry, logger, { contactService: contacts, principalIdentities });
+
+      let resolved: unknown;
+      registry.register(makeManifest(), {
+        execute: async (ctx: ToolContext) => {
+          resolved = await ctx.resolveRecipientReference?.('email', 'principal', { field: 'to' });
+          return { success: true, data: 'ran' };
+        },
+      });
+      await execution.invoke('test-skill', { query: 'x' });
+      expect(resolved).toMatchObject({ ok: true, kind: 'principal', identifier: 'pat@home.example' });
+    });
+
+    it('sets no resolver without a contact service', async () => {
+      let present: boolean | undefined;
+      registry.register(makeManifest(), {
+        execute: async (ctx: ToolContext) => {
+          present = ctx.resolveRecipientReference !== undefined;
+          return { success: true, data: 'ran' };
+        },
+      });
+      await execution.invoke('test-skill', { query: 'x' });
+      expect(present).toBe(false);
+    });
   });
 
   describe('identifier provenance (#2061)', () => {

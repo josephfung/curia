@@ -354,6 +354,16 @@ export interface ToolContext {
    *  replays). Read
    *  through `identifierHasSource()` in `src/skills/_shared/identifier-source.ts`. */
   identifierSources?: import('../contacts/identifier-provenance.js').IdentifierSources;
+  /** Resolve a recipient reference (a contact UUID or `principal`, optional `#label`) to
+   *  the address on that contact's verified, active identity for `channel` (#2053,
+   *  ADR-047). The same resolver as OutboundGateway.resolveRecipientReference, without
+   *  the outboundGateway capability: for skills that address a draft rather than send.
+   *  Set whenever the ExecutionLayer has a contactService. Fails closed. */
+  resolveRecipientReference?: (
+    channel: string,
+    value: string,
+    fields: import('./_shared/recipient-reference.js').RecipientReferenceFields,
+  ) => Promise<import('./_shared/recipient-reference.js').RecipientResolution>;
 }
 
 /**
