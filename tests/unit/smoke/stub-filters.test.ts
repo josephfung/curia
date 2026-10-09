@@ -278,12 +278,13 @@ describe('SchedulerState', () => {
 });
 
 describe('DraftState', () => {
-  const compose = { draft_id: 'draft-0002', subject: '{{input:subject}}', to: '{{input:to}}', cc: [] };
+  const compose = { draft_id: 'draft-0002', subject: '{{input:subject}}' };
+  const MAYA_ID = '3f6e2d1c-9b8a-4c7d-8e6f-5a4b3c2d1e0f';
 
   it('returns a composed draft, including a later edit, from ceo-inbox-read', () => {
     const state = new CaseToolState();
-    shapeStubResult('ceo-inbox-draft-compose', compose, { subject: 'Hello', to: ['maya@techto.example'], body: 'See you Tuesday.' }, state);
-    shapeStubResult('ceo-inbox-draft-edit', { draft_id: 'draft-0002' }, { draft_id: 'draft-0002', body: 'See you Wednesday.', cc: ['priya@curiatech.example'] }, state);
+    shapeStubResult('ceo-inbox-draft-compose', compose, { subject: 'Hello', to_addresses: ['maya@techto.example'], body: 'See you Tuesday.' }, state);
+    shapeStubResult('ceo-inbox-draft-edit', { draft_id: 'draft-0002' }, { draft_id: 'draft-0002', body: 'See you Wednesday.', add_cc_addresses: ['priya@curiatech.example'] }, state);
     expect(state.drafts.read({ draft_id: 'draft-0002' })).toEqual(expect.objectContaining({
       id: 'draft-0002',
       is_draft: true,
@@ -291,6 +292,25 @@ describe('DraftState', () => {
       to: [{ email: 'maya@techto.example' }],
       cc: [{ email: 'priya@curiatech.example' }],
       body_plain: 'See you Wednesday.',
+    }));
+  });
+
+  it('records contact IDs and addresses together, and applies remove and moves (#2053)', () => {
+    const state = new CaseToolState();
+    shapeStubResult('ceo-inbox-draft-compose', compose, {
+      subject: 'Hello', to: [MAYA_ID], to_addresses: ['sam@lakeshore.example'], cc_addresses: ['list@groups.example'], body: 'Hi.',
+    }, state);
+    expect(state.drafts.read({ draft_id: 'draft-0002' })).toEqual(expect.objectContaining({
+      to: [{ email: MAYA_ID }, { email: 'sam@lakeshore.example' }],
+      cc: [{ email: 'list@groups.example' }],
+    }));
+
+    shapeStubResult('ceo-inbox-draft-edit', { draft_id: 'draft-0002' }, {
+      draft_id: 'draft-0002', remove: ['Sam@Lakeshore.example'], add_to_addresses: ['list@groups.example'],
+    }, state);
+    expect(state.drafts.read({ draft_id: 'draft-0002' })).toEqual(expect.objectContaining({
+      to: [{ email: MAYA_ID }, { email: 'list@groups.example' }],
+      cc: [],
     }));
   });
 
