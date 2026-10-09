@@ -24,6 +24,8 @@ import type {
 import type { ObservedToolCall } from '../shared/turn-capture.js';
 import type { DelegationRecord } from './types.js';
 
+const COORDINATOR = 'coordinator';
+
 /** A specialist's call, as the bus saw it, with its place in the run's call order. */
 export interface SpecialistCall extends ObservedToolCall {
   agentId: string;
@@ -82,6 +84,7 @@ export function createDelegationCapture(
     const { payload } = event as AgentTaskEvent;
     const trace = specialistTrace(payload.conversationId);
     if (!trace) return;
+    ended.delete(payload.conversationId);
     const record: DelegationRecord = {
       agentId: payload.agentId,
       conversationId: payload.conversationId,
@@ -118,11 +121,12 @@ export function createDelegationCapture(
 
   on('agent.response', (event) => {
     const { payload, parentEventId } = event as AgentResponseEvent;
-    if (ended.has(payload.conversationId)) {
+    const trace = specialistTrace(payload.conversationId);
+    if (!trace && ended.has(payload.conversationId)) {
       onLate(payload.conversationId);
       return;
     }
-    const record = parentEventId ? specialistTrace(payload.conversationId)?.byTask.get(parentEventId) : undefined;
+    const record = parentEventId ? trace?.byTask.get(parentEventId) : undefined;
     if (!record || record.outcome !== 'in_flight') return;
     record.response = payload.content;
     record.outcome = payload.isError ? 'error' : 'answered';
@@ -130,11 +134,11 @@ export function createDelegationCapture(
 
   on('agent.error', (event) => {
     const { payload } = event as AgentErrorEvent;
-    if (ended.has(payload.conversationId)) {
+    const trace = specialistTrace(payload.conversationId);
+    if (!trace && ended.has(payload.conversationId)) {
       onLate(payload.conversationId);
       return;
     }
-    const trace = specialistTrace(payload.conversationId);
     for (const record of trace?.delegations ?? []) {
       if (record.conversationId === payload.conversationId && record.outcome === 'in_flight') {
         record.outcome = 'error';
@@ -163,4 +167,21 @@ export function createDelegationCapture(
       return { seqByInvoke: trace.seqByInvoke, calls: trace.calls, delegations: trace.delegations };
     },
   };
+}
+
+/**
+ * The coordinator's calls (turn capture) and the specialists', each tagged with its agent,
+ * in the order they were made. Without specialists, the coordinator's order.
+ */
+export function inRunOrder(
+  coordinatorCalls: ObservedToolCall[],
+  trace: Pick<DelegationTrace, 'seqByInvoke' | 'calls'> | undefined,
+): Array<ObservedToolCall & { agentId: string }> {
+  const own = coordinatorCalls.map(c => ({ ...c, agentId: COORDINATOR }));
+  if (!trace || trace.calls.length === 0) return own;
+  const seqOf = (c: ObservedToolCall): number =>
+    (c.invokeEventId ? trace.seqByInvoke.get(c.invokeEventId) : undefined) ?? Number.MAX_SAFE_INTEGER;
+  const specialists = trace.calls.map(({ seq: _seq, ...call }) => call);
+  // A stable sort: a coordinator call with no recorded order keeps its place among its own.
+  return [...own, ...specialists].sort((a, b) => seqOf(a) - seqOf(b));
 }

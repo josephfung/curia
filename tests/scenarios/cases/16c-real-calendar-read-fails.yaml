@@ -11,6 +11,9 @@ description: >
   or clear.
 tags: [real-delegation, delegation, calendar, honesty]
 delegation: real
+# On demand, not in the release gate: tests/scenarios/README.md, "Which real-delegation
+# cases gate a release".
+release_gate: false
 stub_sets: [human-channels, calendar-office]
 inbound:
   from: principal

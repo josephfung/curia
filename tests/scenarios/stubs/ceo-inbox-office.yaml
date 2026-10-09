@@ -1,0 +1,23 @@
+# ceo-inbox's housekeeping on a message it handled, for cases that run it for real
+# (#2027): labelling, filing, archiving, marking read. Scoped to ceo-inbox. Each succeeds
+# and echoes the message id; a case that scores one of these stubs it itself.
+ceo-inbox-label:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, applied: ["✍️ Drafted"], created: [], folders: [INBOX, "✍️ Drafted"] }
+ceo-inbox-update-folders:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, folders: [INBOX, "✍️ Drafted"], created: [], removed_unresolved: [] }
+ceo-inbox-archive:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg }
+ceo-inbox-mark-read:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg }
+ceo-inbox-mark-starred:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, starred: true }

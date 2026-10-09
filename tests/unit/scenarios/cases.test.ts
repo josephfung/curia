@@ -130,6 +130,18 @@ describe('coordinator scenario cases', () => {
     }
   });
 
+  it('gate releases on the real-delegation cases the README names (#2027)', () => {
+    // Real delegation multiplies cost, so most of these run on demand. A change here
+    // changes the release gate: update the table in tests/scenarios/README.md with it.
+    const real = cases.filter(c => c.delegation === 'real');
+    expect(real.map(c => path.basename(c.sourceFile).slice(0, 3)).sort())
+      .toEqual(['16a', '16b', '16c', '16d', '16e', '16f', '16g']);
+    expect(real.filter(c => c.releaseGate).map(c => path.basename(c.sourceFile).slice(0, 3)).sort())
+      .toEqual(['16a', '16d', '16f']);
+    // Every other case is in the gate.
+    expect(cases.filter(c => c.delegation === 'stubbed').every(c => c.releaseGate)).toBe(true);
+  });
+
   it('have a well-formed stub-coverage record', () => {
     const coverage = readCoverage(path.join(SCENARIOS_DIR, 'stub-coverage.json'));
     expect(coverageViolations(cases.map(c => c.name), coverage, { strict: false })).toEqual([]);

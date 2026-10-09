@@ -248,3 +248,74 @@ describe('resolveRunPlaceholders', () => {
     expect(() => resolveRunPlaceholders('on {{day:today}}', { refs: {} })).toThrow(/no clock/);
   });
 });
+
+describe('real delegation (#2027)', () => {
+  const REAL = `
+name: real one
+delegation: real
+release_gate: false
+seed:
+  outbound_context:
+    - key: ask
+      channel: signal
+      agent: research-analyst
+      content: Which angle?
+      delegation_hint: research-analyst
+      resume: { agent: research-analyst, original_task: Research targets, context: Found three }
+inbound:
+  from: principal
+  content: Technology
+tool_stubs:
+  web-search:
+    - agent: research-analyst
+      match: {}
+      return: { results: [], count: 0 }
+expected_behaviors:
+  - id: resumes
+    weight: critical
+    description: resumes with the token
+    check:
+      called: delegate
+      with: { resume_token: "{{resume_token:ask}}" }
+  - id: briefed
+    description: the specialist gets its progress back
+    check:
+      briefed: research-analyst
+      brief_contains: ["Principal's Direction"]
+  - id: specialist
+    description: the specialist searches
+    check:
+      called: [web-search, web-fetch]
+      agent: research-analyst
+      returns: { count: 0 }
+`;
+
+  it('loads delegation, release_gate, agent-scoped stubs and checks, and resume tokens', () => {
+    const c = loadScenarioCase(write('real.yaml', REAL));
+    expect(c.delegation).toBe('real');
+    expect(c.releaseGate).toBe(false);
+    expect(c.toolStubs['web-search']![0]).toMatchObject({ agent: 'research-analyst' });
+    expect(c.seed.outboundContext[0]!.resume).toEqual({ agent: 'research-analyst', originalTask: 'Research targets', context: 'Found three' });
+    expect(c.expectedBehaviors.map(b => b.check?.kind)).toEqual(['called', 'briefed', 'called']);
+    expect(c.expectedBehaviors[2]!.check).toMatchObject({ tool: ['web-search', 'web-fetch'], agent: 'research-analyst', returns: { count: 0 } });
+  });
+
+  it('defaults to stubbed delegation in the release gate', () => {
+    const c = loadScenarioCase(write('c.yaml', VALID));
+    expect(c.delegation).toBe('stubbed');
+    expect(c.releaseGate).toBe(true);
+  });
+
+  it('rejects what a mode cannot honour', () => {
+    const load = (body: string) => () => loadScenarioCase(write('x.yaml', body));
+    // A delegate stub would replace the specialist the case runs.
+    expect(load(REAL.replace('tool_stubs:', 'tool_stubs:\n  delegate:\n    - match: {}\n      return: {}'))).toThrow(/remove the 'delegate' stubs/);
+    // A stubbed case runs no specialist: scoped stubs, agent checks and briefs see nothing.
+    const stubbed = REAL.replace('delegation: real\n', '');
+    expect(load(stubbed)).toThrow(/needs delegation: real/);
+    expect(load(REAL.replace('delegation: real', 'delegation: sometimes'))).toThrow(/'delegation' must be one of stubbed, real/);
+    expect(load(REAL.replace('briefed: research-analyst', 'briefed: any'))).toThrow(/names one agent/);
+    // A token placeholder must name an entry that seeds one.
+    expect(load(REAL.replace('{{resume_token:ask}}', '{{resume_token:other}}'))).toThrow(/names no seeded resume_token/);
+  });
+});

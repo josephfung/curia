@@ -11,6 +11,12 @@ Smoke (`tests/smoke/`, spec 16) asks "does the whole stack produce a good answer
 suite asks "did the coordinator make the right decision?", which is usually a tool call:
 it routed instead of answering, it released the entry, it edited instead of duplicating.
 
+By default `delegate` is stubbed, so no specialist runs and a case isolates the
+coordinator's decision. A case with `delegation: real` runs the specialist too, through
+production's delegate path, to test the round trip: the brief the specialist gets, what it
+does with it, and what the coordinator makes of the result. See
+[Real delegation](#real-delegation).
+
 ## Run it
 
 ```bash
@@ -29,6 +35,7 @@ pnpm scenarios --case "sweep-on-close" --runs 2 --model deepseek/deepseek-v4.1-f
 | `--runs <n>` | Runs per case, overriding the case's `runs` and the default of 5. |
 | `--concurrency <n>` | Cases run at once (default 4). A case's own runs are always one at a time. |
 | `--allow-other-connections` | Run even though another client is connected to the database (see below). |
+| `--on-demand` | Also run the cases marked `release_gate: false`. `--case` and `--tags` select them without it. |
 
 `SCENARIO_TIMEOUT_MS` sets the default per-run wait (180s). A case can set its own
 `timeout_seconds`. The wait is a hard bound: a turn that outlives it is scored as an
@@ -45,7 +52,9 @@ summary, and recorded on the run (`providerRetries`). A failure that is still th
 two re-runs is scored as an errored run, as before.
 
 A run narrowed with `--case`, `--tags` or `--runs` can exit 0, but it says it is **not**
-a release-gate result, and the results JSON records the filters.
+a release-gate result, and the results JSON records the filters. An unfiltered run leaves
+out the cases marked `release_gate: false` and says how many it left out
+(`onDemandSkipped` in the results JSON); it is still the release gate.
 
 ### What it needs
 
@@ -81,9 +90,11 @@ a release-gate result, and the results JSON records the filters.
 - A line per run, listing the tools called. `name!` means the stub layer refused the call.
   `name~` means an unstubbed MCP tool got the canned stand-in (also a stub hole).
   `name?` means a real read-only tool failed — a real outcome production would also
-  return (e.g. `date-resolve` rejecting an expression), not a harness gap.
-- Per case, once its runs are rated: its estimated spend, then per behavior its pass rate
-  and an example justification when it is under 100%.
+  return (e.g. `date-resolve` rejecting an expression), not a harness gap. A real
+  specialist's call carries its name: `calendar:calendar-list-events`. A run that timed out
+  while a specialist was still working prints `SLOW SPECIALIST` instead of `ERROR`.
+- Per case, once its runs are rated: its estimated spend (split by agent when more than one
+  ran), then per behavior its pass rate and an example justification when it is under 100%.
 - In the summary, each case's spend and the run's total, split by agent and judge. The
   results JSON holds the split per run, per case and for the suite (`usage`). These are
   estimates from registry prices; see
@@ -93,7 +104,8 @@ a release-gate result, and the results JSON records the filters.
 - `tests/scenarios/stub-coverage.json` (committed). See [Stub coverage](#stub-coverage).
 - **Exit 1** when any of these is true:
   - a critical behavior fully passed fewer than 80% of its runs;
-  - a run errored (timeout, `agent.error`, a `model.fallback`, seeded state not visible);
+  - a run errored (timeout, `agent.error`, a `model.fallback`, seeded state not visible),
+    including one that timed out on a slow specialist (reported on its own line);
   - the judge itself failed on a run (reported separately from model failures);
   - cleaning up a run's rows failed;
   - a case's worst run had stub holes above its allowance;
@@ -143,7 +155,8 @@ seeded rows, stubs, model calls and spend are found through its own case context
 3. **Capture** `tool.invoke` / `tool.result` and the coordinator's `agent.response` as the
    `system` layer. A `NO_REPLY` turn, or a reply Gate C holds for a non-principal, still
    ends the run. The runtime publishes an exact `NO_REPLY` as empty content with
-   `suppressDelivery` (#1732), so capture restores the sentinel.
+   `suppressDelivery` (#1732), so capture restores the sentinel. With real delegation,
+   each specialist's brief, calls and response too (`delegation-capture.ts`).
 4. **Clean up** every seeded row and the run's own conversation rows.
 5. **Rate:** apply each `check` in code and send the other behaviors to the judge, one run
    at a time. To try a cheaper judge on saved runs, see `pnpm rejudge` in
@@ -158,15 +171,20 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Bullpen threads | `BullpenService.openThread` | Runtimes see only this run's threads (the `wrapBullpenService` stack option). Deleted after the run. |
 | Scheduler jobs | the `scheduler-list` stub | Never written to the database. Within a run, a later list replays that run's stubbed creates, edits and cancels onto the stub. |
 | The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
+| Specialists' conversations (real delegation) | | The same rows for each `scenario-delegate-…` conversation. A specialist the run abandoned is cleaned again when it finishes. |
+| Delegation claims (real delegation) | production's `pending_delegations` claims | Rows whose origin is the run's conversation or whose delegate conversation is a specialist's are deleted. |
+| Entries a specialist changes or registers | the run-scoped outbound-context view | Every read or write outside the run's entries finds nothing. A registered entry joins the run's and is deleted with them. |
 | Prior history | | Withheld. *Contact recent history* (a sender's turns from other conversations) returns nothing during a run (the `wrapWorkingMemory` stack option), so a case never inherits smoke runs' or the real principal's turns from the dev database. |
 
 `audit_log` keeps the runs' events. It is append-only by design.
 
 **Interrupted runs.** Every fixture carries a marker: contacts a `notes` tag, their KG
 nodes `source = 'scenario-test'` (the suite mints each fixture's node itself, so a contact
-never adopts a real node), entries a `scenario-origin-` conversation id, threads a
-`scenario:` `source_message_id`. On Ctrl-C/SIGTERM, and at every start-up, the CLI sweeps
-anything carrying those markers — and nothing else.
+never adopts a real node), entries a `scenario-origin-` conversation id (or, registered
+during a run, the run's or a specialist's), threads a `scenario:` `source_message_id`,
+specialist conversations a `scenario-delegate-` id, and delegation claims those
+conversations. On Ctrl-C/SIGTERM, and at every start-up, the CLI sweeps anything carrying
+those markers — and nothing else.
 
 ### Stubs, and why nothing can send
 
@@ -197,11 +215,21 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
 
 This sits on top of the test-mode stack's own guarantee: a gateway with no transport
 client (spec 16). So a run cannot send, and `tests/unit/scenarios/stub-layer.test.ts`
-asserts that unstubbed and stubbed sends never reach the real tool. `delegate` is always
-stubbed, so no specialist runs: the suite tests the coordinator's decisions.
+asserts that unstubbed and stubbed sends never reach the real tool, from the coordinator
+or from a real specialist. Unless a case sets `delegation: real`, `delegate` is always
+stubbed, so no specialist runs.
+
+**Every agent gets the same layer.** A real specialist's calls are answered from the run's
+stubs and refused by the same rules. A stub can be scoped to one agent with `agent:`
+(`agent: calendar` on a `calendar-list-events` stub answers the specialist, not the
+coordinator); an unscoped stub answers every agent.
 
 **Stub sets** live in `stubs/`. A case can name some in `stub_sets`, and its own stubs for
 a tool are matched first.
+
+- `voice-profile` answers `executive-profile-get`, for an agent that drafts in the
+  principal's voice. `calendar-office` is a quiet calendar for a real calendar specialist,
+  scoped to it: calendars, events, free time, conflicts and its stored rules (none).
 
 - `defaults` applies to **every** case. It is an empty office: reads that test mode
   can't serve (`email-list` with no mail client, `task-list`, `doc-search`, …) answer as a
@@ -257,6 +285,8 @@ name: transfer-ownership trivial yes      # unique
 description: >                            # shown to the judge
   …
 tags: [outbound-context, routing]
+delegation: stubbed                       # stubbed (default) | real — see Real delegation
+release_gate: true                        # optional; false = only on demand
 runs: 5                                   # optional; CLI --runs overrides
 timeout_seconds: 300                      # optional
 known_failure: { issue: "#1234", reason: … }   # optional; reported, not gated
@@ -278,6 +308,10 @@ seed:
       delegation_hint: ceo-inbox
       metadata: { bind_reply: true }      # optional
       sent_minutes_ago: 12                # optional, default 10
+      resume:                             # optional → metadata.resume_token, {{resume_token:<key>}}
+        agent: research-analyst           #   a relayed clarification (encodeResumeToken)
+        original_task: …
+        context: …
   bullpen:                                # → {{thread:<key>}}
     - key: brief
       topic: Q3 competitor brief
@@ -290,13 +324,17 @@ inbound:
   channel: cli                            # principal only; default cli
   thread: brief                           # bullpen only
   content: "Yes"
-  email: { nylas_message_id: …, auto_generated: false }   # email inbound only
+  email: { nylas_message_id: …, account: ops, auto_generated: false }   # email inbound only
 tool_stubs:
   delegate:
     - match: { agent: ceo-inbox }         # subset match; null = argument absent
       return: { agent: ceo-inbox, response: Sent. }
     - match: {}
       error: specialist unavailable       # a scripted failure
+  calendar-list-events:
+    - agent: calendar                     # only this agent's calls (real delegation)
+      match: {}
+      return: { events: [], count: 0 }
 expected_behaviors:
   - id: routes_to_owner
     weight: critical                      # critical | important | nice-to-have
@@ -306,13 +344,25 @@ expected_behaviors:
       with: { agent: ceo-inbox }          #     | reply: no_reply | not_no_reply
       contains: { task: "{{entry:offsite}}" }   # | reply_excludes: [regex]
       max: 1                              #     | reply_excludes_internal_names: true
-      success: true
+      success: true                       #     | briefed: <agent> + brief_contains: [..]
+      returns: { outbound_entry: { status: released } }   # | any_of: [checks]
 failure_modes:
   - Replies "Done!" without delegating
 ```
 
 `success` is only valid on `called`. It keeps calls whose result has that value, and
 `min` / `max` count only those calls. A refused send still counts for `not_called`.
+
+`returns` (on `called` and `not_called`) keeps calls that succeeded with result data
+containing it, as a nested subset: `not_called: [delegate]` with `returns: { declined: true }`
+passes unless a specialist declined. `called` may list several tools; their matching calls
+are counted together (`called: [signal-send, email-send]` with `max: 1`).
+
+`called`, `not_called` and `order` read the coordinator's calls. With real delegation they
+can read another agent's (`agent: calendar`) or every agent's (`agent: any`). `briefed:
+<agent>` passes when a real run of that specialist received a brief containing every string
+in `brief_contains`: the brief after the delegate handler's additions, such as the
+`Message ID:` and `Account:` lines (#1909) or a resume's rebuilt brief.
 
 `{{principal_contact_id}}` resolves too. A placeholder that names nothing the case seeds is
 a load error.
@@ -340,3 +390,65 @@ refused in `description` and `failure_modes`, which reach the judge as written: 
 
 After adding a case, run it (`--case`, a few runs) so the CLI records its stub coverage,
 and commit the updated `stub-coverage.json`.
+
+## Real delegation
+
+`delegation: real` (#2027) lets `delegate` run. Production's handler does everything it does
+in production: it links and settles the `[ACTIVE OUTBOUND CONTEXT]` entry the reply answers,
+stamps the email `Message ID` / `Account` lines into the brief, takes the
+`pending_delegations` dispatch claim, publishes the `agent.task` with the forwarded
+originator (so the specialist builds its requester-identity block, #1871), and waits for
+the answer with production's wait and timeout. The specialist runs in the same case context,
+under the same stub layer.
+
+What test mode adds for it, and nothing else:
+
+- The specialist's conversation is named `scenario-delegate-…` (a `conversation_id` the
+  model chose is kept within the run, never shared across runs), so the run can clean it.
+- The ExecutionLayer gets an outbound-context service narrowed to the run's own entries
+  (`scopedOutboundContext`, `seed.ts`), and production's delegation claims
+  (`delegationClaims` on the test-mode stack).
+- `delegate`, `context-bridge-keep-open` and `context-bridge-clear` run unstubbed in such a
+  run (`REAL_IN_DELEGATION`, `stub-layer.ts`). The two context-bridge tools write only the
+  run's entries. Every other rule is unchanged: a specialist's unstubbed send is refused.
+  `context-bridge-release` still needs the task repo, which test mode never has, so a case
+  stubs it.
+
+**Timeouts.** A real-delegation run waits for the longest delegate wait any specialist gets
+(from `expected_duration_seconds`, or `delegate.defaultTimeoutMs`), plus two minutes, unless
+the case sets `timeout_seconds`. So a slow specialist normally ends as production's delegate
+timeout result (`failed`, `reason: timeout`, `possibly_succeeded`), which the case scores
+like any other result. If the run's own wait runs out first while a `delegate` call is still
+waiting, the run is recorded with `timeoutKind: delegate_wait` and reported as a slow
+specialist, apart from a stuck run (`timeoutKind: run`). Both fail the gate: neither run
+was scored.
+
+**Cost.** Each specialist turn is several more model calls, and the specialists' spend is
+reported per agent: per case in the run output, per run and case in the results JSON
+(`usage.byAgent`), and for the suite in the summary. On the 2026-10-09 baseline (below), a
+real-delegation run cost $0.01 to $0.04 and took 15 to 120 seconds, about twice a stubbed
+run.
+
+### Which real-delegation cases gate a release
+
+The release gate runs three of them (`release_gate` left at its default): the paths no
+stubbed case can reach, behind bugs that took the coordinator down or lost the principal's
+answer.
+
+| Case | In the gate | Why |
+|---|---|---|
+| 16a transfer ownership | yes | The entry's lifecycle across two agents (#1972): the platform releases it, neither agent does it again. |
+| 16d clarification resume | yes | The resume token round trip: only the real handler rebuilds the brief (#1858, #1893). |
+| 16f principal request over email | yes | The specialist treats the principal's request as the principal's (#1871, a P1 outage). |
+| 16b calendar borrow | on demand | The relay half is covered by stubbed cases; the identity half by 16f. |
+| 16c calendar read fails | on demand | Failure honesty (#1854); a stubbed failing result covers the coordinator half. |
+| 16e email identifiers | on demand | The stamping is deterministic and unit-tested (`delegate.test.ts`); this checks it end to end. |
+| 16g one message per item | on demand | Duplicate sends (#1860, #1917); the stubbed cases cover the coordinator's own sends. |
+
+Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before changing a
+specialist prompt or the delegate handler, run `--tags real-delegation`.
+
+Baseline: `deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each,
+2026-10-09, commit BASELINE_COMMIT.
+
+BASELINE_TABLE

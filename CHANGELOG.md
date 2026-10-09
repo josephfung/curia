@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Scenario real delegation** — `delegation: real` runs the specialist under the same stubs; checks can target agents. (#2027)
+- **Scenario cases 16a–16g** — coordinator → specialist round trips; three join the release gate. (#2027)
 - **`ToolContext` (public API)** — optional `signal` and `deadline` let a handler cancel requests at its timeout. (#2083)
 - **`delegate` (public API)** — `sent` lists what the specialist actually sent; `draft_emails` carries composed, unsent email. (#2055)
 - **`agent.response` (public API)** — optional `sends` lists the successful message and invite sends of a task. (#2055)

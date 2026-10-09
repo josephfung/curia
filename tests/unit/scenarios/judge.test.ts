@@ -63,6 +63,43 @@ describe('formatJudgeInput', () => {
   });
 });
 
+describe('formatJudgeInput with real delegation (#2027)', () => {
+  const scenario: ScenarioCase = {
+    name: 'real', description: 'Calendar really runs.', tags: [], delegation: 'real', releaseGate: true, sourceFile: 'x.yaml',
+    seed: { contacts: [], outboundContext: [], bullpen: [] },
+    inbound: { from: 'principal', content: "What's on tomorrow?" },
+    toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],
+  };
+  const base: ScenarioRun = {
+    runIndex: 0, inboundContent: "What's on tomorrow?", refs: {}, durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [],
+    reply: 'Three meetings tomorrow.',
+    toolCalls: [
+      { agentId: 'coordinator', name: 'delegate', input: { agent: 'calendar' }, disposition: 'passthrough', result: { success: true, data: { response: 'Three' } } },
+      { agentId: 'calendar', name: 'calendar-list-events', input: {}, disposition: 'stubbed', result: { success: true, data: { count: 3 } } },
+    ],
+  };
+
+  it('labels the specialists\' calls and shows each brief and response', () => {
+    const text = formatJudgeInput(scenario, {
+      ...base,
+      delegations: [
+        { agentId: 'calendar', conversationId: 'c', brief: 'Read tomorrow.', response: 'Three meetings.', outcome: 'answered' },
+        { agentId: 'calendar', conversationId: 'c2', brief: 'Again.', response: null, outcome: 'in_flight' },
+      ],
+    }, behaviors);
+    expect(text).toContain('1. delegate');
+    expect(text).toContain('2. [calendar] calendar-list-events');
+    expect(text).toContain('## Specialist runs');
+    expect(text).toContain('### 1. calendar\nBrief received:\nRead tomorrow.');
+    expect(text).toContain('Response:\nThree meetings.');
+    expect(text).toContain('Response: (none: still working when the run ended)');
+  });
+
+  it('leaves the section out for a stubbed-delegation run', () => {
+    expect(formatJudgeInput(scenario, base, behaviors)).not.toContain('## Specialist runs');
+  });
+});
+
 describe('extractJsonObject', () => {
   it('unwraps a fenced block or surrounding prose', () => {
     expect(extractJsonObject('```json\n{"scores": []}\n```')).toBe('{"scores": []}');

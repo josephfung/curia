@@ -159,3 +159,51 @@ describe('internal names', () => {
     expect(evaluateCheck({ kind: 'reply_excludes_internal_names' }, run([], 'I asked my research team.'), c).rating).toBe('PASS');
   });
 });
+
+describe('real delegation checks (#2027)', () => {
+  const by = (agentId: string | undefined, name: string, input: Record<string, unknown> = {}, data: unknown = {}): CapturedToolCall => ({
+    ...(agentId ? { agentId } : {}), name, input, disposition: 'stubbed', result: { success: true, data },
+  });
+  const r = {
+    ...run([
+      by('coordinator', 'delegate', { agent: 'calendar' }, { agent: 'calendar', outbound_entry: { id: 'e-1', status: 'released' } }),
+      by('calendar', 'calendar-list-events'),
+      by('calendar', 'signal-send', { recipient: 'principal' }),
+      // A transcript saved before #2027 has no agentId: the coordinator's.
+      by(undefined, 'email-send', { to: 'principal' }),
+    ]),
+    delegations: [{ agentId: 'calendar', conversationId: 'scenario-delegate-1', brief: 'Message ID: m-1\nAccount: ops\n\nFind a slot.', response: 'Tuesday 2pm', outcome: 'answered' as const }],
+  };
+
+  it('reads the coordinator\'s calls unless the check names an agent', () => {
+    expect(evaluateCheck({ kind: 'called', tool: 'calendar-list-events' }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'called', tool: 'calendar-list-events', agent: 'calendar' }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'called', tool: 'email-send' }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'not_called', tools: ['signal-send'] }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'not_called', tools: ['signal-send'], agent: 'any' }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'order', tools: ['delegate', 'email-send'] }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'order', tools: ['delegate', 'calendar-list-events'], agent: 'any' }, r, ctx).rating).toBe('PASS');
+  });
+
+  it('counts the tools of a multi-tool called check together', () => {
+    const sends = ['signal-send', 'email-send', 'sms-send'];
+    expect(evaluateCheck({ kind: 'called', tool: sends, agent: 'any', min: 2, max: 2 }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'called', tool: sends, agent: 'any', max: 1 }, r, ctx).rating).toBe('MISS');
+  });
+
+  it('matches a call\'s result data as a nested subset with returns', () => {
+    expect(evaluateCheck({ kind: 'called', tool: 'delegate', returns: { outbound_entry: { status: 'released' } } }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'called', tool: 'delegate', returns: { outbound_entry: { status: 'kept' } } }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'not_called', tools: ['delegate'], returns: { declined: true } }, r, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'not_called', tools: ['delegate'], returns: { agent: 'calendar' } }, r, ctx).rating).toBe('MISS');
+  });
+
+  it('reads the brief a real specialist received with briefed', () => {
+    expect(evaluateCheck({ kind: 'briefed', agent: 'calendar', contains: ['message id: m-1', 'Account: ops'] }, r, ctx).rating).toBe('PASS');
+    const missing = evaluateCheck({ kind: 'briefed', agent: 'calendar', contains: ['Message ID: m-1', 'Account: curia'] }, r, ctx);
+    expect(missing).toMatchObject({ rating: 'MISS', justification: expect.stringContaining('none has Account: curia') });
+    expect(evaluateCheck({ kind: 'briefed', agent: 'ceo-inbox', contains: ['x'] }, r, ctx).justification).toMatch(/no real ceo-inbox run/);
+    // A stubbed-delegation run has no specialist runs at all.
+    expect(evaluateCheck({ kind: 'briefed', agent: 'calendar', contains: ['x'] }, run([]), ctx).rating).toBe('MISS');
+  });
+});
