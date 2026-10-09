@@ -3,9 +3,13 @@
 # #1860: a Signal send was followed by a reply narrating it. On a live principal turn the
 # reply is the message, so any send to the principal on top of it is the duplicate. Here
 # ceo-inbox really runs and finds Sam's answer; every send is stubbed to succeed for every
-# agent, so the duplicate is available. Rules: agents/coordinator.yaml "How you speak" (a
-# specialist's work is reported as your own); delegate's `sent` field and its next_step
-# (src/agents/prompts/delegate-result-guidance.ts, #2055).
+# agent, so the duplicate is available. Rules: asks_ceo_inbox and no_extra_message,
+# agents/coordinator.yaml "Principal inbox requests (borrow-then-answer)" and the Routing
+# Decision's "Borrow-then-answer" (compose the reply yourself; the conversation stays
+# yours). no_send_narration and the voice checks, "How you speak" (a specialist's work is
+# yours when you report it) and delegate's `sent` field, with its NOTHING_SENT next_step
+# when the specialist's text talks about a send it did not make
+# (src/agents/prompts/delegate-result-guidance.ts, src/agents/specialist-answer.ts, #2055).
 name: real delegation one message per item
 description: >
   The principal asks whether Sam Rivera has answered about the Q3 offsite planning session.
