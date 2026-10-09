@@ -295,6 +295,50 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
     expect(identity).toMatchObject({ source: 'outbound_recipient', verified: false });
   });
 
+  it('records an email-reply recipient as verified email_participant, so a later send by contact ID goes out (#2071)', async () => {
+    const address = 'reply.person@cold.example';
+    const created = await h.gateway.send(
+      {
+        channel: 'email',
+        to: address,
+        subject: 'Re: Venue',
+        body: 'The 14th works.',
+        replyToMessageId: 'msg-1',
+      },
+      { recipientSource: 'email_participant' },
+    );
+    expect(created.success).toBe(true);
+
+    const resolved = await h.contacts.resolveByChannelIdentity('email', address);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.tier).toBe('known');
+    const found = await h.contacts.getContactWithIdentities(resolved!.contactId);
+    const identity = found!.identities.find((i) => i.channelIdentifier === address);
+    expect(identity).toMatchObject({ source: 'email_participant', verified: true });
+
+    h.nylasSend.mockClear();
+    const result = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(resolved!.contactId)));
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual([address]);
+  });
+
+  it('replyToMessageId alone does not verify the new contact (#2071)', async () => {
+    const address = 'threaded.person@cold.example';
+    const created = await h.gateway.send({
+      channel: 'email',
+      to: address,
+      subject: 'Re: Venue',
+      body: 'The 14th works.',
+      replyToMessageId: 'msg-1',
+    });
+    expect(created.success).toBe(true);
+
+    const resolved = await h.contacts.resolveByChannelIdentity('email', address);
+    const found = await h.contacts.getContactWithIdentities(resolved!.contactId);
+    const identity = found!.identities.find((i) => i.channelIdentifier === address);
+    expect(identity).toMatchObject({ source: 'outbound_recipient', verified: false });
+  });
+
   it('so a later send by reference to that contact fails closed until an address is verified', async () => {
     await h.gateway.send({ channel: 'email', to: 'new.person@cold.example', subject: 'Hi', body: 'Hello.' });
     const resolved = await h.contacts.resolveByChannelIdentity('email', 'new.person@cold.example');

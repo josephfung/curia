@@ -279,9 +279,10 @@ interface ContactServiceBackend {
 // when the identifier occurs in text the model did not write (a message a person sent, a source-tool
 // result), so a typo is never verified (#2061, ADR-047). A new writer of either source stores
 // unverified unless it runs that check.
-// outbound_recipient is NOT auto-verified — the address came from LLM-generated tool input on a
-// first-time send, the opposite of a mechanical extraction (#2033, ADR-047). An agent re-stating it
-// with contact-link-identity verifies it (#2041).
+// outbound_recipient is NOT auto-verified — the address was not read from a message
+// header (#2033, ADR-047). email-reply records email_participant instead, which is
+// auto-verified, because its To is the From header of the message being answered (#2071).
+// An agent re-stating an outbound_recipient address with contact-link-identity verifies it (#2041).
 // Only self_claimed cannot be force-verified.
 const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'ceo_stated',

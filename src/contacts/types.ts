@@ -86,9 +86,10 @@ export type IdentitySource =
   // Written, verified, only after the duplicate check passes and the identifier is found
   // in a message a person sent or a source-tool result (#2061); see ADR-047.
   | 'agent_stated'
-  // First-time outbound recipient the gateway recorded after a send
-  // (promoteOrCreateRecipientContact). An agent typed this address; nobody
-  // stated or confirmed it, so it is not auto-verified (#2033, ADR-047).
+  // First-time outbound recipient the gateway recorded when the caller did not
+  // name another source (promoteOrCreateRecipientContact): send-draft, or a raw
+  // send before #2041. Not auto-verified (#2033, #2071, ADR-047). email-reply
+  // passes email_participant instead, because its To is a message From header.
   | 'outbound_recipient';
 
 // -- Identity status --

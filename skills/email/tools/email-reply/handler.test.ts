@@ -98,6 +98,12 @@ describe('EmailReplyHandler', () => {
       expect((result.data as Record<string, unknown>).to).toBe('alice@example.com');
       expect((result.data as Record<string, unknown>).subject).toBe('Re: Project update');
     }
+    // To was copied from the message From. The gateway records that provenance
+    // only when the caller names it (#2071).
+    expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'alice@example.com', replyToMessageId: 'nylas-msg-1' }),
+      expect.objectContaining({ recipientSource: 'email_participant' }),
+    );
   });
 
   it('returns error when gateway blocks the reply', async () => {

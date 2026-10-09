@@ -5,6 +5,7 @@ Status: Accepted
 Amended: 2026-10-07 — no raw-address path; agent-entered contacts (#2041)
 Amended: 2026-10-08 — agent-entered identifiers are verified by provenance (#2061)
 Amended: 2026-10-08 — the principal's mailbox drafts address recipients by reference; a raw address needs a source (#2053)
+Amended: 2026-10-09 — `email-reply` records a new recipient as verified `email_participant` (#2071)
 
 ## Context
 
@@ -172,7 +173,11 @@ When a filter blocks a send (identity gate, export block, PII redactor error, co
 
 ### Gateway-created contacts get honest provenance
 
-`promoteOrCreateRecipientContact` records a first-time outbound recipient with source `outbound_recipient`, not `ceo_stated`. That source is not auto-verified: on a raw send the address came from LLM-generated tool input, the opposite of the mechanical extraction that `email_participant` relies on. `agent_called` is not such an extraction either: `contact-register`, callable by ceo-inbox only, records it from tool input, verified only when the provenance check finds it (#2061). With the raw inputs retired (#2041), the gateway creates such a contact after any successful gateway send to an address with no contact record (send-draft, email-reply). An agent re-stating the address with contact-link-identity verifies it, after the duplicate check.
+`promoteOrCreateRecipientContact` records a first-time outbound recipient. The source is whatever the caller passes, and the default is `outbound_recipient`, not `ceo_stated`. That default is not auto-verified: on a raw send the address came from LLM-generated tool input, the opposite of the mechanical extraction that `email_participant` relies on, and a draft's To may have been typed by hand. The principal approving a send-draft is not a check of the address. `agent_called` is not such an extraction either: `contact-register`, callable by ceo-inbox only, records it from tool input, verified only when the provenance check finds it (#2061).
+
+`send()` takes `recipientSource`. A caller that does not set it fails closed to `outbound_recipient`. `send-draft` does not set it. `email-reply` passes `email_participant` (#2071): its To is the From header of the message being answered, copied by the handler, and no agent typed it. That source is auto-verified, the same as an inbound sender, so a later send by contact ID resolves. The risk matches inbound mail: a forged From header would give a verified identity. The gateway cannot infer this from `replyToMessageId`, because `email-send` accepts that field too. Only the To is recorded this way. CC recipients are not promoted. A queued email keeps the option on the stored payload, so a flush after reconnect records the same source. A payload without it, including rows queued before this change, stays `outbound_recipient`.
+
+With the raw inputs retired (#2041), the gateway creates a contact after any successful gateway send to an address with no contact record (send-draft, email-reply). An `outbound_recipient` identity is verified when an agent re-states the address with contact-link-identity, after the duplicate check, or when the principal confirms it.
 
 The tier of such a contact is `known` (#2040). No agent typed the address on either remaining path:
 - `send-draft` runs only on a principal-originated task (ADR-017). `email-draft-save` addresses by contact ID, so a draft whose To has no contact was written outside Curia, in practice by the principal;
@@ -201,7 +206,8 @@ Option A is not added. What send-by-reference does not cover:
 - An address the model already has is never retyped on the reference path, for the principal and every other contact, on every channel.
 - **Breaking change to four `tool.json` input surfaces.** `to`, `cc` and `recipient` no longer accept addresses. A pending approval stored before the deploy with an address in `to` fails when approved, and the error names `contact-create`. That window is 48 hours.
 - Success payloads are unchanged (`to`, `delivered_to` carry the resolved address, which reply-lock and the activity log read) and gain `contact_id` when the agent passed a contact UUID.
-- A contact the gateway created has an unverified identity, so a later send to it by reference fails closed. Its address came from a raw send before #2041, or from a gateway send (send-draft, email-reply) to an address with no contact. An agent re-states the address with contact-link-identity (after the duplicate check), or the principal verifies it. An inbound reply does not verify it (#2040).
+- A contact the gateway created from `send-draft`, or from a raw send before #2041, has an unverified `outbound_recipient` identity, so a later send to it by reference fails closed. An agent re-states the address with contact-link-identity (after the duplicate check), or the principal verifies it. An inbound reply does not verify it (#2040).
+- A contact `email-reply` created has a verified `email_participant` identity, so a later send by contact ID resolves (#2071). The risk matches inbound mail: a forged From header would give a verified identity. The tier stays `known` either way.
 - **Breaking change (#2041):** the four send skills' raw-address inputs and email-draft-save's typed to are gone. An approval stored before the deploy with a raw input fails when approved, with a message naming contact-create. That window is 48 hours.
 - A send by reference costs a contact read before the gates and another in the skill, plus one more if an approval is filed.
 - An approval resolves the reference again when it runs, up to 48 hours later. If the contact's primary changed in between, an unhinted send goes to the contact's new address, which is another verified address of the same person. A hinted approval records the identity row and the name that was resolved (`send_resolution`, not skill input). Replay sends only when both still match. A renamed or removed label, or a fallback onto a different unlabelled address, fails closed before the skill runs. A hint that originally selected the single unlabelled address still sends while that same row is the one resolved.

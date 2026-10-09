@@ -261,6 +261,8 @@ describe('OutboundGateway queue (#1380)', () => {
     expect(result.success).toBe(true);
     expect(result.queued).toBe(true);
     expect(outboundQueue.enqueue).toHaveBeenCalledOnce();
+    // No recipientSource: a queued send that did not opt in stays the default (#2071).
+    expect(outboundQueue.enqueue.mock.calls[0]![0]).not.toHaveProperty('recipientSource');
     await vi.advanceTimersByTimeAsync(30_000);
     expect(outboundQueue.listPending).toHaveBeenCalledWith('email');
     vi.useRealTimers();
@@ -298,6 +300,101 @@ describe('OutboundGateway queue (#1380)', () => {
     expect(result.success).toBe(false);
     expect(result.queued).toBeUndefined();
     expect(outboundQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('keeps email-reply provenance on a queued payload and applies it on flush (#2071)', async () => {
+    vi.useFakeTimers();
+    const nylasClient = {
+      sendMessage: vi.fn().mockRejectedValue(new Error('fetch failed')),
+    };
+    const outboundQueue = {
+      enqueue: vi.fn().mockResolvedValue({ id: 'q-reply' }),
+      listPending: vi.fn().mockResolvedValue([]),
+      deleteByIds: vi.fn(),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', nylasClient as never]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['email', () => true]]),
+    });
+
+    try {
+      const queued = await gateway.send(
+        {
+          channel: 'email',
+          to: 'alice@example.com',
+          subject: 'Re: Venue',
+          body: 'The 14th works.',
+          replyToMessageId: 'msg-1',
+        },
+        { recipientSource: 'email_participant' },
+      );
+      expect(queued.queued).toBe(true);
+      expect(outboundQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        to: 'alice@example.com',
+        recipientSource: 'email_participant',
+      }));
+      await vi.advanceTimersByTimeAsync(30_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      createContact: vi.fn().mockResolvedValue({ id: 'reply-contact' }),
+      linkIdentity: vi.fn().mockResolvedValue(undefined),
+    };
+    const flushNylas = { sendMessage: vi.fn().mockResolvedValue({ id: 'sent-reply' }) };
+    const flushQueue = {
+      enqueue: vi.fn(),
+      listPending: vi.fn().mockResolvedValue([{
+        id: 'q-reply',
+        channel: 'email',
+        recipient: 'alice@example.com',
+        payload: {
+          channel: 'email' as const,
+          to: 'alice@example.com',
+          subject: 'Re: Venue',
+          body: 'The 14th works.',
+          replyToMessageId: 'msg-1',
+          recipientSource: 'email_participant',
+        },
+        enqueuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      }]),
+      deleteByIds: vi.fn().mockResolvedValue(1),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+    const flushGateway = new OutboundGateway({
+      nylasClients: new Map([['curia', flushNylas as never]]),
+      contactService: contactService as unknown as ContactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: flushQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['email', () => true]]),
+    });
+
+    const flushed = await flushGateway.flushChannel('email');
+    expect(flushed).toEqual({ flushed: 1, skipped: false });
+    expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'email_participant',
+      tier: 'known',
+    }));
+    expect(contactService.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'email_participant',
+      channelIdentifier: 'alice@example.com',
+    }));
+    // The stored field is provenance, not a Nylas option.
+    const sent = flushNylas.sendMessage.mock.calls[0]![0] as Record<string, unknown>;
+    expect(sent).not.toHaveProperty('recipientSource');
   });
 
   it('flushes queued Signal messages incrementally (delete after each success)', async () => {

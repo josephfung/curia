@@ -155,6 +155,10 @@ export class EmailReplyHandler implements ToolHandler {
         taskEventId: ctx.taskEventId,
         conversationId: ctx.conversationId,
         humanApproved: ctx.humanApproved,
+        // To is original.from, copied from the message being answered. The
+        // gateway cannot infer that: email-send also sets replyToMessageId.
+        // A contact created for this address is a verified email_participant (#2071).
+        recipientSource: 'email_participant',
         ...(attachmentsParsed.length > 0
           ? {
             reExecRecipe: {

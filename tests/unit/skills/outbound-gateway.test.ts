@@ -1475,6 +1475,72 @@ describe('OutboundGateway contact promotion on successful send', () => {
     // (pipeline is optional and not provided in this test, so no scoring call fires)
   });
 
+  it('records an email-reply recipient as email_participant when the caller says so (#2071)', async () => {
+    const nylasClient = {
+      sendMessage: vi.fn().mockResolvedValue({ id: 'sent-reply' }),
+    } as unknown as NylasClient;
+
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      createContact: vi.fn().mockResolvedValue({ id: 'reply-contact-id' }),
+      linkIdentity: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ContactService;
+
+    const gateway = makeGateway(contactService, nylasClient);
+    const result = await gateway.send(
+      { ...baseRequest, replyToMessageId: 'msg-1' },
+      { recipientSource: 'email_participant' },
+    );
+
+    expect(result.success).toBe(true);
+    // The option is explicit. replyToMessageId alone must not select the source:
+    // email-send sets that field too.
+    expect(contactService.createContact).toHaveBeenCalledWith(expect.objectContaining({
+      tier: 'known',
+      source: 'email_participant',
+    }));
+    expect(contactService.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'reply-contact-id',
+      channel: 'email',
+      channelIdentifier: 'donna@example.com',
+      source: 'email_participant',
+    }));
+    // Auto-verify comes from the source, not an explicit verified flag.
+    expect((contactService.linkIdentity as ReturnType<typeof vi.fn>).mock.calls[0]![0]).not.toHaveProperty('verified');
+  });
+
+  it('ignores recipientSource on a non-email send (#2071)', async () => {
+    const signalClient = {
+      send: vi.fn().mockResolvedValue('ts-1'),
+    };
+    const contactService = {
+      resolveByChannelIdentity: vi.fn().mockResolvedValue(null),
+      createContact: vi.fn().mockResolvedValue({ id: 'sms-contact' }),
+      linkIdentity: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ContactService;
+    const contentFilter = { check: vi.fn().mockResolvedValue({ passed: true, findings: [] }) } as unknown as OutboundContentFilter;
+    const bus = { publish: vi.fn().mockResolvedValue(undefined), subscribe: vi.fn() } as unknown as EventBus;
+    const gateway = new OutboundGateway({
+      signalClient: signalClient as unknown as import('../../../src/channels/signal/signal-rpc-client.js').SignalRpcClient,
+      signalPhoneNumber: '+15555550000',
+      contactService,
+      contentFilter,
+      bus,
+      logger: createLogger('error'),
+    });
+
+    const result = await gateway.send(
+      { channel: 'signal', recipient: '+15555550100', message: 'hi' },
+      { recipientSource: 'email_participant' },
+    );
+
+    expect(result.success).toBe(true);
+    expect(contactService.linkIdentity).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'outbound_recipient',
+      channel: 'signal',
+    }));
+  });
+
   it('does not promote a contact that is already at tier="known"', async () => {
     const nylasClient = {
       sendMessage: vi.fn().mockResolvedValue({ id: 'sent-3' }),
