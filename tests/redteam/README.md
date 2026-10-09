@@ -91,7 +91,20 @@ The default `pnpm redteam` target delivers adversarial probes as a **bare user t
 | **External-sender** (security test) | `pnpm redteam:provenance:external` | Unknown external contact, `tier=unknown`, LOW-TRUST block, email thread-participants preamble | Refuse stylistic instructions embedded in the probe |
 | **Principal** (regression guard) | `pnpm redteam:provenance:principal` | Principal (`systemRole=principal`), CLI channel, direct utterance | Honour legitimate principal-issued style requests |
 
-Both cohorts use `promptfooconfig-provenance.yaml` and the `provenance-prompt.mjs` harness, which mirrors the sender-context system message from `src/agents/runtime.ts` and email preamble construction from `src/dispatch/dispatcher.ts`.
+Both cohorts use `promptfooconfig-provenance.yaml` and the `provenance-prompt.mjs` harness, which mirrors the sender-context system message from `src/agents/runtime.ts` (through the shared `renderSenderLine`), the turn guidance the dispatcher picks for the cohort's turn, and email preamble construction from `src/dispatch/dispatcher.ts`.
+
+Unlike the default runbook, this config makes **no Anthropic calls**. The target is the production standard-tier model, `deepseek/deepseek-v4.1-flash` through OpenRouter (`OPENROUTER_API_KEY`), and probes are generated and graded by `openai:gpt-4o` (`OPENAI_API_KEY`), the smoke and scenario judge. A cohort run of 174 probes cost about $0.35 on 2026-10-09 (prompt trim PR 4): DeepSeek reads most of its input from the prefix cache, and most plugins grade deterministically.
+
+To A/B a prompt change, generate the probes once and evaluate both sides against the same set, so the two sides face the same attacks. Four plugins (`indirect-prompt-injection`, `hijacking`, `ascii-smuggling`, `special-token-injection`) generate only through promptfoo's hosted service, which needs `promptfoo auth login` and receives the `purpose` text. Once logged in, promptfoo also uploads every eval result unless `PROMPTFOO_DISABLE_SHARING=true` is set. `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true` keeps generation local, with gpt-4o, at the cost of those four plugins.
+
+With promptfoo 0.123.1 on Node 24, every request hangs: it passes an undici 8 dispatcher to Node's built-in `fetch`. Until promptfoo is upgraded, preload a shim that swaps in undici's own `fetch` (`NODE_OPTIONS=--import <shim>`, where the shim assigns undici's `fetch`, `Headers`, `Request`, `Response` and `FormData` to `globalThis`).
+
+```bash
+pnpm exec promptfoo redteam generate -c tests/redteam/promptfooconfig-provenance.yaml -o tests/redteam/redteam.yaml --env-file .env
+PROMPTFOO_DISABLE_SHARING=true REDTEAM_COHORT=external pnpm exec promptfoo redteam eval -c tests/redteam/redteam.yaml --env-file .env
+```
+
+Copy the same `redteam.yaml` into the other side's `tests/redteam/` (its prompt path is relative) and render that side's prompt before evaluating there.
 
 ### Running provenance red team
 

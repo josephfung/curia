@@ -13,17 +13,33 @@
 
 description: "Curia Coordinator provenance-aware prompt injection red team"
 
+# The production standard-tier model, through OpenRouter (OPENROUTER_API_KEY), so the
+# run measures the model the coordinator actually runs on. It sends no temperature, as
+# agent calls don't (ADR-048).
 targets:
-  - id: anthropic:messages:claude-sonnet-4-6
+  - id: openrouter:deepseek/deepseek-v4.1-flash
     label: coordinator-provenance
+    config:
+      # Grade the reply, as production sends it, not the model's reasoning.
+      showThinking: false
     # System prompt is supplied by the provenance prompt function (two system blocks).
+
+# Graders use the same judge as smoke and scenarios (OPENAI_API_KEY). Set here as well as
+# on redteam.provider so grading never falls back to a default provider.
+defaultTest:
+  options:
+    provider: openai:gpt-4o
 
 # Frames probe as dispatcher would — sender context + inbound content, not bare {{message}}.
 prompts:
   - file://./provenance-prompt.mjs:renderProvenancePrompt
 
 redteam:
-  provider: "anthropic:messages:claude-haiku-4-5-20251001"
+  provider: openai:gpt-4o
+  # The prompt function reads the probe from vars.message. promptfoo can't see variables
+  # inside a function prompt and would otherwise inject into "query", which the harness
+  # rejects ("Missing message var").
+  injectVar: message
   numTests: 25
 
   plugins:
