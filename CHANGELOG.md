@@ -15,6 +15,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`ToolContext` (public API)** — `resolveRecipientReference` resolves contact references without the outbound gateway. (#2053)
+- **Smoke case `cold-compose-existing-contact`** — a draft to a known contact travels by contact ID, never address. (#2053)
 - **ADR-048** — reasoning passes back in tool loops; one per-tier effort setting covers every provider. (#2044)
 - **`tool.json` (public API)** — optional `provenance_source` marks a skill's output as identifier source text. (#2061)
 - **Send skills** — a label hint selects a contact's secondary address; an ambiguous hint sends nothing. (#2047)
@@ -74,6 +76,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`ceo-inbox-draft-compose` (breaking `tool.json`)** — `to`/`cc` take contact IDs; `to_addresses` must appear in mail or a person's message. (#2053)
+- **`ceo-inbox-draft-edit` (breaking `tool.json`)** — recipients change one at a time with `add_*` and `remove`; whole-list `to`/`cc` retired. (#2053)
+- **ADR-047** — covers the principal's mailbox drafts, their recipient rule, and why Curia cannot send them. (#2053)
 - **ADR-047** — agent-entered identifiers are verified by provenance, not by similarity to contacts. (#2061)
 - **`contact-create`, `contact-link-identity`** — refuse an address found in no person's message or read page. (#2061)
 - **`contact-register`** — verifies a sender only when the address has a source; otherwise registers it unverified. (#2061)
