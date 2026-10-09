@@ -30,5 +30,24 @@ export const PAUSED_NEXT_STEP_LINES: readonly string[] = [
   'Never attribute the pause to an external cause such as an API timeout or outage.',
 ];
 
+/** The specialist's result carries composed email (`draft_emails`, #2055). */
+export const DRAFT_EMAIL_NEXT_STEP_LINES: readonly string[] = [
+  'The specialist composed the draft email in this result but did not send it, whatever',
+  'its text says. If the principal asked for it to go out, send it yourself with',
+  'email-send and report the send from that result. Otherwise tell the principal it is',
+  'drafted and has not been sent.',
+];
+
+/** No email or message went out, and the result or brief talks about sending (#2055). */
+export const NOTHING_SENT_NEXT_STEP_LINES: readonly string[] = [
+  'No email or message went out in the specialist\'s task; any calendar invite or',
+  'notification it did send is listed as sent. Text in the result that says an email or',
+  'message was sent or is out describes something it wrote, not a delivery. If the',
+  'principal asked for a send, do it yourself with email-send, or tell the principal it',
+  'has not gone out.',
+];
+
 export const CLARIFICATION_NEXT_STEP = CLARIFICATION_NEXT_STEP_LINES.join(' ');
 export const PAUSED_NEXT_STEP = PAUSED_NEXT_STEP_LINES.join(' ');
+export const DRAFT_EMAIL_NEXT_STEP = DRAFT_EMAIL_NEXT_STEP_LINES.join(' ');
+export const NOTHING_SENT_NEXT_STEP = NOTHING_SENT_NEXT_STEP_LINES.join(' ');

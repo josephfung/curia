@@ -13,6 +13,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-08T17:20:23.923Z"
     },
+    "delegated draft not reported sent": {
+      "unstubbed": 0,
+      "runs": 9,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-09T01:03:19.474Z"
+    },
     "direct email reply as text": {
       "unstubbed": 0,
       "runs": 5,

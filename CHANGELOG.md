@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`delegate` (public API)** — `sent` lists what the specialist actually sent; `draft_emails` carries composed, unsent email. (#2055)
+- **`agent.response` (public API)** — optional `sends` lists the successful message and invite sends of a task. (#2055)
+- **Scenario case 15** — a specialist's write-up of a send is not reported as a send. (#2055)
 - **`ToolContext` (public API)** — `resolveRecipientReference` resolves contact references without the outbound gateway. (#2053)
 - **Smoke case `cold-compose-existing-contact`** — a draft to a known contact travels by contact ID, never address. (#2053)
 - **ADR-048** — reasoning passes back in tool loops; one per-tier effort setting covers every provider. (#2044)
@@ -175,6 +178,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Delegated sends** — the coordinator no longer reports a specialist's composed email as sent. (#2055)
 - **Smoke and scenario stubs** — scheduler, task and draft reads replay writes from the same case. (#2074)
 - **Smoke scheduler stubs** — a schedule edit refreshes `nextRunAt`, and a missing one is filled from the cron. (#2074)
 - **Smoke scheduler list** — omitting `agentId` on a turn stub keeps the agent from the create. (#2074)

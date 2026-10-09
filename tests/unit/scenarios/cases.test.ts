@@ -3,6 +3,7 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PAUSED_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
+import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
 import { loadScenarioCases } from '../../scenarios/loader.js';
 import { matchToolStub } from '../../scenarios/stub-matcher.js';
 import { coverageViolations, readCoverage } from '../../scenarios/stub-coverage.js';
@@ -37,6 +38,18 @@ describe('coordinator scenario cases', () => {
       .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && (r as Record<string, unknown>)['paused'] === true);
     expect(paused.length).toBeGreaterThan(0);
     for (const r of paused) expect(r['next_step']).toBe(PAUSED_NEXT_STEP);
+  });
+
+  it('gives a delegate stub with `sent` the next_step the handler would add (#2055)', () => {
+    const withSent = cases.flatMap(c => (c.toolStubs['delegate'] ?? []).map(stub => stub.return))
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && Array.isArray((r as Record<string, unknown>)['sent']));
+    expect(withSent.length).toBeGreaterThan(0);
+    for (const r of withSent) {
+      // The stub has no brief, so this mirrors the handler on the response alone. A stub whose
+      // note would come only from the brief's wording is not caught here.
+      const shaped = shapeSpecialistAnswer(String(r['response']), r['sent'] as string[], '');
+      expect(r['next_step'], String(r['response']).slice(0, 60)).toBe(shaped.next_step);
+    }
   });
 
   it('answers the side calls that failed stub coverage (#2058)', () => {
