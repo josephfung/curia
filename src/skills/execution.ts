@@ -126,6 +126,7 @@ import {
   retiredRecipientFieldError,
   sendPinsMatch,
   STALE_SEND_APPROVAL_ERROR,
+  type RecipientReferenceFields,
   type SendRecipientPin,
 } from './_shared/recipient-reference.js';
 
@@ -2052,6 +2053,7 @@ export class ExecutionLayer {
       if (entry) secretCache.set(entry[0], entry[1]);
     }
 
+    const contactServiceForRefs = this.contactService;
     const ctx: ToolContext = {
       // Invoking skill's manifest identity — lets handlers read their own name/version
       // from ctx instead of hardcoding a const that must be kept in sync with tool.json.
@@ -2139,6 +2141,17 @@ export class ExecutionLayer {
       delegationGuard: options?.delegationGuard,
       turnDateResolveResults: options?.turnDateResolveResults,
       identifierSources: options?.identifierSources,
+      // Reference resolution for skills that address drafts without the gateway (#2053).
+      // The principal alias resolves from the same hot-reloaded snapshot the gateway uses.
+      ...(contactServiceForRefs
+        ? {
+            resolveRecipientReference: (channel: string, value: string, fields: RecipientReferenceFields) =>
+              resolveRecipientReference(value, channel, fields, {
+                contactService: contactServiceForRefs,
+                principalContactId: this.principalIdentities[0]?.contactId,
+              }),
+          }
+        : {}),
       // Expose the configured timezone so skills can format output timestamps
       // in the user's local time. See toLocalIso() in src/time/timestamp.ts.
       timezone: this.timezone,
