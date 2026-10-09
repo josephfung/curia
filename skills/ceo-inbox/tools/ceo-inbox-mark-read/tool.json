@@ -1,7 +1,7 @@
 {
   "name": "ceo-inbox-mark-read",
   "description": "Mark a message as read in the principal's personal email inbox. Call this after processing each message to prevent re-processing on the next triage run. Intended for use by the ceo-inbox agent — accesses the principal's personal email, do not call from other agents.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

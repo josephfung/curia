@@ -2069,6 +2069,33 @@ describe('autonomy gates', () => {
       expect(classifyAction).not.toHaveBeenCalled();
     });
 
+    it('rejects a placeholder reply_to_message_id before Gate C fetches it (#2083)', async () => {
+      const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: true });
+      const gateway = makeEmailGateway({ from: [{ email: 'alice@example.com' }] });
+      const { registry, layer } = makeLayerWithScore100(undefined, judge, TEST_PRINCIPAL_IDENTITIES, {
+        outboundGateway: gateway,
+        selfEmail: 'curia@example.com',
+      });
+      const handler = makeHandler('should not run');
+      registry.register(makeRiskyManifest('email-reply', 'medium'), handler);
+
+      const result = await layer.invoke(
+        'email-reply',
+        { reply_to_message_id: '9b359f65-placeholder', body: 'Thanks', cc: '' },
+        undefined,
+        originatorMeta('known', null, { senderId: 'alice@example.com' }),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/placeholder text/);
+        expect(result.errorType).toBe('VALIDATION_ERROR');
+      }
+      expect(handler.execute).not.toHaveBeenCalled();
+      expect(gateway.getEmailMessage).not.toHaveBeenCalled();
+      expect(classifyAction).not.toHaveBeenCalled();
+    });
+
     it('escalates known-tier email-reply reply-all when CC contains anyone else', async () => {
       const { judge, classifyAction } = makeEscalationJudge({ isThirdPartyFacing: false });
       const gateway = makeEmailGateway({

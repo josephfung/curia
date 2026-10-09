@@ -36,7 +36,7 @@ export class CeoInboxDraftComposeHandler implements ToolHandler {
       return { success: false, error: 'principal inbox is not configured (missing credentials)' };
     }
 
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};

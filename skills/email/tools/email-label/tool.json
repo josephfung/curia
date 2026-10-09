@@ -1,7 +1,7 @@
 {
   "name": "email-label",
   "description": "Apply one or more labels to an email message. Resolves label names to Gmail folder IDs, creating any labels that do not yet exist. Preserves existing labels on the message.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

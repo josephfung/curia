@@ -219,6 +219,40 @@ describe('ExecutionLayer', () => {
     }
   });
 
+  it('gives the handler a deadline and aborts its signal when the timeout fires (#2083)', async () => {
+    let seen: ToolContext | undefined;
+    const handler: ToolHandler = {
+      execute: async (ctx: ToolContext) => {
+        seen = ctx;
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        return { success: true, data: 'should not reach' };
+      },
+    };
+    registry.register(makeManifest({ timeout: 100 }), handler);
+
+    const before = Date.now();
+    await execution.invoke('test-skill', { query: 'slow' });
+
+    expect(seen!.deadline).toBeGreaterThanOrEqual(before + 100);
+    expect(seen!.deadline).toBeLessThanOrEqual(Date.now() + 100);
+    expect(seen!.signal?.aborted).toBe(true);
+    expect(String((seen!.signal?.reason as Error).message)).toContain('timed out');
+  });
+
+  it('leaves the signal un-aborted when the handler finishes in time', async () => {
+    let seen: ToolContext | undefined;
+    registry.register(makeManifest(), {
+      execute: async (ctx: ToolContext) => {
+        seen = ctx;
+        return { success: true, data: 'fast' };
+      },
+    });
+
+    await execution.invoke('test-skill', { query: 'fast' });
+
+    expect(seen!.signal?.aborted).toBe(false);
+  });
+
   it('provides secret access scoped to manifest declarations', async () => {
     process.env.TEST_SECRET_KEY = 'secret-value-123';
 

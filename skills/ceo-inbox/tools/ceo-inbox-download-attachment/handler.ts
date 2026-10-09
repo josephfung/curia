@@ -11,13 +11,14 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { MAX_TEMP_FILE_BYTES } from '../../../../src/skills/temp-file-store.js';
 
 export class CeoInboxDownloadAttachmentHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -34,13 +35,18 @@ export class CeoInboxDownloadAttachmentHandler implements ToolHandler {
       return { success: false, error: 'message_id is required' };
     }
 
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
+    }
+
     // Fetch the full message to verify the attachment exists and get its metadata.
     let msg: Awaited<ReturnType<typeof client.getMessage>>;
     try {
       msg = await client.getMessage(messageId);
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-download-attachment: failed to fetch message');
-      return { success: false, error: 'Failed to fetch message' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to fetch message') };
     }
 
     const attachment = msg.attachments.find((a) => a.id === attachmentId);

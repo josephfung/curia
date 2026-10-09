@@ -297,7 +297,9 @@ Use `install.requires_secrets` for the credential that *gates the skill's existe
 
 #### `timeout` (optional, default: `30000`)
 
-Per-invocation timeout in milliseconds. Skills that exceed this limit are killed and return a failure result. The task continues — the agent receives the failure and can retry or give up.
+Per-invocation timeout in milliseconds. A call that exceeds this limit returns a failure result. The task continues — the agent receives the failure and can retry or give up.
+
+The handler itself is not stopped: the execution layer stops waiting for it, and its code runs on. At the timeout the layer aborts `ctx.signal`; `ctx.deadline` holds the timeout as epoch milliseconds. Pass the signal to every network request (`fetch(url, { signal: ctx.signal })`) and check it before a write. A read-modify-write that finishes late can otherwise undo a newer call's write (#2083). `src/util/call-budget.ts` has helpers, and `ctx` itself satisfies its `CallBudget` type.
 
 Set higher for skills that call slow external APIs. Set lower for skills that should be fast and likely have a bug if they aren't.
 

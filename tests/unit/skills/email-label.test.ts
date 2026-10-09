@@ -61,7 +61,7 @@ describe('EmailLabelHandler', () => {
       expect(data.applied).toEqual(['SECURITY']);
       expect(data.created).toEqual([]);
     }
-    expect(gateway.labelEmailMessage).toHaveBeenCalledWith('msg-1', ['SECURITY'], undefined);
+    expect(gateway.labelEmailMessage).toHaveBeenCalledWith('msg-1', ['SECURITY'], undefined, expect.anything());
   });
 
   it('passes accountId when account is provided', async () => {
@@ -80,7 +80,7 @@ describe('EmailLabelHandler', () => {
       ),
     );
     expect(result.success).toBe(true);
-    expect(gateway.labelEmailMessage).toHaveBeenCalledWith('msg-1', ['SECURITY'], 'curia');
+    expect(gateway.labelEmailMessage).toHaveBeenCalledWith('msg-1', ['SECURITY'], 'curia', expect.anything());
   });
 
   it('returns failure when gateway returns an error', async () => {
@@ -126,6 +126,6 @@ describe('EmailLabelHandler', () => {
       ),
     );
     expect(result.success).toBe(true);
-    expect(gateway.labelEmailMessage).toHaveBeenCalledWith('msg-1', ['SECURITY'], undefined);
+    expect(gateway.labelEmailMessage).toHaveBeenCalledWith('msg-1', ['SECURITY'], undefined, expect.anything());
   });
 });

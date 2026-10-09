@@ -1,11 +1,12 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient, htmlToPlainText } from '../../../_shared/ceo-nylas-client.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxReadHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -22,6 +23,12 @@ export class CeoInboxReadHandler implements ToolHandler {
     // message are different resources, and guessing could read the wrong one.
     if (messageId && draftId) {
       return { success: false, error: 'Provide exactly one of message_id or draft_id, not both' };
+    }
+    if (messageId) {
+      const idError = validateNylasMessageId(messageId);
+      if (idError) {
+        return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
+      }
     }
 
     // ── Draft path (issue #1000) ─────────────────────────────────────────────
@@ -65,7 +72,7 @@ export class CeoInboxReadHandler implements ToolHandler {
       msg = await client.getMessage(messageId);
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-read: failed to fetch message');
-      return { success: false, error: 'Failed to read principal inbox message' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to read principal inbox message') };
     }
 
     const attachmentSummary =

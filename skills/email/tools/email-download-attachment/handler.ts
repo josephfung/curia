@@ -10,6 +10,7 @@
 //   4. Return base64-encoded content plus metadata.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { MAX_TEMP_FILE_BYTES } from '../../../../src/skills/temp-file-store.js';
 
 export class EmailDownloadAttachmentHandler implements ToolHandler {
@@ -41,6 +42,11 @@ export class EmailDownloadAttachmentHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message_id' };
     }
 
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
+    }
+
     // Fetch the message to verify the attachment ID and check its declared size.
     // This also serves as an authorization check — the caller must know both IDs.
     let message: Awaited<ReturnType<typeof ctx.outboundGateway.getEmailMessage>>;
@@ -48,7 +54,7 @@ export class EmailDownloadAttachmentHandler implements ToolHandler {
       message = await ctx.outboundGateway.getEmailMessage(messageId, accountId);
     } catch (err) {
       ctx.log.error({ err, messageId }, 'email-download-attachment: failed to fetch message');
-      return { success: false, error: 'Failed to fetch message to verify attachment' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to fetch message to verify attachment') };
     }
 
     const attachment = message.attachments.find((a) => a.id === attachmentId);

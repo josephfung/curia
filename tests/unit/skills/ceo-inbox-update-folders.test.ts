@@ -1,7 +1,13 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import pino from 'pino';
 import type { ToolContext } from '../../../src/skills/types.js';
 import { CeoInboxUpdateFoldersHandler } from '../../../skills/ceo-inbox/tools/ceo-inbox-update-folders/handler.js';
+import { clearFolderCache } from '../../../skills/_shared/ceo-nylas-client.js';
+
+// Folder lists are cached per grant; each test brings its own fixture.
+beforeEach(() => {
+  clearFolderCache();
+});
 
 const logger = pino({ level: 'silent' });
 

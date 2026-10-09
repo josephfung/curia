@@ -73,6 +73,9 @@ import type { ExportItem } from '../security/export-controls.js';
 import type { ConversationEntityState } from '../entity-context/conversation-entities.js';
 import { describeUnresolvedIdentity, emailLocalNameTokens } from '../agents/resolved-entities.js';
 import type { IdentityGateMode } from '../config.js';
+import type { ErrorType } from '../errors/types.js';
+import type { CallBudget } from '../util/call-budget.js';
+import { nylasMessageFailure } from '../channels/email/nylas-message-id.js';
 import {
   PRINCIPAL_RECIPIENT_ALIAS,
   parseRecipientReference,
@@ -2766,11 +2769,13 @@ export class OutboundGateway {
    *
    * @param messageId  Nylas message ID to archive
    * @param accountId  Named account (e.g. "joseph"). Defaults to the primary account.
+   * @param budget     The tool call's time budget; requests stop when it runs out.
    */
   async archiveEmailMessage(
     messageId: string,
     accountId?: string,
-  ): Promise<{ success: boolean; error?: string }> {
+    budget?: CallBudget,
+  ): Promise<{ success: boolean; error?: string; errorType?: ErrorType }> {
     const client = this.getNylasClient(accountId);
     if (!client) {
       return {
@@ -2780,12 +2785,12 @@ export class OutboundGateway {
     }
 
     try {
-      await client.archiveMessage(messageId);
+      await client.archiveMessage(messageId, budget);
       this.log.info({ messageId, accountId }, 'outbound-gateway: message archived');
       return { success: true };
     } catch (err) {
       this.log.error({ err, messageId, accountId }, 'outbound-gateway: archiveEmailMessage failed');
-      return { success: false, error: 'Archive failed' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Archive failed') };
     }
   }
 
@@ -2823,7 +2828,8 @@ export class OutboundGateway {
   async markEmailAsRead(
     messageId: string,
     accountId?: string,
-  ): Promise<{ success: boolean; error?: string }> {
+    budget?: CallBudget,
+  ): Promise<{ success: boolean; error?: string; errorType?: ErrorType }> {
     const client = this.getNylasClient(accountId);
     if (!client) {
       return {
@@ -2833,12 +2839,12 @@ export class OutboundGateway {
     }
 
     try {
-      await client.markAsRead(messageId);
+      await client.markAsRead(messageId, budget);
       this.log.info({ messageId, accountId }, 'outbound-gateway: message marked as read');
       return { success: true };
     } catch (err) {
       this.log.error({ err, messageId, accountId }, 'outbound-gateway: markEmailAsRead failed');
-      return { success: false, error: 'Mark as read failed' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Mark as read failed') };
     }
   }
 
@@ -2853,7 +2859,15 @@ export class OutboundGateway {
     messageId: string,
     labels: string[],
     accountId?: string,
-  ): Promise<{ success: boolean; applied: string[]; created: string[]; folders: string[]; error?: string }> {
+    budget?: CallBudget,
+  ): Promise<{
+    success: boolean;
+    applied: string[];
+    created: string[];
+    folders: string[];
+    error?: string;
+    errorType?: ErrorType;
+  }> {
     const client = this.getNylasClient(accountId);
     if (!client) {
       return {
@@ -2872,8 +2886,8 @@ export class OutboundGateway {
     const resolvedIds: string[] = [];
 
     try {
-      // Step 1: List existing folders to build a name → ID lookup
-      const existingFolders = await client.listFolders();
+      // Step 1: List existing folders to build a name → ID lookup (cached per grant)
+      const existingFolders = await client.listFolders(budget);
       const foldersByName = new Map<string, NylasFolder>(
         existingFolders.map((f) => [f.name.toUpperCase(), f]),
       );
@@ -2885,7 +2899,7 @@ export class OutboundGateway {
 
         if (!folder) {
           this.log.info({ label, accountId }, 'outbound-gateway: creating new label');
-          folder = await client.createFolder(label);
+          folder = await client.createFolder(label, budget);
           foldersByName.set(key, folder);
           created.push(label);
         }
@@ -2894,7 +2908,7 @@ export class OutboundGateway {
       }
 
       // Step 3: Read current message folders
-      const msg = await client.getMessage(messageId);
+      const msg = await client.getMessage(messageId, { budget });
       const currentFolders = new Set(msg.folders);
 
       // Step 4: Merge — add new folder IDs without removing existing ones
@@ -2905,7 +2919,7 @@ export class OutboundGateway {
       const mergedFolders = [...currentFolders];
 
       // Step 5: Write back the merged folder set
-      const result = await client.updateMessageFolders(messageId, mergedFolders);
+      const result = await client.updateMessageFolders(messageId, mergedFolders, budget);
       const finalFolders = result.folders.length > 0 ? result.folders : mergedFolders;
 
       this.log.info(
@@ -2916,7 +2930,7 @@ export class OutboundGateway {
       return { success: true, applied: labels, created, folders: finalFolders };
     } catch (err) {
       this.log.error({ err, messageId, labels, accountId, created }, 'outbound-gateway: labelEmailMessage failed');
-      return { success: false, applied: [], created, folders: [], error: 'Label operation failed' };
+      return { success: false, applied: [], created, folders: [], ...nylasMessageFailure(err, messageId, 'Label operation failed') };
     }
   }
 

@@ -1,11 +1,12 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxMarkStarredHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -15,6 +16,11 @@ export class CeoInboxMarkStarredHandler implements ToolHandler {
 
     if (!messageId) {
       return { success: false, error: 'message_id is required' };
+    }
+
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
 
     // LLM tool calls may serialize booleans as strings; accept "true"/"false" explicitly.
@@ -40,7 +46,7 @@ export class CeoInboxMarkStarredHandler implements ToolHandler {
       return { success: true, data: { message_id: messageId, starred } };
     } catch (err) {
       ctx.log.error({ err, messageId }, 'ceo-inbox-mark-starred: failed');
-      return { success: false, error: 'Failed to mark message as starred' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to mark message as starred') };
     }
   }
 }

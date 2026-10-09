@@ -1,12 +1,13 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient } from '../../../_shared/ceo-nylas-client.js';
 import type { NylasFolder } from '../../../_shared/ceo-nylas-client.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class CeoInboxLabelHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
     const apiKey = ctx.secret('nylas_api_key');
     const grantId = ctx.secret('ceo_nylas_grant_id');
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -17,6 +18,11 @@ export class CeoInboxLabelHandler implements ToolHandler {
     if (!messageId) {
       ctx.log.warn({ inputType: typeof input.message_id }, 'ceo-inbox-label: message_id missing or not a string');
       return { success: false, error: 'message_id is required' };
+    }
+
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
 
     const labels = Array.isArray(input.labels)
@@ -100,8 +106,7 @@ export class CeoInboxLabelHandler implements ToolHandler {
       };
     } catch (err) {
       ctx.log.error({ err, messageId, labels }, 'ceo-inbox-label: failed to apply labels');
-      const detail = err instanceof Error ? err.message : String(err);
-      return { success: false, error: `Failed to apply labels to principal inbox message: ${detail}` };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to apply labels to principal inbox message') };
     }
   }
 }

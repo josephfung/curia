@@ -25,7 +25,9 @@ import { deriveEmailReplyRecipientSet } from '../../../../src/channels/email/rep
 import { replyDisplayName, replyRecipientSource } from '../../../../src/channels/email/reply-recipient-provenance.js';
 import {
   looksLikeOutboundContextEntryId,
+  nylasMessageFailure,
   replyToMessageIdLooksLikeEntryIdError,
+  validateNylasMessageId,
 } from '../../../../src/channels/email/nylas-message-id.js';
 
 export { looksLikeOutboundContextEntryId } from '../../../../src/channels/email/nylas-message-id.js';
@@ -69,6 +71,10 @@ export class EmailReplyHandler implements ToolHandler {
         success: false,
         error: replyToMessageIdLooksLikeEntryIdError(),
       };
+    }
+    const idError = validateNylasMessageId(replyToMessageId, 'reply_to_message_id');
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
 
     if (!ctx.outboundGateway) {
@@ -223,9 +229,8 @@ export class EmailReplyHandler implements ToolHandler {
         ctx.log.error({ err, replyToMessageId, accountId }, 'Failed to reply to email');
         return { success: false, error: err.message };
       }
-      const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, replyToMessageId }, 'Failed to reply to email');
-      return { success: false, error: `Failed to reply to email: ${message}` };
+      return { success: false, ...nylasMessageFailure(err, replyToMessageId, 'Failed to reply to email') };
     }
   }
 }

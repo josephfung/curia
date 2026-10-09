@@ -1,5 +1,6 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { CeoNylasClient, type NylasParticipant, type DraftAttachment } from '../../../_shared/ceo-nylas-client.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
 import { markdownToHtml } from '../../../../src/format/markdown-to-html.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
@@ -33,7 +34,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
       return { success: false, error: 'Configuration error: ceo_self_email secret is not set' };
     }
 
-    const client = new CeoNylasClient(apiKey, grantId, ctx.log);
+    const client = new CeoNylasClient(apiKey, grantId, ctx.log, ctx);
 
     const input =
       ctx.input && typeof ctx.input === 'object' ? (ctx.input as Record<string, unknown>) : {};
@@ -45,6 +46,10 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
 
     if (!replyToMessageId) {
       return { success: false, error: 'reply_to_message_id is required' };
+    }
+    const idError = validateNylasMessageId(replyToMessageId, 'reply_to_message_id');
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
     if (!body) {
       return { success: false, error: 'body is required' };
@@ -230,7 +235,7 @@ export class CeoInboxDraftReplyHandler implements ToolHandler {
         { err, replyToMessageId },
         'ceo-inbox-draft-reply: failed to create draft',
       );
-      return { success: false, error: 'Failed to create draft reply in principal inbox' };
+      return { success: false, ...nylasMessageFailure(err, replyToMessageId, 'Failed to create draft reply in principal inbox') };
     }
   }
 }

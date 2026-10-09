@@ -5,6 +5,7 @@
 // existing labels on the message (merge, not replace).
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class EmailLabelHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -16,6 +17,11 @@ export class EmailLabelHandler implements ToolHandler {
 
     if (!messageId) {
       return { success: false, error: 'Missing required input: message_id (string)' };
+    }
+
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
     }
 
     const labels = Array.isArray(input.labels)
@@ -41,9 +47,10 @@ export class EmailLabelHandler implements ToolHandler {
 
     ctx.log.info({ messageId, labels, accountId }, 'Applying labels to email');
 
-    let result: { success: boolean; applied: string[]; created: string[]; folders: string[]; error?: string };
+    let result: Awaited<ReturnType<typeof ctx.outboundGateway.labelEmailMessage>>;
     try {
-      result = await ctx.outboundGateway.labelEmailMessage(messageId, labels, accountId);
+      // ctx carries the call's abort signal and deadline (#2083).
+      result = await ctx.outboundGateway.labelEmailMessage(messageId, labels, accountId, ctx);
     } catch (err) {
       ctx.log.error({ err, messageId, labels, accountId }, 'email-label: unexpected error from gateway');
       return { success: false, error: 'Label operation failed' };
@@ -51,7 +58,7 @@ export class EmailLabelHandler implements ToolHandler {
 
     if (!result.success) {
       ctx.log.error({ messageId, labels, accountId, error: result.error }, 'Failed to apply labels');
-      return { success: false, error: result.error ?? 'Label operation failed' };
+      return { success: false, error: result.error ?? 'Label operation failed', errorType: result.errorType };
     }
 
     ctx.log.info(

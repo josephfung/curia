@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CeoInboxReadHandler } from './handler.js';
+import { clearFolderCache } from '../../../_shared/ceo-nylas-client.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 
 function buildCtx(input: Record<string, unknown>): ToolContext {
@@ -32,6 +33,7 @@ describe('CeoInboxReadHandler', () => {
   beforeEach(() => {
     handler = new CeoInboxReadHandler();
     mockFetch = vi.spyOn(globalThis, 'fetch');
+    clearFolderCache();
   });
 
   afterEach(() => {
@@ -95,6 +97,26 @@ describe('CeoInboxReadHandler', () => {
       expect(data.labels).toEqual(['UNREAD', '✍️ Drafted']);
       const folderUrl = new URL(mockFetch.mock.calls[1]![0] as string);
       expect(folderUrl.pathname.endsWith('/folders')).toBe(true);
+    });
+
+    it('lists folders once across repeated reads (#2083)', async () => {
+      const message = {
+        id: 'm1', thread_id: 't1', from: [], to: [], cc: [], subject: 's', body: '', date: 1,
+        labels: ['Label_39'], folders: ['Label_39'], attachments: [],
+      };
+      mockFetch.mockImplementation(async (url: unknown) =>
+        new URL(String(url)).pathname.endsWith('/folders')
+          ? jsonResponse([{ id: 'Label_39', name: '✍️ Drafted' }])
+          : jsonResponse(message),
+      );
+
+      for (const id of ['m1', 'm2', 'm3']) {
+        const result = await handler.execute(buildCtx({ message_id: id }));
+        expect((result as { data: { labels: string[] } }).data.labels).toEqual(['✍️ Drafted']);
+      }
+
+      const folderCalls = mockFetch.mock.calls.filter(([url]: unknown[]) => new URL(String(url)).pathname.endsWith('/folders'));
+      expect(folderCalls).toHaveLength(1);
     });
 
     it('returns raw label ids when the folder lookup fails', async () => {

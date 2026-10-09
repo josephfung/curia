@@ -1,7 +1,7 @@
 {
   "name": "email-mark-read",
   "description": "Mark an email message as read. Call after processing a message to prevent re-processing on subsequent triage runs.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

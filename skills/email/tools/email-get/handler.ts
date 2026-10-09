@@ -5,6 +5,7 @@
 // is handled by the gateway's named-client map.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { nylasMessageFailure, validateNylasMessageId } from '../../../../src/channels/email/nylas-message-id.js';
 
 export class EmailGetHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -25,6 +26,11 @@ export class EmailGetHandler implements ToolHandler {
       return { success: false, error: 'Missing required input: message_id (string)' };
     }
 
+    const idError = validateNylasMessageId(messageId);
+    if (idError) {
+      return { success: false, error: idError, errorType: 'VALIDATION_ERROR' };
+    }
+
     const accountId = typeof account === 'string' && account.trim() ? account.trim() : undefined;
 
     ctx.log.info({ messageId, accountId }, 'email-get: fetching message');
@@ -34,7 +40,7 @@ export class EmailGetHandler implements ToolHandler {
       message = await ctx.outboundGateway.getEmailMessage(messageId, accountId);
     } catch (err) {
       ctx.log.error({ err, messageId, accountId }, 'email-get: failed to fetch message');
-      return { success: false, error: 'Failed to fetch message' };
+      return { success: false, ...nylasMessageFailure(err, messageId, 'Failed to fetch message') };
     }
 
     return {

@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **`ToolContext` (public API)** — optional `signal` and `deadline` let a handler cancel requests at its timeout. (#2083)
 - **`delegate` (public API)** — `sent` lists what the specialist actually sent; `draft_emails` carries composed, unsent email. (#2055)
 - **`agent.response` (public API)** — optional `sends` lists the successful message and invite sends of a task. (#2055)
 - **Scenario case 15** — a specialist's write-up of a send is not reported as a send. (#2055)
@@ -183,6 +184,10 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Nylas folder lookups** — label and read calls reuse a per-grant folder list; email labels past page one resolve. (#2083)
+- **Skill timeouts** — a timed-out call now aborts its Nylas requests instead of writing late. (#2083)
+- **`ceo-inbox` retries** — a `Retry-After` longer than the call's remaining time fails fast as retryable. (#2083)
+- **Mail message IDs** — `ceo-inbox-*` and `email-*` reject malformed IDs; a 404 says not to retry. (#2083)
 - **Delegated sends** — the coordinator no longer reports a specialist's composed email as sent. (#2055)
 - **`email-reply`** — verifies a reply recipient only when mail auth passes and it is not ours. (#2071)
 - **Smoke and scenario stubs** — scheduler, task and draft reads replay writes from the same case. (#2074)
