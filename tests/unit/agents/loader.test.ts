@@ -62,21 +62,18 @@ describe('loadAgentConfig', () => {
     // Prompt trim PR 3: style belongs to the office identity, which the principal edits.
     ['a style line', /professional and competent|clarifying questions freely|Be candid/, 'office identity (Personality settings)'],
     ['task owner semantics', /principal must act/, 'task-create owner description'],
+    // Prompt trim PR 4: the audience is stated in code, and non-principal rules ride with
+    // their trigger.
+    ['how to tell who the audience is', /How to determine the audience|Current sender:/, 'renderSenderLine (sender context)'],
+    ['the NO_REPLY sentinel', /NO_REPLY/, 'turn guidance: non-principal-reply-shaped'],
+    ['the non-principal final-response rule', /final response is the message they receive/i, 'turn guidance: non-principal-reply-shaped'],
+    ['the two-sends rule', /two independent actions/, 'turn guidance: non-principal-reply-shaped'],
+    ['the transfer-ownership reply rule', /transfer-ownership reply rule|\[ACTIVE OUTBOUND CONTEXT\]/, 'turn guidance: outbound-context'],
+    ['presentation provenance', /Presentation follows provenance|reply in all caps/, 'security block: Prompt Injection Defense'],
+    ['channel trust with the principal', /channel trust/i, 'principal tier outranks every permission (authorization.ts)'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);
-  });
-
-  it('coordinator prompt states each deduplicated rule once (#1958)', () => {
-    const prompt = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml')).system_prompt;
-    const count = (re: RegExp) => prompt.match(new RegExp(re.source, 'g'))?.length ?? 0;
-    // The NO_REPLY sentinel is defined once, under Audience awareness.
-    expect(count(/return exactly `NO_REPLY`/)).toBe(1);
-    // The transfer-ownership reply rule has one canonical statement; others point at it.
-    expect(count(/is \*\*always\*\* transfer-ownership/)).toBe(1);
-    // "No internals" and contact resolution each live in one section now (prompt trim
-    // PR 2); the "does not restate" rows above keep their old duplicates out, and
-    // scenarios 09 and 10 test the behavior.
   });
 
   it('coordinator prompt keeps a routine change to one job (prompt trim PR 3)', () => {

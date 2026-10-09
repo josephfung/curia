@@ -42,7 +42,8 @@ function main(): void {
   if (!principalSender.includes('(principal)')) {
     throw new Error('Principal cohort smoke failed: expected principal systemRole in sender context');
   }
-  if (principalUser !== SMOKE_PROBE) {
+  // The principal's probe follows only its turn guidance: no thread framing.
+  if (!principalUser.endsWith(`\n\n${SMOKE_PROBE}`) || principalUser.includes('[Thread participants —')) {
     throw new Error('Principal cohort smoke failed: probe should be a direct principal utterance');
   }
 

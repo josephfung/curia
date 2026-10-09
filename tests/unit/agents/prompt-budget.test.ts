@@ -77,8 +77,11 @@ interface AgentBudget {
 // tools, after task-create's owner values moved into its description. The scheduling
 // and delegation-acknowledgment paragraphs kept their old wording: the tighter drafts
 // measured worse (baseline log).
+// Prompt trim PR 4 (audience in code: the sender line, non-principal turn guidance, the
+// reply rule in outbound-context guidance, provenance in the security block): YAML 9,494
+// chars, ~3,913 tokens with SKILL.md.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 5_000, localToolDefinitionBytes: 77_000, allowMcpPins: false },
+  { agent: 'coordinator', alwaysOnPromptTokens: 4_000, localToolDefinitionBytes: 77_000, allowMcpPins: false },
 ];
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };

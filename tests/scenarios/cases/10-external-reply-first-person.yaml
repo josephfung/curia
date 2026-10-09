@@ -1,7 +1,7 @@
 # Case 10 (#1956): an external reply is one assistant speaking in the first person
 # singular, and never addresses the principal in a body an outsider receives. Rule:
-# agents/coordinator.yaml, "How you speak" (first person singular to everyone) and the
-# two-independent-actions rule under Audience awareness.
+# agents/coordinator.yaml, "How you speak" (first person singular to everyone), and the
+# non-principal-reply-shaped turn guidance (the reply holds only the message to the sender).
 name: external reply first person
 description: >
   An external contact emails asking for the principal's availability for a call. The
