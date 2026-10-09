@@ -427,7 +427,7 @@ was scored.
 reported per agent: per case in the run output, per run and case in the results JSON
 (`usage.byAgent`), and for the suite in the summary. On the 2026-10-09 baseline (below), a
 real-delegation run cost $0.01 to $0.04 with its judging, two to five times a stubbed run,
-and took 11 to 118 seconds on average. The three gated cases add about $0.25 and two minutes
+and took 14 to 133 seconds on average. The three gated cases add about $0.25 and two minutes
 to a release gate run.
 
 ### Which real-delegation cases gate a release
@@ -450,33 +450,31 @@ Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before cha
 specialist prompt or the delegate handler, run `--tags real-delegation`.
 
 Baseline: `deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each,
-2026-10-09. Measured before the rebase onto main `1bff67c7`: 16a, 16c and 16e–16g at
-`8b90df44`, 16b at `fdd51732`, 16d at `0ef4754e` (that tree differed from the commit only
-in this README and `stub-coverage.json`). Those commits are the pre-rebase versions of
-`5b1de635`, `dddb4853` and `5bb7d5ab` on this branch. The rebase brings the coordinator
-prompt trim (#1954); these seven cases and the scenario harness are the trees the runs
-measured. Every critical behavior passed all five runs, with no stub holes.
-Spend is for the five runs, judge included.
+2026-10-09, all seven cases in one suite run at `da43807e`, after the coordinator prompt
+trim (#1954). Every critical behavior passed all five runs, with no stub holes. Spend is for
+the five runs, judge included.
 
 | Case | Score | Below 100% | Avg run | Spend |
 |---|---|---|---|---|
-| 16a transfer ownership | 100% | | 28s | $0.08 |
-| 16b calendar borrow | 98% | `one_read` 4/5: delegated a second time once | 11s | $0.05 |
-| 16c calendar read fails | 100% | | 45s | $0.10 |
-| 16d clarification resume | 97% | `resumes_with_token` 4/5: once, the model miscopied a character of the 700-character token, and the brief was still rebuilt | 34s | $0.11 |
-| 16e email identifiers | 100% | | 118s | $0.19 |
-| 16f principal request over email | 100% | | 21s | $0.06 |
-| 16g one message per item | 100% | | 41s | $0.10 |
+| 16a transfer ownership | 100% | | 34s | $0.08 |
+| 16b calendar borrow | 96% | `one_read` 3/5: twice the coordinator delegated before resolving the date, the delegate guard refused it ("requires date-resolve first"), and it re-delegated after `date-resolve` | 14s | $0.05 |
+| 16c calendar read fails | 100% | | 38s | $0.09 |
+| 16d clarification resume | 100% | | 35s | $0.13 |
+| 16e email identifiers | 100% | | 133s | $0.20 |
+| 16f principal request over email | 100% | | 16s | $0.06 |
+| 16g one message per item | 100% | | 53s | $0.15 |
 
-Two checks are scored but deliberately not critical, because each was measured at 4/5,
-exactly on the 80% line, where one more miss in a sample of five fails the release:
+Two checks are scored but deliberately not critical, because each was measured at 4/5 before
+this baseline, exactly on the 80% line, where one more miss in a sample of five fails the
+release:
 
-- 16a `platform_released_entry`. In an earlier measurement ceo-inbox called
+- 16a `platform_released_entry`. In one measurement ceo-inbox called
   `context-bridge-keep-open` after drafting, once in five runs, so the entry stayed open
-  (15/15 since). In another, it released the entry itself although the platform had
+  (20/20 since). In another, it released the entry itself although the platform had
   (`no_second_release`, also `important`).
-- 16d `resumes_with_token`. It is an exact match on the token, so a transcription slip fails
-  it even when the resume works (as above). `specialist_gets_resumed_brief` is the check
-  that gates the resume.
+- 16d `resumes_with_token`. It is an exact match on the 700-character token, so a
+  transcription slip fails it even when the resume works: one run miscopied one character
+  and the brief was still rebuilt. `specialist_gets_resumed_brief` is the check that gates
+  the resume.
 
 Raise either to `critical` only once a larger sample clears 80% with room.
