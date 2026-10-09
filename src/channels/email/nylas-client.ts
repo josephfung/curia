@@ -41,6 +41,7 @@ interface NylasLike {
     find(params: {
       identifier: string;
       messageId: string;
+      queryParams?: { fields?: MessageFields };
     }): Promise<NylasResponse<NylasSdkMessage>>;
 
     send(params: {
@@ -116,8 +117,9 @@ export interface NylasMessage {
   unread: boolean;
   folders: string[];
   /**
-   * Email headers — only present when listMessages was called with fields: 'include_headers'.
-   * Used by the email adapter to extract Authentication-Results for SPF/DKIM/DMARC validation.
+   * Email headers — only present when the fetch asked for fields: 'include_headers'
+   * (listMessages, or getMessage with includeHeaders). Used to read
+   * Authentication-Results for SPF/DKIM/DMARC validation.
    */
   headers?: Array<{ name: string; value: string }>;
   /** Non-inline file attachments. Empty array when no attachments are present. */
@@ -288,14 +290,17 @@ export class NylasClient {
 
   /**
    * Fetch a single message by its Nylas message ID.
+   * `includeHeaders` asks Nylas for Authentication-Results. The gateway's
+   * getEmailMessage always sets it so a cached fetch still carries them (#2071).
    */
-  async getMessage(messageId: string): Promise<NylasMessage> {
-    this.log.debug({ messageId }, 'fetching message');
+  async getMessage(messageId: string, options?: { includeHeaders?: boolean }): Promise<NylasMessage> {
+    this.log.debug({ messageId, includeHeaders: options?.includeHeaders }, 'fetching message');
 
     try {
       const response = await this.nylas.messages.find({
         identifier: this.grantId,
         messageId,
+        ...(options?.includeHeaders ? { queryParams: { fields: 'include_headers' as MessageFields } } : {}),
       });
       return this.normalizeMessage(response.data);
     } catch (err) {

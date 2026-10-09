@@ -127,3 +127,40 @@ describe('NylasClient.listMessages — folder/search filters', () => {
     expect(messages[0]!.attachments[0]!.isCalendarInvite).toBe(true);
   });
 });
+
+describe('NylasClient.getMessage — headers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockMessages.find.mockResolvedValue({
+      data: {
+        id: 'm1',
+        date: 1,
+        from: [],
+        to: [],
+        cc: [],
+        bcc: [],
+        folders: [],
+        attachments: [],
+      },
+    });
+  });
+
+  it('requests include_headers when asked', async () => {
+    const client = new NylasClient('api-key', 'grant-id', logger);
+    await client.getMessage('m1', { includeHeaders: true });
+    expect(mockMessages.find).toHaveBeenCalledWith({
+      identifier: 'grant-id',
+      messageId: 'm1',
+      queryParams: { fields: 'include_headers' },
+    });
+  });
+
+  it('omits queryParams when headers are not requested', async () => {
+    const client = new NylasClient('api-key', 'grant-id', logger);
+    await client.getMessage('m1');
+    expect(mockMessages.find).toHaveBeenCalledWith({
+      identifier: 'grant-id',
+      messageId: 'm1',
+    });
+  });
+});

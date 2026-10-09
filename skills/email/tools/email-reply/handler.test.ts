@@ -98,12 +98,81 @@ describe('EmailReplyHandler', () => {
       expect((result.data as Record<string, unknown>).to).toBe('alice@example.com');
       expect((result.data as Record<string, unknown>).subject).toBe('Re: Project update');
     }
-    // To was copied from the message From. The gateway records that provenance
-    // only when the caller names it (#2071).
+    // No Authentication-Results: the reply still sends, without reply provenance.
+    // Absent headers fail closed (#2071).
     expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'alice@example.com', replyToMessageId: 'nylas-msg-1' }),
-      expect.objectContaining({ recipientSource: 'email_participant' }),
+      expect.not.objectContaining({ recipientSource: 'email_participant' }),
     );
+  });
+
+  it('passes email_participant when auth passes and the sender is not an owned mailbox (#2071)', async () => {
+    const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!' });
+    ctx.selfEmails = ['curia@example.com'];
+    (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      from: [{ email: 'alice@example.com', name: 'Alice' }],
+      to: [],
+      cc: [],
+      subject: 'Project update',
+      body: '',
+      date: 0,
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }],
+    });
+    (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true, messageId: 'reply-123',
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    expect(ctx.outboundGateway!.send).toHaveBeenCalledWith(
+      expect.not.objectContaining({ recipientSource: expect.anything() }),
+      expect.objectContaining({
+        recipientSource: 'email_participant',
+        recipientDisplayName: 'Alice',
+      }),
+    );
+  });
+
+  it('drops reply provenance when the From is an owned mailbox (#2071)', async () => {
+    const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!' });
+    ctx.selfEmails = ['alice+tag@example.com'];
+    (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      from: [{ email: 'Alice@example.com', name: 'Alice' }],
+      to: [],
+      cc: [],
+      subject: 'Sent',
+      body: '',
+      date: 0,
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=pass dkim=pass dmarc=pass' }],
+    });
+    (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true, messageId: 'reply-123',
+    });
+
+    const result = await handler.execute(ctx);
+    expect(result.success).toBe(true);
+    const options = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as Record<string, unknown>;
+    expect(options).not.toHaveProperty('recipientSource');
+  });
+
+  it('drops reply provenance when authentication did not pass (#2071)', async () => {
+    const ctx = makeCtx({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!' });
+    (ctx.outboundGateway!.getEmailMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      from: [{ email: 'alice@example.com', name: 'Alice' }],
+      to: [],
+      cc: [],
+      subject: 'Hi',
+      body: '',
+      date: 0,
+      headers: [{ name: 'Authentication-Results', value: 'mx.google.com; spf=fail dkim=pass dmarc=pass' }],
+    });
+    (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mockResolvedValue({
+      success: true, messageId: 'reply-123',
+    });
+
+    await handler.execute(ctx);
+    const options = (ctx.outboundGateway!.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as Record<string, unknown>;
+    expect(options).not.toHaveProperty('recipientSource');
   });
 
   it('returns error when gateway blocks the reply', async () => {

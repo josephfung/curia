@@ -11,6 +11,7 @@ import type { EventBus } from '../../bus/bus.js';
 import type { Logger } from '../../logger.js';
 import type { OutboundGateway } from '../../skills/outbound-gateway.js';
 import type { EmailSendRequest } from './outbound-request.js';
+import { replyDisplayName, replyRecipientSource } from './reply-recipient-provenance.js';
 import type { ContactService } from '../../contacts/contact-service.js';
 import type { PrincipalEmailRef } from '../../contacts/types.js';
 import { resolvePrincipalEmail } from '../../contacts/types.js';
@@ -686,7 +687,11 @@ export class EmailAdapter implements Channel {
       // latest. If Curia was the last sender (a prior turn in the conversation),
       // messages[0].from is Curia's own address — we must NOT reply to ourselves.
       // In that case, look at messages[0].to to find the human recipient.
-      const messages = await outboundGateway.listEmailMessages({ limit: 1, threadId }, this.config.accountId);
+      // include_headers so Authentication-Results is present for reply provenance (#2071).
+      const messages = await outboundGateway.listEmailMessages(
+        { limit: 1, threadId, fields: 'include_headers' },
+        this.config.accountId,
+      );
       const threadMessage = messages[0];
       if (!threadMessage) {
         logger.warn({ threadId }, 'Cannot find message to reply to in thread');
@@ -789,10 +794,26 @@ export class EmailAdapter implements Channel {
         return;
       }
 
+      // Provenance is a send option, not a field on sendRequest. A gated send
+      // falls back to a draft, and send-draft must stay outbound_recipient.
+      // addressFromHeader is false when To came from the thread's To list
+      // (the latest message is ours), so that reply does not opt in.
+      const provenance = replyRecipientSource({
+        addressFromHeader: !latestIsOurs,
+        recipient: recipientEmail,
+        selfEmails: [this.config.selfEmail],
+        headers: threadMessage.headers,
+      });
+      const fromName = provenance
+        ? replyDisplayName(latestIsOurs ? undefined : threadMessage.from[0]?.name, recipientEmail)
+        : undefined;
+
       await this.sendWithGatedDraftFallback(sendRequest, {
         taskEventId: outbound.payload.taskEventId,
         conversationId: outbound.payload.conversationId,
         parentEventId: outbound.id,   // link the outbound.delivered row back to the outbound.message event
+        ...(provenance ? { recipientSource: provenance } : {}),
+        ...(fromName ? { recipientDisplayName: fromName } : {}),
       });
     } catch (err) {
       logger.error({ err, threadId }, 'Failed to send email reply');
@@ -807,7 +828,13 @@ export class EmailAdapter implements Channel {
    */
   private async sendWithGatedDraftFallback(
     sendRequest: EmailSendRequest,
-    context: { taskEventId?: string; conversationId?: string; parentEventId?: string },
+    context: {
+      taskEventId?: string;
+      conversationId?: string;
+      parentEventId?: string;
+      recipientSource?: 'email_participant';
+      recipientDisplayName?: string;
+    },
   ): Promise<void> {
     const { outboundGateway, logger, accountId } = this.config;
 
@@ -823,6 +850,8 @@ export class EmailAdapter implements Channel {
       taskEventId: context.taskEventId,
       conversationId: context.conversationId,
       parentEventId: context.parentEventId,
+      ...(context.recipientSource ? { recipientSource: context.recipientSource } : {}),
+      ...(context.recipientDisplayName ? { recipientDisplayName: context.recipientDisplayName } : {}),
       reExecRecipe: {
         toolName: 'send-draft',
         partialPayload: { account: accountId },

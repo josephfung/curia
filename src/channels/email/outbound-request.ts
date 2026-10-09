@@ -7,6 +7,15 @@
 
 import type { OutboundAttachmentInput } from '../../skills/_shared/read-attachments.js';
 
+/**
+ * Provenance for a contact this send creates (#2071).
+ *
+ * `email_participant` is auto-verified. Callers pass it only when To was copied
+ * from a message header that is not an owned mailbox and that passed SPF, DKIM,
+ * and DMARC. `outbound_recipient` is not auto-verified. Absent means that default.
+ */
+export type EmailRecipientSource = 'outbound_recipient' | 'email_participant';
+
 export interface EmailSendRequest {
   channel: 'email';
   /** Which named account should send this message (e.g. "curia", "joseph").
@@ -28,6 +37,18 @@ export interface EmailSendRequest {
    *  to a temp file (from email-download-attachment or similar). The gateway
    *  reads the files from disk before passing them to Nylas. */
   attachments?: OutboundAttachmentInput[];
+  /**
+   * Provenance for a contact this send creates. Not a wire field: dispatch copies
+   * named provider fields only, so Nylas never receives it. Stored on the queued
+   * payload so a flush keeps the same provenance (#2071). Set by `send()` from
+   * its options; a value already on the request is ignored.
+   */
+  recipientSource?: EmailRecipientSource;
+  /**
+   * From display name, used only for the duplicate check when `recipientSource`
+   * is `email_participant`. Not sent to the provider.
+   */
+  recipientDisplayName?: string;
 }
 
 /** Type guard for email outbound requests. */

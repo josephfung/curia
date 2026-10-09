@@ -322,6 +322,48 @@ describe('first-time outbound recipients get honest provenance (#2033)', () => {
     expect(delivered(h)).toEqual([address]);
   });
 
+  it('a later email-reply verifies an existing outbound_recipient, so a send by contact ID goes out (#2071)', async () => {
+    const address = 'later.reply@cold.example';
+    await h.gateway.send({ channel: 'email', to: address, subject: 'Hi', body: 'Hello.' });
+    const before = await h.contacts.resolveByChannelIdentity('email', address);
+    const beforeContact = await h.contacts.getContactWithIdentities(before!.contactId);
+    expect(beforeContact!.identities.find((i) => i.channelIdentifier === address)).toMatchObject({
+      source: 'outbound_recipient',
+      verified: false,
+    });
+
+    const again = await h.gateway.send(
+      { channel: 'email', to: address, subject: 'Re: Hi', body: 'Following up.', replyToMessageId: 'msg-2' },
+      { recipientSource: 'email_participant', recipientDisplayName: 'Later Reply' },
+    );
+    expect(again.success).toBe(true);
+    const after = await h.contacts.getContactWithIdentities(before!.contactId);
+    expect(after!.identities.find((i) => i.channelIdentifier === address)).toMatchObject({
+      source: 'outbound_recipient',
+      verified: true,
+    });
+
+    h.nylasSend.mockClear();
+    const result = await SKILLS.email.handler.execute(ctx(h, SKILLS.email.input(before!.contactId)));
+    expect(result.success).toBe(true);
+    expect(delivered(h)).toEqual([address]);
+  });
+
+  it('withholds email_participant when the From name matches another contact (#2071)', async () => {
+    const address = 'sam.other@cold.example';
+    const created = await h.gateway.send(
+      { channel: 'email', to: address, subject: 'Re: Hi', body: 'Hello.', replyToMessageId: 'msg-3' },
+      { recipientSource: 'email_participant', recipientDisplayName: 'Sam Principal' },
+    );
+    expect(created.success).toBe(true);
+    const resolved = await h.contacts.resolveByChannelIdentity('email', address);
+    const found = await h.contacts.getContactWithIdentities(resolved!.contactId);
+    expect(found!.identities.find((i) => i.channelIdentifier === address)).toMatchObject({
+      source: 'outbound_recipient',
+      verified: false,
+    });
+  });
+
   it('replyToMessageId alone does not verify the new contact (#2071)', async () => {
     const address = 'threaded.person@cold.example';
     const created = await h.gateway.send({

@@ -25,7 +25,7 @@
 import { randomUUID } from 'node:crypto';
 import type { NylasClient, NylasMessage, NylasFolder, ListMessagesOptions, SendEmailOptions, AttachmentContent } from '../channels/email/nylas-client.js';
 import { readAttachmentFiles, MAX_ATTACHMENT_BYTES, type OutboundAttachmentInput } from './_shared/read-attachments.js';
-import type { EmailSendRequest } from '../channels/email/outbound-request.js';
+import type { EmailRecipientSource, EmailSendRequest } from '../channels/email/outbound-request.js';
 import type { SignalOutboundRequest } from '../channels/signal/outbound-request.js';
 import type { SlackOutboundRequest } from '../channels/slack/outbound-request.js';
 import type { SmsOutboundRequest } from '../channels/sms/outbound-request.js';
@@ -119,36 +119,21 @@ export type OutboundSendRequest =
 export type { OutboundSendRequest as OutboundEmailSendRequest };
 
 /**
- * Provenance for a contact `send()` creates when the recipient has none (#2071).
- *
- * `email_participant` is auto-verified: `email-reply` passes it because To is
- * the From header of the message being answered. `outbound_recipient` is not.
- * A caller that omits the option fails closed to `outbound_recipient`.
+ * Queue JSON is untyped. Only the exact `email_participant` opt-in counts;
+ * any other value, including rows queued before #2071, fails closed.
+ * The display name is used only for that opt-in's duplicate check.
  */
-export type GatewayRecipientSource = 'outbound_recipient' | 'email_participant';
-
-/**
- * Extra field stored on a queued email payload so a later flush keeps the
- * provenance `send()` was given. Absent on rows queued before #2071, which
- * stay `outbound_recipient`. Not a wire field — dispatch ignores it.
- */
-const QUEUED_RECIPIENT_SOURCE = 'recipientSource';
-
-function queuedSendPayload(
-  request: OutboundSendRequest,
-  recipientSource: GatewayRecipientSource | undefined,
-): OutboundSendRequest {
-  if (recipientSource !== 'email_participant' || request.channel !== 'email') return request;
-  // Spread adds a field the request type does not declare. The queue stores
-  // JSON; flush reads the field back. dispatchEmail copies named fields only,
-  // so the provider never receives it.
-  return { ...request, [QUEUED_RECIPIENT_SOURCE]: recipientSource } as OutboundSendRequest;
-}
-
-function recipientSourceFromQueued(payload: OutboundSendRequest): GatewayRecipientSource {
-  if (payload.channel !== 'email') return 'outbound_recipient';
-  const raw = (payload as unknown as Record<string, unknown>)[QUEUED_RECIPIENT_SOURCE];
-  return raw === 'email_participant' ? 'email_participant' : 'outbound_recipient';
+function emailProvenanceFromPayload(payload: EmailSendRequest): {
+  source?: EmailRecipientSource;
+  displayName?: string;
+} {
+  if (payload.recipientSource !== 'email_participant') return {};
+  const rawName = payload.recipientDisplayName;
+  const displayName = typeof rawName === 'string' && rawName.trim() ? rawName.trim() : undefined;
+  return {
+    source: 'email_participant',
+    ...(displayName ? { displayName } : {}),
+  };
 }
 
 export interface OutboundSendResult {
@@ -595,8 +580,12 @@ export class OutboundGateway {
    * @param options.recipientSource  Provenance for a contact this send creates (#2071).
    *   Applies to the email To only. Default `outbound_recipient` (unverified), so a
    *   caller that does not set it fails closed. `email-reply` passes
-   *   `email_participant` because To was copied from the message From header.
-   *   The gateway cannot infer that from `replyToMessageId`: `email-send` sets it too.
+   *   `email_participant` only when To was copied from a From header that is not
+   *   an owned mailbox and that passed SPF, DKIM, and DMARC. The gateway cannot
+   *   infer that from `replyToMessageId`: `email-send` sets it too. A likely
+   *   duplicate still records `outbound_recipient`.
+   * @param options.recipientDisplayName  From display name for that duplicate check.
+   *   Omitted when the header has no real name. Not sent to the provider.
    */
   async send(
     request: OutboundSendRequest,
@@ -648,7 +637,12 @@ export class OutboundGateway {
        * Provenance for a contact this send creates when the recipient has none.
        * Email To only. Omitted means `outbound_recipient` (#2071).
        */
-      recipientSource?: GatewayRecipientSource;
+      recipientSource?: EmailRecipientSource;
+      /**
+       * From display name, used only when `recipientSource` is `email_participant`.
+       * An address is not a name; omit it and the duplicate check is identifier-only.
+       */
+      recipientDisplayName?: string;
     },
   ): Promise<OutboundSendResult> {
     // ------------------------------------------------------------------
@@ -1354,15 +1348,25 @@ export class OutboundGateway {
     // they receive — if we pass the original `request`, the unredacted content
     // reaches Nylas / signal-cli even though redactedBody was computed above.
     if (request.channel === 'email') {
-      const toSend = { ...request, body: redactedBody, subject: redactedSubject };
-      const recipientSource = options?.recipientSource;
-      const result = await this.dispatchOrEnqueue(
-        toSend,
-        () => this.dispatchEmail(toSend),
-        recipientSource,
-      );
+      // Provenance lives on the request so a queued payload keeps it. Only send()
+      // options set it; a value already on the request is dropped. dispatchEmail
+      // copies named provider fields, so Nylas never sees these (#2071).
+      const toSend: EmailSendRequest = { ...request, body: redactedBody, subject: redactedSubject };
+      delete toSend.recipientSource;
+      delete toSend.recipientDisplayName;
+      if (options?.recipientSource === 'email_participant') {
+        toSend.recipientSource = 'email_participant';
+        const fromName = options.recipientDisplayName?.trim();
+        if (fromName) toSend.recipientDisplayName = fromName;
+      }
+      const result = await this.dispatchOrEnqueue(toSend, () => this.dispatchEmail(toSend));
       if (result.success && !result.queued) {
-        await this.promoteOrCreateRecipientContact('email', recipientId, recipientSource);
+        await this.promoteOrCreateRecipientContact(
+          'email',
+          recipientId,
+          toSend.recipientSource,
+          toSend.recipientDisplayName,
+        );
         await this.publishDelivered({
           channel: 'email',
           recipientId,
@@ -1471,10 +1475,9 @@ export class OutboundGateway {
   private async dispatchOrEnqueue(
     request: OutboundSendRequest,
     dispatch: () => Promise<OutboundSendResult>,
-    recipientSource?: GatewayRecipientSource,
   ): Promise<OutboundSendResult> {
     if (this.isQueueableChannel(request.channel) && !this.isChannelOutboundReady(request.channel)) {
-      return this.enqueueInsteadOfDrop(request, recipientSource);
+      return this.enqueueInsteadOfDrop(request);
     }
     const result = await dispatch();
     if (
@@ -1482,7 +1485,7 @@ export class OutboundGateway {
       && result.queueable
       && this.isQueueableChannel(request.channel)
     ) {
-      const queued = await this.enqueueInsteadOfDrop(request, recipientSource);
+      const queued = await this.enqueueInsteadOfDrop(request);
       // HTTP channels (SMS) may stay "ready" while the provider is briefly down —
       // schedule a flush retry since no socket reconnect event will fire.
       if (queued.queued && this.isChannelOutboundReady(request.channel)) {
@@ -1513,13 +1516,12 @@ export class OutboundGateway {
    */
   private async enqueueInsteadOfDrop(
     request: OutboundSendRequest,
-    recipientSource?: GatewayRecipientSource,
   ): Promise<OutboundSendResult> {
     if (!this.outboundQueue) {
       return { success: false, blockedReason: 'Outbound queue not configured' };
     }
     try {
-      const { id } = await this.outboundQueue.enqueue(queuedSendPayload(request, recipientSource));
+      const { id } = await this.outboundQueue.enqueue(request);
       this.log.info(
         { channel: request.channel, queueId: id },
         'outbound-gateway: channel disconnected — message queued for reconnect flush',
@@ -1594,10 +1596,12 @@ export class OutboundGateway {
         } else if (row.payload.channel === 'sms') {
           await this.promoteOrCreateRecipientContact('sms', row.payload.recipient);
         } else if (row.payload.channel === 'email') {
+          const provenance = emailProvenanceFromPayload(row.payload);
           await this.promoteOrCreateRecipientContact(
             'email',
             row.payload.to,
-            recipientSourceFromQueued(row.payload),
+            provenance.source,
+            provenance.displayName,
           );
         }
 
@@ -2019,15 +2023,103 @@ export class OutboundGateway {
   }
 
   /**
+   * True when an `email_participant` opt-in may verify this address (#2071).
+   * A taken identifier or a candidate (near-miss address, same or similar name)
+   * withholds verification. A lookup error withholds it too. The send already
+   * happened, so this never throws.
+   */
+  private async replyProvenanceClearsDuplicates(
+    recipientId: string,
+    displayName: string | undefined,
+    excludeContactId?: string,
+  ): Promise<boolean> {
+    try {
+      const dup = await this.contactService.findLikelyDuplicates({
+        ...(displayName ? { displayName } : {}),
+        identities: [{ channel: 'email', identifier: recipientId }],
+        ...(excludeContactId ? { excludeContactId } : {}),
+      });
+      if (dup.taken.length > 0 || dup.candidates.length > 0) {
+        this.log.info(
+          {
+            recipientId: redactId(recipientId),
+            taken: dup.taken.length,
+            candidates: dup.candidates.length,
+          },
+          'outbound-gateway: reply provenance withheld — address or name matches another contact',
+        );
+        return false;
+      }
+      return true;
+    } catch (err) {
+      this.log.warn(
+        { err, recipientId: redactId(recipientId) },
+        'outbound-gateway: duplicate check failed — recording the recipient unverified',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * A later authenticated reply verifies an existing unverified `outbound_recipient`
+   * identity in place and keeps that source (#2071). Other sources stay as they are.
+   * Blocked contacts are not passed here.
+   */
+  private async verifyExistingReplyRecipient(
+    contactId: string,
+    channel: string,
+    recipientId: string,
+    displayName: string | undefined,
+  ): Promise<void> {
+    if (channel !== 'email') return;
+    let identities: ChannelIdentity[];
+    try {
+      identities = await this.contactService.getIdentitiesForContact(contactId);
+    } catch (err) {
+      this.log.warn(
+        { err, contactId, recipientId: redactId(recipientId) },
+        'outbound-gateway: could not load identities to verify a reply recipient',
+      );
+      return;
+    }
+    const needle = recipientId.toLowerCase();
+    const identity = identities.find((row) =>
+      row.channel === channel
+      && row.channelIdentifier.toLowerCase() === needle
+      && row.source === 'outbound_recipient'
+      && row.status === 'active'
+      && !row.verified,
+    );
+    if (!identity) return;
+    const clear = await this.replyProvenanceClearsDuplicates(recipientId, displayName, contactId);
+    if (!clear) return;
+    try {
+      await this.contactService.verifyIdentity(identity.id);
+      this.log.info(
+        { contactId, identityId: identity.id, recipientId: redactId(recipientId) },
+        'outbound-gateway: verified existing outbound_recipient identity from an authenticated reply',
+      );
+    } catch (err) {
+      this.log.warn(
+        { err, contactId, identityId: identity.id },
+        'outbound-gateway: verifyIdentity failed after an authenticated reply — identity stays unverified',
+      );
+    }
+  }
+
+  /**
    * After a successful outbound send, ensure the recipient has a confirmed contact record.
    *
    * - If the contact exists and is provisional: promote to confirmed.
    * - If no contact record exists: create one at tier known, using the channel
    *   identifier as a placeholder display name (enrichment happens later).
-   *   Provenance is `recipientSource`, default `outbound_recipient` (unverified).
-   *   `email-reply` passes `email_participant`, which is auto-verified, because
-   *   its To was copied from the message From header (#2033, #2040, #2071, ADR-047).
-   * - If the contact is already confirmed or blocked: no-op.
+   *   Provenance defaults to `outbound_recipient` (unverified). `email_participant`
+   *   is recorded only when the caller opted in and the duplicate check is clear
+   *   (#2033, #2040, #2071, ADR-047).
+   * - An existing unverified `outbound_recipient` identity is verified in place
+   *   when the caller opted in and the same check is clear. The source stays.
+   * - If the contact is already confirmed or blocked: no tier change. Blocked
+   *   contacts are not verified.
    *
    * Fail-open: the message was already sent, so a DB error here must not surface
    * as a send failure. Log at warn so anomalies are visible without alarming callers.
@@ -2035,12 +2127,13 @@ export class OutboundGateway {
   private async promoteOrCreateRecipientContact(
     channel: string,
     recipientId: string,
-    recipientSource?: GatewayRecipientSource,
+    recipientSource?: EmailRecipientSource,
+    recipientDisplayName?: string,
   ): Promise<void> {
-    // Anything other than the one explicit opt-in fails closed (#2071).
-    const source: GatewayRecipientSource = recipientSource === 'email_participant'
-      ? 'email_participant'
-      : 'outbound_recipient';
+    // Callers and the queue read already narrowed this to the one opt-in or
+    // undefined. Undefined is the unverified default (#2071).
+    let source: EmailRecipientSource = recipientSource ?? 'outbound_recipient';
+    const displayName = recipientDisplayName?.trim() || undefined;
     let contact;
     try {
       contact = await this.contactService.resolveByChannelIdentity(channel, recipientId);
@@ -2056,12 +2149,18 @@ export class OutboundGateway {
       // No contact record yet — create one so replies from this person are not held.
       // displayName defaults to the identifier (e.g. email address) as a placeholder
       // until the contact is enriched or the principal assigns a proper name.
+      // A likely duplicate, or a duplicate check that itself fails, withholds
+      // verification: the contact is still created, as unverified outbound_recipient.
+      if (source === 'email_participant') {
+        const clear = await this.replyProvenanceClearsDuplicates(recipientId, displayName);
+        if (!clear) source = 'outbound_recipient';
+      }
       let created;
       try {
         // Source is the caller's provenance, never ceo_stated (#2033). ceo_stated
         // made an invented address look principal-confirmed (the 2026-10-07 contact).
-        // email_participant is only set when email-reply copied To from a From
-        // header (#2071). Every other caller stays outbound_recipient.
+        // email_participant is only set when the caller opted in and the duplicate
+        // check above was clear (#2071). Every other caller stays outbound_recipient.
         //
         // Tier: known (#2040, ADR-047). Send skills address recipients by contact
         // ID (#2041), so this branch runs only for send-draft, which needs a
@@ -2087,9 +2186,10 @@ export class OutboundGateway {
       try {
         // outbound_recipient is not auto-verified, so that identity lands
         // unverified and a later send by contact ID fails closed until the
-        // principal verifies it or an agent re-states it (#2041). An inbound
-        // reply does not verify it (#2040). email_participant is auto-verified:
-        // the address was read from a message header, same as inbound mail (#2071).
+        // principal verifies it, an agent re-states it (#2041), or a later
+        // authenticated reply verifies it in place (#2071). An inbound reply
+        // does not verify it (#2040). email_participant is auto-verified, and
+        // this path uses it only after the duplicate check.
         await this.contactService.linkIdentity({
           contactId: created.id,
           channel,
@@ -2139,6 +2239,10 @@ export class OutboundGateway {
         'outbound-gateway: sent message to blocked contact — blocked-contact check may have been bypassed due to DB error',
       );
       return;
+    }
+
+    if (source === 'email_participant') {
+      await this.verifyExistingReplyRecipient(contact.contactId, channel, recipientId, displayName);
     }
 
     if (contact.tier === 'unknown') {
@@ -2227,7 +2331,10 @@ export class OutboundGateway {
       }
       throw new Error('outbound-gateway: getEmailMessage called but no nylasClient is configured');
     }
-    return client.getMessage(messageId);
+    // Always request headers. Gate C and email-reply share one cached getEmailMessage,
+    // and that cache drops any extra argument, so a header-less fetch first would hide
+    // Authentication-Results from the reply provenance check (#2071).
+    return client.getMessage(messageId, { includeHeaders: true });
   }
 
   /**

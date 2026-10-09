@@ -280,9 +280,11 @@ interface ContactServiceBackend {
 // result), so a typo is never verified (#2061, ADR-047). A new writer of either source stores
 // unverified unless it runs that check.
 // outbound_recipient is NOT auto-verified — the address was not read from a message
-// header (#2033, ADR-047). email-reply records email_participant instead, which is
-// auto-verified, because its To is the From header of the message being answered (#2071).
+// header that passed the reply checks (#2033, ADR-047). email-reply records
+// email_participant, which is auto-verified, only when the From is not an owned
+// mailbox, SPF/DKIM/DMARC all pass, and the duplicate check is clear (#2071).
 // An agent re-stating an outbound_recipient address with contact-link-identity verifies it (#2041).
+// A later reply that meets the same bar verifies the existing identity in place.
 // Only self_claimed cannot be force-verified.
 const AUTO_VERIFIED_SOURCES: ReadonlySet<IdentitySource> = new Set([
   'ceo_stated',

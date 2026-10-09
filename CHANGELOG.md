@@ -79,6 +79,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`EmailSendRequest` (public API)** — optional `recipientSource` records reply provenance and is not sent. (#2071)
 - **`ceo-inbox-draft-compose` (breaking `tool.json`)** — `to`/`cc` take contact IDs; `to_addresses` must appear in mail or a person's message. (#2053)
 - **`ceo-inbox-draft-edit` (breaking `tool.json`)** — recipients change one at a time with `add_*` and `remove`; whole-list `to`/`cc` retired. (#2053)
 - **ADR-047** — covers the principal's mailbox drafts, their recipient rule, and why Curia cannot send them. (#2053)
@@ -179,7 +180,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Delegated sends** — the coordinator no longer reports a specialist's composed email as sent. (#2055)
-- **`email-reply`** — records a new recipient as verified `email_participant`, so later sends resolve. (#2071)
+- **`email-reply`** — verifies a reply recipient only when mail auth passes and it is not ours. (#2071)
 - **Smoke and scenario stubs** — scheduler, task and draft reads replay writes from the same case. (#2074)
 - **Smoke scheduler stubs** — a schedule edit refreshes `nextRunAt`, and a missing one is filled from the cron. (#2074)
 - **Smoke scheduler list** — omitting `agentId` on a turn stub keeps the agent from the create. (#2074)
