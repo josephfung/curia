@@ -1,7 +1,8 @@
 # Case 16a (#2027, starter case 1): transfer-ownership end to end, with ceo-inbox really
 # running. The stubbed cases (01a-01c) stop at the coordinator's delegate call; this one
-# follows the reply across it. Rules: agents/coordinator.yaml "The transfer-ownership reply
-# rule"; delegate's entry settlement (skills/delegate/outbound-entry.ts, #1972), which
+# follows the reply across it. Rules: the `delegation:` bullet of the outbound-context turn
+# guidance (src/agents/prompts/turn-guidance.ts), anchored in agents/coordinator.yaml's
+# Routing Decision ("Transfer-ownership"); delegate's entry settlement (skills/delegate/outbound-entry.ts, #1972), which
 # releases the entry when the specialist returns; ceo-inbox's "Closing a multi-turn
 # exchange", which tells it to leave the release to the platform.
 # context-bridge-release cannot run in test mode (it needs the task repo), so a second
