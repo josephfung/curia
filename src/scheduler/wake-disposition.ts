@@ -19,9 +19,10 @@ export const WAKE_DISPOSITION_INSTRUCTION =
   'You were woken to advance this task. Before you finish, leave it in a deliberate end state: ' +
   'call task-complete with a note if the goal is achieved, ' +
   'call task-update with status cancelled if it should stop, ' +
-  'or park it with task-update status waiting or blocked, a progress note, and wake_at. ' +
+  'or park it with task-update status waiting or blocked, a progress note, and wake_at ' +
+  '(wake_at is optional only when the task waits on a contact or a blocking task). ' +
   'scheduler-report records this job run and does not close the task. ' +
-  'Ending while the task is still open with no new note and no wake, or parked with no wake, is a bug.';
+  'Ending while the task is still open with no new note and no wake, or parked with nothing to wake it, is a bug.';
 
 const ACTIVE_STATUSES = new Set(['open', 'in_progress']);
 const PARKED_STATUSES = new Set(['waiting', 'blocked']);
