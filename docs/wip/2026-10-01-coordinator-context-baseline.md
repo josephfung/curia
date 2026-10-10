@@ -972,9 +972,8 @@ database. The test-mode stack now serves google-workspace from a tools/list snap
   attempts: on a Tuesday the model read "next Friday" as the coming Friday and the judge
   wanted the one after (the date-resolve ambiguity kept in PR#1993). A/B below.
 
-**After deploy:** add a `report-agent-context` capture. It now prints the share of
-tasks that activated each skill (`#### Skill activations`) and charges activated MCP
-tools to their server.
+**After deploy:** see "2026-10-10 — google-workspace on demand, after deploy (#2024)"
+below.
 
 **Natural Language Deadlines A/B.** Three alternating single-case smoke rounds per side
 on `202c912c`, swapping in `origin/main`'s `agents/coordinator.yaml` for the main side.
@@ -1318,3 +1317,51 @@ Two tooling problems surfaced, outside PR 4:
   `special-token-injection`) generate only through promptfoo's hosted service, which needs
   a logged-in account. Logged in, promptfoo uploads every eval result unless
   `PROMPTFOO_DISABLE_SHARING=true`; these runs set it.
+
+### 2026-10-10 — google-workspace on demand, after deploy (#2024)
+
+`report-agent-context --agent coordinator` on production. #2024 (`f8392d02`,
+coordinator 0.24.0) was deployed at 2026-10-07T01:49:32Z, and the prompt-trim PRs were
+deployed on top of it from 10-08. To keep #2024's effect apart from theirs, the windows
+below end or start at a deploy. The deploys were located from where the per-task
+`system_prompt` estimate in `context.budget` changes. The figures themselves are the
+report's archive p50s.
+
+| Window (UTC) | Running | Calls | System chars p50 | Tools | Tool bytes p50 | Fixed context | vs 2026-10-01 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 09-23 → 10-01 21:43 | baseline (post-holdback) | 1,343 | 71,292 | 180 | 225,809 | 297.1k | — |
+| 10-06 01:49 → 10-07 01:49 | #1957; #1958–#1960 from 10-06 21:26 | 224 | 74,297 | 117 | 160,942 | 235.2k | −21% |
+| 10-07 01:49 → 10-08 10:00 | #2024 | 79 | 40,467 | 65 | 76,463 | 116.9k | **−61%** |
+| 10-09 23:09 → 10-10 12:47 | trim PRs 1, 2, 11, 3 and 4 | 20 | 30,129 | 66 | 78,861 | 109.0k | −63% |
+
+Fixed context adds system-string chars to tool-definition bytes, a mixed-unit figure. The
+baseline is the 2026-10-01 post-holdback p50s summed (71,292 + 225,809). The skipped stretch
+(10-08 10:00 → 10-09 23:09) spans several trim deploys, measured in their own sections
+above. One deploy inside the #2024 window changed tool descriptions only, by about 0.2 KB.
+
+The day before #2024 owes its −21% mostly to the #1957 allowlist (114 → 49
+google-workspace tools). Its system-chars p50 is mostly the prompt before #1958–#1960,
+which deployed late that day. Its last call (2026-10-07T01:00Z, the same 65 local tools
+as after) offered 166,471 tool bytes: 76,333 local, 89,908 for the 50 tools outside the
+local catalog, and 230 of JSON framing. Less the scheduler's `approval-expiry-sweep`
+(215), the 49 google-workspace tools are 89,693 bytes, exactly the figure predicted above.
+
+**Activations: 0 of 52 coordinator tasks** from 2026-10-07T01:49:32Z to
+2026-10-10T12:44Z (280 calls). None of those tasks needed Google, so zero is a true
+count, not a miss:
+
+- No `web-fetch` or `web-browser` call targeted a Google URL. That is the failure #2024
+  guards against.
+- 18 tasks mention Google Docs, Drive or a spreadsheet, all in `senderContext` (the
+  principal's profile), none in the request.
+- 19 coordinator tool results carried a Google URL: `web-search` results linking public
+  Google files (13), `scheduler-list` job descriptions (4) and sent-mail snippets in
+  `email-list` (2). None asked the coordinator to open the file.
+- The Google file work in the window went to specialists (`essay-editor`,
+  `meeting-debrief`, `t2125-expense-tracker`), which have their own google-workspace
+  access.
+
+Demand was already low. The day before the deploy had one google-workspace call
+(`get_drive_file_permissions`) in 48 tasks, and the 60-day rate of 0.7% predicts about
+0.4 activations in 52 tasks. The on-demand path has not run in production yet. Cases
+13a–13d cover it.
