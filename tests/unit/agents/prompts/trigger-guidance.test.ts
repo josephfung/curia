@@ -95,6 +95,7 @@ describe('parseTurnGuidanceKeys', () => {
       'email-cc-reply',
       'email-cc-principal',
       'email-etiquette',
+      'scheduler-delivery',
     ];
     expect([...TURN_GUIDANCE_ORDER].sort()).toEqual([...keys].sort());
   });

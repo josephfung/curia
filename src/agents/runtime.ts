@@ -450,7 +450,13 @@ export class AgentRuntime {
     // explains. Only promptContent carries it: working memory stores originalContent, so
     // history never holds one copy per earlier turn, and the system string never varies
     // by trigger. The keys are re-validated: the payload crossed the bus.
-    const turnGuidance = renderTurnGuidance(parseTurnGuidanceKeys(taskEvent.payload.turnGuidance));
+    const turnGuidanceKeys = parseTurnGuidanceKeys(taskEvent.payload.turnGuidance);
+    // Scheduler tasks skip the dispatcher, so this trigger is detected here (#2091). A
+    // tool-allowlisted turn is excluded: it may not hold a send skill.
+    if (taskEvent.payload.channelId === 'scheduler' && !taskEvent.payload.toolAllowlist?.length) {
+      turnGuidanceKeys.push('scheduler-delivery');
+    }
+    const turnGuidance = renderTurnGuidance(turnGuidanceKeys);
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     const { conversationId } = taskEvent.payload;
 
@@ -2639,6 +2645,7 @@ export class AgentRuntime {
       ...(prepared.suppressDelivery && { suppressDelivery: true }),
       skillsCalled,
       ...(!isResponseError && { sends }),
+      channelId: turnChannelId,
       ...failedSkillsPayload(),
       parentEventId: taskEvent.id,
     });

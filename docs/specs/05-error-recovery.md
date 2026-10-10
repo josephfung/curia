@@ -236,6 +236,13 @@ Silence is a first-class outcome. Dispatch publishes `outbound.no_reply` instead
   `abandonedContent` — so "how often does the coordinator ignore the preamble" is
   answerable from the audit log.
 
+A **scheduler-channel turn** has no dispatcher routing at all: it never came through
+`handleInbound`, so its reply text goes nowhere, and the only way to reach the principal
+is a send skill. The runtime tells the agent so on those turns (the `scheduler-delivery`
+turn guidance). When the turn still ends with reply text and no successful send (the
+response's `sends` is empty), dispatch publishes `outbound.no_reply` with reason
+`scheduler_undelivered` and the text on `abandonedContent`, and logs a warn (#2091).
+
 This is distinct from `outbound.suppressed_duplicate`: the reply-lock fires after a
 human-facing skill already succeeded; no-reply means this turn sent nothing.
 

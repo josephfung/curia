@@ -29,7 +29,8 @@ export type TurnGuidanceKey =
   | 'email-direct-reply'
   | 'email-cc-reply'
   | 'email-cc-principal'
-  | 'email-etiquette';
+  | 'email-etiquette'
+  | 'scheduler-delivery';
 
 /**
  * Principal turn with no [ACTIVE OUTBOUND CONTEXT] block. One line on purpose: the
@@ -161,6 +162,18 @@ const EMAIL_ETIQUETTE = [
   '  in, or archive the principal\'s mailbox; anything about their email goes to ceo-inbox.',
 ];
 
+/**
+ * A scheduler-channel turn (#2091). Nothing routes its reply anywhere, so a job that
+ * should tell the principal something has to send it. Added by the runtime, not the
+ * dispatcher: these tasks come from the scheduler and never pass through dispatch.
+ */
+const SCHEDULER_DELIVERY = [
+  'This is a scheduled run, not a conversation: your final response is not delivered to',
+  'anyone. When this run should tell the principal something, send it yourself with a send',
+  'skill and `principal` as the recipient, one message, then end with exactly NO_REPLY. When',
+  'there is nothing to tell them, end with NO_REPLY.',
+];
+
 const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'principal-reply-shaped': PRINCIPAL_REPLY_SHAPED,
   'non-principal-reply-shaped': NON_PRINCIPAL_REPLY_SHAPED,
@@ -172,6 +185,7 @@ const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {
   'email-cc-reply': EMAIL_CC_REPLY,
   'email-cc-principal': EMAIL_CC_PRINCIPAL,
   'email-etiquette': EMAIL_ETIQUETTE,
+  'scheduler-delivery': SCHEDULER_DELIVERY,
 };
 
 /**
@@ -189,6 +203,7 @@ export const TURN_GUIDANCE_ORDER: readonly TurnGuidanceKey[] = [
   'email-cc-reply',
   'email-direct-reply',
   'email-etiquette',
+  'scheduler-delivery',
 ];
 
 /** Heads the rendered guidance so the model can tell it from the sender's own words. */

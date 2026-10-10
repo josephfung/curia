@@ -27,7 +27,7 @@ function capturingProvider(): LLMProvider & { chat: ReturnType<typeof vi.fn> } {
   };
 }
 
-async function runTurn(payload: { content: string; turnGuidance?: unknown }) {
+async function runTurn(payload: { content: string; turnGuidance?: unknown; channelId?: string; toolAllowlist?: string[] }) {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
   bus.subscribe('agent.response', 'dispatch', () => {});
@@ -45,9 +45,10 @@ async function runTurn(payload: { content: string; turnGuidance?: unknown }) {
   await bus.publish('dispatch', createAgentTask({
     agentId: 'coordinator',
     conversationId: 'conv-guidance',
-    channelId: 'cli',
+    channelId: payload.channelId ?? 'cli',
     senderId: 'principal',
     content: payload.content,
+    ...(payload.toolAllowlist && { toolAllowlist: payload.toolAllowlist }),
     // Cast: the runtime must cope with whatever crossed the bus, not only valid keys.
     ...(payload.turnGuidance !== undefined && {
       turnGuidance: payload.turnGuidance as Parameters<typeof createAgentTask>[0]['turnGuidance'],
@@ -84,5 +85,15 @@ describe('AgentRuntime turn guidance (#1959)', () => {
       const { messages } = await runTurn({ content: 'Hello', turnGuidance });
       expect(messages[messages.length - 1]!.content).toBe('Hello');
     }
+  });
+
+  it('tells a scheduler turn its reply reaches no one (#2091)', async () => {
+    const { messages } = await runTurn({ content: 'Check on Sam.', channelId: 'scheduler' });
+    expect(messages[messages.length - 1]!.content).toBe(`${renderTurnGuidance(['scheduler-delivery'])}\n\nCheck on Sam.`);
+  });
+
+  it('skips the scheduler delivery guidance on a tool-allowlisted turn', async () => {
+    const { messages } = await runTurn({ content: 'Dispose of the task.', channelId: 'scheduler', toolAllowlist: ['task-complete'] });
+    expect(messages[messages.length - 1]!.content).toBe('Dispose of the task.');
   });
 });

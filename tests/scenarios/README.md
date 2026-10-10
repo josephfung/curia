@@ -445,6 +445,7 @@ answer.
 | 16c calendar read fails | on demand | Failure honesty (#1854); a stubbed failing result covers the coordinator half. |
 | 16e email identifiers | on demand | The stamping is deterministic and unit-tested (`delegate.test.ts`); this checks it end to end. |
 | 16g one message per item | on demand | Duplicate sends (#1860, #1917); the stubbed cases cover the coordinator's own sends. |
+| 17a scheduled job tells principal | on demand | A scheduler turn's reply reaches no one (#2091). The dispatcher audits a reply that skipped the send, so a miss is visible in production. |
 
 Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before changing a
 specialist prompt or the delegate handler, run `--tags real-delegation`.
@@ -463,6 +464,13 @@ the five runs, judge included.
 | 16e email identifiers | 100% | | 133s | $0.20 |
 | 16f principal request over email | 100% | | 16s | $0.06 |
 | 16g one message per item | 100% | | 53s | $0.15 |
+
+17a was measured separately on 2026-10-10 (#2091), three times at 5 runs: 80%, 100%, 80%
+on `one_send_to_principal`, about $0.12 a time. Both misses were the coordinator searching
+only its own mailbox, never asking ceo-inbox, and ending with `NO_REPLY`. That is a search
+miss, not a dropped reply. With the turn guidance switched off it also scored 80%: the
+one-reply-no-send failure from the 2026-10-09 incident did not recur in five runs, so the
+case guards the delivery path rather than reproducing the incident at a measurable rate.
 
 Two checks are scored but deliberately not critical, because each was measured at 4/5 before
 this baseline, exactly on the 80% line, where one more miss in a sample of five fails the
