@@ -7785,6 +7785,8 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     reasoningTokens?: number;
   }): Promise<{
     content: string;
+    /** The note on the agent.response, for the dispatcher to email (prompt trim PR 5). */
+    responseNote: string | undefined;
     notes: DelegationPrincipalNoteEvent[];
     llmCalls: LlmCallEvent[];
     invokes: Array<[string, Record<string, unknown>]>;
@@ -7880,6 +7882,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
     expect(agentResponses).toHaveLength(1);
     return {
       content: agentResponses[0]!.payload.content,
+      responseNote: agentResponses[0]!.payload.principalNote,
       notes,
       llmCalls,
       invokes: vi.mocked(mockExecution.invoke).mock.calls.map(([name, input]) => [name, input as Record<string, unknown>]),
@@ -7890,7 +7893,7 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
   const principalNote = 'P.S. Placeholder Principal: I could not find the original venue thread anywhere.';
 
   it('sends the sender only the reply, and records the note for the principal (#1990)', async () => {
-    const { content, notes, invokes } = await runNarratedFailure({
+    const { content, responseNote, notes, invokes } = await runNarratedFailure({
       metadata: originatorOf(null, 'known'),
       // The #1990 shape: the note sits inside the reply block.
       narration: `<reply>${cleanVenueReply} <note_for_principal>${principalNote}</note_for_principal></reply>`,
@@ -7899,6 +7902,8 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(content).toBe(cleanVenueReply);
     expect(content).not.toMatch(/Placeholder|note_for_principal/);
+    // Carried on the response too, so the dispatcher emails it (prompt trim PR 5).
+    expect(responseNote).toBe(principalNote);
 
     expect(notes).toHaveLength(1);
     expect(notes[0]!.parentEventId).toBeDefined();
@@ -7954,12 +7959,13 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
   });
 
   it('reads no note on the principal\'s own turn (#1990)', async () => {
-    const { content, notes, invokes } = await runNarratedFailure({
+    const { content, responseNote, notes, invokes } = await runNarratedFailure({
       metadata: originatorOf('principal', 'principal'),
       narration: `<reply>${cleanVenueReply}</reply><note_for_principal>aside</note_for_principal>`,
       taskCreateSucceeds: true,
     });
     expect(content).toBe(cleanVenueReply);
+    expect(responseNote).toBeUndefined();
     expect(notes).toHaveLength(0);
     expect(invokes.some(([name]) => name === 'task-update')).toBe(false);
   });
@@ -8161,5 +8167,104 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(taskCreateCount.n).toBe(0);
     expect(provider.chat).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('AgentRuntime note for the principal on a reply to someone else (prompt trim PR 5)', () => {
+  const REPLY = 'Thanks, Dana. Thursday at 10 works; the invite is on its way.';
+  const NOTE = 'Dana confirmed Thursday at 10 and asked whether the CFO will join.';
+
+  /** One coordinator turn whose model answers with `text`. Returns the response and what memory kept. */
+  async function runTurn(opts: { text: string; systemRole: 'principal' | null; channelId?: string }): Promise<{
+    response: AgentResponseEvent;
+    remembered: string | undefined;
+  }> {
+    const logger = createLogger('error');
+    const bus = new EventBus(logger);
+    const responses: AgentResponseEvent[] = [];
+    bus.subscribe('agent.response', 'dispatch', (event) => { responses.push(event as AgentResponseEvent); });
+    const memory = WorkingMemory.createInMemory();
+    const provider: LLMProvider = {
+      id: 'mock',
+      chat: vi.fn(async () => ({
+        type: 'text' as const,
+        content: opts.text,
+        usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+        provenance: MOCK_PROVENANCE,
+      })),
+    };
+    new AgentRuntime({
+      agentId: 'coordinator',
+      systemPrompt: 'You are an assistant.',
+      provider,
+      resolvedModel: 'mock-model',
+      bus,
+      logger,
+      memory,
+    }).register();
+    const channelId = opts.channelId ?? 'email';
+    await bus.publish('dispatch', createAgentTask({
+      agentId: 'coordinator',
+      conversationId: 'email:thread-pr5',
+      channelId,
+      senderId: 'dana@vendor.example.test',
+      content: 'Subject: Vendor review\n\nDoes Thursday at 10 work?',
+      metadata: {
+        originator: { contactId: 'contact-pr5', systemRole: opts.systemRole, channel: channelId, initiatedAt: '2026-10-10T10:00:00.000Z', tier: opts.systemRole ?? 'known' },
+      },
+      parentEventId: 'inbound-pr5',
+    }));
+    expect(responses).toHaveLength(1);
+    const history = await memory.getHistory('email:thread-pr5', 'coordinator');
+    const last = history.at(-1);
+    return { response: responses[0]!, remembered: last?.role === 'assistant' ? String(last.content) : undefined };
+  }
+
+  it('cuts the note out of a reply to a non-principal sender and carries it on the response', async () => {
+    const { response, remembered } = await runTurn({
+      text: `${REPLY}\n\n<note_for_principal>${NOTE}</note_for_principal>`,
+      systemRole: null,
+    });
+    expect(response.payload.content).toBe(REPLY);
+    expect(response.payload.principalNote).toBe(NOTE);
+    // The sender's conversation keeps only what was said to the sender.
+    expect(remembered).toBe(REPLY);
+  });
+
+  it('turns NO_REPLY plus a note into a clean decline that still carries the note', async () => {
+    const { response } = await runTurn({
+      text: `NO_REPLY\n<note_for_principal>${NOTE}</note_for_principal>`,
+      systemRole: null,
+    });
+    expect(response.payload.suppressDelivery).toBe(true);
+    expect(response.payload.content).toBe('');
+    expect(response.payload.principalNote).toBe(NOTE);
+  });
+
+  it('removes an empty note block without carrying a note', async () => {
+    const { response } = await runTurn({
+      text: `${REPLY}<note_for_principal></note_for_principal>`,
+      systemRole: null,
+    });
+    expect(response.payload.content).toBe(REPLY);
+    expect(response.payload.principalNote).toBeUndefined();
+  });
+
+  it('leaves untagged output and the principal\'s own turn as they were', async () => {
+    const untagged = await runTurn({ text: REPLY, systemRole: null });
+    expect(untagged.response.payload.content).toBe(REPLY);
+    expect(untagged.response.payload.principalNote).toBeUndefined();
+
+    const tagged = `${REPLY} <note_for_principal>aside</note_for_principal>`;
+    const principal = await runTurn({ text: tagged, systemRole: 'principal' });
+    expect(principal.response.payload.content).toBe(tagged);
+    expect(principal.response.payload.principalNote).toBeUndefined();
+  });
+
+  it('reads no note on a principal-only channel, whatever the originator says', async () => {
+    const tagged = `${REPLY} <note_for_principal>aside</note_for_principal>`;
+    const { response } = await runTurn({ text: tagged, systemRole: null, channelId: 'cli' });
+    expect(response.payload.content).toBe(tagged);
+    expect(response.payload.principalNote).toBeUndefined();
   });
 });

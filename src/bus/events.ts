@@ -178,6 +178,13 @@ interface AgentResponsePayload {
    * flag, and treat blank `content` as "nothing to summarise". See #1732.
    */
   suppressDelivery?: boolean;
+  /**
+   * A note for the principal, cut out of a response that goes to someone else
+   * (<note_for_principal>, #1990, prompt trim PR 5). `content` never contains it. The
+   * dispatcher delivers it to the principal, whatever happens to the relay itself.
+   * Absent when the response carries no note.
+   */
+  principalNote?: string;
 }
 
 interface OutboundMessagePayload {
@@ -347,6 +354,7 @@ interface OutboundNoReplyPayload {
 //                           task-completion undo/confirm) event-driven when produced, after #1464 removed
 //                           the scheduled digest that used to surface them (#1466)
 //   - 'database_unavailable': principal alert that Postgres has been unreachable for >5 minutes (#1381)
+//   - 'principal_note':     a note for the principal cut out of a reply to someone else (prompt trim PR 5)
 export interface OutboundNotificationPayload {
   notificationType:
     | 'blocked_content'
@@ -356,7 +364,8 @@ export interface OutboundNotificationPayload {
     | 'schedule_suspended'      // scheduled job auto-suspended after consecutive failures (#538)
     | 'schedule_recovered'      // stuck job auto-recovered after exceeding timeout threshold (#207)
     | 'learning_proposal'       // learning-digest item surfaced event-driven when produced (#1466)
-    | 'database_unavailable'; // Postgres unreachable beyond escalation threshold (#1381)
+    | 'database_unavailable'  // Postgres unreachable beyond escalation threshold (#1381)
+    | 'principal_note';       // note for the principal from a reply to someone else (prompt trim PR 5)
   /** Recipient email for this notification (always the principal email today). */
   ceoEmail: string;
   subject: string;

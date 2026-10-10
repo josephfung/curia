@@ -71,6 +71,13 @@ export type BehaviorCheck =
    */
   | { kind: 'briefed'; agent: string; contains: string[] }
   /**
+   * Whether the coordinator left a note for the principal in a <note_for_principal> block,
+   * which the runtime cuts out of a reply to a non-principal sender and the dispatcher
+   * emails to the principal (prompt trim PR 5). `contains`: every string appears in the
+   * note (case-insensitive).
+   */
+  | { kind: 'principal_note'; is: 'present' | 'absent'; contains?: string[] }
+  /**
    * Passes when any alternative passes. For a behavior the platform accepts in more
    * than one shape — e.g. delegate links an entry from `outbound_entry_id` or from its
    * id quoted in the brief (#1972).
@@ -239,6 +246,11 @@ export interface ScenarioRun {
   toolCalls: CapturedToolCall[];
   /** The coordinator's agent.response content (NO_REPLY included verbatim). */
   reply: string | null;
+  /**
+   * A note for the principal cut out of the reply to a non-principal sender, which the
+   * dispatcher emails to the principal (prompt trim PR 5). Absent when there was none.
+   */
+  principalNote?: string;
   /** Set when the Dispatcher suppressed delivery (outbound.no_reply reason). */
   noReplyReason?: string;
   durationMs: number;

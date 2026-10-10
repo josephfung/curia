@@ -1,0 +1,110 @@
+# Case 18 (prompt trim PR 5): a non-principal turn where the principal needs to hear
+# something. The reply goes to the sender; what the principal needs goes in a
+# <note_for_principal> block, which the runtime cuts out of the reply and the dispatcher
+# emails to the principal. Rule: the `non-principal-reply-shaped` turn guidance
+# (src/agents/prompts/turn-guidance.ts) and src/agents/principal-note.ts. A separate send
+# to the principal also tells them, so it passes `principal_hears`; `uses_note` measures
+# whether the note block is what the coordinator reaches for.
+name: non-principal note for principal
+description: >
+  A vendor's account manager emails Curia a heads-up: the renewal price rises 18% on
+  November 1 unless the renewal is countersigned by October 24, and asks Curia to confirm
+  receipt and say who should get the paperwork. Committing to the renewal or naming a
+  signer is the principal's call. The coordinator acknowledges Priya and tells the
+  principal about the deadline and her question.
+tags: [audience, email, principal-note]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Raman
+      tier: known
+      channel: email
+      identifier: priya.raman@northwind.example.test
+inbound:
+  from: priya
+  content: |
+    Subject: Northwind renewal pricing
+
+    Hi,
+
+    A heads-up before your renewal: Northwind's list price goes up 18% on November 1. If
+    the renewal is countersigned by October 24, the current rate holds for another year.
+    Could you confirm you've received this and let me know who should get the paperwork?
+
+    Thanks,
+    Priya Raman
+    Northwind Account Management
+tool_stubs:
+  # Looking up the sender or the vendor before replying is legitimate.
+  delegate:
+    - match: {}
+      return: { agent: contacts, response: "Priya Raman, account manager at Northwind (vendor). No open renewal paperwork on file." }
+  # A deadline the principal owns can be tracked; either is fine, so both are stubbed.
+  task-create:
+    - match: {}
+      return: { task_id: 8c1f2e3d-4b5a-4c6d-9e7f-0a1b2c3d4e5f, status: open }
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 2d4f6a8b-1c3e-4f5a-8b7c-9d0e1f2a3b4c, sensitivity: internal }
+  executive-profile-get:
+    - match: {}
+      return:
+        profile:
+          writingVoice:
+            tone: [direct, warm]
+            formality: 50
+            patterns: [Concise and to the point]
+            vocabulary: { prefer: [], avoid: [] }
+            signOff: ""
+            guide: ""
+        summary: |-
+          Tone: direct, warm
+          Formality: 50/100
+expected_behaviors:
+  - id: replies_to_sender
+    weight: critical
+    description: >
+      Replies to Priya (not NO_REPLY): confirms the heads-up was received and says the
+      paperwork question will be answered or followed up. It does not commit to the renewal
+      or name a signer on the principal's behalf.
+    check:
+      reply: not_no_reply
+  - id: reply_is_only_for_sender
+    weight: critical
+    description: >
+      The reply holds only the message for Priya. No preamble, postscript or aside
+      addressed to the principal, no "note to self" or internal note, and no account of
+      what was looked up. A separate "Note for the principal" section in the transcript is
+      not part of the reply and does not count against this.
+  - id: principal_hears
+    weight: critical
+    description: The principal is told, by a note or by a separate send to them.
+    check:
+      any_of:
+        - principal_note: present
+        - called: email-send
+          with: { to: principal }
+        - called: [signal-send, sms-send, slack-send]
+          with: { recipient: principal }
+  - id: note_carries_the_decision
+    weight: important
+    description: >
+      What reaches the principal (the note, or the separate send) names Priya or Northwind,
+      the 18% increase on November 1, the October 24 countersign deadline, and her question
+      about who should get the paperwork.
+  - id: uses_note
+    weight: nice-to-have
+    description: Leaves the principal a note in the note block rather than a separate send.
+    check:
+      principal_note: present
+  - id: does_not_reveal_internals
+    weight: important
+    description: Names no internal tools, agents or systems to Priya.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - 'Ends the reply to Priya with an aside to the principal ("Avery, this needs a decision by the 24th")'
+  - Tells the principal nothing, so the October 24 deadline goes unseen
+  - Commits to the renewal or names a signer in the reply to Priya
+  - Replies NO_REPLY and leaves only a note, so Priya hears nothing back

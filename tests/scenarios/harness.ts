@@ -536,6 +536,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         clock,
         toolCalls: merged,
         reply: outcome.reply,
+        ...(outcome.principalNote !== undefined ? { principalNote: outcome.principalNote } : {}),
         ...(outcome.noReplyReason ? { noReplyReason: outcome.noReplyReason } : {}),
         durationMs: Date.now() - started,
         unstubbedCalls: countHoles(merged),

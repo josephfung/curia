@@ -319,3 +319,22 @@ expected_behaviors:
     expect(load(REAL.replace('{{resume_token:ask}}', '{{resume_token:other}}'))).toThrow(/names no seeded resume_token/);
   });
 });
+
+describe('loadScenarioCase: principal_note checks (prompt trim PR 5)', () => {
+  const withCheck = (check: string) => VALID.replace(
+    '  - id: silent\n    description: does not answer directly\n',
+    `  - id: silent\n    description: does not answer directly\n    check:\n${check}`,
+  );
+
+  it('loads present with note_contains, and absent', () => {
+    const present = loadScenarioCase(write('note.yaml', withCheck('      principal_note: present\n      note_contains: [Sam, offsite]\n')));
+    expect(present.expectedBehaviors[1]!.check).toEqual({ kind: 'principal_note', is: 'present', contains: ['Sam', 'offsite'] });
+    const absent = loadScenarioCase(write('note-absent.yaml', withCheck('      principal_note: absent\n')));
+    expect(absent.expectedBehaviors[1]!.check).toEqual({ kind: 'principal_note', is: 'absent' });
+  });
+
+  it('rejects an unknown value and note_contains on absent', () => {
+    expect(() => loadScenarioCase(write('bad1.yaml', withCheck('      principal_note: maybe\n')))).toThrow(/present or absent/);
+    expect(() => loadScenarioCase(write('bad2.yaml', withCheck('      principal_note: absent\n      note_contains: [Sam]\n')))).toThrow(/needs principal_note: present/);
+  });
+});

@@ -36,6 +36,7 @@ import { containsRawAgentId } from './agent-display-name.js';
 import { UUID_PATTERN } from '../util/uuid.js';
 import { escapeRegExp } from '../util/escape-regexp.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
+import { boundNote, NOTE_TAG, splitPrincipalNotes } from './principal-note.js';
 
 /**
  * Who reads the reply. `principal` is the principal (or an agent acting for them).
@@ -304,66 +305,28 @@ export function extractReplyBlock(text: string): string | null {
   return body.length > 0 ? body : null;
 }
 
-// A complete note block. Same shape as the reply pattern: a body never contains another
-// opening tag, so an abandoned opener followed by a complete block yields only the latter.
-const NOTE_BLOCK = /<note_for_principal>((?:(?!<note_for_principal>)[\s\S])*?)<\/note_for_principal>/gi;
-// Any note tag left in the reply once complete blocks are cut out. Looser than the block
-// pattern on purpose: a variant spelling (`<note_for_principal >`, `<Note-For-Principal>`)
-// is not cut out, so it must be caught here or its text would reach the sender.
-// One whitespace run only (after the optional slash): two adjacent `\s*` around it would
-// backtrack quadratically on a long run of spaces.
-const NOTE_TAG = /<\/?\s*note[\s_-]*for[\s_-]*principal\b[^>]*>/i;
-// Every note tag, for stripping out of recovered note text.
-const NOTE_TAG_ALL = new RegExp(NOTE_TAG.source, 'gi');
-// An opening tag left over once complete blocks are cut out: a note never closed, or the
-// outer note of a nested pair (its inner block was cut out first).
-const UNCLOSED_NOTE_OPEN = /<note_for_principal>/i;
-// Where a leftover note's text ends: a reply tag, or the outer note's own closing tag.
-const LEFTOVER_NOTE_END = /<\/?reply>|<\/note_for_principal>/i;
-// The note lands in the principal's digest as part of a progress note, so it is folded
-// onto one line and bounded like the other model- or sender-supplied text there.
+// The note lands on the review task as part of a progress note, so it is folded onto one
+// line and bounded like the other model- or sender-supplied text there.
 const MAX_PRINCIPAL_NOTE = 1000;
 
 /**
  * Split a sender-audience draft into the text the reply is read from and the note for
- * the principal (#1990). Every complete note block is cut out first, wherever it sits
- * (before, after or inside the reply block), so none of it can reach the sender.
+ * the principal (#1990), with the shared parser (src/agents/principal-note.ts). Every
+ * complete note block is cut out first, wherever it sits (before, after or inside the
+ * reply block), so none of it can reach the sender.
  *
- * Distinct non-empty blocks are all kept, in source order: two blocks may be two
- * separate points, and an exact repeat is dropped. A leftover opening tag is a note
- * never closed (most often cut off by the output limit, since it comes last) or the
- * outer note of a nested pair. Its text is recovered from the raw draft up to a reply
- * tag, its own closing tag, or the end, with any inner note tags stripped, so a nested
- * note keeps its words in the order written. It is flagged `unclosed`. Its opening tag
- * stays in `rest`, so when it sits inside the reply the reply is still rejected as
- * `note_markup`.
+ * A note never closed is flagged `unclosed`. Its opening tag stays in `rest`, so when it
+ * sits inside the reply the reply is still rejected as `note_markup`.
  *
  * The note is sanitized, folded onto one line and bounded by code point.
  */
 function splitPrincipalNote(raw: string): { rest: string; note?: string; unclosed?: true } {
-  let notes = [...raw.matchAll(NOTE_BLOCK)].map((m) => ({ at: m.index, text: (m[1] ?? '').trim() }));
-  // The reply is read from `rest`, where each block becomes one space. `blanked` keeps
-  // every block's length, so a position found in it is the same position in `raw`.
-  const rest = raw.replace(NOTE_BLOCK, ' ');
-  const blanked = raw.replace(NOTE_BLOCK, (block) => ' '.repeat(block.length));
-  const open = UNCLOSED_NOTE_OPEN.exec(blanked);
-  if (open) {
-    const start = open.index + open[0].length;
-    const tail = blanked.slice(start).search(LEFTOVER_NOTE_END);
-    const end = tail >= 0 ? start + tail : raw.length;
-    // Taken from `raw`, so an inner block keeps its place; the inner block itself is then
-    // dropped as a separate entry, since its words are already in the recovered text.
-    const recovered = raw.slice(start, end).replace(NOTE_TAG_ALL, ' ').trim();
-    notes = notes.filter((n) => n.at < open.index || n.at >= end);
-    notes.push({ at: open.index, text: recovered });
-  }
-  const unclosed = open ? { unclosed: true as const } : {};
-  const ordered = notes.filter((n) => n.text.length > 0).sort((a, b) => a.at - b.at).map((n) => n.text);
-  const distinct = [...new Set(ordered)];
-  if (distinct.length === 0) return { rest, ...unclosed };
-  const folded = sanitizeOutput(distinct.join(' ')).replace(/\s+/g, ' ').trim();
-  const note = Array.from(folded).slice(0, MAX_PRINCIPAL_NOTE).join('').trim();
-  return note.length > 0 ? { rest, note, ...unclosed } : { rest, ...unclosed };
+  const { rest, notes, unclosed } = splitPrincipalNotes(raw);
+  const flag = unclosed ? { unclosed: true as const } : {};
+  if (notes.length === 0) return { rest, ...flag };
+  const folded = sanitizeOutput(notes.join(' ')).replace(/\s+/g, ' ').trim();
+  const note = boundNote(folded, MAX_PRINCIPAL_NOTE);
+  return note.length > 0 ? { rest, note, ...flag } : { rest, ...flag };
 }
 
 /**

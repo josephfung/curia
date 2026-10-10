@@ -153,6 +153,17 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
       const missing = check.contains.filter(n => !briefs.some(brief => brief.toLowerCase().includes(n.toLowerCase())));
       return miss(`no ${check.agent} brief carries all of ${check.contains.join(', ')}${missing.length > 0 ? ` (none has ${missing.join(', ')})` : ''}`);
     }
+    case 'principal_note': {
+      const note = run.principalNote;
+      if (check.is === 'absent') {
+        return note === undefined ? pass('left no note for the principal') : miss(`left a note for the principal: ${note.slice(0, 200)}`);
+      }
+      if (note === undefined) return miss('left no note for the principal');
+      const missing = (check.contains ?? []).filter(s => !note.toLowerCase().includes(s.toLowerCase()));
+      return missing.length === 0
+        ? pass('left a note for the principal')
+        : miss(`the note for the principal lacks ${missing.join(', ')}: ${note.slice(0, 200)}`);
+    }
     case 'any_of': {
       const ratings = check.checks.map(alt => evaluateCheck(alt, run, ctx));
       const hit = ratings.find(r => r.rating === 'PASS');

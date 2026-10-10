@@ -168,3 +168,28 @@ describe('withoutRecentHistory', () => {
     expect(await view.getHistory()).toEqual(['this conversation']);
   });
 });
+
+describe('createTurnCapture: note for the principal (prompt trim PR 5)', () => {
+  it('records the note the runtime cut out of the reply', async () => {
+    const { bus, capture } = setup();
+    const turn = capture.waitFor('conv-note', 5_000);
+    await bus.publish('agent', createAgentResponse({
+      agentId: 'coordinator',
+      conversationId: 'conv-note',
+      content: '',
+      suppressDelivery: true,
+      principalNote: 'Lena replied "Yes, go ahead."',
+      parentEventId: 'task-1',
+    }));
+    const outcome = await turn;
+    expect(outcome.reply).toBe('NO_REPLY');
+    expect(outcome.principalNote).toBe('Lena replied "Yes, go ahead."');
+  });
+
+  it('records no note when the response has none', async () => {
+    const { bus, capture } = setup();
+    const turn = capture.waitFor('conv-no-note', 5_000);
+    await respond(bus, 'conv-no-note', 'Hi');
+    expect((await turn).principalNote).toBeUndefined();
+  });
+});

@@ -207,3 +207,24 @@ describe('real delegation checks (#2027)', () => {
     expect(evaluateCheck({ kind: 'briefed', agent: 'calendar', contains: ['x'] }, run([]), ctx).rating).toBe('MISS');
   });
 });
+
+describe('evaluateCheck: principal_note (prompt trim PR 5)', () => {
+  const withNote = { ...run([], 'Thanks, noted.'), principalNote: 'Lena wrote "Yes, go ahead." about the venue options. What does it refer to?' };
+
+  it('passes when a note was left and holds every string, case-insensitively', () => {
+    expect(evaluateCheck({ kind: 'principal_note', is: 'present' }, withNote, ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'principal_note', is: 'present', contains: ['LENA', 'venue'] }, withNote, ctx).rating).toBe('PASS');
+  });
+
+  it('misses when the note lacks a string, or there is none', () => {
+    const lacks = evaluateCheck({ kind: 'principal_note', is: 'present', contains: ['Lena', 'budget'] }, withNote, ctx);
+    expect(lacks.rating).toBe('MISS');
+    expect(lacks.justification).toContain('budget');
+    expect(evaluateCheck({ kind: 'principal_note', is: 'present' }, run([]), ctx).rating).toBe('MISS');
+  });
+
+  it('checks for no note', () => {
+    expect(evaluateCheck({ kind: 'principal_note', is: 'absent' }, run([]), ctx).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'principal_note', is: 'absent' }, withNote, ctx).rating).toBe('MISS');
+  });
+});

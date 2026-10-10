@@ -41,6 +41,8 @@ export interface TurnOutcome {
   calls: ObservedToolCall[];
   /** The agent's agent.response content, with an exact NO_REPLY restored. */
   reply: string | null;
+  /** A note for the principal the runtime cut out of the reply (prompt trim PR 5). */
+  principalNote?: string;
   /** Set when the Dispatcher suppressed delivery (outbound.no_reply reason). */
   noReplyReason?: string;
   /** Set when the turn could not complete (timeout, agent.error, model fallback, delivery failure). */
@@ -57,6 +59,7 @@ interface PendingTurn {
   calls: ObservedToolCall[];
   invokeIndex: Map<string, number>;
   reply: string | null;
+  principalNote?: string;
   noReplyReason?: string;
   error?: string;
   errorKind?: TurnErrorKind;
@@ -88,6 +91,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
       p.resolve({
         calls: p.calls,
         reply: p.reply,
+        ...(p.principalNote !== undefined ? { principalNote: p.principalNote } : {}),
         ...(p.noReplyReason ? { noReplyReason: p.noReplyReason } : {}),
         ...(p.error ? { error: p.error } : {}),
         ...(p.error && p.errorKind ? { errorKind: p.errorKind } : {}),
@@ -137,6 +141,7 @@ export function createTurnCapture(bus: EventBus): TurnCapture {
     // ("NO_REPLY — automated notice") keeps its text and suppressDelivery, so it still
     // reads as not-exactly-NO_REPLY — which is the failure the check exists to catch.
     p.reply = payload.suppressDelivery && payload.content === '' ? 'NO_REPLY' : payload.content;
+    if (payload.principalNote !== undefined) p.principalNote = payload.principalNote;
     if (payload.isError && p.error === undefined) {
       p.error = `${p.agentId} returned an error response: ${payload.content.slice(0, 200)}`;
       p.errorKind = 'error_response';

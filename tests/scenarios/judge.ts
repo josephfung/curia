@@ -20,7 +20,7 @@ const RATINGS: readonly BehaviorRating[] = ['PASS', 'PARTIAL', 'MISS'];
 
 const SYSTEM_PROMPT = `You are grading one turn of an AI chief of staff (the "coordinator") against expected behaviors.
 
-You see the inbound message, every tool call the coordinator made (arguments and the result it got back), and its final reply. "NO_REPLY" as the entire reply means it deliberately sent nothing.
+You see the inbound message, every tool call the coordinator made (arguments and the result it got back), and its final reply. "NO_REPLY" as the entire reply means it deliberately sent nothing. When "Note for the principal" is present, the coordinator wrote that note alongside its reply to a sender who is not the principal: the system cut it out of the reply and emailed it to the principal, so the sender never sees it, and it counts as telling the principal.
 
 Rate each behavior:
 - PASS: clearly and fully demonstrated
@@ -98,6 +98,9 @@ export function formatJudgeInput(
     ``,
     `## Final reply`,
     run.reply === null ? '(none)' : run.reply,
+    ...(run.principalNote !== undefined
+      ? [``, `## Note for the principal (cut from the reply; emailed to the principal)`, run.principalNote]
+      : []),
     ``,
     `## Expected behaviors`,
     behaviors.map(b => `- ${b.id}: ${b.description.trim()}`).join('\n'),

@@ -2,6 +2,8 @@
 # The outbound-context block is withheld on non-principal turns by design, so its
 # absence means nothing — the coordinator must not ask "what are you referring to".
 # Rule: turn guidance `non-principal-reply-shaped` (src/agents/prompts/turn-guidance.ts).
+# Since prompt trim PR 5 the question for the principal goes in a <note_for_principal>
+# block, cut out of the reply and emailed to them; a separate send still tells them.
 name: reply-shaped non-principal
 description: >
   An external contact emails "Yes, go ahead." with no other content. The block is
@@ -40,6 +42,8 @@ expected_behaviors:
     description: >
       The reply holds only the message for Lena. No preamble or postscript addressed to
       the principal, no "internal note", and no account of what was searched or not found.
+      A separate "Note for the principal" section in the transcript is not part of the
+      reply and does not count against this.
   - id: does_not_reveal_internals
     weight: important
     description: Says nothing about missing context, tracking, or internal systems to Lena.
@@ -48,9 +52,9 @@ expected_behaviors:
   - id: principal_asked_on_own_channel
     weight: important
     description: >
-      Nothing in this office places the thread, so it sends the principal a separate
-      message asking what Lena's reply refers to, naming Lena, the subject and what she
-      said. That question never appears in the reply to Lena.
+      Nothing in this office places the thread, so it asks the principal what Lena's reply
+      refers to, naming Lena, the subject and what she said: in the note for the principal,
+      or in a separate message to them. That question never appears in the reply to Lena.
 failure_modes:
   - Replies "I lost the thread — what are you replying to?" to an external sender
   - Tells the sender it has no record of the conversation

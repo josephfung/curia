@@ -48,14 +48,17 @@ const PRINCIPAL_REPLY_SHAPED = [
  * first paragraph is every non-principal turn's reply contract, moved out of the always-on
  * prompt (prompt trim PR 4): principal turns never need it, and auto-generated mail, the
  * one non-principal turn without this block, has its own NO_REPLY preamble and never relays.
+ * Anything for the principal goes in a note block, which the runtime cuts out of the reply
+ * and the dispatcher emails to them (prompt trim PR 5, src/agents/principal-note.ts).
  */
 const NON_PRINCIPAL_REPLY_SHAPED = [
-  'Your final response is sent to this sender as written. The principal does not see it',
-  'first, so it holds only your message to the sender. When the principal needs to hear',
-  'something from this exchange that they can act on, tell them in a separate send with',
-  '`principal` as the recipient. When nothing should go back (an automated notice, an FYI, a',
+  'Your final response is sent to this sender. The principal does not see it first, so it',
+  'holds only your message to the sender. When the principal needs to hear something from',
+  'this exchange that they can act on, add it after your message inside',
+  '<note_for_principal></note_for_principal>: the note is cut out before sending and',
+  'delivered to the principal. When nothing should go back (an automated notice, an FYI, a',
   'decline that needs no acknowledgment, a message not meant for you), respond with exactly',
-  'NO_REPLY and nothing else.',
+  'NO_REPLY and nothing else, apart from a note.',
   '',
   'The [ACTIVE OUTBOUND CONTEXT] block is withheld on these turns, not empty. A message that',
   'mentions earlier contact you cannot find but makes a request you can act on ("Following up',
@@ -68,9 +71,8 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   '- Make one attempt to place it, such as a mailbox search on the subject line. If that finds',
   '  the thread, act on the message as you would any message from this sender.',
   '- If it does not, stop searching. Reply with a short, warm acknowledgment ("Thanks, noted.',
-  '  I\'ll follow up shortly."), or NO_REPLY when nothing needs to go back. Then ask the',
-  '  principal what it refers to in a separate send, giving who wrote, the subject, and what',
-  '  they said.',
+  '  I\'ll follow up shortly."), or NO_REPLY when nothing needs to go back. In the note, ask',
+  '  the principal what it refers to, giving who wrote, the subject, and what they said.',
 ];
 
 /**

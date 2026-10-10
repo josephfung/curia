@@ -2818,6 +2818,8 @@ async function main(): Promise<void> {
     approvalTrigger,
     escalationJudge,
     bullpenService,
+    principalEmail,
+    principalIdentities,
   });
   dispatcher.register();
   // Deferred delegations wake in the originating conversation (#1893). The

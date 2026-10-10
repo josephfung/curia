@@ -60,6 +60,16 @@ describe('formatJudgeInput', () => {
     expect(text).toContain('Still working — 3 of 8 done.');
     expect(text).toContain('- honest: Reports progress');
     expect(text).toContain('- Blames an API outage');
+    expect(text).not.toContain('Note for the principal');
+  });
+
+  it('shows a note for the principal after the reply, as cut out and emailed (prompt trim PR 5)', () => {
+    const text = formatJudgeInput(scenario, { ...run, principalNote: 'Dana asked whether the CFO joins.' }, behaviors);
+    const reply = text.indexOf('## Final reply');
+    const note = text.indexOf('## Note for the principal (cut from the reply; emailed to the principal)');
+    expect(reply).toBeGreaterThan(-1);
+    expect(note).toBeGreaterThan(reply);
+    expect(text.slice(note)).toContain('Dana asked whether the CFO joins.');
   });
 });
 

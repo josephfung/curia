@@ -73,6 +73,7 @@ const CHECK_KEYS: Record<string, readonly string[]> = {
   reply_excludes: ['reply_excludes'],
   reply_excludes_internal_names: ['reply_excludes_internal_names'],
   briefed: ['briefed', 'brief_contains'],
+  principal_note: ['principal_note', 'note_contains'],
   any_of: ['any_of'],
 };
 
@@ -129,10 +130,10 @@ function list(raw: Raw, key: string, file: string): Raw[] {
 
 function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
   if (!isObject(raw)) throw new CaseError(file, `${where}: check must be a mapping`);
-  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'briefed', 'any_of']
+  const kinds = ['called', 'not_called', 'order', 'reply', 'reply_excludes', 'reply_excludes_internal_names', 'briefed', 'principal_note', 'any_of']
     .filter(k => k in raw);
   if (kinds.length !== 1) {
-    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names, briefed, any_of (got ${kinds.join(', ') || 'none'})`);
+    throw new CaseError(file, `${where}: check needs exactly one of called, not_called, order, reply, reply_excludes, reply_excludes_internal_names, briefed, principal_note, any_of (got ${kinds.join(', ') || 'none'})`);
   }
   onlyKeys(raw, CHECK_KEYS[kinds[0]!]!, file, where);
   const withArgs = raw['with'];
@@ -173,6 +174,17 @@ function parseCheck(raw: unknown, file: string, where: string): BehaviorCheck {
       return { kind: 'briefed', agent: str(raw, 'briefed', file, where), contains: strList(raw, 'brief_contains', file, where, true) };
     case 'order':
       return { kind: 'order', tools: strList(raw, 'order', file, where, true), ...(agent !== undefined ? { agent } : {}) };
+    case 'principal_note': {
+      const is = raw['principal_note'];
+      if (is !== 'present' && is !== 'absent') {
+        throw new CaseError(file, `${where}: 'principal_note' must be present or absent`);
+      }
+      const noteContains = strList(raw, 'note_contains', file, where);
+      if (is === 'absent' && noteContains.length > 0) {
+        throw new CaseError(file, `${where}: 'note_contains' needs principal_note: present`);
+      }
+      return { kind: 'principal_note', is, ...(noteContains.length > 0 ? { contains: noteContains } : {}) };
+    }
     case 'reply': {
       const is = raw['reply'];
       if (is !== 'no_reply' && is !== 'not_no_reply') {

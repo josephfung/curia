@@ -30,6 +30,7 @@ import type { CallerContext } from '../skills/types.js';
 import type { ChannelIdentity, PrincipalPrimaryEmailRef } from '../contacts/types.js';
 import { sanitizeOutput } from '../skills/sanitize.js';
 import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
+import { splitRelayNote } from './principal-note.js';
 import { stripOutboundContextPreamble } from '../dispatch/outbound-context.js';
 import { parseTurnGuidanceKeys, renderTurnGuidance } from './prompts/turn-guidance.js';
 import { renderSenderLine, UNRESOLVED_SENDER_HEAD } from './prompts/sender-line.js';
@@ -1683,7 +1684,8 @@ export class AgentRuntime {
               );
               const escalationContent = composed.content;
               // Only a sender-audience reply carries one (#1990). Recorded before the
-              // reply goes out, so the audit log reads in the order things happened.
+              // reply goes out, so the audit log reads in the order things happened. It
+              // also rides on the response, for the dispatcher to deliver (prompt trim PR 5).
               if (composed.principalNote !== undefined) {
                 await this.recordPrincipalNote(esc, composed.principalNote, composed.via, taskEvent, conversationId);
               }
@@ -1702,6 +1704,7 @@ export class AgentRuntime {
                 sends,
                 // Ordinary reply text, so a scheduler turn's copy is audited when dropped (#2091).
                 channelId: turnChannelId,
+                ...(composed.principalNote !== undefined && { principalNote: composed.principalNote }),
                 ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });
@@ -2624,6 +2627,36 @@ export class AgentRuntime {
       await this.publishAgentErrorForFallback(taskEvent, responseAgentError);
     }
 
+    // A response to someone other than the principal can end with a note for the
+    // principal (prompt trim PR 5). Cut out first, so "NO_REPLY" plus a note is an exact
+    // NO_REPLY below, and the sender's conversation keeps only what was said to them. The
+    // dispatcher delivers the note. Same audience rule as the delegation-failure reply's
+    // note (#1990): a turn whose reader cannot be shown to be the principal's side.
+    let principalNote: string | undefined;
+    if (!isResponseError && failureAudience.audience === 'sender') {
+      const split = splitRelayNote(responseContent);
+      // Untagged output comes back unchanged. Anything else had markup, even an empty
+      // note, which must not reach the sender either.
+      if (split.reply !== responseContent) {
+        responseContent = split.reply;
+        principalNote = split.note;
+        // Lengths only: the note and the reply can carry a sender's details.
+        const fields = {
+          agentId,
+          conversationId,
+          noteLength: split.note?.length ?? 0,
+          replyLength: split.reply.length,
+          unclosed: split.unclosed === true,
+          strayTag: split.strayTag === true,
+        };
+        if (split.unclosed || split.strayTag) {
+          logger.warn(fields, 'Principal note markup was malformed — note tags removed from the reply to the sender');
+        } else {
+          logger.info(fields, 'Principal note cut out of the reply to the sender');
+        }
+      }
+    }
+
     // Lift NO_REPLY out of content before persist/publish so scheduler summaries
     // and working-memory turns do not store a control token (#1732).
     const prepared = isResponseError
@@ -2648,6 +2681,7 @@ export class AgentRuntime {
       skillsCalled,
       ...(!isResponseError && { sends }),
       channelId: turnChannelId,
+      ...(principalNote !== undefined && { principalNote }),
       ...failedSkillsPayload(),
       parentEventId: taskEvent.id,
     });
