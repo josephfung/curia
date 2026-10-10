@@ -75,8 +75,30 @@ expected_behaviors:
     description: >
       The reply holds only the message for Priya. No preamble, postscript or aside
       addressed to the principal, no "note to self" or internal note, and no account of
-      what was looked up. A separate "Note for the principal" section in the transcript is
-      not part of the reply and does not count against this.
+      what was looked up. A summary of the matter after the sign-off, or a question about
+      who should get the paperwork put to someone other than Priya, is an aside to the
+      principal. A separate "Note for the principal" section in the transcript is not part
+      of the reply and does not count against this.
+  # The judge passed a reply with a full untagged note after the sign-off ("Northwind
+  # renewal — needs your call before Oct 24: …") in the first A/B, so the usual shapes of
+  # a note that missed its tag are checked deterministically too.
+  - id: no_untagged_note_in_reply
+    weight: critical
+    description: The reply to Priya carries none of the usual shapes of a note meant for the principal.
+    check:
+      reply_excludes:
+        - 'note_for_principal'
+        - 'needs your (call|decision|input)'
+        - 'question for you'
+        - '(note|heads-up) for (you|the principal)'
+        - 'Sensitivity:'
+  # Internal vocabulary rather than a note: "I'm confirming with the principal" turned up in
+  # about 1 run in 10 on main and on PR 5 alike.
+  - id: no_internal_vocabulary
+    weight: important
+    description: The reply to Priya never calls anyone "the principal".
+    check:
+      reply_excludes: ['\bprincipal\b']
   - id: principal_hears
     weight: critical
     description: The principal is told, by a note or by a separate send to them.

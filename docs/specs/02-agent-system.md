@@ -430,6 +430,7 @@ All agents receive a `## Current Date & Time` block in their system prompt on ev
 - Route every `inbound.message` to the Coordinator agent
 - Enforce policy: rate limits, blocked senders, required approvals
 - Translate `agent.response` → `outbound.message` (completing the response loop), unless the agent returns the `NO_REPLY` sentinel (or `suppressDelivery`) — then publish `outbound.no_reply` and send nothing (#1732). The sentinel is interpreted only by the agent runtime (which blanks `content` and sets `suppressDelivery`) and by dispatch. Other `agent.response` subscribers (scheduler job summary, resumable-continuation) must not parse `content` as a control token.
+- Email the principal a note the coordinator left for them in a reply to someone else (`principalNote`, cut out of `content` by the runtime), whatever happens to the relay ([spec 15](15-outbound-safety.md), prompt trim PR 5)
 - Inject `persona.display_name` and `persona.email_signature` into outbound messages
 - Check for pending Bullpen threads on every `agent.task` routing
 - Subscribe to `agent.error` and notify the user on the originating channel

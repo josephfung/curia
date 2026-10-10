@@ -27,7 +27,9 @@
 // reply: it had something real to tell the principal and one place to write it. So
 // the sender prompt asks for anything meant for the principal in a
 // <note_for_principal> block, which is cut out of the text before the reply is read
-// and returned separately for the runtime to record.
+// and returned separately for the runtime to record. Since prompt trim PR 5 the
+// dispatcher also emails it to the principal, like a note on any other reply to a
+// sender (src/agents/principal-note.ts).
 
 import type { TaskOriginator } from '../contacts/types.js';
 import type { Message } from './llm/provider.js';

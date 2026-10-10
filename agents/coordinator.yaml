@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.25.3"
+version: "0.25.4"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:

@@ -97,6 +97,22 @@ The dispatcher translates every `agent.response` with a routing entry into `outb
    HTTP/`EventRouter` waiters receive a terminal pending-approval status outbound so
    `POST /api/messages` does not hang for the full response timeout.
 
+**A note for the principal** (prompt trim PR 5). On a turn answering someone other than the
+principal, the coordinator puts what the principal needs to hear in a
+`<note_for_principal></note_for_principal>` block. The runtime cuts it out of the final
+response before the `NO_REPLY` lift and carries it on `agent.response` as `principalNote`
+(`src/agents/principal-note.ts`). Which turns: the delegation-failure reply's audience rule
+(#1978), so never a principal-only channel or a principal-side originator. Untagged output
+is the whole reply, unchanged. A note never closed takes the rest of the response with it,
+and a closing tag with no note is removed, so markup never reaches the sender. The
+dispatcher emails the note to the principal as a `principal_note` `outbound.notification`
+before any exception above applies: a declined, suppressed or held reply still delivers it.
+It is not emailed when a send already reached one of the principal's verified identities on
+that turn. The delegation-failure reply's note (#1990) takes the same path. Stage 2 is the
+backstop for a note written without the tag: on the production judge it blocked a
+postscript or a labelled note to the principal every time, and an aside woven into the body
+never (PR 5 in the [baseline log](../wip/2026-10-01-coordinator-context-baseline.md)).
+
 The content-filter rewrite prompt (#1355) offers `NO_REPLY` alongside rewrite. Returning it
 abandons delivery: no send, no salvage draft, no further retry. An `llm-judge-audience-leak`
 block that the agent abandons therefore cannot be polished into a recipient-appropriate

@@ -50,15 +50,18 @@ const PRINCIPAL_REPLY_SHAPED = [
  * one non-principal turn without this block, has its own NO_REPLY preamble and never relays.
  * Anything for the principal goes in a note block, which the runtime cuts out of the reply
  * and the dispatcher emails to them (prompt trim PR 5, src/agents/principal-note.ts).
+ *
+ * The note line closes the block, as the delegation-failure prompt's format line does
+ * (#1990), and says the note is emailed. Both were A/B'd on the production standard-tier
+ * model: in the first paragraph, one note in five went untagged into the reply and routine
+ * replies grew notes; closing the block without "emailed", 7 of 10 vendor deadlines reached
+ * the principal; as written, 10 of 10 (baseline log, PR 5).
  */
 const NON_PRINCIPAL_REPLY_SHAPED = [
   'Your final response is sent to this sender. The principal does not see it first, so it',
-  'holds only your message to the sender. When the principal needs to hear something from',
-  'this exchange that they can act on, add it after your message inside',
-  '<note_for_principal></note_for_principal>: the note is cut out before sending and',
-  'delivered to the principal. When nothing should go back (an automated notice, an FYI, a',
-  'decline that needs no acknowledgment, a message not meant for you), respond with exactly',
-  'NO_REPLY and nothing else, apart from a note.',
+  'holds only your message to the sender. When nothing should go back (an automated notice,',
+  'an FYI, a decline that needs no acknowledgment, a message not meant for you), the message',
+  'is exactly NO_REPLY and nothing else.',
   '',
   'The [ACTIVE OUTBOUND CONTEXT] block is withheld on these turns, not empty. A message that',
   'mentions earlier contact you cannot find but makes a request you can act on ("Following up',
@@ -73,6 +76,11 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   '- If it does not, stop searching. Reply with a short, warm acknowledgment ("Thanks, noted.',
   '  I\'ll follow up shortly."), or NO_REPLY when nothing needs to go back. In the note, ask',
   '  the principal what it refers to, giving who wrote, the subject, and what they said.',
+  '',
+  'Write the message to the sender, or NO_REPLY. If the principal needs to hear something from',
+  'this exchange that they can act on, add it after the message inside',
+  '<note_for_principal></note_for_principal> tags. The note is emailed to the principal and',
+  'only they see it; nothing for the principal goes in the message.',
 ];
 
 /**
