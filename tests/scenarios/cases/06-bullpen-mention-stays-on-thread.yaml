@@ -43,6 +43,18 @@ tool_stubs:
             content: >
               @coordinator the Q3 competitor brief is finished and saved in the documents
               workspace as "Q3 competitor brief". Can you acknowledge you've got it?
+    # A reply missing a required field gets the handler's error, in the handler's order, so
+    # a malformed call can be corrected. Answering it "posted" made runs retry until the turn
+    # budget ran out (#2098). `null` matches an absent argument; the handler also rejects an
+    # empty string. A non-string value can't be matched here and still falls through.
+    - match: { action: reply, thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { action: reply, thread_id: "" }
+      error: "Missing required field: 'thread_id'"
+    - match: { action: reply, content: null }
+      error: "Missing required field: 'content'"
+    - match: { action: reply, content: "" }
+      error: "Missing required field: 'content'"
     - match: {}
       return: { posted: true, thread_id: "{{thread:brief}}" }
   # The brief is already saved, but a run sometimes places it anyway. Test mode has no
@@ -114,8 +126,10 @@ expected_behaviors:
     description: >
       Replies on that thread with the bullpen tool (a reply with close_after counts).
       Reading the thread with get_thread is not a reply.
+    # A reply the stub refused (missing content, #2098) did not post, so it does not count.
     check:
       called: bullpen
+      success: true
       with: { action: reply, thread_id: "{{thread:brief}}" }
   - id: no_human_channel
     weight: critical

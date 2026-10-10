@@ -189,6 +189,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Scenario 06 bullpen stub** — a reply missing `content` or `thread_id` gets the handler's error, not "posted". (#2098)
 - **Image publish and CI** — Docker Hub pulls are authenticated, so shared-runner rate limits no longer fail them. (#2095)
 - **Nylas folder lookups** — label and read calls reuse a per-grant folder list; email labels past page one resolve. (#2083)
 - **Skill timeouts** — a timed-out call now aborts its Nylas requests instead of writing late. (#2083)
