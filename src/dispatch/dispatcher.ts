@@ -1799,13 +1799,16 @@ export class Dispatcher {
    * with is audited as `outbound.no_reply` (`scheduler_undelivered`) with the text kept
    * (#2091), whether or not the turn also sent something: `sends` names skills, not
    * recipients, so a send to a third party cannot vouch that the principal heard. Errors
-   * are the scheduler's to record, and a decline has no text to lose.
+   * are the scheduler's to record, and an empty or exact NO_REPLY has no text to lose.
    */
   private async recordUnroutedSchedulerReply(event: AgentResponseEvent): Promise<void> {
     const { agentId, conversationId, content, sends, isError } = event.payload;
-    const declined = event.payload.suppressDelivery === true
-      || classifyNoReply(content) !== null
-      || containsStandaloneNoReplyToken(content);
+    // Only an empty or exact NO_REPLY is a decline with nothing to lose (the runtime blanks
+    // an exact one). Prose around a stray token ("…told the principal. NO_REPLY", or a
+    // near-miss the runtime flags suppressDelivery with the text kept) is still text that
+    // reached no one, so it is recorded — the routed path keeps it too, as ambiguous_decline.
+    const kind = classifyNoReply(content);
+    const declined = kind === 'exact' || kind === 'empty';
     if (isError || declined) {
       this.logger.debug(
         { agentId, conversationId, parentEventId: event.parentEventId, channelId: 'scheduler', isError: isError === true, declined },

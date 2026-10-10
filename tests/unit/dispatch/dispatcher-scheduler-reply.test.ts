@@ -93,6 +93,17 @@ describe('Dispatcher — unrouted scheduler-turn replies (#2091)', () => {
     expect(noReplyEvents).toHaveLength(0);
   });
 
+  it('still records prose around a stray NO_REPLY token', async () => {
+    const { bus, noReplyEvents } = buildHarness();
+    // A trailing token: classifyNoReply sees a real reply, the runtime does not suppress.
+    const trailing = `Sam confirmed Thursday at 10. ${NO_REPLY_SENTINEL}`;
+    await publishUnrouted(bus, { content: trailing, sends: [] });
+    // A leading-token near-miss: the runtime flags suppressDelivery but keeps the text.
+    const leading = `${NO_REPLY_SENTINEL} — Sam confirmed Thursday at 10.`;
+    await publishUnrouted(bus, { content: leading, suppressDelivery: true, sends: [] });
+    expect(noReplyEvents.map((e) => e.payload.abandonedContent)).toEqual([trailing, leading]);
+  });
+
   it('leaves an error response to the scheduler', async () => {
     const { bus, noReplyEvents } = buildHarness();
     await publishUnrouted(bus, { content: 'Something went wrong.', isError: true });
