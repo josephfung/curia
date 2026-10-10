@@ -6,7 +6,9 @@
 # a Google file URL and point to skill-activate (src/skills/_shared/google-workspace-url.ts)
 # instead of returning a sign-in page, and the prompt no longer says so. Both are stubbed
 # with that refusal (tests/unit/scenarios/cases.test.ts pins it), so a run that tries them
-# first is told where the file opens, as in production.
+# first is told where the file opens, as in production. The case no longer checks that
+# they go uncalled: the refusal is enforced and unit-tested, and a refused call costs one
+# call, not the answer.
 name: google doc link read
 description: >
   The principal pastes a Google Docs link to the Q3 offsite plan and asks for the gist.
@@ -164,12 +166,6 @@ expected_behaviors:
           with: { document_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
         - called: get_drive_file_content
           with: { file_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
-  # Code refuses these calls now, so trying one first costs a call, not the answer.
-  - id: no_web_tools_on_google_url
-    weight: nice-to-have
-    description: Goes straight to the Workspace tools without trying web-fetch or web-browser.
-    check:
-      not_called: [web-fetch, web-browser]
   - id: summarises_doc
     weight: important
     description: >
