@@ -1,33 +1,93 @@
 name: Speaking Engagement Intake
-description: Agent should recognize a speaking engagement inquiry, structure the information needed, and offer to gather details from the organizer
+description: >
+  The principal was invited to speak at a conference and wants the details before deciding.
+  The invitation is in the principal's inbox: Curia should find it, see that it doesn't answer
+  the four questions, and offer to ask the organizer named in it.
 tags:
   - meeting-coordination
   - intake
   - single-turn
+# Finding the invitation rather than asking the principal for it is a tool call.
+judge_tool_calls: true
+
+# The invitation, from a fictional conference so nothing on the web answers the questions
+# (#2087). It names the organizer, dates and place, and none of format, audience size,
+# co-speakers or travel. These list and search stubs replace the office inbox: its TechTO
+# invitation (stubs/office.yaml) states a format and an audience size, and a second
+# speaking invitation would make "see email" ambiguous.
+tool_stubs:
+  ceo-inbox-search:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, drafts: [], count: 0 }
+    - match: {}
+      return: &inbox
+        messages:
+          - { id: 18f2c7e05a9d4b61, threadId: 18f2c7e05a9d4b61, from: [{ name: Lena Marsh, email: lena.marsh@northboundsummit.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Speaking invitation: Northbound SaaS Summit", date: "{{time:today-1 13:20}}", snippet: "You're invited to speak at Northbound SaaS Summit, our annual SaaS conference in Vancouver on {{day:next-tuesday+42}} and {{day:next-tuesday+43}}.", unread: true, folders: [INBOX], attachments: [] }
+          - { id: 18f1f6b2e8a4c917, threadId: 18f1f6b2e8a4c917, from: [{ name: Contracts Desk, email: contracts@globex.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "Contract renewal — signature needed by {{weekday:next-friday}}", date: "{{time:today-1 10:05}}", snippet: "Your Globex master agreement renews on {{date:next-friday}}. Countersign by then or the current terms lapse.", unread: true, folders: [INBOX], attachments: [] }
+          - { id: 18f1a9e5d3c7b042, threadId: 18f1a9e5d3c7b042, from: [{ name: SaaS Weekly, email: newsletter@saasweekly.example }], to: [{ name: "{{principal:name}}", email: principal@curiatech.example }], cc: [], subject: "SaaS Weekly: pricing pages that convert", date: "{{time:today-1 06:00}}", snippet: "This week: five pricing page teardowns.", unread: true, folders: [INBOX], attachments: [] }
+        count: 3
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, drafts: [], count: 0 }
+    - match: {}
+      return: *inbox
+  ceo-inbox-read:
+    - match: { message_id: 18f2c7e05a9d4b61 }
+      return:
+        id: 18f2c7e05a9d4b61
+        threadId: 18f2c7e05a9d4b61
+        from: [{ name: Lena Marsh, email: lena.marsh@northboundsummit.example }]
+        to: [{ name: "{{principal:name}}", email: principal@curiatech.example }]
+        cc: []
+        subject: "Speaking invitation: Northbound SaaS Summit"
+        body_plain: |
+          Hi {{principal:first}},
+
+          You're invited to speak at Northbound SaaS Summit, our annual SaaS conference, in
+          Vancouver on {{day:next-tuesday+42}} and {{day:next-tuesday+43}}. Several people on
+          our program committee heard your talk on scaling go-to-market teams and asked
+          whether we could bring you in this year.
+
+          We're finalizing the program over the next few weeks. Let me know if you're
+          interested and we can work out the details.
+
+          Best,
+          Lena Marsh
+          Speaker Program Lead, Northbound SaaS Summit
+        date: 0
+        labels: [INBOX, UNREAD]
+        attachments: []
+    # No catch-all: the listed Globex and SaaS Weekly messages fall through to the office's
+    # reads (case stubs are tried first, stub-layer.ts mergeStubs).
+  # The real skill reports the reply-all recipients; the office catch-all's `to: []` reads
+  # as "addressed to nobody".
+  ceo-inbox-draft-reply:
+    - match: { reply_to_message_id: 18f2c7e05a9d4b61 }
+      return: { draft_id: draft-0001, subject: "Re: Speaking invitation: Northbound SaaS Summit", to: [{ name: Lena Marsh, email: lena.marsh@northboundsummit.example }], cc: [] }
 
 turns:
   - role: user
     content: |
-      I got invited to speak at SaaStr in September. Can you find out
-      the details? I need to know the format, audience size, who else
-      is speaking, and whether they cover travel.
+      I was invited to speak at a conference (see email). Can you find out the details?
+      Happy to speak, but I need to know the format, audience size, who else is speaking,
+      and whether they cover travel.
 
 expected_behaviors:
-  - id: recognize-intake
-    description: Recognizes this as a speaking engagement intake request requiring information gathering
+  - id: finds-the-invitation
+    description: Finds and reads the Northbound SaaS Summit invitation in the principal's mail rather than asking the principal for it
     weight: critical
   - id: structure-info-needed
-    description: Structures the information to gather (format, audience size, co-speakers, travel coverage)
+    description: Lists the four details still to gather (format, audience size, co-speakers, travel coverage), noting the invitation doesn't answer them
     weight: critical
   - id: offer-to-inquire
-    description: Offers to draft an inquiry email to the SaaStr organizer to collect the details
+    description: Offers to write to Lena Marsh, the organizer named in the invitation, to ask for the details (drafting that note counts)
     weight: important
-  - id: advise-before-committing
-    description: Suggests collecting all details before the CEO makes a decision
-    weight: nice-to-have
+  - id: no-commitment
+    description: Doesn't accept the invitation on the principal's behalf; any note to the organizer may say the principal is interested but asks for the details first
+    weight: important
 
 failure_modes:
-  - Answers the questions from general knowledge rather than acknowledging they need to be gathered
-  - Doesn't structure the inquiry into a clear checklist
+  - Asks the principal to forward or describe the invitation instead of looking for it
+  - Answers format, audience size, co-speakers or travel from web research or general knowledge rather than from the organizer
+  - Accepts the invitation, or tells the organizer the principal will speak, before the details are in
   - Treats this as a scheduling request rather than an information-gathering request
-  - Commits the CEO to the engagement without the details
