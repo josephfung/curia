@@ -240,7 +240,8 @@ A **scheduler-channel turn** has no dispatcher routing at all: it never came thr
 `handleInbound`, so its reply text goes nowhere, and the only way to reach the principal
 is a send skill. The runtime tells the agent so on those turns, and to send only when the
 task asks it to tell, notify or remind the principal (the `scheduler-delivery`
-turn guidance). When the turn ends with reply text instead of `NO_REPLY`, dispatch
+turn guidance). When the turn ends with anything but an empty or exact `NO_REPLY` (prose
+around a stray token counts as reply text), dispatch
 publishes `outbound.no_reply` with reason `scheduler_undelivered` and the text on
 `abandonedContent`, whether or not the turn also sent something: the response's `sends`
 names skills, not recipients, so a send to a third party says nothing about whether the
