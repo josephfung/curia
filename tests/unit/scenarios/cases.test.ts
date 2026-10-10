@@ -2,8 +2,12 @@
 // Runs in CI with no database or model: the live suite is `pnpm scenarios`.
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { BullpenHandler } from '../../../skills/bullpen/handler.js';
 import { PAUSED_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
+import { createLogger } from '../../../src/logger.js';
+import { BullpenService } from '../../../src/memory/bullpen.js';
+import type { ToolContext } from '../../../src/skills/types.js';
 import { loadScenarioCases } from '../../scenarios/loader.js';
 import { matchToolStub } from '../../scenarios/stub-matcher.js';
 import { coverageViolations, readCoverage } from '../../scenarios/stub-coverage.js';
@@ -128,6 +132,54 @@ describe('coordinator scenario cases', () => {
       expect(behavior?.weight, id).toBe('important');
       expect(behavior?.check).toMatchObject({ kind: 'not_called', tools: [tool] });
     }
+  });
+
+  it("answers a malformed bullpen reply with the handler's own error (#2098)", async () => {
+    // Case 06's catch-all answers posted: true. Without these rules a reply with no content
+    // is told it posted, never gets the error production returns, and retries until the
+    // turn budget runs out. The expected errors come from the real handler, so a reworded
+    // handler message fails here instead of leaving the stub quietly out of date.
+    const bullpen = cases.find(c => c.name === 'bullpen mention stays on thread');
+    expect(bullpen).toBeDefined();
+    const handler = new BullpenHandler();
+    const handlerError = async (input: Record<string, unknown>): Promise<string | undefined> => {
+      // The handler refuses before validating unless its service, bus, agent and task are set.
+      // Both field checks then run before it reads a thread or publishes, so an empty
+      // in-memory service and an inert bus are enough.
+      const result = await handler.execute({
+        input,
+        agentId: 'coordinator',
+        taskEventId: 'task-2098',
+        log: createLogger('error'),
+        bullpenService: BullpenService.createInMemory(),
+        bus: { publish: async () => undefined, subscribe: () => undefined },
+      } as unknown as ToolContext);
+      return result.success ? undefined : result.error;
+    };
+
+    const threadId = '9b2f4c1e-6a3d-4e8f-b0c7-2d5e9a1f3b64';
+    for (const input of [
+      // The 2026-10-10 gate's looping runs sent exactly this shape.
+      { action: 'reply', thread_id: threadId, source_message_id: threadId, close_after: true },
+      { action: 'reply', thread_id: threadId, content: '' },
+      { action: 'reply', thread_id: '', content: 'Got it, thanks.' },
+      { action: 'reply', content: 'Got it, thanks.' },
+      { action: 'reply' },
+    ]) {
+      const stub = matchToolStub('bullpen', input, bullpen!.toolStubs);
+      const expected = await handlerError(input);
+      expect(expected, JSON.stringify(input)).toEqual(expect.any(String));
+      expect(stub?.return, JSON.stringify(input)).toBeUndefined();
+      expect(stub?.error, JSON.stringify(input)).toBe(expected);
+    }
+
+    // A refused reply did not post, so the critical behavior counts only a reply that succeeded.
+    expect(bullpen!.expectedBehaviors.find(b => b.id === 'replies_on_thread')?.check)
+      .toMatchObject({ kind: 'called', success: true });
+
+    // A well-formed reply still posts.
+    expect(matchToolStub('bullpen', { action: 'reply', thread_id: threadId, content: 'Got it, thanks.' }, bullpen!.toolStubs)?.return)
+      .toMatchObject({ posted: true });
   });
 
   it('gate releases on the real-delegation cases the README names (#2027)', () => {
