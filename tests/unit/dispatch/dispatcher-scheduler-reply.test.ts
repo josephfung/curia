@@ -66,10 +66,11 @@ describe('Dispatcher — unrouted scheduler-turn replies (#2091)', () => {
       abandonedContent: REPLY,
     });
     expect(noReplyEvents[0]!.parentEventId).toBe(responseId);
-    expect(logger.warn).toHaveBeenCalledWith(
+    expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({ channelId: 'scheduler', droppedContent: REPLY }),
       expect.stringContaining('reached no one'),
     );
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('records nothing when the turn sent a message', async () => {

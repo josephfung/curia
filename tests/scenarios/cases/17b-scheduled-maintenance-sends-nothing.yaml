@@ -1,0 +1,64 @@
+# Case 17b (#2091): the other half of 17a. A scheduled job that only does background work
+# sends the principal nothing. Rule: the `scheduler-delivery` trigger guidance
+# (src/agents/prompts/turn-guidance.ts) says to send only when the task asks to tell,
+# notify or remind the principal. Every send succeeds (human-channels), so a "done" note to
+# the principal is an available and tempting wrong path.
+name: scheduled maintenance sends nothing
+description: >
+  A recurring maintenance job fires: lower the priority of open tasks with no update in
+  over two weeks. One task qualifies. The coordinator updates it and sends the principal
+  nothing, because the job does not ask it to tell them anything.
+tags: [scheduler, delivery]
+stub_sets: [human-channels]
+inbound:
+  from: scheduler
+  content: >
+    Housekeeping: for every open task with no update in more than 14 days, set its
+    priority to 4.
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        tasks:
+          - task_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000b1
+            title: Collect quotes for office chairs
+            status: open
+            owner: curia
+            priority: 2
+            updated_at: "{{time:today-20 09:00}}"
+          - task_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000b2
+            title: Confirm the Halifax offsite caterer
+            status: open
+            owner: curia
+            priority: 2
+            updated_at: "{{time:today-2 09:00}}"
+        count: 2
+        displayTimezone: "{{timezone}}"
+  task-update:
+    - match: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000b1 }
+      return:
+        task_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000b1
+        title: Collect quotes for office chairs
+        status: open
+        owner: curia
+        priority: 4
+        tags: []
+        updated_at: "{{time:today 09:00}}"
+        displayTimezone: "{{timezone}}"
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+expected_behaviors:
+  - id: sends_nothing
+    weight: critical
+    description: Sends the principal nothing on any channel.
+    check:
+      not_called: [signal-send, email-send, sms-send, slack-send]
+  - id: updates_stale_task
+    weight: important
+    description: Sets the stale task's priority to 4.
+    check:
+      called: task-update
+      with: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000b1, priority: 4 }
+failure_modes:
+  - Sends the principal a note that housekeeping ran

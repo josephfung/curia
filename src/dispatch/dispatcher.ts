@@ -1796,8 +1796,8 @@ export class Dispatcher {
   /**
    * A scheduler-channel turn's reply goes nowhere: the only way it reaches the principal
    * is a send skill called during the turn. When the turn sent nothing and still wrote a
-   * reply, that text was meant for someone and reached no one, so it is audited as
-   * `outbound.no_reply` (`scheduler_undelivered`) with the text kept (#2091). Errors are
+   * reply, that text reached no one, so it is audited as `outbound.no_reply`
+   * (`scheduler_undelivered`) with the text kept (#2091). Errors are
    * the scheduler's to record; a decline, or a reply beside a send, is a run summary.
    */
   private async recordUnroutedSchedulerReply(event: AgentResponseEvent): Promise<void> {
@@ -1814,7 +1814,10 @@ export class Dispatcher {
       return;
     }
 
-    this.logger.warn(
+    // Info, not warn: most such replies are a maintenance run's summary, which the
+    // scheduler already keeps as last_run_summary. The audit event is what makes a missed
+    // "let the principal know" findable.
+    this.logger.info(
       { agentId, conversationId, parentEventId: event.parentEventId, channelId: 'scheduler', droppedContent: content.slice(0, 500) },
       'Scheduler turn ended with a reply and no send — the reply reached no one',
     );

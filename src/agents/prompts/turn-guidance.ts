@@ -169,9 +169,10 @@ const EMAIL_ETIQUETTE = [
  */
 const SCHEDULER_DELIVERY = [
   'This is a scheduled run, not a conversation: your final response is not delivered to',
-  'anyone. When this run should tell the principal something, send it yourself with a send',
-  'skill and `principal` as the recipient, one message, then end with exactly NO_REPLY. When',
-  'there is nothing to tell them, end with NO_REPLY.',
+  'anyone. Only when the task asks you to tell, notify or remind the principal, send it',
+  'yourself with a send skill and `principal` as the recipient, one message. Otherwise send',
+  'nothing: background and maintenance work is recorded, not reported. Either way, end with',
+  'exactly NO_REPLY.',
 ];
 
 const TURN_GUIDANCE: Record<TurnGuidanceKey, readonly string[]> = {

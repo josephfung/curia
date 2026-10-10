@@ -465,12 +465,15 @@ the five runs, judge included.
 | 16f principal request over email | 100% | | 16s | $0.06 |
 | 16g one message per item | 100% | | 53s | $0.15 |
 
-17a was measured separately on 2026-10-10 (#2091), three times at 5 runs: 80%, 100%, 80%
-on `one_send_to_principal`, about $0.12 a time. Both misses were the coordinator searching
-only its own mailbox, never asking ceo-inbox, and ending with `NO_REPLY`. That is a search
-miss, not a dropped reply. With the turn guidance switched off it also scored 80%: the
-one-reply-no-send failure from the 2026-10-09 incident did not recur in five runs, so the
-case guards the delivery path rather than reproducing the incident at a measurable rate.
+17a was measured separately on 2026-10-10 (#2091), about $0.12 per 5 runs. On the first
+guidance wording it scored 80%, 100% and 80% on `one_send_to_principal`; both misses were
+the coordinator searching only its own mailbox, never asking ceo-inbox, and ending with
+`NO_REPLY`, a search miss rather than a dropped reply. With the guidance switched off it
+also scored 80%: the one-reply-no-send failure from the 2026-10-09 incident did not recur
+in five runs, so the case guards the delivery path rather than reproducing the incident at
+a measurable rate. On the final wording (send only when the task asks to tell, notify or
+remind the principal) it scored 100%, and its stubbed counterpart 17b, a maintenance job
+that must send nothing, scored 100% in the gate.
 
 Two checks are scored but deliberately not critical, because each was measured at 4/5 before
 this baseline, exactly on the 80% line, where one more miss in a sample of five fails the
