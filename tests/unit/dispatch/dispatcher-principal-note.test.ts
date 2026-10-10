@@ -200,6 +200,25 @@ describe('Dispatcher — note for the principal (prompt trim PR 5)', () => {
     expect(notification!.payload.body).toContain(`an email from ${SENDER}.`);
   });
 
+  it('logs a failed note publish and still relays the reply', async () => {
+    const { dispatcher, handlers, published, logger } = harness();
+    const bus = (dispatcher as unknown as { bus: EventBus }).bus;
+    const publish = vi.mocked(bus.publish);
+    publish.mockImplementation(async (_layer, event) => {
+      if (event.type === 'outbound.notification') throw new Error('bus down');
+      published.push(event);
+    });
+    seedRouting(dispatcher, 'task-1');
+    await respond(handlers, { taskId: 'task-1', principalNote: NOTE });
+
+    expect(notifications(published)).toHaveLength(0);
+    expect(relays(published)).toHaveLength(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ noteLength: NOTE.length }),
+      expect.stringContaining('Failed to publish the principal note notification'),
+    );
+  });
+
   it('sends nothing extra for a response without a note', async () => {
     const { dispatcher, handlers, published } = harness();
     seedRouting(dispatcher, 'task-1');

@@ -544,6 +544,29 @@ describe('OutboundGateway', () => {
       expect(result.blockedRules).toEqual(['llm-judge-audience-leak']);
     });
 
+    it('tells the agent where a note for the principal goes when that rule blocks (prompt trim PR 5)', async () => {
+      const detail = 'A <note_for_principal> block goes only in your final response.';
+      (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mockResolvedValue({
+        passed: false,
+        findings: [{ rule: 'principal-note-markup', detail }],
+        stage: 'deterministic',
+      });
+
+      const gateway = new OutboundGateway({
+        nylasClients: new Map([['curia', mocks.nylasClient]]),
+        contactService: mocks.contactService,
+        contentFilter: mocks.contentFilter,
+        bus: mocks.bus,
+        principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+        logger: mocks.logger,
+      });
+
+      const result = await gateway.send(baseRequest);
+      expect(result.success).toBe(false);
+      expect(reasonBeforeRecipientNote(result.blockedReason)).toBe(`principal-note-markup: ${detail}`);
+      expect(result.blockedRules).toEqual(['principal-note-markup']);
+    });
+
     it('never leaks a Stage-1 deterministic finding\'s detail into the blocked result', async () => {
       // #1051 safety contract: the blocked result is LLM-facing, so it must obey
       // the same per-rule policy as the CEO notification — a deterministic rule's

@@ -32,7 +32,10 @@ const NOTE_TAG_ALL = new RegExp(NOTE_TAG.source, 'gi');
 // outer note of a nested pair (its inner block was cut out first).
 const UNCLOSED_NOTE_OPEN = /<note_for_principal>/i;
 // Where a leftover note's text ends: a reply tag, or the outer note's own closing tag.
+// The delegation-failure draft has reply tags; a relayed response does not, so a reply tag
+// there is just text inside the note (RELAY_NOTE_END).
 const LEFTOVER_NOTE_END = /<\/?reply>|<\/note_for_principal>/i;
+const RELAY_NOTE_END = /<\/note_for_principal>/i;
 
 export interface PrincipalNoteSplit {
   /** The text with every complete note block replaced by one space. A leftover tag stays in it. */
@@ -56,9 +59,11 @@ export interface PrincipalNoteSplit {
  * (most often cut off by the output limit, since it comes last) or the outer note of a
  * nested pair. Its text is recovered from the raw draft up to a reply tag, its own closing
  * tag, or the end, with any inner note tags stripped, so a nested note keeps its words in
- * the order written.
+ * the order written. `endAtReplyTag: false` ignores reply tags, for text that has none of
+ * its own (a relayed response).
  */
-export function splitPrincipalNotes(raw: string): PrincipalNoteSplit {
+export function splitPrincipalNotes(raw: string, opts: { endAtReplyTag?: boolean } = {}): PrincipalNoteSplit {
+  const leftoverEnd = opts.endAtReplyTag === false ? RELAY_NOTE_END : LEFTOVER_NOTE_END;
   let notes = [...raw.matchAll(NOTE_BLOCK)].map((m) => ({ at: m.index, text: (m[1] ?? '').trim() }));
   // The reply is read from `rest`, where each block becomes one space. `blanked` keeps
   // every block's length, so a position found in it is the same position in `raw`.
@@ -68,7 +73,7 @@ export function splitPrincipalNotes(raw: string): PrincipalNoteSplit {
   let unclosed: PrincipalNoteSplit['unclosed'];
   if (open) {
     const start = open.index + open[0].length;
-    const tail = blanked.slice(start).search(LEFTOVER_NOTE_END);
+    const tail = blanked.slice(start).search(leftoverEnd);
     const end = tail >= 0 ? start + tail : raw.length;
     // Taken from `raw`, so an inner block keeps its place; the inner block itself is then
     // dropped as a separate entry, since its words are already in the recovered text.
@@ -77,7 +82,7 @@ export function splitPrincipalNotes(raw: string): PrincipalNoteSplit {
     notes.push({ at: open.index, text: recovered });
     // The same note in `rest`. Complete blocks before it are shorter there, so find it again.
     const restOpen = UNCLOSED_NOTE_OPEN.exec(rest)!;
-    const restTail = rest.slice(restOpen.index + restOpen[0].length).search(LEFTOVER_NOTE_END);
+    const restTail = rest.slice(restOpen.index + restOpen[0].length).search(leftoverEnd);
     const restEnd = restTail < 0
       ? rest.length
       : endOfLeftoverNote(rest, restOpen.index + restOpen[0].length + restTail);
@@ -130,7 +135,7 @@ export interface RelayNoteSplit {
 export function splitRelayNote(content: string): RelayNoteSplit {
   if (!NOTE_TAG.test(content)) return { reply: content };
   const canonical = content.replace(NOTE_TAG_ALL, (tag) => (/^<\s*\//.test(tag) ? '</note_for_principal>' : '<note_for_principal>'));
-  const { rest, notes, unclosed } = splitPrincipalNotes(canonical);
+  const { rest, notes, unclosed } = splitPrincipalNotes(canonical, { endAtReplyTag: false });
   let reply = unclosed ? rest.slice(0, unclosed.start) + rest.slice(unclosed.end) : rest;
   const strayTag = NOTE_TAG.test(reply);
   if (strayTag) reply = reply.replace(NOTE_TAG_ALL, ' ');

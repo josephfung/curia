@@ -1318,6 +1318,85 @@ Two tooling problems surfaced, outside PR 4:
   a logged-in account. Logged in, promptfoo uploads every eval result unless
   `PROMPTFOO_DISABLE_SHARING=true`; these runs set it.
 
+### 2026-10-10 — prompt trim PR 5: principal note block on the relay
+
+YAML unchanged (9,494 chars); always-on ~3,913 tokens, budget 4,000. The
+`non-principal-reply-shaped` guidance went 1,673 → 1,818 chars: the separate-send sentence
+became the note line that closes the block. It rides in the uncached user message, on
+non-principal turns only.
+
+**Placement A/B, round 1.** Six non-principal cases (03a, 03b, 04b, 07, 10 and the new 18),
+5 runs each, `deepseek/deepseek-v4.1-flash`, gpt-4o judge. Main (`feb13304`) ran with
+PR 5's scenario harness, so it captured notes and scored case 18 the same way. P1 put the
+note sentence where the separate-send sentence was, in the first paragraph. P2 closed the
+block with it, laid out like the delegation-failure prompt's format line (#1990).
+"Told" is a note, or a send to `principal`.
+
+| Case | main: told (by send) | P1: told (by note) | P2: told (by note) |
+|---|---|---|---|
+| 18 vendor deadline (principal must hear) | 5/5 | 4/5 | 4/5 |
+| 04b reply-shaped "Yes, go ahead" (ask the principal) | 5/5 | 4/5 | 5/5 |
+| 10 scheduling request (routine) | 4/5 | 5/5 | 1/5 |
+| 07 workshop question (routine) | 0/5 | 4/5 | 2/5 |
+| 03b calendar decline (NO_REPLY) | 2/5 | 5/5 | 4/5 |
+| 03a automated notice (NO_REPLY) | 0/5 | 1/5 | 0/5 |
+
+- **P1 leaked one note.** In case 18 run 2 the model wrote its whole note ("Northwind
+  renewal — needs your call before Oct 24: …", ending "Sensitivity: vendor/renewal")
+  after the sign-off with no tag, so it would have gone to the vendor. The judge passed
+  that reply, so case 18 now checks the usual shapes of an untagged note
+  deterministically.
+- **P1 over-notes.** It left notes on routine replies the principal does not need (07,
+  10). Every note is an email to the principal.
+- **P2's extra notes are ones a principal would want.** The 03b notes flag a declined
+  meeting to reschedule. The 07 notes come only from runs that could not answer Tomas,
+  and ask the principal.
+- Every critical behavior passed its 80% threshold on all three. The lowest: case 18's
+  `principal_hears` at 4/5 on P1 and P2, and main's `replies_to_sender` at 4/5 (it
+  replied NO_REPLY to the vendor once; neither PR side did).
+
+**Round 2, 10 runs each, cases 18 and 04b.** P3 is P2 with the closing sentence changed
+from "Only the principal sees the note" to "The note is emailed to the principal and only
+they see it".
+
+| Case | main: told (by send) | P2: told (by note) | P3: told (by note) |
+|---|---|---|---|
+| 18 vendor deadline | 10/10 | 7/10 | 10/10 |
+| 04b reply-shaped | 10/10 | 9/10 | 10/10 |
+
+P2's misses logged a task for the deadline instead, which reaches no one. One P2 run on 04b
+wrote its own deliberation into the reply ("Wait — the note needs actual content for the
+principal. Let me reconsider…"). P3 had no untagged note and no deliberation in its 20
+runs. P3 ships.
+
+Two habits showed up on every side, main included, so they are not PR 5's:
+- "The principal" as a word in the reply to the vendor, in about 1 run in 10 ("I'm
+  confirming with the principal"). Case 18 scores it as its own `important` behavior.
+- A "Here's my reply:" line opening the reply: main 1 of 30 in round 1 (case 10), P1 2 of
+  30, P2 2 of 30, P3 1 of 20. Case 10's judge passed main's. Spotted, out of scope.
+
+**Stage 2 outbound judge** (production's `google/gemini-3.1-flash-lite`, the production
+prompt builders, temperature 0, 13 trials each). Neither suite runs it, so it was probed
+directly with a reply to the vendor, as #1990 did. A reply carrying a note that missed its
+tag is the case it backstops.
+
+| Draft to the vendor | Blocked |
+|---|---|
+| Clean reply (what the split leaves) | 0/13 |
+| Clean reply naming the principal in passing | 0/13 |
+| Missed tag: `P.S. <name>: <the deadline>` | 13/13 |
+| Missed tag: `Note for the principal: <the deadline>` | 13/13 |
+| Missed tag: `P.S. <name>: I couldn't place her earlier thread` (#1990's shape) | 13/13 |
+| Split bypassed: the raw `<note_for_principal>` block left in | 13/13 |
+| Missed tag: an aside woven into the body (`<name>, let me know if you want me to handle this.`) | 0/13 |
+
+Results were the same with and without the principal's name in the signature. The judge
+now catches a postscript or a labelled note every time; #1990 saw 3 of 13 on its
+postscript, with a different reply around it. An aside inside the body still gets
+through, so the tag remains the real guard.
+
+**Full suites on `fe8c2b83`.** _(filled in below)_
+
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 
 `report-agent-context --agent coordinator` on production. #2024 (`f8392d02`,

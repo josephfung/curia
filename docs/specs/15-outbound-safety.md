@@ -101,14 +101,18 @@ The dispatcher translates every `agent.response` with a routing entry into `outb
 principal, the coordinator puts what the principal needs to hear in a
 `<note_for_principal></note_for_principal>` block. The runtime cuts it out of the final
 response before the `NO_REPLY` lift and carries it on `agent.response` as `principalNote`
-(`src/agents/principal-note.ts`). Which turns: the delegation-failure reply's audience rule
-(#1978), so never a principal-only channel or a principal-side originator. Untagged output
-is the whole reply, unchanged. A note never closed takes the rest of the response with it,
+(`src/agents/principal-note.ts`). Which turns: any turn given the `non-principal-reply-shaped`
+guidance, which asks for the tag, and any other the delegation-failure reply's audience rule
+(#1978) reads as an outside sender's. Untagged output is the whole reply, unchanged. A note never closed takes the rest of the response with it,
 and a closing tag with no note is removed, so markup never reaches the sender. The
 dispatcher emails the note to the principal as a `principal_note` `outbound.notification`
 before any exception above applies: a declined, suppressed or held reply still delivers it.
 It is not emailed when a send already reached one of the principal's verified identities on
-that turn. The delegation-failure reply's note (#1990) takes the same path. Stage 2 is the
+that turn. The delegation-failure reply's note (#1990) takes the same path. Only the final
+response is cut, so a note written into a send skill's body (an `email-reply` on a CC'd
+thread) would go to its recipients: the Stage 1 `principal-note-markup` rule blocks any send
+to someone other than the principal that carries a note tag, and tells the agent the note
+belongs in its final response. Stage 2 is the
 backstop for a note written without the tag: on the production judge it blocked a
 postscript or a labelled note to the principal every time, and an aside woven into the body
 never (PR 5 in the [baseline log](../wip/2026-10-01-coordinator-context-baseline.md)).
@@ -159,8 +163,9 @@ Fast, zero-cost pattern matching. Any finding from Stage 1 blocks immediately �
 - **Internal structure leakage** — bus event type names, YAML/JSON config patterns, internal field names (`conversationId`, `taskId`, `agentId`, etc.)
 - **Secret patterns** — reuses existing patterns from `sanitizeOutput()`: API keys, bearer tokens, hex tokens ≥ 32 chars
 - **Contact data leakage** — email addresses in the body that are not the intended recipient or the CEO
+- **Principal note markup** — a `<note_for_principal>` tag (any spelling) in the body. Notes are cut only out of the coordinator's final response, so one in a send skill's body would reach its recipients (prompt trim PR 5)
 
-The identity- and structure-leakage rules carry a **principal-recipient bypass**: when the outbound message's recipient set is exclusively the structurally-verified principal, these rules do not fire (the principal is entitled to see internal structure). Secret-pattern and contact-leakage rules still apply. (#1334)
+The identity- and structure-leakage rules, and the principal-note rule, carry a **principal-recipient bypass**: when the outbound message's recipient set is exclusively the structurally-verified principal, these rules do not fire (the principal is entitled to see internal structure). Secret-pattern and contact-leakage rules still apply. (#1334)
 
 ### Stage 2: LLM-as-Judge — audience-leak & sensitive-data detection (implemented)
 
@@ -216,7 +221,8 @@ principal-safe **reason summary**:
   construction (names the category, never quotes the value), so it is safe to show and gives
   the CEO something actionable.
 - For a Stage 1 deterministic block, only the rule *name* is shown (e.g. `secret-pattern`); the
-  rule detail can embed the matched fragment, so it is withheld.
+  rule detail can embed the matched fragment, so it is withheld. `principal-note-markup` is
+  the exception: its detail is fixed text saying where the note goes, so it is shown.
 
 `outbound.blocked.content` stores the PII-redacted body. The CEO notification omits the
 blocked body on both Stage 1 and Stage 2 paths. Exact rewrite abandon additionally copies

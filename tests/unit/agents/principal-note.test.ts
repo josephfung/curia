@@ -56,6 +56,14 @@ describe('splitRelayNote', () => {
     expect(split.unclosed).toBe(true);
   });
 
+  it('takes reply tags inside an unclosed note as note text, not as its end', () => {
+    for (const tag of ['</reply>', '<reply>']) {
+      const split = splitRelayNote(`Hi Bob.\n<note_for_principal>Secret C ${tag} still secret D`);
+      expect(split.reply, tag).toBe('Hi Bob.');
+      expect(split.note, tag).toContain('still secret D');
+    }
+  });
+
   it('keeps reply text after the closing tag of an outer note in a nested pair', () => {
     const split = splitRelayNote('<note_for_principal>a <note_for_principal>b</note_for_principal> c</note_for_principal> Hi Dana');
     expect(split.reply).toBe('Hi Dana');

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { OutboundContentFilter } from '../../../src/dispatch/outbound-filter.js';
+import { OutboundContentFilter, PRINCIPAL_NOTE_MARKUP_DETAIL } from '../../../src/dispatch/outbound-filter.js';
 import type { OutboundJudge } from '../../../src/dispatch/outbound-judge.js';
 import type { FilterRecipient } from '../../../src/dispatch/outbound-filter.js';
 import type { EscalationJudge, EscalationVerdict } from '../../../src/autonomy/escalation-judge.js';
@@ -36,6 +36,34 @@ const BASE_INPUT = {
 };
 
 describe('OutboundContentFilter', () => {
+  describe('principal-note-markup rule (prompt trim PR 5)', () => {
+    const body = 'Hi Priya,\n\nThanks, received.\n\n<note_for_principal>The renewal deadline is Oct 24.</note_for_principal>';
+
+    it('blocks a send to someone else that carries a note for the principal', async () => {
+      const result = await createTestFilter().check({ ...BASE_INPUT, content: body });
+      expect(result.passed).toBe(false);
+      expect(result.stage).toBe('deterministic');
+      expect(result.findings).toEqual([{ rule: 'principal-note-markup', detail: PRINCIPAL_NOTE_MARKUP_DETAIL }]);
+    });
+
+    it('blocks a lone or variant-spelled tag too, and a tag split by invisible characters', async () => {
+      for (const content of ['Thanks.</note_for_principal>', 'Thanks. <Note-For-Principal >', 'Thanks. <note_for\u200B_principal>']) {
+        const result = await createTestFilter().check({ ...BASE_INPUT, content });
+        expect(result.findings.map((f) => f.rule), content).toContain('principal-note-markup');
+      }
+    });
+
+    it('lets a message only the principal reads through', async () => {
+      const result = await createTestFilter().check({ ...BASE_INPUT, content: body, principalIsSoleRecipient: true });
+      expect(result.passed).toBe(true);
+    });
+
+    it('says where the note goes without quoting the message', () => {
+      expect(PRINCIPAL_NOTE_MARKUP_DETAIL).toContain('final response');
+      expect(PRINCIPAL_NOTE_MARKUP_DETAIL).not.toContain('Oct 24');
+    });
+  });
+
   describe('system-prompt-fragment rule', () => {
     it('blocks content containing a system prompt marker', async () => {
       const filter = createTestFilter();

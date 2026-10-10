@@ -26,6 +26,14 @@ import { normalizeFragmentText } from './prompt-exfiltration-markers.js';
 import type { OutboundJudge, JudgeInput } from './outbound-judge.js';
 import type { EscalationJudge } from '../autonomy/escalation-judge.js';
 import { tierPermitsAllDisclosure } from '../autonomy/escalation-policy.js';
+import { NOTE_TAG } from '../agents/principal-note.js';
+
+/**
+ * What the agent is told when the principal-note-markup rule blocks a send. Fixed text,
+ * so it is safe to surface whole (it quotes nothing from the message).
+ */
+export const PRINCIPAL_NOTE_MARKUP_DETAIL =
+  'A <note_for_principal> block goes only in your final response, which is where it is cut out and emailed to the principal. Send this message again without the note.';
 
 /**
  * A single resolved outbound recipient. `isPrincipal` is determined structurally
@@ -257,6 +265,7 @@ export class OutboundContentFilter {
       ...this.checkInternalStructure(normalizedContent, principalIsSoleRecipient),
       ...this.checkSecretPatterns(normalizedContent),
       ...this.checkContactDataLeak(normalizedContent, input.recipientEmail, input.recipientTier),
+      ...this.checkPrincipalNoteMarkup(normalizedContent, principalIsSoleRecipient),
     ];
 
     if (findings.length > 0) {
@@ -399,6 +408,29 @@ export class OutboundContentFilter {
     }
 
     return this.applyPrincipalBypass('internal-structure', findings, principalIsSoleRecipient);
+  }
+
+  /**
+   * Rule: principal-note-markup (prompt trim PR 5)
+   *
+   * A <note_for_principal> block is cut out of the coordinator's final response, never out
+   * of a send skill's body. On a CC'd thread the reply is an `email-reply` call, so a note
+   * written "after the message" can land in that body and go to everyone on the thread.
+   * Any note tag in a send that reaches someone other than the principal is blocked; the
+   * agent is told where the note goes (PRINCIPAL_NOTE_MARKUP_DETAIL) and can resend.
+   *
+   * Principal bypass: a note tag in a message only the principal reads leaks nothing.
+   */
+  private checkPrincipalNoteMarkup(
+    content: string,
+    principalIsSoleRecipient: boolean,
+  ): FilterFinding[] {
+    if (!NOTE_TAG.test(content)) return [];
+    return this.applyPrincipalBypass(
+      'principal-note-markup',
+      [{ rule: 'principal-note-markup', detail: PRINCIPAL_NOTE_MARKUP_DETAIL }],
+      principalIsSoleRecipient,
+    );
   }
 
   /**

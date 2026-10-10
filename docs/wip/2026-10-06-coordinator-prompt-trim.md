@@ -119,6 +119,27 @@ Behavior: smoke 47 of 47; every scenario PR 4 moves text for passed at 100%. 13a
 `principal_can_edit` miss recurred on main (6 of 10 against PR 4's 8 of 10). Red-team A/B
 in the baseline log: external cohort 174 of 174 on both sides.
 
+**PR 5 (2026-10-10).** On a turn answering someone other than the principal, anything for
+the principal goes in `<note_for_principal></note_for_principal>`. The runtime cuts it out
+of the final response before the NO_REPLY lift (`src/agents/principal-note.ts`, the #1990
+parser moved there and shared), and the dispatcher emails it to the principal as a
+`principal_note` notification, whatever happens to the relay. Choices (Joseph,
+2026-10-10):
+- **Delivery is email**, through the system-notification path approval alerts use. The
+  bullpen plus a review task, as #1990 does, is pull-only since the scheduled digest went
+  (#1464), so it would have been a step down from the separate send it replaces.
+- **#1990's delegation-failure note is emailed too.** It keeps its audit event and its
+  line on the review task.
+- **Deduped by recipient,** not by skill name: a send that reached one of the principal's
+  verified identities on the turn means the note is not emailed as well.
+
+The separate-send sentence and the "ask the principal in a separate send" bullet became
+one closing line. Where it sits mattered (A/B in the baseline log): in the first paragraph,
+one note in five went untagged into the reply; closing the block without saying the note is
+emailed, 7 of 10 vendor deadlines reached the principal; as shipped, 10 of 10, level with
+main's separate sends. Stage 2 blocks a missed-tag postscript or labelled note every time
+and an aside woven into the body never, so the tag is the real guard.
+
 ### Lessons so far
 
 These apply to every later PR and to the final phase. They are also posted on #2025 and

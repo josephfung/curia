@@ -13,6 +13,7 @@ import type { AgentError } from '../../../src/errors/types.js';
 import { delegationKey } from '../../../src/agents/delegation-guard.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { encodeResumeToken } from '../../../src/agents/resume-token.js';
+import type { TurnGuidanceKey } from '../../../src/agents/prompts/turn-guidance.js';
 
 // Minimal provenance block for mock LLM responses — satisfies the required field
 // without tying tests to specific model names.
@@ -8175,7 +8176,7 @@ describe('AgentRuntime note for the principal on a reply to someone else (prompt
   const NOTE = 'Dana confirmed Thursday at 10 and asked whether the CFO will join.';
 
   /** One coordinator turn whose model answers with `text`. Returns the response and what memory kept. */
-  async function runTurn(opts: { text: string; systemRole: 'principal' | null; channelId?: string }): Promise<{
+  async function runTurn(opts: { text: string; systemRole: 'principal' | 'agent' | null; channelId?: string; turnGuidance?: TurnGuidanceKey[] }): Promise<{
     response: AgentResponseEvent;
     remembered: string | undefined;
   }> {
@@ -8209,6 +8210,7 @@ describe('AgentRuntime note for the principal on a reply to someone else (prompt
       channelId,
       senderId: 'dana@vendor.example.test',
       content: 'Subject: Vendor review\n\nDoes Thursday at 10 work?',
+      ...(opts.turnGuidance && { turnGuidance: opts.turnGuidance }),
       metadata: {
         originator: { contactId: 'contact-pr5', systemRole: opts.systemRole, channel: channelId, initiatedAt: '2026-10-10T10:00:00.000Z', tier: opts.systemRole ?? 'known' },
       },
@@ -8259,6 +8261,18 @@ describe('AgentRuntime note for the principal on a reply to someone else (prompt
     const principal = await runTurn({ text: tagged, systemRole: 'principal' });
     expect(principal.response.payload.content).toBe(tagged);
     expect(principal.response.payload.principalNote).toBeUndefined();
+  });
+
+  it('cuts the note on any turn told to use it, even one the audience rule reads as the principal\'s side', async () => {
+    // An originator with systemRole 'agent' reads as principal-side, but the dispatcher
+    // gives every non-principal inbound the guidance that asks for the tag.
+    const { response } = await runTurn({
+      text: `${REPLY}\n<note_for_principal>${NOTE}</note_for_principal>`,
+      systemRole: 'agent',
+      turnGuidance: ['non-principal-reply-shaped'],
+    });
+    expect(response.payload.content).toBe(REPLY);
+    expect(response.payload.principalNote).toBe(NOTE);
   });
 
   it('reads no note on a principal-only channel, whatever the originator says', async () => {

@@ -363,7 +363,8 @@ function buildBlockReasonSummary(findings: Array<{ rule: string; detail: string 
   if (findings.length === 0) return 'Content filter (no rule detail available)';
   return findings
     .map((f) => {
-      const showDetail = (f.rule.startsWith('llm-judge-') || f.rule === 'disclosure-tier-gate') && f.detail;
+      // principal-note-markup's detail is fixed text that tells the agent where the note goes.
+      const showDetail = (f.rule.startsWith('llm-judge-') || f.rule === 'disclosure-tier-gate' || f.rule === 'principal-note-markup') && f.detail;
       return showDetail ? `${f.rule}: ${f.detail}` : f.rule;
     })
     .join('\n');

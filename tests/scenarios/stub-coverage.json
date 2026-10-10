@@ -79,6 +79,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-08T17:20:23.923Z"
     },
+    "non-principal note for principal": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-10T20:12:43.727Z"
+    },
     "paused delegate no redelegate": {
       "unstubbed": 0,
       "runs": 5,

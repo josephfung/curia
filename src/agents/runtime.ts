@@ -2631,9 +2631,12 @@ export class AgentRuntime {
     // principal (prompt trim PR 5). Cut out first, so "NO_REPLY" plus a note is an exact
     // NO_REPLY below, and the sender's conversation keeps only what was said to them. The
     // dispatcher delivers the note. Same audience rule as the delegation-failure reply's
-    // note (#1990): a turn whose reader cannot be shown to be the principal's side.
+    // note (#1990): a turn whose reader cannot be shown to be the principal's side. A turn
+    // the dispatcher told to use the tag is cut whatever that rule says, so an instruction
+    // to write a note never comes without the cut that keeps it from the sender.
     let principalNote: string | undefined;
-    if (!isResponseError && failureAudience.audience === 'sender') {
+    const cutsNote = failureAudience.audience === 'sender' || turnGuidanceKeys.includes('non-principal-reply-shaped');
+    if (!isResponseError && cutsNote) {
       const split = splitRelayNote(responseContent);
       // Untagged output comes back unchanged. Anything else had markup, even an empty
       // note, which must not reach the sender either.
