@@ -47,6 +47,31 @@ export const NOTHING_SENT_NEXT_STEP_LINES: readonly string[] = [
   'has not gone out.',
 ];
 
+/**
+ * A delegation to a specialist that failed (`failed: true`, or a failed tool result).
+ * Keyed by agent id; only specialists whose failure has a known wrong reading carry
+ * one. These were sentences in the coordinator prompt until prompt trim PR 6.
+ */
+export const DELEGATE_FAILURE_NEXT_STEP_LINES: Readonly<Record<string, readonly string[]>> = {
+  // An empty or failed read is not an empty calendar (#1854).
+  calendar: [
+    'The calendar could not be read, so you do not know what is on it. Tell the principal',
+    'it could not be read and why, in plain words; never present the day as clear or free.',
+  ],
+  contacts: [
+    'The person could not be resolved. Tell the principal the lookup failed and try it once',
+    'more; act on that person only once you have their contact ID.',
+  ],
+};
+
+/** The next step for a failed delegation to `agent`, or undefined when it has none. */
+export function delegateFailureNextStep(agent: string): string | undefined {
+  const lines = Object.hasOwn(DELEGATE_FAILURE_NEXT_STEP_LINES, agent)
+    ? DELEGATE_FAILURE_NEXT_STEP_LINES[agent]
+    : undefined;
+  return lines ? lines.join(' ') : undefined;
+}
+
 export const CLARIFICATION_NEXT_STEP = CLARIFICATION_NEXT_STEP_LINES.join(' ');
 export const PAUSED_NEXT_STEP = PAUSED_NEXT_STEP_LINES.join(' ');
 export const DRAFT_EMAIL_NEXT_STEP = DRAFT_EMAIL_NEXT_STEP_LINES.join(' ');

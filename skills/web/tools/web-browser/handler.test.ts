@@ -801,6 +801,27 @@ describe('web-browser hard-block detection', () => {
   });
 });
 
+// Prompt trim PR 6: a Google file opens through google-workspace, not the browser.
+describe('web-browser refuses Google Workspace file URLs', () => {
+  it('refuses a Google Doc without navigating, and says where it opens', async () => {
+    const { ctx, session } = makeToolContext({
+      input: { action: 'navigate', url: 'https://docs.google.com/document/d/1AbC/edit' },
+    });
+    const result = await new WebBrowserHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/skill-activate with skill "google-workspace"/);
+    expect((session.page as unknown as { goto: ReturnType<typeof vi.fn> }).goto).not.toHaveBeenCalled();
+  });
+
+  it('still opens a Google Form', async () => {
+    const { ctx } = makeToolContext({
+      input: { action: 'navigate', url: 'https://docs.google.com/forms/d/e/1FAIp/viewform' },
+    });
+    const result = await new WebBrowserHandler().execute(ctx);
+    expect(result.success).toBe(true);
+  });
+});
+
 describe('web-browser navigate hardening — dwell + soft-block reload (#1053)', () => {
   function makeNavCtx(page: ReturnType<typeof makeMockPage>) {
     const session = new BrowserSession({} as unknown as BrowserContext, page as unknown as Page);

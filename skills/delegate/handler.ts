@@ -53,7 +53,11 @@ import {
   parseExecutionPausedPayload,
 } from '../../src/agents/resumable-task.js';
 import { validateDelegateBriefDates } from '../../src/agents/delegate-brief-date-validation.js';
-import { CLARIFICATION_NEXT_STEP, PAUSED_NEXT_STEP } from '../../src/agents/prompts/delegate-result-guidance.js';
+import {
+  CLARIFICATION_NEXT_STEP,
+  PAUSED_NEXT_STEP,
+  delegateFailureNextStep,
+} from '../../src/agents/prompts/delegate-result-guidance.js';
 import { shapeSpecialistAnswer } from '../../src/agents/specialist-answer.js';
 import { buildInboundEmailIdentifierBlock, preambleAccountLabel, sanitizeNylasMessageId } from '../../src/dispatch/email-metadata.js';
 import {
@@ -155,6 +159,12 @@ function inFlightResult(agent: string, hit: InFlightDelegation): ToolResult {
       next_step: inFlightNextStep(agent),
     },
   };
+}
+
+/** `next_step` for a failed delegation, when that specialist's failure has one (prompt trim PR 6). */
+function failureNextStep(agent: string): { next_step?: string } {
+  const nextStep = delegateFailureNextStep(agent);
+  return nextStep ? { next_step: nextStep } : {};
 }
 
 function inFlightNextStep(agent: string): string {
@@ -915,6 +925,7 @@ export class DelegateHandler implements ToolHandler {
             reason: SPECIALIST_DECLINE_REASON,
             retryable: false,
             message: decline.message,
+            ...failureNextStep(agent),
           },
         };
       }
@@ -973,12 +984,15 @@ export class DelegateHandler implements ToolHandler {
               delegate_conversation_id: err.delegateConversationId,
             }),
             ...(err.waitTimeoutMs !== undefined && { wait_timeout_ms: err.waitTimeoutMs }),
+            ...failureNextStep(err.agent),
           },
         };
       }
       const message = err instanceof Error ? err.message : String(err);
       ctx.log.error({ err, targetAgent: agent }, 'Delegation failed');
-      return { success: false, error: message };
+      // A failed tool result has only the error text, so the next step rides in it.
+      const nextStep = delegateFailureNextStep(agent);
+      return { success: false, error: nextStep ? `${message.replace(/[.\s]+$/, '')}. ${nextStep}` : message };
     } finally {
       // Always clean up the timeout on any exit path. Unset when we returned
       // before the listener was armed (claim conflict, acquire failure).

@@ -10,6 +10,7 @@ import { BULLPEN_REPLY_RULE } from './bullpen-reply-rule.js';
 import { DAILY_DEBRIEF_RECAP_LINES, WEEKLY_DEBRIEF_RECAP_LINES } from './debrief-recap-instruction.js';
 import {
   CLARIFICATION_NEXT_STEP_LINES,
+  DELEGATE_FAILURE_NEXT_STEP_LINES,
   DRAFT_EMAIL_NEXT_STEP_LINES,
   NOTHING_SENT_NEXT_STEP_LINES,
   PAUSED_NEXT_STEP_LINES,
@@ -23,6 +24,7 @@ export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   PAUSED_NEXT_STEP_LINES.join('\n'),
   DRAFT_EMAIL_NEXT_STEP_LINES.join('\n'),
   NOTHING_SENT_NEXT_STEP_LINES.join('\n'),
+  ...Object.values(DELEGATE_FAILURE_NEXT_STEP_LINES).map(lines => lines.join('\n')),
   BULLPEN_REPLY_RULE,
   DAILY_DEBRIEF_RECAP_LINES.join('\n'),
   WEEKLY_DEBRIEF_RECAP_LINES.join('\n'),

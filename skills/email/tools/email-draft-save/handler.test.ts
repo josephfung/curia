@@ -1,7 +1,7 @@
 // handler.test.ts — unit tests for email-draft-save skill.
 
 import { describe, it, expect, vi } from 'vitest';
-import { EmailDraftSaveHandler } from './handler.js';
+import { EmailDraftSaveHandler, PRINCIPAL_MAILBOX_ERROR } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import { createSilentLogger } from '../../../../src/logger.js';
 
@@ -17,7 +17,10 @@ const BASE_INPUT = {
 };
 
 // A mock outboundGateway that returns a successful draft creation result
-function makeMockGateway(overrides?: { createEmailDraft?: ReturnType<typeof vi.fn> }) {
+function makeMockGateway(overrides?: {
+  createEmailDraft?: ReturnType<typeof vi.fn>;
+  isPrincipalMailbox?: ReturnType<typeof vi.fn>;
+}) {
   const resolveRecipientReference = vi.fn(async (_channel: string, value: string) => {
     if (value === ALICE_ID) {
       return { ok: true, kind: 'contact', contactId: ALICE_ID, identifier: 'alice@example.com', displayName: 'Alice', identityName: 'work', identityId: 'id-a' };
@@ -31,6 +34,7 @@ function makeMockGateway(overrides?: { createEmailDraft?: ReturnType<typeof vi.f
     createEmailDraft: overrides?.createEmailDraft
       ?? vi.fn().mockResolvedValue({ success: true, draftId: 'draft-abc' }),
     resolveRecipientReference,
+    isPrincipalMailbox: overrides?.isPrincipalMailbox ?? vi.fn().mockReturnValue(false),
     // Other gateway methods are not used by this skill — typed as unknown
   } as unknown as ToolContext['outboundGateway'];
 }
@@ -200,5 +204,50 @@ describe('EmailDraftSaveHandler — recipient reference (#2041)', () => {
     if (result.success) {
       expect(result.data).toEqual({ draft_id: 'draft-abc', to_identity: 'primary' });
     }
+  });
+});
+
+// Prompt trim PR 6: the principal's mailbox is ceo-inbox's, so the coordinator is told
+// where the draft goes instead of drafting there.
+describe('EmailDraftSaveHandler — principal mailbox', () => {
+  const principalMailbox = () => vi.fn((account?: string) => account === 'ceo');
+
+  it('refuses a coordinator draft in the principal\'s mailbox before resolving anyone', async () => {
+    const create = vi.fn();
+    const gateway = makeMockGateway({ createEmailDraft: create, isPrincipalMailbox: principalMailbox() });
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({ agentId: 'coordinator', outboundGateway: gateway }));
+    expect(result).toEqual({ success: false, error: PRINCIPAL_MAILBOX_ERROR });
+    expect(PRINCIPAL_MAILBOX_ERROR).toMatch(/ceo-inbox/);
+    expect(create).not.toHaveBeenCalled();
+    expect((gateway as unknown as { resolveRecipientReference: ReturnType<typeof vi.fn> }).resolveRecipientReference)
+      .not.toHaveBeenCalled();
+  });
+
+  it('lets the coordinator draft in its own mailbox', async () => {
+    const create = vi.fn().mockResolvedValue({ success: true, draftId: 'draft-own' });
+    const gateway = makeMockGateway({ createEmailDraft: create, isPrincipalMailbox: principalMailbox() });
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({
+      agentId: 'coordinator',
+      input: { ...BASE_INPUT, account: 'curia' },
+      outboundGateway: gateway,
+    }));
+    expect(result.success).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'curia' }));
+  });
+
+  it('checks the primary mailbox when account is omitted', async () => {
+    const isPrincipalMailbox = vi.fn().mockReturnValue(true);
+    const gateway = makeMockGateway({ isPrincipalMailbox });
+    const { account: _omitted, ...input } = BASE_INPUT;
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({ agentId: 'coordinator', input, outboundGateway: gateway }));
+    expect(result.success).toBe(false);
+    expect(isPrincipalMailbox).toHaveBeenCalledWith(undefined);
+  });
+
+  it('leaves other agents\' drafts alone', async () => {
+    const create = vi.fn().mockResolvedValue({ success: true, draftId: 'draft-debrief' });
+    const gateway = makeMockGateway({ createEmailDraft: create, isPrincipalMailbox: principalMailbox() });
+    const result = await new EmailDraftSaveHandler().execute(makeCtx({ agentId: 'meeting-debrief', outboundGateway: gateway }));
+    expect(result.success).toBe(true);
   });
 });

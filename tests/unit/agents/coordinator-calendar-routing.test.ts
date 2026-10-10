@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
+import { delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import { parseSkillMd } from '../../../src/skills/skill-md.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
@@ -63,18 +64,19 @@ function extractPrincipalCalendarSection(prompt: string): string {
 }
 
 describe('coordinator principal-calendar routing (#1853)', () => {
-  it('has the prompt-only parts of the principal-calendar rule: route, who replies, failure line', () => {
+  it('has the prompt-only parts of the principal-calendar rule: route and who replies', () => {
     // "I never read or mutate the principal's calendar myself" is gone from the prompt
     // (prompt trim PR 2): allowed_callers enforces it, and the discovery and pin tests
     // below assert that. The route, who composes the reply and the failure handling have
     // no code home yet. "You compose the reply" is pinned because dropping it was a measured
     // regression: scenario 10 handed external scheduling requests to @calendar as
     // transfer-ownership and replied NO_REPLY in 2 of 5 runs (prompt trim PR 2). PR 3
-    // moved the prompt to the second person, so the anchor reads "you", not "I".
+    // moved the prompt to the second person, so the anchor reads "you", not "I". The
+    // failure line moved to the delegate result's next_step (prompt trim PR 6).
     const section = extractPrincipalCalendarSection(loadCoordinator().system_prompt);
     expect(section).toMatch(/borrow-then-answer through `@calendar`/);
     expect(section).toMatch(/you compose the reply/);
-    expect(section).toMatch(/could not be read/i);
+    expect(delegateFailureNextStep('calendar')).toMatch(/could not be read/);
   });
 
   it('handle-directly does not claim the calendar (no Curia calendar path)', () => {

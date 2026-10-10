@@ -3,7 +3,8 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BullpenHandler } from '../../../skills/bullpen/handler.js';
-import { PAUSED_NEXT_STEP } from '../../../src/agents/prompts/delegate-result-guidance.js';
+import { PAUSED_NEXT_STEP, delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
+import { googleWorkspaceUrlError } from '../../../src/skills/_shared/google-workspace-url.js';
 import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
 import { createLogger } from '../../../src/logger.js';
 import { BullpenService } from '../../../src/memory/bullpen.js';
@@ -42,6 +43,28 @@ describe('coordinator scenario cases', () => {
       .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && (r as Record<string, unknown>)['paused'] === true);
     expect(paused.length).toBeGreaterThan(0);
     for (const r of paused) expect(r['next_step']).toBe(PAUSED_NEXT_STEP);
+  });
+
+  it('gives a failed delegate stub the next_step the handler would add (prompt trim PR 6)', () => {
+    const failed = cases.flatMap(c => (c.toolStubs['delegate'] ?? []).map(stub => stub.return))
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && (r as Record<string, unknown>)['failed'] === true);
+    expect(failed.length).toBeGreaterThan(0);
+    for (const r of failed) expect(r['next_step'], String(r['agent'])).toBe(delegateFailureNextStep(String(r['agent'])));
+  });
+
+  it('answers a Google file URL in a web tool with the handler\'s refusal (prompt trim PR 6)', () => {
+    let seen = 0;
+    for (const c of cases) {
+      for (const tool of ['web-fetch', 'web-browser']) {
+        for (const stub of c.toolStubs[tool] ?? []) {
+          // Other web stubs (the browser unavailable, say) are not this refusal.
+          if (!stub.error?.includes('Google Workspace tools')) continue;
+          seen++;
+          expect(stub.error, `${c.name}: ${tool}`).toBe(googleWorkspaceUrlError(tool));
+        }
+      }
+    }
+    expect(seen).toBeGreaterThan(0);
   });
 
   it('gives a delegate stub with `sent` the next_step the handler would add (#2055)', () => {

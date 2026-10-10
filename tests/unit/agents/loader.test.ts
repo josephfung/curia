@@ -71,6 +71,12 @@ describe('loadAgentConfig', () => {
     ['the transfer-ownership reply rule', /transfer-ownership reply rule|\[ACTIVE OUTBOUND CONTEXT\]/, 'turn guidance: outbound-context'],
     ['presentation provenance', /Presentation follows provenance|reply in all caps/, 'security block: Prompt Injection Defense'],
     ['channel trust with the principal', /channel trust/i, 'principal tier outranks every permission (authorization.ts)'],
+    // Prompt trim PR 6: prose-only rules that code now enforces or delivers.
+    ['the principal-mailbox draft rule', /email-draft-save/, 'email-draft-save refuses the principal\'s mailbox'],
+    ['the Google URL web-tool rule', /web-fetch|web-browser/, 'web-fetch / web-browser refuse Google file URLs'],
+    ['the calendar failure line', /could not be read|empty schedule/, "delegate failure next_step (calendar)"],
+    ['the contacts briefing-failure line', /briefing fails/, "delegate failure next_step (contacts)"],
+    ['the signing line', /sign emails/i, 'outbound gateway email signature'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);

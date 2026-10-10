@@ -1,7 +1,7 @@
 {
   "name": "email-draft-save",
   "description": "Save an email as a draft without sending it. The principal can review and send the draft from their email client. Use when composing a reply that needs principal approval before sending. to takes a contact ID, or \"principal\"; the address comes from their verified identities.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "sensitivity": "normal",
   "action_risk": "low",
   "inputs": {

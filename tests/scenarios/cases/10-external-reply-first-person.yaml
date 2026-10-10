@@ -67,9 +67,10 @@ tool_stubs:
             - Professional but approachable
 expected_behaviors:
   # #1989: the judge docked the email sign-off (name + title) as "not first person" and
-  # "implies a team-based role", and once quoted a "we" the reply did not contain. The
-  # coordinator prompt *requires* that sign-off ("I sign emails with my name and title"),
-  # so the description says outright what is and is not evidence.
+  # "implies a team-based role", and once quoted a "we" the reply did not contain. A
+  # sign-off is expected in an email (the outbound gateway adds the configured signature
+  # since prompt trim PR 6, and the model often signs too), so the description says
+  # outright what is and is not evidence.
   - id: first_person_singular
     weight: critical
     description: >

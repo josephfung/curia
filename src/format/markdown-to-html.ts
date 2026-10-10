@@ -6,7 +6,7 @@ export interface MarkdownToHtmlOptions {
   wrap?: boolean;
 }
 
-const EMAIL_WRAPPER_STYLE = 'font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222;';
+export const EMAIL_WRAPPER_STYLE = 'font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222;';
 
 const markdown = new MarkdownIt({
   html: false,

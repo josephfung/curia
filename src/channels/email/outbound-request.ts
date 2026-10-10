@@ -49,6 +49,13 @@ export interface EmailSendRequest {
    * is `email_participant`. Not sent to the provider.
    */
   recipientDisplayName?: string;
+  /**
+   * The assistant's signature, rendered after the body and before any quote (prompt
+   * trim PR 6). Code-owned text, not part of `body`, so the content filter and the
+   * delivery record see only what the agent wrote. Set by `send()` and
+   * `createEmailDraft()`; a value already on the request is ignored.
+   */
+  signature?: string;
 }
 
 /** Type guard for email outbound requests. */

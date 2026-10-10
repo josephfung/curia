@@ -1,13 +1,17 @@
 # Case 13b (#2024): the principal sends a Google Docs link and asks about it. The Docs
 # tools are no longer pinned, so the coordinator activates google-workspace and reads the
-# Doc with a Docs tool. web-fetch and web-browser have no Google credentials and only get
-# a sign-in page; both are stubbed to succeed with one, so the wrong path is available.
-# Rule: agents/coordinator.yaml, "Google Workspace".
+# Doc with a Docs tool. Rule: agents/coordinator.yaml, "Google Workspace".
+#
+# web-fetch and web-browser have no Google credentials. Since prompt trim PR 6 they refuse
+# a Google file URL and point to skill-activate (src/skills/_shared/google-workspace-url.ts)
+# instead of returning a sign-in page, and the prompt no longer says so. Both are stubbed
+# with that refusal (tests/unit/scenarios/cases.test.ts pins it), so a run that tries them
+# first is told where the file opens, as in production.
 name: google doc link read
 description: >
   The principal pastes a Google Docs link to the Q3 offsite plan and asks for the gist.
   The coordinator activates its Google Workspace tools and reads the Doc with a Docs or
-  Drive tool, never web-fetch or web-browser, then summarises it.
+  Drive tool, then summarises it.
 tags: [google-workspace, skill-activation]
 inbound:
   from: principal
@@ -130,16 +134,18 @@ tool_stubs:
         - Name: "Q3 leadership offsite: plan" (ID: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga, Type: application/vnd.google-apps.document)
   web-fetch:
     - match: {}
-      return:
-        url: https://accounts.google.com/v3/signin/identifier
-        title: Sign in - Google Accounts
-        content: "Sign in. Use your Google Account. Email or phone. Forgot email? Next."
+      error: >-
+        Google Docs, Sheets and Drive links open only through the Google Workspace tools;
+        web-fetch gets a sign-in page for them, so nothing was fetched. Call skill-activate
+        with skill "google-workspace" and read the file with its tools. If you have no
+        skill-activate, say the file needs Google Workspace access.
   web-browser:
     - match: {}
-      return:
-        url: https://accounts.google.com/v3/signin/identifier
-        title: Sign in - Google Accounts
-        text: "Sign in. Use your Google Account. Email or phone. Forgot email? Next."
+      error: >-
+        Google Docs, Sheets and Drive links open only through the Google Workspace tools;
+        web-browser gets a sign-in page for them, so nothing was fetched. Call
+        skill-activate with skill "google-workspace" and read the file with its tools. If
+        you have no skill-activate, say the file needs Google Workspace access.
 expected_behaviors:
   - id: activates_google_workspace
     weight: critical
@@ -158,9 +164,10 @@ expected_behaviors:
           with: { document_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
         - called: get_drive_file_content
           with: { file_id: 1LnkOffsiteQ3PlanTb7Wc2Rx9Kd4Mz8Np5Hs1Vf6Yq3Je0Ga }
+  # Code refuses these calls now, so trying one first costs a call, not the answer.
   - id: no_web_tools_on_google_url
-    weight: critical
-    description: Never fetches the Google URL with web-fetch or web-browser.
+    weight: nice-to-have
+    description: Goes straight to the Workspace tools without trying web-fetch or web-browser.
     check:
       not_called: [web-fetch, web-browser]
   - id: summarises_doc
@@ -169,5 +176,5 @@ expected_behaviors:
       Gives the gist from the Doc: a two-day Halifax offsite whose goals are the hiring
       plan, the enterprise pricing model and a possible Montreal office.
 failure_modes:
-  - Fetches the link with web-fetch and reports a Google sign-in page
+  - Gives up on the link after web-fetch refuses it
   - Says it cannot open Google Docs

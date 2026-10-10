@@ -167,9 +167,9 @@ const EMAIL_ETIQUETTE = [
   '  not to (the conversation has become private, or the principal asks you to reply',
   '  directly). Removing someone needs a reason; adding someone should be intentional.',
   '- Use `email-send` only for a new email the principal asked for, or proactive outbound.',
-  '- The `account` parameter on email-list, email-get, email-get-thread, email-draft-save and',
-  '  email-archive selects the mailbox. Omit it or pass your own account. Never read, draft',
-  '  in, or archive the principal\'s mailbox; anything about their email goes to ceo-inbox.',
+  '- The `account` parameter on email-list, email-get, email-get-thread and email-archive',
+  '  selects the mailbox. Omit it or pass your own account. Never read or archive the',
+  '  principal\'s mailbox; anything about their email goes to ceo-inbox.',
 ];
 
 /**

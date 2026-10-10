@@ -80,8 +80,11 @@ interface AgentBudget {
 // Prompt trim PR 4 (audience in code: the sender line, non-principal turn guidance, the
 // reply rule in outbound-context guidance, provenance in the security block): YAML 9,494
 // chars, ~3,913 tokens with SKILL.md.
+// Prompt trim PR 6 (prose-only rules into code: the principal-mailbox draft refusal, the
+// Google URL refusal, delegate failure next steps, the email signature): YAML 9,065
+// chars, ~3,806 tokens with SKILL.md; 76,982 bytes over 66 local tools.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 4_000, localToolDefinitionBytes: 77_000, allowMcpPins: false },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_900, localToolDefinitionBytes: 77_000, allowMcpPins: false },
 ];
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };

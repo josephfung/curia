@@ -1717,6 +1717,12 @@ async function main(): Promise<void> {
     }
     outboundGateway = new OutboundGateway({
       nylasClients: registryGatedOutbound.nylasClients,
+      // Each mailbox's own address, so the gateway can tell the principal's mailbox
+      // from Curia's own (prompt trim PR 6).
+      emailAccountAddresses: new Map(resolvedEmailAccounts.map(a => [a.name, a.selfEmail])),
+      // By reference: identity hot-reload mutates it in place, so the next email signs
+      // with the edited signature.
+      agentPersona,
       signalClient: registryGatedOutbound.signalClient,
       signalPhoneNumber: registryGatedOutbound.signalPhoneNumber,
       slackClient: registryGatedOutbound.slackClient,

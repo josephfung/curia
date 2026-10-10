@@ -22,6 +22,7 @@ import type { Page, Frame, Locator } from 'playwright';
 // server-side handler. See dom-extract.ts.
 import { extractFrameContent } from './dom-extract.js';
 import { jitteredDelay, simulateHumanPresence, humanClick, humanType } from '../../../../src/browser/human-behavior.js';
+import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl } from '../../../../src/skills/_shared/google-workspace-url.js';
 
 // Maximum cleaned DOM content length before truncation.
 // Prevents token blowout on content-heavy pages.
@@ -462,6 +463,10 @@ async function performAction(step: BrowserActionStep, deps: ActionDeps): Promise
       const hostname = parsedUrl.hostname.toLowerCase();
       if (isPrivateHost(hostname)) {
         return { ok: false, error: `Blocked: navigation to private/internal addresses is not allowed (${hostname})` };
+      }
+      // The browser has no Google credentials either: a Google file gets a sign-in page.
+      if (isGoogleWorkspaceFileUrl(parsedUrl)) {
+        return { ok: false, error: googleWorkspaceUrlError('web-browser') };
       }
       const response = await page.goto(parsedUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 20_000 });
 

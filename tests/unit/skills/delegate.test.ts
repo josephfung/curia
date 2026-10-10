@@ -6,6 +6,7 @@ import {
   DRAFT_EMAIL_NEXT_STEP,
   NOTHING_SENT_NEXT_STEP,
   PAUSED_NEXT_STEP,
+  delegateFailureNextStep,
 } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import type { ToolContext, ToolManifest } from '../../../src/skills/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
@@ -736,6 +737,82 @@ describe('DelegateHandler', () => {
     if (!result.success) {
       expect(result.error).toContain('encountered an error');
     }
+  });
+
+  // The failure guidance that was coordinator prose until prompt trim PR 6.
+  describe('failure next_step for calendar and contacts', () => {
+    async function delegateTo(
+      agent: string,
+      response: Partial<Parameters<typeof import('../../../src/bus/events.js').createAgentResponse>[0]>,
+    ) {
+      const agentRegistry = new AgentRegistry();
+      agentRegistry.register('coordinator', { role: 'coordinator', description: 'Main' });
+      agentRegistry.register(agent, { role: 'specialist', description: agent });
+      const bus = new EventBus(logger);
+      bus.subscribe('agent.task', 'agent', async (event) => {
+        if (event.type === 'agent.task' && event.payload.agentId === agent) {
+          const { createAgentResponse } = await import('../../../src/bus/events.js');
+          await bus.publish('agent', createAgentResponse({
+            agentId: agent,
+            conversationId: event.payload.conversationId,
+            content: 'I could not finish that.',
+            parentEventId: event.id,
+            ...response,
+          }));
+        }
+      });
+      return handler.execute(makeCtx({ agent, task: 'List the principal\'s events with titles and locations.' }, { bus, agentRegistry }));
+    }
+
+    it('tells the coordinator a failed calendar read is not a free day', async () => {
+      const result = await delegateTo('calendar', {
+        isError: true, errorType: 'SKILL_ERROR', reason: 'tool_error', retryable: true,
+      });
+      expect(result.success).toBe(true);
+      const data = (result as { data: { failed?: boolean; next_step?: string } }).data;
+      expect(data.failed).toBe(true);
+      expect(data.next_step).toBe(delegateFailureNextStep('calendar'));
+      expect(data.next_step).toMatch(/never present the day as clear or free/);
+    });
+
+    it('tells the coordinator to report a failed contacts lookup and try again', async () => {
+      const result = await delegateTo('contacts', {
+        isError: true, errorType: 'SKILL_ERROR', reason: 'tool_error', retryable: true,
+      });
+      const data = (result as { data: { next_step?: string } }).data;
+      expect(data.next_step).toBe(delegateFailureNextStep('contacts'));
+    });
+
+    it('carries the next step in the error text when the failure has no structure', async () => {
+      const result = await delegateTo('contacts', { isError: true });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('encountered an error');
+        expect(result.error).toContain(delegateFailureNextStep('contacts')!);
+      }
+    });
+
+    it('adds the next step to a calendar decline', async () => {
+      const result = await delegateTo('calendar', {
+        content: '<specialist_decline reason="unknown_sender">No contact record.</specialist_decline>',
+      });
+      const data = (result as { data: { declined?: boolean; next_step?: string } }).data;
+      expect(data.declined).toBe(true);
+      expect(data.next_step).toBe(delegateFailureNextStep('calendar'));
+    });
+
+    it('adds nothing for a specialist without one', async () => {
+      const failed = await delegateTo('research-analyst', {
+        isError: true, errorType: 'SKILL_ERROR', reason: 'tool_error', retryable: true,
+      });
+      expect((failed as { data: { next_step?: string } }).data.next_step).toBeUndefined();
+      const plain = await delegateTo('research-analyst', { isError: true });
+      if (!plain.success) expect(plain.error).toBe("Specialist 'research-analyst' encountered an error and could not complete the task");
+    });
+
+    it('has no next step for an inherited object key', () => {
+      expect(delegateFailureNextStep('constructor')).toBeUndefined();
+    });
   });
 
   it('propagates runtime BUDGET_EXCEEDED(maxTurns) to delegate result (#1170)', async () => {

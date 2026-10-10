@@ -3,12 +3,14 @@
 // Fetches web pages via HTTP GET using Node's built-in fetch().
 // Security constraints:
 //   - Only HTTPS and HTTP protocols allowed (no file://, ftp://, etc.)
+//   - Google Docs, Sheets and Drive files are refused: they open through google-workspace
 //   - Response body is truncated to prevent memory exhaustion
 //   - Timeout is enforced by the execution layer (not duplicated here)
 //
 // This is a "normal" sensitivity skill — no human approval required.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl } from '../../../../src/skills/_shared/google-workspace-url.js';
 
 // Default max body length: 50KB. Enough for most web pages when truncated.
 const DEFAULT_MAX_LENGTH = 50000;
@@ -69,6 +71,12 @@ export class WebFetchHandler implements ToolHandler {
     const hostname = parsedUrl.hostname.toLowerCase();
     if (isPrivateHostname(hostname)) {
       return { success: false, error: `Blocked: requests to internal/private addresses are not allowed (${hostname})` };
+    }
+
+    // A Google file gets only a sign-in page here; its tools are google-workspace's.
+    if (isGoogleWorkspaceFileUrl(parsedUrl)) {
+      ctx.log.info({ hostname }, 'web-fetch: refused a Google Workspace file URL');
+      return { success: false, error: googleWorkspaceUrlError('web-fetch') };
     }
 
     const maxLength = typeof max_length === 'number' ? max_length : DEFAULT_MAX_LENGTH;

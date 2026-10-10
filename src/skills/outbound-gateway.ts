@@ -61,6 +61,8 @@ import {
 import { deliverApprovalToChatChannels } from '../autonomy/approval-channel-notify.js';
 import type { OutboundNotificationPayload } from '../bus/events.js';
 import { markdownToHtml } from '../format/markdown-to-html.js';
+import { bodyEndsWithSignature, emailSignatureHtml, emailSignatureText } from '../channels/email/signature.js';
+import type { AgentPersona } from './types.js';
 import { scrubPii } from '../pii/scrubber.js';
 import type { ExportControlService } from '../security/export-controls.js';
 import {
@@ -200,6 +202,22 @@ export interface OutboundGatewayConfig {
    * abstract over the underlying send/draft/list APIs per account.
    */
   nylasClients?: Map<string, NylasClient>;
+
+  /**
+   * Each email account's own address (`email_accounts.self_email`), by account name.
+   * isPrincipalMailbox() reads it to tell the principal's mailbox from Curia's own
+   * (prompt trim PR 6). Absent in tests and boots without email, where no mailbox
+   * counts as the principal's.
+   */
+  emailAccountAddresses?: ReadonlyMap<string, string>;
+
+  /**
+   * The assistant's persona, held by reference so a hot-reloaded identity edit applies
+   * to the next email. Its signature is added to every email the gateway sends or
+   * drafts, except system notifications and mail from the principal's own mailbox
+   * (prompt trim PR 6). Absent: no signature.
+   */
+  agentPersona?: AgentPersona;
 
   /**
    * signal-cli RPC client for Signal sends. Optional — gateway can be initialized
@@ -497,6 +515,8 @@ export class OutboundGateway {
   private readonly contentFilter: OutboundContentFilter;
   private readonly bus: EventBus;
   private readonly principalIdentities: ChannelIdentity[];
+  private readonly emailAccountAddresses: ReadonlyMap<string, string>;
+  private readonly agentPersona?: AgentPersona;
   private readonly conversationEntities?: ConversationEntityState;
   private readonly identityGate: IdentityGateMode;
   private readonly log: Logger;
@@ -522,6 +542,8 @@ export class OutboundGateway {
     this.contentFilter = config.contentFilter;
     this.bus = config.bus;
     this.principalIdentities = config.principalIdentities ?? [];
+    this.emailAccountAddresses = config.emailAccountAddresses ?? new Map();
+    this.agentPersona = config.agentPersona;
     this.conversationEntities = config.conversationEntities;
     this.identityGate = config.identityGate ?? 'enforce';
     this.log = config.logger.child({ component: 'outbound-gateway' });
@@ -1372,6 +1394,9 @@ export class OutboundGateway {
       const toSend: EmailSendRequest = { ...request, body: redactedBody, subject: redactedSubject };
       delete toSend.recipientSource;
       delete toSend.recipientDisplayName;
+      delete toSend.signature;
+      const signature = this.emailSignatureFor(toSend, options?.isSystemNotification === true);
+      if (signature) toSend.signature = signature;
       if (options?.recipientSource === 'email_participant') {
         toSend.recipientSource = 'email_participant';
         const fromName = options.recipientDisplayName?.trim();
@@ -2319,6 +2344,18 @@ export class OutboundGateway {
   }
 
   /**
+   * True when `accountId` (the primary account when omitted) is a mailbox whose own
+   * address is one of the principal's verified email identities. The principal's mailbox
+   * belongs to ceo-inbox, so the coordinator does not draft in it (prompt trim PR 6).
+   */
+  isPrincipalMailbox(accountId?: string): boolean {
+    const name = accountId ?? this.nylasClients.keys().next().value;
+    if (name === undefined) return false;
+    const address = this.emailAccountAddresses.get(name);
+    return address !== undefined && this.isPrincipalOnChannel('email', address);
+  }
+
+  /**
    * Reject a mailbox name that is not configured, without fetching a message.
    *
    * Gate C skips recipient resolution when both policy axes already escalate
@@ -2435,7 +2472,25 @@ export class OutboundGateway {
       return { success: false, blockedReason: 'Contact resolution failed; draft not created' };
     }
 
-    return this.dispatchEmailDraft(request);
+    const toDraft: EmailSendRequest = { ...request };
+    delete toDraft.signature;
+    const signature = this.emailSignatureFor(toDraft, false);
+    if (signature) toDraft.signature = signature;
+    return this.dispatchEmailDraft(toDraft);
+  }
+
+  /**
+   * The signature for an email the gateway is about to send or draft, or undefined.
+   * Not on system notifications (alerts and principal notes, which the assistant does
+   * not write as a letter), not from the principal's own mailbox (it would sign as the
+   * assistant in the principal's name), and not twice when the body already ends with it.
+   */
+  private emailSignatureFor(request: EmailSendRequest, isSystemNotification: boolean): string | undefined {
+    if (isSystemNotification) return undefined;
+    if (this.isPrincipalMailbox(request.accountId)) return undefined;
+    const signature = emailSignatureText(this.agentPersona);
+    if (!signature || bodyEndsWithSignature(request.body, signature)) return undefined;
+    return signature;
   }
 
   /**
@@ -3029,7 +3084,9 @@ export class OutboundGateway {
     }
 
     // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.
-    const htmlBody = markdownToHtml(request.body, { wrap: true }) + (request.htmlQuote ?? '');
+    const htmlBody = markdownToHtml(request.body, { wrap: true })
+      + emailSignatureHtml(request.signature)
+      + (request.htmlQuote ?? '');
 
     let attachments: AttachmentContent[] | undefined;
     if (request.attachments && request.attachments.length > 0) {
@@ -3087,7 +3144,9 @@ export class OutboundGateway {
     // Called outside the Nylas try-catch so that any future regression in the
     // converter is not silently misattributed as "Nylas send failed" in logs.
     // htmlQuote is appended after conversion so it is not re-escaped by markdownToHtml.
-    const htmlBody = markdownToHtml(request.body, { wrap: true }) + (request.htmlQuote ?? '');
+    const htmlBody = markdownToHtml(request.body, { wrap: true })
+      + emailSignatureHtml(request.signature)
+      + (request.htmlQuote ?? '');
 
     let attachments: AttachmentContent[] | undefined;
     if (request.attachments && request.attachments.length > 0) {

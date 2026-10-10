@@ -6,6 +6,10 @@
 // Use this for the NEEDS DRAFT triage category: coordinator writes the draft,
 // the principal reviews and sends it from their email client.
 //
+// The coordinator drafts only in Curia's own mailboxes. The principal's mailbox belongs
+// to the ceo-inbox specialist, which keeps its own draft tools, so a coordinator call
+// naming that mailbox is refused with where the draft goes instead (prompt trim PR 6).
+//
 // `to` is a contact reference (#2041, ADR-047): a contact ID or "principal", with an
 // optional #label hint, resolved by the gateway to a verified address. Curia's draft
 // skill no longer writes a typed address into a draft.
@@ -15,6 +19,11 @@ import { buildReplyQuote } from '../../../../src/skills/_shared/reply-quote.js';
 import { parseAttachmentInputs } from '../../../_shared/parse-attachments.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export const PRINCIPAL_MAILBOX_ERROR =
+  "No draft was saved: drafts in the principal's mailbox are made by the ceo-inbox specialist. "
+  + 'Delegate the draft to ceo-inbox with the recipient\'s contact ID and what to say. '
+  + 'email-draft-save saves drafts only in your own mailbox.';
 
 export class EmailDraftSaveHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
@@ -46,6 +55,10 @@ export class EmailDraftSaveHandler implements ToolHandler {
     if (!body || typeof body !== 'string') return { success: false, error: 'Missing required input: body (string)' };
 
     const accountId = typeof account === 'string' && account.trim() ? account.trim() : undefined;
+    if (ctx.agentId === 'coordinator' && ctx.outboundGateway.isPrincipalMailbox(accountId)) {
+      ctx.log.info({ accountId }, 'email-draft-save: refused a coordinator draft in the principal\'s mailbox');
+      return { success: false, error: PRINCIPAL_MAILBOX_ERROR };
+    }
     const replyToMessageId = typeof reply_to_message_id === 'string' && reply_to_message_id.trim()
       ? reply_to_message_id.trim()
       : undefined;

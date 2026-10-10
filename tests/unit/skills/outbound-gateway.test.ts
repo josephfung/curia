@@ -3375,3 +3375,116 @@ describe('hasTransientErrorSignal (#1380)', () => {
     expect(hasTransientErrorSignal('a string')).toBe(false);
   });
 });
+
+// Prompt trim PR 6: the principal's mailbox is told apart from the assistant's own, and
+// the configured signature is added to the emails the assistant writes.
+describe('OutboundGateway — principal mailbox and email signature', () => {
+  const PERSONA = { displayName: 'Alex Curia', title: 'Digital EA', emailSignature: '--\nAlex Curia\nDigital EA' };
+
+  function makeGateway(opts: { persona?: typeof PERSONA; accounts?: Array<[string, string]> } = {}) {
+    const mocks = createMocks();
+    const nylasClient = {
+      ...(mocks.nylasClient as unknown as Record<string, unknown>),
+      createDraft: vi.fn().mockResolvedValue({ id: 'draft-1' }),
+    } as unknown as NylasClient;
+    const accounts = opts.accounts ?? [['curia', 'assistant@example.com'], ['joseph', 'ceo@example.com']];
+    const gateway = new OutboundGateway({
+      nylasClients: new Map(accounts.map(([name]) => [name, nylasClient])),
+      emailAccountAddresses: new Map(accounts),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('CEO@example.com')],
+      logger: mocks.logger,
+      ...(opts.persona ? { agentPersona: opts.persona } : {}),
+    });
+    const sentHtml = () => (nylasClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![0].body as string;
+    const draftHtml = () => (nylasClient.createDraft as ReturnType<typeof vi.fn>).mock.calls[0]![0].body as string;
+    return { gateway, mocks, sentHtml, draftHtml };
+  }
+
+  const email = (overrides: Record<string, unknown> = {}) => ({
+    channel: 'email' as const, to: 'priya@example.com', subject: 'Call', body: 'Tuesday at 10 works.', ...overrides,
+  });
+
+  it('isPrincipalMailbox matches a mailbox whose address is a principal identity', () => {
+    const { gateway } = makeGateway();
+    expect(gateway.isPrincipalMailbox('joseph')).toBe(true);
+    expect(gateway.isPrincipalMailbox('curia')).toBe(false);
+    // Omitted: the primary (first) account.
+    expect(gateway.isPrincipalMailbox()).toBe(false);
+    expect(gateway.isPrincipalMailbox('unknown')).toBe(false);
+  });
+
+  it('isPrincipalMailbox is false when no addresses are configured', () => {
+    const mocks = createMocks();
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['joseph', mocks.nylasClient]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      principalIdentities: [makePrincipalIdentity('ceo@example.com')],
+      logger: mocks.logger,
+    });
+    expect(gateway.isPrincipalMailbox('joseph')).toBe(false);
+  });
+
+  it('signs a sent email after the body, as plain escaped text, and before the quote', async () => {
+    const { gateway, mocks, sentHtml } = makeGateway({
+      persona: { ...PERSONA, emailSignature: 'Alex <Curia>\n*Digital EA*' },
+    });
+    const result = await gateway.send(email({ htmlQuote: '<blockquote>earlier</blockquote>' }));
+    expect(result.success).toBe(true);
+    const html = sentHtml();
+    expect(html).toContain('Alex &lt;Curia&gt;<br>\n*Digital EA*');
+    expect(html.indexOf('Tuesday at 10')).toBeLessThan(html.indexOf('Alex &lt;Curia&gt;'));
+    expect(html.indexOf('Alex &lt;Curia&gt;')).toBeLessThan(html.indexOf('<blockquote>earlier'));
+    // The filter checks only what the agent wrote.
+    const checked = (mocks.contentFilter.check as ReturnType<typeof vi.fn>).mock.calls[0]![0] as { content: string };
+    expect(checked.content).toBe('Tuesday at 10 works.');
+  });
+
+  it('builds the signature from name and title when none is set', async () => {
+    const { gateway, sentHtml } = makeGateway({ persona: { ...PERSONA, emailSignature: '' } });
+    await gateway.send(email());
+    expect(sentHtml()).toContain('<p>Alex Curia<br>\nDigital EA</p>');
+  });
+
+  it('signs a draft', async () => {
+    const { gateway, draftHtml } = makeGateway({ persona: PERSONA });
+    const result = await gateway.createEmailDraft(email({ accountId: 'curia' }));
+    expect(result.success).toBe(true);
+    expect(draftHtml()).toContain('Alex Curia<br>\nDigital EA');
+  });
+
+  it('does not sign twice when the body already ends with the signature', async () => {
+    const { gateway, sentHtml } = makeGateway({ persona: PERSONA });
+    await gateway.send(email({ body: 'Tuesday at 10 works.\n\nAlex Curia\n**Digital EA**' }));
+    expect(sentHtml()).not.toContain('<p>--');
+    expect(sentHtml().match(/Alex Curia/g)).toHaveLength(1);
+  });
+
+  it('still signs below a short sign-off', async () => {
+    const { gateway, sentHtml } = makeGateway({ persona: PERSONA });
+    await gateway.send(email({ body: 'Tuesday at 10 works.\n\nBest,\nAlex' }));
+    expect(sentHtml()).toContain('--<br>\nAlex Curia<br>\nDigital EA');
+  });
+
+  it('does not sign system notifications', async () => {
+    const { gateway, sentHtml } = makeGateway({ persona: PERSONA });
+    await gateway.send(email({ to: 'ceo@example.com' }), { isSystemNotification: true });
+    expect(sentHtml()).not.toContain('Digital EA');
+  });
+
+  it('does not sign as the assistant from the principal\'s mailbox', async () => {
+    const { gateway, draftHtml } = makeGateway({ persona: PERSONA });
+    await gateway.createEmailDraft(email({ accountId: 'joseph' }));
+    expect(draftHtml()).not.toContain('Digital EA');
+  });
+
+  it('ignores a signature already on the request', async () => {
+    const { gateway, sentHtml } = makeGateway();
+    await gateway.send({ ...email(), signature: 'Injected' });
+    expect(sentHtml()).not.toContain('Injected');
+  });
+});
