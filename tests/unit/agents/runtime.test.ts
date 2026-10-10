@@ -6392,6 +6392,8 @@ describe('Delegation failure circuit-breaker (#1171)', () => {
 
     expect(agentResponses).toHaveLength(1);
     const response = agentResponses[0]!;
+    // Carries the task's channel, so a scheduler turn's copy is audited when dropped (#2091).
+    expect(response.payload.channelId).toBe('cli');
     // Must be human-readable — no protocol JSON leaking to the principal (#1329)
     expect(response.payload.content).not.toContain('_curia_protocol');
     expect(response.payload.content).not.toContain('delegation_failure');
