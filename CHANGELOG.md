@@ -16,7 +16,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Added
 
 - **`agent.response` (public API)** — optional `channelId` names the channel of the task it answers. (#2091)
-- **Scenario case 17a** — a scheduled job reaches the principal with exactly one send. (#2091)
+- **Scenario cases 17a–17b** — scheduled jobs send the principal one message when asked, otherwise none. (#2091)
 - **Scenario real delegation** — `delegation: real` runs the specialist under the same stubs; checks can target agents. (#2027)
 - **Scenario cases 16a–16g** — coordinator → specialist round trips; three join the release gate. (#2027)
 - **`ToolContext` (public API)** — optional `signal` and `deadline` let a handler cancel requests at its timeout. (#2083)
@@ -192,7 +192,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **Scenario 06 bullpen stub** — a reply missing `content` or `thread_id` gets the handler's error, not "posted". (#2098)
-- **Scheduled-job replies** — the coordinator is told to send; undelivered reply text is audited, not silently dropped. (#2091)
+- **Scheduled-job replies** — jobs asked to notify the principal now send; undelivered reply text is audited. (#2091)
 - **Image publish and CI** — Docker Hub pulls are authenticated, so shared-runner rate limits no longer fail them. (#2095)
 - **Nylas folder lookups** — label and read calls reuse a per-grant folder list; email labels past page one resolve. (#2083)
 - **Skill timeouts** — a timed-out call now aborts its Nylas requests instead of writing late. (#2083)
