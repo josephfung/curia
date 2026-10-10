@@ -1395,7 +1395,38 @@ now catches a postscript or a labelled note every time; #1990 saw 3 of 13 on its
 postscript, with a different reply around it. An aside inside the body still gets
 through, so the tag remains the real guard.
 
-**Full suites on `fe8c2b83`.** _(filled in below)_
+**Full suites on `fe8c2b83`.** Same model and judge, concurrency 4, on copies of
+`curia_scen`.
+
+- **Smoke:** 45 of 47 (estimated $1.10); six passed on retry. The two failures, Schedule
+  External Meeting (first attempt 46%, then a timeout) and Pre-Meeting Prep Brief (67%),
+  are principal turns on the console channel. PR 5 changes nothing such a turn sees: it
+  gets no non-principal guidance, the runtime cuts nothing on a principal-only channel,
+  and the YAML changed only its `version`. Pre-Meeting Prep Brief misses about as often on
+  main (PR 3).
+- **Scenarios:** every non-principal case passed: 03a, 03b, 04b, 07, 10 and 18 (96%). The
+  gate failed on four, none of them a non-principal turn:
+  - `reply-shaped principal no context` (04a): a judge error on one run. Rerun 5 times:
+    100% on PR 5, 90% on main.
+  - `bullpen mention stays on thread` (06): 60%, two runs out of turn budget. A/B, 10
+    runs and then 10 more each: main 9 of 10 and 10 of 10, PR 5 6 of 10 and 10 of 10.
+    The rendered coordinator prompt is byte-identical on both sides (timestamps aside),
+    a bullpen turn gets no turn guidance, and no tool definition changed, so the model
+    sees the same input: this is variance. The budget runs are the #2033 behavior PR 10
+    targets.
+  - `google file filing after delegation` (13a): `principal_can_edit` 3 of 5. A/B, 10 runs
+    each: main 2 of 10, PR 5 7 of 10. Both fail the gate on the reader/writer sharing
+    choice seen in PR 4, a principal turn PR 5 changes nothing in.
+  - `real delegation clarification resume` (16d): two refused calls in one run, the
+    coordinator filing the research brief (`doc-place`, `doc-write`) on a principal turn.
+    A stub hole, not PR 5.
+
+**After review (`d76ded90`).** Case 18, 5 runs: every behavior 100%. 04b: every critical
+behavior 100%; `principal_asked_on_own_channel` 4 of 5. The review added a Stage 1 rule
+(a note tag in a send to anyone but the principal is blocked) and ended a relayed note
+only at its own closing tag.
+
+Spend for all of PR 5's runs, judge included: about $4.02 estimated.
 
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 
