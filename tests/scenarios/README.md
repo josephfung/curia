@@ -472,7 +472,9 @@ the coordinator searching only its own mailbox, never asking ceo-inbox, and endi
 also scored 80%: the one-reply-no-send failure from the 2026-10-09 incident did not recur
 in five runs, so the case guards the delivery path rather than reproducing the incident at
 a measurable rate. On the final wording (send only when the task asks to tell, notify or
-remind the principal) it scored 100%, and its stubbed counterpart 17b, a maintenance job
+remind the principal) it scored 100%. With the check tightened to require the `principal`
+recipient (`sends_to_principal`) as well as one send in all, both critical checks again
+passed 5/5. Its stubbed counterpart 17b, a maintenance job
 that must send nothing, scored 100% in the gate.
 
 Two checks are scored but deliberately not critical, because each was measured at 4/5 before

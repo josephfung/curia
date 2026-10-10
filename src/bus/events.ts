@@ -151,9 +151,11 @@ interface AgentResponsePayload {
    */
   sends?: string[];
   /**
-   * The channel of the agent.task this answers. Set on responses that end the tool-use
-   * loop. The dispatcher reads it to tell a scheduler turn, whose reply text has no route
-   * to anyone, from other unrouted responses such as bullpen and delegation (#2091).
+   * The channel of the agent.task this answers. Set on responses that carry reply text:
+   * the end of the tool-use loop and the delegation-failure reply, not the structured
+   * clarification pause. The dispatcher reads it to tell a scheduler turn, whose reply
+   * text has no route to anyone, from other unrouted responses such as bullpen and
+   * delegation (#2091).
    */
   channelId?: string;
   /**
@@ -318,9 +320,9 @@ interface OutboundNoReplyPayload {
    * delivery and recorded the narrated body on `abandonedContent` so audit can
    * distinguish preamble compliance (`agent_declined`) from backstop catches
    * (#1734). Agent always ran — `routingTaskId` / `agentId` are real.
-   * `scheduler_undelivered` = a scheduler-channel turn ended with reply text and
-   * no message send. Nothing routes a scheduler turn's reply anywhere, so the text
-   * reached no one; it is kept on `abandonedContent` (#2091).
+   * `scheduler_undelivered` = a scheduler-channel turn ended with reply text instead
+   * of declining. Nothing routes a scheduler turn's reply anywhere, so the text
+   * reached no one, whatever else the turn sent; it is kept on `abandonedContent` (#2091).
    */
   reason: 'agent_declined' | 'content_block_abandoned' | 'empty_response' | 'ambiguous_decline' | 'auto_generated' | 'scheduler_undelivered';
   /** Raw text preserved for recoverability (blocked draft, near-miss body,

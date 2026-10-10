@@ -1,5 +1,5 @@
-// A scheduler turn's reply has no route to anyone (#2091). When the turn sent nothing and
-// still wrote a reply, the dispatcher records it rather than dropping it silently.
+// A scheduler turn's reply has no route to anyone (#2091). Reply text the turn ends with is
+// recorded, not dropped silently.
 import { describe, it, expect, vi } from 'vitest';
 import { Dispatcher } from '../../../src/dispatch/dispatcher.js';
 import { EventBus } from '../../../src/bus/bus.js';
@@ -67,16 +67,23 @@ describe('Dispatcher — unrouted scheduler-turn replies (#2091)', () => {
     });
     expect(noReplyEvents[0]!.parentEventId).toBe(responseId);
     expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ channelId: 'scheduler', droppedContent: REPLY }),
+      expect.objectContaining({ channelId: 'scheduler', contentLength: REPLY.length }),
       expect.stringContaining('reached no one'),
     );
     expect(logger.warn).not.toHaveBeenCalled();
+    // The reply text belongs in the audit event only, never the log.
+    for (const call of vi.mocked(logger.info).mock.calls) {
+      expect(JSON.stringify(call)).not.toContain('Sam says');
+    }
   });
 
-  it('records nothing when the turn sent a message', async () => {
+  it('still records the reply when the turn also sent something', async () => {
+    // `sends` names skills, not recipients: an email to a third party does not mean the
+    // principal heard the update written in the reply.
     const { bus, noReplyEvents } = buildHarness();
-    await publishUnrouted(bus, { content: 'Told the principal.', sends: ['signal-send'] });
-    expect(noReplyEvents).toHaveLength(0);
+    await publishUnrouted(bus, { content: REPLY, sends: ['email-send'] });
+    expect(noReplyEvents).toHaveLength(1);
+    expect(noReplyEvents[0]!.payload.abandonedContent).toBe(REPLY);
   });
 
   it('records nothing when the turn declined', async () => {

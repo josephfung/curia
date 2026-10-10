@@ -79,12 +79,24 @@ tool_stubs:
     - match: { action: post }
       return: { thread_id: 7c1e2d3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f, message_id: 8d2f3e4a-5b6c-4d7e-9f8a-1b2c3d4e5f60 }
 expected_behaviors:
-  - id: one_send_to_principal
+  # Two checks: a send reached `principal`, and there was exactly one send in all. Sam is a
+  # seeded contact, so a send to him is possible and must not count.
+  - id: sends_to_principal
     weight: critical
-    description: Sends the principal exactly one message, with any send skill.
+    description: Sends the principal a message, addressed by the `principal` alias.
     check:
-      # No `with`: the recipient input is `to` on email-send and `recipient` on the rest.
-      # The coordinator's own sends only: a specialist emailing Sam is not this check.
+      # The recipient input is `to` on email-send and `recipient` on the rest.
+      any_of:
+        - called: email-send
+          with: { to: principal }
+          success: true
+        - called: [signal-send, sms-send, slack-send]
+          with: { recipient: principal }
+          success: true
+  - id: one_send_in_all
+    weight: critical
+    description: Sends exactly one message in all, on any channel.
+    check:
       called: [signal-send, email-send, sms-send, slack-send]
       success: true
       min: 1

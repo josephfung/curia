@@ -1794,21 +1794,21 @@ export class Dispatcher {
   }
 
   /**
-   * A scheduler-channel turn's reply goes nowhere: the only way it reaches the principal
-   * is a send skill called during the turn. When the turn sent nothing and still wrote a
-   * reply, that text reached no one, so it is audited as `outbound.no_reply`
-   * (`scheduler_undelivered`) with the text kept (#2091). Errors are
-   * the scheduler's to record; a decline, or a reply beside a send, is a run summary.
+   * A scheduler-channel turn's reply goes nowhere: the only way anything reaches the
+   * principal is a send skill called during the turn. So any reply text the turn ends
+   * with is audited as `outbound.no_reply` (`scheduler_undelivered`) with the text kept
+   * (#2091), whether or not the turn also sent something: `sends` names skills, not
+   * recipients, so a send to a third party cannot vouch that the principal heard. Errors
+   * are the scheduler's to record, and a decline has no text to lose.
    */
   private async recordUnroutedSchedulerReply(event: AgentResponseEvent): Promise<void> {
     const { agentId, conversationId, content, sends, isError } = event.payload;
     const declined = event.payload.suppressDelivery === true
       || classifyNoReply(content) !== null
       || containsStandaloneNoReplyToken(content);
-    const sent = (sends?.length ?? 0) > 0;
-    if (isError || declined || sent) {
+    if (isError || declined) {
       this.logger.debug(
-        { agentId, conversationId, parentEventId: event.parentEventId, channelId: 'scheduler', isError: isError === true, declined, sends },
+        { agentId, conversationId, parentEventId: event.parentEventId, channelId: 'scheduler', isError: isError === true, declined },
         'No routing info for scheduler-turn response — nothing undelivered, skipping outbound delivery',
       );
       return;
@@ -1816,10 +1816,11 @@ export class Dispatcher {
 
     // Info, not warn: most such replies are a maintenance run's summary, which the
     // scheduler already keeps as last_run_summary. The audit event is what makes a missed
-    // "let the principal know" findable.
+    // "let the principal know" findable. The text stays out of the log: it can hold
+    // message bodies and personal details, and only the audit event needs it.
     this.logger.info(
-      { agentId, conversationId, parentEventId: event.parentEventId, channelId: 'scheduler', droppedContent: content.slice(0, 500) },
-      'Scheduler turn ended with a reply and no send — the reply reached no one',
+      { agentId, conversationId, parentEventId: event.parentEventId, channelId: 'scheduler', contentLength: content.length, sends: sends ?? [] },
+      'Scheduler turn ended with reply text — it reached no one; recorded as outbound.no_reply',
     );
     await this.bus.publish('dispatch', createOutboundNoReply({
       routingTaskId: event.parentEventId!,

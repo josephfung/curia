@@ -1700,6 +1700,8 @@ export class AgentRuntime {
                 content: escalationContent,
                 skillsCalled,
                 sends,
+                // Ordinary reply text, so a scheduler turn's copy is audited when dropped (#2091).
+                channelId: turnChannelId,
                 ...failedSkillsPayload(),
                 parentEventId: taskEvent.id,
               });

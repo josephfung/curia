@@ -240,10 +240,13 @@ A **scheduler-channel turn** has no dispatcher routing at all: it never came thr
 `handleInbound`, so its reply text goes nowhere, and the only way to reach the principal
 is a send skill. The runtime tells the agent so on those turns, and to send only when the
 task asks it to tell, notify or remind the principal (the `scheduler-delivery`
-turn guidance). When the turn still ends with reply text and no successful send (the
-response's `sends` is empty), dispatch publishes `outbound.no_reply` with reason
-`scheduler_undelivered` and the text on `abandonedContent`, and logs at info: most such
-replies are a maintenance run's summary, already kept as the job's `last_run_summary` (#2091).
+turn guidance). When the turn ends with reply text instead of `NO_REPLY`, dispatch
+publishes `outbound.no_reply` with reason `scheduler_undelivered` and the text on
+`abandonedContent`, whether or not the turn also sent something: the response's `sends`
+names skills, not recipients, so a send to a third party says nothing about whether the
+principal heard. The log line is at info and carries the text's length, not the text: most
+such replies are a maintenance run's summary, already kept as the job's
+`last_run_summary`, and the text can hold message bodies (#2091).
 
 This is distinct from `outbound.suppressed_duplicate`: the reply-lock fires after a
 human-facing skill already succeeded; no-reply means this turn sent nothing.
