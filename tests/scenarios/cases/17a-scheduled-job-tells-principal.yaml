@@ -1,0 +1,99 @@
+# Case 17a (#2091): a scheduled job's reply text reaches no one. A scheduler turn has no
+# dispatcher route, so "let the principal know" only happens through a send skill. Rule:
+# the `scheduler-delivery` trigger guidance (src/agents/prompts/turn-guidance.ts); the
+# dispatcher audits a reply that skipped it as outbound.no_reply `scheduler_undelivered`.
+# Replays the 2026-10-09 run where ceo-inbox, really running, found Sam's answer and the
+# coordinator wrote the principal a full message as its final reply, which production drops.
+name: scheduled job tells principal
+description: >
+  A scheduled job fires: check whether Sam Rivera has replied about the Q3 offsite planning
+  session and let the principal know what he said. Sam's reply is in the principal's inbox:
+  Thursday at 10 works, and he will bring a shortlist of three venues. The coordinator
+  sends the principal one message with Sam's answer; its final reply is not delivered to
+  anyone.
+tags: [real-delegation, scheduler, delivery, ceo-inbox]
+delegation: real
+# On demand, like the other non-gate real cases: about $0.12 and four minutes for five runs.
+release_gate: false
+runs: 5
+stub_sets: [human-channels, ceo-inbox-office]
+seed:
+  contacts:
+    - key: sam
+      display_name: Sam Rivera
+      tier: known
+      channel: email
+      identifier: sam@northwind.example.test
+inbound:
+  from: scheduler
+  content: >
+    Check whether Sam Rivera has replied about the Q3 offsite planning session, and let the
+    principal know what he said.
+tool_stubs:
+  ceo-inbox-search:
+    - agent: ceo-inbox
+      match: {}
+      return:
+        messages:
+          - id: scenario-msg-sam-reply
+            threadId: scenario-thread-sam-offsite
+            from: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+            subject: "Re: Q3 offsite planning session"
+            snippet: Thursday at 10 works for me. I'll bring the shortlist of three venues
+            unread: true
+            folders: [INBOX]
+        count: 1
+  ceo-inbox-read:
+    - agent: ceo-inbox
+      match: {}
+      return:
+        id: scenario-msg-sam-reply
+        threadId: scenario-thread-sam-offsite
+        from: [{ name: Sam Rivera, email: sam@northwind.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: "Re: Q3 offsite planning session"
+        body_plain: |
+          Hi,
+
+          Thursday at 10 works for me. I'll bring the shortlist of three venues so we can
+          pick one in the room.
+
+          Sam
+        body_html: ""
+        labels: []
+        attachments: []
+  # Some runs ask contacts about Sam, and it checks his recent meetings: none.
+  calendar-list-events:
+    - agent: contacts
+      match: {}
+      return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
+  scheduler-report:
+    - match: {}
+      return: { recorded: true }
+  # The coordinator sometimes looks for a thread about Sam first, or asks ceo-inbox on a new
+  # one before delegating. No bullpen is seeded, so any thread id misses, as in production.
+  bullpen:
+    - match: { action: get_thread }
+      error: No bullpen thread with that ID exists
+    - match: { action: post }
+      return: { thread_id: 7c1e2d3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f, message_id: 8d2f3e4a-5b6c-4d7e-9f8a-1b2c3d4e5f60 }
+expected_behaviors:
+  - id: one_send_to_principal
+    weight: critical
+    description: Sends the principal exactly one message, with any send skill.
+    check:
+      # No `with`: the recipient input is `to` on email-send and `recipient` on the rest.
+      # The coordinator's own sends only: a specialist emailing Sam is not this check.
+      called: [signal-send, email-send, sms-send, slack-send]
+      success: true
+      min: 1
+      max: 1
+  - id: conveys_sams_answer
+    weight: important
+    description: >
+      The message to the principal says Sam replied that Thursday at 10 works and that he
+      will bring the venue shortlist.
+failure_modes:
+  - Writes the update to the principal as its final reply and sends nothing
+  - Sends the same update on two channels

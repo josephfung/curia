@@ -187,7 +187,7 @@ describe('coordinator scenario cases', () => {
     // changes the release gate: update the table in tests/scenarios/README.md with it.
     const real = cases.filter(c => c.delegation === 'real');
     expect(real.map(c => path.basename(c.sourceFile).slice(0, 3)).sort())
-      .toEqual(['16a', '16b', '16c', '16d', '16e', '16f', '16g']);
+      .toEqual(['16a', '16b', '16c', '16d', '16e', '16f', '16g', '17a']);
     expect(real.filter(c => c.releaseGate).map(c => path.basename(c.sourceFile).slice(0, 3)).sort())
       .toEqual(['16a', '16d', '16f']);
     // Every other case is in the gate.

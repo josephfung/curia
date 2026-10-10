@@ -1244,12 +1244,17 @@ export class Dispatcher {
       : undefined;
 
     if (!routing) {
-      // Expected for bullpen tasks: BullpenDispatcher publishes agent.task events with
-      // channelId "bullpen", which have no routing entry here. Downgraded to debug to
-      // avoid noisy warn logs in normal operation.
+      // Scheduler turns never come through handleInbound, so their reply text has no
+      // route to anyone. Record it rather than drop it silently (#2091).
+      if (event.payload.channelId === 'scheduler') {
+        await this.recordUnroutedSchedulerReply(event);
+        return;
+      }
+      // Bullpen and delegated tasks have no routing entry here either: their caller reads
+      // the response. Debug, to keep normal operation quiet.
       this.logger.debug(
-        { parentEventId: event.parentEventId },
-        'No routing info for agent response — expected for bullpen tasks, skipping outbound delivery',
+        { parentEventId: event.parentEventId, channelId: event.payload.channelId, conversationId: event.payload.conversationId },
+        'No routing info for agent response — not a dispatched inbound turn, skipping outbound delivery',
       );
       return;
     }
@@ -1786,6 +1791,42 @@ export class Dispatcher {
     }
 
     this.scheduleCheckpoint(routing.conversationId, event.payload.agentId, routing.channelId);
+  }
+
+  /**
+   * A scheduler-channel turn's reply goes nowhere: the only way it reaches the principal
+   * is a send skill called during the turn. When the turn sent nothing and still wrote a
+   * reply, that text was meant for someone and reached no one, so it is audited as
+   * `outbound.no_reply` (`scheduler_undelivered`) with the text kept (#2091). Errors are
+   * the scheduler's to record; a decline, or a reply beside a send, is a run summary.
+   */
+  private async recordUnroutedSchedulerReply(event: AgentResponseEvent): Promise<void> {
+    const { agentId, conversationId, content, sends, isError } = event.payload;
+    const declined = event.payload.suppressDelivery === true
+      || classifyNoReply(content) !== null
+      || containsStandaloneNoReplyToken(content);
+    const sent = (sends?.length ?? 0) > 0;
+    if (isError || declined || sent) {
+      this.logger.debug(
+        { agentId, conversationId, parentEventId: event.parentEventId, channelId: 'scheduler', isError: isError === true, declined, sends },
+        'No routing info for scheduler-turn response — nothing undelivered, skipping outbound delivery',
+      );
+      return;
+    }
+
+    this.logger.warn(
+      { agentId, conversationId, parentEventId: event.parentEventId, channelId: 'scheduler', droppedContent: content.slice(0, 500) },
+      'Scheduler turn ended with a reply and no send — the reply reached no one',
+    );
+    await this.bus.publish('dispatch', createOutboundNoReply({
+      routingTaskId: event.parentEventId!,
+      agentId,
+      conversationId,
+      channelId: 'scheduler',
+      reason: 'scheduler_undelivered',
+      abandonedContent: content,
+      parentEventId: event.id,
+    }));
   }
 
   private resolveNoReplyReason(
