@@ -823,6 +823,30 @@ describe('web-browser refuses Google Workspace file URLs', () => {
     if (!result.success) expect(result.error).toMatch(/skill-activate with skill "google-workspace"/);
   });
 
+  it('stops a batch at the landing, before later steps act on the page', async () => {
+    const { ctx } = makeToolContext({
+      input: { actions: [{ action: 'navigate', url: 'https://bit.ly/offsite-plan' }, { action: 'click', selector: 'Next' }] },
+      pageUrl: 'https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fdocs.google.com%2Fdocument%2Fd%2F1AbC%2Fedit',
+    });
+    const result = await new WebBrowserHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/completed 1\/2 action\(s\) first/);
+    expect(vi.mocked(humanClick)).not.toHaveBeenCalled();
+  });
+
+  it('gives the guidance when an action fails after reaching the landing', async () => {
+    vi.mocked(humanClick).mockRejectedValueOnce(new Error('element detached'));
+    const { ctx } = makeToolContext({
+      input: { action: 'click', selector: 'Open the plan', session_id: 'sess-1' },
+      pageUrl: 'https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fdocs.google.com%2Fdocument%2Fd%2F1AbC%2Fedit',
+    });
+    const result = await new WebBrowserHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/skill-activate with skill "google-workspace"/);
+    // The click ran and threw: the guidance replaced the "Browser action failed" error.
+    expect(vi.mocked(humanClick)).toHaveBeenCalledOnce();
+  });
+
   it('still opens a Google Form', async () => {
     const { ctx } = makeToolContext({
       input: { action: 'navigate', url: 'https://docs.google.com/forms/d/e/1FAIp/viewform' },

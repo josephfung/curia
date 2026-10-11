@@ -317,6 +317,9 @@ export class WebBrowserHandler implements ToolHandler {
         // `screenshot: true`). Only honor it if we actually reached the step, not on a batch that
         // stopped earlier.
         if (stepAction === 'screenshot') screenshotStepReached = true;
+        // A redirect or a click that reached a Google file (or its sign-in page) stops the
+        // batch here: later steps would act on a page this tool refuses.
+        if (isGoogleWorkspaceLanding(page.url())) break;
       } catch (err) {
         // Count this failure toward the circuit-breaker — but ONLY for the interaction actions
         // the breaker actually gates. A failed navigate/get_content, or a secret_ref config
@@ -336,6 +339,15 @@ export class WebBrowserHandler implements ToolHandler {
       }
     }
 
+    // A redirect or a click can reach a Google file the navigate guard never saw, or its
+    // sign-in page: same refusal, before the page is read. Checked ahead of the failure
+    // returns too, since an action can fail after it navigated there. Batch progress says
+    // what already ran.
+    if (isGoogleWorkspaceLanding(page.url())) {
+      const progress = isBatch ? ` The batch completed ${completed}/${steps.length} action(s) first.` : '';
+      return { success: false, error: `${googleWorkspaceUrlError('web-browser')}${progress}` };
+    }
+
     // Single-action back-compat: one action, one failure → { success:false, error } exactly as
     // before. A validation error and the breaker message are returned RAW (the original switch
     // returned them directly); only a thrown execution error keeps the "Browser action \"X\"
@@ -345,13 +357,6 @@ export class WebBrowserHandler implements ToolHandler {
         success: false,
         error: failure.kind === 'execution' ? `Browser action "${steps[0]!.action}" failed: ${failure.error}` : failure.error,
       };
-    }
-
-    // A redirect or a click can reach a Google file the navigate guard never saw, or its
-    // sign-in page: same refusal, before the page is read. Batch progress says what already ran.
-    if (isGoogleWorkspaceLanding(page.url())) {
-      const progress = isBatch ? ` The batch completed ${completed}/${steps.length} action(s) first.` : '';
-      return { success: false, error: `${googleWorkspaceUrlError('web-browser')}${progress}` };
     }
 
     // --- Gather result (once, from the final page state) ---
