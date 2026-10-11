@@ -124,6 +124,7 @@ target:                         # optional — address a specialist instead (see
     ...
 judge_tool_calls: false         # optional — show the judge each turn's tool calls
 known_failure: { issue: "#123" } # optional — a tracked bug this case catches (reported, not gated)
+timeout_seconds: 300            # optional — a longer wait per turn, for cases that chain specialists
 tool_stubs:                     # optional — fixture answers for tools (see "The fixture office")
   calendar-list-events:
     - match: {}                 # subset match on the call's arguments; {} matches any call

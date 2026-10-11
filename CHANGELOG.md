@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Smoke `timeout_seconds`** — a case can lengthen its per-turn wait; six multi-specialist cases now wait 300s. (#1954)
 - **`agent.response` (public API)** — optional `channelId` names the channel of the task it answers. (#2091)
 - **Scenario cases 17a–17b** — scheduled jobs send the principal one message when asked, otherwise none. (#2091)
 - **Scenario real delegation** — `delegation: real` runs the specialist under the same stubs; checks can target agents. (#2027)

@@ -1,5 +1,7 @@
 name: Vague Follow Up on This
 description: Agent must infer what "this" refers to from prior context and propose a concrete follow-up action
+# Chains several real specialists and has run past 180s (prompt trim PR 6 smoke A/B).
+timeout_seconds: 300
 tags:
   - context
   - multi-turn

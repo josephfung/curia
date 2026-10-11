@@ -1,5 +1,7 @@
 name: Reschedule Board Chair Meeting
 description: Agent should handle rescheduling a high-stakes meeting (board chair) with appropriate sensitivity, apology, and new time proposals
+# Chains several real specialists and has run past 180s (prompt trim PR 6 smoke A/B).
+timeout_seconds: 300
 tags:
   - meeting-coordination
   - scheduling

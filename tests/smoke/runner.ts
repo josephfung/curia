@@ -225,6 +225,7 @@ async function runTurns(
       content: prompt,
       sender: tc.sender,
       ...(target ? { target } : {}),
+      ...(tc.timeoutSeconds !== undefined ? { timeoutMs: tc.timeoutSeconds * 1000 } : {}),
     });
 
     responses.push({

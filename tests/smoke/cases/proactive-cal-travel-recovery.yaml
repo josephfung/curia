@@ -1,5 +1,7 @@
 name: Post-Travel Recovery Scheduling
 description: Agent should recognize the need for a lighter schedule after a multi-day conference and take action to protect the recovery day
+# Chains several real specialists and has run past 180s (prompt trim PR 6 smoke A/B).
+timeout_seconds: 300
 tags:
   - proactive
   - calendar
