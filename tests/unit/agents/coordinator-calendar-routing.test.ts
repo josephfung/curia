@@ -76,7 +76,7 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     const section = extractPrincipalCalendarSection(loadCoordinator().system_prompt);
     expect(section).toMatch(/borrow-then-answer through `@calendar`/);
     expect(section).toMatch(/you compose the reply/);
-    expect(delegateFailureNextStep('calendar')).toMatch(/could not be read/);
+    expect(delegateFailureNextStep('calendar')).toMatch(/never present the day\s+as clear or free/);
   });
 
   it('handle-directly does not claim the calendar (no Curia calendar path)', () => {

@@ -22,8 +22,9 @@ log.
 | 11: Who you are / Who you serve preamble | Merged (2026-10-08, #2052) | 15,709 (unchanged; code-owned blocks only; #2041 then took it to 15,667) | ~5,456 / 5,600 |
 | 3: rewrite pass | Merged (2026-10-08, #2073) | 13,439 | ~4,899 / 5,000 |
 | 4: audience in code | Merged (2026-10-09, #2092) | 9,494 | ~3,913 / 4,000 |
-| 5: principal note block on the relay | In review (2026-10-10) | 9,494 (unchanged; turn guidance and code) | ~3,913 / 4,000 |
-| 6–10, final phase | Not started | — | — |
+| 5: principal note block on the relay | Merged (2026-10-10, #2102) | 9,494 (unchanged; turn guidance and code) | ~3,913 / 4,000 |
+| 6: prose-only rules into code | In review (2026-10-10) | 9,065 | ~3,806 / 3,900 |
+| 7–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
@@ -139,6 +140,46 @@ one note in five went untagged into the reply; closing the block without saying 
 emailed, 7 of 10 vendor deadlines reached the principal; as shipped, 10 of 10, level with
 main's separate sends. Stage 2 blocks a missed-tag postscript or labelled note every time
 and an aside woven into the body never, so the tag is the real guard.
+
+**PR 6 (2026-10-10).** Five prose-only rules moved into code, and their sentences left the
+YAML and the `email-etiquette` guidance (9,494 → 9,065 chars):
+- **`email-draft-save`** refuses a coordinator draft in the principal's mailbox and says the
+  draft goes to ceo-inbox. Other agents (meeting-debrief) still draft there.
+- **`web-fetch` and `web-browser`** refuse Google Docs, Sheets, Slides and Drive file URLs and
+  point to `skill-activate google-workspace` (`src/skills/_shared/google-workspace-url.ts`).
+- **A retryable failed delegation to `calendar` or `contacts`** carries a `next_step`: say
+  what could not be done, and never present a failed read as a clear day; the person could
+  not be resolved, so tell the principal, try once more, and act only with their contact ID.
+- **The email signature** from the office identity is added below every email the gateway
+  sends or drafts.
+
+Choices that differ from the plan:
+- **The signature is added in the outbound gateway,** not in `email-send` and `email-reply`.
+  The most common email, the reply to an inbound email, is relayed by the dispatcher and
+  never passes through those skills. System notifications and mail from the principal's
+  own mailbox are left unsigned, and a body that already ends with the signature is not
+  signed twice. The model still writes a short sign-off ("Best, Alex"); the signature
+  sits below it.
+- **"The principal's mailbox"** is a configured email account whose own address is one of
+  the principal's verified email identities (`OutboundGateway.isPrincipalMailbox`).
+- **Google Forms and Docs published to the web stay open:** both are public, and the
+  Workspace tools cannot read a publish ID.
+- **The failure next step comes only on a retryable failure or a plain error.** A decline is
+  a refusal, a timeout may have gone through (and the in-flight guard refuses a retry), and
+  a non-retryable failure is escalated and its reply written by the failure narration
+  (#1860). The calendar line is worded for a failed change as well as a failed read.
+- **The outbound filter allows the assistant's own mailbox addresses** (review). A draft
+  sent with send-draft is filtered with its signature, and a signature carrying the
+  assistant's address would otherwise be blocked as third-party contact data.
+- **Case 13b no longer checks that the web tools go uncalled.** Code refuses them, and a
+  refused call costs one call, not the answer.
+- **research-analyst keeps its own Google URL sentence.** It is now redundant; the final
+  phase (#2025) can drop it.
+
+Behavior held (baseline log). The targeted scenario A/B was level, with new cases 19a and
+19b at 100% on both sides. Smoke's three failures, two of them timeouts, came out level once
+the limit was 300 s; several runs on both sides needed more than 180 s, so a per-case smoke
+timeout is the follow-up.
 
 ### Lessons so far
 

@@ -925,7 +925,6 @@ export class DelegateHandler implements ToolHandler {
             reason: SPECIALIST_DECLINE_REASON,
             retryable: false,
             message: decline.message,
-            ...failureNextStep(agent),
           },
         };
       }
@@ -984,7 +983,8 @@ export class DelegateHandler implements ToolHandler {
               delegate_conversation_id: err.delegateConversationId,
             }),
             ...(err.waitTimeoutMs !== undefined && { wait_timeout_ms: err.waitTimeoutMs }),
-            ...failureNextStep(err.agent),
+            // Only a failure the coordinator may retry; the rest are escalated (#1860).
+            ...(err.retryable && err.reason !== 'timeout' ? failureNextStep(err.agent) : {}),
           },
         };
       }

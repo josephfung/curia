@@ -162,7 +162,7 @@ Fast, zero-cost pattern matching. Any finding from Stage 1 blocks immediately �
 - **System prompt fragments** — prompt-exfiltration markers are *derived at runtime from the live coordinator prompt* (not a hardcoded phrase list), and matching is whitespace- and markdown-robust so trivial reformatting cannot bypass them. Checked for verbatim or near-verbatim matches in the outbound body. (#1334)
 - **Internal structure leakage** — bus event type names, YAML/JSON config patterns, internal field names (`conversationId`, `taskId`, `agentId`, etc.)
 - **Secret patterns** — reuses existing patterns from `sanitizeOutput()`: API keys, bearer tokens, hex tokens ≥ 32 chars
-- **Contact data leakage** — email addresses in the body that are not the intended recipient or the CEO
+- **Contact data leakage** — email addresses in the body that are not the intended recipient, the CEO or one of the assistant's own mailboxes (which the email signature may carry; prompt trim PR 6)
 - **Principal note markup** — a `<note_for_principal>` tag (any spelling) in the body. Notes are cut only out of the coordinator's final response, so one in a send skill's body would reach its recipients (prompt trim PR 5)
 
 The identity- and structure-leakage rules, and the principal-note rule, carry a **principal-recipient bypass**: when the outbound message's recipient set is exclusively the structurally-verified principal, these rules do not fire (the principal is entitled to see internal structure). Secret-pattern and contact-leakage rules still apply. (#1334)

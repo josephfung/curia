@@ -48,15 +48,20 @@ export const NOTHING_SENT_NEXT_STEP_LINES: readonly string[] = [
 ];
 
 /**
- * A delegation to a specialist that failed (`failed: true`, or a failed tool result).
- * Keyed by agent id; only specialists whose failure has a known wrong reading carry
- * one. These were sentences in the coordinator prompt until prompt trim PR 6.
+ * A delegation to a specialist that failed and may be retried: a retryable failure, or a
+ * failed tool result. Keyed by agent id; only specialists whose failure has a known wrong
+ * reading carry one. These were sentences in the coordinator prompt until prompt trim PR 6.
+ *
+ * Not for a decline (a refusal, not a failed lookup) or a timeout (the work may have
+ * gone through, and the in-flight guard refuses a retry). Those, and every other
+ * non-retryable failure, are escalated and answered by the failure narration (#1860).
  */
 export const DELEGATE_FAILURE_NEXT_STEP_LINES: Readonly<Record<string, readonly string[]>> = {
-  // An empty or failed read is not an empty calendar (#1854).
+  // An empty or failed read is not an empty calendar (#1854). Worded for writes too.
   calendar: [
-    'The calendar could not be read, so you do not know what is on it. Tell the principal',
-    'it could not be read and why, in plain words; never present the day as clear or free.',
+    'The calendar request did not complete. Tell the principal what could not be done and',
+    'why, in plain words. A read that failed is not an empty calendar: never present the day',
+    'as clear or free.',
   ],
   contacts: [
     'The person could not be resolved. Tell the principal the lookup failed and try it once',

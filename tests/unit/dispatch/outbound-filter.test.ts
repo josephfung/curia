@@ -396,6 +396,23 @@ describe('OutboundContentFilter', () => {
       expect(result.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
     });
 
+    // Prompt trim PR 6: a draft sent with send-draft is filtered with its signature, which
+    // may carry the assistant's own address. It is the sender's, not a third party's.
+    it('allows the assistant\'s own mailbox addresses', async () => {
+      const filter = new OutboundContentFilter({
+        systemPromptMarkers: [],
+        ceoEmail: 'ceo@example.com',
+        ownEmails: ['Assistant@Office.example'],
+      });
+      const allowed = await filter.check({
+        ...BASE_INPUT,
+        content: 'Thanks!\n\n--\nAlex Curia | assistant@office.example',
+      });
+      expect(allowed.findings.some((f) => f.rule === 'contact-data-leak')).toBe(false);
+      const other = await filter.check({ ...BASE_INPUT, content: 'Reach me at someone@office.example' });
+      expect(other.findings.some((f) => f.rule === 'contact-data-leak')).toBe(true);
+    });
+
     it('blocks a third-party email even when recipient and CEO emails are also present', async () => {
       const filter = createTestFilter();
       const result = await filter.check({

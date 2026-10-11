@@ -111,6 +111,12 @@ export interface OutboundContentFilterConfig {
   // principal email — allowed in outbound content (not a third-party leak).
   // Accepts a mutable PrincipalEmailRef so post-boot identity binds hot-reload (#1514).
   ceoEmail: string | PrincipalEmailRef;
+  /**
+   * The assistant's own mailbox addresses — allowed in outbound content too. They are
+   * the sender's, not a third party's, and the email signature may carry one: a draft
+   * sent with send-draft is filtered with its signature (prompt trim PR 6).
+   */
+  ownEmails?: readonly string[];
   /** Optional Stage 2 LLM judge. When absent, Stage 2 is a no-op pass. */
   judge?: OutboundJudge;
   /**
@@ -482,7 +488,8 @@ export class OutboundContentFilter {
   /**
    * Rule: contact-data-leak
    *
-   * Finds any email address in the content that is not the recipient or principal,
+   * Finds any email address in the content that is not the recipient, the principal or
+ * one of the assistant's own mailboxes,
    * then decides whether to block based on recipient tier.
    *
    * Block condition:
@@ -511,6 +518,7 @@ export class OutboundContentFilter {
     const allowedEmails = new Set([
       recipientEmail.toLowerCase(),
       ...(ceoEmail ? [ceoEmail.toLowerCase()] : []),
+      ...(this.config.ownEmails ?? []).map((email) => email.toLowerCase()),
     ]);
 
     // Recipients at 'trusted' or above may receive third-party email addresses.

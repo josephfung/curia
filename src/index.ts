@@ -1458,6 +1458,7 @@ async function main(): Promise<void> {
     outboundFilter = buildOutboundContentFilter({
       systemPromptMarkers,
       ceoEmail: principalEmail,
+      ownEmails: resolvedEmailAccounts.map(a => a.selfEmail),
       judge: outboundJudge,
       escalationJudge,
       logger,

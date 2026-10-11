@@ -399,6 +399,65 @@ describe('OutboundGateway queue (#1380)', () => {
     expect(sent).not.toHaveProperty('recipientDisplayName');
   });
 
+  // Prompt trim PR 6: the signature is decided at send() and rides on the request, so a
+  // flush days later signs with what was decided then, not with whatever persona is live.
+  it('keeps the email signature on a queued payload and renders it on flush', async () => {
+    vi.useFakeTimers();
+    const outboundQueue = {
+      enqueue: vi.fn().mockResolvedValue({ id: 'q-sig' }),
+      listPending: vi.fn().mockResolvedValue([]),
+      deleteByIds: vi.fn(),
+      deleteExpired: vi.fn(),
+      countPending: vi.fn(),
+    };
+    const gateway = new OutboundGateway({
+      nylasClients: new Map([['curia', { sendMessage: vi.fn().mockRejectedValue(new Error('fetch failed')) } as never]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: outboundQueue as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['email', () => true]]),
+      agentPersona: { displayName: 'Alex Curia', title: 'Digital EA', emailSignature: 'Alex Curia\nDigital EA' },
+    });
+    try {
+      const queued = await gateway.send({ channel: 'email', to: 'alice@example.com', subject: 'Venue', body: 'The 14th works.' });
+      expect(queued.queued).toBe(true);
+      expect(outboundQueue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ signature: 'Alex Curia\nDigital EA' }));
+      await vi.advanceTimersByTimeAsync(30_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const flushNylas = { sendMessage: vi.fn().mockResolvedValue({ id: 'sent-sig' }) };
+    const flushGateway = new OutboundGateway({
+      nylasClients: new Map([['curia', flushNylas as never]]),
+      contactService: mocks.contactService,
+      contentFilter: mocks.contentFilter,
+      bus: mocks.bus,
+      logger: mocks.logger,
+      outboundQueue: {
+        enqueue: vi.fn(),
+        listPending: vi.fn().mockResolvedValue([{
+          id: 'q-sig',
+          channel: 'email',
+          recipient: 'alice@example.com',
+          payload: { channel: 'email' as const, to: 'alice@example.com', subject: 'Venue', body: 'The 14th works.', signature: 'Alex Curia\nDigital EA' },
+          enqueuedAt: new Date(),
+          expiresAt: new Date(Date.now() + 60_000),
+        }]),
+        deleteByIds: vi.fn().mockResolvedValue(1),
+        deleteExpired: vi.fn(),
+        countPending: vi.fn(),
+      } as unknown as OutboundQueueRepo,
+      outboundQueueReadiness: new Map([['email', () => true]]),
+    });
+    expect(await flushGateway.flushChannel('email')).toEqual({ flushed: 1, skipped: false });
+    const sent = flushNylas.sendMessage.mock.calls[0]![0] as { body: string };
+    expect(sent.body).toContain('Alex Curia<br>\nDigital EA');
+    expect(sent).not.toHaveProperty('signature');
+  });
+
   it('fails closed when a queued payload names a source other than email_participant (#2071)', async () => {
     const contactService = {
       resolveByChannelIdentity: vi.fn().mockResolvedValue(null),

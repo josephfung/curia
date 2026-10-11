@@ -772,7 +772,7 @@ describe('DelegateHandler', () => {
       const data = (result as { data: { failed?: boolean; next_step?: string } }).data;
       expect(data.failed).toBe(true);
       expect(data.next_step).toBe(delegateFailureNextStep('calendar'));
-      expect(data.next_step).toMatch(/never present the day as clear or free/);
+      expect(data.next_step).toMatch(/never present the day\s+as clear or free/);
     });
 
     it('tells the coordinator to report a failed contacts lookup and try again', async () => {
@@ -792,13 +792,33 @@ describe('DelegateHandler', () => {
       }
     });
 
-    it('adds the next step to a calendar decline', async () => {
-      const result = await delegateTo('calendar', {
+    // A decline is a refusal, a timeout may have gone through, and a non-retryable failure
+    // cannot be retried: each is escalated and narrated instead (#1860).
+    it('adds nothing to a decline', async () => {
+      const result = await delegateTo('contacts', {
         content: '<specialist_decline reason="unknown_sender">No contact record.</specialist_decline>',
       });
       const data = (result as { data: { declined?: boolean; next_step?: string } }).data;
       expect(data.declined).toBe(true);
-      expect(data.next_step).toBe(delegateFailureNextStep('calendar'));
+      expect(data.next_step).toBeUndefined();
+    });
+
+    it('adds nothing to a non-retryable failure', async () => {
+      const result = await delegateTo('calendar', {
+        isError: true, errorType: 'BUDGET_EXCEEDED', reason: 'maxTurns', retryable: false,
+      });
+      const data = (result as { data: { failed?: boolean; next_step?: string } }).data;
+      expect(data.failed).toBe(true);
+      expect(data.next_step).toBeUndefined();
+    });
+
+    it('adds nothing to a timeout reported by the specialist', async () => {
+      const result = await delegateTo('calendar', {
+        isError: true, errorType: 'TIMEOUT', reason: 'timeout', retryable: true,
+      });
+      const data = (result as { data: { failed?: boolean; next_step?: string } }).data;
+      expect(data.failed).toBe(true);
+      expect(data.next_step).toBeUndefined();
     });
 
     it('adds nothing for a specialist without one', async () => {

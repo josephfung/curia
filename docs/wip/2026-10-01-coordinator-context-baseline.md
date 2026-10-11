@@ -1428,6 +1428,57 @@ only at its own closing tag.
 
 Spend for all of PR 5's runs, judge included: about $4.02 estimated.
 
+### 2026-10-10 — prompt trim PR 6: prose-only rules into code
+
+YAML 9,494 → 9,065 chars; always-on ~3,913 → ~3,806 tokens, budget 4,000 → 3,900. Local
+tool definitions unchanged at 76,982 bytes. The `email-etiquette` guidance lost
+`email-draft-save` from its mailbox line.
+
+**Targeted A/B, 5 runs each.** `deepseek/deepseek-v4.1-flash`, gpt-4o judge, main at
+`9dfd1976` against `b0abceef`, on separate copies of `curia_scen`. Main ran the new cases
+with stubs that leave out `next_step`, as main's handler does, and its own 13b (sign-in page
+stubs, `not_called` check).
+
+| Case | main | PR 6 |
+|---|---|---|
+| 13a google file filing after delegation | 84%, `principal_can_edit` 1/5 | 81%, `principal_can_edit` 0/5 |
+| 13b google doc link read | 100% | 100% |
+| 13c–13f | 100% each | 100% each |
+| 16c real calendar read fails | 100% | 100% |
+| 19a calendar delegate failure (new) | 100% | 100% |
+| 19b contacts delegate failure (new) | 100% | 100% |
+| 10 external reply first person | 100% | 100% |
+
+- **13b without the web-fetch sentence:** no run on either side called `web-fetch` or
+  `web-browser`; every run activated google-workspace first.
+- **13a** misses `principal_can_edit` on both sides, as in PRs 4 and 5.
+- **19b:** both sides told the principal and sent nothing. Main hunted for Dana through
+  mail, memory and direct contact lookups, with refused calls (52–154 s a run); PR 6 ran
+  15–58 s with none.
+- **The signing line:** main signs "Best, / Alex Curia / Digital EA" itself; PR 6 writes
+  "Best, / Alex", and the gateway adds the configured signature below it.
+
+**Smoke, full suite on `b0abceef`:** 44 of 47 (estimated $1.10). Triage Batch of Mixed
+Emails 69%; Reschedule Board Chair Meeting and Vague Follow Up on This timed out (180 s)
+on both attempts. A/B on those three, first attempts only, separate database copies:
+
+| Case | main, 180 s (6 rounds) | PR 6, 180 s (6 rounds) | PR 6 code + main's prompt text, 180 s (3 rounds) | main, 300 s (4 rounds) | PR 6, 300 s (4 rounds) |
+|---|---|---|---|---|---|
+| Reschedule Board Chair Meeting | 5/6 | 3/6 (3 timeouts) | 1/3 | 2/4 | 2/4 |
+| Vague Follow Up on This | 3/6 (3 timeouts) | 2/6 (3 timeouts, 1 empty model reply) | 2/3 | 3/4 | 4/4 |
+| Triage Batch of Mixed Emails | 6/6 | 3/6 | 2/3 | 2/4 | 4/4 |
+
+At 180 s main led, 14 of 18 to 8 of 18, mostly on timeouts. The middle arm runs PR 6's code
+with main's YAML and guidance, and scored like PR 6, not like main: none of PR 6's code
+fires in smoke (no persona or mailbox addresses in test mode, no Google URL, no failed
+delegation), so that gap is variance. With the limit at 300 s nothing timed out, and PR 6
+led 10 of 12 to 7 of 12. Several runs needed more than 180 s on both sides (Triage 219 s on
+PR 6 and 293 s on main), so the limit, not the prompt, decides these cases at 180 s; a
+per-case smoke timeout is the follow-up. PR 6's timeouts on Vague Follow Up all delegated
+to research-analyst, which main's sampled runs did not; with 300 s, PR 6 passed it 4 of 4.
+
+Spend for all of PR 6's runs, judge included: about $4.90 estimated.
+
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 
 `report-agent-context --agent coordinator` on production. #2024 (`f8392d02`,
