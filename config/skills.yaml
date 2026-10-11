@@ -75,6 +75,12 @@ servers:
   # deploy overlays (e.g. curia-deploy's custom/config/skills.yaml) replace this
   # file wholesale, so they must carry the same allowlist.
   #
+  # The launcher runs the version pinned in scripts/workspace-mcp.pin (#2010): the
+  # Docker image's build-time install, or uvx at that pin elsewhere (pnpm dev). The
+  # path is relative to the working directory, which is the repo root under pnpm dev
+  # and /app in the image. Never launch a bare `uvx workspace-mcp`: it floats to PyPI
+  # latest and downloads on every boot.
+  #
   # Secrets are declared in the `secrets:` block and resolved from the encrypted
   # vault at spawn time. The `secrets:` list defines which credentials are required,
   # and how they are injected into the process:
@@ -92,9 +98,8 @@ servers:
   # process.
   - name: google-workspace
     transport: stdio
-    command: uvx
+    command: scripts/workspace-mcp.sh
     args:
-      - workspace-mcp
       - --tool-tier
       - complete
       # Allowlist, not a filter: see the comment above (#1957, #1853).

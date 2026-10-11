@@ -1,0 +1,13 @@
+# The workspace-mcp (Google Workspace MCP server) pin. The single source of truth
+# (#2010): the Dockerfile installs from it, and scripts/workspace-mcp.sh runs it,
+# which is how config/skills.yaml and scripts/gdrive-auth.py launch the server.
+#
+# Sourced by POSIX sh, so plain KEY=VALUE lines only.
+#
+# Bump both values in the same edit. The version alone pins one package; the cutoff
+# freezes its whole dependency tree (fastmcp, mcp, the Google client libraries) as of
+# that instant. uv applies the cutoff to every package, workspace-mcp included, so it
+# must fall AFTER the pinned release's PyPI upload time or the pin cannot resolve.
+# See docs/dev/google-drive.md ("Bumping workspace-mcp").
+WORKSPACE_MCP_VERSION=2.0.1
+WORKSPACE_MCP_EXCLUDE_NEWER=2026-10-05T00:00:00Z

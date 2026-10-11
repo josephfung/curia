@@ -10,8 +10,12 @@ official hosted Workspace MCP server.
 
 Google's hosted Workspace MCP server is not yet available. In the meantime, Curia
 uses [`taylorwilsdon/google_workspace_mcp`](https://github.com/taylorwilsdon/google_workspace_mcp)
-as a local stdio subprocess — the MCP loader spawns it via `uvx workspace-mcp` and
-communicates over stdin/stdout.
+as a local stdio subprocess — the MCP loader spawns it via `scripts/workspace-mcp.sh`
+and communicates over stdin/stdout. That launcher runs the version pinned in
+`scripts/workspace-mcp.pin` (#2010): the Docker image installs it at build time, so
+the container never fetches it from PyPI, and anywhere else (`pnpm dev`,
+`scripts/gdrive-auth.py`) it runs through `uvx` at the same pin. See
+[Bumping workspace-mcp](#bumping-workspace-mcp).
 
 This gives Curia access to Drive, Sheets and Docs using OAuth 2.0 as Curia's own
 Gmail user. `config/skills.yaml` passes `--tools drive docs sheets`, and that
@@ -182,10 +186,14 @@ repeat Step 5 to re-authenticate and copy fresh tokens to the VPS.
 
 **`ERROR Failed to connect to MCP server`**
 
-`uvx` is not on the PATH inside the container. The Dockerfile installs `uv`/`uvx` into
-`/usr/local/bin/` via `COPY --from=ghcr.io/astral-sh/uv`. Verify with
-`docker compose exec curia which uvx` — if missing, rebuild the image.
+In the container, the server runs from its build-time install at
+`/opt/uv/bin/workspace-mcp`, so no network is involved. Check it is there with
+`docker compose exec curia test -x /opt/uv/bin/workspace-mcp && echo ok`. If it is
+missing, the image predates #2010 or was built from a different Dockerfile; rebuild it.
 (The compose-service form resolves the container regardless of project name.)
+
+Under `pnpm dev`, the launcher needs `uvx` on the PATH (install `uv`, see Step 5),
+and the first start downloads the pinned version.
 
 **`INFO MCP server tools registered {"registered":0}`**
 
@@ -212,15 +220,40 @@ security settings, then repeat Step 5.
 
 ---
 
+## Bumping workspace-mcp
+
+The version and the dependency cutoff live in `scripts/workspace-mcp.pin`, and
+nowhere else. Bump them together, in the same edit:
+
+- `WORKSPACE_MCP_VERSION` is the exact release. It pins one package only.
+- `WORKSPACE_MCP_EXCLUDE_NEWER` is passed to uv as `--exclude-newer`. uv ignores
+  every distribution uploaded after it, so fastmcp, mcp and the Google client
+  libraries resolve the same way on every rebuild. The image's uv supports only
+  this single global cutoff, which applies to workspace-mcp too, so it must fall
+  **after** the new release's upload time. Otherwise the pin cannot resolve and
+  the image build fails.
+
+To bump:
+
+1. Find the release's upload time on PyPI
+   (`curl -s https://pypi.org/pypi/workspace-mcp/<version>/json | jq '.urls[].upload_time_iso_8601'`)
+   and set the cutoff a little after it (e.g. the next midnight UTC).
+2. Update both lines in `scripts/workspace-mcp.pin`.
+3. Build the image (`docker build .`). The build imports `main` and the module of
+   each `--tools` service, so a broken dependency or a service that no longer
+   loads fails here, not at boot. If the allowlist changes, update the import
+   list in the `Dockerfile` and `SERVICE_MODULES` in
+   `tests/unit/config.workspace-mcp-pin.test.ts`.
+4. Start the server and compare its `tools/list` with the previous version's.
+   Upstream renames and drops tools between releases, majors in particular.
+
+---
+
 ## Production Dockerfile (`curia-deploy`)
 
 The production image uses `curia-deploy/deploy/compose/Dockerfile.curia` (not the
-`curia/Dockerfile`). That file also needs `uv`/`uvx`. Use the same signed,
-version-pinned copy pattern as `curia/Dockerfile`:
-
-```dockerfile
-COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
-```
+`curia/Dockerfile`). It builds `FROM` the core image, so it inherits the
+build-time `workspace-mcp` install at `/opt/uv/bin/workspace-mcp`.
 
 Also add the token volume to `compose.production.yaml` under the `curia` service:
 

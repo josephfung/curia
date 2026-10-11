@@ -54,7 +54,7 @@ FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd
 # curl is needed for the HEALTHCHECK command
 # Copy uv/uvx binaries from the official signed image (Astral's recommended
 # Docker pattern — no curl|sh, cryptographically signed, version-pinned).
-# uvx is needed to spawn workspace-mcp as an MCP stdio subprocess.
+# uv installs workspace-mcp at build time (below); the server then runs without it.
 COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 
 # apt-get upgrade pulls the latest Debian 12 security patches for packages baked
@@ -65,13 +65,16 @@ COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /usr/local/bin/
 # pulseaudio-utils provides parec/pacat, which SignalAudioTransport spawns to
 # move call PCM through the Pulse socket shared from the signal-cli container
 # (#1672). Client tools only — no PulseAudio daemon runs in this image.
+# python3 runs workspace-mcp, installed below (#2010). node:24-slim ships no Python,
+# so without it uv downloads its own CPython; the Debian one gets security fixes from
+# the `upgrade` on every rebuild. curia-deploy's image also installs into this Python.
 # Acquire::Retries covers a transient Debian mirror hiccup, the apt-side equivalent of
 # the npm registry drop that motivated #1699. Without it a single failed fetch fails the
 # whole publish — and for the curia-postgres image this apt call is the ONLY network step,
 # so it gets no benefit from the pnpm retry wrapper.
 RUN apt-get -o Acquire::Retries=3 update \
  && apt-get -o Acquire::Retries=3 upgrade -y \
- && apt-get -o Acquire::Retries=3 install -y --no-install-recommends curl pulseaudio-utils \
+ && apt-get -o Acquire::Retries=3 install -y --no-install-recommends curl pulseaudio-utils python3 \
  && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root system user/group for the runtime process.
@@ -116,6 +119,47 @@ RUN set -e; \
     if command -v npm >/dev/null 2>&1; then echo 'npm still resolvable after removal' >&2; exit 1; fi; \
     if command -v npx >/dev/null 2>&1; then echo 'npx still resolvable after removal' >&2; exit 1; fi
 
+# Same transient-network guard as the build stage (#1699). Copied here, ahead of the
+# workspace-mcp install, which pulls a whole dependency tree from PyPI.
+COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
+
+# Install the Google Workspace MCP server (workspace-mcp) at build time, so the
+# google-workspace server starts with no PyPI access at container start (#2010).
+# `uvx workspace-mcp` used to fetch the package and its dependency tree on every boot
+# (uv's cache lives under $HOME, which is not a volume), and one network error there
+# lost every Workspace tool until the next restart (curia-deploy#181).
+#
+# The version and the --exclude-newer cutoff come from scripts/workspace-mcp.pin, the
+# one place core defines them. scripts/workspace-mcp.sh, which config/skills.yaml
+# launches, runs this install whenever it is present. The cutoff freezes the whole
+# dependency tree, not just workspace-mcp.
+#
+# Fixed paths, not $HOME: the build runs as root and the server as curia, so
+# UV_TOOL_DIR/UV_TOOL_BIN_DIR put the venv and its shim under /opt/uv, root-owned and
+# world-readable. The shim execs the venv's python by absolute path, so it needs
+# neither uv nor the network. UV_PYTHON_DOWNLOADS=never fails the build rather than
+# quietly fetching a CPython if the Debian python3 above ever goes missing.
+#
+# Then fail the build, not the boot:
+#   - `test -x`: uv can exit 0 without the shim the launcher looks for.
+#   - the imports: workspace-mcp's main.py catches ModuleNotFoundError per service,
+#     logs it and starts without that service's tools. The MCP handshake still
+#     succeeds, so the zero-tool alert (#1500) never fires. Import main plus the module
+#     of every service in the `--tools` allowlist in config/skills.yaml;
+#     tests/unit/config.workspace-mcp-pin.test.ts keeps this list in step. Importing
+#     main creates $HOME/.google_workspace_mcp/logs, hence the throwaway HOME.
+# Only the install is wrapped in pnpm-retry: retrying an assertion defeats it.
+COPY scripts/workspace-mcp.pin /tmp/workspace-mcp.pin
+RUN set -eu; \
+    . /tmp/workspace-mcp.pin; \
+    UV_TOOL_DIR=/opt/uv/tools UV_TOOL_BIN_DIR=/opt/uv/bin UV_PYTHON_DOWNLOADS=never \
+      pnpm-retry uv tool install --python /usr/bin/python3 --compile-bytecode \
+        --exclude-newer "$WORKSPACE_MCP_EXCLUDE_NEWER" "workspace-mcp==$WORKSPACE_MCP_VERSION"; \
+    test -x /opt/uv/bin/workspace-mcp; \
+    HOME=/tmp/workspace-mcp-smoke /opt/uv/tools/workspace-mcp/bin/python -c \
+      "import main, gdrive.drive_tools, gdocs.docs_tools, gsheets.sheets_tools"; \
+    rm -rf /tmp/workspace-mcp-smoke /tmp/workspace-mcp.pin /root/.cache/uv
+
 # Copy manifest and lockfile, then install production deps only
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # Copy the @curia/shared-types workspace package (source-only: package.json +
@@ -127,8 +171,6 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # does a strict re-resolution.) shared-types is imported type-only (erased at build), so
 # it isn't required at runtime, but shipping the member keeps the manifest honest.
 COPY --from=build /app/packages/shared-types ./packages/shared-types
-# Same transient-network guard as the build stage (#1699).
-COPY docker/pnpm-retry.sh /usr/local/bin/pnpm-retry
 
 # tsx is needed at runtime: skill handlers are .ts files loaded via dynamic
 # import(), and they use ESM .js extension mapping (e.g., import from './foo.js'

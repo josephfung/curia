@@ -85,6 +85,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`workspace-mcp` pin** — pinned with a frozen dependency tree and baked into the image; no PyPI fetch at boot. (#2010)
 - **Approval Required autonomy band** — a direct principal instruction now counts as approval; Curia still asks before acting unprompted. (#2068, spec 14)
 - **`EmailSendRequest` (public API)** — optional `recipientSource` records reply provenance and is not sent. (#2071)
 - **`ceo-inbox-draft-compose` (breaking `tool.json`)** — `to`/`cc` take contact IDs; `to_addresses` must appear in mail or a person's message. (#2053)

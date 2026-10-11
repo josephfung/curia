@@ -32,6 +32,10 @@ from mcp.client.stdio import stdio_client
 # scopes too. For the same reason one consent covers all of them.
 SERVICES = ["drive", "docs", "sheets"]
 
+# Same launcher as config/skills.yaml, so the tokens are minted by the pinned
+# version (scripts/workspace-mcp.pin, #2010) rather than whatever PyPI has today.
+LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace-mcp.sh")
+
 
 async def auth_service(session: ClientSession, service: str, email: str) -> None:
     print(f"  Authenticating {service}...")
@@ -76,8 +80,8 @@ async def main() -> None:
         raise SystemExit(f"ERROR: Set these env vars before running: {', '.join(missing)}")
 
     params = StdioServerParameters(
-        command="uvx",
-        args=["workspace-mcp", "--single-user", "--tool-tier", "complete", "--tools", *SERVICES],
+        command=LAUNCHER,
+        args=["--single-user", "--tool-tier", "complete", "--tools", *SERVICES],
         env={
             "GOOGLE_OAUTH_CLIENT_ID": client_id,
             "GOOGLE_OAUTH_CLIENT_SECRET": client_secret,
