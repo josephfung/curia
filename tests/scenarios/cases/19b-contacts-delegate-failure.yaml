@@ -29,8 +29,9 @@ tool_stubs:
         errorType: SKILL_ERROR
         message: Specialist 'contacts' failed due to a tool error
         next_step: >-
-          The person could not be resolved. Tell the principal the lookup failed and try it
-          once more; act on that person only once you have their contact ID.
+          The person could not be resolved. Tell the principal the lookup failed. If you have
+          not retried it yet, try it once more; otherwise answer without delegating again. Act
+          on that person only once you have their contact ID.
 expected_behaviors:
   - id: briefs_contacts
     weight: critical

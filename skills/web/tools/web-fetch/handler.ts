@@ -10,7 +10,7 @@
 // This is a "normal" sensitivity skill — no human approval required.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
-import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl } from '../../../../src/skills/_shared/google-workspace-url.js';
+import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLanding } from '../../../../src/skills/_shared/google-workspace-url.js';
 
 // Default max body length: 50KB. Enough for most web pages when truncated.
 const DEFAULT_MAX_LENGTH = 50000;
@@ -90,6 +90,12 @@ export class WebFetchHandler implements ToolHandler {
         },
         signal: AbortSignal.timeout(10000),
       });
+
+      // Redirects are followed, so a short link can land on a Google file or its sign-in page.
+      if (isGoogleWorkspaceLanding(response.url)) {
+        ctx.log.info({ hostname }, 'web-fetch: a redirect landed on a Google Workspace file — refused');
+        return { success: false, error: googleWorkspaceUrlError('web-fetch') };
+      }
 
       if (!response.ok) {
         return {

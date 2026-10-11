@@ -22,7 +22,7 @@ import type { Page, Frame, Locator } from 'playwright';
 // server-side handler. See dom-extract.ts.
 import { extractFrameContent } from './dom-extract.js';
 import { jitteredDelay, simulateHumanPresence, humanClick, humanType } from '../../../../src/browser/human-behavior.js';
-import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl } from '../../../../src/skills/_shared/google-workspace-url.js';
+import { googleWorkspaceUrlError, isGoogleWorkspaceFileUrl, isGoogleWorkspaceLanding } from '../../../../src/skills/_shared/google-workspace-url.js';
 
 // Maximum cleaned DOM content length before truncation.
 // Prevents token blowout on content-heavy pages.
@@ -345,6 +345,13 @@ export class WebBrowserHandler implements ToolHandler {
         success: false,
         error: failure.kind === 'execution' ? `Browser action "${steps[0]!.action}" failed: ${failure.error}` : failure.error,
       };
+    }
+
+    // A redirect or a click can reach a Google file the navigate guard never saw, or its
+    // sign-in page: same refusal, before the page is read. Batch progress says what already ran.
+    if (isGoogleWorkspaceLanding(page.url())) {
+      const progress = isBatch ? ` The batch completed ${completed}/${steps.length} action(s) first.` : '';
+      return { success: false, error: `${googleWorkspaceUrlError('web-browser')}${progress}` };
     }
 
     // --- Gather result (once, from the final page state) ---

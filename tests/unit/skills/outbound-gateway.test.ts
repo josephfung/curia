@@ -3416,6 +3416,12 @@ describe('OutboundGateway — principal mailbox and email signature', () => {
     expect(gateway.isPrincipalMailbox('unknown')).toBe(false);
   });
 
+  it('isPrincipalMailbox reads a blank account as the primary, as sends do', () => {
+    const { gateway } = makeGateway({ accounts: [['joseph', 'ceo@example.com'], ['curia', 'assistant@example.com']] });
+    expect(gateway.isPrincipalMailbox('')).toBe(true);
+    expect(gateway.isPrincipalMailbox(undefined)).toBe(true);
+  });
+
   it('isPrincipalMailbox is false when no addresses are configured', () => {
     const mocks = createMocks();
     const gateway = new OutboundGateway({

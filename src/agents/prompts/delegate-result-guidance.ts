@@ -63,9 +63,12 @@ export const DELEGATE_FAILURE_NEXT_STEP_LINES: Readonly<Record<string, readonly 
     'why, in plain words. A read that failed is not an empty calendar: never present the day',
     'as clear or free.',
   ],
+  // The guard escalates a second identical failure (MAX_RETRYABLE_IDENTICAL_DELEGATIONS);
+  // a reworded brief is a new key, so the one retry is stated here too.
   contacts: [
-    'The person could not be resolved. Tell the principal the lookup failed and try it once',
-    'more; act on that person only once you have their contact ID.',
+    'The person could not be resolved. Tell the principal the lookup failed. If you have not',
+    'retried it yet, try it once more; otherwise answer without delegating again. Act on that',
+    'person only once you have their contact ID.',
   ],
 };
 

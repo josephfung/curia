@@ -34,6 +34,15 @@ describe('web-fetch', () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
+  it('refuses a redirect that lands on a Google file\'s sign-in page', async () => {
+    const landed = new Response('<html>Sign in</html>', { status: 200 });
+    Object.defineProperty(landed, 'url', { value: 'https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fdocs.google.com%2Fdocument%2Fd%2F1AbC%2Fedit' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(landed));
+    const result = await new WebFetchHandler().execute(ctxFor('https://bit.ly/offsite-plan'));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/skill-activate with skill "google-workspace"/);
+  });
+
   it('still refuses private addresses first', async () => {
     const result = await new WebFetchHandler().execute(ctxFor('http://127.0.0.1/'));
     expect(result.success).toBe(false);

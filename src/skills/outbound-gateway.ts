@@ -2349,7 +2349,8 @@ export class OutboundGateway {
    * belongs to ceo-inbox, so the coordinator does not draft in it (prompt trim PR 6).
    */
   isPrincipalMailbox(accountId?: string): boolean {
-    const name = accountId ?? this.nylasClients.keys().next().value;
+    // Blank selects the primary account, as getNylasClient() does.
+    const name = accountId || this.nylasClients.keys().next().value;
     if (name === undefined) return false;
     const address = this.emailAccountAddresses.get(name);
     return address !== undefined && this.isPrincipalOnChannel('email', address);

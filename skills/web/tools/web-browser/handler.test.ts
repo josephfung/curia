@@ -813,6 +813,16 @@ describe('web-browser refuses Google Workspace file URLs', () => {
     expect((session.page as unknown as { goto: ReturnType<typeof vi.fn> }).goto).not.toHaveBeenCalled();
   });
 
+  it('refuses when navigation or a click lands on a Google file\'s sign-in page', async () => {
+    const { ctx } = makeToolContext({
+      input: { action: 'navigate', url: 'https://bit.ly/offsite-plan' },
+      pageUrl: 'https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fdocs.google.com%2Fdocument%2Fd%2F1AbC%2Fedit',
+    });
+    const result = await new WebBrowserHandler().execute(ctx);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/skill-activate with skill "google-workspace"/);
+  });
+
   it('still opens a Google Form', async () => {
     const { ctx } = makeToolContext({
       input: { action: 'navigate', url: 'https://docs.google.com/forms/d/e/1FAIp/viewform' },
