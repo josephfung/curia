@@ -32,6 +32,14 @@ tool_stubs:
           The person could not be resolved. Tell the principal the lookup failed. If you have
           not retried it yet, try it once more; otherwise answer without delegating again. Act
           on that person only once you have their contact ID.
+  # Some runs look for Dana in the principal's mail before answering (prompt trim PR 6
+  # review). Nothing there names her, so the read surface answers with no matches.
+  ceo-inbox-search:
+    - match: {}
+      return: { messages: [], count: 0 }
+  ceo-inbox-list:
+    - match: {}
+      return: { messages: [], count: 0 }
 expected_behaviors:
   - id: briefs_contacts
     weight: critical
