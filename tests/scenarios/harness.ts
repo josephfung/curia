@@ -64,6 +64,7 @@ import {
   resolveSender,
   scopedBullpen,
   scopedOutboundContext,
+  scopedPrincipalBacklog,
   SeedScope,
   describeError,
   seedRun,
@@ -279,13 +280,14 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   const outboundContext = createOutboundContextService(stack);
 
   // Production's Dispatcher, given an outbound-context service so it injects the
-  // block — narrowed to the run's own entries.
+  // block — narrowed to the run's own entries — and the run's own backlog counts.
   new Dispatcher({
     bus,
     logger,
     contactResolver: stack.contactResolver,
     channelPolicies: undefined,
     outboundContextService: scopedOutboundContext(outboundContext, currentScope),
+    principalBacklog: scopedPrincipalBacklog(currentScope),
   }).register();
   // Bullpen mentions reach the coordinator the way they do in production.
   new BullpenDispatcher(bus, logger, stack.bullpenService, stack.agentRegistry).register();

@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Backlog line** — principal turns carry counts of pending approvals, decay warnings and principal-owned tasks. (#1954, spec 02)
+- **`agent.task` (public API)** — optional `principalBacklog` carries those counts; never part of `content`. (#1954)
+- **Scenario case 20** — the coordinator raises the oldest waiting item after handling the request. (#1954)
 - **Smoke `timeout_seconds`** — a case can lengthen its per-turn wait; six multi-specialist cases now wait 300s. (#1954)
 - **`agent.response` (public API)** — optional `channelId` names the channel of the task it answers. (#2091)
 - **Scenario cases 17a–17b** — scheduled jobs send the principal one message when asked, otherwise none. (#2091)
@@ -110,6 +113,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **`delegate`** — retryable calendar and contacts failures carry a `next_step` for the coordinator. (#1954)
 - **Outbound filter** — the assistant's own mailbox addresses no longer count as third-party contact data. (#1954)
 - **`EmailSendRequest` (public API)** — optional `signature`, set by the gateway; a caller's value is ignored. (#1954)
+- **Coordinator prompt** — the proactive-surfacing section gives way to the backlog line; 9.1k → 8.7k chars. (#1954)
 - **Coordinator prompt** — five prose-only rules are now enforced or delivered in code; 9.5k → 9.1k chars. (#1954)
 - **Notes for the principal** — a tag in replies to others is cut out and emailed to the principal. (#1954)
 - **Bus events (API)** — `agent.response` gains optional `principalNote`; new `principal_note` notification type. (#1954)

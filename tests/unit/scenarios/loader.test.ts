@@ -142,6 +142,23 @@ describe('loadScenarioCase', () => {
     expect(() => loadScenarioCase(write('bad3.yaml', body))).toThrow(/any_of/);
   });
 
+  it('loads seed.backlog, absent counts as zero (prompt trim PR 7)', () => {
+    const body = VALID.replace('seed:\n', 'seed:\n  backlog: { pending_approvals: 2 }\n');
+    const c = loadScenarioCase(write('backlog.yaml', body));
+    expect(c.seed.backlog).toEqual({ decayWarnings: 0, pendingApprovals: 2, principalTasks: 0 });
+    expect(loadScenarioCase(write('none.yaml', VALID)).seed).not.toHaveProperty('backlog');
+  });
+
+  it.each([
+    ['all zero', '{ pending_approvals: 0 }', /at least one count must be positive/],
+    ['a fractional count', '{ decay_warnings: 1.5 }', /must be a whole number/],
+    ['a negative count', '{ principal_tasks: -1 }', /non-negative number/],
+    ['an unknown kind', '{ held_messages: 1 }', /unknown key\(s\) held_messages/],
+  ])('rejects a backlog with %s', (_label, backlog, error) => {
+    const body = VALID.replace('seed:\n', `seed:\n  backlog: ${backlog}\n`);
+    expect(() => loadScenarioCase(write('bad-backlog.yaml', body))).toThrow(error);
+  });
+
   it('requires a bullpen inbound to name a seeded thread', () => {
     const body = VALID.replace('from: principal', 'from: bullpen');
     expect(() => loadScenarioCase(write('b.yaml', body))).toThrow(/needs 'thread'/);

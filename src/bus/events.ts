@@ -108,6 +108,13 @@ interface AgentTaskPayload {
    * free of them. Absent means none.
    */
   turnGuidance?: import('../agents/prompts/turn-guidance.js').TurnGuidanceKey[];
+  /**
+   * What is waiting on the principal (prompt trim PR 7): set by the dispatcher on a live
+   * principal turn when anything is. The runtime renders it as the backlog line at the end
+   * of the turn guidance (src/agents/prompts/backlog-line.ts); like `turnGuidance`, it is
+   * never part of `content`. Absent means nothing is waiting, or the count failed.
+   */
+  principalBacklog?: import('../agents/prompts/backlog-line.js').PrincipalBacklogCounts;
 }
 
 /** Coarse failure reason propagated on agent.response when isError is true.

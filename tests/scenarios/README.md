@@ -169,6 +169,7 @@ seeded rows, stubs, model calls and spend are found through its own case context
 | Sender contacts | `ContactService.createContact` + `linkIdentity` | Tagged in `notes`, deleted with their KG node after the run. A leftover from a crashed run is only removed if it carries the tag. |
 | Outbound-context entries | `OutboundContextService.register`, backdated to `sent_minutes_ago` | The Dispatcher's `getActive()` returns only this run's entries, each read through the real `getEntry` SQL. Deleted after the run. |
 | Bullpen threads | `BullpenService.openThread` | Runtimes see only this run's threads (the `wrapBullpenService` stack option). Deleted after the run. |
+| The principal backlog (prompt trim PR 7) | `seed.backlog` counts | The Dispatcher's backlog line reads the run's own counts (`scopedPrincipalBacklog`), never the shared tables. A case stubs the list tools to show the items its counts promise. |
 | Scheduler jobs | the `scheduler-list` stub | Never written to the database. Within a run, a later list replays that run's stubbed creates, edits and cancels onto the stub. |
 | The run's conversation | | `working_memory`, `conversation_checkpoints` and `conversation_resolved_entities` rows are deleted. |
 | Specialists' conversations (real delegation) | | The same rows for each `scenario-delegate-…` conversation. A specialist the run abandoned is cleaned again when it finishes. |
@@ -319,6 +320,9 @@ seed:
       participants: [research-analyst, coordinator]
       content: Opening message.
       mentions: []
+  backlog:                                # optional; what the backlog line reports on a principal turn
+    pending_approvals: 1                  #   decay_warnings, pending_approvals, principal_tasks;
+    decay_warnings: 0                     #   absent counts are 0, and one must be positive
 inbound:
   from: principal                         # principal | bullpen | scheduler | <contact key>
   channel: cli                            # principal only; default cli

@@ -230,9 +230,10 @@ export function parseTurnGuidanceKeys(raw: unknown): TurnGuidanceKey[] {
 
 /**
  * The guidance block for these keys, in TURN_GUIDANCE_ORDER whatever order they were
- * given in, each at most once. Null when there is nothing to render.
+ * given in, each at most once. The backlog line (src/agents/prompts/backlog-line.ts), when
+ * given, closes the block. Null when there is nothing to render.
  */
-export function renderTurnGuidance(keys: readonly TurnGuidanceKey[]): string | null {
+export function renderTurnGuidance(keys: readonly TurnGuidanceKey[], backlogLine?: string | null): string | null {
   const wanted = new Set(keys);
   let out = TURN_GUIDANCE_HEADER;
   let previous: TurnGuidanceKey | undefined;
@@ -244,6 +245,7 @@ export function renderTurnGuidance(keys: readonly TurnGuidanceKey[]): string | n
     out += (continuesList ? '\n' : '\n\n') + TURN_GUIDANCE[key].join('\n');
     previous = key;
   }
+  if (backlogLine) return `${out}\n\n${backlogLine}`;
   return previous === undefined ? null : out;
 }
 

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentRuntime } from '../../../src/agents/runtime.js';
 import type { LLMProvider, Message } from '../../../src/agents/llm/provider.js';
 import { renderTurnGuidance, TURN_GUIDANCE_HEADER } from '../../../src/agents/prompts/turn-guidance.js';
+import { renderBacklogLine } from '../../../src/agents/prompts/backlog-line.js';
 import { EventBus } from '../../../src/bus/bus.js';
 import { createAgentTask } from '../../../src/bus/events.js';
 import { createLogger } from '../../../src/logger.js';
@@ -27,7 +28,13 @@ function capturingProvider(): LLMProvider & { chat: ReturnType<typeof vi.fn> } {
   };
 }
 
-async function runTurn(payload: { content: string; turnGuidance?: unknown; channelId?: string; toolAllowlist?: string[] }) {
+async function runTurn(payload: {
+  content: string;
+  turnGuidance?: unknown;
+  principalBacklog?: unknown;
+  channelId?: string;
+  toolAllowlist?: string[];
+}) {
   const logger = createLogger('error');
   const bus = new EventBus(logger);
   bus.subscribe('agent.response', 'dispatch', () => {});
@@ -52,6 +59,9 @@ async function runTurn(payload: { content: string; turnGuidance?: unknown; chann
     // Cast: the runtime must cope with whatever crossed the bus, not only valid keys.
     ...(payload.turnGuidance !== undefined && {
       turnGuidance: payload.turnGuidance as Parameters<typeof createAgentTask>[0]['turnGuidance'],
+    }),
+    ...(payload.principalBacklog !== undefined && {
+      principalBacklog: payload.principalBacklog as Parameters<typeof createAgentTask>[0]['principalBacklog'],
     }),
     parentEventId: 'parent-guidance',
   }));
@@ -83,6 +93,25 @@ describe('AgentRuntime turn guidance (#1959)', () => {
   it('leaves the user message untouched without guidance, or with only unknown keys', async () => {
     for (const turnGuidance of [undefined, [], ['not-a-key'], 'outbound-context']) {
       const { messages } = await runTurn({ content: 'Hello', turnGuidance });
+      expect(messages[messages.length - 1]!.content).toBe('Hello');
+    }
+  });
+
+  it('closes the guidance with the backlog line, kept out of working memory (prompt trim PR 7)', async () => {
+    const counts = { decayWarnings: 0, pendingApprovals: 1, principalTasks: 2 };
+    const { messages, history } = await runTurn({
+      content: 'Book Friday.',
+      turnGuidance: ['principal-reply-shaped'],
+      principalBacklog: counts,
+    });
+    expect(messages[messages.length - 1]!.content)
+      .toBe(`${renderTurnGuidance(['principal-reply-shaped'], renderBacklogLine(counts))}\n\nBook Friday.`);
+    expect(history[0]).toEqual({ role: 'user', content: 'Book Friday.' });
+  });
+
+  it('drops a malformed or empty backlog', async () => {
+    for (const principalBacklog of [{ pendingApprovals: 1 }, { decayWarnings: 0, pendingApprovals: 0, principalTasks: 0 }]) {
+      const { messages } = await runTurn({ content: 'Hello', principalBacklog });
       expect(messages[messages.length - 1]!.content).toBe('Hello');
     }
   });

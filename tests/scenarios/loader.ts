@@ -6,6 +6,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
+import { hasBacklog, type PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import { hasDatePlaceholders, resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import { leafChecks } from './assertions.js';
 import {
@@ -56,7 +57,8 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
 }
 
 const CASE_KEYS = ['name', 'description', 'tags', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
-const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen'] as const;
+const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog'] as const;
+const BACKLOG_KEYS = ['decay_warnings', 'pending_approvals', 'principal_tasks'] as const;
 const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier'] as const;
 const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'sent_minutes_ago', 'expires_in_hours', 'resume'] as const;
 const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
@@ -344,6 +346,25 @@ function parseBullpen(raw: Raw, file: string): SeedBullpenThread[] {
   });
 }
 
+/** `seed.backlog`: each count a whole number, absent ones zero, at least one positive. */
+function parseBacklog(raw: Raw, file: string): PrincipalBacklogCounts | undefined {
+  if (raw['backlog'] === undefined) return undefined;
+  const backlog = mapping(raw, 'backlog', file, 'seed');
+  onlyKeys(backlog, BACKLOG_KEYS, file, 'seed.backlog');
+  const count = (key: (typeof BACKLOG_KEYS)[number]): number => {
+    const v = optNum(backlog, key, file, 'seed.backlog') ?? 0;
+    if (!Number.isInteger(v)) throw new CaseError(file, `seed.backlog: '${key}' must be a whole number`);
+    return v;
+  };
+  const counts = {
+    decayWarnings: count('decay_warnings'),
+    pendingApprovals: count('pending_approvals'),
+    principalTasks: count('principal_tasks'),
+  };
+  if (!hasBacklog(counts)) throw new CaseError(file, `seed.backlog: at least one count must be positive (omit it for none)`);
+  return counts;
+}
+
 function parseInbound(raw: unknown, file: string): ScenarioInbound {
   if (!isObject(raw)) throw new CaseError(file, `'inbound' must be a mapping`);
   onlyKeys(raw, INBOUND_KEYS, file, 'inbound');
@@ -485,10 +506,12 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   const seedRaw = raw['seed'] ?? {};
   if (!isObject(seedRaw)) throw new CaseError(file, `'seed' must be a mapping`);
   onlyKeys(seedRaw, SEED_KEYS, file, 'seed');
+  const backlog = parseBacklog(seedRaw, file);
   const seed = {
     contacts: parseContacts(seedRaw, file),
     outboundContext: parseOutbound(seedRaw, file),
     bullpen: parseBullpen(seedRaw, file),
+    ...(backlog && { backlog }),
   };
 
   const runs = optNum(raw, 'runs', file, 'case');

@@ -23,8 +23,9 @@ log.
 | 3: rewrite pass | Merged (2026-10-08, #2073) | 13,439 | ~4,899 / 5,000 |
 | 4: audience in code | Merged (2026-10-09, #2092) | 9,494 | ~3,913 / 4,000 |
 | 5: principal note block on the relay | Merged (2026-10-10, #2102) | 9,494 (unchanged; turn guidance and code) | ~3,913 / 4,000 |
-| 6: prose-only rules into code | In review (2026-10-10) | 9,065 | ~3,806 / 3,900 |
-| 7–10, final phase | Not started | — | — |
+| 6: prose-only rules into code | Merged (2026-10-11, #2103) | 9,065 | ~3,806 / 3,900 |
+| 7: backlog line for proactive surfacing | In review (2026-10-11) | 8,652 | ~3,703 / 3,800 |
+| 8–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
@@ -180,6 +181,37 @@ Behavior held (baseline log). The targeted scenario A/B was level, with new case
 19b at 100% on both sides. Smoke's three failures, two of them timeouts, came out level once
 the limit was 300 s; several runs on both sides needed more than 180 s, so a per-case smoke
 timeout is the follow-up.
+
+**PR 7 (2026-10-11).** On a principal turn the dispatcher counts what is waiting on the
+principal: decay warnings, pending approvals, and open tasks they own (owner `ceo`). When
+any count is positive it sets `principalBacklog` on the `agent.task`, and the runtime closes
+the turn guidance with one line: the counts, the tool that lists each kind, and "raise the
+oldest at a natural pause, unless you already raised it in this conversation"
+(`src/agents/prompts/backlog-line.ts`, `src/dispatch/principal-backlog.ts`). What you
+proactively surface is gone; its sensitive-items sentence joined Backlog awareness. The YAML
+goes from 9,065 to 8,652 chars. Choices:
+- **The source is one SQL round trip** with three counts, each using the same WHERE as the list
+  tool the line points to, so the line never promises what the tool won't show
+  (`tests/integration/principal-backlog.test.ts` checks them against the reads). The pending
+  approvals count uses an index; the decay-warning and task counts scan `kg_nodes` and
+  `tasks`. No migration: a principal turn already costs model calls, and the scans can get
+  an index if production shows them.
+- **"Tasks waiting on the principal" means owner `ceo`, not done or cancelled,** which is what
+  `task-create`'s owner description says and what `task-list` can filter. The line passes
+  the status list, because `task-list` has no default status filter.
+- **The truncation clause went.** "Say 'appears to be' when the data was truncated" came
+  from held-message previews (#957), and held messages are gone. None of the three tools
+  truncates.
+- **The sensitive-items sentence stayed in the YAML,** as the plan said, because it also
+  applies when the principal asks what is pending.
+- **Inbound principal turns only.** Scheduler and voice turns get no turn guidance today,
+  so they get no backlog line either.
+- **The scenario harness seeds counts, not rows** (`seed.backlog`, `scopedPrincipalBacklog`).
+  Production counts span the shared tables, so a real count would hand each run whatever
+  the dev instance and the other runs hold. The new case stubs the list tools to match.
+
+Behavior (baseline log): case 20 passed 5 of 5 on raising the oldest item, against 0 of 5
+on main, and the full scenario suite was otherwise level.
 
 ### Lessons so far
 

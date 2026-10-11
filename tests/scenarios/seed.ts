@@ -9,6 +9,7 @@
 // delegation (#2027) that includes what the specialists write: their conversations,
 // the dispatch claims in pending_delegations, and changes to the run's entries.
 import { randomUUID } from 'node:crypto';
+import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import { encodeResumeToken } from '../../src/agents/resume-token.js';
 import {
   OutboundContextService,
@@ -16,6 +17,7 @@ import {
   type OutboundContextRow,
   type SubjectClearResult,
 } from '../../src/dispatch/outbound-context.js';
+import type { PrincipalBacklogSource } from '../../src/dispatch/principal-backlog.js';
 import type { BullpenService } from '../../src/memory/bullpen.js';
 import type { TestModeStack } from '../../src/startup/test-mode-stack.js';
 import { cleanupConversation, sweepConversations } from '../shared/turn-capture.js';
@@ -53,6 +55,8 @@ export class SeedScope {
   readonly threadIds = new Set<string>();
   /** Conversations real specialists ran in for this run (#2027); cleaned with the run's own. */
   readonly specialistConversations = new Set<string>();
+  /** What the run says is waiting on the principal (`seed.backlog`); none when unset. */
+  backlog: PrincipalBacklogCounts | undefined;
   /**
    * Failures inside the scoped views. The Dispatcher and runtime log such a failure
    * and carry on WITHOUT the block — a case would then be scored on a premise it never
@@ -64,6 +68,7 @@ export class SeedScope {
     this.entryIds.clear();
     this.threadIds.clear();
     this.specialistConversations.clear();
+    this.backlog = undefined;
     this.errors.length = 0;
   }
 }
@@ -155,6 +160,22 @@ export function scopedOutboundContext(real: OutboundContextService, currentScope
   });
 }
 
+/** Nothing waiting: what a run without `seed.backlog`, or any call outside a run, sees. */
+const NO_BACKLOG: PrincipalBacklogCounts = { decayWarnings: 0, pendingApprovals: 0, principalTasks: 0 };
+
+/**
+ * The backlog counts the Dispatcher reads on a principal turn (prompt trim PR 7), from the
+ * calling run's `seed.backlog` rather than the shared database. Production's counts span
+ * every row, so a real one would hand each run whatever the instance and the other runs
+ * hold. The SQL has its own test (tests/integration/principal-backlog.test.ts); a case
+ * stubs the list tools to show what its counts promise.
+ */
+export function scopedPrincipalBacklog(currentScope: CurrentScope): PrincipalBacklogSource {
+  return {
+    counts: async (): Promise<PrincipalBacklogCounts> => currentScope()?.backlog ?? NO_BACKLOG,
+  };
+}
+
 /** The bullpen as runtimes see it, narrowed to the calling run's threads (real SQL underneath). */
 export function scopedBullpen(real: BullpenService, currentScope: CurrentScope): BullpenService {
   return Object.assign(Object.create(real) as BullpenService, {
@@ -196,6 +217,7 @@ export async function seedRun(scenario: ScenarioCase, deps: SeedDeps): Promise<S
   const seeded: SeededRun = { refs: new Map(), contacts: [], entryIds: [], threads: new Map() };
   if (stack.principalContactId) seeded.refs.set('principal_contact_id', stack.principalContactId);
 
+  scope.backlog = scenario.seed.backlog;
   try {
     for (const contact of scenario.seed.contacts) {
       const created = await seedContact(stack, contact);

@@ -77,6 +77,8 @@ describe('loadAgentConfig', () => {
     ['the calendar failure line', /could not be read|empty schedule/, "delegate failure next_step (calendar)"],
     ['the contacts briefing-failure line', /briefing fails/, "delegate failure next_step (contacts)"],
     ['the signing line', /sign emails/i, 'outbound gateway email signature'],
+    // Prompt trim PR 7: the dispatcher counts the backlog and the line says when to raise it.
+    ['when to raise the backlog', /natural\s+pause|decay-warnings-list|list-pending-actions/, 'backlog line (principalBacklog)'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);

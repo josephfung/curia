@@ -1479,6 +1479,54 @@ to research-analyst, which main's sampled runs did not; with 300 s, PR 6 passed 
 
 Spend for all of PR 6's runs, judge included: about $4.90 estimated.
 
+### 2026-10-11 — prompt trim PR 7: backlog line for proactive surfacing
+
+YAML 9,065 → 8,652 chars; always-on ~3,806 → ~3,703 tokens, budget 3,900 → 3,800. Local
+tool definitions unchanged. A principal turn with anything waiting adds the backlog line to
+its turn guidance (uncached user message, about 300 chars with all three kinds).
+
+All runs: `deepseek/deepseek-v4.1-flash`, gpt-4o judge, main at `3619f63d` against the
+branch, on separate copies of `curia_scen`. Main ran case 20 without `seed.backlog`, which
+its loader does not know and which has no line to feed on main.
+
+**Scenarios, full gate, 5 runs each, both arms at once.**
+
+| Case | main | PR 7 |
+|---|---|---|
+| 20 principal backlog surfaced (new) | 70%, `raises_oldest_item` 0/5 | 99%, `raises_oldest_item` 5/5 |
+| 13a google file filing after delegation | 79%, `principal_can_edit` 0/5 | 88%, `principal_can_edit` 2/5 |
+| Every other case | pass (95–100%) | pass (92–100%) |
+
+- **Case 20:** without the line, main saved the preferences and never looked at what was
+  waiting. With it, every run called `list-pending-actions` and `decay-warnings-list`, raised
+  the 3-day-old request to email compensation bands to an outside recruiter, and called it a
+  data export to someone outside the company. Two of five also listed the newer invite and
+  the stale hotel fact (`brief_not_a_rundown` 90%).
+- **13a** misses `principal_can_edit` on both sides, as in PRs 4–6.
+- **Two single refused calls on PR 7,** each 1 run in 5: scheduler additive create cancelled
+  the job it had just created, and delegated draft not reported sent called `task-update` on
+  task id `placeholder`. Rerun 10 times on each side: PR 7 10 of 10 clean on both cases, every
+  behavior 100%; main had one draft run with 5 refused task calls.
+
+**Smoke, full suite on PR 7:** 44 of 47 (estimated $1.12), run alongside both scenario
+suites. Pre-Meeting Prep Brief, Cancellation or Change Request and Coordinator routes
+long-running task failed, each ending in a 180 s timeout on retry. A/B on those three, 4 rounds
+each, first attempts:
+
+| Case | main | PR 7 |
+|---|---|---|
+| Pre-Meeting Prep Brief | 2/4 (2 timeouts) | 1/4 (1 timeout; 67%, 78%) |
+| Cancellation or Change Request | 3/4 | 3/4 |
+| Coordinator routes long-running task | 2/4 (2 timeouts) | 3/4 |
+
+7 of 12 on each side. **Tavily ran out of credits** during the full smoke run and round 1:
+every `web-search` returned HTTP 433, and the coordinator then tried pages one at a time with
+`web-fetch` until it timed out. Cancellation or Change Request's round-1 miss on both sides is
+that. Pre-Meeting's non-timeout misses are `ask-meeting-purpose`, which misses about as often
+on main (PR 3). The searches the suites make are #2106.
+
+Spend for all of PR 7's runs, judge included: about $5.50 estimated.
+
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 
 `report-agent-context --agent coordinator` on production. #2024 (`f8392d02`,

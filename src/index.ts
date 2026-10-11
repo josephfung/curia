@@ -36,6 +36,7 @@ import { AnthropicProvider } from './agents/llm/anthropic.js';
 import { OpenRouterProvider } from './agents/llm/openrouter.js';
 import { AgentRuntime } from './agents/runtime.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
+import { createPrincipalBacklogSource } from './dispatch/principal-backlog.js';
 import { CliAdapter } from './channels/cli/cli-adapter.js';
 import { discoverAgentManifests } from './agents/loader.js';
 import type { AgentYamlConfig, AgentDiscovery } from './agents/loader.js';
@@ -2827,6 +2828,7 @@ async function main(): Promise<void> {
     bullpenService,
     principalEmail,
     principalIdentities,
+    principalBacklog: createPrincipalBacklogSource(pool),
   });
   dispatcher.register();
   // Deferred delegations wake in the originating conversation (#1893). The

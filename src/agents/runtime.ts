@@ -33,6 +33,7 @@ import { prepareAgentResponseContent } from '../dispatch/no-reply.js';
 import { splitRelayNote } from './principal-note.js';
 import { stripOutboundContextPreamble } from '../dispatch/outbound-context.js';
 import { parseTurnGuidanceKeys, renderTurnGuidance } from './prompts/turn-guidance.js';
+import { parsePrincipalBacklog, renderBacklogLine } from './prompts/backlog-line.js';
 import { renderSenderLine, UNRESOLVED_SENDER_HEAD } from './prompts/sender-line.js';
 import { classifySkillError, formatTaskError } from '../errors/classify.js';
 import { DEFAULT_ERROR_BUDGET, type AgentError, type ErrorBudget } from '../errors/types.js';
@@ -457,7 +458,9 @@ export class AgentRuntime {
     if (taskEvent.payload.channelId === 'scheduler' && !taskEvent.payload.toolAllowlist?.length) {
       turnGuidanceKeys.push('scheduler-delivery');
     }
-    const turnGuidance = renderTurnGuidance(turnGuidanceKeys);
+    // The backlog line (prompt trim PR 7) closes the guidance; re-validated like the keys.
+    const backlog = parsePrincipalBacklog(taskEvent.payload.principalBacklog);
+    const turnGuidance = renderTurnGuidance(turnGuidanceKeys, backlog ? renderBacklogLine(backlog) : null);
     let promptContent = turnGuidance ? `${turnGuidance}\n\n${originalContent}` : originalContent;
     const { conversationId } = taskEvent.payload;
 

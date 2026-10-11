@@ -3,6 +3,7 @@
 // A scenario is one inbound message to the coordinator, with seeded state and
 // stubbed tools, run N times on the production prompt. Behaviors are scored per
 // run, either in code (`check`) or by the LLM judge (no `check`).
+import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
 import type { UsageBreakdown } from '../shared/usage.js';
 
@@ -196,6 +197,11 @@ export interface ScenarioCase {
     contacts: SeedContact[];
     outboundContext: SeedOutboundEntry[];
     bullpen: SeedBullpenThread[];
+    /**
+     * What is waiting on the principal on this run's principal turn (prompt trim PR 7):
+     * the counts the Dispatcher's backlog line reports. Absent means nothing is waiting.
+     */
+    backlog?: PrincipalBacklogCounts;
   };
   inbound: ScenarioInbound;
   toolStubs: Record<string, ToolStub[]>;

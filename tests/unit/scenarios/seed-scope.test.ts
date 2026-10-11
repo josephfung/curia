@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { BullpenService } from '../../../src/memory/bullpen.js';
 import type { OutboundContextRow, OutboundContextService } from '../../../src/dispatch/outbound-context.js';
 import { createCaseContext, newAttempt, type CaseAttempt } from '../../shared/case-scope.js';
-import { scopedBullpen, scopedOutboundContext, SeedScope, seedConflictKeys } from '../../scenarios/seed.js';
+import { scopedBullpen, scopedOutboundContext, scopedPrincipalBacklog, SeedScope, seedConflictKeys } from '../../scenarios/seed.js';
 import type { ScenarioCase } from '../../scenarios/types.js';
 
 type RunState = CaseAttempt & { scope: SeedScope };
@@ -42,6 +42,20 @@ describe('scoped views with overlapping runs', () => {
     const active = (state: RunState) => context.run(state, async () => (await view.getActive()).map(r => r.id));
     expect(await active(run('A', [], ['e-a']))).toEqual(['e-a']);
     expect(await view.getActive()).toEqual([]);
+  });
+
+  it('give each run only its own backlog counts (prompt trim PR 7)', async () => {
+    const view = scopedPrincipalBacklog(currentScope);
+    const withBacklog = run('A', []);
+    withBacklog.scope.backlog = { decayWarnings: 0, pendingApprovals: 2, principalTasks: 0 };
+    const none = { decayWarnings: 0, pendingApprovals: 0, principalTasks: 0 };
+    const [a, b] = await Promise.all([
+      context.run(withBacklog, () => view.counts()),
+      context.run(run('B', []), () => view.counts()),
+    ]);
+    expect(a).toEqual({ decayWarnings: 0, pendingApprovals: 2, principalTasks: 0 });
+    expect(b).toEqual(none);
+    expect(await view.counts()).toEqual(none);
   });
 });
 
