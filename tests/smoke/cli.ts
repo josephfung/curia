@@ -25,6 +25,7 @@ import { runTestCases } from './runner.js';
 import { evaluateCases } from './evaluator.js';
 import { formatPct, gatingFailures, mergeRetries, staleKnownFailures } from './gate.js';
 import { generateReport } from './report.js';
+import { liveSearchLines } from '../shared/live-search.js';
 import { emptyBreakdown, formatUsageLines, formatUsd, sumBreakdowns } from '../shared/usage.js';
 import { CASE_PASS_THRESHOLD, type CaseExecution, type RunResult, type HistoricalEntry } from './types.js';
 
@@ -306,6 +307,7 @@ async function main(): Promise<void> {
       today,
       usage: sumBreakdowns([...caseResults.map(c => c.usage), overheadUsage]),
       overheadUsage,
+      liveSearch: { ...harness.stubs.liveSearch },
     };
 
     // Load historical data BEFORE writing current results, so the trend chart
@@ -347,6 +349,7 @@ async function main(): Promise<void> {
       out(`     (includes ${formatUsd(overheadUsage.total.estimatedCostUsd)} outside any case: the warm-up` +
         `${late.calls > 0 ? `, and ${formatUsd(late.estimatedCostUsd)} over ${late.calls} call(s) made outside a case or after it ended` : ''})`);
     }
+    for (const line of liveSearchLines(harness.stubs.liveSearch)) out(`   ${line}`);
     out('');
 
     // Per-case summary

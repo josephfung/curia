@@ -185,6 +185,27 @@ describe('stub sets', () => {
   it('rejects an unknown set', () => {
     expect(() => loadScenarioCase(write('c.yaml', VALID.replace('tags: [routing]', 'tags: [routing]\nstub_sets: [nope]')))).toThrow(/stub set 'nope'/);
   });
+
+  it('stubs web-search from defaults unless the case sets live_search (#2106)', () => {
+    const stubsDir = path.join(dir, 'stubs');
+    mkdirSync(stubsDir);
+    const search = 'web-search:\n  - match: {}\n    return: { results: [], count: 0 }\n';
+    writeFileSync(path.join(stubsDir, 'defaults.yaml'), `${search}email-list:\n  - match: {}\n    return: { messages: [], count: 0 }\n`);
+    writeFileSync(path.join(stubsDir, 'research.yaml'), search);
+    const withKey = (extra: string): string => VALID.replace('tags: [routing]', `tags: [routing]\n${extra}`);
+
+    const stubbed = loadScenarioCase(write('a.yaml', VALID), { stubsDir });
+    expect(stubbed.toolStubs['web-search']).toHaveLength(1);
+    expect(stubbed.liveSearch).toBeUndefined();
+
+    const live = loadScenarioCase(write('b.yaml', withKey('live_search: true')), { stubsDir });
+    expect(live.toolStubs['web-search']).toBeUndefined();
+    expect(live.toolStubs['email-list']).toHaveLength(1);
+    expect(live.liveSearch).toBe(true);
+
+    // A stub of the case's own, or a named set's, would answer every search instead.
+    expect(() => loadScenarioCase(write('c.yaml', withKey(`live_search: true\nstub_sets: [research]`)), { stubsDir })).toThrow(/live_search/);
+  });
 });
 
 describe('loadScenarioCases', () => {

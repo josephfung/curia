@@ -2,7 +2,7 @@
 import { conversationIdFor, TurnError, type CuriaHarness, type TargetThread } from './harness.js';
 import { resolveDatePlaceholders } from '../shared/date-placeholders.js';
 import { resolvePrincipalPlaceholders, type PrincipalRef } from './fixtures.js';
-import { mergeStubs, newSmokeCase } from './stub-layer.js';
+import { mergeStubs, newSmokeCase, officeFor } from './stub-layer.js';
 import {
   PROVIDER_RETRIES,
   providerFailure,
@@ -218,7 +218,7 @@ async function runTurns(
     // One "now" for the turn, so {{at:now+60m}} agrees between the message and the fixtures.
     const timezone = harness.stack.config.timezone;
     const now = new Date();
-    harness.stubs.set(withPrincipal(resolveDatePlaceholders(mergeStubs(turn.toolStubs, tc.toolStubs, defaultStubs), timezone, now)));
+    harness.stubs.set(withPrincipal(resolveDatePlaceholders(mergeStubs(turn.toolStubs, tc.toolStubs, officeFor(tc, defaultStubs)), timezone, now)));
     const prompt = withPrincipal(resolveDatePlaceholders(turn.content, timezone, now));
     const response = await harness.sendMessage({
       conversationId,

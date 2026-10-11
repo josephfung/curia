@@ -96,7 +96,9 @@ out the cases marked `release_gate: false` and says how many it left out
 - Per case, once its runs are rated: its estimated spend (split by agent when more than one
   ran), then per behavior its pass rate and an example justification when it is under 100%.
 - In the summary, each case's spend and the run's total, split by agent and judge. The
-  results JSON holds the split per run, per case and for the suite (`usage`). These are
+  results JSON holds the split per run, per case and for the suite (`usage`). Then the
+  number of `web-search` calls that reached Tavily (`liveSearch` in the JSON), with a warning
+  when Tavily refused any for an exhausted quota (HTTP 432 or 433). These are
   estimates from registry prices; see
   [docs/dev/smoke-tests.md](../../docs/dev/smoke-tests.md#concurrency-cost-and-provider-failures).
 - `tests/scenarios/results/<timestamp>.json` (gitignored), with the commit, the model and
@@ -202,7 +204,8 @@ The stub layer (`stub-layer.ts`) wraps the test-mode ExecutionLayer:
    resolve approvals): the call is refused with a `<skill_error>`. It never falls through.
    The runtime formats the error as production's `<task_error>`.
 3. **No stub, read-only tool test mode can serve:** the real tool runs (memory reads,
-   `date-resolve`, `web-fetch`). A read test mode cannot serve (missing capability) is
+   `date-resolve`, `web-fetch`). `web-search` is one too, but `defaults` stubs it, because each real
+   call spends a Tavily credit (#2106). Only a case with `live_search: true` reaches it. A read test mode cannot serve (missing capability) is
    refused instead, whether the coordinator is offered it, finds it through
    `tool-registry`, or loads it with `skill-activate` (`drive-download-file` needs the
    temp store, #2050, #2059).
@@ -236,7 +239,10 @@ a tool are matched first.
   can't serve (`email-list` with no mail client, `task-list`, `doc-search`, …) answer as a
   quiet day instead of failing in ways production never does. `task-update` and
   `task-complete` answer only for the task `task-create` returns; updating any other
-  task is refused and counted (#2059).
+  task is refused and counted (#2059). `web-search` finds nothing. A case that needs
+  results stubs them, as 16d does for its research specialist. A case about searching
+  itself sets `live_search: true`, which drops this one stub, and may not stub
+  `web-search` itself.
 - `human-channels` makes every send succeed. `deferred-work` does the same for creating
   tasks and jobs.
 
@@ -292,6 +298,7 @@ runs: 5                                   # optional; CLI --runs overrides
 timeout_seconds: 300                      # optional
 known_failure: { issue: "#1234", reason: … }   # optional; reported, not gated
 stub_sets: [human-channels]               # optional; `defaults` always applies
+live_search: true                         # optional; web-search runs for real (Tavily credits)
 seed:
   contacts:                               # → {{contact:<key>}}
     - key: sam

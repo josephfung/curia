@@ -27,6 +27,7 @@ import { createJudge, judgeRun, type Judge } from './judge.js';
 import { loadScenarioCases, resolveRunPlaceholders } from './loader.js';
 import { describeError, seedConflictKeys } from './seed.js';
 import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from '../shared/case-scope.js';
+import { liveSearchLines } from '../shared/live-search.js';
 import { formatUsageLines, formatUsd, sumBreakdowns, UsageLedger } from '../shared/usage.js';
 import { mustStub } from './stub-layer.js';
 import { coverageViolations, mergeCoverage, readCoverage, writeCoverage } from './stub-coverage.js';
@@ -472,6 +473,7 @@ async function main(): Promise<void> {
       concurrency: args.concurrency,
       usage: sumBreakdowns([...results.map(r => r.usage), overheadUsage]),
       overheadUsage,
+      liveSearch: { ...harness.stubs.liveSearch },
     };
     mkdirSync(RESULTS_DIR, { recursive: true });
     const resultsFile = path.join(RESULTS_DIR, `${suite.timestamp.replace(/[:.]/g, '-')}.json`);
@@ -496,6 +498,7 @@ async function main(): Promise<void> {
     if (overheadUsage.total.calls > 0) {
       out(`     (includes ${formatUsd(overheadUsage.total.estimatedCostUsd)} over ${overheadUsage.total.calls} call(s) made outside a run or after it ended)`);
     }
+    for (const line of liveSearchLines(harness.stubs.liveSearch)) out(`   ${line}`);
     const providerRetries = results.flatMap(r => r.runs.flatMap(run => run.providerRetries.map(reason => `${r.name} run ${run.runIndex + 1}: ${reason}`)));
     if (providerRetries.length > 0) {
       out('\n   Provider failures, re-run without counting against the case:');

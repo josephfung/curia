@@ -232,6 +232,19 @@ describe('Smoke test loader', () => {
       expect(() => loadYaml(`${minimalYaml('Text')}\ntimeout_seconds: "300"`)).toThrow(/timeout_seconds/);
       expect(() => loadYaml(`${minimalYaml('Fraction')}\ntimeout_seconds: 90.5`)).toThrow(/timeout_seconds/);
     });
+
+    it('reads live_search (#2106), and rejects it beside a web-search stub that would answer instead', () => {
+      expect(loadYaml(minimalYaml('Stubbed search')).liveSearch).toBeUndefined();
+      expect(loadYaml(`${minimalYaml('Off')}\nlive_search: false`).liveSearch).toBeUndefined();
+      expect(loadYaml(`${minimalYaml('Live')}\nlive_search: true`).liveSearch).toBe(true);
+      expect(() => loadYaml(`${minimalYaml('Text')}\nlive_search: "yes"`)).toThrow(/live_search/);
+      const stub = 'web-search:\n    - match: {}\n      return: { results: [], count: 0 }';
+      expect(() => loadYaml(`${minimalYaml('Both')}\nlive_search: true\ntool_stubs:\n  ${stub}`)).toThrow(/live_search/);
+      expect(() => loadYaml([
+        'name: Turn stub', 'live_search: true', 'turns:', '  - content: hi', '    tool_stubs:',
+        '      web-search:', '        - match: {}', '          return: { results: [], count: 0 }', behaviors,
+      ].join('\n'))).toThrow(/live_search/);
+    });
   });
 });
 

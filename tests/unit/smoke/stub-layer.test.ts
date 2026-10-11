@@ -4,7 +4,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ExecutionLayer } from '../../../src/skills/execution.js';
 import { createCaseContext } from '../../shared/case-scope.js';
-import { createSmokeStubs as createStubsIn, mergeStubs, newSmokeCase, type SmokeCaseState } from '../../smoke/stub-layer.js';
+import { createSmokeStubs as createStubsIn, mergeStubs, newSmokeCase, officeFor, type SmokeCaseState } from '../../smoke/stub-layer.js';
 
 /**
  * Stubs bound to a context, with one case already entered for the rest of the test, so
@@ -37,6 +37,7 @@ function createSmokeStubs(): ReturnType<typeof createStubsIn> {
     answer: inCase(stubs.answer),
     clear: inCase(stubs.clear),
     get orphanCalls() { return stubs.orphanCalls; },
+    get liveSearch() { return stubs.liveSearch; },
   };
 }
 
@@ -101,6 +102,21 @@ describe('createSmokeStubs', () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
+  it('counts real web-search calls and Tavily quota refusals, not stubbed ones (#2106)', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, data: { results: [], count: 0 } })
+      .mockResolvedValueOnce({ success: false, error: '<skill_error>Tavily returned HTTP 433: request failed</skill_error>' })
+      .mockResolvedValueOnce({ success: false, error: 'Search failed: fetch failed' });
+    const stubs = createSmokeStubs();
+    const wrapped = stubs.wrap({ invoke } as unknown as ExecutionLayer);
+    for (let i = 0; i < 3; i++) await wrapped.invoke('web-search', { query: `q${i}` }, undefined as never, opts('research-analyst') as never);
+    stubs.set({ 'web-search': [{ match: {}, return: { results: [], count: 0 } }] });
+    await wrapped.invoke('web-search', { query: 'stubbed' }, undefined as never, opts('coordinator') as never);
+    expect(stubs.liveSearch).toEqual({ calls: 3, quotaErrors: 1 });
+    // The real error is kept on the record, so a quota failure reads in the results JSON.
+    expect(stubs.clear()[1]).toMatchObject({ disposition: 'real', success: false, error: expect.stringContaining('HTTP 433') });
+  });
+
   it('records every call and clears the record and the stubs', async () => {
     const stubs = createSmokeStubs();
     const wrapped = stubs.wrap(realLayer().layer);
@@ -146,6 +162,12 @@ describe('mergeStubs', () => {
     const merged = mergeStubs(undefined, { a: [{ match: {}, return: 'case' }] }, { a: [{ match: {}, return: 'office' }], b: [{ match: {}, return: 'office' }] });
     expect(merged['a']!.map(s => s.return)).toEqual(['case', 'office']);
     expect(merged['b']!.map(s => s.return)).toEqual(['office']);
+  });
+
+  it('drops the office web-search stub only for a live_search case (#2106)', () => {
+    const office = { 'web-search': [{ match: {}, return: { results: [], count: 0 } }], b: [{ match: {}, return: 'office' }] };
+    expect(officeFor({}, office)).toBe(office);
+    expect(Object.keys(officeFor({ liveSearch: true }, office))).toEqual(['b']);
   });
 
   it('shapes a stubbed result for the call (time range, echoed inputs)', async () => {

@@ -5,6 +5,26 @@ tags:
   - multi-turn
   - change-management
 
+# What a search finds about the venue (#2106): live searches spent a Tavily credit each.
+tool_stubs:
+  web-search:
+    - match: {}
+      return:
+        count: 2
+        results:
+          - title: Dining | Langdon Hall Country House Hotel & Spa
+            url: https://www.langdonhall.ca/dining
+            content: >-
+              The Dining Room at Langdon Hall, Cambridge, Ontario, serves dinner nightly.
+              Reservations are taken online or by phone.
+            score: 0.9
+          - title: Private Dining | Langdon Hall
+            url: https://www.langdonhall.ca/private-dining
+            content: >-
+              Private dining rooms seat small groups for dinner. Requests go to the
+              events team, who confirm availability for the date and party size.
+            score: 0.86
+
 turns:
   - role: user
     content: |

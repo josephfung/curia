@@ -353,3 +353,11 @@ activity-log:
 web-browser:
   - match: {}
     error: The browser is not available right now.
+
+# Every real search spends a Tavily credit, and A/B runs multiply them (#2106). The
+# default finds nothing, as it would for the office's fictional people and companies; a
+# case whose premise needs results stubs them itself, and a case about searching sets
+# `live_search: true` to drop this stub.
+web-search:
+  - match: {}
+    return: { results: [], count: 0 }

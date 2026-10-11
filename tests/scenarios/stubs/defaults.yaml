@@ -118,3 +118,9 @@ task-update:
       tags: []
       updated_at: "2026-10-01T12:05:00-04:00"
       displayTimezone: America/Toronto
+# Every real search spends a Tavily credit, and the gate runs each case several times
+# (#2106). An unplanned search finds nothing, as it would for the cases' fictional
+# companies; a case that needs results stubs them, and `live_search: true` drops this one.
+web-search:
+  - match: {}
+    return: { results: [], count: 0 }

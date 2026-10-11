@@ -4,6 +4,7 @@ import * as yaml from 'js-yaml';
 import { parseStubs } from '../scenarios/loader.js';
 import type { ToolStub } from '../scenarios/types.js';
 import { resolveDatePlaceholders } from '../shared/date-placeholders.js';
+import { LIVE_SEARCH_TOOL } from '../shared/live-search.js';
 import { resolvePrincipalPlaceholders } from './fixtures.js';
 import {
   SMOKE_SENDERS,
@@ -28,6 +29,7 @@ interface RawTestCase {
   target?: unknown;
   judge_tool_calls?: unknown;
   tool_stubs?: unknown;
+  live_search?: unknown;
   known_failure?: unknown;
   timeout_seconds?: unknown;
   turns?: Array<{ role?: string; content?: string; delay_ms?: number; tool_stubs?: unknown }>;
@@ -38,8 +40,8 @@ interface RawTestCase {
 // A misspelt key (`judge_tool_call`, `senders`) would otherwise be dropped silently and the
 // case would run with the default — passing for the wrong reason.
 const CASE_KEYS: ReadonlySet<string> = new Set([
-  'name', 'description', 'tags', 'sender', 'target', 'judge_tool_calls', 'tool_stubs', 'known_failure',
-  'timeout_seconds', 'turns', 'expected_behaviors', 'failure_modes',
+  'name', 'description', 'tags', 'sender', 'target', 'judge_tool_calls', 'tool_stubs', 'live_search',
+  'known_failure', 'timeout_seconds', 'turns', 'expected_behaviors', 'failure_modes',
 ]);
 const TURN_KEYS: ReadonlySet<string> = new Set(['role', 'content', 'delay_ms', 'tool_stubs']);
 const TARGET_KEYS: ReadonlySet<string> = new Set(['agent', 'via', 'from', 'topic', 'opening']);
@@ -117,6 +119,9 @@ export function loadTestCase(filePath: string): TestCase {
   if (raw.judge_tool_calls !== undefined && typeof raw.judge_tool_calls !== 'boolean') {
     throw new Error(`'judge_tool_calls' must be true or false in ${filePath}`);
   }
+  if (raw.live_search !== undefined && typeof raw.live_search !== 'boolean') {
+    throw new Error(`'live_search' must be true or false in ${filePath}`);
+  }
   const knownFailure = parseKnownFailure(raw.known_failure, filePath);
   const timeoutSeconds = raw.timeout_seconds;
   if (timeoutSeconds !== undefined && (typeof timeoutSeconds !== 'number' || !Number.isInteger(timeoutSeconds) || timeoutSeconds < 10)) {
@@ -145,6 +150,14 @@ export function loadTestCase(filePath: string): TestCase {
       ...(t.tool_stubs !== undefined ? { toolStubs: parseStubs(t.tool_stubs, filePath) } : {}),
     };
   });
+
+  // A web-search stub would answer every search ahead of the real tool, so the case would
+  // spend nothing while claiming to test live search.
+  const toolStubs = parseStubs(raw.tool_stubs, filePath);
+  const liveSearch = raw.live_search === true;
+  if (liveSearch && [toolStubs, ...turns.map(t => t.toolStubs ?? {})].some(s => LIVE_SEARCH_TOOL in s)) {
+    throw new Error(`'live_search' is set but a stub answers ${LIVE_SEARCH_TOOL} in ${filePath} — drop one`);
+  }
 
   // Duplicate ids would share the judge's first score and collapse in the gate's lookup,
   // so a critical MISS could hide behind a nice-to-have PASS of the same id.
@@ -177,7 +190,8 @@ export function loadTestCase(filePath: string): TestCase {
     sender: sender as SmokeSender,
     ...(target ? { target } : {}),
     judgeToolCalls: raw.judge_tool_calls === true,
-    toolStubs: parseStubs(raw.tool_stubs, filePath),
+    toolStubs,
+    ...(liveSearch ? { liveSearch: true as const } : {}),
     ...(knownFailure ? { knownFailure } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     turns,

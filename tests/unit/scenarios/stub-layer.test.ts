@@ -256,6 +256,24 @@ describe('scenario stub layer', () => {
     ]);
   });
 
+  it('counts web-search calls that reach the real tool, and Tavily quota refusals (#2106)', async () => {
+    const registry = new ToolRegistry();
+    const answers = [
+      { success: false as const, error: 'Tavily returned HTTP 432: request failed' },
+      { success: true as const, data: { results: [], count: 0 } },
+    ];
+    registry.register(manifest('web-search', 'none'), { execute: async () => answers.shift()! });
+    const controller = createStubController(() => registry);
+    const layer = controller.wrap(new ExecutionLayer(registry, logger));
+    controller.beginRun({}, 'scenario-1');
+    await layer.invoke('web-search', { query: 'a' }, undefined, coordinatorCall);
+    await layer.invoke('web-search', { query: 'b' }, undefined, coordinatorCall);
+    controller.endRun('scenario-1');
+    controller.beginRun({ 'web-search': [{ match: {}, return: { results: [], count: 0 } }] }, 'scenario-2');
+    await layer.invoke('web-search', { query: 'stubbed' }, undefined, { ...coordinatorCall, conversationId: 'scenario-2' });
+    expect(controller.liveSearch).toEqual({ calls: 2, quotaErrors: 1 });
+  });
+
   it('refuses every side-effecting call outside a run', async () => {
     const { layer, executed } = setup();
     const result = await layer.invoke('signal-send', {}, undefined, coordinatorCall);

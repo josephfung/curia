@@ -9,6 +9,61 @@ tags:
   - synchronous-ack
   - single-turn
 
+# The research specialist's searches, answered from fixtures (#2106): this case alone made
+# about 9 live searches a run. Every query gets the same overview; fetching any page
+# returns no more than the result says, so the specialist writes from these.
+tool_stubs:
+  web-search:
+    - match: {}
+      return:
+        count: 5
+        results:
+          - title: The EU AI Act — overview and timeline
+            url: https://policy.example.test/eu-ai-act-timeline
+            content: >-
+              Regulation (EU) 2024/1689 entered into force on 1 August 2024. It sorts AI
+              systems by risk: unacceptable-risk practices banned from February 2025,
+              obligations for general-purpose AI models from August 2025, and most
+              high-risk obligations from August 2026. The European AI Office supervises
+              general-purpose models; national market surveillance authorities enforce the rest.
+            score: 0.93
+          - title: NIST AI Risk Management Framework
+            url: https://policy.example.test/nist-ai-rmf
+            content: >-
+              The voluntary NIST AI RMF 1.0 (January 2023) organizes AI risk work into
+              Govern, Map, Measure and Manage. A Generative AI Profile followed in July
+              2024. Federal agencies and many companies use it as a baseline.
+            score: 0.9
+          - title: US federal AI policy after Executive Order 14110
+            url: https://policy.example.test/us-federal-ai-policy
+            content: >-
+              Executive Order 14110 (October 2023) was revoked in January 2025, and the
+              administration's July 2025 AI Action Plan favors deregulation and
+              infrastructure. With no federal AI statute, states legislate: Colorado's AI
+              Act on high-risk systems and California's SB 53 on frontier-model transparency.
+            score: 0.88
+          - title: The UK's principles-based approach to AI regulation
+            url: https://policy.example.test/uk-ai-regulation
+            content: >-
+              The UK has no AI-specific statute. Existing regulators (ICO, CMA, FCA, Ofcom)
+              apply five cross-sector principles from the 2023 white paper. The AI Safety
+              Institute, renamed the AI Security Institute in 2025, evaluates frontier models.
+            score: 0.87
+          - title: International AI governance — OECD, G7 and the Council of Europe
+            url: https://policy.example.test/international-ai-governance
+            content: >-
+              The OECD AI Principles (2019, updated 2024) underpin the G7 Hiroshima
+              Process code of conduct for advanced AI developers. The Council of Europe's
+              Framework Convention on AI, opened for signature in September 2024, is the
+              first binding international treaty on AI.
+            score: 0.84
+  web-fetch:
+    - match: {}
+      return:
+        status: 200
+        content_type: text/html
+        body: The page repeats the summary in the search result; it adds no further figures or dates.
+
 turns:
   - role: user
     content: |

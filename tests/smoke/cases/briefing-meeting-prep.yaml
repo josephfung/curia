@@ -9,6 +9,21 @@ tags:
 # 'Attempts to look up David Kim' happens in the contacts specialist the coordinator
 # delegates to; without the calls the judge only sees the brief.
 judge_tool_calls: true
+# A search finds the firm, not the person (#2106): live searches spent a Tavily credit
+# each, and nothing public should stand in for the contact record.
+tool_stubs:
+  web-search:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - title: Sequoia Capital
+            url: https://www.sequoiacap.com/
+            content: >-
+              Sequoia Capital is a venture capital firm that partners with founders from
+              seed through growth stage.
+            score: 0.81
+
 turns:
   - role: user
     content: |

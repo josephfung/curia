@@ -9,7 +9,9 @@
 // unstubbed call here runs the real tool: smoke tests the whole stack, and it runs on
 // a throwaway copy of the database (clone-db.ts), so a real database write lands nowhere
 // that matters. Sends still cannot leave: the test-mode stack has no transport (#1966).
-// Real reads can — web-fetch and web-search make real requests.
+// Real reads can — web-fetch makes real requests. web-search would too, and spend a
+// Tavily credit each time, so the office stubs it unless a case sets `live_search` (#2106);
+// `liveSearch` counts the searches that ran anyway.
 //
 // A stubbed call is answered before the real ExecutionLayer, so its trust and autonomy
 // checks do not run: a stubbed write "succeeds" even where production would gate it.
@@ -19,6 +21,7 @@ import type { ToolResult } from '../../src/skills/types.js';
 import { newAttempt, type CaseAttempt, type CaseContext } from '../shared/case-scope.js';
 import { matchToolStub } from '../scenarios/stub-matcher.js';
 import { recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
+import { LIVE_SEARCH_TOOL, newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
 import { shapeStubResult } from './stub-filters.js';
 import type { ToolStub } from '../scenarios/types.js';
 
@@ -36,6 +39,8 @@ export interface AgentToolCall {
   disposition: 'stubbed' | 'real';
   /** The stubbed or real outcome, for authoring stubs (`--show-calls`) and the results JSON. */
   success?: boolean;
+  /** A real call's error, so a failure (an exhausted search quota, say) is readable in the results JSON. */
+  error?: string;
 }
 
 /**
@@ -89,6 +94,8 @@ export interface SmokeStubs {
    * real and are no case's; the CLI warns when there are any.
    */
   readonly orphanCalls: number;
+  /** Real web-search calls across the run, every case and orphan included (#2106). */
+  readonly liveSearch: Readonly<LiveSearchTally>;
 }
 
 function skillError(message: string): string {
@@ -111,8 +118,26 @@ export function mergeStubs(
   return merged;
 }
 
+/**
+ * The office a case runs in: the shared defaults, minus the web-search stub for a case
+ * that searches for real (`live_search`, #2106).
+ */
+export function officeFor(
+  tc: { liveSearch?: true },
+  office: Record<string, ToolStub[]>,
+): Record<string, ToolStub[]> {
+  if (!tc.liveSearch) return office;
+  return Object.fromEntries(Object.entries(office).filter(([tool]) => tool !== LIVE_SEARCH_TOOL));
+}
+
 export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStubs {
   let orphanCalls = 0;
+  const liveSearch = newLiveSearchTally();
+  const runReal = async (real: ExecutionLayer, args: Parameters<ExecutionLayer['invoke']>): Promise<ToolResult> => {
+    const result = await real.invoke(...args);
+    recordLiveCall(liveSearch, args[0], result);
+    return result;
+  };
 
   const inCase = (method: string): SmokeCaseState => {
     const state = context.current();
@@ -126,7 +151,7 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
     const state = context.current();
     if (!state) {
       orphanCalls++;
-      return real.invoke(...args);
+      return runReal(real, args);
     }
     if (state.cancelled) {
       // The case passed its timeout and has its result; a write now would land in nothing
@@ -167,8 +192,9 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
       // answer the question asked (time range, search query, echoed inputs, earlier writes).
       return { success: true, data: shapeStubResult(toolName, structuredClone(stub.return ?? null), input, state.tools) };
     }
-    const result = await real.invoke(...args);
+    const result = await runReal(real, args);
     record.success = result.success;
+    if (!result.success) record.error = result.error;
     return result;
   };
 
@@ -204,6 +230,9 @@ export function createSmokeStubs(context: CaseContext<SmokeCaseState>): SmokeStu
     },
     get orphanCalls() {
       return orphanCalls;
+    },
+    get liveSearch() {
+      return liveSearch;
     },
   };
 }

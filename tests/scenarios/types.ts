@@ -4,6 +4,7 @@
 // stubbed tools, run N times on the production prompt. Behaviors are scored per
 // run, either in code (`check`) or by the LLM judge (no `check`).
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
+import type { LiveSearchTally } from '../shared/live-search.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
 import type { UsageBreakdown } from '../shared/usage.js';
 
@@ -211,6 +212,11 @@ export interface ScenarioCase {
    * offered — a default for a tool this registry did not load is simply unused.
    */
   explicitStubTools: string[];
+  /**
+   * web-search runs for real instead of answering from `defaults` (#2106): for a case
+   * about searching itself. Each call spends a Tavily credit.
+   */
+  liveSearch?: true;
   expectedBehaviors: ExpectedBehavior[];
   failureModes: string[];
   /** File the case came from, for messages. */
@@ -376,6 +382,8 @@ export interface SuiteResult {
   usage: UsageBreakdown;
   /** Spend outside every run (should be ~0). */
   overheadUsage: UsageBreakdown;
+  /** web-search calls that reached Tavily (#2106). Absent on results saved before it existed. */
+  liveSearch?: LiveSearchTally;
 }
 
 /**

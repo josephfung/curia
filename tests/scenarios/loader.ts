@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { hasBacklog, type PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import { hasDatePlaceholders, resolveDatePlaceholders } from '../shared/date-placeholders.js';
+import { LIVE_SEARCH_TOOL } from '../shared/live-search.js';
 import { leafChecks } from './assertions.js';
 import {
   ANY_AGENT,
@@ -56,7 +57,7 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog'] as const;
 const BACKLOG_KEYS = ['decay_warnings', 'pending_approvals', 'principal_tasks'] as const;
 const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier'] as const;
@@ -468,13 +469,15 @@ export interface LoadOptions {
 /**
  * Shared stub tables named by a case's `stub_sets`, plus `defaults` for every case. The
  * case's own stubs for a tool come first, so its specific matches win and a set
- * supplies the catch-all.
+ * supplies the catch-all. A `live_search` case gets no web-search stub from `defaults`,
+ * so its searches reach Tavily (#2106).
  */
 function mergeStubSets(
   raw: Raw,
   own: Record<string, ToolStub[]>,
   file: string,
   stubsDir: string,
+  liveSearch: boolean,
 ): { stubs: Record<string, ToolStub[]>; explicit: string[] } {
   // `defaults` always applies, last: an empty office for reads test mode cannot serve.
   const names = [...strList(raw, 'stub_sets', file, 'case').filter(n => n !== 'defaults'), 'defaults'];
@@ -491,9 +494,15 @@ function mergeStubSets(
     }
     const set = parseStubs(setRaw, setFile);
     for (const [tool, stubs] of Object.entries(set)) {
+      if (liveSearch && tool === LIVE_SEARCH_TOOL && name === 'defaults') continue;
       merged[tool] = [...(merged[tool] ?? []), ...stubs];
       if (name !== 'defaults') explicit.add(tool);
     }
+  }
+  // The case's own stub, or a named set's, would answer every search ahead of the real
+  // tool: the case would spend nothing while claiming to test live search.
+  if (liveSearch && explicit.has(LIVE_SEARCH_TOOL)) {
+    throw new CaseError(file, `'live_search' is set but a stub answers ${LIVE_SEARCH_TOOL} — drop one`);
   }
   return { stubs: merged, explicit: [...explicit].sort() };
 }
@@ -537,7 +546,8 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   if (!DELEGATION_MODES.includes(delegation)) {
     throw new CaseError(file, `'delegation' must be one of ${DELEGATION_MODES.join(', ')}`);
   }
-  const stubSets = mergeStubSets(raw, parseStubs(raw['tool_stubs'], file), file, options.stubsDir ?? DEFAULT_STUBS_DIR);
+  const liveSearch = optBool(raw, 'live_search', file, 'case') === true;
+  const stubSets = mergeStubSets(raw, parseStubs(raw['tool_stubs'], file), file, options.stubsDir ?? DEFAULT_STUBS_DIR, liveSearch);
   const scenario: ScenarioCase = {
     name: str(raw, 'name', file, 'case'),
     description: optStr(raw, 'description', file, 'case') ?? '',
@@ -551,6 +561,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     inbound: parseInbound(raw['inbound'], file),
     toolStubs: stubSets.stubs,
     explicitStubTools: stubSets.explicit,
+    ...(liveSearch ? { liveSearch: true as const } : {}),
     expectedBehaviors: parseBehaviors(raw, file),
     failureModes: strList(raw, 'failure_modes', file, 'case'),
     sourceFile: file,

@@ -4,8 +4,9 @@
 // test mode (src/startup/test-mode-stack.ts) — the same agent assembly src/index.ts
 // uses, so the coordinator sees the production system prompt — and adds a
 // Dispatcher. No HTTP or CLI channel and no transport clients: no message can be sent.
-// (Read-only tools still reach the outside world: web-fetch and web-search make real
-// requests, and model and embedding calls go to their providers.) sendMessage()
+// (Read-only tools still reach the outside world: web-fetch makes real requests, as does
+// web-search in a `live_search` case, and model and embedding calls go to their
+// providers.) sendMessage()
 // publishes an inbound.message and reads the coordinator's
 // turn off the bus (tests/shared/turn-capture.ts): its tool calls and its reply.
 //

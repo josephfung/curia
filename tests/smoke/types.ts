@@ -2,6 +2,7 @@
 import type { ToolStub } from '../scenarios/types.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
 import type { UsageBreakdown } from '../shared/usage.js';
+import type { LiveSearchTally } from '../shared/live-search.js';
 import type { AgentToolCall } from './stub-layer.js';
 
 // -- Test case definition (loaded from YAML) --
@@ -66,6 +67,11 @@ export interface TestCase {
    * for any agent. Same schema as the scenario suite's; unstubbed calls run for real.
    */
   toolStubs: Record<string, ToolStub[]>;
+  /**
+   * Run web-search for real instead of the office's stub (#2106): for a case about
+   * searching itself. Each call spends a Tavily credit.
+   */
+  liveSearch?: true;
   /** A tracked bug this case currently catches: reported, but does not fail the gate. */
   knownFailure?: { issue: string };
   /**
@@ -174,6 +180,8 @@ export interface RunResult {
   usage: UsageBreakdown;
   /** Spend outside every case: the warm-up, and any call no case made (should be ~0). */
   overheadUsage: UsageBreakdown;
+  /** web-search calls that reached Tavily (#2106). Absent on results saved before it existed. */
+  liveSearch?: LiveSearchTally;
 }
 
 // -- Historical tracking --

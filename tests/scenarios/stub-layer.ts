@@ -18,6 +18,8 @@
 //      judged by action_risk and by dangerous capabilities; a tool that misdeclares
 //      both is still bounded by the test-mode stack (no transport, withheld services).
 //   3. No stub, read-only tool → the real layer runs it (memory reads, date-resolve…).
+//      web-search is read-only too, but each call spends a Tavily credit, so `defaults`
+//      stubs it and only a `live_search` case reaches it (#2106); `liveSearch` counts those.
 //      So does a tool the stack serves from an MCP snapshot (#2024): its session returns
 //      a canned result and reaches no account, whatever its action_risk says. The call
 //      is recorded as `canned`, a stub hole like a refusal: the model acted on an empty
@@ -31,6 +33,7 @@ import { randomUUID } from 'node:crypto';
 import type { ExecutionLayer } from '../../src/skills/execution.js';
 import type { ToolRegistry } from '../../src/skills/registry.js';
 import type { ToolResult } from '../../src/skills/types.js';
+import { newLiveSearchTally, recordLiveCall, type LiveSearchTally } from '../shared/live-search.js';
 import { applyCaseWrites, recordedDraftRead, CaseToolState } from '../shared/tool-state.js';
 import { emailAttachmentRefusal } from './attachment-guard.js';
 import { matchToolStub } from './stub-matcher.js';
@@ -135,6 +138,8 @@ export interface StubController {
   pendingDelegations(conversationId: string): string[];
   /** Calls refused because they came from a conversation with no open run. */
   readonly staleCalls: number;
+  /** web-search calls that ran the real tool, across every run (#2106). */
+  readonly liveSearch: Readonly<LiveSearchTally>;
 }
 
 function skillError(message: string): string {
@@ -173,6 +178,7 @@ export function createStubController(
   /** A specialist's conversation → the run it works for (#2027). */
   const delegated = new Map<string, OpenRun>();
   let staleCalls = 0;
+  const liveSearch = newLiveSearchTally();
 
   const runFor = (conversationId: string | undefined): OpenRun | undefined =>
     conversationId === undefined ? undefined : runs.get(conversationId) ?? delegated.get(conversationId);
@@ -280,7 +286,9 @@ export function createStubController(
         if (i >= 0) run.waiting.splice(i, 1);
       }
     }
-    return real.invoke(...args);
+    const result = await real.invoke(...args);
+    recordLiveCall(liveSearch, toolName, result);
+    return result;
   };
 
   return {
@@ -324,6 +332,9 @@ export function createStubController(
     },
     get staleCalls() {
       return staleCalls;
+    },
+    get liveSearch() {
+      return liveSearch;
     },
   };
 }

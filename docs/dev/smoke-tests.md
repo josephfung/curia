@@ -82,7 +82,7 @@ The run **passes** when every case passes, apart from cases marked `known_failur
 
 **Work that escapes its case fails the run.** Test mode runs no scheduler, so every tool call and model fallback should belong to some case. One that does not was answered without that case's stubs, or ran on another model, so the CLI lists it under `[ISOLATION]` and exits `1` even when every case passed.
 
-**Cost.** The summary prints the run's estimated spend, split by agent and judge, and each case's total. The results JSON holds the same split per case (`usage`), for the run (`usage`), and for work outside every case such as the warm-up (`overheadUsage`). Agents' figures come from the runtime's `llm.call` events (token counts priced by the model registry). The judge publishes no event, so it prices its own responses. The figures are **estimates**, not OpenRouter's bill:
+**Cost.** The summary prints the run's estimated spend, split by agent and judge, and each case's total, then the number of live web searches ([Web search](#web-search)). The results JSON holds the same split per case (`usage`), for the run (`usage`), and for work outside every case such as the warm-up (`overheadUsage`). Agents' figures come from the runtime's `llm.call` events (token counts priced by the model registry). The judge publishes no event, so it prices its own responses. The figures are **estimates**, not OpenRouter's bill:
 
 - Cache reads and writes come from OpenRouter's `prompt_tokens_details` (#1962) and are priced at the registry's cache rates. When the registry records no cache rate for a model, those tokens are priced at its input rate.
 - A call that fails after the provider billed it publishes no `llm.call`, so it is missing.
@@ -125,6 +125,7 @@ target:                         # optional — address a specialist instead (see
 judge_tool_calls: false         # optional — show the judge each turn's tool calls
 known_failure: { issue: "#123" } # optional — a tracked bug this case catches (reported, not gated)
 timeout_seconds: 300            # optional — a longer wait per turn, for cases that chain specialists
+live_search: true               # optional — web-search runs for real (see "Web search"); costs Tavily credits
 tool_stubs:                     # optional — fixture answers for tools (see "The fixture office")
   calendar-list-events:
     - match: {}                 # subset match on the call's arguments; {} matches any call
@@ -187,11 +188,21 @@ Test mode can't reach a real calendar, mailbox, scheduler or task store. So ever
   - The principal's inbox: an investor asking to talk, the board deck, a contract renewal, an invoice and newsletters.
   - Task, scheduler, document and approval stores that work.
   - A plain executive voice profile, since test mode withholds the real one.
+  - A web search that finds nothing (see [Web search](#web-search)).
 
   List and search results are narrowed to the call's time range or query, the way the real tools narrow them. Writes succeed and echo their inputs (`{{input:title}}`).
 - **`tests/smoke/fixtures/people.yaml`** seeds the people cases mention (Sarah Chen, David Kim, the board chair…) as real contacts in the copy. They use the reserved `.example` domain only.
 
 A case's own `tool_stubs` are tried first, then the office's, so a case can change one answer (the jobs a turn starts from) or break one (a specialist that declines). Calls nothing stubs run for real, on the copy. `--show-calls` prints every agent's calls, which tells you what a new case needs.
+
+### Web search
+
+`web-search` is stubbed by default, because every real call spends a Tavily credit (#2106). Before this, one full run made about 46 searches, and an A/B comparison multiplied them until the credits ran out mid-run. The office's stub returns no results, which is what a search finds for the office's fictional people and companies. `web-fetch` is free and still runs for real.
+
+- **A case whose premise needs search results** stubs `web-search` itself with what a search would find. `coordinator-route-essay.yaml` is a worked example: it gives the research specialist five results and a `web-fetch` that adds nothing to them.
+- **A case about searching itself** sets `live_search: true`. That drops the office's stub for the case, so its searches reach Tavily. The case can't also stub `web-search`; the loader rejects that.
+
+The summary prints how many searches reached Tavily, beside the model spend, and the results JSON records it (`liveSearch`). If Tavily refused any of them for an exhausted quota (HTTP 432 or 433), the summary says so. A case that searched may then have timed out for that reason, not for its behavior.
 
 ### Tools that keep state
 
