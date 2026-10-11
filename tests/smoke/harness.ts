@@ -54,6 +54,14 @@ export const RESPONSE_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout >
   ? _rawTimeout
   : 180_000;
 
+/**
+ * A turn's wait: the case's own `timeout_seconds` when it is longer than the default. A
+ * case can only lengthen it, so a SMOKE_TIMEOUT_MS raised for a slow provider still holds.
+ */
+export function turnTimeoutMs(caseTimeoutMs: number | undefined): number {
+  return Math.max(RESPONSE_TIMEOUT_MS, caseTimeoutMs ?? 0);
+}
+
 /** How long shutdown waits for turns that outlived their timeout. */
 const LATE_TURN_GRACE_MS = 60_000;
 
@@ -127,7 +135,8 @@ export interface CuriaHarness {
   runInCase<T>(state: SmokeCaseState, fn: () => Promise<T>): Promise<T>;
   /**
    * Send a single message and wait for the coordinator's turn to end. Rejects with a
-   * TurnError if it errors or does not end within RESPONSE_TIMEOUT_MS.
+   * TurnError if it errors or does not end within RESPONSE_TIMEOUT_MS, or `timeoutMs`
+   * when the case sets a longer one.
    *
    * With `target`, the message is instead `target.spec.from`'s post on the thread,
    * mentioning `target.spec.agent`, and the turn awaited is that agent's.
@@ -139,6 +148,8 @@ export interface CuriaHarness {
     content: string;
     sender?: SmokeSender;
     target?: { spec: CaseTarget; thread: TargetThread };
+    /** The case's own wait (`timeout_seconds`). Used only when longer than RESPONSE_TIMEOUT_MS. */
+    timeoutMs?: number;
   }): Promise<TurnResponse>;
   /**
    * Open the current case's thread: `target.agent` opened it with `target.opening`,
@@ -382,6 +393,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     content: string;
     sender?: SmokeSender;
     target?: { spec: CaseTarget; thread: TargetThread };
+    timeoutMs?: number;
   }): Promise<TurnResponse> {
     const start = Date.now();
     const sender = options.sender ?? 'principal';
@@ -395,7 +407,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
     // conversation id. Once this turn has its outcome, its own late handlers below must
     // not fail whichever turn is pending by then.
     let turnEnded = false;
-    const waiter = capture.waitFor(options.conversationId, RESPONSE_TIMEOUT_MS, agentId)
+    const waiter = capture.waitFor(options.conversationId, turnTimeoutMs(options.timeoutMs), agentId)
       .then((outcome) => { turnEnded = true; return outcome; });
     const failThisTurn = (err: unknown): void => {
       if (!turnEnded) capture.fail(options.conversationId, err);

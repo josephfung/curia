@@ -145,7 +145,7 @@ each run, asserts tool calls in code, judges prose through the stack's OpenRoute
 exits non-zero when a critical behavior passes fewer than 80% of its runs. See
 `tests/scenarios/README.md`.
 
-**Timeout:** Each `sendMessage()` call waits 180 seconds by default (`SMOKE_TIMEOUT_MS`), as the scenario suite does: with the fixture office, a delegated calendar flow legitimately runs 90–150s. A turn
+**Timeout:** Each `sendMessage()` call waits 180 seconds by default (`SMOKE_TIMEOUT_MS`), as the scenario suite does: with the fixture office, a delegated calendar flow legitimately runs 90–150s. A case whose turns chain several real specialists can set a longer `timeout_seconds`; it only lengthens the wait, so a `SMOKE_TIMEOUT_MS` raised for a slow provider still holds. Six cases set 300, after each ran past 180s on main and on a branch in prompt trim PR 6's smoke A/B. A turn
 that outlives it keeps running, and shutdown waits up to a minute for such turns. A case with
 multiple turns can take several minutes; no overall run timeout exists today (see
 [What's Not Here Yet](#whats-not-here-yet)).

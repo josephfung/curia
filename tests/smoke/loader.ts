@@ -29,6 +29,7 @@ interface RawTestCase {
   judge_tool_calls?: unknown;
   tool_stubs?: unknown;
   known_failure?: unknown;
+  timeout_seconds?: unknown;
   turns?: Array<{ role?: string; content?: string; delay_ms?: number; tool_stubs?: unknown }>;
   expected_behaviors?: Array<{ id?: string; description?: string; weight?: string }>;
   failure_modes?: string[];
@@ -38,7 +39,7 @@ interface RawTestCase {
 // case would run with the default — passing for the wrong reason.
 const CASE_KEYS: ReadonlySet<string> = new Set([
   'name', 'description', 'tags', 'sender', 'target', 'judge_tool_calls', 'tool_stubs', 'known_failure',
-  'turns', 'expected_behaviors', 'failure_modes',
+  'timeout_seconds', 'turns', 'expected_behaviors', 'failure_modes',
 ]);
 const TURN_KEYS: ReadonlySet<string> = new Set(['role', 'content', 'delay_ms', 'tool_stubs']);
 const TARGET_KEYS: ReadonlySet<string> = new Set(['agent', 'via', 'from', 'topic', 'opening']);
@@ -117,6 +118,10 @@ export function loadTestCase(filePath: string): TestCase {
     throw new Error(`'judge_tool_calls' must be true or false in ${filePath}`);
   }
   const knownFailure = parseKnownFailure(raw.known_failure, filePath);
+  const timeoutSeconds = raw.timeout_seconds;
+  if (timeoutSeconds !== undefined && (typeof timeoutSeconds !== 'number' || !Number.isInteger(timeoutSeconds) || timeoutSeconds < 10)) {
+    throw new Error(`'timeout_seconds' must be a whole number of at least 10 in ${filePath}`);
+  }
   const target = parseTarget(raw.target, filePath);
   // A targeted case's turns come from target.from on a bullpen thread; a sender would be ignored.
   if (target && raw.sender !== undefined) {
@@ -174,6 +179,7 @@ export function loadTestCase(filePath: string): TestCase {
     judgeToolCalls: raw.judge_tool_calls === true,
     toolStubs: parseStubs(raw.tool_stubs, filePath),
     ...(knownFailure ? { knownFailure } : {}),
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     turns,
     expectedBehaviors,
     failureModes: raw.failure_modes ?? [],

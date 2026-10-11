@@ -20,7 +20,7 @@ import { stubProblems } from './stub-check.js';
 import { cloneDatabase, databaseName, isLocalDatabase, type DatabaseClone } from './clone-db.js';
 import { loadPeople, seedPeople } from './fixtures.js';
 import { loadDefaultStubs, loadTestCases, targetProblems } from './loader.js';
-import { createHarness, RESPONSE_TIMEOUT_MS, type CuriaHarness } from './harness.js';
+import { createHarness, RESPONSE_TIMEOUT_MS, turnTimeoutMs, type CuriaHarness } from './harness.js';
 import { runTestCases } from './runner.js';
 import { evaluateCases } from './evaluator.js';
 import { formatPct, gatingFailures, mergeRetries, staleKnownFailures } from './gate.js';
@@ -93,7 +93,8 @@ async function main(): Promise<void> {
   const timeoutSec = Math.round(RESPONSE_TIMEOUT_MS / 1000);
   out(`\nCuria Smoke Test`);
   out(`   ${cases.length} test cases loaded`);
-  out(`   Response timeout: ${timeoutSec}s (override with SMOKE_TIMEOUT_MS)`);
+  const ownTimeouts = cases.filter(c => turnTimeoutMs(c.timeoutSeconds && c.timeoutSeconds * 1000) > RESPONSE_TIMEOUT_MS).length;
+  out(`   Response timeout: ${timeoutSec}s (override with SMOKE_TIMEOUT_MS)${ownTimeouts > 0 ? `; ${ownTimeouts} case(s) set a longer timeout_seconds` : ''}`);
   out(`   Concurrency: ${concurrency} case(s) at a time (--concurrency)`);
   out(`   Gate: every case ≥ ${formatPct(CASE_PASS_THRESHOLD)} weighted, no critical behavior MISS\n`);
 

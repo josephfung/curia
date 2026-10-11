@@ -1,5 +1,7 @@
 name: Create Event with Full Context
 description: Agent should capture all meeting details and create a properly formatted calendar event with attendee, time, timezone, duration, topic, and Zoom link
+# Chains several real specialists and has run past 180s (prompt trim PR 6 smoke A/B).
+timeout_seconds: 300
 tags:
   - calendar
   - scheduling

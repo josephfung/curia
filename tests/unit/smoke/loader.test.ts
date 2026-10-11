@@ -224,6 +224,14 @@ describe('Smoke test loader', () => {
       expect(() => loadYaml(`${minimalYaml('Known')}\nknown_failure: { issue: "soon" }`)).toThrow(/known_failure/);
       expect(() => loadYaml(`${minimalYaml('Known')}\nknown_failure: true`)).toThrow(/known_failure/);
     });
+
+    it('reads timeout_seconds and rejects one under 10 or not a whole number', () => {
+      expect(loadYaml(minimalYaml('Default')).timeoutSeconds).toBeUndefined();
+      expect(loadYaml(`${minimalYaml('Slow')}\ntimeout_seconds: 300`).timeoutSeconds).toBe(300);
+      expect(() => loadYaml(`${minimalYaml('Short')}\ntimeout_seconds: 5`)).toThrow(/timeout_seconds/);
+      expect(() => loadYaml(`${minimalYaml('Text')}\ntimeout_seconds: "300"`)).toThrow(/timeout_seconds/);
+      expect(() => loadYaml(`${minimalYaml('Fraction')}\ntimeout_seconds: 90.5`)).toThrow(/timeout_seconds/);
+    });
   });
 });
 

@@ -68,6 +68,11 @@ export interface TestCase {
   toolStubs: Record<string, ToolStub[]>;
   /** A tracked bug this case currently catches: reported, but does not fail the gate. */
   knownFailure?: { issue: string };
+  /**
+   * How long each turn waits for the agent, for a case whose turns chain several real
+   * specialists. Only lengthens the wait: SMOKE_TIMEOUT_MS still applies when it is longer.
+   */
+  timeoutSeconds?: number;
   turns: Turn[];
   expectedBehaviors: ExpectedBehavior[];
   failureModes: string[];
