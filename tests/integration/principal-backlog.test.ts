@@ -18,6 +18,7 @@ import { TaskRepo } from '../../src/db/task-repo.js';
 import { createPrincipalBacklogSource } from '../../src/dispatch/principal-backlog.js';
 import { EmbeddingService } from '../../src/memory/embedding.js';
 import { KnowledgeGraphStore } from '../../src/memory/knowledge-graph.js';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const { Pool } = pg;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -34,6 +35,9 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
   let kg: KnowledgeGraphStore;
   const nodeIds: string[] = [];
   const taskId = `principal-backlog-test-${randomUUID()}`;
+  // The suite writes a pending email-send approval and principal-owned tasks, which a real
+  // instance would surface or act on, so it runs only against curia_test.
+  let dbVerified = false;
 
   async function insertWarnedNode(opts: { archived?: boolean; identitySource?: 'label' | 'contact'; warned?: boolean }): Promise<void> {
     const { rows } = await pool.query<{ id: string }>(
@@ -74,17 +78,21 @@ describeIf('principal backlog counts (prompt trim PR 7)', () => {
     };
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
+    await requireCuriaTestDatabase(pool);
+    dbVerified = true;
     tasks = new TaskRepo(pool, noopBus, logger as never, 'UTC');
     actions = new ActionLogRepo(pool, logger as never);
     kg = KnowledgeGraphStore.createWithPostgres(pool, EmbeddingService.createForTesting(), logger as never);
   });
 
   afterAll(async () => {
-    await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${PREFIX}%`]);
-    await pool.query(`DELETE FROM autonomy_action_log WHERE task_id = $1`, [taskId]);
-    await pool.query(`DELETE FROM kg_nodes WHERE id = ANY($1::uuid[])`, [nodeIds]);
+    if (dbVerified) {
+      await pool.query(`DELETE FROM tasks WHERE title LIKE $1`, [`${PREFIX}%`]);
+      await pool.query(`DELETE FROM autonomy_action_log WHERE task_id = $1`, [taskId]);
+      await pool.query(`DELETE FROM kg_nodes WHERE id = ANY($1::uuid[])`, [nodeIds]);
+    }
     await pool.end();
   });
 
