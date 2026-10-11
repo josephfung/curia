@@ -56,7 +56,7 @@ function isSkippedDir(full: string, name: string): boolean {
 // This list is not maintained by hand alone: the census test below walks the durable trees
 // and fails if any format present is neither matched here nor waived in
 // UNSCANNED_EXTENSIONS. Case-insensitive so `README.MD` is scanned like `readme.md`.
-const SCANNED_EXTENSION = /\.(?:[cm]?tsx?|js|mjs|cjs|sql|md|ya?ml|json|sh|py)$/i;
+const SCANNED_EXTENSION = /\.(?:[cm]?tsx?|js|mjs|cjs|sql|md|ya?ml|json|sh|py|pin)$/i;
 
 /** Extensions deliberately not scanned, with the reason. Asserted against the repo below. */
 const UNSCANNED_EXTENSIONS = new Set([
