@@ -18,6 +18,7 @@ import {
   type ExpectedBehavior,
   type ScenarioCase,
   type ScenarioInbound,
+  type ScenarioWakeTask,
   type SeedBullpenThread,
   type SeedContact,
   type SeedOutboundEntry,
@@ -64,8 +65,11 @@ const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 
 const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'sent_minutes_ago', 'expires_in_hours', 'resume'] as const;
 const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
-const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'email'] as const;
+const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'email', 'task'] as const;
 const EMAIL_KEYS = ['nylas_message_id', 'account', 'auto_generated', 'auto_generated_signals'] as const;
+const WAKE_TASK_KEYS = ['id', 'title', 'intent', 'notes'] as const;
+const WAKE_NOTE_KEYS = ['at', 'note'] as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STUB_KEYS = ['match', 'agent', 'return', 'error'] as const;
 const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check'] as const;
 const CHECK_KEYS: Record<string, readonly string[]> = {
@@ -366,17 +370,43 @@ function parseBacklog(raw: Raw, file: string): PrincipalBacklogCounts | undefine
   return counts;
 }
 
+function parseWakeTask(raw: unknown, file: string): ScenarioWakeTask {
+  if (!isObject(raw)) throw new CaseError(file, `inbound.task must be a mapping`);
+  onlyKeys(raw, WAKE_TASK_KEYS, file, 'inbound.task');
+  const id = str(raw, 'id', file, 'inbound.task');
+  if (!UUID.test(id)) throw new CaseError(file, `inbound.task: 'id' must be a UUID`);
+  const notes = list(raw, 'notes', file).map((n, i) => {
+    onlyKeys(n, WAKE_NOTE_KEYS, file, `inbound.task.notes[${i}]`);
+    return { at: str(n, 'at', file, `inbound.task.notes[${i}]`), note: str(n, 'note', file, `inbound.task.notes[${i}]`) };
+  });
+  if (notes.length === 0) throw new CaseError(file, `inbound.task: 'notes' must list the progress the wake resumes from`);
+  return {
+    id,
+    title: str(raw, 'title', file, 'inbound.task'),
+    intent: str(raw, 'intent', file, 'inbound.task'),
+    notes,
+  };
+}
+
 function parseInbound(raw: unknown, file: string): ScenarioInbound {
   if (!isObject(raw)) throw new CaseError(file, `'inbound' must be a mapping`);
   onlyKeys(raw, INBOUND_KEYS, file, 'inbound');
   const email = raw['email'];
   if (email !== undefined && !isObject(email)) throw new CaseError(file, `inbound.email must be a mapping`);
   if (email) onlyKeys(email, EMAIL_KEYS, file, 'inbound.email');
+  const from = str(raw, 'from', file, 'inbound');
+  // A task wake's body is built from its task when the run starts, so it has no content.
+  const taskWake = from === 'task-wake';
+  if (taskWake && raw['content'] !== undefined) {
+    throw new CaseError(file, `inbound from task-wake takes 'task', not 'content' (the body is built from the task)`);
+  }
+  if (!taskWake && raw['task'] !== undefined) throw new CaseError(file, `inbound.task is only for 'from: task-wake'`);
   return {
-    from: str(raw, 'from', file, 'inbound'),
+    from,
     channel: optStr(raw, 'channel', file, 'inbound'),
-    content: str(raw, 'content', file, 'inbound'),
+    content: taskWake ? '' : str(raw, 'content', file, 'inbound'),
     thread: optStr(raw, 'thread', file, 'inbound'),
+    ...(taskWake ? { task: parseWakeTask(raw['task'], file) } : {}),
     ...(email
       ? {
           email: {
@@ -659,14 +689,14 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
     if (!thread || !keys.get('thread')!.has(thread)) {
       throw new CaseError(file, `inbound from bullpen needs 'thread' naming a seeded thread`);
     }
-  } else if (from === 'scheduler') {
+  } else if (from === 'scheduler' || from === 'task-wake') {
     // A scheduled job has no sender, channel choice, thread or email envelope.
     if (channel || thread || scenario.inbound.email) {
-      throw new CaseError(file, `inbound from scheduler takes only 'content' (the job's task)`);
+      throw new CaseError(file, `inbound from ${from} takes no channel, thread or email`);
     }
   } else if (from !== 'principal') {
     const contact = scenario.seed.contacts.find(c => c.key === from);
-    if (!contact) throw new CaseError(file, `inbound.from '${from}' is not principal, bullpen, scheduler or a seeded contact`);
+    if (!contact) throw new CaseError(file, `inbound.from '${from}' is not principal, bullpen, scheduler, task-wake or a seeded contact`);
     if (channel && channel !== contact.channel) {
       throw new CaseError(file, `inbound.channel '${channel}' differs from contact '${from}' channel '${contact.channel}'`);
     }

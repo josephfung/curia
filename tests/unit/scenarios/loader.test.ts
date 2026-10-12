@@ -59,6 +59,11 @@ expected_behaviors:
     description: does not answer directly
 `;
 
+/** VALID's inbound, which the task-wake rows replace. */
+const PRINCIPAL_INBOUND = 'from: principal\n  content: "Yes"';
+const WAKE_TASK_ID = '5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4';
+const WAKE_TASK = `{ id: ${WAKE_TASK_ID}, title: Deck comments, intent: Collect comments, notes: [{ at: "2026-10-08T10:00:00-04:00", note: Asked Sam. }] }`;
+
 describe('loadScenarioCase', () => {
   it('loads a valid case', () => {
     const c = loadScenarioCase(write('a.yaml', VALID));
@@ -81,11 +86,30 @@ describe('loadScenarioCase', () => {
     expect(c.inbound).toMatchObject({ from: 'scheduler', content: 'Yes' });
   });
 
+  it('loads a task-wake inbound, whose body is built at run time (prompt trim PR 9)', () => {
+    const c = loadScenarioCase(write('w.yaml', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK}`)));
+    expect(c.inbound).toMatchObject({
+      from: 'task-wake',
+      content: '',
+      task: {
+        id: WAKE_TASK_ID,
+        title: 'Deck comments',
+        intent: 'Collect comments',
+        notes: [{ at: '2026-10-08T10:00:00-04:00', note: 'Asked Sam.' }],
+      },
+    });
+  });
+
   it.each([
     ['a placeholder for an unseeded entry', VALID.replace('{{entry:offsite}}', '{{entry:missing}}'), /names no seeded entry/],
     ['an unknown placeholder kind', VALID.replace('{{entry:offsite}}', '{{job:x}}'), /unknown placeholder/],
-    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen, scheduler or a seeded contact/],
-    ['a scheduler inbound with a channel', VALID.replace('from: principal', 'from: scheduler\n  channel: signal'), /takes only 'content'/],
+    ['a sender that is not seeded', VALID.replace('from: principal', 'from: nobody'), /not principal, bullpen, scheduler, task-wake or a seeded contact/],
+    ['a scheduler inbound with a channel', VALID.replace('from: principal', 'from: scheduler\n  channel: signal'), /from scheduler takes no channel/],
+    ['a task wake with content', VALID.replace('from: principal', `from: task-wake\n  task: ${WAKE_TASK}`), /takes 'task', not 'content'/],
+    ['a task wake with no task', VALID.replace(PRINCIPAL_INBOUND, 'from: task-wake'), /inbound\.task must be a mapping/],
+    ['a task wake whose id is not a UUID', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK.replace(WAKE_TASK_ID, 'task-1')}`), /'id' must be a UUID/],
+    ['a task wake with no notes', VALID.replace(PRINCIPAL_INBOUND, `from: task-wake\n  task: ${WAKE_TASK.replace(/, notes: .*\}$/, ' }')}`), /'notes' must list/],
+    ['a task on a principal inbound', VALID.replace(PRINCIPAL_INBOUND, `${PRINCIPAL_INBOUND}\n  task: ${WAKE_TASK}`), /only for 'from: task-wake'/],
     ['a stub with both return and error', VALID.replace("error: wrong specialist", "error: x\n      return: {}"), /exactly one of 'return' or 'error'/],
     ['a check with two kinds', VALID.replace('max: 1', 'max: 1\n      not_called: [email-send]'), /exactly one of/],
     ['an invalid weight', VALID.replace('weight: critical', 'weight: urgent'), /invalid weight/],

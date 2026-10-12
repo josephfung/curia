@@ -31,6 +31,7 @@ import {
 import { loadConfig } from '../../src/config.js';
 import { BullpenDispatcher } from '../../src/dispatch/bullpen-dispatcher.js';
 import { Dispatcher } from '../../src/dispatch/dispatcher.js';
+import { formatTaskWakeContent } from '../../src/scheduler/wake-disposition.js';
 import { createTestModeStack, type TestModeStack } from '../../src/startup/test-mode-stack.js';
 import {
   closeAttempt,
@@ -430,7 +431,15 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       seeded = await seedRun(dated, { stack, outboundContext, scope });
       const stubTable = resolvePlaceholders(dated.toolStubs, seeded.refs);
       const inbound = resolvePlaceholders(dated.inbound, seeded.refs);
-      inboundContent = inbound.content;
+      // A task wake's body comes from the scheduler's own builder, so the case sees the
+      // wake instruction production sends. A wake_at job's payload is the bare envelope.
+      const wakeTask = inbound.task;
+      inboundContent = wakeTask
+        ? formatTaskWakeContent(
+            { taskId: wakeTask.id, title: wakeTask.title, progress: { notes: wakeTask.notes } },
+            { type: 'task-wake' },
+          )
+        : inbound.content;
 
       const sender = await resolveSender(scenario, stack);
       const realDelegation = scenario.delegation === 'real';
@@ -440,7 +449,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       const thread = sender === 'bullpen' ? seeded.threads.get(inbound.thread!)! : undefined;
       const runConversationId = thread
         ? thread.threadId // BullpenDispatcher uses the thread id as the conversation
-        : sender === 'scheduler'
+        : sender === 'scheduler' || sender === 'task-wake'
           ? `scheduler:scenario-${randomUUID()}:${randomUUID()}` // scheduler:<job>:<run>
           : sender !== 'bullpen' && sender.channelId === 'email'
             ? `email:scenario-${randomUUID()}`
@@ -481,6 +490,22 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
             channelId: 'scheduler',
             senderId: 'scheduler',
             content: JSON.stringify({ task: inbound.content }),
+            parentEventId: randomUUID(),
+          }));
+        } else if (sender === 'task-wake') {
+          // What Scheduler.fireJob publishes for a task's wake_at: the wake body, the
+          // task's intent anchor and the bound-task metadata. A wake_at job carries no
+          // standing, so no wakeContext.
+          delivery = bus.publish('system', createAgentTask({
+            agentId: COORDINATOR,
+            conversationId: runConversationId,
+            channelId: 'scheduler',
+            senderId: 'scheduler',
+            content: inboundContent,
+            intentAnchor: wakeTask!.intent,
+            metadata: {
+              boundTask: { taskId: wakeTask!.id, errorBudget: {}, tags: [], progress: { notes: wakeTask!.notes } },
+            },
             parentEventId: randomUUID(),
           }));
         } else if (sender !== 'bullpen') {

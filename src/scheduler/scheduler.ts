@@ -30,8 +30,8 @@ import type { TaskRepo } from '../db/task-repo.js';
 import {
   DISPOSITION_TURN_TOOLS,
   NEEDS_DISPOSITION_TAG,
-  WAKE_DISPOSITION_INSTRUCTION,
   dispositionReviewNotice,
+  formatTaskWakeContent,
   dispositionTurnPrompt,
   isUndisposedWake,
   isParkedStatus,
@@ -1022,15 +1022,20 @@ export class Scheduler {
     // the agent back through the whole recap.
     const recapInstruction = isTaskWakePayload(job.taskPayload) ? undefined : debriefRecapInstruction(job);
     let content: string;
-    if (job.agentTaskId) {
+    if (job.agentTaskId && isTaskWakePayload(job.taskPayload)) {
+      // An ordinary task wake carries the wake instruction. Delegation-retry content
+      // replaces this string below.
+      content = formatTaskWakeContent(
+        { taskId: job.agentTaskId, title: job.taskTitle, progress: job.progress },
+        job.taskPayload,
+      );
+    } else if (job.agentTaskId) {
+      // A task-bound job that is not a wake has no disposition contract.
       content = JSON.stringify({
         task_id: job.agentTaskId,
         ...(job.taskTitle !== null && { title: job.taskTitle }),
         progress: job.progress ?? {},
         task_payload: job.taskPayload,
-        // Ordinary task wakes only. Delegation-retry content replaces this
-        // string below; a non-wake payload has no disposition contract.
-        ...(isTaskWakePayload(job.taskPayload) && { instruction: WAKE_DISPOSITION_INSTRUCTION }),
         ...(recapInstruction !== undefined && { instruction: recapInstruction }),
       });
     } else {

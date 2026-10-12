@@ -47,10 +47,12 @@ export function formatJudgeInput(
       ? 'another internal agent, on the bullpen (internal agent-to-agent thread)'
       : scenario.inbound.from === 'scheduler'
         ? 'the scheduler: a recurring scheduled job firing, with no human sender'
-        : (() => {
-          const c = scenario.seed.contacts.find(x => x.key === scenario.inbound.from)!;
-          return `${c.displayName}, an external contact (not ${principal}), via ${c.channel}`;
-        })();
+        : scenario.inbound.from === 'task-wake'
+          ? 'the scheduler: a task the coordinator parked earlier, woken at its wake time, with no human sender'
+          : (() => {
+            const c = scenario.seed.contacts.find(x => x.key === scenario.inbound.from)!;
+            return `${c.displayName}, an external contact (not ${principal}), via ${c.channel}`;
+          })();
 
   const calls = run.toolCalls.length === 0
     ? '(no tool calls)'

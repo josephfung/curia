@@ -77,7 +77,20 @@ describe('on-disk skills/tasks + skills/documents', () => {
     expect(parsed.tools).toEqual([...TASK_TOOLS]);
     expect(parsed.instructions).toContain('## Task Management');
     expect(parsed.instructions).toContain('task-complete');
-    expect(parsed.instructions).toContain('does not close the task');
+  });
+
+  // Prompt trim PR 9: text only a wake needs rides on the wake, not in the SKILL.md every
+  // turn reads. Each row names where the rule now lives.
+  it.each([
+    ['tasks', 'does not close the task', 'WAKE_DISPOSITION_INSTRUCTION (src/scheduler/wake-disposition.ts)'],
+    ['tasks', 'Pick up where', 'WAKE_DISPOSITION_INSTRUCTION'],
+    ['tasks', 'past at creation', "task-create's seeded progress note and task-complete's refusal (#1299)"],
+    ['documents', 'ttl_days', "doc-write's description"],
+    ['documents', 'collision_short_id', 'the Projects Catalog block injected on task wakes'],
+    ['documents', 'On resume', 'the Workspace Manifest block injected on task wakes'],
+  ])('%s SKILL.md does not restate "%s" (lives in %s)', (skill, phrase) => {
+    const raw = readFileSync(resolve(import.meta.dirname, `../../../skills/${skill}/SKILL.md`), 'utf-8');
+    expect(parseSkillMd(raw).instructions).not.toContain(phrase);
   });
 
   it('documents SKILL.md declares document_workspace and doc tools', () => {

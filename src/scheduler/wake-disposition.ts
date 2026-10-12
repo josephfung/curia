@@ -13,16 +13,41 @@ export const DISPOSITION_TURN_TOOLS = ['task-complete', 'task-update'] as const;
 
 /**
  * Framed into every ordinary task-wake `agent.task` body. Delegation-retry wakes
- * use their own content and are closed at fire time instead.
+ * use their own content and are closed at fire time instead. It is the only place
+ * the wake's instructions live: the tasks SKILL.md, read on every turn, leaves them
+ * out (prompt trim PR 9).
  */
 export const WAKE_DISPOSITION_INSTRUCTION =
-  'You were woken to advance this task. Before you finish, leave it in a deliberate end state: ' +
+  'You were woken to advance this task: pick up where its progress leaves off. ' +
+  'Before you finish, leave it in a deliberate end state: ' +
   'call task-complete with a note if the goal is achieved, ' +
   'call task-update with status cancelled if it should stop, ' +
   'or park it with task-update status waiting or blocked, a progress note, and wake_at ' +
   '(wake_at is optional only when the task waits on a contact or a blocking task). ' +
   'scheduler-report records this job run and does not close the task. ' +
-  'Ending while the task is still open with no new note and no wake, or parked with nothing to wake it, is a bug.';
+  'Ending while the task is still open with no new note and no wake, or parked with nothing to wake it, is a bug. ' +
+  'You may also advance your other ready tasks (task-list), in dependency order, until blocked or out of budget.';
+
+/** The task a wake fires for, as the scheduler reads it from its job row. */
+export interface TaskWakeSubject {
+  taskId: string;
+  title: string | null;
+  progress: Record<string, unknown> | null;
+}
+
+/**
+ * The `agent.task` body of an ordinary task wake. Scheduler.fireJob sends it, and the
+ * scenario harness sends the same body for its task-wake cases.
+ */
+export function formatTaskWakeContent(subject: TaskWakeSubject, taskPayload: Record<string, unknown>): string {
+  return JSON.stringify({
+    task_id: subject.taskId,
+    ...(subject.title !== null && { title: subject.title }),
+    progress: subject.progress ?? {},
+    task_payload: taskPayload,
+    instruction: WAKE_DISPOSITION_INSTRUCTION,
+  });
+}
 
 const ACTIVE_STATUSES = new Set(['open', 'in_progress']);
 const PARKED_STATUSES = new Set(['waiting', 'blocked']);

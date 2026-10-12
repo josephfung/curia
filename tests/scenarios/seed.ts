@@ -509,9 +509,9 @@ export interface ResolvedSender {
 export async function resolveSender(
   scenario: ScenarioCase,
   stack: TestModeStack,
-): Promise<ResolvedSender | 'bullpen' | 'scheduler'> {
+): Promise<ResolvedSender | 'bullpen' | 'scheduler' | 'task-wake'> {
   const { from, channel } = scenario.inbound;
-  if (from === 'bullpen' || from === 'scheduler') return from;
+  if (from === 'bullpen' || from === 'scheduler' || from === 'task-wake') return from;
 
   if (from === 'principal') {
     const channelId = channel ?? 'cli';

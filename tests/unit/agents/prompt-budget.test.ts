@@ -94,8 +94,11 @@ interface AgentBudget {
 // Prompt trim PR 8 (delegate_when roster lines for diagnostics, meeting-debrief and
 // setup-wizard; the calendar and inbox routing stayed in the YAML, which is unchanged): the
 // roster went from 2,719 chars of descriptions to 1,883 (~471 tokens).
+// Prompt trim PR 9 (wake-only text out of the tasks and documents SKILL.md: resuming rides
+// on the wake instruction, the rest was already in code or tool descriptions): SKILL.md
+// 6,157 → 3,715 chars, ~3,092 tokens always-on.
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
 ];
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };
