@@ -21,6 +21,8 @@ import { discoverSkillResources } from './skill-resources.js';
 import type { McpSession } from './mcp-client.js';
 import type { Logger } from '../logger.js';
 import type { SecretsService } from '../secrets/secrets-service.js';
+import type { ChannelIdentity } from '../contacts/types.js';
+import { principalDriveGrantNote, raisePrincipalDriveGrant } from './_shared/drive-principal-access.js';
 import type {
   McpSecretDeclaration,
   McpServerEntry,
@@ -325,6 +327,9 @@ export type McpToolSession = {
  * AbortController to a timer set to the same `timeoutMs` the execution layer uses,
  * and also pass an explicit `timeout`, so a timed-out tool call also tears down the
  * in-flight MCP request instead of stranding it.
+ *
+ * `principalIdentities` is the hot-reloaded principal identity snapshot, read at call
+ * time. On google-workspace it raises a Drive grant to the principal to writer.
  */
 export function buildMcpToolHandler(params: {
   session: McpToolSession;
@@ -332,13 +337,25 @@ export function buildMcpToolHandler(params: {
   resolvedFixedInputs: Record<string, string>;
   timeoutMs: number;
   logger: Logger;
+  principalIdentities?: readonly ChannelIdentity[];
 }): ToolHandler {
-  const { session, toolName, resolvedFixedInputs, timeoutMs, logger } = params;
+  const { session, toolName, resolvedFixedInputs, timeoutMs, logger, principalIdentities = [] } = params;
   return {
     async execute(ctx: ToolContext): Promise<ToolResult> {
       // No call-time calendar identity guard here (#1957): Calendar is never on the
       // google-workspace --tools allowlist, so its tools are never registered. If #1330
       // ever puts them back on purpose, restore guardMcpCalendarIdentity from history.
+
+      // The principal always gets edit access to a Drive file shared with them.
+      const grant = session.serverId === 'google-workspace'
+        ? raisePrincipalDriveGrant(toolName, ctx.input, principalIdentities)
+        : { input: ctx.input, raisedFrom: [] };
+      if (grant.raisedFrom.length > 0) {
+        logger.info(
+          { server: session.serverId, tool: toolName, raisedFrom: grant.raisedFrom },
+          'Drive grant to the principal raised to writer',
+        );
+      }
 
       // Abort the MCP request if it outlives the execution-layer timeout (#1666).
       const controller = new AbortController();
@@ -347,7 +364,7 @@ export function buildMcpToolHandler(params: {
         // Merge fixed_inputs into the tool call arguments. Fixed values take
         // precedence — even if an agent somehow passed a value for a stripped
         // parameter (e.g. via prompt injection), the config value wins.
-        const mergedInput = mergeFixedInputs(ctx.input, resolvedFixedInputs);
+        const mergedInput = mergeFixedInputs(grant.input, resolvedFixedInputs);
         const rawResult = await session.client.callTool(
           { name: toolName, arguments: mergedInput },
           undefined, // use the SDK's default CallToolResultSchema
@@ -365,6 +382,9 @@ export function buildMcpToolHandler(params: {
             { server: session.serverId, tool: toolName },
             'MCP tool returned an error result',
           );
+        }
+        if (result.success && grant.raisedFrom.length > 0 && typeof result.data === 'string') {
+          return { success: true, data: `${result.data}\n\n${principalDriveGrantNote(grant.raisedFrom)}` };
         }
         return result;
       } catch (err) {
@@ -411,6 +431,8 @@ export function buildMcpToolHandler(params: {
  * @param enabledServerNames - When provided, only servers whose name is in this set are spawned.
  *                             Servers absent from the set are skipped with a debug log (not an error).
  *                             Pass undefined to skip the filter (legacy / test behavior).
+ * @param principalIdentities - The principal's identity snapshot, mutated in place on hot
+ *                             reload. Tool handlers read it at call time (Drive grants).
  * @returns Live sessions plus per-server tool names registered this boot.
  */
 export async function loadMcpServers(
@@ -419,6 +441,7 @@ export async function loadMcpServers(
   logger: Logger,
   secrets: SecretsService,
   enabledServerNames?: Set<string>,
+  principalIdentities?: readonly ChannelIdentity[],
 ): Promise<McpLoadResult> {
   const config = loadSkillsConfig(configDir);
   const servers = config.servers ?? [];
@@ -643,7 +666,7 @@ export async function loadMcpServers(
     }
 
     const registeredNames = registerMcpServerTools({
-      serverEntry, session, tools, resolvedFixedInputs, registry, logger,
+      serverEntry, session, tools, resolvedFixedInputs, registry, logger, principalIdentities,
     });
 
     projectedTools.set(serverEntry.name, registeredNames);
@@ -680,8 +703,9 @@ export function registerMcpServerTools(params: {
   resolvedFixedInputs: Record<string, string>;
   registry: ToolRegistry;
   logger: Logger;
+  principalIdentities?: readonly ChannelIdentity[];
 }): string[] {
-  const { serverEntry, session, tools, resolvedFixedInputs, registry, logger } = params;
+  const { serverEntry, session, tools, resolvedFixedInputs, registry, logger, principalIdentities } = params;
   const registeredNames: string[] = [];
   for (const tool of tools) {
     // The `--tools` allowlist keeps Calendar out (#1957); nothing here filters it.
@@ -718,6 +742,7 @@ export function registerMcpServerTools(params: {
       resolvedFixedInputs,
       timeoutMs: manifest.timeout,
       logger,
+      principalIdentities,
     });
 
     // Build the raw MCP input schema for the fast-path in toToolDefinitions.

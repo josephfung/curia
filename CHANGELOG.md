@@ -209,6 +209,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **Drive sharing** — the principal always gets edit access; others get a role fitting the content.
 - **Smoke case Speaking Engagement Intake** — gives Curia a fictional invitation to read, so it stops researching SaaStr online. (#2087)
 - **Scenario 06 bullpen stub** — a reply missing `content` or `thread_id` gets the handler's error, not "posted". (#2098)
 - **Scheduled-job replies** — jobs asked to notify the principal now send; undelivered reply text is audited. (#2091)

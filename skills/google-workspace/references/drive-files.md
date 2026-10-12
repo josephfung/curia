@@ -1,4 +1,4 @@
-# Drive files: move, rename, upload, attach, export
+# Drive files: move, rename, share, upload, attach, export
 
 How to call the Google Drive tools for the jobs their own descriptions don't
 spell out. The tools come from the upstream workspace-mcp server, so these notes
@@ -12,6 +12,17 @@ Use `update_drive_file`.
   `remove_parents` to the current parent folder ID. Find the current parent first
   with `list_drive_items` or `search_drive_files`.
 - **Rename:** set its `name` field.
+
+## Share a file
+
+Use `manage_drive_access` with `action: "grant"`.
+
+- **The principal** always gets `writer`. A file shared with them is theirs to
+  work on. A grant to the principal's address is raised to `writer` regardless.
+- **Anyone else** gets the role that fits the content and the situation:
+  `reader` for something they only need to see, `commenter` when they are asked
+  for feedback, `writer` when they will work on it. When it is unclear what
+  someone should be able to do with a sensitive file, ask the principal.
 
 ## Upload an email attachment to Drive
 
