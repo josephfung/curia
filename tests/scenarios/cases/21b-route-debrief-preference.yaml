@@ -35,6 +35,14 @@ tool_stubs:
   memory-store:
     - match: {}
       return: { stored: true, node_id: "00000000-0000-4000-8000-0000000021b0" }
+  # Seen on main (2026-10-12): a standing preference alongside the delegation, and a
+  # bullpen post to meeting-debrief.
+  behavioral-preferences-update:
+    - match: {}
+      return: { updated: true }
+  bullpen:
+    - match: {}
+      return: { posted: true, thread_id: "00000000-0000-4000-8000-0000000021b1" }
 expected_behaviors:
   - id: routes_to_debrief
     weight: critical

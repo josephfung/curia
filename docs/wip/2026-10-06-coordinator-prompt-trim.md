@@ -25,7 +25,7 @@ log.
 | 5: principal note block on the relay | Merged (2026-10-10, #2102) | 9,494 (unchanged; turn guidance and code) | ~3,913 / 4,000 |
 | 6: prose-only rules into code | Merged (2026-10-11, #2103) | 9,065 | ~3,806 / 3,900 |
 | 7: backlog line for proactive surfacing | Merged (2026-10-11, #2107) | 8,652 | ~3,703 / 3,800 |
-| 8: routing-oriented roster | In review (2026-10-12) | 7,468 (roster 2,719 → 1,778) | ~3,407 / 3,500 |
+| 8: routing-oriented roster | In review (2026-10-12) | 8,652 (unchanged; roster 2,719 → 1,883) | ~3,703 / 3,800 |
 | 9–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
@@ -216,40 +216,40 @@ on main, and the full scenario suite was otherwise level.
 
 **PR 8 (2026-10-12).** Agent YAMLs take an optional `delegate_when`, the agent's line in the
 roster; `description` stays for people (admin UI, audit log) and is the roster line for
-an agent without one. The coordinator's Principal inbox requests and Principal calendar
-requests sections became the ceo-inbox and calendar lines, and diagnostics, meeting-debrief
-and setup-wizard swapped their operational descriptions for routing lines. The YAML goes
-from 8,652 to 7,468 chars and the roster from 2,719 to 1,778, about 2.1k chars off the
-prompt in all. Choices:
-- **One clause stayed at Handle directly:** "The principal's own mail, and drafts from their
-  account, belong to ceo-inbox." Without it the coordinator searched its own mailbox with
-  `email-list` before delegating in every Draft Email in CEO Voice run (7 of 7), against 0
-  of 4 on main. Lesson 9 again: the roster reaches the decision, but not where it is made. The
-  calendar route needed no anchor.
-- **The ceo-inbox line names the principal's asks,** as main's section did. A first draft
-  opening with "The principal's own mailbox" read as a resource to search.
+an agent without one. diagnostics, meeting-debrief and setup-wizard swapped their
+operational descriptions for routing lines, and the roster went from 2,719 to 1,883 chars.
+**The coordinator YAML is unchanged:** the calendar and inbox routing stayed in it.
+
+- **Calendar and inbox routing stay in the YAML (Joseph, 2026-10-12).** Both moved into
+  their roster lines first, and the A/B showed the coordinator acting differently (baseline
+  log). With the inbox route in ceo-inbox's line, in four wordings, it went looking for
+  facts in mail: it searched its own mailbox before handing over drafts (Draft Email in
+  CEO Voice, every run), and in Travel Block and Buffer Time it hunted for the flight
+  itinerary in 9 of 30 runs, against 0 of 22 on main. Putting the inbox section back
+  word for word ended the hunts through ceo-inbox. With the calendar route still in the
+  roster, a quick search of Curia's own inbox remained in 3 of 20 runs (p ≈ 0.10).
+  `delegate_when` suits specialists that are used rarely or do something narrow; core
+  routes the coordinator takes every day belong in its own prompt (lesson 12).
 - **One roster for every reader.** ceo-inbox and meeting-debrief read the same roster
   through `${available_specialists}`, and curia-deploy's eval harness renders both from one
   snapshot string through `specialistSummary()`. A separate coordinator-only roster would
-  have broken that adapter, so the lines are written to read right for any agent: ceo-inbox
-  also consults calendar and writes the reply itself.
+  have broken that adapter, so the lines are written to read right for any agent.
 - **contacts and research-analyst keep their descriptions.** Both are already one routing
   sentence; a `delegate_when` would have repeated them.
-- **The anchors stayed word for word** (lesson 9): "always borrow-then-answer … you compose
-  the reply" on the calendar line, the cold-compose sentence on the ceo-inbox line. The
-  tests that pinned them read the rendered roster now.
-- **"You have no calendar of your own" went:** `allowed_callers` enforces it, and the
-  coordinator can neither discover nor activate the calendar tools.
+- **New cases 21a–c** check the three routes the new lines carry: setup help to
+  setup-wizard, a debrief preference to meeting-debrief, and a "why did this happen"
+  question to diagnostics. 21c runs on demand, because diagnostics is opt-in and a default
+  registry leaves it out of the roster.
 - **The roster has a budget** (`rosterTokens` in `prompt-budget.test.ts`, 500), so routing
-  text moved out of the YAML cannot regrow there unchecked.
+  text cannot grow there unchecked.
 - **The roster is not scanned for exfiltration markers,** as the descriptions were not
-  before. The moved text is routing, not defensive instructions, and the registry is
-  filled after the outbound filter is built.
+  before. Its lines are routing, not defensive instructions, and the registry is filled
+  after the outbound filter is built.
+- **16f's fixture named the wrong week** on a Monday to Wednesday (`next-thursday` is the
+  first Thursday after today); its message now names the date.
 
-Behavior (baseline log): the scenario gate held once 16f's fixture date was fixed, and the
-final prompt passed every smoke first attempt in the A/B. Travel Block and Buffer Time
-still looks in the principal's mail for the flight in some runs (3 of 8), which main did
-not in 12; those runs passed.
+Behavior (baseline log): cases 21a–c passed 5 of 5 on both arms, and the scenario gate held
+once 16f's fixture date was fixed.
 
 ### Lessons so far
 
@@ -298,6 +298,12 @@ curia-deploy#276.
     decides.** PR 3's scheduling draft kept every rule and tool name, and the coordinator
     still chose `scheduler-update`. It then distrusted its own edit and re-checked it. Look
     at the calls after the decision, not only the decision, when a rewrite misses.
+12. **Core routes stay in the coordinator's prompt; the roster suits narrow specialists.**
+    PR 8 moved the calendar and inbox routing into those agents' roster lines. Every wording
+    tried changed what the coordinator did on its most common requests: it searched mail for
+    facts before acting. A roster line at the end of the prompt is enough for a specialist
+    used rarely or for one narrow job (setup, diagnostics, debriefs). Routing the coordinator
+    applies on most turns needs to sit in the prompt body, where it makes the decision.
 
 ## Goal
 

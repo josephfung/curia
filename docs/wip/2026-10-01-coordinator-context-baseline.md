@@ -1529,45 +1529,56 @@ Spend for all of PR 7's runs, judge included: about $5.50 estimated.
 
 ### 2026-10-12 — prompt trim PR 8: routing-oriented roster
 
-YAML 8,652 → 7,468 chars; always-on ~3,703 → ~3,407 tokens, budget 3,800 → 3,500. The
-roster (not in the always-on figure) goes from 2,719 to 1,778 chars and gets its own budget
-of 500 tokens. Local tool definitions unchanged.
+As merged, the coordinator YAML is unchanged (8,652 chars, ~3,703 tokens, budget 3,800).
+diagnostics, meeting-debrief and setup-wizard got `delegate_when` roster lines, and the
+roster went from 2,719 to 1,883 chars, now held to a 500-token budget. The plan's PR 8 also
+moved the calendar and inbox routing into those agents' roster lines. The runs below are
+why that part was dropped.
 
 All runs: `deepseek/deepseek-v4.1-flash`, gpt-4o judge, main at `9c090b0e` against the
 branch, on separate copies of `curia_scen`. 0 live web searches throughout (#2106).
 
-**Scenarios, full gate on the branch (`f2c5db39`, first draft), 5 runs each:** 34 of 38
-cases passed, every calendar and ceo-inbox case among them (10, 12, 15, 16b, 16c, 19a).
+**First draft, both routes in the roster (`f2c5db39`).** Scenario gate: 34 of 38, every
+calendar and ceo-inbox case among the passes (10, 12, 15, 16b, 16c, 19a).
 - **13a** missed `principal_can_edit` (1 of 5), as on main since PR 4.
-- **16f** `answers_availability` 3 of 5: a fixture date, not routing. The message said
+- **16f** `answers_availability` 3 of 5 was a fixture date, not routing: the message said
   "Thursday next week", but `next-thursday` is the first Thursday after today, so on a
-  Monday the events sat on this week's Thursday. Every run delegated to calendar once and
-  answered for the week it asked about. The message now names the date; 5 of 5 on both arms.
-- **06** timed out in 1 of 5. Main did the same in its 5; the branch then passed 5 of 5.
-- **18** made one refused `task-update` call on an invented task ID, in 1 of 5 here and 1
-  of 5 on rerun; main 0 of 5. The same invented-ID update was seen on main in PR 7.
+  Monday the events sat on this week's Thursday. The message now names the date; 5 of 5 on
+  both arms.
+- **06** timed out in 1 of 5, as main did. **18** made one refused `task-update` on an
+  invented task ID (1 of 5, and 1 of 5 on rerun; main 0 of 5), the kind seen on main in PR 7.
 
-**Smoke, full suite on the branch (first draft):** 44 of 47, estimated $1.22. Pre-Meeting
-Prep Brief and Travel Block and Buffer Time timed out; Draft Email in CEO Voice missed
-`resolves-from-mail` and timed out on retry.
+Smoke: 44 of 47 ($1.22). Pre-Meeting Prep Brief and Travel Block and Buffer Time timed out;
+Draft Email in CEO Voice missed `resolves-from-mail` and timed out on retry.
 
-**Smoke A/B, first attempts.** The first draft's ceo-inbox line opened with "The
-principal's own mailbox", and the YAML kept nothing about the inbox. Counted below is
-whether the coordinator searched mail itself (`email-list`) or sent ceo-inbox looking for
-the flight before acting.
+**Smoke A/B on the inbox route.** Counted per run: whether the coordinator searched Curia's
+own mailbox (`email-list`) before delegating, and whether, in Travel Block and Buffer Time
+("I'm flying to New York on Tuesday … no meetings after I land"), it went looking for the
+flight itinerary in mail (its own, or by sending ceo-inbox) instead of estimating the
+landing as main does.
 
-| Case | main | draft 1 | draft 2 (line names the asks) | final (plus Handle-directly clause) |
-|---|---|---|---|---|
-| Draft Email in CEO Voice | 4/4, own mailbox 0/4 | 4/5, own mailbox 5/5 | 1/2, own mailbox 2/2 | 4/4, own mailbox 1/4 |
-| Travel Block and Buffer Time | 8/12, mail lookup 0/12 | 4/7, mail lookup 2/7 | 5/6, mail lookup 2/6 | 8/8, mail lookup 3/8 |
-| Cold Compose (3 cases) | — | 3/3 (full run) | 1/3 | 6/6 |
+| Variant | Draft Email: own mailbox first | Travel Block: itinerary hunt | Travel Block first attempts |
+|---|---|---|---|
+| main | 0 / 4 | 0 / 22 | 17 / 22 |
+| 1: inbox route in ceo-inbox's line ("The principal's own mailbox …") | 5 / 5 | 2 / 7 | 4 / 7 |
+| 2: line names the principal's asks | 2 / 2 | 2 / 6 | 5 / 6 |
+| 3: 2 plus a Handle-directly clause | 1 / 4 | 3 / 8 | 8 / 8 |
+| 4: 3 without "it looks them up in the principal's mail history" | 2 / 2 | 2 / 9 | 8 / 9 |
+| 5: inbox section back word for word; calendar still in the roster | 0 / 3 | 3 / 20 (own mailbox only) | 16 / 20 |
 
-The final prompt passes every first attempt above. It still looks in mail for the flight in
-some Travel Block runs, which main never did in 12. Those runs passed, but the lookup adds
-time. Pre-Meeting Prep Brief was not rerun: it timed out on main at about the same rate in
-PR 7.
+The hunts through ceo-inbox ran 17–25 searches, and in 2 of 3 such runs the coordinator
+then asked the principal for the landing time instead of protecting the afternoon. Variant
+5 ended those; what remained was 1–3 searches of Curia's own inbox before delegating to
+calendar, 3 of 20 against main's 0 of 22 (p ≈ 0.10). Joseph (2026-10-12): calendar and
+inbox are core routes and stay in the coordinator's prompt; `delegate_when` is for the
+narrower specialists. Cold Compose (3 cases) passed 6 of 6 on variant 5.
 
-Spend for all of PR 8's runs, judge included: about $5 estimated.
+**New cases 21a–c, 5 runs each, both arms:** route setup help, route debrief preference
+and route diagnostics question all 100% on main and on the final branch (`3f011df9`). Main
+also made two refused calls in 21b, a `behavioral-preferences-update` and a `bullpen` post to
+meeting-debrief, beside the delegation; both are stubbed now, and 21b reran at 100%.
+
+Spend for all of PR 8's runs, judge included: about $8 estimated.
 
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 

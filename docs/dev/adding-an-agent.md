@@ -123,6 +123,8 @@ When to delegate to this agent, for the model. It is the agent's line in the coo
 
 Keep it to two or three sentences. `tests/unit/agents/prompt-budget.test.ts` holds the roster over the core agents to a budget. Without this field the roster shows `description`.
 
+A roster line suits a specialist the coordinator uses rarely or for one narrow job, such as setup-wizard, diagnostics or meeting-debrief. Routing the coordinator applies on most turns, such as the principal's calendar and inbox, belongs in the coordinator's own prompt: moved into roster lines, those routes changed what it did on everyday requests (prompt trim PR 8, `docs/wip/2026-10-06-coordinator-prompt-trim.md`). Add a scenario case for the route when you add the line.
+
 ### `model` (required)
 
 Specifies which LLM to use.

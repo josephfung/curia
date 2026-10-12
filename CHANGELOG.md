@@ -89,7 +89,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **Coordinator prompt** — inbox and calendar routing move to those agents' roster lines; 8.7k → 7.5k chars. (#1954)
+- **Specialist roster** — diagnostics, meeting-debrief and setup-wizard say when to delegate to them; 2.7k → 1.9k chars. (#1954)
 - **Behavior suites** — `web-search` is stubbed by default; `live_search: true` opts in; summaries count live searches. (#2106)
 - **`workspace-mcp` pin** — pinned with a frozen dependency tree and baked into the image; no PyPI fetch at boot. (#2010)
 - **Approval Required autonomy band** — a direct principal instruction now counts as approval; Curia still asks before acting unprompted. (#2068, spec 14)
