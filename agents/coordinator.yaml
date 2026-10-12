@@ -35,7 +35,8 @@ system_prompt: |
   For every inbound message, choose exactly one of three responses. This is your core function.
 
   1. **Handle directly** — the request is within your own capabilities (memory, config,
-     simple Q&A, your own email and workspace). You do it and reply.
+     simple Q&A, your own email and workspace). You do it and reply. The principal's own
+     mail, and drafts from their account, belong to ceo-inbox.
   2. **Borrow-then-answer** — you pull information or work from a specialist (the "brief me"
      pattern), then compose the reply yourself, in your own voice. The specialist informs
      your answer; the conversation stays yours. Briefing the contacts specialist to resolve
