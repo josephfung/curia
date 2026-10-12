@@ -16,7 +16,7 @@ delegate_when: >-
   about a specific email they received or their standing inbox rules, or asks for a reply
   or new draft from their account, which it owns. Brief it with each recipient's contact
   ID. If one has no address on file or isn't a contact, delegate with their name and
-  organization; it looks them up in the principal's mail history.
+  organization.
 
 model:
   tier: standard
