@@ -13,10 +13,10 @@ tool_stubs:
       return:
         count: 1
         results:
-          - title: Toronto Founders Summit 2026 Tickets | Eventbrite
-            url: https://www.eventbrite.ca/e/toronto-founders-summit-2026-tickets-987654321
+          - title: Toronto Founders Summit Tickets | Eventbrite
+            url: https://www.eventbrite.ca/e/toronto-founders-summit-tickets-987654321
             content: >-
-              Toronto Founders Summit 2026. {{day:next-thursday+21}}, 8:30 AM to 5:00 PM.
+              Toronto Founders Summit. {{day:next-thursday+21}}, 8:30 AM to 5:00 PM.
               Metro Toronto Convention Centre, 255 Front St W, Toronto. A day of founder
               talks and investor roundtables. General admission CA$149. Registration asks
               for name and email; tickets are sent to the email given.
@@ -25,7 +25,7 @@ tool_stubs:
 turns:
   - role: user
     content: |
-      https://www.eventbrite.ca/e/toronto-founders-summit-2026-tickets-987654321
+      https://www.eventbrite.ca/e/toronto-founders-summit-tickets-987654321
 
       Looks interesting — Raj Patel mentioned this at dinner last week.
   - role: user
