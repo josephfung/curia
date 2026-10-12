@@ -8,8 +8,9 @@
 # resolution on a real channel.
 name: real delegation principal request over email
 description: >
-  The principal emails Curia from their own address asking whether they are free on
-  Thursday afternoon next week. The coordinator asks the calendar specialist, which really
+  The principal emails Curia from their own address asking whether they are free on the
+  coming Thursday afternoon. The message names the date: it used to say "next week", but
+  on a Monday to Wednesday the fixture's events fall on this week's Thursday. The coordinator asks the calendar specialist, which really
   runs. The specialist treats the request as the principal's: it reads the calendar and
   answers rather than declining or asking who is asking. The coordinator answers once.
 tags: [real-delegation, delegation, calendar, requester-identity]
@@ -21,7 +22,7 @@ inbound:
   content: |
     Subject: Thursday
 
-    Am I free Thursday afternoon next week? Want to keep it open for the Harbour renewal.
+    Am I free Thursday afternoon, {{day:next-thursday}}? Want to keep it open for the Harbour renewal.
   email:
     nylas_message_id: scenario-msg-principal-thursday
 tool_stubs:
