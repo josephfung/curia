@@ -12,10 +12,10 @@ description: >
   Also runs a daily sent-observe pass (voice-learning diffs + task-completion
   candidates) separate from triage.
 delegate_when: >-
-  The principal's own mailbox ("my inbox", "my email"; "your inbox" is your own mail):
-  questions about email they received, their standing inbox rules, and reply drafts or new
-  drafts from their account, which it owns. Brief it with each recipient's contact ID. If
-  one has no address on file or isn't a contact, delegate with their name and
+  When the principal says "my inbox" or "my email" ("your inbox" is your own mail), asks
+  about a specific email they received or their standing inbox rules, or asks for a reply
+  or new draft from their account, which it owns. Brief it with each recipient's contact
+  ID. If one has no address on file or isn't a contact, delegate with their name and
   organization; it looks them up in the principal's mail history.
 
 model:
