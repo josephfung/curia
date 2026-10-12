@@ -278,8 +278,7 @@ describe('calendar agent — key-loaded scheduling rules (ceo-inbox parity)', ()
     // 0.9.0 = answers a generic PEER REQUEST, a new capability, so minor.
     // 0.9.1 = principal vocabulary in the prompt (#1950).
     // 0.9.2 = composed email is always a draft block, never reported as sent (#2055).
-    // 0.9.3 = delegate_when: the coordinator's calendar routing moved to the roster.
-    expect(config.version).toBe('0.9.3');
+    expect(config.version).toBe('0.9.2');
   });
 
   it('forbids using calendar-update-event to record another guest RSVP', () => {

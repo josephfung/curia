@@ -213,8 +213,11 @@ describe('coordinator scenario cases', () => {
       .toEqual(['16a', '16b', '16c', '16d', '16e', '16f', '16g', '17a']);
     expect(real.filter(c => c.releaseGate).map(c => path.basename(c.sourceFile).slice(0, 3)).sort())
       .toEqual(['16a', '16d', '16f']);
-    // Every other case is in the gate.
-    expect(cases.filter(c => c.delegation === 'stubbed').every(c => c.releaseGate)).toBe(true);
+    // Every other case is in the gate, except 21c: it routes to diagnostics, an opt-in
+    // agent that a default registry leaves out of the roster (README, "Cases that need an
+    // opt-in agent").
+    expect(cases.filter(c => c.delegation === 'stubbed' && !c.releaseGate).map(c => path.basename(c.sourceFile).slice(0, 3)))
+      .toEqual(['21c']);
   });
 
   it('have a well-formed stub-coverage record', () => {

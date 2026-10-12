@@ -1,0 +1,50 @@
+# Case 21a (prompt trim PR 8): the principal asks for help setting something up. The
+# route to setup-wizard has no coordinator prompt text; it rests on setup-wizard's roster
+# line (agents/setup-wizard.yaml, `delegate_when`). Added with that line so it has a
+# behavior check before and after.
+name: route setup help
+description: >
+  The principal asks for help connecting Slack. The coordinator should hand the request to
+  the setup specialist and relay its instructions in its own voice, rather than answering
+  from memory or saying it can't help.
+tags: [routing, setup-wizard]
+inbound:
+  from: principal
+  content: Can you help me get Slack connected?
+tool_stubs:
+  delegate:
+    - match: { agent: setup-wizard }
+      return: &steps
+        agent: setup-wizard
+        response: >
+          Slack setup, 3 steps: (1) open Settings → Channels → Slack in the console and
+          click Connect; (2) approve the app in the Slack workspace (needs a workspace
+          admin); (3) pick the channel for notifications. Guide:
+          https://docs.meetcuria.com/channels/slack
+    - match: { agent: "@setup-wizard" }
+      return: *steps
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+expected_behaviors:
+  - id: routes_to_setup
+    weight: critical
+    description: Hands the request to the setup specialist.
+    check:
+      called: delegate
+      with: { agent: setup-wizard }
+  - id: relays_steps
+    weight: important
+    description: >
+      The reply gives the principal the Slack steps (console Settings → Channels → Slack,
+      approve in the workspace, pick a channel) or the guide link. Saying it cannot help,
+      or inventing different steps, is a miss.
+  - id: no_identifiers
+    weight: important
+    description: The reply names no tool, agent or system.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Answers from general knowledge with steps that don't match the console
+  - Says it has no way to connect Slack

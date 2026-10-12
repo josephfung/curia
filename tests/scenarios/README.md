@@ -461,6 +461,13 @@ answer.
 Run them all with `pnpm scenarios --on-demand`, or one with `--case`. Before changing a
 specialist prompt or the delegate handler, run `--tags real-delegation`.
 
+### Cases that need an opt-in agent
+
+One stubbed case is on demand too: 21c route diagnostics question. diagnostics is opt-in
+(`config/registry-defaults.yaml`, #1356), so it is in the coordinator's roster only where
+`agent_registry` enables it. Enable it in the database the run uses, then run the case with
+`--case`. Run it before changing diagnostics' `delegate_when`.
+
 Baseline: `deepseek/deepseek-v4.1-flash` (the production standard tier), 5 runs each,
 2026-10-09, all seven cases in one suite run at `da43807e`, after the coordinator prompt
 trim (#1954). Every critical behavior passed all five runs, with no stub holes. Spend is for

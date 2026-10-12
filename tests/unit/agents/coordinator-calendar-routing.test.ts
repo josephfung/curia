@@ -4,9 +4,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadAgentConfig, loadAllAgentConfigs } from '../../../src/agents/loader.js';
-import { AgentRegistry } from '../../../src/agents/agent-registry.js';
-import { registerAgentRoster } from '../../../src/startup/agent-assembly.js';
+import { loadAgentConfig } from '../../../src/agents/loader.js';
 import { delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import { parseSkillMd } from '../../../src/skills/skill-md.js';
 import { SkillRegistry } from '../../../src/skills/skill-registry.js';
@@ -55,13 +53,14 @@ function extractHandleDirectlySection(prompt: string): string {
   return prompt.slice(start, end);
 }
 
-/** The calendar agent's line in the coordinator's roster. */
-function calendarRosterLine(): string {
-  const registry = new AgentRegistry();
-  registerAgentRoster(registry, loadAllAgentConfigs(agentsDir));
-  const line = registry.specialistSummary().split('\n').find(l => l.startsWith('- @calendar: '));
-  if (!line) throw new Error('calendar is not in the roster');
-  return line;
+function extractPrincipalCalendarSection(prompt: string): string {
+  const start = prompt.indexOf('### Principal calendar requests (borrow-then-answer)');
+  const end = prompt.indexOf('### Delegation acknowledgment on synchronous channels');
+  if (start === -1) throw new Error('Principal calendar requests section not found');
+  if (end === -1 || end <= start) {
+    throw new Error('Delegation acknowledgment delimiter not found after Principal calendar section');
+  }
+  return prompt.slice(start, end);
 }
 
 describe('coordinator principal-calendar routing (#1853)', () => {
@@ -73,11 +72,10 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     // regression: scenario 10 handed external scheduling requests to @calendar as
     // transfer-ownership and replied NO_REPLY in 2 of 5 runs (prompt trim PR 2). PR 3
     // moved the prompt to the second person, so the anchor reads "you", not "I". The
-    // failure line moved to the delegate result's next_step (prompt trim PR 6), and the
-    // route to calendar's roster line, its `delegate_when` (prompt trim PR 8).
-    const line = calendarRosterLine();
-    expect(line).toMatch(/The principal's calendar, always borrow-then-answer/);
-    expect(line).toMatch(/you compose the reply/);
+    // failure line moved to the delegate result's next_step (prompt trim PR 6).
+    const section = extractPrincipalCalendarSection(loadCoordinator().system_prompt);
+    expect(section).toMatch(/borrow-then-answer through `@calendar`/);
+    expect(section).toMatch(/you compose the reply/);
     expect(delegateFailureNextStep('calendar')).toMatch(/never present the day\s+as clear or free/);
   });
 
@@ -87,9 +85,11 @@ describe('coordinator principal-calendar routing (#1853)', () => {
     expect(handleDirectly).not.toMatch(/Curia's identity only/);
   });
 
-  it('states the @calendar route only in the roster (#1958)', () => {
+  it('states the @calendar route only in the calendar section (#1958)', () => {
     // It was once repeated in nine places. Each copy is rule density with no added protection.
-    expect(loadCoordinator().system_prompt).not.toMatch(/@calendar/);
+    const prompt = loadCoordinator().system_prompt;
+    const outside = prompt.replace(extractPrincipalCalendarSection(prompt), '');
+    expect(outside).not.toMatch(/@calendar/);
   });
 
   it('the coordinator can neither discover nor activate the calendar bundle (#1958)', () => {

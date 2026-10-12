@@ -1,15 +1,10 @@
 name: calendar
-version: "0.9.3"
+version: "0.9.2"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
   event CRUD, invite RSVPs, and scheduling-related email composition for meeting
   requests, reschedules, and cancellations
-delegate_when: >-
-  The principal's calendar, always borrow-then-answer: it reads or changes the calendar,
-  and you compose the reply. That covers briefs, "what's on my calendar", free/busy,
-  conflicts, reschedules and invites, in scheduled routines and ad-hoc asks alike. Brief it
-  with the concrete ask, including any date-resolve ISO dates from this turn.
 model:
   tier: standard  # scheduling + RSVP judgment (relationship tier, sender kind, conflicts)
 allow_discovery: false

@@ -1,0 +1,52 @@
+# Case 21c (prompt trim PR 8): the principal asks why something odd happened. The route to
+# diagnostics has no coordinator prompt text; it rests on diagnostics' roster line
+# (agents/diagnostics.yaml, `delegate_when`).
+#
+# On demand only: diagnostics is opt-in (config/registry-defaults.yaml, #1356), so it is in
+# the roster only where agent_registry enables it. Enable it in the database the run uses
+# before running this case.
+name: route diagnostics question
+description: >
+  The principal asks why they received the morning briefing twice. The coordinator should
+  hand the question to the diagnostics specialist and relay its finding in plain language,
+  rather than guessing at a cause.
+tags: [routing, diagnostics]
+release_gate: false
+inbound:
+  from: principal
+  content: Why did I get the morning briefing twice today?
+tool_stubs:
+  delegate:
+    - match: { agent: diagnostics }
+      return: &finding
+        agent: diagnostics
+        response: >
+          The 07:00 briefing job fired twice: the scheduler restarted at 07:00:04 during a
+          deploy and re-ran the job before the first run had recorded completion. One-off;
+          the job's next run is normal. Mitigation: none needed unless it recurs.
+    - match: { agent: "@diagnostics" }
+      return: *finding
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+expected_behaviors:
+  - id: routes_to_diagnostics
+    weight: critical
+    description: Hands the question to the diagnostics specialist.
+    check:
+      called: delegate
+      with: { agent: diagnostics }
+  - id: explains_cause
+    weight: important
+    description: >
+      The reply says the briefing went out twice because a restart re-ran it, that it was a
+      one-off, and that nothing needs doing. Guessing at a different cause is a miss.
+  - id: no_identifiers
+    weight: important
+    description: The reply names no tool, agent or system.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Guesses at a cause without investigating
+  - Says it can't see why

@@ -58,7 +58,7 @@ describe('loadAgentConfig', () => {
     ['a second outbound-voice rule', /Outbound voice \(mandatory\)/, 'How you speak (every audience)'],
     ['a second no-internals rule', /NEVER expose contact lookup results/, 'How you speak (every audience)'],
     ['a second contact-resolution section', /### Contact intelligence|Before composing any email/, 'People'],
-    ['calendar in handle-directly', /Calendar is never handle-directly/, 'calendar allowed_callers + calendar delegate_when'],
+    ['calendar in handle-directly', /Calendar is never handle-directly/, 'calendar allowed_callers + Principal calendar requests'],
     // Prompt trim PR 3: style belongs to the office identity, which the principal edits.
     ['a style line', /professional and competent|clarifying questions freely|Be candid/, 'office identity (Personality settings)'],
     ['task owner semantics', /principal must act/, 'task-create owner description'],
@@ -79,9 +79,6 @@ describe('loadAgentConfig', () => {
     ['the signing line', /sign emails/i, 'outbound gateway email signature'],
     // Prompt trim PR 7: the dispatcher counts the backlog and the line says when to raise it.
     ['when to raise the backlog', /natural\s+pause|decay-warnings-list|list-pending-actions/, 'backlog line (principalBacklog)'],
-    // Prompt trim PR 8: calendar's routing is its roster line. The inbox route stays in the
-    // YAML: as a roster line it sent the coordinator searching mail (baseline log).
-    ['the principal calendar route', /### Principal calendar requests|free\/busy/, 'calendar delegate_when'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);

@@ -1,0 +1,57 @@
+# Case 21b (prompt trim PR 8): the principal sets a debrief preference. The route to
+# meeting-debrief has no coordinator prompt text; it rests on meeting-debrief's roster line
+# (agents/meeting-debrief.yaml, `delegate_when`), and the specialist owns its preferences
+# (its "Preference Updates" mode). Storing the preference with config-store or memory
+# itself would leave meeting-debrief still prompting after internal meetings.
+name: route debrief preference
+description: >
+  The principal tells the assistant to stop prompting for debriefs after internal meetings.
+  The coordinator should hand the preference to the meeting-debrief specialist, which owns
+  debrief scheduling, and confirm it briefly.
+tags: [routing, meeting-debrief]
+inbound:
+  from: principal
+  content: >
+    Quick one: stop asking me for debriefs after internal meetings. Only ping me after
+    meetings with people outside the company.
+tool_stubs:
+  delegate:
+    - match: { agent: meeting-debrief }
+      return: &saved
+        agent: meeting-debrief
+        response: >
+          Preference saved: debrief prompts now go out only after meetings with at least
+          one external attendee. Internal-only meetings are skipped from the next scan on.
+    - match: { agent: "@meeting-debrief" }
+      return: *saved
+    - match: {}
+      return:
+        agent: other
+        response: Nothing on file for this request.
+  # The wrong paths have to be available, so a miss shows as a routing miss, not a refusal.
+  config-store:
+    - match: {}
+      return: { stored: true }
+  memory-store:
+    - match: {}
+      return: { stored: true, node_id: "00000000-0000-4000-8000-0000000021b0" }
+expected_behaviors:
+  - id: routes_to_debrief
+    weight: critical
+    description: Hands the preference to the meeting-debrief specialist.
+    check:
+      called: delegate
+      with: { agent: meeting-debrief }
+  - id: confirms_briefly
+    weight: important
+    description: >
+      The reply confirms that debrief prompts will now come only after meetings with
+      external attendees.
+  - id: no_identifiers
+    weight: important
+    description: The reply names no tool, agent or system.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Stores the preference itself and never tells meeting-debrief
+  - Asks which meetings count as internal when the message already says
