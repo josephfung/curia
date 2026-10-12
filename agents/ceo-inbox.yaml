@@ -1,5 +1,5 @@
 name: ceo-inbox
-version: "0.20.1"
+version: "0.20.0"
 role: specialist
 description: >
   Manages the principal's personal email inbox. Handles standing-rule management,
@@ -11,12 +11,6 @@ description: >
   escalates urgent items to the coordinator via the bullpen for Signal delivery.
   Also runs a daily sent-observe pass (voice-learning diffs + task-completion
   candidates) separate from triage.
-delegate_when: >-
-  When the principal says "my inbox" or "my email" ("your inbox" is your own mail), asks
-  about a specific email they received or their standing inbox rules, or asks for a reply
-  or new draft from their account, which it owns. Brief it with each recipient's contact
-  ID. If one has no address on file or isn't a contact, delegate with their name and
-  organization.
 
 model:
   tier: standard

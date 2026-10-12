@@ -79,8 +79,8 @@ describe('loadAgentConfig', () => {
     ['the signing line', /sign emails/i, 'outbound gateway email signature'],
     // Prompt trim PR 7: the dispatcher counts the backlog and the line says when to raise it.
     ['when to raise the backlog', /natural\s+pause|decay-warnings-list|list-pending-actions/, 'backlog line (principalBacklog)'],
-    // Prompt trim PR 8: each specialist's routing is its roster line.
-    ['the principal inbox route', /### Principal inbox requests|"my inbox"/, 'ceo-inbox delegate_when'],
+    // Prompt trim PR 8: calendar's routing is its roster line. The inbox route stays in the
+    // YAML: as a roster line it sent the coordinator searching mail (baseline log).
     ['the principal calendar route', /### Principal calendar requests|free\/busy/, 'calendar delegate_when'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));

@@ -96,7 +96,7 @@ interface AgentBudget {
 // chars, ~3,407 tokens with SKILL.md. The roster went from 2,719 chars of descriptions to
 // 1,778 (~445 tokens).
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_500, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_700, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 550 },
 ];
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };

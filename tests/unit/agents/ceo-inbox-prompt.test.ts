@@ -405,9 +405,8 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     // 0.19.1 = memory/contact-update how-to moved into the tool descriptions (#1960).
     // 0.20.0 = drafts address recipients by contact ID; raw addresses and one-at-a-time
     //          recipient edits use the new draft-tool inputs (#2053).
-    // 0.20.1 = delegate_when: the coordinator's inbox routing moved to the roster.
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.20.1');
+    expect(config.version).toBe('0.20.0');
   });
 });
 
