@@ -109,4 +109,14 @@ describe('AgentRegistry', () => {
       '- @calendar: The principal\'s calendar.\n- @expense-tracker: Tracks expenses',
     );
   });
+
+  it('keeps a multi-line value on its own roster line', () => {
+    // A YAML literal block (`|`) keeps its line breaks; the roster must not spill them
+    // onto lines with no `- @name:` label.
+    registry.register('setup', { role: 'specialist', description: 'x', delegateWhen: 'First line\nsecond line\n\n  third\n' });
+    registry.register('expense-tracker', { role: 'specialist', description: 'Tracks\nexpenses\n' });
+    expect(registry.specialistSummary()).toBe(
+      '- @setup: First line second line third\n- @expense-tracker: Tracks expenses',
+    );
+  });
 });

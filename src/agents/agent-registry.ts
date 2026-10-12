@@ -54,6 +54,8 @@ export class AgentRegistry {
   /**
    * The roster: one line per specialist saying when to delegate to it. Agents without a
    * `delegate_when` (curia-deploy's custom agents, for now) show their description.
+   * Whitespace runs collapse to one space, so a YAML literal block (`|`) keeps its whole
+   * value on the agent's `- @name:` line instead of spilling onto unlabelled lines.
    */
   specialistSummary(): string {
     const specialists = this.listSpecialists();
@@ -61,7 +63,7 @@ export class AgentRegistry {
       return 'No specialist agents are currently available.';
     }
     return specialists
-      .map(s => `- @${s.name}: ${(s.delegateWhen ?? s.description).trim()}`)
+      .map(s => `- @${s.name}: ${(s.delegateWhen ?? s.description).replace(/\s+/g, ' ').trim()}`)
       .join('\n');
   }
 
