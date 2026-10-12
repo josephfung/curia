@@ -92,8 +92,9 @@ interface AgentBudget {
 // Prompt trim PR 7 (the backlog line on principal turns replaces What you proactively
 // surface): YAML 8,652 chars, ~3,703 tokens with SKILL.md.
 // Prompt trim PR 8 (the inbox and calendar routing moved to those agents' delegate_when
-// roster lines): YAML 7,387 chars, ~3,387 tokens with SKILL.md. The roster went from
-// 2,719 chars of descriptions to 1,771 (~443 tokens).
+// roster lines, with a one-clause ceo-inbox anchor kept at Handle directly): YAML 7,468
+// chars, ~3,407 tokens with SKILL.md. The roster went from 2,719 chars of descriptions to
+// 1,778 (~445 tokens).
 const AGENT_BUDGETS: AgentBudget[] = [
   { agent: 'coordinator', alwaysOnPromptTokens: 3_500, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
 ];

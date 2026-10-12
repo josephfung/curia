@@ -25,7 +25,7 @@ log.
 | 5: principal note block on the relay | Merged (2026-10-10, #2102) | 9,494 (unchanged; turn guidance and code) | ~3,913 / 4,000 |
 | 6: prose-only rules into code | Merged (2026-10-11, #2103) | 9,065 | ~3,806 / 3,900 |
 | 7: backlog line for proactive surfacing | Merged (2026-10-11, #2107) | 8,652 | ~3,703 / 3,800 |
-| 8: routing-oriented roster | In review (2026-10-12) | 7,387 (roster 2,719 → 1,771) | ~3,387 / 3,500 |
+| 8: routing-oriented roster | In review (2026-10-12) | 7,468 (roster 2,719 → 1,778) | ~3,407 / 3,500 |
 | 9–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
@@ -219,8 +219,15 @@ roster; `description` stays for people (admin UI, audit log) and is the roster l
 an agent without one. The coordinator's Principal inbox requests and Principal calendar
 requests sections became the ceo-inbox and calendar lines, and diagnostics, meeting-debrief
 and setup-wizard swapped their operational descriptions for routing lines. The YAML goes
-from 8,652 to 7,387 chars and the roster from 2,719 to 1,771, about 2.2k chars off the
+from 8,652 to 7,468 chars and the roster from 2,719 to 1,778, about 2.1k chars off the
 prompt in all. Choices:
+- **One clause stayed at Handle directly:** "The principal's own mail, and drafts from their
+  account, belong to ceo-inbox." Without it the coordinator searched its own mailbox with
+  `email-list` before delegating in every Draft Email in CEO Voice run (7 of 7), against 0
+  of 4 on main. Lesson 9 again: the roster reaches the decision, but not where it is made. The
+  calendar route needed no anchor.
+- **The ceo-inbox line names the principal's asks,** as main's section did. A first draft
+  opening with "The principal's own mailbox" read as a resource to search.
 - **One roster for every reader.** ceo-inbox and meeting-debrief read the same roster
   through `${available_specialists}`, and curia-deploy's eval harness renders both from one
   snapshot string through `specialistSummary()`. A separate coordinator-only roster would
@@ -238,6 +245,11 @@ prompt in all. Choices:
 - **The roster is not scanned for exfiltration markers,** as the descriptions were not
   before. The moved text is routing, not defensive instructions, and the registry is
   filled after the outbound filter is built.
+
+Behavior (baseline log): the scenario gate held once 16f's fixture date was fixed, and the
+final prompt passed every smoke first attempt in the A/B. Travel Block and Buffer Time
+still looks in the principal's mail for the flight in some runs (3 of 8), which main did
+not in 12; those runs passed.
 
 ### Lessons so far
 
