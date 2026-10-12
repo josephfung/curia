@@ -1,5 +1,5 @@
 name: diagnostics
-version: "0.4.1"
+version: "0.4.2"
 role: specialist
 description: >-
   Read-only forensic investigator for the PRINCIPAL. Diagnoses "what happened /
@@ -12,6 +12,11 @@ description: >-
   it for internal system-behavior investigations, never for the outside world.
   Principal-only: its findings expose internal state and must never be relayed to
   a third party.
+delegate_when: >-
+  The principal asks what happened, or why, in your own behavior: an odd or duplicate
+  notification, an email that was never processed, a blocked message, a scheduled job that
+  misfired, or an ID. It reads the audit log and reports the cause. Its findings are for
+  the principal only.
 model:
   # First agent on the `powerful` tier (ADR-014). Forensic correlation + causal
   # inference is the most analytically demanding, lowest-frequency, and most

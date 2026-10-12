@@ -160,7 +160,8 @@ export async function buildBaseSystemPrompt(
   // Coordinator-only in practice; gated on presence so specialists that don't
   // route work never see it.
   // @TODO: the roster comes from AgentRegistry.specialistSummary() over operator-authored
-  // agent manifests — trusted. If specialist names/descriptions ever become user- or
+  // agent manifests — trusted. If specialist names or roster lines (delegate_when,
+  // description) ever become user- or
   // API-editable, strip newlines here (as the ### Principal Contact Details block does).
   if (sources.availableSpecialists) {
     prompt += '\n\n## Available Specialists\n' + sources.availableSpecialists;

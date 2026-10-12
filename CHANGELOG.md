@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Agent YAML `delegate_when` (public API)** — optional routing line shown in the specialist roster instead of `description`. (#1954)
 - **Backlog line** — principal turns carry counts of pending approvals, decay warnings and principal-owned tasks. (#1954, spec 02)
 - **`agent.task` (public API)** — optional `principalBacklog` carries those counts; never part of `content`. (#1954)
 - **Scenario case 20** — the coordinator raises the oldest waiting item after handling the request. (#1954)
@@ -88,6 +89,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Coordinator prompt** — inbox and calendar routing move to those agents' roster lines; 8.7k → 7.4k chars. (#1954)
 - **Behavior suites** — `web-search` is stubbed by default; `live_search: true` opts in; summaries count live searches. (#2106)
 - **`workspace-mcp` pin** — pinned with a frozen dependency tree and baked into the image; no PyPI fetch at boot. (#2010)
 - **Approval Required autonomy band** — a direct principal instruction now counts as approval; Curia still asks before acting unprompted. (#2068, spec 14)

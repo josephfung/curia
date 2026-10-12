@@ -182,16 +182,17 @@ function buildContext(provider: LLMProvider, configs: AgentYamlConfig[]): AgentA
 }
 
 describe('registerAgentRoster', () => {
-  it('registers every agent with its role, description and duration hint', () => {
+  it('registers every agent with its role, description, routing line and duration hint', () => {
     const registry = new AgentRegistry();
     registerAgentRoster(registry, [
       coordinatorYaml(),
-      specialistYaml({ expected_duration_seconds: 90, display_name: 'Research' }),
+      specialistYaml({ expected_duration_seconds: 90, display_name: 'Research', delegate_when: 'Anything to look up.' }),
     ]);
     expect(registry.get('coordinator')?.role).toBe('coordinator');
     expect(registry.get('researcher')).toMatchObject({
       role: 'specialist',
       description: 'Looks things up',
+      delegateWhen: 'Anything to look up.',
       displayName: 'Research',
       expectedDurationSeconds: 90,
     });

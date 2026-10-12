@@ -12,7 +12,15 @@ export interface AgentYamlConfig {
   name: string;
   version?: string;
   role?: string;
+  /** What the agent does, for people: the admin UI, the audit log and docs. */
   description?: string;
+  /**
+   * When to delegate to this agent, for the model: its line in the coordinator's
+   * `## Available Specialists` roster and in `${available_specialists}`. A short
+   * routing statement, not an account of how the agent works. When omitted, the
+   * roster shows `description` instead.
+   */
+  delegate_when?: string;
   /**
    * What a model might call this agent in a principal-facing reply. Since #1975
    * delegation-failure replies never name the specialist; this label is checked
@@ -100,6 +108,12 @@ export function loadAgentConfig(filePath: string): AgentYamlConfig {
     throw new Error(
       `Invalid agent name in ${filePath}: ${JSON.stringify(name)} (must be ${AGENT_NAME_RULE})`,
     );
+  }
+
+  // A blank or non-string routing line would put an empty or garbled entry in the roster.
+  const delegateWhen: unknown = config.delegate_when;
+  if (delegateWhen !== undefined && (typeof delegateWhen !== 'string' || delegateWhen.trim() === '')) {
+    throw new Error(`Invalid delegate_when in ${filePath}: must be a non-empty string`);
   }
 
   // Interpolate ${persona.*} placeholders in the system prompt.

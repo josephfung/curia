@@ -75,6 +75,7 @@ export function registerAgentRoster(agentRegistry: AgentRegistry, agentConfigs: 
     agentRegistry.register(agentConfig.name, {
       role: agentConfig.role ?? 'specialist',
       description: agentConfig.description ?? agentConfig.name,
+      delegateWhen: agentConfig.delegate_when,
       displayName: agentConfig.display_name,
       expectedDurationSeconds: agentConfig.expected_duration_seconds,
     });

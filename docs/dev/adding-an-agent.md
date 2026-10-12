@@ -29,6 +29,8 @@ See [Adding a Skill](adding-a-tool.md) if you want to add a capability rather th
 name: expense-tracker          # unique identifier; used in logs, delegation, audit trail
 description: |                 # human-readable purpose; shown in the admin UI and audit log
   Tracks and categorizes expenses from receipts and emails.
+delegate_when: >-              # optional. The agent's line in the specialist roster; defaults to description
+  Receipts, expense reports and spending questions. Forward the receipt with the request.
 display_name: expense team     # optional. What a model might call this agent; failure replies reject drafts that use it. Not persona.display_name.
 
 # ------------------------------------------------------------------
@@ -108,12 +110,18 @@ Use lowercase kebab-case. Must be unique across all agents in the deployment.
 
 ### `description` (required)
 
-Plain-language description of what the agent does. This is:
+Plain-language description of what the agent does, for people. This is:
 - Shown in the admin dashboard
 - Included in audit log metadata
-- Used by the Coordinator to decide which specialist to delegate to
+- The agent's line in the specialist roster when it has no `delegate_when`
 
-Write it from the perspective of "what tasks should be routed here." One or two sentences is enough.
+One or two sentences is enough.
+
+### `delegate_when` (optional)
+
+When to delegate to this agent, for the model. It is the agent's line in the coordinator's `## Available Specialists` roster and in `${available_specialists}`, so the coordinator reads it on every turn. Say which requests go here and, when it matters, how to brief the agent and who replies. Leave how the agent works to its own `system_prompt`.
+
+Keep it to two or three sentences. `tests/unit/agents/prompt-budget.test.ts` holds the roster over the core agents to a budget. Without this field the roster shows `description`.
 
 ### `model` (required)
 

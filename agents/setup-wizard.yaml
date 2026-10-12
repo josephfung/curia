@@ -1,5 +1,5 @@
 name: setup-wizard
-version: "0.3.0"
+version: "0.3.1"
 role: specialist
 description: >
   Resumable first-conversation concierge and setup guide. Invoke when the principal
@@ -8,6 +8,10 @@ description: >
   tour ("what can you do?"), or returns to finish deferred setup tasks. Returns
   structured output the coordinator relays: instant wins, setup instructions,
   status summaries, or a capability menu.
+delegate_when: >-
+  The principal's setup: their first message after setup ("Just finished setup"), "help
+  me set up X" for any integration or feature, "what can you do?", and coming back to
+  finish deferred setup. You relay what it returns.
 model:
   tier: standard
 system_prompt: |

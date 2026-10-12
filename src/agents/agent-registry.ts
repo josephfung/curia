@@ -3,13 +3,15 @@
 // The registry is populated at startup when agent YAML configs are loaded.
 // It provides lookup by name (for the delegate skill to verify targets),
 // listing (for the Coordinator to know which specialists are available),
-// and a summary method (for injecting specialist descriptions into the
-// Coordinator's system prompt).
+// and a summary method (the specialist roster in the Coordinator's system
+// prompt and in ${available_specialists}).
 
 export interface AgentRegistryEntry {
   name: string;
   role: string;
   description: string;
+  /** Agent YAML `delegate_when`: the agent's roster line. Absent → `description`. */
+  delegateWhen?: string;
   /**
    * Agent YAML `display_name` (#1860). Delegation-failure replies reject a
    * draft that uses it rather than showing it (#1975).
@@ -26,7 +28,7 @@ export interface AgentRegistryEntry {
 export class AgentRegistry {
   private agents = new Map<string, AgentRegistryEntry>();
 
-  register(name: string, info: { role: string; description: string; displayName?: string; expectedDurationSeconds?: number }): void {
+  register(name: string, info: Omit<AgentRegistryEntry, 'name'>): void {
     if (this.agents.has(name)) {
       throw new Error(`Agent '${name}' is already registered`);
     }
@@ -49,13 +51,17 @@ export class AgentRegistry {
     return this.list().filter(a => a.role !== 'coordinator');
   }
 
+  /**
+   * The roster: one line per specialist saying when to delegate to it. Agents without a
+   * `delegate_when` (curia-deploy's custom agents, for now) show their description.
+   */
   specialistSummary(): string {
     const specialists = this.listSpecialists();
     if (specialists.length === 0) {
       return 'No specialist agents are currently available.';
     }
     return specialists
-      .map(s => `- @${s.name}: ${s.description}`)
+      .map(s => `- @${s.name}: ${(s.delegateWhen ?? s.description).trim()}`)
       .join('\n');
   }
 

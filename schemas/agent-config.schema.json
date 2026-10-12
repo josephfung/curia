@@ -13,6 +13,11 @@
       "minLength": 1,
       "description": "Principal-facing label for replies (#1860). Not persona.display_name, which is prompt text only."
     },
+    "delegate_when": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "When to delegate to this agent: its line in the specialist roster. Without it the roster shows description."
+    },
     "role": { "type": "string" },
     "persona": {
       "type": "object",

@@ -58,6 +58,12 @@ interface AgentBudget {
   /** JSON bytes of the local tool definitions (MCP excluded). */
   localToolDefinitionBytes: number;
   /**
+   * The `## Available Specialists` roster over the core agents, in estimated tokens. Each
+   * line is the agent's YAML `delegate_when` (or its description), so routing text moved
+   * out of the prompt lands here and is held to a budget too. Coordinator only.
+   */
+  rosterTokens?: number;
+  /**
    * Whether the agent may pin an MCP server. Its tools cannot be measured here (they
    * come from the upstream server), so an agent under budget must not pin one: the
    * coordinator activates google-workspace on demand instead (#2024). Default true.
@@ -85,8 +91,11 @@ interface AgentBudget {
 // chars, ~3,806 tokens with SKILL.md; 76,982 bytes over 66 local tools.
 // Prompt trim PR 7 (the backlog line on principal turns replaces What you proactively
 // surface): YAML 8,652 chars, ~3,703 tokens with SKILL.md.
+// Prompt trim PR 8 (the inbox and calendar routing moved to those agents' delegate_when
+// roster lines): YAML 7,387 chars, ~3,387 tokens with SKILL.md. The roster went from
+// 2,719 chars of descriptions to 1,771 (~443 tokens).
 const AGENT_BUDGETS: AgentBudget[] = [
-  { agent: 'coordinator', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 77_000, allowMcpPins: false },
+  { agent: 'coordinator', alwaysOnPromptTokens: 3_500, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
 ];
 
 const noopHandler = { execute: async () => ({ success: true as const, data: {} }) };
@@ -127,6 +136,7 @@ interface Measurement {
   unresolvedPins: string[];
   allowDiscovery: boolean;
   localToolNames: string[];
+  rosterChars: number;
 }
 
 function measure(agentName: string): Measurement {
@@ -185,13 +195,14 @@ function measure(agentName: string): Measurement {
     unresolvedPins: assembled.pinResolution.unresolvedPins.map(p => p.pin),
     allowDiscovery: agentConfig.allow_discovery === true,
     localToolNames: assembled.toolDefs.map(d => d.name),
+    rosterChars: assembled.runtimeConfig.availableSpecialists?.length ?? 0,
   };
 }
 
 describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
   const m = measure(budget.agent);
-  const { yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount } = m;
-  const detail = JSON.stringify({ yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount });
+  const { yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount, rosterChars } = m;
+  const detail = JSON.stringify({ yamlChars, skillMdChars, alwaysOnPromptTokens, localToolDefinitionBytes, localToolCount, rosterChars });
 
   it('measures the whole local pin set', () => {
     // A pin that silently failed to load would shrink both numbers and pass the
@@ -224,5 +235,15 @@ describe.each(AGENT_BUDGETS)('always-on context budget: $agent', (budget) => {
       `on every call. Unpin tools the agent does not call, move rare procedures to a lazy playbook, and ` +
       `keep descriptions to how to call the tool. See ${ADR}.`,
     ).toBeLessThanOrEqual(budget.localToolDefinitionBytes);
+  });
+
+  it.runIf(budget.rosterTokens !== undefined)('specialist roster is within budget', () => {
+    const rosterTokens = Math.ceil(m.rosterChars / CHARS_PER_TOKEN);
+    expect(
+      rosterTokens,
+      `${budget.agent}'s specialist roster is ~${rosterTokens} tokens, over its budget of ${budget.rosterTokens} ` +
+      `(${detail}). Each line is an agent's delegate_when: say when to delegate there, and leave how the ` +
+      `agent works to its own prompt. See ${ADR}.`,
+    ).toBeLessThanOrEqual(budget.rosterTokens ?? 0);
   });
 });

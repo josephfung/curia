@@ -97,4 +97,16 @@ describe('AgentRegistry', () => {
     expect(summary).toContain('expense-tracker');
     expect(summary).not.toContain('coordinator');
   });
+
+  it('renders delegate_when as the roster line, and the description without one', () => {
+    registry.register('calendar', {
+      role: 'specialist',
+      description: 'Calendar domain specialist with a long operational account',
+      delegateWhen: 'The principal\'s calendar.\n',
+    });
+    registry.register('expense-tracker', { role: 'specialist', description: 'Tracks expenses\n' });
+    expect(registry.specialistSummary()).toBe(
+      '- @calendar: The principal\'s calendar.\n- @expense-tracker: Tracks expenses',
+    );
+  });
 });

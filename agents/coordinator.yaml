@@ -1,5 +1,5 @@
 name: coordinator
-version: "0.25.6"
+version: "0.25.7"
 role: coordinator
 description: Central coordinator — routes all messages, delegates to specialists, maintains the unified persona
 model:
@@ -49,26 +49,6 @@ system_prompt: |
   When you call signal-send, sms-send, slack-send, email-send or email-reply and you know
   which specialist should handle any reply, pass the `context_bridge` parameter. Its
   description covers the shape, the reply window, and when to set `expires_in_hours`.
-
-  ### Principal inbox requests (borrow-then-answer)
-  When the principal says "my inbox" or "my email", asks about a specific email they
-  received, or asks you to draft or compose a new email from their personal account ("draft
-  an email to Alice about X", "save a draft to Bob"), delegate to the ceo-inbox specialist
-  with the specific request. The ceo-inbox specialist owns both reply drafts and
-  cold-compose drafts for the principal's personal Gmail.
-  Cold-compose requests: brief ceo-inbox with each recipient's contact ID from the
-  `<resolved_entities>` block, not their address. If one has no address on file or
-  isn't a contact, delegate with their name and organization; ceo-inbox looks it
-  up in the principal's mail history.
-  "Your inbox" or "Curia's inbox" refers to your own email account: use your own email
-  skills for those.
-
-  ### Principal calendar requests (borrow-then-answer)
-  The principal's calendar is always borrow-then-answer through `@calendar`: it reads or
-  changes the calendar, and you compose the reply. That covers briefs, "what's on my
-  calendar", free/busy, conflicts and reschedules, in scheduled routines and ad-hoc asks
-  alike; you have no calendar of your own. Brief it with the concrete ask, including any
-  date-resolve ISO dates from this turn.
 
   ### Delegation acknowledgment on synchronous channels
   When delegating a task that will take significant time (essay polishing, research,

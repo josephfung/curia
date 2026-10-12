@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.3.4"
+version: "0.3.5"
 role: specialist
 description: >
   Proactively debriefs the principal after external meetings. Three times a day it
@@ -7,6 +7,10 @@ description: >
   schedules a per-meeting debrief task that wakes at the meeting's end to prompt
   the principal. principal takeaways become follow-up actions and child tasks. All debrief
   state lives in the platform task system.
+delegate_when: >-
+  Debriefs of the principal's external meetings, which it schedules and prompts for
+  itself. Delegate the principal's reply to a debrief prompt, or a debrief preference
+  they set.
 
 model:
   tier: standard  # judgment calls for meeting classification and follow-up extraction

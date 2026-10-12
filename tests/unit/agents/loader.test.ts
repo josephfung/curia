@@ -58,7 +58,7 @@ describe('loadAgentConfig', () => {
     ['a second outbound-voice rule', /Outbound voice \(mandatory\)/, 'How you speak (every audience)'],
     ['a second no-internals rule', /NEVER expose contact lookup results/, 'How you speak (every audience)'],
     ['a second contact-resolution section', /### Contact intelligence|Before composing any email/, 'People'],
-    ['calendar in handle-directly', /Calendar is never handle-directly/, 'calendar allowed_callers + Principal calendar requests'],
+    ['calendar in handle-directly', /Calendar is never handle-directly/, 'calendar allowed_callers + calendar delegate_when'],
     // Prompt trim PR 3: style belongs to the office identity, which the principal edits.
     ['a style line', /professional and competent|clarifying questions freely|Be candid/, 'office identity (Personality settings)'],
     ['task owner semantics', /principal must act/, 'task-create owner description'],
@@ -79,6 +79,9 @@ describe('loadAgentConfig', () => {
     ['the signing line', /sign emails/i, 'outbound gateway email signature'],
     // Prompt trim PR 7: the dispatcher counts the backlog and the line says when to raise it.
     ['when to raise the backlog', /natural\s+pause|decay-warnings-list|list-pending-actions/, 'backlog line (principalBacklog)'],
+    // Prompt trim PR 8: each specialist's routing is its roster line.
+    ['the principal inbox route', /### Principal inbox requests|"my inbox"/, 'ceo-inbox delegate_when'],
+    ['the principal calendar route', /### Principal calendar requests|free\/busy/, 'calendar delegate_when'],
   ])('coordinator prompt does not restate %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);
@@ -120,6 +123,22 @@ describe('loadAgentConfig', () => {
   ])('coordinator prompt does not carry the %s', (_rule, pattern) => {
     const config = loadAgentConfig(path.join(agentsDir, 'coordinator.yaml'));
     expect(config.system_prompt).not.toMatch(pattern);
+  });
+
+  it.each([
+    ['empty', "''"],
+    ['blank', "'   '"],
+    ['a list', '[a, b]'],
+    ['a number', '3'],
+  ])('rejects a delegate_when that is %s', (_label, value) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-delegate-when-'));
+    const file = path.join(dir, 'bad.yaml');
+    fs.writeFileSync(file, `name: bad\ndelegate_when: ${value}\nmodel:\n  tier: fast\nsystem_prompt: x\n`);
+    try {
+      expect(() => loadAgentConfig(file)).toThrow(/Invalid delegate_when/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('throws on nonexistent file', () => {
