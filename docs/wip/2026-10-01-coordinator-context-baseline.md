@@ -1580,6 +1580,60 @@ meeting-debrief, beside the delegation; both are stubbed now, and 21b reran at 1
 
 Spend for all of PR 8's runs, judge included: about $8 estimated.
 
+### 2026-10-12 — prompt trim PR 9: wake-only SKILL.md content
+
+YAML unchanged (8,652 chars). The `tasks` and `documents` SKILL.md bodies went from 6,157 to
+3,715 chars; always-on ~3,703 → ~3,092 tokens, budget 3,800 → 3,200. Local tool definitions
+unchanged. Every ordinary task wake's instruction grows by about 160 chars.
+
+All runs: `deepseek/deepseek-v4.1-flash`, gpt-4o judge, 0 live web searches. The main arm
+is the branch's harness with main's two SKILL.md files, wake instruction and `task-create`
+note (main's harness has no task-wake inbound), on separate copies of `curia_scen`.
+
+**New case 22, task wake resumes from progress.**
+
+| | main | PR 9 |
+|---|---|---|
+| Runs | 5 | 5 + 5 in the gate |
+| `nudges_marcus` | 4/5 | 10/10 |
+| Other critical behaviors | 100% | 100% |
+| Calls per run | 14–21 (mean 16.2) | 9–28 (mean 15.4) |
+
+The main miss parked the task without sending the nudge. One PR 9 run in ten also called
+`tool-registry` and `skill-activate` before nudging; no main run did. The other nine did not.
+
+**Scenario gate, full, PR 9 (`a986dc38`):** 40 of 41 cases pass on behavior. The gate failed
+on four counts, each checked on main:
+- **13a** `principal_can_edit` 0/5, as on main since PR 4.
+- **06 bullpen mention** errored once at the turn budget: the coordinator called `bullpen`
+  reply with no `content` 33 times. A second run looped 6 times and recovered.
+- **15 delegated draft** made one refused `behavioral-preferences-update`, and **19b
+  contacts delegate failure** one refused `bullpen` post.
+
+Rerun 10 times on each arm: 15 at 96% (PR 9) and 89% (main, one timeout), with no refused
+calls on either; 19b 100% on both, no refused calls. Case 06's content-less reply loop
+(#2098 made the stub return the handler's error, so the loop is the model's):
+
+| Case 06 runs | main | PR 9 |
+|---|---|---|
+| Rerun 1 | 1/10 (timed out) | 2/10 (one at the turn budget) |
+| Rerun 2 | 0/20 | 0/20 |
+| Full gate | — | 2/5 |
+| Total | 1/30 | 4/35 (Fisher p ≈ 0.36) |
+
+PR 9's four loops all came in its first 15 runs, which ran beside the full smoke suite.
+
+**Smoke, full suite on PR 9:** 45 of 47 ($1.00). Pre-Meeting Prep Brief missed
+`ask-meeting-purpose` twice; Cancellation or Change Request timed out twice, searching for a
+way to book the restaurant. A/B on those two, 3 rounds each, first attempts:
+
+| Case | main | PR 9 |
+|---|---|---|
+| Pre-Meeting Prep Brief | 0/3 (2 timeouts) | 1/3 (1 timeout) |
+| Cancellation or Change Request | 2/3 (1 timeout) | 3/3 |
+
+Spend for all of PR 9's runs, judge included: about $4.30 estimated.
+
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 
 `report-agent-context --agent coordinator` on production. #2024 (`f8392d02`,

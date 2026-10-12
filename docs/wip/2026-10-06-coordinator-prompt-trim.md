@@ -252,6 +252,38 @@ operational descriptions for routing lines, and the roster went from 2,719 to 1,
 Behavior (baseline log): cases 21a–c passed 5 of 5 on both arms, and the scenario gate held
 once 16f's fixture date was fixed.
 
+**PR 9 (2026-10-12).** The `tasks` and `documents` SKILL.md bodies went from 6,157 to 3,715
+chars, so the coordinator's always-on prompt went from ~3,703 to ~3,092 tokens (budget
+3,200). contacts and ceo-inbox pin both skills and read the same text, and so does
+curia-deploy's writing-scout. Most of what left was already said where it applies:
+- **Resuming** moved into `WAKE_DISPOSITION_INSTRUCTION`, which every ordinary task wake
+  carries. The wake half of **Finishing** was already there, nearly word for word.
+- **Past-due milestones** is enforced by #1299: `task-create` wakes such a subtask at once
+  and `task-complete` refuses it for five minutes. The note `task-create` seeds is what the
+  wake reads, so it now says what to do.
+- **Browser sessions across wakes** became one write-time clause in "self-contained":
+  record the `session_id` and whether it was incognito, and resume with the same value.
+  `web-browser`'s description already covers reattaching and re-navigating. The incognito
+  point is the one it lacks, and the tool definitions have 18 bytes of headroom, so it
+  stays in the SKILL.md.
+- **Retention** is in `doc-write`'s description. **Manifest first** is what the catalog and
+  manifest blocks injected on a wake say. **Placement** is `doc-place`'s description and
+  the wake's placement block; one clause stays ("call `doc-place` before a new folder").
+
+Choices:
+- **The wake instruction, not a new turn-guidance key.** The instruction is already the
+  wake's own text, so one place holds everything a wake needs. "Pick up where its progress
+  leaves off" opens it; "you may also advance your other ready tasks" closes it, so "it" in
+  the disposition sentence still means the woken task.
+- **No coverage existed for a wake.** The scenario harness gains `from: task-wake`, built
+  with the scheduler's own `formatTaskWakeContent`, and case 22 wakes a task whose notes
+  say the next step is one nudge.
+- **"Does not restate" rows** in `pin-resolution.test.ts` guard the deletions (lesson 5),
+  replacing the SKILL.md assertion on "does not close the task".
+
+Behavior (baseline log): case 22 passed 10 of 10 on the branch, against 4 of 5 on main.
+The full scenario gate and smoke failed only on cases that miss as often on main.
+
 ### Lessons so far
 
 These apply to every later PR and to the final phase. They are also posted on #2025 and
