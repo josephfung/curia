@@ -24,8 +24,9 @@ log.
 | 4: audience in code | Merged (2026-10-09, #2092) | 9,494 | ~3,913 / 4,000 |
 | 5: principal note block on the relay | Merged (2026-10-10, #2102) | 9,494 (unchanged; turn guidance and code) | ~3,913 / 4,000 |
 | 6: prose-only rules into code | Merged (2026-10-11, #2103) | 9,065 | ~3,806 / 3,900 |
-| 7: backlog line for proactive surfacing | In review (2026-10-11) | 8,652 | ~3,703 / 3,800 |
-| 8–10, final phase | Not started | — | — |
+| 7: backlog line for proactive surfacing | Merged (2026-10-11, #2107) | 8,652 | ~3,703 / 3,800 |
+| 8: routing-oriented roster | In review (2026-10-12) | 7,387 (roster 2,719 → 1,771) | ~3,387 / 3,500 |
+| 9–10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
@@ -212,6 +213,31 @@ goes from 9,065 to 8,652 chars. Choices:
 
 Behavior (baseline log): case 20 passed 5 of 5 on raising the oldest item, against 0 of 5
 on main, and the full scenario suite was otherwise level.
+
+**PR 8 (2026-10-12).** Agent YAMLs take an optional `delegate_when`, the agent's line in the
+roster; `description` stays for people (admin UI, audit log) and is the roster line for
+an agent without one. The coordinator's Principal inbox requests and Principal calendar
+requests sections became the ceo-inbox and calendar lines, and diagnostics, meeting-debrief
+and setup-wizard swapped their operational descriptions for routing lines. The YAML goes
+from 8,652 to 7,387 chars and the roster from 2,719 to 1,771, about 2.2k chars off the
+prompt in all. Choices:
+- **One roster for every reader.** ceo-inbox and meeting-debrief read the same roster
+  through `${available_specialists}`, and curia-deploy's eval harness renders both from one
+  snapshot string through `specialistSummary()`. A separate coordinator-only roster would
+  have broken that adapter, so the lines are written to read right for any agent: ceo-inbox
+  also consults calendar and writes the reply itself.
+- **contacts and research-analyst keep their descriptions.** Both are already one routing
+  sentence; a `delegate_when` would have repeated them.
+- **The anchors stayed word for word** (lesson 9): "always borrow-then-answer … you compose
+  the reply" on the calendar line, the cold-compose sentence on the ceo-inbox line. The
+  tests that pinned them read the rendered roster now.
+- **"You have no calendar of your own" went:** `allowed_callers` enforces it, and the
+  coordinator can neither discover nor activate the calendar tools.
+- **The roster has a budget** (`rosterTokens` in `prompt-budget.test.ts`, 500), so routing
+  text moved out of the YAML cannot regrow there unchecked.
+- **The roster is not scanned for exfiltration markers,** as the descriptions were not
+  before. The moved text is routing, not defensive instructions, and the registry is
+  filled after the outbound filter is built.
 
 ### Lessons so far
 
