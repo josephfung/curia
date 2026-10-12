@@ -15,6 +15,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Scenario task wakes** — `from: task-wake` fires a parked task's wake; case 22 checks it resumes from progress. (#1954)
 - **Agent YAML `delegate_when` (public API)** — optional routing line shown in the specialist roster instead of `description`. (#1954)
 - **Backlog line** — principal turns carry counts of pending approvals, decay warnings and principal-owned tasks. (#1954, spec 02)
 - **`agent.task` (public API)** — optional `principalBacklog` carries those counts; never part of `content`. (#1954)
@@ -89,6 +90,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **`tasks` and `documents` skills** — wake-only guidance moved onto the task wake; always-on SKILL.md text 6.2k → 3.7k chars. (#1954)
 - **Specialist roster** — diagnostics, meeting-debrief and setup-wizard say when to delegate to them; 2.7k → 1.9k chars. (#1954)
 - **Behavior suites** — `web-search` is stubbed by default; `live_search: true` opts in; summaries count live searches. (#2106)
 - **`workspace-mcp` pin** — pinned with a frozen dependency tree and baked into the image; no PyPI fetch at boot. (#2010)

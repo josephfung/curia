@@ -153,7 +153,10 @@ seeded rows, stubs, model calls and spend are found through its own case context
    post on the thread and publish `agent.discuss`, which production's `BullpenDispatcher`
    turns into the coordinator's task. Scheduler cases publish the `agent.task` a
    recurring job with no linked task fires: channel `scheduler`, content
-   `{"task": <content>}`, no Dispatcher.
+   `{"task": <content>}`, no Dispatcher. Task-wake cases publish what a task's `wake_at`
+   fires: the body `formatTaskWakeContent` builds for `Scheduler.fireJob` from the case's
+   `task` (with the wake instruction), its intent anchor and the bound-task metadata. No
+   task row is written; the case stubs the task tools it expects on the task's `id`.
 3. **Capture** `tool.invoke` / `tool.result` and the coordinator's `agent.response` as the
    `system` layer. A `NO_REPLY` turn, or a reply Gate C holds for a non-principal, still
    ends the run. The runtime publishes an exact `NO_REPLY` as empty content with
@@ -331,11 +334,17 @@ seed:
     pending_approvals: 1                  #   decay_warnings, pending_approvals, principal_tasks;
     decay_warnings: 0                     #   absent counts are 0, and one must be positive
 inbound:
-  from: principal                         # principal | bullpen | scheduler | <contact key>
+  from: principal                         # principal | bullpen | scheduler | task-wake | <contact key>
   channel: cli                            # principal only; default cli
   thread: brief                           # bullpen only
-  content: "Yes"
+  content: "Yes"                          # every kind but task-wake
   email: { nylas_message_id: …, account: ops, auto_generated: false }   # email inbound only
+  task:                                   # task-wake only, in place of content
+    id: 5f1c2d3e-…                        #   a fixed UUID the case's task-* stubs match on
+    title: Collect comments on the deck
+    intent: Collect both sets of comments, then summarize them.   # the intent anchor
+    notes:                                #   progress.notes, oldest first
+      - { at: "{{time:today-1 16:40}}", note: Priya replied; next, nudge Marcus. }
 tool_stubs:
   delegate:
     - match: { agent: ceo-inbox }         # subset match; null = argument absent
