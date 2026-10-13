@@ -68,7 +68,7 @@ const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
 const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'email', 'task'] as const;
 const EMAIL_KEYS = ['nylas_message_id', 'account', 'auto_generated', 'auto_generated_signals'] as const;
-const WAKE_TASK_KEYS = ['id', 'title', 'intent', 'notes'] as const;
+const WAKE_TASK_KEYS = ['id', 'title', 'intent', 'notes', 'tags'] as const;
 const WAKE_NOTE_KEYS = ['at', 'note'] as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STUB_KEYS = ['match', 'agent', 'return', 'error'] as const;
@@ -381,11 +381,13 @@ function parseWakeTask(raw: unknown, file: string): ScenarioWakeTask {
     return { at: str(n, 'at', file, `inbound.task.notes[${i}]`), note: str(n, 'note', file, `inbound.task.notes[${i}]`) };
   });
   if (notes.length === 0) throw new CaseError(file, `inbound.task: 'notes' must list the progress the wake resumes from`);
+  const tags = strList(raw, 'tags', file, 'inbound.task');
   return {
     id,
     title: str(raw, 'title', file, 'inbound.task'),
     intent: str(raw, 'intent', file, 'inbound.task'),
     notes,
+    ...(tags.length > 0 ? { tags } : {}),
   };
 }
 
@@ -708,10 +710,10 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
 
   const { from, thread, channel } = scenario.inbound;
   const toSpecialist = scenario.agent !== COORDINATOR;
-  // The Dispatcher hands a channel inbound to the coordinator, and only the coordinator
-  // parks tasks it wakes; a specialist hears from the coordinator, a thread or its schedule.
-  if (toSpecialist && !['delegate', 'bullpen', 'scheduler'].includes(from)) {
-    throw new CaseError(file, `a case for '${scenario.agent}' takes inbound from delegate, bullpen or scheduler (got '${from}')`);
+  // The Dispatcher hands a channel inbound to the coordinator; a specialist hears from the
+  // coordinator, a thread, its schedule, or a task of its own waking.
+  if (toSpecialist && !['delegate', 'bullpen', 'scheduler', 'task-wake'].includes(from)) {
+    throw new CaseError(file, `a case for '${scenario.agent}' takes inbound from delegate, bullpen, scheduler or task-wake (got '${from}')`);
   }
   if (!toSpecialist && from === 'delegate') {
     throw new CaseError(file, `inbound from delegate fires a specialist; set the case's 'agent'`);

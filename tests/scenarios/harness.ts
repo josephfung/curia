@@ -564,14 +564,14 @@ export async function createScenarioHarness(options: { model?: string } & StackS
           // task's intent anchor and the bound-task metadata. A wake_at job carries no
           // standing, so no wakeContext.
           delivery = bus.publish('system', createAgentTask({
-            agentId: COORDINATOR,
+            agentId: agent,
             conversationId: runConversationId,
             channelId: 'scheduler',
             senderId: 'scheduler',
             content: inboundContent,
             intentAnchor: wakeTask!.intent,
             metadata: {
-              boundTask: { taskId: wakeTask!.id, errorBudget: {}, tags: [], progress: { notes: wakeTask!.notes } },
+              boundTask: { taskId: wakeTask!.id, errorBudget: {}, tags: wakeTask!.tags ?? [], progress: { notes: wakeTask!.notes } },
             },
             parentEventId: randomUUID(),
           }));

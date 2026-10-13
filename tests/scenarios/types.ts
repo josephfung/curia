@@ -196,6 +196,8 @@ export interface ScenarioWakeTask {
   intent: string;
   /** progress.notes, oldest first, as task-update appends them. */
   notes: { at: string; note: string }[];
+  /** The task's tags, as Scheduler.fireJob puts them on the bound task (e.g. `debrief-pending`). */
+  tags?: string[];
 }
 
 /**

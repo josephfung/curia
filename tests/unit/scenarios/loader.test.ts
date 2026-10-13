@@ -435,7 +435,7 @@ expected_behaviors:
   });
 
   it('rejects inbounds a specialist cannot receive and fields that belong to another inbound', () => {
-    expect(load(SPECIALIST.replace('  from: delegate\n', '  from: principal\n'))).toThrow(/takes inbound from delegate, bullpen or scheduler/);
+    expect(load(SPECIALIST.replace('  from: delegate\n', '  from: principal\n'))).toThrow(/takes inbound from delegate, bullpen, scheduler or task-wake/);
     expect(load(SPECIALIST.replace('agent: ceo-inbox\n', ''))).toThrow(/set the case's 'agent'/);
     expect(load(SPECIALIST.replace('  from: delegate\n', '  from: delegate\n  requester: nobody\n'))).toThrow(/not principal or a seeded contact/);
     expect(load(SPECIALIST.replace('  from: delegate\n', '  from: delegate\n  author: calendar\n'))).toThrow(/only for 'from: bullpen'/);
