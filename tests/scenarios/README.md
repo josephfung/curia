@@ -1,11 +1,15 @@
-# Coordinator scenario suite
+# Scenario suite
 
-Behavioral tests for the coordinator rules that only its prompt enforces (#1956). Each
-case is one inbound message with seeded state and stubbed tools. It runs N times on the
-production prompt and the model you choose. A behavior is scored either in code
-(was `delegate` called with this entry id?) or by an LLM judge that sees the tool calls
-and the reply. A `critical` behavior must fully pass at least 80% of its runs, or the
-suite exits non-zero.
+Behavioral tests for the rules that only an agent's prompt enforces: the coordinator's
+(#1956) and the specialists' (#2025). Each case is one inbound message with seeded state
+and stubbed tools. It runs N times on the production prompt and the model you choose. A
+behavior is scored either in code (was `delegate` called with this entry id?) or by an LLM
+judge that sees the tool calls and the reply. A `critical` behavior must fully pass at
+least 80% of its runs, or the suite exits non-zero.
+
+Most cases test the coordinator. A case can instead fire a task straight at a specialist
+(see [Cases for a specialist](#cases-for-a-specialist)), and a deployment can run its own
+agents' cases on this runner (see [A deployment's own agents](#a-deployments-own-agents)).
 
 Smoke (`tests/smoke/`, spec 16) asks "does the whole stack produce a good answer?". This
 suite asks "did the coordinator make the right decision?", which is usually a tool call:
@@ -278,9 +282,9 @@ every case loads and has a well-formed entry.
 
 ## Writing a case
 
-Cases are `cases/NN<letter>-<slug>.yaml`, numbered by #1956's list. Start the file with a
-comment that cites the rule it tests: a section of `agents/coordinator.yaml`, or the
-trigger guidance in `src/agents/prompts/` that now carries it (#1959). A stub that stands
+Cases are `cases/NN<letter>-<slug>.yaml`, numbered by #1956's list (specialists from 30,
+#2025). Start the file with a comment that cites the rule it tests: a section of the
+agent's YAML, or the trigger guidance in `src/agents/prompts/` that now carries it (#1959). A stub that stands
 in for a tool whose real result carries `next_step` must carry it too. Two
 principles:
 
@@ -410,6 +414,75 @@ refused in `description` and `failure_modes`, which reach the judge as written: 
 
 After adding a case, run it (`--case`, a few runs) so the CLI records its stub coverage,
 and commit the updated `stub-coverage.json`.
+
+## Cases for a specialist
+
+`agent: <specialist>` (#2025) points a case at a specialist: the inbound reaches it, its
+reply ends the run, and checks, stubs and the judge read its calls unless they name
+another agent. It hears from the places it does in production:
+
+```yaml
+agent: ceo-inbox
+inbound:
+  from: delegate            # the coordinator's delegate call
+  requester: principal      # or a seeded contact key: whose request it is (default principal)
+  email: { nylas_message_id: m-1, account: ops }   # optional: the stamped Message ID / Account lines
+  content: "List my inbox rules."                   # the brief
+```
+
+- `from: delegate` publishes the agent.task production's delegate handler would
+  (`skills/delegate/handler.ts`): the internal channel from the coordinator, the brief, the
+  delegation origin, and the requester's originator and live-turn signal, so the specialist
+  builds its requester-identity block and passes the same skill gates.
+- `from: bullpen` with `thread:` posts on a seeded thread the agent participates in. Set
+  `author:` to the participant posting it (default: the thread's creator), as when calendar
+  answers a consult ceo-inbox opened.
+- `from: scheduler` fires one of the agent's cron jobs: copy its `schedule:` task text.
+- `from: task-wake` wakes one of its tasks; `task.tags` go on the bound task, as
+  Scheduler.fireJob puts them.
+
+Only the case's agent runs, so a stub or check scoped to another agent is a load error,
+and `delegation: real` is for coordinator cases. A specialist case holds only its own
+`tool_stubs` to the agent's reach: a shared set such as `human-channels` stubs sends a
+narrow specialist never has, and those stubs go unused.
+
+Specialist cases are numbered by agent: 30 ceo-inbox, 31 calendar, 32 meeting-debrief,
+33 contacts. Each carries the tag `specialist-<agent>`, so `--tags specialist-calendar`
+runs one agent's cases. Before changing a specialist's prompt, run its cases on both
+prompts; see [A/B against main](#ab-against-main).
+
+### A/B against main
+
+`--overlay <dir>` lays a directory's `agents/`, `skills/` and `config/` over the checkout
+(next section). A directory holding only `agents/<agent>.yaml` from `origin/main` is main's
+prompt on this branch's harness, which is the main arm of an A/B:
+
+```bash
+mkdir -p /tmp/main-arm/agents
+git show origin/main:agents/calendar.yaml > /tmp/main-arm/agents/calendar.yaml
+pnpm scenarios --tags specialist-calendar --runs 5 --overlay /tmp/main-arm --coverage /tmp/ab.json --model …
+pnpm scenarios --tags specialist-calendar --runs 5 --coverage /tmp/ab.json --model …
+```
+
+Pass a scratch `--coverage` for A/B runs, so only a clean run of the branch writes the
+committed record.
+
+## A deployment's own agents
+
+A deployment repo (curia-deploy) keeps its agents' cases next to their prompts and runs
+them on this runner:
+
+| Flag | Meaning |
+|---|---|
+| `--overlay <dir>` | Lay the deployment's `custom/` over core's agents, skills and config, as its image does: agents and skills copied over core's, `config/skills.yaml` replaced, `config/local.yaml` added (`overlay.ts`). |
+| `--cases <dir>` | Run these cases instead of `tests/scenarios/cases`. |
+| `--stubs <dir>` | Stub sets searched before core's (a set here can replace one of core's). |
+| `--coverage <file>` | Read and write this stub-coverage record instead of core's. |
+| `--mcp-snapshots <dir>` | MCP tools/list snapshots searched before `tests/fixtures/mcp`, for the deployment's own servers. |
+
+The results record the deployment repo's commit (`overlayCommit`) beside core's. The
+database needs the `agent_registry` (and `tool_registry`) rows that enable the deployment's
+agents, as its production database has them.
 
 ## Real delegation
 
