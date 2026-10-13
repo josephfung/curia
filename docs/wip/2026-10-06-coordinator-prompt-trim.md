@@ -27,7 +27,8 @@ log.
 | 7: backlog line for proactive surfacing | Merged (2026-10-11, #2107) | 8,652 | ~3,703 / 3,800 |
 | 8: routing-oriented roster | Merged (2026-10-12, #2109) | 8,652 (unchanged; roster 2,719 → 1,883) | ~3,703 / 3,800 |
 | 9: wake-only SKILL.md content | Merged (2026-10-13, #2122) | 8,652 (unchanged; SKILL.md 6,157 → 3,715) | ~3,092 / 3,200 |
-| 10, final phase | Not started | — | — |
+| 10: negation pass on the injected blocks | In review (2026-10-13) | 8,652 (unchanged; injected blocks only) | ~3,092 / 3,200 |
+| Final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
@@ -284,6 +285,42 @@ Choices:
 Behavior (baseline log): case 22 passed 10 of 10 on the branch, against 4 of 5 on main.
 The full scenario gate and smoke failed only on cases that miss as often on main.
 
+**PR 10 (2026-10-13).** Three of the four injected blocks say what to do instead of what
+not to; none of them counts toward the budget.
+- **Bullpen reply rule.** A thread reply goes on the thread with `bullpen`, so an
+  acknowledgment or status note stays there. A message the thread asks you to send is a
+  separate action, made with the send skill the request calls for. The old "never with …
+  email-send" read as forbidding ceo-inbox's urgent escalation, which asks the coordinator
+  on a thread to Signal the principal (#2033).
+- **Non-principal reply-shaped guidance.** The bullet listing questions never to ask the
+  sender went. The bullets after it already say what to do: one attempt to place the
+  message, then a warm acknowledgment, with the question for the principal in the note.
+- **Security block.** No NEVER, MUST, MAY or capitals. "Denied" is refused politely
+  however reasonable the request seems, and a decline is all an external sender hears
+  about trust scores. The "provisional" and "blocked" bullets went (lesson 1): tier
+  `unknown` replaced the provisional status in migration 055, and the sender line's
+  AUTHORIZATION text gives the rule for that tier on the turn it applies. The dispatcher
+  rejects blocked senders before the coordinator sees them. The old provisional bullet
+  also contradicted the sender line ("inform the principal via CLI" against read-only mode).
+
+Choices:
+- **The date guardrail is unchanged.** Rewording its "Monday May 19" paragraph, with or
+  without its first sentence's "always", went with Natural Language Deadlines passing 3 of
+  12 first attempts against main's 7 of 11. Smoke's date reading is noisy on both prompts,
+  so this is borderline, but the item is the smallest in the PR. It needs its own A/B.
+- **The reply-shaped acknowledgment and note sentences kept their wording.** Reworded
+  ("write as someone who has the thread in hand … What the message refers to is a question
+  for the principal"), 2 of 10 runs of case 04b lost the note: one wrote none, one put it
+  untagged into the reply to the sender. Main tagged 10 of 10, and so did the shipped
+  version, which deletes only the never-ask bullet (lesson 13).
+- **New case 06b,** a bullpen send request in ceo-inbox's urgent format. Nothing covered
+  the path before. Main sends correctly too, so the case guards the rewrite rather than
+  fixing a failure.
+
+Behavior (baseline log): 06b passed 15 of 15, 06 looped on a content-less reply in 1 of 15
+runs against main's 2 of 10, and the red team's external cohort scored 167 of 174 against
+main's 164.
+
 ### Lessons so far
 
 These apply to every later PR and to the final phase. They are also posted on #2025 and
@@ -337,6 +374,11 @@ curia-deploy#276.
     facts before acting. A roster line at the end of the prompt is enough for a specialist
     used rarely or for one narrow job (setup, diagnostics, debriefs). Routing the coordinator
     applies on most turns needs to sit in the prompt body, where it makes the decision.
+13. **Rewrite the prohibition, not the instruction beside it.** PR 10's first draft of the
+    reply-shaped guidance reworded the sentence that tells the model to write the note as well
+    as deleting the never-ask bullet above it, and the note went missing in 2 of 10 runs. The
+    sentence that triggers an action is load-bearing in its exact words; change it only with
+    its own A/B.
 
 ## Goal
 

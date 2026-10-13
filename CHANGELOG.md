@@ -91,7 +91,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
-- **Injected prompt blocks** — bullpen rule names requested sends; security, date and reply-shaped guidance say what to do. (#1954)
+- **Injected prompt blocks** — bullpen rule names requested sends; security and reply-shaped guidance say what to do. (#1954)
 - **`tasks` and `documents` skills** — wake-only guidance moved onto the task wake; always-on SKILL.md text 6.2k → 3.7k chars. (#1954)
 - **Specialist roster** — diagnostics, meeting-debrief and setup-wizard say when to delegate to them; 2.7k → 1.9k chars. (#1954)
 - **Behavior suites** — `web-search` is stubbed by default; `live_search: true` opts in; summaries count live searches. (#2106)
