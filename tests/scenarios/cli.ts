@@ -144,7 +144,8 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
         else if (!reachable(tool, [agent])) problems.push(`${c.name}: a '${tool}' stub is scoped to '${agent}', which can neither be offered nor activate it`);
       }
     }
-    for (const tool of c.explicitStubTools) {
+    // A specialist's case holds only its own stubs to the agent's reach (see ownStubTools).
+    for (const tool of c.agent === COORDINATOR ? c.explicitStubTools : c.ownStubTools) {
       const unscoped = (c.toolStubs[tool] ?? []).some(st => st.agent === undefined);
       if (unscoped && !reachable(tool, runAgents)) {
         problems.push(`${c.name}: stubs '${tool}', which ${unreachableBy(runAgents)} in this stack`);

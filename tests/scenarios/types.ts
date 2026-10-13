@@ -257,6 +257,12 @@ export interface ScenarioCase {
    */
   explicitStubTools: string[];
   /**
+   * Tools the case's own tool_stubs name, without its stub sets'. A case aimed at a
+   * specialist (#2025) holds only these to the agent's reach: a shared set such as
+   * human-channels stubs sends a narrow specialist never has, and those stubs go unused.
+   */
+  ownStubTools: string[];
+  /**
    * web-search runs for real instead of answering from `defaults` (#2106): for a case
    * about searching itself. Each call spends a Tavily credit.
    */

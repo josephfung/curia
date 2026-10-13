@@ -610,6 +610,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     inbound: parseInbound(raw['inbound'], file),
     toolStubs: stubSets.stubs,
     explicitStubTools: stubSets.explicit,
+    ownStubTools: Object.keys(raw['tool_stubs'] && isObject(raw['tool_stubs']) ? raw['tool_stubs'] : {}).sort(),
     ...(liveSearch ? { liveSearch: true as const } : {}),
     expectedBehaviors: parseBehaviors(raw, file),
     failureModes: strList(raw, 'failure_modes', file, 'case'),
