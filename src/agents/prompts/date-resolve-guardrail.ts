@@ -13,9 +13,9 @@
  */
 export const DATE_RESOLVE_GUARDRAIL = [
   '### Date & time',
-  'When interpreting relative dates ("next Friday", "the Monday after"), resolve',
-  'them to specific calendar dates and state the dates explicitly so the user can',
-  'confirm you understood correctly.',
+  'When interpreting relative dates ("next Friday", "the Monday after"), always',
+  'resolve them to specific calendar dates and state the dates explicitly so the',
+  'user can confirm you understood correctly.',
   'The current date, time, and timezone are injected each turn when a timezone is configured.',
   '',
   'Day-of-week arithmetic is unreliable in every language model. Whenever you',
