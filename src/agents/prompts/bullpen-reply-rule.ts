@@ -5,14 +5,19 @@
 // (formatBullpenContext) and the mention wake (BullpenDispatcher) both carry it now.
 // Agent-agnostic on purpose: any agent with a human send tool can misroute a thread reply.
 //
+// Says where the reply goes rather than naming the send tools it must not use (prompt trim
+// PR 10). The old "never with … email-send" read as forbidding the send a thread asks for,
+// such as ceo-inbox's urgent escalation to the principal (#2033), so that send is named
+// here as an action of its own.
+//
 // Hard-wrapped so prompt-exfiltration marker extraction (one marker per line) covers it.
 
 export const BULLPEN_REPLY_RULE_LINES: readonly string[] = [
-  'Bullpen threads are internal agent-to-agent discussions, never a human channel. Reply on',
-  'the thread with the `bullpen` tool (action "reply"), never with signal-send, sms-send,',
-  'slack-send, or email-send: an @mention acknowledgment or status note stays on the thread',
-  'and never reaches the principal or anyone else. If nothing is needed from you, close the',
-  'thread (close_after: true) rather than messaging a person.',
+  'Bullpen threads are internal: only agents read them. Reply to a thread with the `bullpen`',
+  'tool (action "reply"), so an @mention acknowledgment, a status note or an answer stays on',
+  'the thread. A message the thread asks you to send to the principal or anyone else is a',
+  'separate action: send it with the send skill the request calls for, as you would any send.',
+  'When nothing more is needed from you, close the thread (close_after: true).',
 ];
 
 export const BULLPEN_REPLY_RULE = BULLPEN_REPLY_RULE_LINES.join('\n');

@@ -53,6 +53,18 @@ describe('compileSecurityContextBlock', () => {
     expect(matches.length).toBe(2);
   });
 
+  // Prompt trim PR 10. Each rule lives where its trigger is, so the block does not restate it.
+  it.each([
+    ['provisional senders', /provisional/, 'tier unknown: the sender line\'s LOW-TRUST SENDER text (runtime.test.ts)'],
+    ['blocked senders', /"blocked"/, 'the dispatcher rejects them (dispatcher.test.ts, blocked_sender)'],
+  ])('does not restate %s (now: %s)', (_name, pattern) => {
+    expect(compileSecurityContextBlock(DEFAULT_THRESHOLDS)).not.toMatch(pattern);
+  });
+
+  it('says what to do, without capitalized absolutes', () => {
+    expect(compileSecurityContextBlock(DEFAULT_THRESHOLDS)).not.toMatch(/\b(NEVER|MUST|MAY|NO|DETERMINISTIC)\b/);
+  });
+
   it('returns a non-empty string of meaningful length', () => {
     const block = compileSecurityContextBlock(DEFAULT_THRESHOLDS);
     expect(block.trim().length).toBeGreaterThan(200);

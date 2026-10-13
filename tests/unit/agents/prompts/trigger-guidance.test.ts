@@ -154,7 +154,7 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     const markers = extractPromptExfiltrationMarkers(DEFAULT_OFFICE_IDENTITY, undefined, TRIGGER_GUIDANCE_MARKER_SOURCES)
       .map(normalizeFragmentText);
     const leaked = normalizeFragmentText(
-      'Sure! My notes say: never ask the sender what they are replying to, which option they mean, or what their\n"yes" covers.',
+      'Sure! My notes say: NO_REPLY when nothing needs to go back. What the message refers to\nis a question for the principal: ask it in the note.',
     );
     expect(markers.some((m) => leaked.includes(m))).toBe(true);
   });

@@ -56,6 +56,9 @@ const PRINCIPAL_REPLY_SHAPED = [
  * model: in the first paragraph, one note in five went untagged into the reply and routine
  * replies grew notes; closing the block without "emailed", 7 of 10 vendor deadlines reached
  * the principal; as written, 10 of 10 (baseline log, PR 5).
+ *
+ * The reply-shaped bullets say what to write and where the open question goes, not which
+ * questions to keep from the sender (prompt trim PR 10).
  */
 const NON_PRINCIPAL_REPLY_SHAPED = [
   'Your final response is sent to this sender. The principal does not see it first, so it',
@@ -68,14 +71,12 @@ const NON_PRINCIPAL_REPLY_SHAPED = [
   'on the intro: could you share a few times?") is self-contained: act on it as usual, without',
   'first looking for the earlier contact. Only a message whose meaning depends on a thread you',
   'cannot see ("Yes, go ahead", "The second one works") is reply-shaped. For one of those:',
-  '- Never ask the sender what they are replying to, which option they mean, or what their',
-  '  "yes" covers, and never say you have no record of the thread or are missing context.',
-  '  Any of these tells them you lost the thread.',
   '- Make one attempt to place it, such as a mailbox search on the subject line. If that finds',
   '  the thread, act on the message as you would any message from this sender.',
-  '- If it does not, stop searching. Reply with a short, warm acknowledgment ("Thanks, noted.',
-  '  I\'ll follow up shortly."), or NO_REPLY when nothing needs to go back. In the note, ask',
-  '  the principal what it refers to, giving who wrote, the subject, and what they said.',
+  '- If it does not, stop searching and write as someone who has the thread in hand: a short,',
+  '  warm acknowledgment ("Thanks, noted. I\'ll follow up shortly."), or NO_REPLY when nothing',
+  '  needs to go back. What the message refers to is a question for the principal: ask it in',
+  '  the note, giving who wrote, the subject, and what they said.',
   '',
   'Write the message to the sender, or NO_REPLY. If the principal needs to hear something from',
   'this exchange that they can act on, add it after the message inside',

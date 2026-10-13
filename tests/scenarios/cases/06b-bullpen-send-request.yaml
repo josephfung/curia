@@ -1,0 +1,94 @@
+# Case 6b (prompt trim PR 10): a bullpen thread can ask for a send. ceo-inbox escalates an
+# urgent email by asking the coordinator, on a thread, to Signal the principal (its 🚨
+# Urgent format in agents/ceo-inbox.yaml); the 2026-10-07 incident in #2033 was this path.
+# The send is its own action, apart from any reply on the thread. Rule: BULLPEN_REPLY_RULE
+# (src/agents/prompts/bullpen-reply-rule.ts), which until PR 10 named signal-send among the
+# tools a thread reply must "never" use. Case 06 is the other half: an acknowledgment stays
+# on the thread.
+#
+# Every human-channel send is stubbed to succeed, so the case scores the choice of tool,
+# recipient and channel rather than a refusal.
+name: bullpen send request
+description: >
+  ceo-inbox posts on a bullpen thread with the coordinator, mentioning it: an urgent email
+  from Alice Chen needs the principal's decision on the merger terms by Friday, and it asks
+  the coordinator to send the principal a Signal message with a context bridge back to
+  ceo-inbox. The coordinator sends that message to the principal on Signal.
+tags: [bullpen, channel, recipient]
+stub_sets: [human-channels]
+seed:
+  bullpen:
+    - key: urgent
+      topic: "Urgent: Alice Chen — merger terms"
+      creator: ceo-inbox
+      participants: [ceo-inbox, coordinator]
+      content: Triage found one urgent email needing the principal's decision.
+      mentions: []
+inbound:
+  from: bullpen
+  thread: urgent
+  content: |
+    @coordinator I'd like you to send a message to the principal.
+
+    Urgency: immediate
+    Channel: Signal
+    Message: "Alice Chen — Merger terms: she needs your decision on the revised terms by Friday EOD."
+    Context bridge: agent_id=ceo-inbox, expected_reply="Decision or follow-up instruction", delegation_hint="ceo-inbox", expires_in_hours=24
+tool_stubs:
+  bullpen:
+    - match: { action: get_thread }
+      return:
+        thread:
+          id: "{{thread:urgent}}"
+          topic: "Urgent: Alice Chen — merger terms"
+          status: open
+          participants: [ceo-inbox, coordinator]
+        messages:
+          - sender: ceo-inbox
+            content: Triage found one urgent email needing the principal's decision.
+          - sender: ceo-inbox
+            content: >
+              @coordinator I'd like you to send a message to the principal. Urgency:
+              immediate. Channel: Signal. Message: "Alice Chen — Merger terms: she needs
+              your decision on the revised terms by Friday EOD." Context bridge:
+              agent_id=ceo-inbox, expected_reply="Decision or follow-up instruction",
+              delegation_hint="ceo-inbox", expires_in_hours=24
+    # As in case 06: a reply missing a required field gets the handler's error (#2098).
+    - match: { action: reply, thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { action: reply, thread_id: "" }
+      error: "Missing required field: 'thread_id'"
+    - match: { action: reply, content: null }
+      error: "Missing required field: 'content'"
+    - match: { action: reply, content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { posted: true, thread_id: "{{thread:urgent}}" }
+expected_behaviors:
+  - id: signals_principal
+    weight: critical
+    description: Calls signal-send with `recipient` set to "principal".
+    check:
+      called: signal-send
+      with: { recipient: principal }
+  - id: message_carries_request
+    weight: critical
+    description: The Signal message carries the request's content (Alice Chen, the merger terms, Friday).
+    check:
+      called: signal-send
+      contains: { message: Friday }
+  - id: requested_channel_only
+    weight: important
+    description: Sends nothing on email, SMS or Slack; the request named Signal.
+    check:
+      not_called: [email-send, email-reply, sms-send, slack-send]
+  - id: bridges_to_ceo_inbox
+    weight: important
+    description: Passes a context_bridge whose agent_id is ceo-inbox, so the principal's reply routes back.
+    check:
+      called: signal-send
+      contains: { context_bridge: ceo-inbox }
+failure_modes:
+  - Replies on the thread that it will pass the message on, and sends nothing
+  - Sends the message by email instead of Signal
+  - Types the principal's number into `recipient` instead of "principal"

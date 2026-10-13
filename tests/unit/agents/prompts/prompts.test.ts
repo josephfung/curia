@@ -12,6 +12,11 @@ describe('shared prompt guardrails (#1595 / ADR-038)', () => {
     expect(DATE_RESOLVE_GUARDRAIL).toContain('### Date & time');
   });
 
+  it('date-resolve guardrail quotes no weekday-date pair (prompt trim PR 10)', () => {
+    // A quoted pair, even as the thing to check, puts that pair into the context.
+    expect(DATE_RESOLVE_GUARDRAIL).not.toMatch(/(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day,? [A-Z][a-z]+ \d/);
+  });
+
   it('pronoun guardrail resolves my/your/their before delegate', () => {
     expect(PRONOUN_RESOLUTION_GUARDRAIL).toContain('My calendar');
     expect(PRONOUN_RESOLUTION_GUARDRAIL).toContain('Your calendar');
