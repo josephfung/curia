@@ -1,6 +1,6 @@
 {
   "name": "bullpen-close",
-  "description": "Close a Bullpen thread without posting. Only its opener or the coordinator may close it.",
+  "description": "Close a Bullpen thread without posting. Only its opener or the coordinator may.",
   "version": "0.1.0",
   "sensitivity": "normal",
   "action_risk": "low",

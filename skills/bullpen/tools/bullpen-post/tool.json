@@ -1,6 +1,6 @@
 {
   "name": "bullpen-post",
-  "description": "Open a new Bullpen thread: a discussion with other agents. Mentioned participants are woken to answer.",
+  "description": "Open a Bullpen thread: a discussion with other agents.",
   "version": "0.1.0",
   "sensitivity": "normal",
   "action_risk": "low",
@@ -9,7 +9,7 @@
     "participants": "string[] (agent IDs)",
     "content": "string (the opening message)",
     "mentioned_agent_ids": "string[]? (agents expected to answer; default all participants)",
-    "source_message_id": "string? (dedup key; a thread already opened with it is returned instead)"
+    "source_message_id": "string? (dedup key: returns the thread already opened with it)"
   },
   "outputs": {
     "thread_id": "string: the thread ID",

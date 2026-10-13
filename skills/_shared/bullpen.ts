@@ -85,16 +85,35 @@ export function threadMissResult(ctx: ToolContext, threadId: string, tool: strin
   return { success: false, error: miss.error };
 }
 
-/** The context every bullpen tool needs, narrowed. */
+/** What bullpen-read and bullpen-close need: the service and the calling agent. */
 export interface BullpenToolContext {
   service: BullpenService;
-  bus: EventBus;
   agentId: string;
+}
+
+/** What bullpen-post and bullpen-reply also need, to publish agent.discuss. */
+export interface BullpenPublishContext extends BullpenToolContext {
+  bus: EventBus;
   taskEventId: string;
 }
 
-/** Infrastructure the bundle's tools require. Returns the refusal when any is absent. */
+/**
+ * Infrastructure for a tool that only reads or closes. Returns the refusal when any is
+ * absent. The execution layer injects only declared capabilities, so a tool's guard must
+ * ask for no more than its manifest declares (bullpen-capabilities.test.ts).
+ */
 export function requireBullpenContext(ctx: ToolContext): BullpenToolContext | ToolResult {
+  if (!ctx.bullpenService) {
+    return { success: false, error: 'BullpenService not available in context' };
+  }
+  if (!ctx.agentId) {
+    return { success: false, error: 'agentId not available in context' };
+  }
+  return { service: ctx.bullpenService, agentId: ctx.agentId };
+}
+
+/** Infrastructure for a tool that posts and publishes. Returns the refusal when any is absent. */
+export function requirePublishContext(ctx: ToolContext): BullpenPublishContext | ToolResult {
   if (!ctx.bullpenService) {
     return { success: false, error: 'BullpenService not available in context' };
   }
@@ -110,8 +129,8 @@ export function requireBullpenContext(ctx: ToolContext): BullpenToolContext | To
   return { service: ctx.bullpenService, bus: ctx.bus, agentId: ctx.agentId, taskEventId: ctx.taskEventId };
 }
 
-/** Distinguishes a refusal from requireBullpenContext from the narrowed context. */
-export function isToolResult(value: BullpenToolContext | ToolResult): value is ToolResult {
+/** Distinguishes a refusal from the narrowed context. */
+export function isToolResult<T extends BullpenToolContext>(value: T | ToolResult): value is ToolResult {
   return 'success' in value;
 }
 

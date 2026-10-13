@@ -6,11 +6,11 @@
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import { createAgentDiscuss } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
-import { isToolResult, requireBullpenContext, requiredString, runBullpenTool } from '../../../_shared/bullpen.js';
+import { isToolResult, requirePublishContext, requiredString, runBullpenTool } from '../../../_shared/bullpen.js';
 
 export class BullpenPostHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const bp = requireBullpenContext(ctx);
+    const bp = requirePublishContext(ctx);
     if (isToolResult(bp)) return bp;
 
     return runBullpenTool(ctx, 'bullpen-post', async () => {

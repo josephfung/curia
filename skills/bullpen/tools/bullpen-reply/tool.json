@@ -6,8 +6,9 @@
   "action_risk": "low",
   "inputs": {
     "thread_id": "string",
-    "content": "string (the message)",
-    "close_after": "boolean? (true closes the thread after posting; use it when your reply concludes the discussion)"
+    "content": "string",
+    "mentioned_agent_ids": "string[]? (agents expected to answer)",
+    "close_after": "boolean? (true closes the thread after posting, when your reply concludes it)"
   },
   "outputs": {
     "thread_id": "string: the thread ID",

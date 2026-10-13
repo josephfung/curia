@@ -446,7 +446,10 @@ describe('on-disk bullpen bundle (#2126)', () => {
     if (disc.manifest && disc.manifest.name.startsWith('bullpen')) tools.register(disc.manifest, noopHandler);
   }
   const skills = new SkillRegistry();
-  skills.register(parsed, resolve(skillsDir, 'bullpen'));
+  skills.register(
+    { name: parsed.name, description: parsed.description, tools: parsed.tools ?? [], instructions: parsed.instructions },
+    resolve(skillsDir, 'bullpen'),
+  );
   registerSyntheticSingletonSkills(tools, skills);
 
   it('has no SKILL.md body, so the bundle adds nothing to the always-on prompt', () => {
@@ -463,7 +466,7 @@ describe('on-disk bullpen bundle (#2126)', () => {
   it('marks each tool\'s own fields required, so a reply requires content', () => {
     const required = Object.fromEntries(
       tools.toToolDefinitions(['bullpen-post', 'bullpen-reply', 'bullpen-read', 'bullpen-close'])
-        .map(def => [def.name, [...def.input_schema.required].sort()]),
+        .map(def => [def.name, [...(def.input_schema.required ?? [])].sort()]),
     );
     expect(required).toEqual({
       'bullpen-post': ['content', 'participants', 'topic'],

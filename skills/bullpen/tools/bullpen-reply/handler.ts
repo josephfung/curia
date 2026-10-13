@@ -9,12 +9,12 @@ import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skill
 import { createAgentDiscuss } from '../../../../src/bus/events.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
 import {
-  isToolResult, requireBullpenContext, requiredString, runBullpenTool, threadMissResult,
+  isToolResult, requirePublishContext, requiredString, runBullpenTool, threadMissResult,
 } from '../../../_shared/bullpen.js';
 
 export class BullpenReplyHandler implements ToolHandler {
   async execute(ctx: ToolContext): Promise<ToolResult> {
-    const bp = requireBullpenContext(ctx);
+    const bp = requirePublishContext(ctx);
     if (isToolResult(bp)) return bp;
 
     return runBullpenTool(ctx, 'bullpen-reply', async () => {

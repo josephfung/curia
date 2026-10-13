@@ -3,9 +3,9 @@
   "cases": {
     "bullpen mention stays on thread": {
       "unstubbed": 0,
-      "runs": 5,
+      "runs": 40,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-10T14:27:26.339Z"
+      "recordedAt": "2026-10-13T23:18:09.039Z"
     },
     "bullpen send request": {
       "unstubbed": 0,
