@@ -64,6 +64,8 @@ interface Args {
   casesDir?: string;
   stubsDir?: string;
   coverageFile?: string;
+  /** MCP tools/list snapshots for the overlay's own servers (format: tests/fixtures/mcp). */
+  mcpSnapshots?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -90,6 +92,7 @@ function parseArgs(argv: string[]): Args {
     casesDir: optionalPath(value('--cases')),
     stubsDir: optionalPath(value('--stubs')),
     coverageFile: optionalPath(value('--coverage')),
+    mcpSnapshots: optionalPath(value('--mcp-snapshots')),
   };
 }
 
@@ -311,7 +314,11 @@ async function main(): Promise<void> {
   const overlay = args.overlay ? buildOverlay(args.overlay, REPO_ROOT) : undefined;
   let harness: ScenarioHarness;
   try {
-    harness = await createScenarioHarness({ model: args.model, ...(overlay ?? {}) });
+    harness = await createScenarioHarness({
+      model: args.model,
+      ...(overlay ?? {}),
+      ...(args.mcpSnapshots ? { mcpSnapshotDirs: [args.mcpSnapshots] } : {}),
+    });
   } catch (e) {
     overlay?.cleanup();
     err(`\nFailed to boot: ${e instanceof Error ? e.message : String(e)}`);

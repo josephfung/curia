@@ -19,7 +19,7 @@ import type { StackSources } from './harness.js';
 /** The parts of a deployment's `custom/` directory the image lays over core. */
 const LAYERS = ['agents', 'skills', 'config'] as const;
 
-export interface Overlay extends Required<StackSources> {
+export interface Overlay extends Required<Pick<StackSources, 'agentsDir' | 'skillsDir' | 'configDir'>> {
   /** Remove the temp tree (the overlay's own files are untouched). */
   cleanup(): void;
 }

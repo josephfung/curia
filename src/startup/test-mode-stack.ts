@@ -236,6 +236,11 @@ export interface TestModeStackOptions {
    * and skills.yaml laid over it, as that deployment's image does.
    */
   configDir?: string;
+  /**
+   * MCP tools/list snapshot directories searched before core's tests/fixtures/mcp: a
+   * deployment's own servers, for the scenario suite's --overlay.
+   */
+  mcpSnapshotDirs?: string[];
 }
 
 export interface TestModeStack {
@@ -681,6 +686,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     const snapshotMcp = registerSnapshotMcpServers({
       configDir,
       snapshotDir: MCP_SNAPSHOT_DIR,
+      ...(options.mcpSnapshotDirs ? { extraSnapshotDirs: options.mcpSnapshotDirs } : {}),
       toolRegistry,
       skillRegistry,
       skillsDir,

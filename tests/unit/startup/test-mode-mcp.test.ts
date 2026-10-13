@@ -132,6 +132,25 @@ describe('registerSnapshotMcpServers', () => {
     }
   });
 
+  it('prefers a snapshot in an extra directory, as a deployment overlay supplies its own', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-snapshots-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'google-workspace.tools.json'), JSON.stringify({
+        server: 'google-workspace', source: 'deployment', captured: '2026-10-13',
+        tools: [{ name: 'search_drive_files', description: 'narrower list', inputSchema: { type: 'object', properties: {} } }],
+      }));
+      const toolRegistry = new ToolRegistry();
+      const result = registerSnapshotMcpServers({
+        configDir: CONFIG_DIR, snapshotDir: SNAPSHOT_DIR, extraSnapshotDirs: [dir], toolRegistry,
+        skillRegistry: new SkillRegistry(), skillsDir: SKILLS_DIR, logger,
+      });
+      expect([...result.tools]).toEqual(['search_drive_files']);
+      expect(toolRegistry.get('update_drive_file')).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a snapshot for the wrong server or with no tools', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-snapshots-'));
     try {

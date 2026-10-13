@@ -230,6 +230,8 @@ export interface StackSources {
   agentsDir?: string;
   skillsDir?: string;
   configDir?: string;
+  /** MCP tools/list snapshots searched before core's: a deployment's own servers. */
+  mcpSnapshotDirs?: string[];
 }
 
 export async function createScenarioHarness(options: { model?: string } & StackSources = {}): Promise<ScenarioHarness> {
@@ -263,6 +265,7 @@ export async function createScenarioHarness(options: { model?: string } & StackS
     ...(options.agentsDir ? { agentsDir: options.agentsDir } : {}),
     ...(options.skillsDir ? { skillsDir: options.skillsDir } : {}),
     ...(options.configDir ? { configDir: options.configDir } : {}),
+    ...(options.mcpSnapshotDirs ? { mcpSnapshotDirs: options.mcpSnapshotDirs } : {}),
     wrapExecutionLayer: (layer) => controller.wrap(layer),
     wrapBullpenService: (bullpen) => scopedBullpen(bullpen, currentScope),
     // Times each model call against its run, and refuses a cancelled run's calls.

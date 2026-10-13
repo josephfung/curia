@@ -149,20 +149,26 @@ export interface SnapshotMcpResult {
 export function registerSnapshotMcpServers(params: {
   configDir: string;
   snapshotDir: string;
+  /**
+   * More snapshot directories, searched before `snapshotDir`: a deployment's own servers
+   * (the scenario suite's --overlay), or its narrower list for a server core also has.
+   */
+  extraSnapshotDirs?: string[];
   toolRegistry: ToolRegistry;
   skillRegistry: SkillRegistry;
   skillsDir: string;
   logger: Logger;
 }): SnapshotMcpResult {
   const { configDir, snapshotDir, toolRegistry, skillRegistry, skillsDir, logger } = params;
+  const dirs = [...(params.extraSnapshotDirs ?? []), snapshotDir];
   const projected = new Map<string, string[]>();
   const tools = new Set<string>();
   const serversWithoutSnapshot: string[] = [];
   const problems: string[] = [];
 
   for (const entry of loadSkillsConfig(configDir).servers ?? []) {
-    const file = path.join(snapshotDir, `${entry.name}.tools.json`);
-    if (!fs.existsSync(file)) {
+    const file = dirs.map(dir => path.join(dir, `${entry.name}.tools.json`)).find(f => fs.existsSync(f));
+    if (!file) {
       serversWithoutSnapshot.push(entry.name);
       continue;
     }
