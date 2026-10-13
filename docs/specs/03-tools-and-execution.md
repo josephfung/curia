@@ -282,7 +282,7 @@ This means a "timed out" result is **not the same as "no work happened"**. Calle
 
 Skill handlers should be designed so that a timeout leaves no half-committed visible state:
 
-- If the skill's purpose is to **create a thing** (a thread, a draft, a message), persist that thing as the first awaited step, then make every downstream step fire-and-forget. `bullpen` follows this pattern: `openThread()` (synchronous, awaited) followed by `bus.publish(agent.discuss)` (fire-and-forget, with a `.catch` for logging) — agents see the new thread via pending-thread context injection even if the publish never fires.
+- If the skill's purpose is to **create a thing** (a thread, a draft, a message), persist that thing as the first awaited step, then make every downstream step fire-and-forget. `bullpen-post` follows this pattern: `openThread()` (synchronous, awaited) followed by `bus.publish(agent.discuss)` (fire-and-forget, with a `.catch` for logging) — agents see the new thread via pending-thread context injection even if the publish never fires.
 - If the skill's purpose is to **deliver a side effect that cannot be made fire-and-forget** (a wire-level send), the timeout must be set comfortably above the channel's p99 latency, and callers must be instructed not to retry.
 - Skills that internally `await` long-running infrastructure (e.g. an LLM call as part of `infraLlm`) must propagate timeouts so the skill's own timeout is the effective deadline.
 
@@ -320,7 +320,7 @@ The framework ships with these skills (in `skills/` as part of core):
 - `config-store` — generic namespaced key-value store for persistent agent configuration; backs `company`, `meeting_links`, `travel_preferences`, `loyalty_programs`, `writing_config`, and any future per-agent config needs
 - `entity-context` — assemble full context for a list of contacts/entities
 - `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
-- `bullpen` — inter-agent discussion threads; `post`/`reply` persist the thread/message synchronously and fire-and-forget the `agent.discuss` publish so a slow subscriber can't push the handler past its timeout (see *Timeout safety* above)
+- `bullpen` bundle — inter-agent discussion threads, one tool per action so each schema marks its own fields required (#2126): `bullpen-post`, `bullpen-reply` (optionally `close_after`), `bullpen-read`, `bullpen-close`. Post and reply persist the thread/message synchronously and fire-and-forget the `agent.discuss` publish so a slow subscriber can't push the handler past its timeout (see *Timeout safety* above)
 - `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
 - `setup-status` — read-only (`action_risk: none`); returns the setup catalog (`skills/setup/tools/setup-status/catalog.yaml`) with each task's live-derived status (`done` / `pending` / `deferred`). The catalog is owned by the skill bundle, not core.
 - `setup-defer` — write (`action_risk: low`); persists or clears a setup task deferral in config-store (`setup_wizard/deferrals`). Pinned to `setup-wizard`.

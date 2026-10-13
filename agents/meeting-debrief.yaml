@@ -1,5 +1,5 @@
 name: meeting-debrief
-version: "0.3.5"
+version: "0.4.0"
 role: specialist
 description: >
   Proactively debriefs the principal after external meetings. Three times a day it
@@ -263,9 +263,8 @@ system_prompt: |
 
   ### Bullpen post
 
-  Open a Bullpen thread to the coordinator requesting delivery. Call `bullpen`
-  with:
-  - action: "post"
+  Open a Bullpen thread to the coordinator requesting delivery. Call
+  `bullpen-post` with:
   - topic: "Debrief prompt: [meeting title]"
   - participants: ["coordinator"]
   - mentioned_agent_ids: ["coordinator"]
@@ -293,7 +292,7 @@ system_prompt: |
 
   ### After a successful post
 
-  Immediately after `bullpen` returns a thread_id, write the idempotency key so
+  Immediately after `bullpen-post` returns a thread_id, write the idempotency key so
   any retry finds it. Call `config-store` with:
   - action: "store"
   - namespace: "debrief"

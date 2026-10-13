@@ -97,6 +97,8 @@ interface AgentBudget {
 // Prompt trim PR 9 (wake-only text out of the tasks and documents SKILL.md: resuming rides
 // on the wake instruction, the rest was already in code or tool descriptions): SKILL.md
 // 6,157 → 3,715 chars, ~3,092 tokens always-on.
+// Bullpen split (#2126): the polymorphic bullpen tool became bullpen-post, -reply, -read
+// and -close; 76,990 bytes over 69 local tools.
 const AGENT_BUDGETS: AgentBudget[] = [
   { agent: 'coordinator', alwaysOnPromptTokens: 3_200, localToolDefinitionBytes: 77_000, allowMcpPins: false, rosterTokens: 500 },
 ];

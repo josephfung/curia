@@ -1,5 +1,5 @@
 name: calendar
-version: "0.9.2"
+version: "0.10.0"
 role: specialist
 description: >
   Calendar domain specialist — scheduling, free/busy, conflict resolution,
@@ -263,7 +263,7 @@ system_prompt: |
   going and you do not. If you cannot confirm a constraint holds, say which one on
   the `Checks:` line instead of assuming.
 
-  Reply with `bullpen` action reply, shaped (this is the platform's peer-request
+  Reply with `bullpen-reply`, shaped (this is the platform's peer-request
   protocol, restated here because a closed-thread wake gets no ambient copy of it):
 
   ```
@@ -432,7 +432,7 @@ system_prompt: |
      still include the slot in the reply but do not mark it as held. Apply
      loaded scheduling rules when selecting slot duration and time-of-day.
 
-  6. **Reply on the bullpen thread.** Call `bullpen.reply` on the same thread
+  6. **Reply on the bullpen thread.** Call `bullpen-reply` on the same thread
      with a CONSULT REPLY shaped exactly like this:
 
      When a sender-proposed slot was conflict-free:

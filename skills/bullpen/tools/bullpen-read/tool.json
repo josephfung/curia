@@ -1,0 +1,21 @@
+{
+  "name": "bullpen-read",
+  "description": "Read a Bullpen thread's full message history.",
+  "version": "0.1.0",
+  "sensitivity": "normal",
+  "action_risk": "low",
+  "inputs": {
+    "thread_id": "string"
+  },
+  "outputs": {
+    "thread_id": "string: the thread ID",
+    "thread": "object: the thread record",
+    "messages": "object[]: the thread's messages"
+  },
+  "permissions": [],
+  "secrets": [],
+  "timeout": 10000,
+  "capabilities": [
+    "bullpenService"
+  ]
+}

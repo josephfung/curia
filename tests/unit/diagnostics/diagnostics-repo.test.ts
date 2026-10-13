@@ -54,7 +54,7 @@ describe('DiagnosticsRepo', () => {
   });
 
   it('maps last_run_context.failedSkills for diagnostics (#1830)', async () => {
-    const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+    const failedSkills = [{ name: 'bullpen-post', error: 'Thread not found' }];
     const { repo } = repoWithRows([
       {
         id: 'job-d3f8', agent_id: 'calendar', source_agent_id: null, task_id: null,

@@ -718,7 +718,7 @@ describe('AgentRuntime', () => {
     expect(systemMsg?.content).toContain('Outbound-context entries are informational');
     // Positive success-path cue — without this, bare "report" in a task drifts to bullpen (#1828).
     expect(systemMsg?.content).toContain('Record the outcome of this run by calling `scheduler-report`');
-    expect(systemMsg?.content).toContain('do not use `bullpen` to report');
+    expect(systemMsg?.content).toContain('do not use the bullpen to report');
     // Bare job UUID must NOT appear — agents mistook it for a bullpen thread_id (#1828).
     expect(systemMsg?.content).not.toContain('Job ID (pass to scheduler-report)');
     expect(systemMsg?.content).not.toContain('123e4567-e89b-12d3-a456-426614174000');
@@ -1576,7 +1576,7 @@ describe('AgentRuntime tool-use loop', () => {
             type: 'tool_use' as const,
             toolCalls: [
               { id: 'call-ok', name: 'calendar-list-events', input: {} },
-              { id: 'call-fail', name: 'bullpen.post', input: { thread_id: 'missing' } },
+              { id: 'call-fail', name: 'bullpen-post', input: { thread_id: 'missing' } },
             ],
             usage: { inputTokens: 50, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
             provenance: MOCK_PROVENANCE,
@@ -1593,7 +1593,7 @@ describe('AgentRuntime tool-use loop', () => {
 
     const mockExecution = {
       invoke: vi.fn().mockImplementation(async (name: string) => {
-        if (name === 'bullpen.post') {
+        if (name === 'bullpen-post') {
           return { success: false, error: 'Thread not found' };
         }
         return { success: true, data: { events: [] } };
@@ -1620,7 +1620,7 @@ describe('AgentRuntime tool-use loop', () => {
           input_schema: { type: 'object' as const, properties: {}, required: [] as string[] },
         },
         {
-          name: 'bullpen.post',
+          name: 'bullpen-post',
           description: 'Post to bullpen',
           input_schema: { type: 'object' as const, properties: { thread_id: { type: 'string' } }, required: ['thread_id'] },
         },
@@ -1642,8 +1642,8 @@ describe('AgentRuntime tool-use loop', () => {
     expect(responses).toHaveLength(1);
     const payload = responses[0]!.payload;
     expect(payload.isError).toBeUndefined();
-    expect(payload.skillsCalled).toEqual(['calendar-list-events', 'bullpen.post']);
-    expect(payload.failedSkills).toEqual([{ name: 'bullpen.post', error: 'Thread not found' }]);
+    expect(payload.skillsCalled).toEqual(['calendar-list-events', 'bullpen-post']);
+    expect(payload.failedSkills).toEqual([{ name: 'bullpen-post', error: 'Thread not found' }]);
     expect(payload.failedSkillsOmitted).toBeUndefined();
   });
 
@@ -5801,7 +5801,7 @@ describe('AgentRuntime bullpen read-watermark (#1065, #1901)', () => {
     bus.subscribe('agent.response', 'dispatch', () => {});
     const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
 
-    const provider = createToolUseProvider('bullpen', { action: 'reply', thread_id: threadId, content: 'done' });
+    const provider = createToolUseProvider('bullpen-reply', { thread_id: threadId, content: 'done' });
     const agent = makeCoordinator(bus, logger, bullpenService, provider, {
       invoke: vi.fn().mockResolvedValue({ success: true, data: { thread_id: threadId } }),
     } as unknown as ExecutionLayer);
@@ -5825,7 +5825,7 @@ describe('AgentRuntime bullpen read-watermark (#1065, #1901)', () => {
     bus.subscribe('agent.response', 'dispatch', () => {});
     const { bullpenService, threadId } = await makeBullpenWithOpenRequest();
 
-    const provider = createToolUseProvider('bullpen', { action: 'get_thread', thread_id: threadId });
+    const provider = createToolUseProvider('bullpen-read', { thread_id: threadId });
     const agent = makeCoordinator(bus, logger, bullpenService, provider, {
       invoke: vi.fn().mockResolvedValue({ success: true, data: { thread: {} } }),
     } as unknown as ExecutionLayer);

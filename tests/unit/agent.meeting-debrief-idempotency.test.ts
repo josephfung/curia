@@ -43,11 +43,11 @@ beforeAll(() => {
 
 describe('meeting-debrief idempotency guard (issue #724)', () => {
   it('checks config-store for prompted:<eventId> key before opening a Bullpen thread', () => {
-    // The idempotency key must be referenced before the bullpen "post" action in Step 6.
+    // The idempotency key must be referenced before the bullpen-post call in Step 6.
     // If this fails, the agent can post duplicate threads on the same calendar event.
     expect(step6).toMatch(/prompted:/);
     const idxKey = step6.indexOf('prompted:');
-    const idxPost = step6.search(/"post"/);
+    const idxPost = step6.indexOf('`bullpen-post` with');
     expect(idxPost).toBeGreaterThan(-1);
     expect(idxKey).toBeLessThan(idxPost);
   });
@@ -62,7 +62,7 @@ describe('meeting-debrief idempotency guard (issue #724)', () => {
     // The store must come AFTER the bullpen post — writing before would create a phantom
     // key that blocks all future posts if the bullpen call then fails.
     expect(step6).toMatch(/action.*['"']store['"']|store.*prompted:|prompted:.*store/i);
-    const idxPost = step6.search(/"post"/);
+    const idxPost = step6.indexOf('`bullpen-post` with');
     const idxStore = step6.search(/action.*['"']store['"']/);
     expect(idxPost).toBeGreaterThan(-1);
     expect(idxStore).toBeGreaterThan(idxPost);

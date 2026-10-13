@@ -73,10 +73,11 @@ tool_stubs:
       return: { recorded: true }
   # The coordinator sometimes looks for a thread about Sam first, or asks ceo-inbox on a new
   # one before delegating. No bullpen is seeded, so any thread id misses, as in production.
-  bullpen:
-    - match: { action: get_thread }
+  bullpen-read:
+    - match: {}
       error: No bullpen thread with that ID exists
-    - match: { action: post }
+  bullpen-post:
+    - match: {}
       return: { thread_id: 7c1e2d3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f, message_id: 8d2f3e4a-5b6c-4d7e-9f8a-1b2c3d4e5f60 }
 expected_behaviors:
   # Two checks: a send reached `principal`, and there was exactly one send in all. Sam is a

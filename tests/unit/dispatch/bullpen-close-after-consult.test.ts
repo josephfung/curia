@@ -75,6 +75,6 @@ describe('bullpen close_after scheduling consult regression (#1256)', () => {
     expect(tasks[0]!.payload.agentId).toBe('ceo-inbox');
     expect(tasks[0]!.payload.metadata.threadClosed).toBe(true);
     expect(tasks[0]!.payload.content.toLowerCase()).toContain('do not reply in-thread');
-    expect(tasks[0]!.payload.content).toContain('get_thread');
+    expect(tasks[0]!.payload.content).toContain('bullpen-read');
   });
 });

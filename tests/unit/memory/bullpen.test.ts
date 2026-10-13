@@ -481,8 +481,8 @@ describe('formatBullpenContext', () => {
     expect(out).toContain('first + last 14 of 20');
     // Middle-omission hint must be present
     expect(out).toContain('Middle messages omitted');
-    // get_thread hint still present
-    expect(out).toContain('get_thread');
+    // bullpen-read hint still present
+    expect(out).toContain('Call bullpen-read for full history');
   });
 
   // ── peer-request protocol ────────────────────────────────────────────────
@@ -665,21 +665,28 @@ describe('selectThreadsToWatermark (#1901)', () => {
   it('stamps a bullpen reply or close and ignores a read of the same thread', () => {
     expect(watermarkIds(selectThreadsToWatermark({
       ambient: [handled],
-      toolTouches: [{ name: 'bullpen', input: { action: 'reply', thread_id: 'handled', content: 'done' }, success: true }],
+      toolTouches: [{ name: 'bullpen-reply', input: { thread_id: 'handled', content: 'done' }, success: true }],
     }))).toEqual(['handled']);
     expect(watermarkIds(selectThreadsToWatermark({
       ambient: [handled],
-      toolTouches: [{ name: 'bullpen', input: { action: 'close', thread_id: 'handled' }, success: true }],
+      toolTouches: [{ name: 'bullpen-close', input: { thread_id: 'handled' }, success: true }],
     }))).toEqual(['handled']);
     const read = selectThreadsToWatermark({
       ambient: [handled],
-      toolTouches: [{ name: 'bullpen', input: { action: 'get_thread', thread_id: 'handled' }, success: true }],
+      toolTouches: [{ name: 'bullpen-read', input: { thread_id: 'handled' }, success: true }],
     });
     expect(watermarkIds(read)).toEqual([]);
     expect(deferIds(read)).toEqual(['handled']);
+    // A post opens another thread, even when it quotes the mention it is about.
+    const post = selectThreadsToWatermark({
+      ambient: [handled],
+      toolTouches: [{ name: 'bullpen-post', input: { topic: 'handled', content: mention }, success: true }],
+    });
+    expect(watermarkIds(post)).toEqual([]);
+    expect(deferIds(post)).toEqual(['handled']);
     const otherThread = selectThreadsToWatermark({
       ambient: [handled],
-      toolTouches: [{ name: 'bullpen', input: { action: 'reply', thread_id: 'someone-else' }, success: true }],
+      toolTouches: [{ name: 'bullpen-reply', input: { thread_id: 'someone-else' }, success: true }],
     });
     expect(watermarkIds(otherThread)).toEqual([]);
     expect(deferIds(otherThread)).toEqual(['handled']);

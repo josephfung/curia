@@ -13,8 +13,8 @@
 // Hard-wrapped so prompt-exfiltration marker extraction (one marker per line) covers it.
 
 export const BULLPEN_REPLY_RULE_LINES: readonly string[] = [
-  'Bullpen threads are internal: only agents read them. Reply to a thread with the `bullpen`',
-  'tool (action "reply"), so an @mention acknowledgment, a status note or an answer stays on',
+  'Bullpen threads are internal: only agents read them. Reply to a thread with',
+  '`bullpen-reply`, so an @mention acknowledgment, a status note or an answer stays on',
   'the thread. A message the thread asks you to send to the principal or anyone else is a',
   'separate action: send it with the send skill the request calls for, as you would any send.',
   'When nothing more is needed from you, close the thread (close_after: true).',

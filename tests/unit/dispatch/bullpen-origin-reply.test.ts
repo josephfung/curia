@@ -255,7 +255,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
     const execute = vi.fn<ToolHandler['execute']>(async () => ({ success: true, data: { ok: true } }));
     registry.register(
       {
-        name: 'bullpen',
+        name: 'bullpen-reply',
         description: 'reply in thread',
         version: '0.0.0',
         sensitivity: 'normal',
@@ -269,7 +269,7 @@ describe('bullpen mention wake vs originating reply (#1917)', () => {
       { execute },
     );
     const execution = new ExecutionLayer(registry, logger);
-    const result = await execution.invoke('bullpen', { action: 'reply' }, undefined, {
+    const result = await execution.invoke('bullpen-reply', {}, undefined, {
       agentId: 'coordinator',
       channelId: 'bullpen',
       taskMetadata: {
@@ -382,6 +382,6 @@ describe('parseOriginTurnOwnsReply', () => {
     expect(parseOriginTurnOwnsReply({ delegateEventId: '' })).toBeNull();
     expect(isHumanReplySkill('signal-send')).toBe(true);
     expect(isHumanReplySkill('send-draft')).toBe(true);
-    expect(isHumanReplySkill('bullpen')).toBe(false);
+    expect(isHumanReplySkill('bullpen-reply')).toBe(false);
   });
 });

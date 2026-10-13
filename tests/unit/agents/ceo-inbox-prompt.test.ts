@@ -81,10 +81,10 @@ describe('ceo-inbox consult-timeout self-healing', () => {
     expect(scheduledWake).toContain('consult already resolved');
   });
 
-  it('checks bullpen get_thread for a late CONSULT REPLY before blind-drafting', () => {
+  it('checks bullpen-read for a late CONSULT REPLY before blind-drafting', () => {
     const prompt = loadCeoInboxPrompt();
     const scheduledWake = extractScheduledWakeSection(prompt);
-    const getThreadPos = posIn(scheduledWake, 'get_thread');
+    const getThreadPos = posIn(scheduledWake, 'bullpen-read');
     const blindDraftPos = posIn(scheduledWake, 'pending your calendar');
     expect(getThreadPos).toBeGreaterThan(-1);
     expect(blindDraftPos).toBeGreaterThan(getThreadPos);
@@ -111,7 +111,7 @@ describe('ceo-inbox consult-timeout self-healing', () => {
   it('runs idempotent no-op before timeout fallback and checks DRAFTS folder', () => {
     const prompt = loadCeoInboxPrompt();
     const scheduledWake = extractScheduledWakeSection(prompt);
-    const getThreadPos = posIn(scheduledWake, 'get_thread');
+    const getThreadPos = posIn(scheduledWake, 'bullpen-read');
     const noopPos = posIn(scheduledWake, 'Idempotent no-op');
     const fallbackPos = posIn(scheduledWake, 'Still parked');
     expect(getThreadPos).toBeGreaterThan(-1);
@@ -139,18 +139,18 @@ describe('ceo-inbox consult-timeout self-healing', () => {
 });
 
 describe('ceo-inbox closed bullpen wake routing (#1256)', () => {
-  it('routes threadClosed wakes to get_thread before the Branch A content gate', () => {
+  it('routes threadClosed wakes to bullpen-read before the Branch A content gate', () => {
     const prompt = loadCeoInboxPrompt();
     const preamble = extractResumePreamble(prompt);
 
     expect(preamble).toContain('Closed bullpen thread wake');
     expect(preamble).toContain('threadClosed: true');
-    expect(preamble).toContain('get_thread');
+    expect(preamble).toContain('bullpen-read');
     expect(preamble).toMatch(/Branch A[\s\n]+sub-steps/);
 
-    const closedGetThreadPos = posIn(preamble, 'get_thread');
+    const closedGetThreadPos = posIn(preamble, 'bullpen-read');
     const closedHeaderAbsPos = prompt.indexOf('**Closed bullpen thread wake');
-    const closedGetThreadAbsPos = prompt.indexOf('get_thread', closedHeaderAbsPos);
+    const closedGetThreadAbsPos = prompt.indexOf('bullpen-read', closedHeaderAbsPos);
     const branchAContentGateAbsPos = prompt.indexOf(
       'If the bullpen message body visible in injected context is a CONSULT REPLY',
     );
@@ -172,10 +172,10 @@ describe('ceo-inbox closed bullpen wake routing (#1256)', () => {
 });
 
 describe('ceo-inbox Branch A prompt — memory-query contract', () => {
-  it('loads the full bullpen thread via get_thread before acting', () => {
+  it('loads the full bullpen thread via bullpen-read before acting', () => {
     const prompt = loadCeoInboxPrompt();
     const branchA = extractBranchASection(prompt);
-    const getThreadPos = posIn(branchA, 'get_thread');
+    const getThreadPos = posIn(branchA, 'bullpen-read');
     const readEmailPos = posIn(branchA, 'ceo-inbox-read');
     expect(getThreadPos).toBeGreaterThan(-1);
     expect(readEmailPos).toBeGreaterThan(getThreadPos);
@@ -251,7 +251,7 @@ describe('ceo-inbox Branch A prompt — memory-query contract', () => {
 });
 
 describe('ceo-inbox scheduling consult prompt — proposed-time protocol', () => {
-  it('CONSULT REQUEST bullpen.post sets participants to calendar', () => {
+  it('CONSULT REQUEST bullpen-post sets participants to calendar', () => {
     const prompt = loadCeoInboxPrompt();
     const schedulingSection = extractSchedulingConsultSection(prompt);
     expect(schedulingSection).toContain("participants: ['calendar']");
@@ -282,7 +282,7 @@ describe('ceo-inbox scheduling consult prompt — proposed-time protocol', () =>
     const tapSection = schedulingSection.slice(tapStart, parkStart);
     const proposedPos = posIn(tapSection, 'Proposed:');
     const dateResolvePos = posIn(tapSection, 'date-resolve');
-    const bullpenPostPos = posIn(tapSection, 'bullpen.post');
+    const bullpenPostPos = posIn(tapSection, 'bullpen-post');
 
     expect(proposedPos).toBeGreaterThan(-1);
     expect(dateResolvePos).toBeGreaterThan(proposedPos);
@@ -405,8 +405,9 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     // 0.19.1 = memory/contact-update how-to moved into the tool descriptions (#1960).
     // 0.20.0 = drafts address recipients by contact ID; raw addresses and one-at-a-time
     //          recipient edits use the new draft-tool inputs (#2053).
+    // 0.21.0 = the bullpen tool is split into bullpen-post/-reply/-read/-close (#2126).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.20.0');
+    expect(config.version).toBe('0.21.0');
   });
 });
 

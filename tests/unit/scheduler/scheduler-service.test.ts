@@ -723,7 +723,7 @@ describe('SchedulerService', () => {
       });
       pool.query.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
-      const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+      const failedSkills = [{ name: 'bullpen-post', error: 'Thread not found' }];
       const result = await svc.completeJobRun(jobId, true, undefined, 'sweep done', failedSkills);
 
       expect(result).toEqual({ suspended: false });
@@ -779,7 +779,7 @@ describe('SchedulerService', () => {
       });
       pool.query.mockResolvedValueOnce({ rows: [{ status: 'failed' }], rowCount: 1 });
 
-      const failedSkills = [{ name: 'bullpen.post', error: 'Thread not found' }];
+      const failedSkills = [{ name: 'bullpen-post', error: 'Thread not found' }];
       await svc.completeJobRun(jobId, false, 'budget blown', undefined, failedSkills);
 
       const updateCall = pool.query.mock.calls[1];

@@ -35,8 +35,8 @@ inbound:
     Message: "Alice Chen — Merger terms: she needs your decision on the revised terms by Friday EOD."
     Context bridge: agent_id=ceo-inbox, expected_reply="Decision or follow-up instruction", delegation_hint="ceo-inbox", expires_in_hours=24
 tool_stubs:
-  bullpen:
-    - match: { action: get_thread }
+  bullpen-read:
+    - match: {}
       return:
         thread:
           id: "{{thread:urgent}}"
@@ -53,17 +53,21 @@ tool_stubs:
               your decision on the revised terms by Friday EOD." Context bridge:
               agent_id=ceo-inbox, expected_reply="Decision or follow-up instruction",
               delegation_hint="ceo-inbox", expires_in_hours=24
+  bullpen-reply:
     # As in case 06: a reply missing a required field gets the handler's error (#2098).
-    - match: { action: reply, thread_id: null }
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: reply, thread_id: "" }
+    - match: { thread_id: "" }
       error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
     - match: {}
       return: { posted: true, thread_id: "{{thread:urgent}}" }
+  bullpen-close:
+    - match: {}
+      return: { thread_id: "{{thread:urgent}}", status: closed }
 expected_behaviors:
   - id: signals_principal
     weight: critical

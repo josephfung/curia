@@ -2,7 +2,7 @@
 // Runs in CI with no database or model: the live suite is `pnpm scenarios`.
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BullpenHandler } from '../../../skills/bullpen/handler.js';
+import { BullpenReplyHandler } from '../../../skills/bullpen/tools/bullpen-reply/handler.js';
 import { PAUSED_NEXT_STEP, delegateFailureNextStep } from '../../../src/agents/prompts/delegate-result-guidance.js';
 import { googleWorkspaceUrlError } from '../../../src/skills/_shared/google-workspace-url.js';
 import { shapeSpecialistAnswer } from '../../../src/agents/specialist-answer.js';
@@ -164,7 +164,7 @@ describe('coordinator scenario cases', () => {
     // handler message fails here instead of leaving the stub quietly out of date.
     const bullpen = cases.find(c => c.name === 'bullpen mention stays on thread');
     expect(bullpen).toBeDefined();
-    const handler = new BullpenHandler();
+    const handler = new BullpenReplyHandler();
     const handlerError = async (input: Record<string, unknown>): Promise<string | undefined> => {
       // The handler refuses before validating unless its service, bus, agent and task are set.
       // Both field checks then run before it reads a thread or publishes, so an empty
@@ -183,13 +183,13 @@ describe('coordinator scenario cases', () => {
     const threadId = '9b2f4c1e-6a3d-4e8f-b0c7-2d5e9a1f3b64';
     for (const input of [
       // The 2026-10-10 gate's looping runs sent exactly this shape.
-      { action: 'reply', thread_id: threadId, source_message_id: threadId, close_after: true },
-      { action: 'reply', thread_id: threadId, content: '' },
-      { action: 'reply', thread_id: '', content: 'Got it, thanks.' },
-      { action: 'reply', content: 'Got it, thanks.' },
-      { action: 'reply' },
+      { thread_id: threadId, source_message_id: threadId, close_after: true },
+      { thread_id: threadId, content: '' },
+      { thread_id: '', content: 'Got it, thanks.' },
+      { content: 'Got it, thanks.' },
+      {},
     ]) {
-      const stub = matchToolStub('bullpen', input, bullpen!.toolStubs);
+      const stub = matchToolStub('bullpen-reply', input, bullpen!.toolStubs);
       const expected = await handlerError(input);
       expect(expected, JSON.stringify(input)).toEqual(expect.any(String));
       expect(stub?.return, JSON.stringify(input)).toBeUndefined();
@@ -201,7 +201,7 @@ describe('coordinator scenario cases', () => {
       .toMatchObject({ kind: 'called', success: true });
 
     // A well-formed reply still posts.
-    expect(matchToolStub('bullpen', { action: 'reply', thread_id: threadId, content: 'Got it, thanks.' }, bullpen!.toolStubs)?.return)
+    expect(matchToolStub('bullpen-reply', { thread_id: threadId, content: 'Got it, thanks.' }, bullpen!.toolStubs)?.return)
       .toMatchObject({ posted: true });
   });
 

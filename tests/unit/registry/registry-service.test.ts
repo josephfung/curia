@@ -329,16 +329,16 @@ describe('RegistryService — bundle cascade', () => {
 
   it('leaves tool and agent enable on the single-table path', async () => {
     const toolRepo = new FakeRepo();
-    await toolRepo.install('bullpen', 'test');
+    await toolRepo.install('delegate', 'test');
     const cascade = new FakeCascade();
     const svc = new RegistryService(
-      toolRepo, new FakeRepo(), [disc('bullpen')], [], undefined, new FakeRepo(), [], cascade,
+      toolRepo, new FakeRepo(), [disc('delegate')], [], undefined, new FakeRepo(), [], cascade,
     );
 
-    await svc.enable('tool', 'bullpen', 'web-app');
+    await svc.enable('tool', 'delegate', 'web-app');
 
     expect(cascade.enabled).toEqual([]);
-    expect((await toolRepo.getRow('bullpen'))?.enabled).toBe(true);
+    expect((await toolRepo.getRow('delegate'))?.enabled).toBe(true);
   });
 
   it('installAndEnable cascades the bundle and its member tools without a separate install() call', async () => {

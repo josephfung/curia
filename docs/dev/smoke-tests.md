@@ -174,7 +174,7 @@ For each case run, the harness opens the thread on the database copy and posts e
 - Both agents must be registered in the stack under test. This is checked before any case runs.
 - Placeholders work in `topic` and `opening`.
 - The judge is told which agent it is judging. It sees the thread's opening, that agent's calls and response for each turn, and (with `judge_tool_calls`) other agents' calls separately. Most targeted behaviors are actions, such as "drafts a reply" or "calls memory-query first", so set `judge_tool_calls: true`.
-- Test mode has no bullpen service, so the `bullpen` tool is normally refused. For the case's own thread, `get_thread` returns the real thread and `reply` really posts to it, as in production. Other bullpen calls stay refused unless the case stubs them.
+- Test mode has no bullpen service, so the bullpen tools are normally refused. For the case's own thread, `bullpen-read` returns the real thread and `bullpen-reply` really posts to it, as in production. Other bullpen calls stay refused unless the case stubs them.
 - A post the specialist makes on the bullpen does not wake anyone mid-case. Only the case's own posts are dispatched, so a reply chain can't run on into the next case. To test a hand-off between two agents, use one case per side.
 
 `tests/smoke/cases/ceo-inbox-branch-a-*.yaml` are worked examples.

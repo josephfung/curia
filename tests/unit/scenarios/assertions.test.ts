@@ -29,7 +29,7 @@ describe('evaluateCheck: called', () => {
 
   it('misses on the wrong arguments or no call', () => {
     expect(evaluateCheck({ kind: 'called', tool: 'delegate', with: { agent: 'calendar' } }, r, ctx).rating).toBe('MISS');
-    expect(evaluateCheck({ kind: 'called', tool: 'bullpen' }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'called', tool: 'bullpen-reply' }, r, ctx).rating).toBe('MISS');
   });
 
   it('can require the call to have succeeded', () => {

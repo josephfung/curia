@@ -46,9 +46,14 @@ describe('provenance_source manifests (#2061)', () => {
 
   it('never marks a tool whose result a model wrote, or may echo', () => {
     const byName = new Map(manifests().map((m) => [m.name, m]));
-    // delegate and bullpen return model text. doc-read and doc-search read the workspace
-    // agents write with doc-write. web-browser results echo what the agent typed into a page.
-    for (const name of ['delegate', 'bullpen', 'doc-read', 'doc-search', 'web-browser']) {
+    // delegate and the bullpen tools return model text. doc-read and doc-search read the
+    // workspace agents write with doc-write. web-browser results echo what the agent typed
+    // into a page.
+    for (const name of [
+      'delegate', 'bullpen-post', 'bullpen-reply', 'bullpen-read', 'bullpen-close',
+      'doc-read', 'doc-search', 'web-browser',
+    ]) {
+      expect(byName.has(name), name).toBe(true);
       expect(byName.get(name)?.provenance_source, name).toBeUndefined();
     }
   });
