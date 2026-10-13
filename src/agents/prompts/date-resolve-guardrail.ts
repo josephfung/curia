@@ -18,8 +18,9 @@ export const DATE_RESOLVE_GUARDRAIL = [
   'user can confirm you understood correctly.',
   'The current date, time, and timezone are injected each turn when a timezone is configured.',
   '',
-  'Day-of-week arithmetic is unreliable in every language model. Whenever you',
-  'state a weekday for a specific date, or a date for a weekday, call',
-  'date-resolve to verify the pair before you write it. A wrong pair creates',
+  'IMPORTANT: You are unreliable at day-of-week arithmetic — all LLMs are. When',
+  'you need to state a day-of-week for a specific date (or vice versa), call',
+  'date-resolve to verify. Never write "Monday May 19" without confirming that',
+  'May 19 is actually a Monday. Getting a date wrong is embarrassing and creates',
   'scheduling confusion.',
 ].join('\n');
