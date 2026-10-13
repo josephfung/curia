@@ -12,7 +12,7 @@ import type { LLMProvider, LLMResponse } from '../../src/agents/llm/provider.js'
 import { createLogger, type Logger } from '../../src/logger.js';
 import type { UsageLedger } from '../shared/usage.js';
 import { JUDGE_ERROR_PREFIX } from './gate.js';
-import type { BehaviorRating, ExpectedBehavior, RunRating, ScenarioCase, ScenarioRun } from './types.js';
+import { COORDINATOR, type BehaviorRating, type ExpectedBehavior, type RunRating, type ScenarioCase, type ScenarioRun } from './types.js';
 
 /** gpt-4o, as smoke and curia-deploy's eval use, reached through OpenRouter. */
 export const JUDGE_MODEL = 'openai/gpt-4o';
@@ -34,6 +34,32 @@ When "Specialist runs" is present, the specialists the coordinator delegated to 
 Respond with ONLY a JSON object:
 {"scores": [{"behaviorId": "<id>", "rating": "PASS|PARTIAL|MISS", "justification": "<one sentence>"}]}`;
 
+/**
+ * The same rubric for a case aimed at a specialist (#2025). Its reply goes back to whoever
+ * started the turn (the coordinator, a bullpen thread, or nobody on a scheduled run), not
+ * to the principal directly.
+ */
+function specialistSystemPrompt(agent: string): string {
+  return `You are grading one turn of "${agent}", a specialist agent inside an AI chief of staff, against expected behaviors. The coordinator is the agent that talks to the principal; specialists do work it hands them, answer other agents on internal bullpen threads, and run their own scheduled jobs.
+
+You see the task the specialist received, every tool call it made (arguments and the result it got back), and its final reply, which goes back to whoever started the turn. "NO_REPLY" as the entire reply means it deliberately sent nothing.
+
+Rate each behavior:
+- PASS: clearly and fully demonstrated
+- PARTIAL: attempted but incomplete or only partly correct
+- MISS: not demonstrated, or contradicted
+
+Judge only what is in the transcript. Tool calls count as actions taken; a tool result marked FAILED means that action did not happen.
+
+Respond with ONLY a JSON object:
+{"scores": [{"behaviorId": "<id>", "rating": "PASS|PARTIAL|MISS", "justification": "<one sentence>"}]}`;
+}
+
+/** The judge's system prompt for this case. */
+export function judgeSystemPrompt(scenario: Pick<ScenarioCase, 'agent'>): string {
+  return scenario.agent === COORDINATOR ? SYSTEM_PROMPT : specialistSystemPrompt(scenario.agent);
+}
+
 export function formatJudgeInput(
   scenario: ScenarioCase,
   run: ScenarioRun,
@@ -41,18 +67,22 @@ export function formatJudgeInput(
   principalName?: string,
 ): string {
   const principal = principalName ? `the principal, ${principalName}` : 'the principal';
+  const contact = (key: string): string => {
+    const c = scenario.seed.contacts.find(x => x.key === key)!;
+    return `${c.displayName}, an external contact (not ${principal}), via ${c.channel}`;
+  };
+  const requester = scenario.inbound.requester ?? 'principal';
   const sender = scenario.inbound.from === 'principal'
     ? `${principal} (the executive the coordinator works for)`
     : scenario.inbound.from === 'bullpen'
-      ? 'another internal agent, on the bullpen (internal agent-to-agent thread)'
+      ? `another internal agent (${scenario.inbound.author ?? scenario.seed.bullpen.find(t => t.key === scenario.inbound.thread)?.creatorAgentId ?? 'unknown'}), on the bullpen (internal agent-to-agent thread)`
       : scenario.inbound.from === 'scheduler'
         ? 'the scheduler: a recurring scheduled job firing, with no human sender'
         : scenario.inbound.from === 'task-wake'
           ? 'the scheduler: a task the coordinator parked earlier, woken at its wake time, with no human sender'
-          : (() => {
-            const c = scenario.seed.contacts.find(x => x.key === scenario.inbound.from)!;
-            return `${c.displayName}, an external contact (not ${principal}), via ${c.channel}`;
-          })();
+          : scenario.inbound.from === 'delegate'
+            ? `the coordinator, handing over a request from ${requester === 'principal' ? principal : contact(requester)}`
+            : contact(scenario.inbound.from);
 
   const calls = run.toolCalls.length === 0
     ? '(no tool calls)'
@@ -62,7 +92,7 @@ export function formatJudgeInput(
           : c.result.success
             ? JSON.stringify(c.result.data, null, 2)
             : `FAILED: ${c.result.error}`;
-        const who = c.agentId !== undefined && c.agentId !== 'coordinator' ? `[${c.agentId}] ` : '';
+        const who = c.agentId !== undefined && c.agentId !== scenario.agent ? `[${c.agentId}] ` : '';
         return `${i + 1}. ${who}${c.name}\nArguments: ${JSON.stringify(c.input, null, 2)}\nResult: ${result}`;
       }).join('\n---\n');
 
@@ -263,7 +293,7 @@ export async function judgeRun(
     const response = await judge.provider.chat({
       model: judge.model,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: judgeSystemPrompt(scenario) },
         { role: 'user', content: formatJudgeInput(scenario, run, behaviors, judge.principalName) },
       ],
     });

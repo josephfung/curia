@@ -170,14 +170,16 @@ export function createDelegationCapture(
 }
 
 /**
- * The coordinator's calls (turn capture) and the specialists', each tagged with its agent,
- * in the order they were made. Without specialists, the coordinator's order.
+ * The case agent's calls (turn capture: the coordinator's, or the specialist a case fires
+ * directly, #2025) and the specialists', each tagged with its agent, in the order they were
+ * made. Without specialists, the case agent's order.
  */
 export function inRunOrder(
   coordinatorCalls: ObservedToolCall[],
   trace: Pick<DelegationTrace, 'seqByInvoke' | 'calls'> | undefined,
+  agentId: string = COORDINATOR,
 ): Array<ObservedToolCall & { agentId: string }> {
-  const own = coordinatorCalls.map(c => ({ ...c, agentId: COORDINATOR }));
+  const own = coordinatorCalls.map(c => ({ ...c, agentId }));
   if (!trace || trace.calls.length === 0) return own;
   const seqOf = (c: ObservedToolCall): number =>
     (c.invokeEventId ? trace.seqByInvoke.get(c.invokeEventId) : undefined) ?? Number.MAX_SAFE_INTEGER;

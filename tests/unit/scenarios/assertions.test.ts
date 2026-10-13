@@ -208,6 +208,23 @@ describe('real delegation checks (#2027)', () => {
   });
 });
 
+describe('a case aimed at a specialist reads its calls by default (#2025)', () => {
+  const r = run([
+    { agentId: 'ceo-inbox', name: 'config-store', input: { action: 'retrieve' }, disposition: 'stubbed', result: { success: true, data: {} } },
+  ], null);
+  const inbox = { ...ctx, caseAgent: 'ceo-inbox' };
+
+  it('scores the case agent\'s calls without naming it', () => {
+    expect(evaluateCheck({ kind: 'called', tool: 'config-store', with: { action: 'retrieve' } }, r, inbox).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'called', tool: 'config-store' }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'called', tool: 'config-store', agent: 'ceo-inbox' }, r, ctx).rating).toBe('PASS');
+  });
+
+  it('names the agent when it produced no reply', () => {
+    expect(evaluateCheck({ kind: 'reply', is: 'not_no_reply' }, r, inbox).justification).toBe('ceo-inbox produced no reply');
+  });
+});
+
 describe('evaluateCheck: principal_note (prompt trim PR 5)', () => {
   const withNote = { ...run([], 'Thanks, noted.'), principalNote: 'Lena wrote "Yes, go ahead." about the venue options. What does it refer to?' };
 

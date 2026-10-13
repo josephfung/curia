@@ -1,8 +1,8 @@
-// tests/scenarios/types.ts — coordinator scenario suite (#1956).
+// tests/scenarios/types.ts — scenario suite (#1956).
 //
-// A scenario is one inbound message to the coordinator, with seeded state and
-// stubbed tools, run N times on the production prompt. Behaviors are scored per
-// run, either in code (`check`) or by the LLM judge (no `check`).
+// A scenario is one inbound message to the coordinator, or one task fired at a specialist
+// (#2025), with seeded state and stubbed tools, run N times on the production prompt.
+// Behaviors are scored per run, either in code (`check`) or by the LLM judge (no `check`).
 import type { PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
 import type { LiveSearchTally } from '../shared/live-search.js';
 import type { ObservedToolCall } from '../shared/turn-capture.js';
@@ -38,10 +38,13 @@ export interface ToolStub {
 
 /**
  * Whose calls a `called` / `not_called` / `order` check reads (#2027): an agent id, or
- * `any` for every agent in the run. Absent means the coordinator, the only agent whose
- * calls a stubbed-delegation run has.
+ * `any` for every agent in the run. Absent means the case's agent (the coordinator unless
+ * the case sets `agent`), the only agent whose calls a stubbed-delegation run has.
  */
 export type CheckAgent = string;
+
+/** The agent a case reaches when it does not name one. */
+export const COORDINATOR = 'coordinator';
 
 /** The `agent` value that makes a check read every agent's calls. */
 export const ANY_AGENT = 'any';
@@ -138,15 +141,18 @@ export interface SeedBullpenThread {
 }
 
 /**
- * The message the coordinator receives.
+ * The message the case's agent receives.
  * `from: principal` resolves through the stack's principal (channel `cli` by default;
  * any other channel uses the principal's own identity on it). `from: <contact key>`
- * uses that seeded contact's channel identity. `from: bullpen` wakes the coordinator
- * on a seeded thread the way BullpenDispatcher does, with `content` as the new message.
- * `from: scheduler` fires a recurring job with no linked task the way the scheduler
- * does: an agent.task on the `scheduler` channel whose content is `{"task": content}`.
- * `from: task-wake` fires a task's `wake_at` (prompt trim PR 9): the body
- * Scheduler.fireJob builds from `task`, with the wake instruction. It has no `content`.
+ * uses that seeded contact's channel identity. Both reach the coordinator only, through
+ * the Dispatcher. `from: bullpen` wakes the case's agent on a seeded thread the way
+ * BullpenDispatcher does, with `content` as the new message. `from: scheduler` fires a
+ * recurring job with no linked task the way the scheduler does: an agent.task on the
+ * `scheduler` channel whose content is `{"task": content}`. `from: task-wake` fires a
+ * task's `wake_at` (prompt trim PR 9): the body Scheduler.fireJob builds from `task`, with
+ * the wake instruction. It has no `content`. `from: delegate` (#2025) fires a specialist
+ * the way the coordinator's `delegate` call does: the agent.task the delegate handler
+ * publishes, with `content` as the brief and the requester's originator forwarded.
  */
 export interface ScenarioInbound {
   from: string;
@@ -155,6 +161,17 @@ export interface ScenarioInbound {
   content: string;
   /** Bullpen only: the thread key the new message is posted on. */
   thread?: string;
+  /**
+   * Bullpen only: the agent that posts the new message. Default: the thread's creator. A
+   * specialist's consult reply comes from the agent it consulted, on a thread it opened.
+   */
+  author?: string;
+  /**
+   * Delegate only: whose request the coordinator delegated — `principal` (the default) or
+   * a seeded contact key. It sets the forwarded originator, so the specialist builds the
+   * requester-identity block production gives it (#1871).
+   */
+  requester?: string;
   /** Task wake only: the woken task, as its row reads at fire time. */
   task?: ScenarioWakeTask;
   /** Email only: rendered as the email preamble the Dispatcher builds. */
@@ -192,6 +209,12 @@ export interface ScenarioCase {
   name: string;
   description: string;
   tags: string[];
+  /**
+   * The agent the inbound reaches and whose turn is scored (#2025): its reply ends the run,
+   * and checks read its calls unless they name another agent. Default `coordinator`. A
+   * specialist is reached by a `delegate`, `bullpen` or `scheduler` inbound.
+   */
+  agent: string;
   delegation: DelegationMode;
   /**
    * False: the case runs only on demand (#2027) — when --case or --tags selects it, or with
@@ -275,7 +298,7 @@ export interface ScenarioRun {
    */
   clock?: { now: string; timezone: string };
   toolCalls: CapturedToolCall[];
-  /** The coordinator's agent.response content (NO_REPLY included verbatim). */
+  /** The case agent's agent.response content (NO_REPLY included verbatim). */
   reply: string | null;
   /**
    * A note for the principal cut out of the reply to a non-principal sender, which the
@@ -377,6 +400,8 @@ export interface SuiteResult {
   timestamp: string;
   model: string;
   commit?: string;
+  /** With --overlay: the deployment repo's commit, whose agents and cases ran. */
+  overlayCommit?: string;
   /** Cases marked release_gate: false that this run left out (#2027). */
   onDemandSkipped?: string[];
   /** Runs each case actually got (a case's `runs` or --runs can differ from the default). */

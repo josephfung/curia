@@ -30,6 +30,7 @@ import { DEFAULT_CONCURRENCY, parseConcurrency, runConcurrently } from '../share
 import { liveSearchLines } from '../shared/live-search.js';
 import { formatUsageLines, formatUsd, sumBreakdowns, UsageLedger } from '../shared/usage.js';
 import { mustStub } from './stub-layer.js';
+import { buildOverlay } from './overlay.js';
 import { coverageViolations, mergeCoverage, readCoverage, writeCoverage } from './stub-coverage.js';
 import {
   ANY_AGENT,
@@ -44,6 +45,7 @@ import {
 
 const COORDINATOR = 'coordinator';
 
+const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
 const CASES_DIR = path.resolve(import.meta.dirname, 'cases');
 const RESULTS_DIR = path.resolve(import.meta.dirname, 'results');
 const COVERAGE_FILE = path.resolve(import.meta.dirname, 'stub-coverage.json');
@@ -56,6 +58,12 @@ interface Args {
   concurrency: number;
   allowOtherConnections: boolean;
   onDemand: boolean;
+  /** A deployment's custom/ directory, laid over core's agents, skills and config (overlay.ts). */
+  overlay?: string;
+  /** Cases, stub sets and the stub-coverage record to use instead of core's (a deployment's own). */
+  casesDir?: string;
+  stubsDir?: string;
+  coverageFile?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -78,7 +86,16 @@ function parseArgs(argv: string[]): Args {
     concurrency: concurrencyRaw === undefined ? DEFAULT_CONCURRENCY : parseConcurrency(concurrencyRaw),
     allowOtherConnections: argv.includes('--allow-other-connections'),
     onDemand: argv.includes('--on-demand'),
+    overlay: optionalPath(value('--overlay')),
+    casesDir: optionalPath(value('--cases')),
+    stubsDir: optionalPath(value('--stubs')),
+    coverageFile: optionalPath(value('--coverage')),
   };
+}
+
+/** A path flag, absolute from the invoking directory (pnpm runs the script from the repo root). */
+function optionalPath(raw: string | undefined): string | undefined {
+  return raw === undefined ? undefined : path.resolve(process.env['INIT_CWD'] ?? process.cwd(), raw);
 }
 
 const out = (line = ''): void => { process.stdout.write(`${line}\n`); };
@@ -99,11 +116,15 @@ function staticProblems(cases: ScenarioCase[], harness: ScenarioHarness): string
   const registry = harness.stack.toolRegistry;
   const byAgent = harness.reachableByAgent;
   for (const c of cases) {
+    if (!byAgent.has(c.agent)) {
+      problems.push(`${c.name}: reaches agent '${c.agent}', which this stack did not load (not on disk, or not enabled in agent_registry)`);
+      continue;
+    }
     const real = c.delegation === 'real';
-    const runAgents = real ? [...byAgent.keys()] : [COORDINATOR];
-    /** The agents a stub's or check's `agent` names: undefined is the coordinator for a check, every run agent for a stub. */
+    const runAgents = real ? [...byAgent.keys()] : [c.agent];
+    /** The agents a stub's or check's `agent` names: undefined is the case's agent for a check, every run agent for a stub. */
     const agentsFor = (agent: string | undefined, forStub: boolean): string[] =>
-      agent === undefined ? (forStub ? runAgents : [COORDINATOR]) : agent === ANY_AGENT ? runAgents : [agent];
+      agent === undefined ? (forStub ? runAgents : [c.agent]) : agent === ANY_AGENT ? runAgents : [agent];
     const reachable = (tool: string, agents: string[]): boolean => agents.some(a => byAgent.get(a)?.has(tool));
     const unreachableBy = (agents: string[]): string => (agents.length === 1
       ? `${agents[0] === COORDINATOR ? 'the coordinator' : `'${agents[0]}'`} is neither offered nor can activate`
@@ -226,7 +247,7 @@ async function rateRuns(
     for (const b of behaviors) {
       ratings.get(b.id)!.push(
         b.check
-          ? evaluateCheck(b.check, run, { internalNames: harness.internalNames })
+          ? evaluateCheck(b.check, run, { internalNames: harness.internalNames, caseAgent: scenario.agent })
           : judgeScores.get(b.id)!,
       );
     }
@@ -239,10 +260,10 @@ async function rateRuns(
  * release pre-flight compares this to the security gate's SHA, and a clean SHA over edited
  * code would claim a result for code that never ran.
  */
-function gitCommit(): string | undefined {
+function gitCommit(cwd: string = import.meta.dirname): string | undefined {
   try {
-    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: import.meta.dirname, encoding: 'utf-8' }).trim();
-    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: import.meta.dirname, encoding: 'utf-8' });
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf-8' }).trim();
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd, encoding: 'utf-8' });
     return status.trim() === '' ? sha : `${sha}-dirty`;
   } catch {
     // Not fatal — results are still useful without it — but say so: the release gate
@@ -258,8 +279,10 @@ async function main(): Promise<void> {
   // during a half-hour suite.
   const commit = gitCommit();
   const args = parseArgs(process.argv.slice(2));
+  // A deployment's agents and cases are its own repo's code: name that commit too.
+  const overlayCommit = args.overlay ? gitCommit(args.overlay) : undefined;
 
-  let cases = loadScenarioCases(CASES_DIR);
+  let cases = loadScenarioCases(args.casesDir ?? CASES_DIR, args.stubsDir ? { extraStubsDirs: [args.stubsDir] } : {});
   if (args.caseFilter) cases = cases.filter(c => c.name.toLowerCase().includes(args.caseFilter!.toLowerCase()));
   if (args.tags) cases = cases.filter(c => c.tags.some(t => args.tags!.includes(t)));
   // An unfiltered run is the release gate: on-demand cases join it only when asked (#2027).
@@ -272,7 +295,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  out('\nCoordinator scenario suite');
+  out('\nScenario suite');
   out(`   ${cases.length} case(s); runs per case: ${args.runs ?? `per case, default ${DEFAULT_RUNS}`}`);
   out(`   Per-run timeout: ${Math.round(RUN_TIMEOUT_MS / 1000)}s (SCENARIO_TIMEOUT_MS)`);
   const realCases = cases.filter(c => c.delegation === 'real').length;
@@ -281,12 +304,16 @@ async function main(): Promise<void> {
     out(`   On demand, not run: ${onDemandSkipped.length} case(s) marked release_gate: false (--on-demand runs them)`);
   }
   out(`   Concurrency: ${args.concurrency} case(s) at a time (--concurrency)`);
+  if (args.overlay) out(`   Overlay: ${args.overlay} (agents, skills and config laid over core's)`);
+  if (args.casesDir) out(`   Cases: ${args.casesDir}`);
   out('   Booting the test-mode stack...');
 
+  const overlay = args.overlay ? buildOverlay(args.overlay, REPO_ROOT) : undefined;
   let harness: ScenarioHarness;
   try {
-    harness = await createScenarioHarness({ model: args.model });
+    harness = await createScenarioHarness({ model: args.model, ...(overlay ?? {}) });
   } catch (e) {
+    overlay?.cleanup();
     err(`\nFailed to boot: ${e instanceof Error ? e.message : String(e)}`);
     err('Needs DATABASE_URL (migrated, with a principal), SECRET_ENCRYPTION_KEY, and the model\'s provider key in the vault (#911).');
     process.exit(1);
@@ -295,6 +322,7 @@ async function main(): Promise<void> {
   const model = args.model ?? harness.stack.yamlConfig.model_routing?.tiers.standard.model ?? 'configured routing';
   let exitCode = 0;
   const stopHooks: Array<() => Promise<void>> = [];
+  if (overlay) stopHooks.push(async () => overlay.cleanup());
   try {
     const principal = harness.stack.principalContactId
       ? await harness.stack.contactService.getContact(harness.stack.principalContactId)
@@ -386,7 +414,7 @@ async function main(): Promise<void> {
         // `name?` = a real read-only tool that failed (e.g. no mail client in test mode).
         // A real specialist's call is prefixed with its name: `calendar:calendar-list-events`.
         const calls = run.toolCalls.map(c => {
-          const name = c.agentId !== undefined && c.agentId !== COORDINATOR ? `${c.agentId}:${c.name}` : c.name;
+          const name = c.agentId !== undefined && c.agentId !== scenario.agent ? `${c.agentId}:${c.name}` : c.name;
           return c.disposition === 'refused' ? `${name}!`
             : c.disposition === 'canned' ? `${name}~`
               : c.disposition === 'passthrough' && c.result?.success === false ? `${name}?`
@@ -438,10 +466,10 @@ async function main(): Promise<void> {
 
     // Stub coverage: record this measurement, then gate on it.
     const coverage = mergeCoverage(
-      readCoverage(COVERAGE_FILE),
+      readCoverage(args.coverageFile ?? COVERAGE_FILE),
       results.map(r => ({ name: r.name, model, runs: r.runs })),
     );
-    writeCoverage(COVERAGE_FILE, coverage);
+    writeCoverage(args.coverageFile ?? COVERAGE_FILE, coverage);
     const failures = [
       ...gateFailures(results),
       ...coverageViolations(results.map(r => r.name), coverage, { strict: true }),
@@ -461,6 +489,7 @@ async function main(): Promise<void> {
       timestamp: new Date(started).toISOString(),
       model,
       commit,
+      ...(overlayCommit ? { overlayCommit } : {}),
       ...(onDemandSkipped.length > 0 ? { onDemandSkipped } : {}),
       runsPerCase: Object.fromEntries(results.map(r => [r.name, r.runs.length])),
       cases: results,
@@ -490,6 +519,7 @@ async function main(): Promise<void> {
       );
     }
     out(`\n   Commit:  ${suite.commit ?? '(unknown)'}`);
+    if (suite.overlayCommit) out(`   Overlay: ${suite.overlayCommit}`);
     out(`   Model:   ${model}`);
     out(`   Results: ${resultsFile}`);
     out(`   Time:    ${Math.round(suite.durationMs / 1000)}s (concurrency ${args.concurrency})`);

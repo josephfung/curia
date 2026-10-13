@@ -37,7 +37,7 @@ describe('parseJudgeResponse', () => {
 
 describe('formatJudgeInput', () => {
   const scenario: ScenarioCase = {
-    name: 'paused', description: 'Delegate returns paused.', tags: [], delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
+    name: 'paused', description: 'Delegate returns paused.', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: 'How is the research going?' },
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
@@ -75,7 +75,7 @@ describe('formatJudgeInput', () => {
 
 describe('formatJudgeInput with real delegation (#2027)', () => {
   const scenario: ScenarioCase = {
-    name: 'real', description: 'Calendar really runs.', tags: [], delegation: 'real', releaseGate: true, sourceFile: 'x.yaml',
+    name: 'real', description: 'Calendar really runs.', tags: [], agent: 'coordinator', delegation: 'real', releaseGate: true, sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: "What's on tomorrow?" },
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],
@@ -120,7 +120,7 @@ describe('extractJsonObject', () => {
 
 describe('judgeRun', () => {
   const scenario = {
-    name: 'x', description: '', tags: [], delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
+    name: 'x', description: '', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: 'hi' },
     toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],

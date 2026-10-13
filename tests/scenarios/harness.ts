@@ -21,8 +21,19 @@
 // wait and its timeout), and the specialist works under the same stub layer, in the same
 // case context. Its calls, brief and response are captured beside the coordinator's
 // (delegation-capture.ts), and its rows are cleaned with the run's.
+//
+// A case can instead reach a specialist directly (#2025): `agent: ceo-inbox` with a
+// `delegate` inbound publishes the agent.task the delegate handler would, and the run
+// captures that specialist's turn the way it captures the coordinator's. A `bullpen` or
+// `scheduler` inbound reaches it the way a thread reply or its own schedule does.
 import { randomUUID } from 'node:crypto';
 import { createAgentDiscuss, createAgentTask, createInboundMessage } from '../../src/bus/events.js';
+import { stampOriginator } from '../../src/contacts/stamp-originator.js';
+import {
+  buildInboundEmailIdentifierBlock,
+  preambleAccountLabel,
+  sanitizeNylasMessageId,
+} from '../../src/dispatch/email-metadata.js';
 import {
   clampDelegateWaitTimeoutMs,
   computeDelegateTimeoutMs,
@@ -70,12 +81,11 @@ import {
   describeError,
   seedRun,
   sweepLeftovers,
+  type ResolvedSender,
   type SeededRun,
 } from './seed.js';
 import { createStubController, type StubController, type StubbedCall } from './stub-layer.js';
-import type { CapturedToolCall, ScenarioCase, ScenarioRun } from './types.js';
-
-const COORDINATOR = 'coordinator';
+import { COORDINATOR, type CapturedToolCall, type ScenarioCase, type ScenarioRun } from './types.js';
 
 /**
  * What a real-delegation run waits beyond the longest delegate wait: the coordinator's own
@@ -215,7 +225,14 @@ export async function acquireSuiteLock(stack: TestModeStack): Promise<(() => Pro
   };
 }
 
-export async function createScenarioHarness(options: { model?: string } = {}): Promise<ScenarioHarness> {
+/** Where the stack loads agents, skills and config from: core's, or a deployment overlay laid over them. */
+export interface StackSources {
+  agentsDir?: string;
+  skillsDir?: string;
+  configDir?: string;
+}
+
+export async function createScenarioHarness(options: { model?: string } & StackSources = {}): Promise<ScenarioHarness> {
   const context = createCaseContext<ScenarioRunState>();
   const currentScope = (): SeedScope | undefined => context.current()?.scope;
   const config = loadConfig();
@@ -243,6 +260,9 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
   const stack = await createTestModeStack({
     config: { ...config, databaseUrl: withApplicationName(config.databaseUrl) },
     model: options.model,
+    ...(options.agentsDir ? { agentsDir: options.agentsDir } : {}),
+    ...(options.skillsDir ? { skillsDir: options.skillsDir } : {}),
+    ...(options.configDir ? { configDir: options.configDir } : {}),
     wrapExecutionLayer: (layer) => controller.wrap(layer),
     wrapBullpenService: (bullpen) => scopedBullpen(bullpen, currentScope),
     // Times each model call against its run, and refuses a cancelled run's calls.
@@ -373,6 +393,49 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
     return own().length === 0;
   }
 
+  /**
+   * What the coordinator's `delegate` call publishes for a specialist (#2025;
+   * skills/delegate/handler.ts): an agent.task on the internal channel from the
+   * coordinator, carrying the brief, with the dispatcher-stamped `Message ID` / `Account`
+   * lines in front when the request came by email. Its metadata names the delegation
+   * origin and forwards the requester's originator, and the live-turn signal comes along,
+   * so the specialist builds the requester-identity block and passes the same skill gates
+   * it does in production. What the case leaves out is the coordinator's own turn.
+   */
+  async function publishDelegatedTask(
+    agent: string,
+    conversationId: string,
+    requester: ResolvedSender,
+    inbound: ScenarioCase['inbound'],
+  ): Promise<void> {
+    const senderContext = await stack.contactResolver.resolve(requester.channelId, requester.senderId);
+    const { originator, liveTurn } = stampOriginator({ senderContext, channel: requester.channelId, senderId: requester.senderId });
+    const messageId = inbound.email ? sanitizeNylasMessageId(inbound.email.nylasMessageId ?? `scenario-msg-${randomUUID()}`) : undefined;
+    const account = inbound.email ? preambleAccountLabel(inbound.email.account) : undefined;
+    const identifiers = inbound.email ? buildInboundEmailIdentifierBlock(messageId?.ok ? messageId.value : undefined, account) : null;
+    const brief = identifiers ? identifiers + inbound.content : inbound.content;
+    return bus.publish('dispatch', createAgentTask({
+      agentId: agent,
+      conversationId,
+      channelId: 'internal',
+      senderId: COORDINATOR,
+      content: brief,
+      metadata: {
+        delegationOrigin: {
+          conversationId: `scenario-${randomUUID()}`,
+          channelId: requester.channelId,
+          agentId: COORDINATOR,
+          originalTask: brief,
+        },
+        ...(messageId?.ok ? { inboundNylasMessageId: messageId.value } : {}),
+        ...(account ? { inboundEmailAccount: account } : {}),
+        originator,
+      },
+      liveTurn,
+      parentEventId: `delegate-${randomUUID()}`,
+    }));
+  }
+
   async function runOnce(
     scenario: ScenarioCase,
     runIndex: number,
@@ -442,6 +505,8 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         : inbound.content;
 
       const sender = await resolveSender(scenario, stack);
+      // The agent the inbound reaches and whose turn is scored (#2025).
+      const agent = scenario.agent;
       const realDelegation = scenario.delegation === 'real';
       const timeoutMs = scenario.timeoutSeconds
         ? scenario.timeoutSeconds * 1000
@@ -451,7 +516,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         ? thread.threadId // BullpenDispatcher uses the thread id as the conversation
         : sender === 'scheduler' || sender === 'task-wake'
           ? `scheduler:scenario-${randomUUID()}:${randomUUID()}` // scheduler:<job>:<run>
-          : sender !== 'bullpen' && sender.channelId === 'email'
+          : typeof sender === 'object' && 'channelId' in sender && sender.channelId === 'email'
             ? `email:scenario-${randomUUID()}`
             : `scenario-${randomUUID()}`;
       conversationId = runConversationId;
@@ -463,29 +528,31 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
       // Specialists still working when the run's own wait ran out (#2027).
       let stillWorking: string[] = [];
       try {
-        const waiter = capture.waitFor(runConversationId, timeoutMs);
+        const waiter = capture.waitFor(runConversationId, timeoutMs, agent);
         let delivery: Promise<void>;
         if (thread) {
-          // Posted by the thread's creator, mentioning the coordinator — the event a
-          // specialist's bullpen reply produces. BullpenDispatcher turns it into the
-          // coordinator's agent.task.
-          const creator = scenario.seed.bullpen.find(t => t.key === inbound.thread)!.creatorAgentId;
-          const message = await stack.bullpenService.postMessage(thread.threadId, creator, inbound.content, [COORDINATOR]);
+          // Posted by the thread's creator (or the case's author), mentioning the case's
+          // agent — the event a bullpen reply produces. BullpenDispatcher turns it into
+          // that agent's agent.task.
+          const author = inbound.author ?? scenario.seed.bullpen.find(t => t.key === inbound.thread)!.creatorAgentId;
+          const message = await stack.bullpenService.postMessage(thread.threadId, author, inbound.content, [agent]);
           delivery = bus.publish('agent', createAgentDiscuss({
             threadId: thread.threadId,
             messageId: message.id,
             topic: thread.topic,
-            senderAgentId: creator,
+            senderAgentId: author,
             participants: thread.participants,
-            mentionedAgentIds: [COORDINATOR],
+            mentionedAgentIds: [agent],
             content: inbound.content,
             parentEventId: randomUUID(),
           }));
+        } else if (typeof sender === 'object' && 'delegate' in sender) {
+          delivery = publishDelegatedTask(agent, runConversationId, sender.delegate, inbound);
         } else if (sender === 'scheduler') {
           // What Scheduler.fireJob publishes for a recurring job with no linked task: an
           // agent.task straight to the agent, no Dispatcher, content = the payload JSON.
           delivery = bus.publish('system', createAgentTask({
-            agentId: COORDINATOR,
+            agentId: agent,
             conversationId: runConversationId,
             channelId: 'scheduler',
             senderId: 'scheduler',
@@ -508,7 +575,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
             },
             parentEventId: randomUUID(),
           }));
-        } else if (sender !== 'bullpen') {
+        } else if (sender !== 'bullpen' && 'channelId' in sender) {
           delivery = bus.publish('channel', createInboundMessage({
             conversationId: runConversationId,
             channelId: sender.channelId,
@@ -546,7 +613,7 @@ export async function createScenarioHarness(options: { model?: string } = {}): P
         process.stderr.write(`  [WARN] ${state.label}: a turn was still running ${CANCEL_SETTLE_MS / 1000}s after the run ended; its later spend is counted outside any run\n`);
       }
 
-      const merged = mergeCalls(inRunOrder(outcome.calls, trace), stubbedCalls);
+      const merged = mergeCalls(inRunOrder(outcome.calls, trace, agent), stubbedCalls);
       // A scoped view failing means the case ran without its premise (no block, no thread).
       const premiseError = scope.errors.length > 0 ? `seeded state was not visible: ${scope.errors.join('; ')}` : undefined;
       // A slow specialist is not a stuck coordinator (#2027): say which it was.

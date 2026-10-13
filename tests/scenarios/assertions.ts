@@ -7,28 +7,32 @@
 // check may set `success` when the behavior is the effect, not the attempt.
 //
 // A run with real delegation (#2027) holds every agent's calls. A tool check reads the
-// coordinator's unless it names an `agent` (or `any`).
+// case agent's (the coordinator's unless the case targets a specialist, #2025) unless it
+// names an `agent` (or `any`).
 import { isDeepStrictEqual } from 'node:util';
 import { argsMatch } from './stub-matcher.js';
-import { ANY_AGENT, type BehaviorCheck, type CapturedToolCall, type CheckAgent, type RunRating, type ScenarioRun } from './types.js';
+import { ANY_AGENT, COORDINATOR, type BehaviorCheck, type CapturedToolCall, type CheckAgent, type RunRating, type ScenarioRun } from './types.js';
 
-const COORDINATOR = 'coordinator';
-
-/** The calls a check reads: the coordinator's by default (a call without agentId is one). */
-export function callsFor(calls: CapturedToolCall[], agent: CheckAgent | undefined): CapturedToolCall[] {
+/**
+ * The calls a check reads: the case agent's by default. A call without agentId was saved
+ * before #2027, when every recorded call was the coordinator's.
+ */
+export function callsFor(calls: CapturedToolCall[], agent: CheckAgent | undefined, caseAgent = COORDINATOR): CapturedToolCall[] {
   if (agent === ANY_AGENT) return calls;
-  const wanted = agent ?? COORDINATOR;
+  const wanted = agent ?? caseAgent;
   return calls.filter(c => (c.agentId ?? COORDINATOR) === wanted);
-}
-
-/** "delegate", or "calendar:calendar-list-events" for another agent's tool. */
-function checkLabel(tool: string, agent: CheckAgent | undefined): string {
-  return agent === undefined || agent === COORDINATOR ? tool : `${agent}:${tool}`;
 }
 
 export interface CheckContext {
   /** Identifiers that must never appear in a principal- or external-facing reply. */
   internalNames: string[];
+  /** The agent the case reaches (#2025). Default: the coordinator. */
+  caseAgent?: string;
+}
+
+/** "delegate", or "calendar:calendar-list-events" for a tool of an agent other than the case's. */
+function checkLabel(tool: string, agent: CheckAgent | undefined, caseAgent = COORDINATOR): string {
+  return agent === undefined || agent === caseAgent ? tool : `${agent}:${tool}`;
 }
 
 const NO_REPLY = 'NO_REPLY';
@@ -63,9 +67,9 @@ export function containsSubset(pattern: unknown, value: unknown): boolean {
   return isDeepStrictEqual(pattern, value);
 }
 
-function describeCalls(calls: CapturedToolCall[]): string {
+function describeCalls(calls: CapturedToolCall[], caseAgent: string): string {
   if (calls.length === 0) return 'no tool calls';
-  return calls.map(c => `${checkLabel(c.name, c.agentId)}${c.result?.success === false ? ' [failed]' : ''}(${JSON.stringify(c.input).slice(0, 160)})`).join(', ');
+  return calls.map(c => `${checkLabel(c.name, c.agentId ?? COORDINATOR, caseAgent)}${c.result?.success === false ? ' [failed]' : ''}(${JSON.stringify(c.input).slice(0, 160)})`).join(', ');
 }
 
 const pass = (justification: string): RunRating => ({ rating: 'PASS', justification });
@@ -82,13 +86,14 @@ function returned(call: CapturedToolCall, returns: Record<string, unknown> | und
 }
 
 export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: CheckContext): RunRating {
+  const caseAgent = ctx.caseAgent ?? COORDINATOR;
   const calls = check.kind === 'called' || check.kind === 'not_called' || check.kind === 'order'
-    ? callsFor(run.toolCalls, check.agent)
+    ? callsFor(run.toolCalls, check.agent, caseAgent)
     : run.toolCalls;
   switch (check.kind) {
     case 'called': {
       const tools = calledTools(check);
-      const tool = tools.map(t => checkLabel(t, check.agent)).join(' | ');
+      const tool = tools.map(t => checkLabel(t, check.agent, caseAgent)).join(' | ');
       const matching = calls.filter(c =>
         tools.includes(c.name)
         && callMatches(c, check.with, check.contains)
@@ -102,14 +107,14 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
       return miss(
         `expected ${tool} ${min}${Number.isFinite(max) ? `..${max}` : '+'}x matching ` +
         `${JSON.stringify({ with: check.with, contains: check.contains, ...(check.success !== undefined ? { success: check.success } : {}), ...(check.returns !== undefined ? { returns: check.returns } : {}) })}; got ${matching.length}. ` +
-        `Calls: ${describeCalls(calls)}`,
+        `Calls: ${describeCalls(calls, caseAgent)}`,
       );
     }
     case 'not_called': {
       const offending = calls.filter(c => check.tools.includes(c.name) && callMatches(c, check.with, check.contains) && returned(c, check.returns));
       return offending.length === 0
-        ? pass(`none of ${check.tools.map(t => checkLabel(t, check.agent)).join(', ')} called`)
-        : miss(`called ${describeCalls(offending)}`);
+        ? pass(`none of ${check.tools.map(t => checkLabel(t, check.agent, caseAgent)).join(', ')} called`)
+        : miss(`called ${describeCalls(offending, caseAgent)}`);
     }
     case 'order': {
       let cursor = 0;
@@ -117,13 +122,13 @@ export function evaluateCheck(check: BehaviorCheck, run: ScenarioRun, ctx: Check
         if (c.name === check.tools[cursor]) cursor++;
         if (cursor === check.tools.length) break;
       }
-      const order = check.tools.map(t => checkLabel(t, check.agent)).join(' → ');
+      const order = check.tools.map(t => checkLabel(t, check.agent, caseAgent)).join(' → ');
       return cursor === check.tools.length
         ? pass(`called ${order} in order`)
-        : miss(`expected ${order} in order; calls: ${describeCalls(calls)}`);
+        : miss(`expected ${order} in order; calls: ${describeCalls(calls, caseAgent)}`);
     }
     case 'reply': {
-      if (run.reply === null) return miss('the coordinator produced no reply');
+      if (run.reply === null) return miss(`${caseAgent === COORDINATOR ? 'the coordinator' : caseAgent} produced no reply`);
       const isNoReply = run.reply.trim() === NO_REPLY;
       const wanted = check.is === 'no_reply';
       return isNoReply === wanted
