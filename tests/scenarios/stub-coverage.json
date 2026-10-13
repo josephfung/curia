@@ -7,6 +7,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-10T14:27:26.339Z"
     },
+    "bullpen send request": {
+      "unstubbed": 0,
+      "runs": 10,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-13T00:39:59.919Z"
+    },
     "calendar delegate failure": {
       "unstubbed": 0,
       "runs": 5,

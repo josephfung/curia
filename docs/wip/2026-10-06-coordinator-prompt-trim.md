@@ -26,7 +26,7 @@ log.
 | 6: prose-only rules into code | Merged (2026-10-11, #2103) | 9,065 | ~3,806 / 3,900 |
 | 7: backlog line for proactive surfacing | Merged (2026-10-11, #2107) | 8,652 | ~3,703 / 3,800 |
 | 8: routing-oriented roster | Merged (2026-10-12, #2109) | 8,652 (unchanged; roster 2,719 → 1,883) | ~3,703 / 3,800 |
-| 9: wake-only SKILL.md content | In review (2026-10-12) | 8,652 (unchanged; SKILL.md 6,157 → 3,715) | ~3,092 / 3,200 |
+| 9: wake-only SKILL.md content | Merged (2026-10-13, #2122) | 8,652 (unchanged; SKILL.md 6,157 → 3,715) | ~3,092 / 3,200 |
 | 10, final phase | Not started | — | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
