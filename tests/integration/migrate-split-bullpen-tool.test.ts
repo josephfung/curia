@@ -1,7 +1,10 @@
-// Integration test — runs the 097 migration's Up SQL against a live Postgres and asserts
-// the old `bullpen` tool row becomes the `bullpen` bundle and its four tools (#2126).
-// Skips without DATABASE_URL.
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+// Integration test — runs the 097 migration's Up and Down SQL against a live Postgres and
+// asserts the old `bullpen` tool row becomes the `bullpen` bundle and its four tools, and
+// back (#2126). Skips without DATABASE_URL.
+//
+// Each case runs inside a transaction on one client and is rolled back, so registry rows
+// already in the database, and their timestamps, are never changed.
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import pg from 'pg';
 import { readFile } from 'node:fs/promises';
 
@@ -21,13 +24,12 @@ interface Row {
 
 describeIf('migration 097: split the bullpen tool', () => {
   let pool: pg.Pool;
+  let client: pg.PoolClient;
   let upSql: string;
-  // These tests delete real registry rows, so restore whatever was there before.
-  let savedTools: Row[] = [];
-  let savedSkill: Row[] = [];
+  let downSql: string;
 
   async function toolRows(): Promise<Row[]> {
-    const { rows } = await pool.query<Row>(
+    const { rows } = await client.query<Row>(
       'SELECT name, enabled, installed_by, enabled_by FROM tool_registry WHERE name = ANY($1) ORDER BY name',
       [TOOL_NAMES],
     );
@@ -35,86 +37,96 @@ describeIf('migration 097: split the bullpen tool', () => {
   }
 
   async function skillRow(): Promise<Row | undefined> {
-    const { rows } = await pool.query<Row>(
+    const { rows } = await client.query<Row>(
       "SELECT name, enabled, installed_by, enabled_by FROM skill_registry WHERE name = 'bullpen'",
     );
     return rows[0];
   }
 
-  async function clear(): Promise<void> {
-    await pool.query('DELETE FROM tool_registry WHERE name = ANY($1)', [TOOL_NAMES]);
-    await pool.query("DELETE FROM skill_registry WHERE name = 'bullpen'");
-  }
-
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     const sql = await readFile(MIGRATION_SQL_URL, 'utf8');
-    upSql = sql.split('-- Down Migration')[0]!;
-    savedTools = await toolRows();
-    const skill = await skillRow();
-    savedSkill = skill ? [skill] : [];
+    const [up, down] = sql.split('-- Down Migration');
+    upSql = up!;
+    downSql = down!;
   });
 
-  beforeEach(clear);
+  beforeEach(async () => {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    // A clean slate inside the transaction only; the rollback below restores it.
+    await client.query('DELETE FROM tool_registry WHERE name = ANY($1)', [TOOL_NAMES]);
+    await client.query("DELETE FROM skill_registry WHERE name = 'bullpen'");
+  });
+
+  afterEach(async () => {
+    await client.query('ROLLBACK');
+    client.release();
+  });
 
   afterAll(async () => {
-    await clear();
-    for (const row of savedTools) {
-      await pool.query(
-        'INSERT INTO tool_registry (name, enabled, installed_by, enabled_by) VALUES ($1, $2, $3, $4)',
-        [row.name, row.enabled, row.installed_by, row.enabled_by],
-      );
-    }
-    for (const row of savedSkill) {
-      await pool.query(
-        'INSERT INTO skill_registry (name, enabled, installed_by, enabled_by) VALUES ($1, $2, $3, $4)',
-        [row.name, row.enabled, row.installed_by, row.enabled_by],
-      );
-    }
     await pool.end();
   });
 
   it('moves an enabled bullpen row to the bundle and its four tools, and drops it', async () => {
-    await pool.query(
+    await client.query(
       "INSERT INTO tool_registry (name, enabled, installed_by, enabled_at, enabled_by) VALUES ('bullpen', true, 'reconciliation', now(), 'reconciliation')",
     );
-    await pool.query(upSql);
+    await client.query(upSql);
 
     const tools = await toolRows();
     expect(tools.map(r => r.name)).toEqual([...NEW_TOOLS].sort());
-    expect(tools.every(r => r.enabled && r.installed_by === 'reconciliation')).toBe(true);
-    expect(await skillRow()).toMatchObject({ enabled: true, installed_by: 'reconciliation' });
+    expect(tools.every(r => r.enabled && r.installed_by === 'migration:097' && r.enabled_by === 'reconciliation')).toBe(true);
+    expect(await skillRow()).toMatchObject({ enabled: true, installed_by: 'migration:097', enabled_by: 'reconciliation' });
   });
 
   it("keeps an admin's disable", async () => {
-    await pool.query(
+    await client.query(
       "INSERT INTO tool_registry (name, enabled, installed_by) VALUES ('bullpen', false, 'web-app')",
     );
-    await pool.query(upSql);
+    await client.query(upSql);
 
     const tools = await toolRows();
     expect(tools).toHaveLength(4);
     expect(tools.every(r => !r.enabled)).toBe(true);
-    expect(await skillRow()).toMatchObject({ enabled: false, installed_by: 'web-app' });
+    expect(await skillRow()).toMatchObject({ enabled: false });
   });
 
   it('does nothing on a fresh install', async () => {
-    await pool.query(upSql);
+    await client.query(upSql);
     expect(await toolRows()).toEqual([]);
     expect(await skillRow()).toBeUndefined();
   });
 
   it('leaves an existing row for a new name alone', async () => {
-    await pool.query(
+    await client.query(
       "INSERT INTO tool_registry (name, enabled, installed_by) VALUES ('bullpen', true, 'reconciliation')",
     );
-    await pool.query(
+    await client.query(
       "INSERT INTO tool_registry (name, enabled, installed_by) VALUES ('bullpen-close', false, 'web-app')",
     );
-    await pool.query(upSql);
+    await client.query(upSql);
 
     const close = (await toolRows()).find(r => r.name === 'bullpen-close');
     expect(close).toMatchObject({ enabled: false, installed_by: 'web-app' });
     expect((await toolRows()).map(r => r.name)).not.toContain('bullpen');
+  });
+
+  it('down restores the bullpen row and removes only the rows up created', async () => {
+    await client.query(
+      "INSERT INTO tool_registry (name, enabled, installed_by) VALUES ('bullpen', false, 'web-app')",
+    );
+    await client.query(
+      "INSERT INTO tool_registry (name, enabled, installed_by) VALUES ('bullpen-close', true, 'web-app')",
+    );
+    await client.query(upSql);
+    await client.query(downSql);
+
+    const tools = await toolRows();
+    expect(tools.map(r => r.name)).toEqual(['bullpen', 'bullpen-close']);
+    expect(tools.find(r => r.name === 'bullpen')).toMatchObject({ enabled: false });
+    // Not created by up, so down leaves it with its own state.
+    expect(tools.find(r => r.name === 'bullpen-close')).toMatchObject({ enabled: true, installed_by: 'web-app' });
+    expect(await skillRow()).toBeUndefined();
   });
 });
