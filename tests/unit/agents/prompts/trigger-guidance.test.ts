@@ -71,7 +71,7 @@ describe('renderTurnGuidance', () => {
     // inboundTurnGuidance can actually pick, not every block at once (~6.1KB, a turn
     // that cannot happen). The worst real turn was ~4.0KB at PR 4. A principal turn can
     // also carry the backlog line (PR 7), so the bound includes its longest form, with
-    // the lines on answering a specialist's task (#2129, ~180 chars: 4.4KB → 4.6KB).
+    // the lines on answering a specialist's task (#2129, ~280 chars: 4.4KB → 4.7KB).
     const backlogLine = renderBacklogLine({ decayWarnings: 99, pendingApprovals: 99, principalTasks: 99 });
     const fullEntry = { bind_reply: true, task_id: 't', resume_token: 'r', subject: 'Board prep' };
     let worst = 0;
@@ -85,7 +85,7 @@ describe('renderTurnGuidance', () => {
         }
       }
     }
-    expect(worst).toBeLessThan(4_650);
+    expect(worst).toBeLessThan(4_750);
   });
 });
 

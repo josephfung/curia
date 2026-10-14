@@ -83,7 +83,8 @@ expected_behaviors:
   - id: confirms_plainly
     weight: important
     description: >
-      The reply tells the principal the two contacts were merged (as contacts reported).
+      The reply tells the principal the two contacts were merged, as contacts reported. First
+      person ("I merged them") is right: the coordinator owns its specialists' work.
   - id: names_no_internals
     weight: important
     description: The reply names no tool, agent or system identifier, and no task id.

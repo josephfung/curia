@@ -39,7 +39,8 @@ export const BACKLOG_INSTRUCTION_LINES: readonly string[] = [
  */
 export const PRINCIPAL_TASK_ANSWER_LINES: readonly string[] = [
   'A task of theirs a specialist filed (source_agent_id) holds its question in the last note.',
-  'Delegate their answer to that specialist with the task id; it acts and closes the task.',
+  'When their message answers one, read it with task-list before acting, then delegate the answer',
+  'to that specialist with the task id. The specialist closes the task; do not close or edit it.',
 ];
 
 function plural(count: number, one: string, many: string): string {

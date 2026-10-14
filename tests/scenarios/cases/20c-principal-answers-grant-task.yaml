@@ -58,6 +58,13 @@ tool_stubs:
       return:
         agent: contacts
         response: Declined the scheduling-access recommendation for Omar Haddad; it won't be suggested again. Closed the task.
+  # Remembering the answer is fine; stubbed so the call is not a harness refusal.
+  memory-store:
+    - match: {}
+      return: { action: created, stored: true }
+  behavioral-preferences-update:
+    - match: {}
+      return: { preferences: ["Do not give Omar Haddad scheduling access."], summary: Added one preference., changes: appended 1 entry }
   # The wrong paths, available: closing or editing a task itself.
   task-complete:
     - match: {}
