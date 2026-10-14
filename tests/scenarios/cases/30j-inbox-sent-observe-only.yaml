@@ -1,0 +1,88 @@
+# ceo-inbox, the daily sent-observe job (#2025). Rule: the job's own payload (the second
+# `schedule:` entry in agents/ceo-inbox.yaml): call ceo-inbox-sent-observe, then
+# task-completion-from-sent, report with scheduler-report, and do nothing else (no triage,
+# draft, archive, label or send). Operating Mode's "Sent-observe and voice-learn jobs"
+# line points at it.
+#
+# The inbox holds unread mail and every mailbox write succeeds (ceo-inbox-mailroom), so a
+# triage run is available.
+name: inbox sent-observe job runs only sent-observe
+description: >
+  ceo-inbox's daily sent-observe job fires. ceo-inbox calls ceo-inbox-sent-observe, then
+  task-completion-from-sent, reports both results with scheduler-report, and does nothing
+  else: it does not list or triage the unread mail.
+tags: [specialist-ceo-inbox, ceo-inbox, scheduler, sent-observe]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-mailroom]
+inbound:
+  from: scheduler
+  content: >
+    Run ceo-inbox-sent-observe, then task-completion-from-sent: poll Sent since
+    the watermark, match drafts and open owner=ceo tasks, append evidence,
+    emit ceo.sent_observed, advance the watermark, then auto-complete or queue
+    confirmations for matches. Call scheduler-report when done. Do NOT triage
+    the inbox, draft, archive, label, or send any messages on this wake.
+tool_stubs:
+  ceo-inbox-sent-observe:
+    - match: {}
+      return: { messages_scanned: 14, draft_matches: 3, task_candidates: 2, shadow_reconciled: 1, watermark_advanced_to: 1791878700, backfill_active: false, tasks_truncated: false, skipped_backoff: false }
+  task-completion-from-sent:
+    - match: {}
+      return: { auto_completed: 1, queued_confirm: 1, skipped: 0 }
+  ceo-inbox-list:
+    - match: {}
+      return:
+        count: 1
+        has_more: false
+        messages:
+          - id: msg-30j-unread
+            threadId: thr-30j-unread
+            subject: Quick question about Thursday
+            from: [{ name: Ben Ortiz, email: ben.ortiz@example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791878300
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Are we still on for Thursday?
+  bullpen:
+    # The handler's own validation errors (skills/bullpen/handler.ts), matched first, so a
+    # post or reply missing a required field is refused as production refuses it.
+    - match: { action: post, topic: null }
+      error: "Missing required field: 'topic'"
+    - match: { action: post, participants: null }
+      error: "Missing required field: 'participants' (non-empty string array)"
+    - match: { action: post, content: null }
+      error: "Missing required field: 'content'"
+    - match: { action: post, content: "" }
+      error: "Missing required field: 'content'"
+    - match: { action: reply, thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { action: reply, content: null }
+      error: "Missing required field: 'content'"
+    - match: { action: reply, content: "" }
+      error: "Missing required field: 'content'"
+    - match: { action: get_thread, thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: {}
+      return: { thread_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000ff, message_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000fe, deduplicated: false }
+expected_behaviors:
+  - id: runs_both_in_order
+    weight: critical
+    description: Calls ceo-inbox-sent-observe, then task-completion-from-sent.
+    check:
+      order: [ceo-inbox-sent-observe, task-completion-from-sent]
+  - id: no_triage
+    weight: critical
+    description: Lists no unread mail and archives, labels, marks, drafts or escalates nothing.
+    check:
+      not_called: [ceo-inbox-list, ceo-inbox-archive, ceo-inbox-label, ceo-inbox-mark-read, ceo-inbox-update-folders, ceo-inbox-draft-reply, ceo-inbox-draft-compose, bullpen]
+  - id: reports
+    weight: important
+    description: Reports the run with scheduler-report.
+    check:
+      called: scheduler-report
+failure_modes:
+  - Runs the triage protocol after sent-observe
+  - Skips task-completion-from-sent

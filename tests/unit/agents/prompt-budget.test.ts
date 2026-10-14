@@ -79,6 +79,9 @@ const AGENT_BUDGETS: AgentBudget[] = [
   // Specialists, trimmed per ADR-046 in #2025 (baseline log, final phase).
   // calendar: YAML 28,727 → 23,897 chars (~7,187 → ~5,984 tokens always-on); 24,370 bytes over 19 local tools.
   { agent: 'calendar', alwaysOnPromptTokens: 6_200, localToolDefinitionBytes: 25_000, allowMcpPins: false },
+  // ceo-inbox: YAML 60,090 → 54,238 chars (~16,416 → ~14,953 tokens always-on with its SKILL.md bodies);
+  // 43,469 bytes over 41 local tools.
+  { agent: 'ceo-inbox', alwaysOnPromptTokens: 15_400, localToolDefinitionBytes: 44_800, allowMcpPins: false },
   // meeting-debrief: YAML 18,627 → 14,498 chars (~4,670 → ~3,635 tokens always-on); 22,684 bytes over 17 local tools.
   { agent: 'meeting-debrief', alwaysOnPromptTokens: 3_800, localToolDefinitionBytes: 23_200, allowMcpPins: false },
 ];

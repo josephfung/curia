@@ -406,8 +406,10 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     // 0.20.0 = drafts address recipients by contact ID; raw addresses and one-at-a-time
     //          recipient edits use the new draft-tool inputs (#2053).
     // 0.21.0 = the bullpen tool is split into bullpen-post/-reply/-read/-close (#2126).
+    // 0.21.1 = ADR-046 trim: restatements of payloads, tool descriptions and other
+    //          sections removed from the always-on prompt (#2025).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.21.0');
+    expect(config.version).toBe('0.21.1');
   });
 });
 

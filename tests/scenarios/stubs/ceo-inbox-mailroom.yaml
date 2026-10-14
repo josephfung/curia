@@ -1,0 +1,55 @@
+# ceo-inbox's writes on the principal's mailbox, for cases that fire ceo-inbox directly
+# (#2025): labelling, filing, archiving, marking read and starred, the three draft tools,
+# the shadow draft a punt records, what it learns about a sender, and the scheduler
+# report. Every one succeeds, so a case scores the model's choice and not a refusal. A
+# case that scores one of these, or needs a richer result, stubs it itself (its own stubs
+# are matched first). Unlike ceo-inbox-office this set has no contact-register stub, so a
+# case need not seed `sam`: a triage case stubs contact-register per sender.
+ceo-inbox-label:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, applied: ["📌 Seen"], created: [], folders: [INBOX, "📌 Seen"] }
+ceo-inbox-update-folders:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, folders: [INBOX], created: [], removed_unresolved: [] }
+ceo-inbox-archive:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg }
+ceo-inbox-mark-read:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg }
+ceo-inbox-mark-starred:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true, message_id: scenario-msg, starred: true }
+ceo-inbox-shadow-draft:
+  - agent: ceo-inbox
+    match: {}
+    return: { captured: true, path: /shadow-drafts/scenario.md }
+ceo-inbox-draft-reply:
+  - agent: ceo-inbox
+    match: {}
+    return: { draft_id: scenario-draft-reply-1, subject: "Re: (scenario)", to: [{ email: sender@example.test }], cc: [], already_exists: false }
+ceo-inbox-draft-compose:
+  - agent: ceo-inbox
+    match: {}
+    return: { draft_id: scenario-draft-compose-1, subject: "(scenario)", to: [{ email: recipient@example.test }], cc: [] }
+ceo-inbox-draft-edit:
+  - agent: ceo-inbox
+    match: {}
+    return: { draft_id: scenario-draft-edit-1, subject: "(scenario)", to: [{ email: recipient@example.test }], cc: [] }
+memory-store:
+  - agent: ceo-inbox
+    match: {}
+    return: { stored: true, action: created, node_id: 4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b9, sensitivity: internal }
+contact-update:
+  - agent: ceo-inbox
+    match: {}
+    return: { contact_id: 00000000-0000-4000-8000-000000000000, updated_fields: [] }
+scheduler-report:
+  - agent: ceo-inbox
+    match: {}
+    return: { success: true }

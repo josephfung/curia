@@ -1,0 +1,148 @@
+# ceo-inbox, scheduled triage of a scheduling email (#2025). Rules: agents/ceo-inbox.yaml,
+# "Scheduling-specific drafting rules": do not draft blind; 1. Tap (a CONSULT REQUEST on
+# the bullpen with participants [calendar] and the email's source_message_id), 2. Park
+# (the ⏳ In Progress label and mark-read, no archive, no draft), 3. the ✍️ Drafted label
+# only once a draft exists, 4. the consult-timeout safety wake.
+#
+# Drafting a reply succeeds (ceo-inbox-mailroom), so proposing times blind is available.
+name: inbox scheduling email parks behind a calendar consult
+description: >
+  ceo-inbox's 15-minute triage fires. One unread message: Priya Raman asks for 30 minutes
+  next week to go over the Q4 partnership, Tuesday or Wednesday afternoon. ceo-inbox does
+  not draft a reply yet. It posts a CONSULT REQUEST to the calendar specialist on the
+  bullpen (participants: calendar), labels the email ⏳ In Progress, marks it read, leaves
+  it in the inbox, and schedules the consult-timeout safety wake.
+tags: [specialist-ceo-inbox, ceo-inbox, triage, scheduling]
+agent: ceo-inbox
+timeout_seconds: 420
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Raman
+      channel: email
+      identifier: priya.raman@lumenworks.example.test
+inbound:
+  from: scheduler
+  content: >
+    Check the principal's inbox for unread messages. Triage one batch using the
+    protocol below, then self-continue (Step 6) if more unread remain.
+    If there are no unread messages, exit immediately without any output.
+tool_stubs:
+  ceo-inbox-list:
+    - match: {}
+      return:
+        count: 1
+        has_more: false
+        messages:
+          - id: msg-30c-sched
+            threadId: thr-30c-sched
+            subject: Q4 partnership — 30 min next week?
+            from: [{ name: Priya Raman, email: priya.raman@lumenworks.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791878700
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Could we grab 30 minutes next week to go over the Q4 partnership plan? Tuesday or Wednesday afternoon works best on my end.
+  ceo-inbox-read:
+    - match: { message_id: msg-30c-sched }
+      return:
+        id: msg-30c-sched
+        threadId: thr-30c-sched
+        from: [{ name: Priya Raman, email: priya.raman@lumenworks.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: Q4 partnership — 30 min next week?
+        body_plain: "Hi,\n\nCould we grab 30 minutes next week to go over the Q4 partnership plan? Tuesday or Wednesday afternoon works best on my end, but I can move things around.\n\nThanks,\nPriya"
+        date: 1791878700
+        labels: [INBOX, UNREAD]
+        attachments: []
+  ceo-inbox-search:
+    - match: {}
+      return: { count: 0, messages: [] }
+  contact-register:
+    - match: {}
+      return: { contact_id: "{{contact:priya}}", display_name: Priya Raman, contact_confidence: 0.9, created: false, verified: true }
+  bullpen:
+    # The handler's own validation errors (skills/bullpen/handler.ts), matched first, so a
+    # post or reply missing a required field is refused as production refuses it.
+    - match: { action: post, topic: null }
+      error: "Missing required field: 'topic'"
+    - match: { action: post, participants: null }
+      error: "Missing required field: 'participants' (non-empty string array)"
+    - match: { action: post, content: null }
+      error: "Missing required field: 'content'"
+    - match: { action: post, content: "" }
+      error: "Missing required field: 'content'"
+    - match: { action: reply, thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { action: reply, content: null }
+      error: "Missing required field: 'content'"
+    - match: { action: reply, content: "" }
+      error: "Missing required field: 'content'"
+    - match: { action: get_thread, thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { action: post }
+      return: { thread_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000002, deduplicated: false }
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000003 }
+expected_behaviors:
+  - id: consults_calendar
+    weight: critical
+    description: Posts a CONSULT REQUEST on the bullpen with the calendar specialist as a participant.
+    check:
+      called: bullpen
+      with: { action: post }
+      contains: { participants: calendar, content: CONSULT REQUEST }
+  - id: no_blind_draft
+    weight: critical
+    description: Drafts no reply yet; the consult comes first.
+    check:
+      not_called: [ceo-inbox-draft-reply, ceo-inbox-draft-compose]
+  - id: parked_in_progress
+    weight: critical
+    description: Marks the email ⏳ In Progress (with ceo-inbox-label or ceo-inbox-update-folders).
+    check:
+      any_of:
+        - called: ceo-inbox-label
+          with: { message_id: msg-30c-sched }
+          contains: { labels: In Progress }
+        - called: ceo-inbox-update-folders
+          with: { message_id: msg-30c-sched }
+          contains: { add_folders: In Progress }
+  - id: parked_marked_read
+    weight: critical
+    description: Marks the email read, so the next batch does not triage it again.
+    check:
+      called: ceo-inbox-mark-read
+      with: { message_id: msg-30c-sched }
+  - id: parked_not_archived
+    weight: critical
+    description: Leaves the email in the inbox.
+    check:
+      not_called: [ceo-inbox-archive]
+  - id: consult_dedup_key
+    weight: important
+    description: Passes the email's message id as the bullpen post's source_message_id.
+    check:
+      called: bullpen
+      with: { action: post, source_message_id: msg-30c-sched }
+  - id: no_drafted_label_while_parked
+    weight: important
+    description: Does not apply the ✍️ Drafted label to the parked email (no draft exists).
+    check:
+      not_called: [ceo-inbox-label]
+      contains: { labels: Drafted }
+  - id: timeout_wake
+    weight: important
+    description: Creates the consult-timeout safety task.
+    check:
+      called: task-create
+      contains: { tags: consult-timeout }
+failure_modes:
+  - Drafts a reply proposing times without consulting the calendar specialist
+  - Mentions calendar instead of making it a participant, so the consult never wakes it
+  - Archives the email, or labels it ✍️ Drafted while no draft exists
+  - Leaves the email unread
