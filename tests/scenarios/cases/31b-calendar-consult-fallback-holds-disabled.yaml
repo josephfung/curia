@@ -1,0 +1,123 @@
+# calendar (#2025). Rules: agents/calendar.yaml, "Answering a scheduling consult" steps 3-6
+# and "Holds toggle": when every proposed slot conflicts, fall back to a free-time search;
+# with holds switched off (calendar_holds / enabled = false), propose the slots without
+# holds, say in Notes that hold placement is disabled, and reply `Result: ok` on the thread.
+# calendar-create-hold itself honours the toggle in code (it returns held:false, reason
+# "holds disabled"), so the stub answers the way production would; what the prompt alone
+# carries is the fallback order and what the reply says. Whether calendar reads the toggle
+# itself first or learns it from create-hold's result is not scored: either way no hold is
+# placed.
+name: calendar consult falls back to free time with holds disabled
+description: >
+  ceo-inbox opened a bullpen thread with calendar for its reply to Marcus Lee, who proposed
+  one time next week. That time conflicts with a board meeting. The principal has switched
+  automatic holds off. calendar should check the proposed slot first, find it blocked, search
+  for free time, pick two slots, and reply on the thread with a CONSULT REPLY (Result: ok)
+  listing both slots, none marked as held, with a note that hold placement is disabled.
+tags: [specialist-calendar, consult, holds]
+agent: calendar
+# On demand until #2126: about a quarter of runs, on main as on the branch, repeat a bullpen
+# reply with no `content` until the turn budget runs out, which errors the run.
+release_gate: false
+stub_sets: [calendar-specialist, calendar-office]
+seed:
+  contacts:
+    - key: marcus
+      display_name: Marcus Lee
+      channel: email
+      identifier: marcus.lee@example.test
+  bullpen:
+    - key: consult
+      topic: "Scheduling consult: reply to Marcus Lee re supplier contract renewal"
+      creator: ceo-inbox
+      participants: [ceo-inbox, calendar]
+      content: Opening a scheduling consult for my reply to Marcus Lee about the supplier contract renewal.
+      mentions: []
+inbound:
+  from: bullpen
+  thread: consult
+  content: &consult |
+    CONSULT REQUEST
+    Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
+    For:  reply to Marcus Lee re "supplier contract renewal"
+    By:   slots within next week, weekdays 9 AM to 5 PM
+    Proposed:
+      - {{day:next-monday+3}} at 10:00 AM; start={{time:next-monday+3 10:00}}; end={{time:next-monday+3 10:30}}; source="How about Thursday at 10?"
+    Context: source_message_id=msg-marcus-renewal-002; contact_timezone=unknown; contact_id={{contact:marcus}}
+tool_stubs:
+  calendar-check-conflicts:
+    - agent: calendar
+      match: {}
+      return:
+        clear: false
+        conflicts:
+          - id: evt-board-q4
+            title: Board meeting
+            startTime: "{{time:next-monday+3 09:00}}"
+            endTime: "{{time:next-monday+3 12:00}}"
+            status: confirmed
+            busy: true
+        displayTimezone: "{{timezone}}"
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        freeWindows:
+          - { start: "{{time:next-monday+1 10:00}}", end: "{{time:next-monday+1 12:00}}" }
+          - { start: "{{time:next-monday+4 09:30}}", end: "{{time:next-monday+4 11:30}}" }
+        displayTimezone: "{{timezone}}"
+  # The principal switched holds off. A retrieve of the rules still finds none
+  # (calendar-office).
+  config-store:
+    - agent: calendar
+      match: { action: retrieve, namespace: calendar_holds }
+      return: { found: true, namespace: calendar_holds, key: enabled, value: "false" }
+  # What the real tool returns with the toggle off.
+  calendar-create-hold:
+    - agent: calendar
+      match: {}
+      return:
+        holdEventId: null
+        held: false
+        display: "(not held)"
+        displayTimezone: "{{timezone}}"
+        reason: holds disabled
+  bullpen:
+    - agent: calendar
+      match: { action: get_thread }
+      return:
+        thread:
+          id: "{{thread:consult}}"
+          topic: "Scheduling consult: reply to Marcus Lee re supplier contract renewal"
+          status: open
+          participants: [ceo-inbox, calendar]
+        messages:
+          - sender: ceo-inbox
+            content: Opening a scheduling consult for my reply to Marcus Lee about the supplier contract renewal.
+          - sender: ceo-inbox
+            content: *consult
+expected_behaviors:
+  - id: checks_proposed_first
+    weight: critical
+    description: Checks Marcus's proposed slot before searching for free time.
+    check:
+      order: [calendar-check-conflicts, calendar-find-free-time]
+  - id: replies_ok
+    weight: critical
+    description: Replies on the consult thread with a CONSULT REPLY whose Result is ok.
+    check:
+      called: bullpen
+      success: true
+      with: { action: reply }
+      contains: { content: "Result: ok" }
+  - id: no_slot_marked_held
+    weight: critical
+    description: >
+      The bullpen CONSULT REPLY lists two concrete slots from the free windows (not Thursday
+      at 10, which conflicts), marks neither as "hold placed", and its Notes say that hold
+      placement is currently disabled (or that no holds were placed because holds are off).
+failure_modes:
+  - Confirms Marcus's Thursday time although it conflicts with the board meeting
+  - Marks slots "hold placed" although holds are off
+  - Leaves out of the reply that holds are disabled
+  - Answers in its final response only, leaving the thread without a CONSULT REPLY

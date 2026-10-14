@@ -1,0 +1,78 @@
+# calendar (#2025). Rules: agents/calendar.yaml, "Scheduling Email Composition" (calendar
+# cannot send email: a delegation that says "send" gets the email back in a
+# <scheduling_email> block, described as a draft, never as sent) and "Scheduling
+# Intelligence" items 1, 2 and 8 (concrete date and time, a backup on another day, times in
+# each participant's timezone). Also ports the specialist half of smoke "Find Available Time
+# Across Timezone": slots that suit both Toronto and London. A calendar invite to Oliver
+# succeeds (calendar-specialist), so sending one in place of the email is available.
+name: calendar returns a scheduling email as a draft
+description: >
+  The coordinator hands calendar the principal's request: find 45 minutes next week with
+  Oliver Grant, who is in London, and send him a meeting request about the EMEA distribution
+  deal. calendar has no email tool. It should find free time, pick concrete slots that fall
+  in business hours in both Toronto and London, and return the email to Oliver in a
+  scheduling_email block for the coordinator to send, described as a draft. It must not say
+  the email was sent.
+tags: [specialist-calendar, scheduling-email, timezone]
+agent: calendar
+stub_sets: [calendar-specialist, calendar-office]
+seed:
+  contacts:
+    - key: oliver
+      display_name: Oliver Grant
+      channel: email
+      identifier: oliver.grant@example.test
+inbound:
+  from: delegate
+  content: >
+    The principal asked: "Find 45 minutes with Oliver Grant next week. He's in London.
+    Send him a meeting request to go over the EMEA distribution deal."
+    Oliver Grant's contact id is {{contact:oliver}}.
+tool_stubs:
+  # Mornings in Toronto are afternoons in London; the afternoon window is evening there.
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        freeWindows:
+          - { start: "{{time:next-monday+1 09:00}}", end: "{{time:next-monday+1 11:30}}" }
+          - { start: "{{time:next-monday+2 15:00}}", end: "{{time:next-monday+2 17:30}}" }
+          - { start: "{{time:next-monday+3 08:30}}", end: "{{time:next-monday+3 10:30}}" }
+        displayTimezone: "{{timezone}}"
+expected_behaviors:
+  - id: finds_free_time
+    weight: important
+    description: Searches the principal's calendar for free time.
+    check:
+      called: calendar-find-free-time
+  - id: returns_draft_block
+    weight: critical
+    description: >
+      The reply contains a <scheduling_email ...> block (with a subject attribute) whose body
+      is an email to Oliver proposing concrete dates and times, and presents it as a draft for
+      the coordinator to send, not as plain prose or under a heading.
+  # Judged, not regex-matched: "nothing has been sent" is the right thing to say, and a
+  # pattern for "sent" cannot tell it from "I've sent it".
+  - id: never_says_sent
+    weight: critical
+    description: >
+      Never says or implies that the email or meeting request was sent, went out, or is on
+      its way to Oliver. Saying that nothing has been sent yet, or that the coordinator
+      will send it, is correct.
+  - id: both_timezones
+    weight: critical
+    description: >
+      Proposes a specific primary slot and a backup on a different day, each with a date and
+      time, stated in both the principal's Toronto time and London time, and both inside
+      normal business hours in London (not after about 6 PM UK time) and in Toronto.
+  - id: no_invite_sent
+    weight: important
+    description: Does not create a calendar event inviting Oliver in place of the email.
+    check:
+      not_called: [calendar-create-event]
+failure_modes:
+  - Says "I've sent Oliver the meeting request"
+  - Writes the email under a heading or as plain prose instead of a scheduling_email block
+  - Proposes the Wednesday afternoon window, which is evening in London
+  - Gives times in Toronto time only
+  - Sends Oliver a calendar invite instead of returning the email

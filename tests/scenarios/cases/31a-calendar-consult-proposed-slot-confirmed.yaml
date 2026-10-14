@@ -1,0 +1,115 @@
+# calendar (#2025). Rules: agents/calendar.yaml, "Answering a scheduling consult" steps 0
+# and 3, the `Result: confirmed` CONSULT REPLY, and "Task Start — Load Scheduling Rules":
+# load the rules first, check the sender's proposed slots before any free-time search, and
+# when one is clear reply `Result: confirmed` on the thread with no hold. The Need line asks
+# for holds (ceo-inbox always writes it), free time is available and holds succeed, so the
+# wrong path is open.
+name: calendar consult confirms a proposed slot without a hold
+description: >
+  ceo-inbox opened a bullpen thread with calendar for its reply to Priya Shah, who proposed
+  two meeting times next week. The principal's calendar is clear at both. calendar should
+  load the scheduling rules, check Priya's proposed slots against the calendar, and reply on
+  the thread with a CONSULT REPLY whose Result is confirmed for the first proposed slot,
+  without searching for other free time and without placing a hold.
+tags: [specialist-calendar, consult]
+agent: calendar
+# On demand until #2126: about a quarter of runs, on main as on the branch, repeat a bullpen
+# reply with no `content` until the turn budget runs out, which errors the run.
+release_gate: false
+stub_sets: [calendar-specialist, calendar-office]
+seed:
+  contacts:
+    - key: priya
+      display_name: Priya Shah
+      channel: email
+      identifier: priya.shah@example.test
+  bullpen:
+    - key: consult
+      topic: "Scheduling consult: reply to Priya Shah re Q4 partnership review"
+      creator: ceo-inbox
+      participants: [ceo-inbox, calendar]
+      content: Opening a scheduling consult for my reply to Priya Shah about the Q4 partnership review.
+      mentions: []
+inbound:
+  from: bullpen
+  thread: consult
+  content: &consult |
+    CONSULT REQUEST
+    Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
+    For:  reply to Priya Shah re "Q4 partnership review"
+    By:   slots within next week, weekdays 9 AM to 5 PM
+    Proposed:
+      - {{day:next-monday+1}} at 2:00 PM; start={{time:next-monday+1 14:00}}; end={{time:next-monday+1 14:30}}; source="Tuesday at 2pm works for me"
+      - {{day:next-monday+2}} at 10:00 AM; start={{time:next-monday+2 10:00}}; end={{time:next-monday+2 10:30}}; source="or Wednesday at 10"
+    Context: source_message_id=msg-priya-q4-001; contact_timezone=America/Vancouver; contact_id={{contact:priya}}
+tool_stubs:
+  # Free time is there if calendar goes looking for it (the wrong path).
+  calendar-find-free-time:
+    - agent: calendar
+      match: {}
+      return:
+        freeWindows:
+          - { start: "{{time:next-monday+1 09:00}}", end: "{{time:next-monday+1 12:00}}" }
+          - { start: "{{time:next-monday+3 13:00}}", end: "{{time:next-monday+3 17:00}}" }
+        displayTimezone: "{{timezone}}"
+  bullpen:
+    - agent: calendar
+      match: { action: get_thread }
+      return:
+        thread:
+          id: "{{thread:consult}}"
+          topic: "Scheduling consult: reply to Priya Shah re Q4 partnership review"
+          status: open
+          participants: [ceo-inbox, calendar]
+        messages:
+          - sender: ceo-inbox
+            content: Opening a scheduling consult for my reply to Priya Shah about the Q4 partnership review.
+          - sender: ceo-inbox
+            content: *consult
+expected_behaviors:
+  - id: loads_rules
+    weight: critical
+    description: Loads the stored scheduling rules from config-store (calendar / rules).
+    check:
+      called: config-store
+      with: { action: retrieve, namespace: calendar, key: rules }
+  - id: checks_proposed_slot
+    weight: critical
+    description: Checks the proposed slot against the principal's calendar with calendar-check-conflicts.
+    check:
+      called: calendar-check-conflicts
+  - id: rules_before_check
+    weight: important
+    description: Loads the rules before checking the proposed slots.
+    check:
+      order: [config-store, calendar-check-conflicts]
+  - id: no_free_time_search
+    weight: critical
+    description: Does not search for other free time once a proposed slot is clear.
+    check:
+      not_called: [calendar-find-free-time]
+  - id: no_hold
+    weight: critical
+    description: Places no hold for a confirmed sender-proposed slot.
+    check:
+      not_called: [calendar-create-hold]
+  - id: replies_confirmed
+    weight: critical
+    description: Replies on the consult thread with a CONSULT REPLY whose Result is confirmed.
+    check:
+      called: bullpen
+      success: true
+      with: { action: reply }
+      contains: { content: "Result: confirmed" }
+  - id: confirmed_reply_shape
+    weight: important
+    description: >
+      The bullpen CONSULT REPLY confirms the first proposed slot (Tuesday at 2:00 PM in the
+      principal's timezone, labelled), gives Priya's local time (11:00 AM Pacific) in
+      parentheses, does not mark any slot "hold placed", and carries a Rules line saying how
+      many rules were loaded.
+failure_modes:
+  - Runs a free-time search and offers new slots although Priya's first time is clear
+  - Places a hold on the confirmed slot because the Need line asks for holds
+  - Answers in its final response only, leaving the thread without a CONSULT REPLY
+  - Confirms Wednesday instead of the first clear proposed slot

@@ -447,7 +447,10 @@ and `delegation: real` is for coordinator cases. A specialist case holds only it
 narrow specialist never has, and those stubs go unused.
 
 Specialist cases are numbered by agent: 30 ceo-inbox, 31 calendar, 32 meeting-debrief,
-33 contacts. Each carries the tag `specialist-<agent>`, so `--tags specialist-calendar`
+33 contacts. The ones that end in a bullpen reply run on demand (`release_gate: false`)
+until #2126: in about a quarter of runs, on main's prompt as on any other, the specialist
+repeats a `bullpen` reply with no `content` until its turn budget runs out, which errors
+the run and would fail the gate. Each carries the tag `specialist-<agent>`, so `--tags specialist-calendar`
 runs one agent's cases. Before changing a specialist's prompt, run its cases on both
 prompts; see [A/B against main](#ab-against-main).
 

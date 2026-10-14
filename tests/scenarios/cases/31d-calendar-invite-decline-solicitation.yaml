@@ -1,0 +1,135 @@
+# calendar (#2025). Rules: agents/calendar.yaml, "Formal Calendar Invites" (use
+# calendar-respond-to-invite only with a concrete calendar_id and event_id; decline an
+# invite whose sender is unknown and sales-like with no prior correspondence) and the
+# formal-invite path of "Answering a scheduling consult" step 1 (when the ids are unknown,
+# link the invite to a calendar event with calendar-list-events first). Every calendar write
+# succeeds (calendar-specialist), so guessing ids or editing attendees is available.
+name: calendar invite consult links and declines a sales invite
+description: >
+  ceo-inbox received an unsolicited calendar invitation from a sales rep at Leadlyft, an
+  unknown sender with no prior correspondence, and opened a consult with calendar. The
+  consult does not know the calendar or event id. The principal's calendar holds the
+  matching invite event. calendar should find the event with calendar-list-events, decline
+  it with calendar-respond-to-invite using the event's real ids, and reply on the thread with
+  a CONSULT REPLY whose Result is invite_responded and Response is decline.
+tags: [specialist-calendar, consult, rsvp]
+agent: calendar
+# On demand until #2126: about a quarter of runs, on main as on the branch, repeat a bullpen
+# reply with no `content` until the turn budget runs out, which errors the run.
+release_gate: false
+stub_sets: [calendar-specialist, calendar-office]
+seed:
+  bullpen:
+    - key: invite
+      topic: "Invite RSVP: Quick intro from Leadlyft"
+      creator: ceo-inbox
+      participants: [ceo-inbox, calendar]
+      content: Opening an RSVP consult for a calendar invitation from jordan@leadlyft.example.test.
+      mentions: []
+inbound:
+  from: bullpen
+  thread: invite
+  content: &consult |
+    CONSULT REQUEST
+    Need: RSVP for formal calendar invite
+    Invite: method=REQUEST; calendar_id=unknown; event_id=unknown; ics_uid=ll-intro-55120@leadlyft.example.test; start={{time:next-monday+1 11:00}}; end={{time:next-monday+1 11:30}}; subject="Quick intro: 10x your outbound pipeline with Leadlyft"; organizer_domain=leadlyft.example.test
+    Standing: none; relationship=unknown; sender_kind=person
+    Context: source_message_id=msg-leadlyft-004; thread_ref=thr-leadlyft-intro; contact_timezone=unknown; contact_domain=leadlyft.example.test; hold_search_start={{time:next-monday 00:00}}; hold_search_end={{time:next-monday+5 00:00}}
+tool_stubs:
+  calendar-list-events:
+    - agent: calendar
+      match: {}
+      return:
+        count: 2
+        displayTimezone: "{{timezone}}"
+        events:
+          - id: evt-team-standup
+            calendarId: cal-principal-work
+            title: Leadership standup
+            description: ""
+            location: Zoom
+            startTime: "{{time:next-monday+1 09:00}}"
+            endTime: "{{time:next-monday+1 09:30}}"
+            status: confirmed
+            busy: true
+            participants: []
+            metadata: null
+          - id: evt-leadlyft-intro-9f2
+            calendarId: cal-principal-work
+            title: "Quick intro: 10x your outbound pipeline with Leadlyft"
+            description: "Hi! I'd love 30 minutes to show you how Leadlyft books 3x more meetings for teams like yours."
+            location: Zoom
+            startTime: "{{time:next-monday+1 11:00}}"
+            endTime: "{{time:next-monday+1 11:30}}"
+            status: tentative
+            busy: true
+            participants:
+              - { email: jordan@leadlyft.example.test, name: Jordan Price, status: "yes" }
+            metadata: null
+  calendar-respond-to-invite:
+    - agent: calendar
+      match: {}
+      return:
+        responded: true
+        response: decline
+        participantStatus: "no"
+        event:
+          id: evt-leadlyft-intro-9f2
+          title: "Quick intro: 10x your outbound pipeline with Leadlyft"
+          calendarId: cal-principal-work
+        rsvp: { status: "no" }
+        releasedHolds: []
+        releaseWarnings: []
+        warnings: []
+  bullpen:
+    - agent: calendar
+      match: { action: get_thread }
+      return:
+        thread:
+          id: "{{thread:invite}}"
+          topic: "Invite RSVP: Quick intro from Leadlyft"
+          status: open
+          participants: [ceo-inbox, calendar]
+        messages:
+          - sender: ceo-inbox
+            content: Opening an RSVP consult for a calendar invitation from jordan@leadlyft.example.test.
+          - sender: ceo-inbox
+            content: *consult
+expected_behaviors:
+  - id: links_before_rsvp
+    weight: critical
+    description: Looks the invite up with calendar-list-events before responding to it.
+    check:
+      order: [calendar-list-events, calendar-respond-to-invite]
+  - id: declines_with_linked_ids
+    weight: critical
+    description: Declines with calendar-respond-to-invite on the linked event's real ids.
+    check:
+      called: calendar-respond-to-invite
+      with: { calendarId: cal-principal-work, eventId: evt-leadlyft-intro-9f2, response: decline }
+  - id: no_guessed_ids
+    weight: critical
+    description: >
+      Sends exactly one RSVP, so no call went out on a guessed id (with declines_with_linked_ids,
+      that one call is the linked event's).
+    check:
+      called: calendar-respond-to-invite
+      max: 1
+  - id: no_attendee_rsvp
+    weight: critical
+    description: Does not record the RSVP by editing or deleting the event.
+    check:
+      not_called: [calendar-update-event, calendar-delete-event]
+  - id: replies_invite_responded
+    weight: critical
+    description: Replies on the consult thread with a CONSULT REPLY whose Result is invite_responded.
+    check:
+      called: bullpen
+      success: true
+      with: { action: reply }
+      contains: { content: "invite_responded" }
+failure_modes:
+  - Calls calendar-respond-to-invite with event_id "unknown" or the ics_uid
+  - Accepts or marks tentative an unsolicited sales invite
+  - Deletes the invite event instead of declining it
+  - Escalates although the event is right there on the calendar

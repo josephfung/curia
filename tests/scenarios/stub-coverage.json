@@ -13,11 +13,83 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-13T23:51:44.517Z"
     },
+    "calendar answers a peer request without holding time": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.931Z"
+    },
+    "calendar consult confirms a proposed slot without a hold": {
+      "unstubbed": 0,
+      "runs": 4,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.930Z"
+    },
+    "calendar consult falls back to free time with holds disabled": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.930Z"
+    },
+    "calendar day brief reads the registered calendar": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.931Z"
+    },
+    "calendar day brief reports a failed read": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.931Z"
+    },
     "calendar delegate failure": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-10T23:42:52.184Z"
+    },
+    "calendar flags an unregistered calendar": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.931Z"
+    },
+    "calendar invite consult accepts a stakeholder invite": {
+      "unstubbed": 0,
+      "runs": 3,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.930Z"
+    },
+    "calendar invite consult links and declines a sales invite": {
+      "unstubbed": 0,
+      "runs": 4,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.930Z"
+    },
+    "calendar nightly holds sweep does nothing else": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.931Z"
+    },
+    "calendar returns a scheduling email as a draft": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.930Z"
+    },
+    "calendar rule add stops when the rules cannot be read": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.930Z"
+    },
+    "calendar rule edit rewrites the whole array": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:06:03.931Z"
     },
     "cold outreach creates a contact": {
       "unstubbed": 0,

@@ -1,0 +1,110 @@
+# The calendar specialist fired directly (#2025), on top of `calendar-office`. Scoped to
+# `agent: calendar`, so it is for cases whose agent is calendar.
+#
+# - The principal's entity context names the Work calendar `calendar-office` lists
+#   (cal-principal-work), so every case resolves the same calendar id. Any other
+#   entity-context call (a seeded contact) runs for real.
+# - Every calendar write, memory write and bullpen reply succeeds. Cases that forbid one
+#   use this set so the wrong path is available and the case tests the model's choice,
+#   not a refusal. Shapes follow each tool.json's outputs. A case's own stubs for these
+#   tools are matched first.
+entity-context:
+  - agent: calendar
+    match: { contactIds: ["{{principal_contact_id}}"] }
+    return:
+      unresolved: []
+      entities:
+        - entityId: kg-principal-node
+          entityType: person
+          label: The Principal
+          contact:
+            contactId: "{{principal_contact_id}}"
+            displayName: The Principal
+            role: null
+            preferredName: null
+            title: Chief Executive Officer
+            organization: null
+            primaryEmail: null
+            primaryPhone: null
+            timezone: "{{timezone}}"
+            locale: null
+            location: Toronto
+            pronouns: null
+            linkedinUrl: null
+            bio: null
+            birthday: null
+          facts: []
+          connectedAccounts:
+            - type: calendar
+              label: Work
+              serviceId: cal-principal-work
+              isPrimary: true
+              readOnly: false
+              metadata:
+                timezone: "{{timezone}}"
+          relationships: []
+calendar-create-hold:
+  - agent: calendar
+    match: {}
+    return:
+      holdEventId: hold-scenario-1
+      held: true
+      display: "(hold placed)"
+      displayTimezone: "{{timezone}}"
+calendar-create-event:
+  - agent: calendar
+    match: {}
+    return:
+      event: { id: evt-scenario-created, calendarId: cal-principal-work, status: confirmed }
+calendar-update-event:
+  - agent: calendar
+    match: {}
+    return:
+      event: { id: evt-scenario-updated, calendarId: cal-principal-work, status: confirmed }
+calendar-delete-event:
+  - agent: calendar
+    match: {}
+    return: { deleted: true }
+calendar-respond-to-invite:
+  - agent: calendar
+    match: {}
+    return:
+      responded: true
+      response: accept
+      participantStatus: "yes"
+      event: null
+      rsvp: { status: "yes" }
+      releasedHolds: []
+      releaseWarnings: []
+      warnings: []
+calendar-register:
+  - agent: calendar
+    match: {}
+    return:
+      calendar_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000c1
+      nylas_calendar_id: cal-scenario-registered
+      contact_id: "{{principal_contact_id}}"
+      label: registered
+      is_primary: false
+memory-store:
+  - agent: calendar
+    match: {}
+    return: { stored: true, action: created, node_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000c2, sensitivity: internal }
+# A reply missing a required field gets the handler's error, so a malformed call can be
+# corrected (see case 06). `null` matches an absent argument.
+bullpen:
+  - agent: calendar
+    match: { action: reply, thread_id: null }
+    error: "Missing required field: 'thread_id'"
+  - agent: calendar
+    match: { action: reply, content: null }
+    error: "Missing required field: 'content'"
+  - agent: calendar
+    match: { action: reply }
+    return: { thread_id: scenario-thread, message_id: scenario-bullpen-reply-1 }
+  - agent: calendar
+    match: { action: post }
+    return: { thread_id: scenario-thread-new, message_id: scenario-bullpen-post-1, deduplicated: false }
+  - agent: calendar
+    match: { action: close }
+    return: { thread_id: scenario-thread, status: closed }
