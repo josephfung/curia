@@ -1,0 +1,57 @@
+# meeting-debrief, delegated mode, a debrief preference (#2025). Rules:
+# agents/meeting-debrief.yaml "DELEGATED MODE: Preference Updates" (store it as a KG fact
+# with memory-store, source agent:meeting-debrief, slow_decay) and the Operating Mode line
+# "Do NOT run detection" in delegated mode. config-store is pinned and its store succeeds,
+# so filing the preference where Step 3's memory-query never looks is an available wrong
+# path; so are a calendar scan and task-create.
+name: debrief preference is stored in memory
+description: >
+  The coordinator delegates a debrief preference from the principal: stop prompting for
+  debriefs after the weekly Monday check-in with Northwind Ventures, which is routine.
+  meeting-debrief should store the preference as a knowledge-graph fact with memory-store
+  (attributed to meeting-debrief, slow decay), confirm it was saved, and do nothing else:
+  no calendar scan, no task, no bullpen post.
+tags: [specialist-meeting-debrief, meeting-debrief, delegated-mode]
+agent: meeting-debrief
+stub_sets: [meeting-debrief-office]
+inbound:
+  from: delegate
+  content: >
+    The principal says: "Don't prompt me for debriefs after my weekly Monday check-in with
+    Northwind Ventures. Those are routine."
+expected_behaviors:
+  - id: stores_preference
+    weight: critical
+    description: Stores the preference with memory-store.
+    check:
+      called: memory-store
+      contains: { value: Northwind }
+  - id: attributed
+    weight: important
+    description: The memory-store call names meeting-debrief as its source.
+    check:
+      called: memory-store
+      contains: { source: meeting-debrief }
+  - id: slow_decay
+    weight: nice-to-have
+    description: The preference is stored with decay_class slow_decay.
+    check:
+      called: memory-store
+      with: { decay_class: slow_decay }
+  - id: not_in_config_store
+    weight: critical
+    description: Does not store the preference in config-store, where detection never reads preferences.
+    check:
+      not_called: [config-store]
+      with: { action: store }
+  - id: no_detection
+    weight: critical
+    description: Runs no detection or lifecycle work (no calendar scan, task or bullpen post).
+    check:
+      not_called: [calendar-list-events, task-create, bullpen]
+  - id: confirms
+    weight: important
+    description: Confirms that debriefs for the weekly Northwind Ventures check-in will be skipped from now on.
+failure_modes:
+  - Stores the preference in config-store instead of the knowledge graph
+  - Runs a detection scan or schedules debriefs on a preference update

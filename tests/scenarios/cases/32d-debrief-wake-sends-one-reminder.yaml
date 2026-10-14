@@ -1,0 +1,131 @@
+# meeting-debrief, task wake-up mode, reminder phase (#2025). Rules:
+# agents/meeting-debrief.yaml "TASK WAKE-UP MODE" phase derivation and Step 7 "Reminder
+# phase": prompted:<eventId> set and reminded:<eventId> absent → one bullpen reminder
+# through the coordinator, store reminded:, then task-update with the expiry wake_at.
+# Also "One reminder per debrief". Completing or cancelling the task is stubbed to succeed.
+name: debrief wake sends one reminder
+description: >
+  A debrief task for the Acme partnership review (calendar event evt-acme-0001) wakes two
+  hours after the principal was prompted. The prompted guard is set; the reminded guard is
+  not. The principal has not answered. meeting-debrief should send exactly one gentle,
+  non-pushy reminder by opening a bullpen thread to the coordinator, store the reminded
+  guard, and reschedule the task's wake-up for the expiry check, keeping the task open.
+tags: [specialist-meeting-debrief, meeting-debrief, task-wake]
+agent: meeting-debrief
+stub_sets: [meeting-debrief-office]
+inbound:
+  from: task-wake
+  task:
+    id: 6a2b3c4d-5e6f-4a7b-8c9d-32d000000001
+    title: "Debrief: Acme partnership review"
+    tags: [debrief-pending]
+    intent: >-
+      Debrief the principal's meeting 'Acme partnership review' that ends around
+      {{at:now-123m}} (calendar event evt-acme-0001) — prompt at meeting end, then follow up
+      on takeaways.
+    notes:
+      - at: "{{at:now-120m}}"
+        note: Prompt delivered; awaiting the principal's takeaways.
+tool_stubs:
+  config-store:
+    - match: { action: retrieve, key: "prompted:evt-acme-0001" }
+      return:
+        found: true
+        namespace: debrief
+        key: "prompted:evt-acme-0001"
+        value: '{"thread_id":"3c9d0e1f-0000-4000-8000-00000000d0a1","promptedAt":"{{at:now-120m}}","title":"Acme partnership review"}'
+    # Reading the whole namespace (no key) lists the guards set so far.
+    - match: { action: retrieve, key: null }
+      return:
+        namespace: debrief
+        entries:
+          - { key: "seen:evt-acme-0001", value: "{{time:today 07:00}}" }
+          - { key: "prompted:evt-acme-0001", value: '{"thread_id":"3c9d0e1f-0000-4000-8000-00000000d0a1","promptedAt":"{{at:now-120m}}","title":"Acme partnership review"}' }
+  calendar-list-events:
+    - match: {}
+      return:
+        count: 1
+        displayTimezone: "{{timezone}}"
+        events:
+          - id: evt-acme-0001
+            title: Acme partnership review
+            description: Pilot scope and pricing for the Acme partnership.
+            location: Acme offices, 200 King St W
+            startTime: "{{at:now-183m}}"
+            endTime: "{{at:now-123m}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: sarah.chen@acme.example.test, name: Sarah Chen, status: yes }
+              - { email: david.park@acme.example.test, name: David Park, status: yes }
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: true
+            metadata: null
+  task-update:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32d000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32d000000001
+        title: "Debrief: Acme partnership review"
+        status: open
+        owner: ceo
+        priority: 3
+        tags: [debrief-pending]
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32d000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32d000000001
+        title: "Debrief: Acme partnership review"
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+expected_behaviors:
+  - id: one_reminder
+    weight: critical
+    description: Opens exactly one bullpen thread, to the coordinator.
+    check:
+      called: bullpen
+      with: { action: post }
+      contains: { participants: coordinator }
+      success: true
+      min: 1
+      max: 1
+  - id: stores_reminded_guard
+    weight: critical
+    description: Stores the reminded:evt-acme-0001 guard.
+    check:
+      called: config-store
+      with: { action: store }
+      contains: { key: "reminded:evt-acme-0001" }
+  - id: schedules_expiry_wake
+    weight: critical
+    description: Updates the task with a wake_at for the expiry check.
+    check:
+      called: task-update
+      with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32d000000001 }
+      contains: { wake_at: ":" }
+  - id: not_cancelled
+    weight: critical
+    description: Does not cancel the debrief task.
+    check:
+      not_called: [task-update]
+      with: { status: cancelled }
+  - id: not_completed
+    weight: critical
+    description: Does not complete the debrief task.
+    check:
+      not_called: [task-complete]
+  - id: reminder_tone
+    weight: important
+    description: >
+      The bullpen post asks the coordinator to send the principal a brief, non-pushy reminder
+      about the Acme partnership review debrief (no rush, still open if they have a moment),
+      not a second full prompt, and carries context_bridge parameters for the reply.
+failure_modes:
+  - Re-sends the full prompt as if no prompt had gone out
+  - Treats the wake as expiry and cancels the task
+  - Sends the reminder without storing the reminded guard, so the next wake reminds again

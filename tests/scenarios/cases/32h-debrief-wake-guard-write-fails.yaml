@@ -1,0 +1,118 @@
+# meeting-debrief, task wake-up mode, a failed prompted: guard write (#2025). Rule:
+# agents/meeting-debrief.yaml Step 6 "After a successful post": when storing
+# prompted:<eventId> fails, do not retry the bullpen post, and hand the task to the
+# principal with a warning note and no wake_at, because a reminder wake would find the
+# guard absent and post the prompt again. bullpen succeeds, so a retry is available.
+name: debrief wake with a failed guard write sets no wake
+description: >
+  A debrief task wakes at the end of the Acme partnership review (calendar event
+  evt-acme-0001), a meeting with Sarah Chen and David Park of Acme Corp that just ended.
+  meeting-debrief posts the debrief prompt to the coordinator, but storing the prompted
+  guard fails. It should not post the prompt again, and it should hand the task to the
+  principal (owner ceo) with a progress note warning that the guard write failed, without
+  setting a wake_at, so no reminder wake re-runs the prompt.
+tags: [specialist-meeting-debrief, meeting-debrief, task-wake]
+agent: meeting-debrief
+stub_sets: [meeting-debrief-office]
+inbound:
+  from: task-wake
+  task:
+    id: 6a2b3c4d-5e6f-4a7b-8c9d-328000000001
+    title: "Debrief: Acme partnership review"
+    tags: [debrief-pending]
+    intent: >-
+      Debrief the principal's meeting 'Acme partnership review' that ends around
+      {{at:now-3m}} (calendar event evt-acme-0001) — prompt at meeting end, then follow up
+      on takeaways.
+    notes:
+      - at: "{{time:today 12:01}}"
+        note: Scheduled by the detection run; prompt the principal at meeting end.
+tool_stubs:
+  config-store:
+    - match: { action: store, key: "prompted:evt-acme-0001" }
+      error: "Knowledge graph write failed: connection terminated unexpectedly"
+  calendar-list-events:
+    - match: {}
+      return:
+        count: 1
+        displayTimezone: "{{timezone}}"
+        events:
+          - id: evt-acme-0001
+            title: Acme partnership review
+            description: Pilot scope and pricing for the Acme partnership.
+            location: Acme offices, 200 King St W
+            startTime: "{{at:now-63m}}"
+            endTime: "{{at:now-3m}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: sarah.chen@acme.example.test, name: Sarah Chen, status: yes }
+              - { email: david.park@acme.example.test, name: David Park, status: yes }
+            conferencing: null
+            status: confirmed
+            calendarId: cal-principal-work
+            busy: true
+            metadata: null
+  task-update:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-328000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-328000000001
+        title: "Debrief: Acme partnership review"
+        status: open
+        owner: ceo
+        priority: 3
+        tags: [debrief-pending]
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-328000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-328000000001
+        title: "Debrief: Acme partnership review"
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+expected_behaviors:
+  - id: posts_once
+    weight: critical
+    description: Posts the debrief prompt exactly once; the failed guard write does not trigger a second post.
+    check:
+      called: bullpen
+      with: { action: post }
+      success: true
+      min: 1
+      max: 1
+  - id: tries_guard
+    weight: critical
+    description: Tries to store the prompted:evt-acme-0001 guard after posting.
+    check:
+      called: config-store
+      with: { action: store }
+      contains: { key: "prompted:evt-acme-0001" }
+  - id: hands_to_principal
+    weight: critical
+    description: Updates the task to owner ceo.
+    check:
+      called: task-update
+      with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-328000000001, owner: ceo }
+  - id: no_reminder_wake
+    weight: critical
+    description: Sets no wake_at on the task, so no reminder wake re-runs the prompt.
+    check:
+      not_called: [task-update]
+      contains: { wake_at: ":" }
+  - id: not_completed
+    weight: important
+    description: Does not complete the debrief task.
+    check:
+      not_called: [task-complete]
+  - id: warning_note
+    weight: important
+    description: >
+      The task-update's progress note warns that the prompted guard write failed, that the
+      prompt was sent (naming the bullpen thread), and that the task needs manual
+      reconciliation.
+failure_modes:
+  - Posts the prompt again after the guard write fails
+  - Schedules the reminder wake anyway, which would re-enter the prompt step

@@ -1,0 +1,106 @@
+# meeting-debrief, task wake-up mode, the cancelled-meeting branch (#2025). Rule:
+# agents/meeting-debrief.yaml Step 6 "Revalidate the meeting": if the event is missing,
+# cancelled or declined, task-complete with a note and stop: no guard, no bullpen post.
+# The intent anchor says "prompt at meeting end" and bullpen, config-store and task-update
+# all succeed, so prompting anyway is an available wrong path.
+name: debrief wake on a cancelled meeting stops
+description: >
+  A debrief task wakes at the scheduled end of the Acme partnership review (calendar event
+  evt-acme-0001), but the calendar now shows the event as cancelled. meeting-debrief should
+  complete the debrief task with a note that the meeting did not happen, and stop: no
+  bullpen post, no prompted guard, no hand-off to the principal.
+tags: [specialist-meeting-debrief, meeting-debrief, task-wake]
+agent: meeting-debrief
+stub_sets: [meeting-debrief-office]
+inbound:
+  from: task-wake
+  task:
+    id: 6a2b3c4d-5e6f-4a7b-8c9d-32c000000001
+    title: "Debrief: Acme partnership review"
+    tags: [debrief-pending]
+    intent: >-
+      Debrief the principal's meeting 'Acme partnership review' that ends around
+      {{at:now-3m}} (calendar event evt-acme-0001) — prompt at meeting end, then follow up
+      on takeaways.
+    notes:
+      - at: "{{time:today 12:01}}"
+        note: Scheduled by the detection run; prompt the principal at meeting end.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return:
+        count: 1
+        displayTimezone: "{{timezone}}"
+        events:
+          - id: evt-acme-0001
+            title: Acme partnership review
+            description: Pilot scope and pricing for the Acme partnership.
+            location: Acme offices, 200 King St W
+            startTime: "{{at:now-63m}}"
+            endTime: "{{at:now-3m}}"
+            startDate: null
+            endDate: null
+            participants:
+              - { email: avery@testwell-labs.example.test, name: Avery Testwell, status: yes }
+              - { email: sarah.chen@acme.example.test, name: Sarah Chen, status: no }
+              - { email: david.park@acme.example.test, name: David Park, status: no }
+            conferencing: null
+            status: cancelled
+            calendarId: cal-principal-work
+            busy: false
+            metadata: null
+  task-update:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32c000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32c000000001
+        title: "Debrief: Acme partnership review"
+        status: open
+        owner: ceo
+        priority: 3
+        tags: [debrief-pending]
+        updated_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32c000000001 }
+      return:
+        task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32c000000001
+        title: "Debrief: Acme partnership review"
+        status: done
+        completed_at: "{{at:now}}"
+        displayTimezone: "{{timezone}}"
+expected_behaviors:
+  - id: revalidates
+    weight: critical
+    description: Checks the calendar for the meeting.
+    check:
+      called: calendar-list-events
+  - id: completes_task
+    weight: critical
+    description: Completes the debrief task.
+    check:
+      called: task-complete
+      with: { task_id: 6a2b3c4d-5e6f-4a7b-8c9d-32c000000001 }
+  - id: no_prompt
+    weight: critical
+    description: Posts nothing to the bullpen.
+    check:
+      not_called: [bullpen]
+  - id: no_prompted_guard
+    weight: critical
+    description: Does not store the prompted guard.
+    check:
+      not_called: [config-store]
+      with: { action: store }
+      contains: { key: prompted }
+  - id: no_handoff
+    weight: important
+    description: Does not hand the task to the principal or schedule a reminder.
+    check:
+      not_called: [task-update]
+      with: { owner: ceo }
+  - id: completion_note
+    weight: nice-to-have
+    description: The completion note says the meeting was cancelled or did not occur, so no debrief is needed.
+failure_modes:
+  - Prompts the principal for a debrief of a meeting that was cancelled
+  - Leaves the task open, or hands it to the principal with a reminder

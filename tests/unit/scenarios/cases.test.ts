@@ -218,7 +218,7 @@ describe('coordinator scenario cases', () => {
     // opt-in agent"); and the specialist cases that reply on a bullpen thread, which run on
     // demand until #2126 ends the content-less reply loop (README, "Cases for a specialist").
     expect(cases.filter(c => c.delegation === 'stubbed' && !c.releaseGate).map(c => path.basename(c.sourceFile).slice(0, 3)))
-      .toEqual(['21c', '31a', '31b', '31c', '31d', '31h']);
+      .toEqual(['21c', '31a', '31b', '31c', '31d', '31h', '32b']);
   });
 
   it('have a well-formed stub-coverage record', () => {

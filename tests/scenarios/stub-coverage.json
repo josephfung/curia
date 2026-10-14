@@ -103,6 +103,54 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-10T23:42:52.184Z"
     },
+    "debrief detection schedules external meetings only": {
+      "unstubbed": 0,
+      "runs": 10,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-13T23:40:04.834Z"
+    },
+    "debrief preference is stored in memory": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-13T23:25:11.628Z"
+    },
+    "debrief reply drafts follow-ups and closes the debrief": {
+      "unstubbed": 0,
+      "runs": 10,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:00:50.273Z"
+    },
+    "debrief wake at expiry cancels without nagging": {
+      "unstubbed": 0,
+      "runs": 10,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-13T23:52:31.212Z"
+    },
+    "debrief wake delivers the prompt": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-13T23:25:11.628Z"
+    },
+    "debrief wake on a cancelled meeting stops": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-13T23:25:11.628Z"
+    },
+    "debrief wake sends one reminder": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-13T23:25:11.628Z"
+    },
+    "debrief wake with a failed guard write sets no wake": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-13T23:25:11.628Z"
+    },
     "delegated draft not reported sent": {
       "unstubbed": 0,
       "runs": 9,
