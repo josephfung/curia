@@ -125,7 +125,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:17:18.967Z"
+      "recordedAt": "2026-10-14T21:29:30.378Z"
     },
     "contacts delegate failure": {
       "unstubbed": 0,
@@ -137,7 +137,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:17:18.967Z"
+      "recordedAt": "2026-10-14T21:30:58.417Z"
     },
     "contacts tier change to trusted": {
       "unstubbed": 0,
