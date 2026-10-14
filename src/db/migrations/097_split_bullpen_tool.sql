@@ -2,27 +2,29 @@
 --
 -- The polymorphic `bullpen` tool is now the `bullpen` skill bundle with four tools:
 -- bullpen-post, bullpen-reply, bullpen-read and bullpen-close (#2126). Carry the old
--- tool row's state, including an admin's disable, to the bundle and each new tool,
--- then drop the old row so it does not linger as a ghost. A fresh install has no
--- `bullpen` tool row, and reconciliation enrolls the bundle from registry-defaults.yaml.
--- An existing row for a new name is left alone.
+-- tool row's state, including an admin's disable, to the bundle, then seed each new
+-- tool from the bundle row, so the two cannot disagree when a `bullpen` skill row
+-- already existed. Then drop the old row so it does not linger as a ghost. A fresh
+-- install has no `bullpen` tool row, and reconciliation enrolls the bundle from
+-- registry-defaults.yaml. An existing row for a new name is left alone.
 --
 -- Rows this migration creates are installed_by 'migration:097', so the downgrade
 -- removes only those and leaves any row it did not create.
 
 -- Up Migration
 
-INSERT INTO tool_registry (name, enabled, installed_at, installed_by, enabled_at, enabled_by)
-SELECT t.name, old.enabled, old.installed_at, 'migration:097', old.enabled_at, old.enabled_by
-  FROM tool_registry old
- CROSS JOIN (VALUES ('bullpen-post'), ('bullpen-reply'), ('bullpen-read'), ('bullpen-close')) AS t(name)
- WHERE old.name = 'bullpen'
-ON CONFLICT (name) DO NOTHING;
-
 INSERT INTO skill_registry (name, enabled, installed_at, installed_by, enabled_at, enabled_by)
 SELECT 'bullpen', enabled, installed_at, 'migration:097', enabled_at, enabled_by
   FROM tool_registry
  WHERE name = 'bullpen'
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO tool_registry (name, enabled, installed_at, installed_by, enabled_at, enabled_by)
+SELECT t.name, skill.enabled, skill.installed_at, 'migration:097', skill.enabled_at, skill.enabled_by
+  FROM skill_registry skill
+ CROSS JOIN (VALUES ('bullpen-post'), ('bullpen-reply'), ('bullpen-read'), ('bullpen-close')) AS t(name)
+ WHERE skill.name = 'bullpen'
+   AND EXISTS (SELECT 1 FROM tool_registry old WHERE old.name = 'bullpen')
 ON CONFLICT (name) DO NOTHING;
 
 DELETE FROM tool_registry WHERE name = 'bullpen';

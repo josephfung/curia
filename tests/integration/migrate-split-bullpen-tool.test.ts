@@ -3,10 +3,12 @@
 // back (#2126). Skips without DATABASE_URL.
 //
 // Each case runs inside a transaction on one client and is rolled back, so registry rows
-// already in the database, and their timestamps, are never changed.
+// already in the database, and their timestamps, are never changed. It still deletes and
+// locks rows inside that transaction, so it refuses any database but curia_test first.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import pg from 'pg';
 import { readFile } from 'node:fs/promises';
+import { requireCuriaTestDatabase } from './require-test-db.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIf = DATABASE_URL ? describe : describe.skip;
@@ -45,6 +47,9 @@ describeIf('migration 097: split the bullpen tool', () => {
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: DATABASE_URL });
+    // Before any case opens a transaction. afterAll still runs if this throws, and only
+    // closes the pool.
+    await requireCuriaTestDatabase(pool);
     const sql = await readFile(MIGRATION_SQL_URL, 'utf8');
     const [up, down] = sql.split('-- Down Migration');
     upSql = up!;
@@ -60,6 +65,7 @@ describeIf('migration 097: split the bullpen tool', () => {
   });
 
   afterEach(async () => {
+    if (!client) return;
     await client.query('ROLLBACK');
     client.release();
   });
@@ -90,6 +96,21 @@ describeIf('migration 097: split the bullpen tool', () => {
     expect(tools).toHaveLength(4);
     expect(tools.every(r => !r.enabled)).toBe(true);
     expect(await skillRow()).toMatchObject({ enabled: false });
+  });
+
+  it('seeds the tools from a bullpen skill row that already existed, so they agree', async () => {
+    await client.query(
+      "INSERT INTO tool_registry (name, enabled, installed_by) VALUES ('bullpen', true, 'reconciliation')",
+    );
+    await client.query(
+      "INSERT INTO skill_registry (name, enabled, installed_by) VALUES ('bullpen', false, 'web-app')",
+    );
+    await client.query(upSql);
+
+    expect(await skillRow()).toMatchObject({ enabled: false, installed_by: 'web-app' });
+    const tools = await toolRows();
+    expect(tools.map(r => r.name)).toEqual([...NEW_TOOLS].sort());
+    expect(tools.every(r => !r.enabled)).toBe(true);
   });
 
   it('does nothing on a fresh install', async () => {
