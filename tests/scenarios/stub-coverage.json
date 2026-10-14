@@ -243,75 +243,99 @@
     },
     "inbox branch A no_slots offers nearest slots outside the window": {
       "unstubbed": 0,
-      "runs": 10,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:58:26.777Z"
+      "recordedAt": "2026-10-14T12:23:43.005Z"
     },
     "inbox branch A ok drafts held slots with stored link": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T12:23:43.005Z"
     },
     "inbox cold compose addresses the contact by id": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
+    },
+    "inbox consult timeout finds a late consult reply": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T12:23:43.005Z"
+    },
+    "inbox consult timeout writes the fallback draft": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T12:23:43.005Z"
     },
     "inbox delegated rules request runs no triage": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
     },
     "inbox delegated summary reads and ranks the unread mail": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
+    },
+    "inbox drain wake completes the drain task when empty": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T12:23:43.005Z"
+    },
+    "inbox drain wake triages and re-arms the drain task": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T12:23:43.005Z"
     },
     "inbox fixes a draft in place instead of recreating it": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
     },
     "inbox makes no promise it cannot back with a task": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
     },
     "inbox peer request answered on the thread": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
     },
     "inbox reports a failed drafts read as inconclusive": {
       "unstubbed": 0,
-      "runs": 10,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:58:26.777Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
     },
     "inbox scheduling email parks behind a calendar consult": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
     },
     "inbox sent-observe job runs only sent-observe": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-13T23:34:22.453Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
     },
     "inbox triage settles each message's end state": {
       "unstubbed": 0,
-      "runs": 15,
+      "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T00:16:09.538Z"
+      "recordedAt": "2026-10-14T00:39:33.311Z"
     },
     "no google file chat": {
       "unstubbed": 0,

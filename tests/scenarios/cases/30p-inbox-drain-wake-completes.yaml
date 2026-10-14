@@ -1,0 +1,79 @@
+# ceo-inbox, an inbox-drain task wake that finds the inbox empty (#2025, P2). Rule: the
+# `inbox-drain` tag steps (agents/ceo-inbox.yaml "Scheduled-wake resume" on main;
+# src/agents/prompts/ceo-inbox-wake-guidance.ts after P2) and "Step 3" / "Step 6": with no
+# unread mail, complete every open drain task and exit; do not re-arm it.
+#
+# task-update and task-create succeed, so re-arming or a new drain task is available.
+name: inbox drain wake completes the drain task when empty
+description: >
+  ceo-inbox's inbox-drain task wakes. The inbox has no unread mail left. ceo-inbox
+  completes the drain task and exits. It does not re-arm the task with a new wake and
+  creates no new drain task.
+tags: [specialist-ceo-inbox, ceo-inbox, task-wake, triage, inbox-drain]
+agent: ceo-inbox
+timeout_seconds: 300
+stub_sets: [ceo-inbox-mailroom, deferred-work]
+inbound:
+  from: task-wake
+  task:
+    id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304
+    title: Drain principal inbox backlog
+    intent: Continue batch-triaging the principal inbox until empty.
+    tags: [inbox-drain]
+    notes:
+      - at: "{{at:now-2m}}"
+        note: batch done, more queued
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        tasks:
+          - task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304
+            title: Drain principal inbox backlog
+            description: Continue batch-triaging the principal inbox until empty.
+            status: in_progress
+            owner: curia
+            tags: [inbox-drain]
+        count: 1
+        displayTimezone: "{{timezone}}"
+  task-update:
+    - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304 }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304, title: Drain principal inbox backlog, status: in_progress, owner: curia, priority: 3, tags: [inbox-drain], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  task-complete:
+    - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304 }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304, title: Drain principal inbox backlog, status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  ceo-inbox-list:
+    - match: {}
+      return: { count: 0, has_more: false, messages: [] }
+  contact-register:
+    - match: {}
+      return: { contact_id: 6c1d2e3f-4a5b-4c6d-8e7f-30f000000001, display_name: Product Weekly, contact_confidence: 0.5, created: true, verified: true }
+  bullpen:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000002, deduplicated: false }
+expected_behaviors:
+  - id: completes_drain_task
+    weight: critical
+    description: Completes the drain task.
+    check:
+      called: task-complete
+      with: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000304 }
+  - id: no_rearm
+    weight: critical
+    description: Does not re-arm the drain task with a new wake.
+    check:
+      not_called: [task-update]
+      contains: { wake_at: "20" }
+  - id: no_new_drain_task
+    weight: critical
+    description: Creates no new drain task.
+    check:
+      not_called: [task-create]
+  - id: no_triage_writes
+    weight: important
+    description: Archives, labels and marks nothing; there is no mail.
+    check:
+      not_called: [ceo-inbox-archive, ceo-inbox-label, ceo-inbox-mark-read]
+failure_modes:
+  - Re-arms the drain task although the inbox is empty
+  - Leaves the drain task open, so it keeps waking

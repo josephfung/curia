@@ -3,10 +3,13 @@
 // Structural contract tests for the ceo-inbox agent prompt.
 // These assert that the YAML system_prompt text satisfies specific ordering and
 // content requirements — without invoking an LLM. They are fast, deterministic,
-// and serve as a living spec for the Branch A resume section.
+// and serve as a living spec for the Branch A resume section. Since #2025 the consult-timeout
+// steps ride on that task's wake (src/agents/prompts/ceo-inbox-wake-guidance.ts), so the
+// tests that pinned them in the YAML pin them there.
 
 import { describe, it, expect } from 'vitest';
 import { loadAgentConfig } from '../../../src/agents/loader.js';
+import { CEO_INBOX_CONSULT_TIMEOUT_LINES } from '../../../src/agents/prompts/ceo-inbox-wake-guidance.js';
 import * as path from 'node:path';
 
 const agentsDir = path.resolve(import.meta.dirname, '../../../agents');
@@ -17,10 +20,9 @@ function loadCeoInboxPrompt(): string {
 }
 
 // Extract the text of the Branch A section from the ceo-inbox prompt.
-// Branch A runs from its header to the start of the Scheduled-wake resume
-// section (the second resume mode). Note: "Branch B" appears earlier in the
-// intro text ("do not fall through to Branch B") so it cannot be used as the
-// delimiter here.
+// Branch A runs from its header to the start of the "Branch B — Task wakes" anchor.
+// Note: "Branch B" alone appears earlier ("do not fall through to Branch B"), so the
+// delimiter is the full anchor heading.
 function extractResumePreamble(prompt: string): string {
   const start = prompt.indexOf('**Resume mode**');
   const branchAStart = prompt.indexOf('**Branch A — Calendar consult reply');
@@ -32,23 +34,17 @@ function extractResumePreamble(prompt: string): string {
 
 function extractBranchASection(prompt: string): string {
   const branchAStart = prompt.indexOf('**Branch A — Calendar consult reply');
-  // "**Scheduled-wake resume" marks the boundary between Branch A and Branch B.
-  const scheduledWakeStart = prompt.indexOf('**Scheduled-wake resume');
+  // "**Branch B — Task wakes" marks the boundary between Branch A and Branch B.
+  const branchBStart = prompt.indexOf('**Branch B — Task wakes');
   if (branchAStart === -1) throw new Error('Branch A section not found in prompt');
-  if (scheduledWakeStart === -1 || scheduledWakeStart <= branchAStart)
-    throw new Error(
-      'Scheduled-wake resume section not found after Branch A in prompt',
-    );
-  return prompt.slice(branchAStart, scheduledWakeStart);
+  if (branchBStart === -1 || branchBStart <= branchAStart)
+    throw new Error('Branch B section not found after Branch A in prompt');
+  return prompt.slice(branchAStart, branchBStart);
 }
 
-function extractScheduledWakeSection(prompt: string): string {
-  const start = prompt.indexOf('**Scheduled-wake resume');
-  const end = prompt.indexOf('**Closing a multi-turn exchange');
-  if (start === -1) throw new Error('Scheduled-wake resume section not found');
-  if (end === -1 || end <= start)
-    throw new Error('Closing a multi-turn exchange not found after scheduled wake');
-  return prompt.slice(start, end);
+// The consult-timeout steps, which ride on that task's wake since #2025.
+function extractScheduledWakeSection(_prompt: string): string {
+  return CEO_INBOX_CONSULT_TIMEOUT_LINES.join('\n');
 }
 
 function extractSchedulingConsultSection(prompt: string): string {
@@ -76,7 +72,7 @@ describe('ceo-inbox consult-timeout self-healing', () => {
     expect(schedulingSection).toContain('consult_kind=scheduling');
     expect(schedulingSection).toContain('source_message_id=<id>');
     expect(schedulingSection).toContain('thread_id=<bullpen thread id');
-    expect(scheduledWake).toContain('`consult-timeout` tag');
+    expect(scheduledWake).toContain('`consult-timeout` task');
     expect(scheduledWake).toContain('pending your calendar');
     expect(scheduledWake).toContain('consult already resolved');
   });
@@ -408,8 +404,10 @@ describe('ceo-inbox formal invite prompt — RSVP consult contract', () => {
     // 0.21.0 = the bullpen tool is split into bullpen-post/-reply/-read/-close (#2126).
     // 0.21.1 = ADR-046 trim: restatements of payloads, tool descriptions and other
     //          sections removed from the always-on prompt (#2025).
+    // 0.22.0 = the consult-timeout, inbox-drain and inbox-follow-up steps ride on the task
+    //          wake by tag (#2025).
     const config = loadAgentConfig(path.join(agentsDir, 'ceo-inbox.yaml'));
-    expect(config.version).toBe('0.21.1');
+    expect(config.version).toBe('0.22.0');
   });
 });
 

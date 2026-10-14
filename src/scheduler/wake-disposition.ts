@@ -5,6 +5,8 @@
 // as new work and wakes it again. These helpers decide whether the run already
 // disposed the task, and they word the one follow-up turn and the review notice.
 
+import { ceoInboxWakeGuidance } from '../agents/prompts/ceo-inbox-wake-guidance.js';
+
 /** Tag that excludes a task from selectHeartbeatCandidates. */
 export const NEEDS_DISPOSITION_TAG = 'needs-disposition';
 
@@ -33,6 +35,10 @@ export interface TaskWakeSubject {
   taskId: string;
   title: string | null;
   progress: Record<string, unknown> | null;
+  /** The agent the wake is for. With `tags`, selects that agent's steps for the task kind. */
+  agentId?: string;
+  /** The task's tags (ceo-inbox's consult-timeout, inbox-drain, inbox-follow-up). */
+  tags?: readonly string[] | null;
 }
 
 /**
@@ -40,11 +46,15 @@ export interface TaskWakeSubject {
  * scenario harness sends the same body for its task-wake cases.
  */
 export function formatTaskWakeContent(subject: TaskWakeSubject, taskPayload: Record<string, unknown>): string {
+  // A ceo-inbox task of a kind it schedules for itself carries that kind's steps (#2025);
+  // they used to sit in its always-on prompt.
+  const steps = ceoInboxWakeGuidance(subject.agentId, subject.tags);
   return JSON.stringify({
     task_id: subject.taskId,
     ...(subject.title !== null && { title: subject.title }),
     progress: subject.progress ?? {},
     task_payload: taskPayload,
+    ...(steps !== undefined && { steps }),
     instruction: WAKE_DISPOSITION_INSTRUCTION,
   });
 }

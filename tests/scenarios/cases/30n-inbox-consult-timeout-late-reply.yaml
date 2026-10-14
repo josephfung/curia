@@ -1,0 +1,182 @@
+# ceo-inbox, a consult-timeout task wake that finds a late CONSULT REPLY (#2025, P2). Rule:
+# the consult-timeout steps, step 3 (agents/ceo-inbox.yaml "Scheduled-wake resume" on main;
+# src/agents/prompts/ceo-inbox-wake-guidance.ts after P2): when the consult thread holds a
+# CONSULT REPLY and no draft exists yet, run the consult-reply protocol (Branch A) with that
+# reply instead of the blind fallback: slot strings verbatim, no "pending your calendar"
+# qualifier, ✍️ Drafted, archive, and close the task.
+#
+# The task's description (source_message_id, thread_id, consult_kind) is not in the wake
+# body; ceo-inbox reads it with task-list, stubbed here, and the progress note repeats it.
+# The inbox holds unread mail and every mailbox write succeeds, so a triage is available.
+name: inbox consult timeout finds a late consult reply
+description: >
+  ceo-inbox's consult-timeout safety task wakes for Priya Raman's scheduling email, parked
+  behind a calendar consult 90 minutes ago. The consult thread now holds the calendar
+  specialist's CONSULT REPLY with two held slots, which never woke ceo-inbox, and there is
+  no draft yet. ceo-inbox drafts the reply with both slot strings exactly as calendar wrote
+  them (no "pending your calendar" qualifier, since holds are placed), moves the email to
+  ✍️ Drafted, archives it, and completes the task.
+tags: [specialist-ceo-inbox, ceo-inbox, task-wake, scheduling, consult-timeout, resume-mode]
+agent: ceo-inbox
+timeout_seconds: 300
+stub_sets: [ceo-inbox-mailroom]
+inbound:
+  from: task-wake
+  task:
+    id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000302
+    title: "Consult timeout: Q4 partnership — 30 min next week?"
+    intent: >
+      Make sure Priya Raman's scheduling email gets a reply even if the calendar consult
+      never answers.
+    tags: [consult-timeout]
+    notes:
+      - at: "{{at:now-90m}}"
+        note: >
+          Parked behind a calendar consult. source_message_id=msg-30n-sched;
+          thread_id=7a1b2c3d-30d0-4e5f-8a9b-0000000003b1; consult_kind=scheduling
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        tasks:
+          - task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000302
+            title: "Consult timeout: Q4 partnership — 30 min next week?"
+            description: "source_message_id=msg-30n-sched; thread_id=7a1b2c3d-30d0-4e5f-8a9b-0000000003b1; consult_kind=scheduling"
+            status: open
+            owner: curia
+            tags: [consult-timeout]
+            next_wake_at: null
+        count: 1
+        displayTimezone: "{{timezone}}"
+  task-complete:
+    - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000302 }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000302, title: "Consult timeout: Q4 partnership — 30 min next week?", status: done, completed_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  task-update:
+    - match: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000302 }
+      return: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000302, title: "Consult timeout: Q4 partnership — 30 min next week?", status: waiting, owner: curia, priority: 3, tags: [consult-timeout], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+  ceo-inbox-read:
+    - match: { message_id: msg-30n-sched }
+      return:
+        id: msg-30n-sched
+        threadId: thr-30n-sched
+        from: [{ name: Priya Raman, email: priya.raman@lumenworks.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: Q4 partnership — 30 min next week?
+        body_plain: "Hi,\n\nCould we grab 30 minutes next week to go over the Q4 partnership plan? Tuesday or Wednesday afternoon works best on my end.\n\nThanks,\nPriya"
+        date: 1791878700
+        labels: [INBOX, "⏳ In Progress"]
+        attachments: []
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+  ceo-inbox-list:
+    - match: { folder: DRAFTS }
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+    - match: {}
+      return:
+        count: 1
+        has_more: false
+        messages:
+          - id: msg-30n-unread
+            threadId: thr-30n-unread
+            subject: Your invoice from Cloudhost
+            from: [{ name: Cloudhost Billing, email: billing@cloudhost.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791878000
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Your October invoice is ready.
+  ceo-inbox-search:
+    - match: {}
+      return: { folder: DRAFTS, count: 0, drafts: [] }
+  ceo-inbox-draft-reply:
+    - match: { reply_to_message_id: msg-30n-sched }
+      return: { draft_id: draft-30n-1, subject: "Re: Q4 partnership — 30 min next week?", to: [{ name: Priya Raman, email: priya.raman@lumenworks.example.test }], cc: [], already_exists: false }
+  bullpen:
+    # The handler's own validation errors (skills/bullpen/handler.ts), matched first.
+    - match: { action: post, topic: null }
+      error: "Missing required field: 'topic'"
+    - match: { action: post, participants: null }
+      error: "Missing required field: 'participants' (non-empty string array)"
+    - match: { action: post, content: null }
+      error: "Missing required field: 'content'"
+    - match: { action: post, content: "" }
+      error: "Missing required field: 'content'"
+    - match: { action: reply, thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { action: reply, content: null }
+      error: "Missing required field: 'content'"
+    - match: { action: reply, content: "" }
+      error: "Missing required field: 'content'"
+    - match: { action: get_thread, thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    # The consult thread: the request, and no reply.
+    - match: { action: get_thread }
+      return:
+        thread:
+          id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b1
+          topic: Scheduling consult — Priya Raman
+          status: open
+          participants: [ceo-inbox, calendar]
+        messages:
+          - sender: ceo-inbox
+            content: |
+              CONSULT REQUEST
+              Need: 2 conflict-free 30-min slots, with holds placed, returned timezone-labelled
+              For:  reply to Priya Raman re "Q4 partnership — 30 min next week?"
+              By:   next week; Tuesday or Wednesday afternoon preferred
+              Context: source_message_id=msg-30n-sched; contact_timezone=unknown
+          - sender: calendar
+            content: |
+              CONSULT REPLY
+              Result: ok
+              Slots:
+                1. {{day:next-tuesday}} at 2:30 PM ET - hold placed
+                2. {{day:next-wednesday}} at 3:00 PM ET - hold placed
+              Rules: loaded 0 active (0 total); applied: none
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b1, message_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b2, deduplicated: false }
+expected_behaviors:
+  - id: first_slot_verbatim
+    weight: critical
+    description: The draft carries the first slot string as calendar wrote it.
+    check:
+      called: ceo-inbox-draft-reply
+      with: { reply_to_message_id: msg-30n-sched }
+      contains: { body: "{{day:next-tuesday}} at 2:30 PM ET" }
+  - id: second_slot_verbatim
+    weight: critical
+    description: The draft carries the second slot string as calendar wrote it.
+    check:
+      called: ceo-inbox-draft-reply
+      contains: { body: "{{day:next-wednesday}} at 3:00 PM ET" }
+  - id: no_blind_qualifier
+    weight: critical
+    description: The draft does not say the times are pending the principal's calendar (holds are placed).
+    check:
+      not_called: [ceo-inbox-draft-reply]
+      contains: { body: pending your calendar }
+  - id: completes_task
+    weight: important
+    description: Completes the consult-timeout task.
+    check:
+      called: task-complete
+      with: { task_id: 5f1c2d3e-3a0d-4c6d-8e7f-000000000302 }
+  - id: archived
+    weight: important
+    description: Archives the email once the draft exists.
+    check:
+      called: ceo-inbox-archive
+      with: { message_id: msg-30n-sched }
+  - id: no_triage
+    weight: important
+    description: Does not triage the unread invoice (no archive, label or mark-read on it).
+    check:
+      not_called: [ceo-inbox-archive, ceo-inbox-label, ceo-inbox-mark-read]
+      with: { message_id: msg-30n-unread }
+failure_modes:
+  - Writes the blind fallback ("pending your calendar") although calendar already answered
+  - Paraphrases or reformats the slot strings
+  - Leaves the task open

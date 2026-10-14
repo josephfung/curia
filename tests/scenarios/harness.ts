@@ -502,7 +502,7 @@ export async function createScenarioHarness(options: { model?: string } & StackS
       const wakeTask = inbound.task;
       inboundContent = wakeTask
         ? formatTaskWakeContent(
-            { taskId: wakeTask.id, title: wakeTask.title, progress: { notes: wakeTask.notes } },
+            { taskId: wakeTask.id, title: wakeTask.title, progress: { notes: wakeTask.notes }, agentId: scenario.agent, tags: wakeTask.tags ?? [] },
             { type: 'task-wake' },
           )
         : inbound.content;

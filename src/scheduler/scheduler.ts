@@ -1026,7 +1026,7 @@ export class Scheduler {
       // An ordinary task wake carries the wake instruction. Delegation-retry content
       // replaces this string below.
       content = formatTaskWakeContent(
-        { taskId: job.agentTaskId, title: job.taskTitle, progress: job.progress },
+        { taskId: job.agentTaskId, title: job.taskTitle, progress: job.progress, agentId: job.agentId, tags: job.taskTags },
         job.taskPayload,
       );
     } else if (job.agentTaskId) {
