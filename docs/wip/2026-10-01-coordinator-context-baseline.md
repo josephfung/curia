@@ -1794,6 +1794,14 @@ spent 113s of its first turn on `web-fetch`, `web-browser` and four searches.
 Spend: the core specialists about $14.30, the gate and smoke $3.89, the re-checks $0.95.
 curia-deploy#276's agents and roster about $18.80.
 
+**After rebasing onto the bullpen split (#2126).** The specialist cases and stub sets name
+`bullpen-post`, `-reply`, `-read` and `-close`, and the trimmed prompts take main's tool
+names. All 36 calendar, ceo-inbox and meeting-debrief cases re-ran 5 times ($1.29): every
+critical behavior met its threshold and no run errored. That includes the nine on-demand
+#2126 cases (30d–f, 31a–d, 31h, 32b), 45 runs with no content-less loop, where calendar's
+consult cases looped in 26 of 100 runs on main before the split. One 32e run read the
+prompt thread with `bullpen-read`; the stub set answers that read now.
+
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 
 `report-agent-context --agent coordinator` on production. #2024 (`f8392d02`,
