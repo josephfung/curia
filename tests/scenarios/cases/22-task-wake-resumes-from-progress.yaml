@@ -58,6 +58,11 @@ tool_stubs:
             <contact name="Marcus Lee" id="{{contact:marcus}}"/>
             <contact name="Priya Shah" id="{{contact:priya}}"/>
           </resolved_entities>
+  # The task has no bullpen thread. A run that looks one up (seen as thread_id "recent")
+  # gets the handler's miss, as production would (skills/bullpen/handler.ts).
+  bullpen:
+    - match: { action: get_thread }
+      error: No bullpen thread with that ID exists
   task-update:
     - match: { task_id: 5f1c2d3e-4a5b-4c6d-8e7f-22a0b1c2d3e4 }
       return:

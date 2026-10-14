@@ -62,6 +62,14 @@ tool_stubs:
   ceo-inbox-search:
     - match: {}
       return: { count: 0, messages: [] }
+  # The safety task task-create returns (stubs/defaults.yaml) updates as usual. Any other
+  # id is one the model made up (seen: "task-created-2"), which production rejects
+  # (skills/tasks/tools/task-update/handler.ts).
+  task-update:
+    - match: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001 }
+      return: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001, title: (updated), status: open, owner: curia, priority: 3, tags: [], updated_at: "{{at:now}}", displayTimezone: "{{timezone}}" }
+    - match: {}
+      error: task_id must be a valid UUID
   contact-register:
     - match: {}
       return: { contact_id: "{{contact:priya}}", display_name: Priya Raman, contact_confidence: 0.9, created: false, verified: true }

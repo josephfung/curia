@@ -323,7 +323,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T00:39:33.311Z"
+      "recordedAt": "2026-10-14T14:00:02.031Z"
     },
     "inbox sent-observe job runs only sent-observe": {
       "unstubbed": 0,
@@ -533,7 +533,7 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-12T18:59:50.027Z"
+      "recordedAt": "2026-10-14T13:52:36.604Z"
     },
     "transfer-ownership sounds good": {
       "unstubbed": 0,
