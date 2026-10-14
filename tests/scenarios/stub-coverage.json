@@ -101,31 +101,31 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts briefing before a meeting": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts conflicting email is flagged": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts dedup excluded closes the task": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts dedup review previews without merging": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts delegate failure": {
       "unstubbed": 0,
@@ -137,31 +137,31 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts tier change to trusted": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts unknown name is created": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts weekly dedup scan reports counts": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "contacts weekly grant scan reports and files nothing itself": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "debrief detection schedules external meetings only": {
       "unstubbed": 0,
@@ -389,19 +389,19 @@
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "principal answers grant task routes to contacts": {
-      "unstubbed": 1,
+      "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "principal backlog surfaced": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
-      "recordedAt": "2026-10-14T20:07:45.909Z"
+      "recordedAt": "2026-10-14T20:17:18.967Z"
     },
     "principal reply no internals": {
       "unstubbed": 0,
