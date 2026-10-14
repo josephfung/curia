@@ -1696,6 +1696,59 @@ leaves it as it is on main.
 
 Spend for all of PR 10's runs, judge and red team included: about $5.80 estimated.
 
+### 2026-10-13 — bullpen tool split (#2126)
+
+The polymorphic `bullpen` tool became `bullpen-post`, `bullpen-reply`, `bullpen-read` and
+`bullpen-close`; each schema marks its own fields required. YAML and SKILL.md unchanged.
+Local tool definitions 76,982 → 76,983 bytes, now over 69 tools (budget 77,000, unchanged).
+
+All runs: `deepseek/deepseek-v4.1-flash`, gpt-4o judge, 0 live web searches. The main arm is
+main itself (`801c8c9e`), with main's harness and stubs; each arm ran on its own copy of
+`curia_scen`, all arms side by side. "Loop" means a run with 3 or more replies that had no
+body; every such run had 22 to 39.
+
+**Case 06, content-less reply loop, 40 runs an arm.**
+
+| Arm | Runs that looped | Any empty reply | Errored runs | Score |
+|---|---|---|---|---|
+| main | 5/40 (22, 25, 34, 36, 36 empty replies) | 6/40 | 4 (2 timeouts, 2 turn budget) | 89% |
+| split, first schema | 0/40 | 0/40 | 0 | 100% |
+| split, `content` → `message` | 0/40 | 0/40 | 0 | 100% |
+| split, as shipped | 0/40 | 0/40 | 0 | 100% |
+| split, as shipped, `message` | 0/40 | 0/40 | 0 | 100% |
+
+The first schema left `mentioned_agent_ids` off `bullpen-reply`; review put it back, so the
+two arms reran. Split against main: 0/160 against 5/40 (Fisher p ≈ 0.0003); as shipped
+alone, 0/40 against 5/40 (p ≈ 0.055). The `message` rename made no difference, so it is
+not shipped.
+
+**Case 06b, 10 runs an arm.** main 9/10: two runs looped (39 and 28 empty replies), one
+to the turn budget. Split 10/10 and 5/5 in the gate, no empty reply.
+
+**Scenario gate, full, split (`281f13a1`):** 06 and 06b at 100%. The gate failed on six
+counts, none on a bullpen tool:
+- 03b `exactly_no_reply` 3/5 and 18 `principal_hears` 3/5. Rerun 10 a side: 03b main
+  9/10, split 8/10; 18 main 9/10, split 8/10, the misses on both arms leaving no note.
+  03b got 60 more a side: main 59/60, split 56/60. Across the 70 targeted runs, main
+  68/70 and split 64/70 (Fisher p ≈ 0.27). Replying to Marcus instead of NO_REPLY is on
+  both arms: main 1/70, split 4/70, and 2 of the gate's 5. The case makes no bullpen call.
+- One judge error on 04a; rerun 10 a side, main 10/10, split 9/10 on `asks_what_it_refers_to`.
+- One refused or canned call each in 07 (`search_drive_files`, after `skill-activate`), 16f
+  (`memory-store`) and 22 (`doc-place`); none is a bullpen tool. 18's rerun refused one
+  `task-update`.
+
+**Smoke, full suite on split:** 46 of 47 ($1.04). Triage Batch of Mixed Emails failed on
+grouping its reply; it makes no bullpen call. Five rounds a side, first attempts: main 3/5,
+split 4/5.
+
+**Production** (`audit_log`, 2026-07-21 to 2026-10-13): 1,915 `bullpen` calls; 135 replies
+or posts had no `content` (ceo-inbox 102, calendar 16, social-media 10, t2125 7). 58 calls
+were a standalone `close`, 51 succeeded: social-media 24 (its prompt closes each consult
+thread after synthesis), ceo-inbox 20 (15 of them one loop on 2026-08-08), calendar 7 (6
+missed, a job id as thread id), coordinator 6, meeting-debrief 1. So `bullpen-close` stays.
+
+Spend for all of this PR's runs, judge included: about $4.80 estimated.
+
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 
 `report-agent-context --agent coordinator` on production. #2024 (`f8392d02`,
