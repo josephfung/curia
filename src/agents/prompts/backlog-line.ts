@@ -31,6 +31,17 @@ export const BACKLOG_INSTRUCTION_LINES: readonly string[] = [
   'unless you already raised it earlier in this conversation.',
 ];
 
+/**
+ * Follows the counts when the principal owns an open task. A specialist that needs the
+ * principal's answer on a turn nobody receives (a task wake, a scheduled job) hands the
+ * question over on a task they own (#2129); this is how the answer gets back to it.
+ * Fixed text, hard-wrapped for marker extraction.
+ */
+export const PRINCIPAL_TASK_ANSWER_LINES: readonly string[] = [
+  'A task of theirs a specialist filed (source_agent_id) holds its question in the last note.',
+  'Delegate their answer to that specialist with the task id; it acts and closes the task.',
+];
+
 function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
@@ -71,5 +82,9 @@ export function renderBacklogLine(counts: PrincipalBacklogCounts): string | null
     );
   }
   if (parts.length === 0) return null;
-  return [`Waiting on the principal: ${parts.join('; ')}.`, ...BACKLOG_INSTRUCTION_LINES].join('\n');
+  return [
+    `Waiting on the principal: ${parts.join('; ')}.`,
+    ...(counts.principalTasks > 0 ? PRINCIPAL_TASK_ANSWER_LINES : []),
+    ...BACKLOG_INSTRUCTION_LINES,
+  ].join('\n');
 }

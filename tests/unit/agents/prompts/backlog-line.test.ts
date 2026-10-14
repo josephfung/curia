@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BACKLOG_INSTRUCTION_LINES,
+  PRINCIPAL_TASK_ANSWER_LINES,
   hasBacklog,
   parsePrincipalBacklog,
   renderBacklogLine,
@@ -27,6 +28,12 @@ describe('renderBacklogLine', () => {
       + '1 stored fact to re-confirm before archiving (decay-warnings-list); '
       + '3 open tasks they own (task-list: owner ceo, status open,in_progress,blocked,waiting).',
     );
+  });
+
+  it('says where the answer to a specialist\'s task goes, only when the principal owns a task (#2129)', () => {
+    const answer = PRINCIPAL_TASK_ANSWER_LINES.join('\n');
+    expect(renderBacklogLine({ decayWarnings: 0, pendingApprovals: 0, principalTasks: 1 })).toContain(answer);
+    expect(renderBacklogLine({ decayWarnings: 1, pendingApprovals: 2, principalTasks: 0 })).not.toContain(answer);
   });
 
   it('ends with the fixed instruction', () => {

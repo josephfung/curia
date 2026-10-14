@@ -9,10 +9,33 @@
 //
 // Cadence ceiling: the run stops creating new recommendations once
 // cadence_ceiling new ones have been produced, preventing a burst.
+//
+// Delivery (#2129): each pending recommendation is filed as a task the principal
+// owns. The backlog line counts open `owner = 'ceo'` tasks on every principal turn,
+// so the coordinator raises it at a natural pause, and routes the answer back to
+// contacts with the task id. The scan's own reply reaches no one (a scheduled
+// turn has no routing entry), so the task is the only delivery path. A pending
+// recommendation with no task yet (a failed filing, or one created before #2129)
+// is filed on the next run; one whose task was closed is never re-filed.
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
+import type { TaskOriginator } from '../../../../src/contacts/types.js';
 
 const CANDIDATE_PERMISSION = 'schedule_meetings';
+
+/** Tag on every grant-recommendation task, and the prefix of the per-recommendation tag. */
+export const GRANT_REC_TASK_TAG = 'grant-recommendation';
+const GRANT_REC_ID_TAG_PREFIX = 'grant-rec:';
+
+// Upper bound on the grant-recommendation tasks loaded to find which pending
+// recommendations already have one. The cadence ceiling caps new ones at 10 a
+// week, so this is years of history; past it a recommendation may be re-filed.
+const EXISTING_TASK_FETCH_LIMIT = 1000;
+
+/** The per-recommendation tag, so a task can be matched to its recommendation. */
+export function grantRecTag(recommendationId: string): string {
+  return `${GRANT_REC_ID_TAG_PREFIX}${recommendationId.toLowerCase()}`;
+}
 
 const JUDGE_SYSTEM_PROMPT = `You are a trust assessment judge for an AI executive assistant. Decide whether a contact has demonstrated sufficient collaborative behavior to be formally granted scheduling access on the executive's behalf.
 
@@ -48,8 +71,12 @@ export class ScanGrantRecommendationsHandler implements ToolHandler {
     if (!ctx.contactService) {
       return { success: false, error: 'scan-grant-recommendations: contactService not available' };
     }
+    if (!ctx.taskRepo) {
+      return { success: false, error: 'scan-grant-recommendations: taskRepo not available — declare "taskRepo" in capabilities.' };
+    }
 
     const svc = ctx.contactService;
+    const taskRepo = ctx.taskRepo;
 
     const input = ctx.input as {
       confidence_threshold?: number;
@@ -192,6 +219,83 @@ export class ScanGrantRecommendationsHandler implements ToolHandler {
       }
     }
 
+    // -- Delivery: file a principal-owned task for every pending recommendation without one --
+    let tasksFiled = 0;
+    let taskFailures = 0;
+    let taggedRecIds: Set<string>;
+    try {
+      // Every status, not just open: a closed task means the principal answered or
+      // deferred, and a deferral must not resurface the recommendation weekly.
+      const existingTasks = await taskRepo.listTasks({ tag: GRANT_REC_TASK_TAG, limit: EXISTING_TASK_FETCH_LIMIT });
+      if (existingTasks.length >= EXISTING_TASK_FETCH_LIMIT) {
+        ctx.log.warn(
+          { count: existingTasks.length, limit: EXISTING_TASK_FETCH_LIMIT },
+          'scan-grant-recommendations: task fetch hit limit — an older recommendation may be re-filed',
+        );
+      }
+      taggedRecIds = new Set(
+        existingTasks.flatMap(t => t.tags.filter(tag => tag.startsWith(GRANT_REC_ID_TAG_PREFIX))),
+      );
+    } catch (err) {
+      // The recommendations are already written; without the task list we cannot tell
+      // which are already filed, so file none rather than duplicate. The next run retries.
+      ctx.log.error({ err }, 'scan-grant-recommendations: failed to load existing recommendation tasks');
+      return {
+        success: false,
+        error: `Created ${created} recommendation(s) but could not load existing recommendation tasks, so none were filed for the principal. The next run will file them.`,
+      };
+    }
+
+    const createdById = new Map(recommendationsCreated.map(r => [r.id, r]));
+    const pending = [
+      ...allRecs
+        .filter(r => r.status === 'pending' && r.permission === CANDIDATE_PERMISSION)
+        .map(r => ({ id: r.id, contactId: r.contactId, reasoning: r.reasoning })),
+      ...recommendationsCreated.map(r => ({ id: r.id, contactId: r.contact_id, reasoning: r.reasoning })),
+    ];
+    const originator = (ctx.taskMetadata?.originator as TaskOriginator | undefined) ?? null;
+
+    for (const rec of pending) {
+      const tag = grantRecTag(rec.id);
+      if (taggedRecIds.has(tag)) continue;
+      try {
+        const contactName = createdById.get(rec.id)?.contact_name
+          ?? (await svc.getContact(rec.contactId))?.displayName;
+        if (!contactName) {
+          // The contact was deleted (its recommendation cascades with it), so there is
+          // nothing to ask about.
+          ctx.log.warn({ recommendationId: rec.id, contactId: rec.contactId }, 'scan-grant-recommendations: contact gone, recommendation not filed');
+          continue;
+        }
+        await taskRepo.createTask({
+          agentId: 'contacts',
+          title: `Grant ${contactName} scheduling access?`,
+          description: [
+            `Grant recommendation from the weekly scan: give ${contactName} formal scheduling access (${CANDIDATE_PERMISSION}).`,
+            ``,
+            `Recommendation ID: ${rec.id}`,
+            `Contact ID: ${rec.contactId}  (${contactName})`,
+            `Why: ${rec.reasoning}`,
+            ``,
+            `Ask the principal to approve or decline. Pass their answer to the contacts specialist with this task's ID.`,
+          ].join('\n'),
+          owner: 'ceo',
+          source: 'agent',
+          sourceAgentId: 'contacts',
+          tags: [GRANT_REC_TASK_TAG, 'contacts', tag],
+          progressNote: `Should ${contactName} get formal scheduling access? ${rec.reasoning} Waiting on the principal to approve or decline; their answer goes to the contacts specialist with this task's ID.`,
+          // Same lineage as the dedup review tasks (#1125): the cron run's originator.
+          originator,
+        });
+        taggedRecIds.add(tag);
+        tasksFiled++;
+      } catch (err) {
+        // Fail open per recommendation: it stays pending without a task, so the next run files it.
+        taskFailures++;
+        ctx.log.error({ err, recommendationId: rec.id }, 'scan-grant-recommendations: failed to file principal task');
+      }
+    }
+
     return {
       success: true,
       data: {
@@ -201,6 +305,8 @@ export class ScanGrantRecommendationsHandler implements ToolHandler {
         skipped_judge: skippedJudge,
         skipped_errors: skippedErrors,
         recommendations_created: recommendationsCreated,
+        tasks_filed: tasksFiled,
+        task_failures: taskFailures,
       },
     };
   }

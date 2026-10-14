@@ -1,6 +1,9 @@
 // Regression for issue #1067: createGrantRecommendation can throw when ON CONFLICT
 // skips the insert and the winner vanishes before re-fetch. The scan loop must
 // treat that like the other per-contact failures so earlier creates still report.
+//
+// #2129: every pending recommendation is filed as a principal-owned task, the only
+// path by which a scheduled scan's recommendation reaches the principal.
 
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
@@ -42,7 +45,27 @@ function makeContact(id: string, displayName: string): Contact {
   };
 }
 
-function makeCtx(contactService: unknown): ToolContext {
+function makeTaskRepo(existing: Array<{ tags: string[] }> = []) {
+  return {
+    listTasks: vi.fn().mockResolvedValue(existing),
+    createTask: vi.fn().mockResolvedValue({}),
+  };
+}
+
+function makeRec(id: string, contactId: string, status: GrantRecommendation['status'] = 'pending'): GrantRecommendation {
+  return {
+    id,
+    contactId,
+    permission: 'schedule_meetings',
+    reasoning: 'Regular calendar coordination.',
+    status,
+    suggestedAt: new Date(),
+    resolvedAt: null,
+    resolvedBy: null,
+  };
+}
+
+function makeCtx(contactService: unknown, taskRepo: unknown = makeTaskRepo()): ToolContext {
   return {
     toolName: 'scan-grant-recommendations',
     toolVersion: '0.1.1',
@@ -50,6 +73,7 @@ function makeCtx(contactService: unknown): ToolContext {
     secret: () => { throw new Error('no secrets'); },
     log: logger,
     contactService: contactService as ToolContext['contactService'],
+    taskRepo: (taskRepo ?? undefined) as ToolContext['taskRepo'],
     infraLlm: {
       classify: vi.fn(),
       extract: vi.fn().mockResolvedValue({
@@ -121,5 +145,92 @@ describe('ScanGrantRecommendationsHandler create failures (issue #1067)', () => 
       },
     ]);
     expect(contactService.createGrantRecommendation).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ScanGrantRecommendationsHandler principal tasks (#2129)', () => {
+  const contact = makeContact('11111111-1111-4111-8111-111111111111', 'Dana Whitfield');
+  const recId = '33333333-3333-4333-8333-333333333333';
+
+  function serviceCreating(existingRecs: GrantRecommendation[] = [], contacts: Contact[] = [contact]) {
+    return {
+      listContacts: vi.fn().mockResolvedValue(contacts),
+      listGrantRecommendations: vi.fn().mockResolvedValue(existingRecs),
+      getAuthOverrides: vi.fn().mockResolvedValue([]),
+      getContact: vi.fn().mockImplementation(async (id: string) => contacts.find(c => c.id === id)),
+      createGrantRecommendation: vi.fn().mockResolvedValue({ created: true, recommendation: makeRec(recId, contact.id) }),
+    };
+  }
+
+  it('files a principal-owned task for each new recommendation', async () => {
+    const taskRepo = makeTaskRepo();
+    const result = await new ScanGrantRecommendationsHandler().execute(makeCtx(serviceCreating(), taskRepo));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({ created: 1, tasks_filed: 1, task_failures: 0 });
+    expect(taskRepo.listTasks).toHaveBeenCalledWith(expect.objectContaining({ tag: 'grant-recommendation' }));
+    // Every status: a closed task (answered or deferred) must keep the recommendation filed.
+    expect(taskRepo.listTasks.mock.calls[0]![0]).not.toHaveProperty('statuses');
+    expect(taskRepo.createTask).toHaveBeenCalledTimes(1);
+    const params = taskRepo.createTask.mock.calls[0]![0] as Record<string, unknown>;
+    expect(params).toMatchObject({
+      agentId: 'contacts',
+      owner: 'ceo',
+      sourceAgentId: 'contacts',
+      title: 'Grant Dana Whitfield scheduling access?',
+      tags: ['grant-recommendation', 'contacts', `grant-rec:${recId}`],
+    });
+    expect(params['description']).toContain(`Recommendation ID: ${recId}`);
+    expect(params['progressNote']).toContain('Regular calendar coordination.');
+  });
+
+  it('files a pending recommendation that has no task yet, and skips one that has', async () => {
+    const other = makeContact('44444444-4444-4444-8444-444444444444', 'Omar Haddad');
+    const filedRecId = '55555555-5555-4555-8555-555555555555';
+    const orphanRecId = '66666666-6666-4666-8666-666666666666';
+    const resolvedRecId = '77777777-7777-4777-8777-777777777777';
+    const existingRecs = [
+      makeRec(filedRecId, contact.id),
+      makeRec(orphanRecId, other.id),
+      makeRec(resolvedRecId, other.id, 'declined'),
+    ];
+    // Both contacts already have a recommendation, so the scan creates none.
+    const svc = serviceCreating(existingRecs, [contact, other]);
+    const taskRepo = makeTaskRepo([{ tags: ['grant-recommendation', 'contacts', `grant-rec:${filedRecId}`] }]);
+
+    const result = await new ScanGrantRecommendationsHandler().execute(makeCtx(svc, taskRepo));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({ created: 0, tasks_filed: 1, task_failures: 0 });
+    expect(svc.createGrantRecommendation).not.toHaveBeenCalled();
+    expect(taskRepo.createTask).toHaveBeenCalledTimes(1);
+    expect(taskRepo.createTask.mock.calls[0]![0]).toMatchObject({
+      title: 'Grant Omar Haddad scheduling access?',
+      tags: ['grant-recommendation', 'contacts', `grant-rec:${orphanRecId}`],
+    });
+  });
+
+  it('counts a failed filing and keeps filing the rest', async () => {
+    const other = makeContact('44444444-4444-4444-8444-444444444444', 'Omar Haddad');
+    const svc = serviceCreating([makeRec('66666666-6666-4666-8666-666666666666', other.id)], [contact, other]);
+    const taskRepo = makeTaskRepo();
+    taskRepo.createTask.mockRejectedValueOnce(new Error('insert failed')).mockResolvedValueOnce({});
+
+    const result = await new ScanGrantRecommendationsHandler().execute(makeCtx(svc, taskRepo));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toMatchObject({ created: 1, tasks_filed: 1, task_failures: 1 });
+    expect(taskRepo.createTask).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails before creating any recommendation when taskRepo is missing', async () => {
+    const svc = serviceCreating();
+    const result = await new ScanGrantRecommendationsHandler().execute(makeCtx(svc, null));
+
+    expect(result.success).toBe(false);
+    expect(svc.createGrantRecommendation).not.toHaveBeenCalled();
   });
 });

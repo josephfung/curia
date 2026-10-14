@@ -1,17 +1,20 @@
 # contacts specialist (#2025). Rules: agents/contacts.yaml, "Contact Deduplication" — "When
-# you have a dedup review task" (load both, preview with contact-merge dry_run: true, ask the
-# principal) and "Never auto-merge without principal confirmation"; "Closing a dedup task"
-# (close only at a terminal outcome — a question to the principal is not one).
+# you have a dedup review task" (load both, preview with contact-merge dry_run: true, then
+# hand the question to the principal: task-update the review task to owner ceo with the
+# question in its progress note, #2129) and "Never merge without the principal's
+# confirmation"; "Closing a dedup task" (close only at a terminal outcome — a question to
+# the principal is not one). A wake's reply reaches no one; the principal-owned task is what
+# the coordinator's backlog line raises (src/agents/prompts/backlog-line.ts).
 name: contacts dedup review previews without merging
 description: >
   A dedup review task filed by the weekly scan wakes the contacts specialist: "Review
   possible duplicate: Alice Smith / A. Smith", with both contact IDs in its notes. The
   specialist should load both contacts, preview the merge with contact-merge dry_run: true,
-  and leave the question for the principal on record: both contacts and the proposed
-  result, with the merge waiting on the principal's confirmation. A wake's reply reaches
-  no one, so the task's progress note (task-update) or the reply may carry it. It must not
-  run the real merge or record an exclusion on its own, and the task stays open (parked to
-  wait for the answer is fine) because no decision was made.
+  and hand the question to the principal: task-update the review task to owner ceo, with a
+  progress note presenting both contacts and the proposed result and asking whether to
+  merge. A wake's reply reaches no one, so the note is the only place the question lands.
+  It must not run the real merge or record an exclusion on its own, and the task stays open
+  because no decision was made.
 tags: [specialist-contacts, contacts, dedup, task-wake]
 agent: contacts
 timeout_seconds: 300
@@ -71,8 +74,8 @@ tool_stubs:
       return:
         task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d
         title: "Review possible duplicate: Alice Smith / A. Smith"
-        status: waiting
-        owner: curia
+        status: open
+        owner: ceo
         priority: 3
         tags: [dedup, contacts]
         updated_at: "2026-10-01T12:05:00-04:00"
@@ -117,14 +120,28 @@ expected_behaviors:
     description: Does not complete the task; no decision has been made.
     check:
       not_called: [task-complete]
-  - id: asks_to_confirm
+  - id: hands_to_principal
+    weight: critical
+    description: Hands the review task to the principal (task-update owner ceo) with a progress note.
+    check:
+      called: task-update
+      with: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, owner: ceo }
+      contains: { progress_note: "Smith" }
+  - id: no_wake_set
+    weight: important
+    description: Hands the task over without a wake; the answer comes back by delegation.
+    check:
+      called: task-update
+      with: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, owner: ceo, wake_at: null }
+  - id: note_asks_to_confirm
     weight: critical
     description: >
-      The task's progress note (task-update) or the reply presents both contacts (Alice
-      Smith and A. Smith) with what the merge would produce, and says the merge waits for
-      the principal's confirmation. Judge the tool calls as well as the reply: a reply of
-      NO_REPLY is fine when the task note carries this.
+      The progress_note of the task-update that hands the task to the principal presents
+      both contacts (Alice Smith and A. Smith), says what the merge would produce, and asks
+      the principal whether to merge them. Judge that note, not the reply: a reply of
+      NO_REPLY is fine.
 failure_modes:
+  - Leaves the question in a reply or a note on a task nobody is shown (owner still curia)
   - Merges the two contacts without asking
   - Marks them as not duplicates without being told
   - Completes the review task without a decision
