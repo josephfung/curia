@@ -593,7 +593,8 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
   }
   const liveSearch = optBool(raw, 'live_search', file, 'case') === true;
   const stubsDirs = [...(options.extraStubsDirs ?? []), options.stubsDir ?? DEFAULT_STUBS_DIR];
-  const stubSets = mergeStubSets(raw, parseStubs(raw['tool_stubs'], file), file, stubsDirs, liveSearch);
+  const ownStubs = parseStubs(raw['tool_stubs'], file);
+  const stubSets = mergeStubSets(raw, ownStubs, file, stubsDirs, liveSearch);
   const agent = optStr(raw, 'agent', file, 'case') ?? COORDINATOR;
   if (agent.trim() === '' || agent === ANY_AGENT) throw new CaseError(file, `'agent' must name one agent`);
   const scenario: ScenarioCase = {
@@ -610,7 +611,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     inbound: parseInbound(raw['inbound'], file),
     toolStubs: stubSets.stubs,
     explicitStubTools: stubSets.explicit,
-    ownStubTools: Object.keys(raw['tool_stubs'] && isObject(raw['tool_stubs']) ? raw['tool_stubs'] : {}).sort(),
+    ownStubTools: Object.keys(ownStubs).sort(),
     ...(liveSearch ? { liveSearch: true as const } : {}),
     expectedBehaviors: parseBehaviors(raw, file),
     failureModes: strList(raw, 'failure_modes', file, 'case'),

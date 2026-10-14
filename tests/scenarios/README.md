@@ -12,8 +12,9 @@ Most cases test the coordinator. A case can instead fire a task straight at a sp
 agents' cases on this runner (see [A deployment's own agents](#a-deployments-own-agents)).
 
 Smoke (`tests/smoke/`, spec 16) asks "does the whole stack produce a good answer?". This
-suite asks "did the coordinator make the right decision?", which is usually a tool call:
-it routed instead of answering, it released the entry, it edited instead of duplicating.
+suite asks "did the agent make the right decision?", which is usually a tool call: the
+coordinator routed instead of answering, released the entry, edited instead of
+duplicating; a specialist placed the hold, linked the child task, kept the slot string.
 
 By default `delegate` is stubbed, so no specialist runs and a case isolates the
 coordinator's decision. A case with `delegation: real` runs the specialist too, through
@@ -282,8 +283,8 @@ every case loads and has a well-formed entry.
 
 ## Writing a case
 
-Cases are `cases/NN<letter>-<slug>.yaml`, numbered by #1956's list (specialists from 30,
-#2025). Start the file with a comment that cites the rule it tests: a section of the
+Cases are `cases/NN<letter>-<slug>.yaml`, numbered by #1956's list (specialists
+from 30, #2025). Start the file with a comment that cites the rule it tests: a section of the
 agent's YAML, or the trigger guidance in `src/agents/prompts/` that now carries it (#1959). A stub that stands
 in for a tool whose real result carries `next_step` must carry it too. Two
 principles:

@@ -36,7 +36,7 @@ function mirror(source: string, target: string): void {
       continue;
     }
     try {
-      if (lstatSync(to).isSymbolicLink()) rmSync(to);
+      if (!lstatSync(to).isDirectory()) rmSync(to);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }

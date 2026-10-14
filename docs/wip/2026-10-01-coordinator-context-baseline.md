@@ -1798,8 +1798,8 @@ curia-deploy#276's agents and roster about $18.80.
 `bullpen-post`, `-reply`, `-read` and `-close`, and the trimmed prompts take main's tool
 names. All 36 calendar, ceo-inbox and meeting-debrief cases re-ran 5 times ($1.29): every
 critical behavior met its threshold and no run errored. That includes the nine on-demand
-#2126 cases (30d–f, 31a–d, 31h, 32b), 45 runs with no content-less loop, where calendar's
-consult cases looped in 26 of 100 runs on main before the split. One 32e run read the
+cases held back for #2126 (30d–f, 31a–d, 31h, 32b), 45 runs with no content-less loop,
+where calendar's consult cases looped in 26 of 100 runs on main before the split. One 32e run read the
 prompt thread with `bullpen-read`; the stub set answers that read now.
 
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)

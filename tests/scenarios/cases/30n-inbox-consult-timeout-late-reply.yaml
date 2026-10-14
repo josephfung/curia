@@ -118,7 +118,7 @@ tool_stubs:
   bullpen-read:
     - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    # The consult thread: the request, and no reply.
+    # The consult thread: the request, then calendar's late CONSULT REPLY with two held slots.
     - match: {}
       return:
         thread:
