@@ -19,7 +19,7 @@ To **import an unmodified Anthropic Agent Skill** (`SKILL.md` + `references/`, n
 5. Pin the tool in any agent that should use it (`pinned_skills` in the agent YAML), or make it discoverable via `allow_discovery: true`
 6. Restart Curia — skills are loaded from the `skills/` directory at startup
 
-> **The tool starts disabled in the registry.** A newly added tool is registered at startup but is **not enabled** by default. Enable it (via the registry HTTP API or admin UI) before any agent can call it. Enable state is **restart-based** — toggling enabled/disabled takes effect on the next restart, when only enabled tools are loaded and registered. See [Manifest → `install.requires_secrets`](#installrequires_secrets-optional) for the secret-gating that the registry enforces at install/enable time, and [Tools & Execution Spec — Registry lifecycle](../specs/03-tools-and-execution.md) for the full design.
+> **The tool starts disabled in the registry — unless it is a member of an enabled bundle.** Listing a tool in an enabled bundle's SKILL.md `tools:` enrolls it (enabled) on the next boot; a member gated by `install.requires_secrets` enrolls on the first boot after its keys exist, and a member can't be uninstalled while its bundle is enabled (disable it instead). `config/registry-defaults.yaml` `tools:` lists standalone tools only (#1974, [ADR-022](../adr/022-skill-agent-registry.md) amendment). Any other newly added tool is registered at startup but is **not enabled** by default. Enable it (via the registry HTTP API or admin UI) before any agent can call it. Enable state is **restart-based** — toggling enabled/disabled takes effect on the next restart, when only enabled tools are loaded and registered. See [Manifest → `install.requires_secrets`](#installrequires_secrets-optional) for the secret-gating that the registry enforces at install/enable time, and [Tools & Execution Spec — Registry lifecycle](../specs/03-tools-and-execution.md) for the full design.
 
 ---
 
@@ -265,7 +265,7 @@ tier) alongside the item it describes:
 The `OutboundGateway` uses these to apply the item-count threshold, non-contact destination
 allowlist (confidential+ only), and `restricted` sensitivity ceiling. An agent-supplied
 `sensitivity` on an item can only **ratchet up** the resolved value, never downgrade it. See
-`skills/email-send/tool.json` for a live example and [spec 06 — Sensitivity resolution](../specs/06-audit-and-security.md#sensitivity-resolution).
+`skills/email/tools/email-send/tool.json` for a live example and [spec 06 — Sensitivity resolution](../specs/06-audit-and-security.md#sensitivity-resolution).
 
 #### `permissions` (optional, default: `[]`)
 
@@ -331,7 +331,8 @@ Marks this skill's successful output as **source text for identifier provenance*
 All handlers export a class implementing the `ToolHandler` interface. The execution layer instantiates the class at load time and calls `execute()` per invocation.
 
 ```typescript
-// skills/web-search/handler.ts
+// skills/my-search/handler.ts — illustrative; the shipped web-search lives at
+// skills/web/tools/web-search/handler.ts
 import type { ToolHandler, ToolContext, ToolResult } from '../../src/skills/types.js';
 
 export class WebSearchHandler implements ToolHandler {
@@ -458,6 +459,21 @@ interface ToolContext {
   /** Local HTTP port the SPA is served on — dev fallback origin for capture links.
    *  From config.httpPort. */
   httpPort?: number;
+
+  /** Aborted when the call hits its manifest timeout; pass it to network requests
+   *  (#2083). Set on every invocation. */
+  signal?: AbortSignal;
+
+  /** Epoch ms at which this call times out (#2083). With `signal`, satisfies CallBudget. */
+  deadline?: number;
+
+  /** Resolve a contact reference (UUID or `principal`, optional `#label`) to a verified
+   *  address, for tools that address a draft without outboundGateway (#2053). Fails closed. */
+  resolveRecipientReference?: (channel: string, value: string, fields: RecipientReferenceFields) =>
+    Promise<RecipientResolution>;
+
+  /** Every mailbox Curia owns — email-reply excludes them from reply-all CC (#1815). */
+  selfEmails?: readonly string[];
 }
 ```
 
@@ -485,12 +501,17 @@ const apiKey = ctx.secret('stripe_api_key');  // synchronous — no await
 - Secret values are never logged — the audit log records which secret was accessed, not its value
 - Agents/LLMs never see secret values — only the handler has access within its execution scope
 
+### Addressing a recipient
+
+A tool that sends or addresses a message takes a **contact reference** — a contact UUID or `principal`, with an optional `#label` hint — never a raw address ([ADR-047](../adr/047-send-skills-address-recipients-by-reference.md), #2033, #2053). Resolve it with `ctx.outboundGateway.resolveRecipientReference(channel, value, { field })`; a tool that addresses a draft without the `outboundGateway` capability (the `ceo-inbox` draft tools) uses `ctx.resolveRecipientReference` instead. Both fail closed: return their error rather than falling back to the input as an address. See `skills/email/tools/email-send/handler.ts`.
+
 ---
 
 ## Tests (`handler.test.ts`)
 
 ```typescript
-// skills/web-search/handler.test.ts
+// skills/my-search/handler.test.ts — illustrative; for a live one see
+// skills/web/tools/web-fetch/handler.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import pino from 'pino';
 import { WebSearchHandler } from './handler.js';
@@ -560,7 +581,7 @@ describe('WebSearchHandler', () => {
 
 Run tests with:
 ```bash
-pnpm test skills/web-search/handler.test.ts
+pnpm test skills/web/tools/web-fetch/handler.test.ts
 ```
 
 Integration tests that call real external APIs should be tagged with `.integration.test.ts` and require the relevant env vars to be set. Unit tests stub `fetch` or mock infrastructure clients.

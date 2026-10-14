@@ -49,7 +49,7 @@ describe('loadAgentConfig', () => {
     ['Message ID stamping detail', /drops any other `Message ID:`/, 'delegate handler identifier stamp'],
     ['principal [primary] email rule', /\[primary\]/, '## Principal Contact Details block'],
     ['calendar discovery ban', /tool-registry or skill-activate for calendar/, 'skillReservedForOtherAgents'],
-    // Prompt trim PR 1 (docs/wip/2026-10-06-coordinator-prompt-trim.md).
+    // Prompt trim PR 1 (#1954).
     ['channel ownership after a specialist send', /\*\*Channel ownership\.\*\*/, 'dispatcher reply-lock (#1860)'],
     ['bulk-export confirmation', /bulk-export sensitive data/, 'export controls (#201)'],
     ['task_error carve-outs', /This cuts one way only/, '<task_error> reporting_constraint (#1546)'],

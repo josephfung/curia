@@ -153,17 +153,10 @@ leave a permanent block behind.
 # agents/coordinator.yaml
 name: coordinator
 role: coordinator                # special role — dispatch always routes here
-persona:
-  display_name: Alex             # what end-users see in emails, messages
-  tone: professional but warm
-  email_signature: |
-    Alex
-    Office of the CEO
 model:
   tier: standard
 system_prompt: |
-  You are ${persona.display_name}, executive assistant to the CEO.
-  You are the single point of contact for all communications.
+  You are a chief of staff, the single point of contact for all communications.
   You have a team of specialists you can delegate to, but you always
   respond in your own voice. The sender should never know multiple
   agents were involved.
@@ -178,7 +171,11 @@ pinned_skills:
 allow_discovery: true
 ```
 
-The `role: coordinator` field tells the dispatch layer to route all inbound messages here. There is exactly one coordinator per deployment.
+The `role: coordinator` field tells the dispatch layer to route all inbound messages here. There is exactly one coordinator per deployment. The YAML carries no `persona:` block: the assistant's name, title and email signature are office identity config, injected by the runtime and appended by the outbound gateway — see [spec 13](13-office-identity.md).
+
+### Prompt assembly
+
+Behavior rules go on the highest rung that works ([ADR-046](../adr/046-agent-behavior-fix-placement.md)): code enforcement, then injection with its trigger, then the tool description, then a lazily loaded playbook, and only last the always-on `system_prompt`. Guidance that applies only on some turns rides `agent.task.turnGuidance` and is rendered at the head of that turn's user message, not the system prompt (#1959). The coordinator's `## Available Specialists` roster uses each agent's `delegate_when`, falling back to its `description`. `tests/unit/agents/prompt-budget.test.ts` budgets the always-on prompt and local tool-definition bytes of the coordinator (plus its roster) and of `calendar`, `ceo-inbox`, `contacts` and `meeting-debrief`; a deployment holds its own agents to budgets with the same `measureAgentContext()` (`src/agents/prompt-budget.ts`).
 
 ### Model Routing
 

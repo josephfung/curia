@@ -49,7 +49,7 @@ interface AgentBudget {
 // Coordinator, measured 2026-10-06 after #1958, #1959 and #1960: ~6,777 tokens
 // (YAML 20,951 chars + SKILL.md 6,157) and 74,856 bytes over 66 local tools. After
 // #2024 (google-workspace unpinned, its prompt section rewritten): YAML 20,532 chars.
-// Prompt trim PR 1 (docs/wip/2026-10-06-coordinator-prompt-trim.md): YAML 18,561 chars,
+// Prompt trim PR 1 (#1954): YAML 18,561 chars,
 // ~6,180 tokens with SKILL.md 6,157; 74,651 bytes over 65 local tools.
 // Prompt trim PR 2 (one section each for voice and contact resolution): YAML 15,709
 // chars (~3,927 tokens, under #1954's 4k target), ~5,467 tokens with SKILL.md.
