@@ -28,7 +28,7 @@ log.
 | 8: routing-oriented roster | Merged (2026-10-12, #2109) | 8,652 (unchanged; roster 2,719 → 1,883) | ~3,703 / 3,800 |
 | 9: wake-only SKILL.md content | Merged (2026-10-13, #2122) | 8,652 (unchanged; SKILL.md 6,157 → 3,715) | ~3,092 / 3,200 |
 | 10: negation pass on the injected blocks | Merged (2026-10-13, #2124) | 8,652 (unchanged; injected blocks only) | ~3,092 / 3,200 |
-| Final phase | In progress (2026-10-13; #2025, curia-deploy#276) | — (specialists only) | — |
+| Final phase | Merged (2026-10-14, #2130, curia-deploy#298) | — (specialists only) | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a

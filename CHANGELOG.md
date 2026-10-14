@@ -94,6 +94,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Changed
 
+- **Prompt trim plan** — status marks the final phase merged; the trim (#1954) is complete. (#2025)
 - **`tool.json` (public API): `bullpen` split** — now `bullpen-post`, `-reply`, `-read`, `-close`; each schema requires its own fields. (#2126)
 - **Specialist prompts** — calendar, meeting-debrief, contacts and ceo-inbox trimmed 17–27% per ADR-046; all budgeted. (#2025)
 - **ceo-inbox task wakes** — consult-timeout, drain and follow-up steps arrive with the wake, not the prompt. (#2025)
