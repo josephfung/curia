@@ -217,6 +217,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 - **Outbound disclosure gate (Stage 2.5)** — now runs in production; principal-directed sends and trusted recipients skip it. (#1870)
 - **Sender verification** — a sender-written Authentication-Results header no longer counts as a pass. (#2071)
+- **`ip-address`** — override floor raised to 10.7.4, clearing a MED quadratic-time DoS (GHSA-rxp7-6hxx-x8q5). (#2125)
+- **`undici`** — override floor raised to 8.11.2, excluding a HIGH WebSocket DoS (CVE-2026-109855). (#2125)
 
 ### Fixed
 
