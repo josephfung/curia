@@ -222,6 +222,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **`email-reply`** — `cc` resolves `"principal"` and contact IDs; non-address entries are refused, nothing sent. (#2131)
 - **calendar unregistered calendars** — reported in plain text; the output sanitizer stripped the old tag. (#2025)
 - **Drive sharing** — the principal always gets edit access; others get a role fitting the content.
 - **Smoke case Speaking Engagement Intake** — gives Curia a fictional invitation to read, so it stops researching SaaStr online. (#2087)

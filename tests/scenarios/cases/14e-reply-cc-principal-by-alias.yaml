@@ -1,0 +1,86 @@
+# Case 14e (#2131): copying the principal on an email-reply names them with the reserved
+# alias in cc, as a send names them in `to` (14a). Rule: the `principal` line of the
+# Principal Contact Details block (src/agents/principal-contact-block.ts) and the `cc`
+# description in skills/email/tools/email-reply/tool.json. Before #2131, `cc: "principal"`
+# went out as a literal cc; it now resolves to the principal's verified address
+# (tests/unit/skills/send-by-reference.test.ts, "email-reply cc by reference"). The block
+# lists the principal's addresses, so typing one into cc is available and attractive.
+name: reply cc principal by alias
+description: >
+  Tomas Reyes emailed the coordinator's own inbox asking whether to bring printed decks to
+  tomorrow's strategy workshop. The principal asks the coordinator to reply on that thread
+  (they give the Message ID) that slides will be on screen, and to copy them on the reply.
+  The coordinator replies with email-reply on that message and copies the principal by
+  passing "principal" in cc.
+tags: [email, recipient]
+stub_sets: [human-channels]
+seed:
+  contacts:
+    - key: tomas
+      display_name: Tomas Reyes
+      tier: known
+      channel: email
+      identifier: tomas.reyes@example.test
+inbound:
+  from: principal
+  channel: cli
+  content: >
+    Tomas Reyes emailed you this morning asking whether to bring printed copies of the deck
+    to tomorrow's strategy workshop (Message ID: scenario-msg-tomas-workshop). Reply on that
+    thread: no printouts needed, the slides will be on screen. Cc me on it so I see what went out.
+tool_stubs:
+  # The coordinator reads the thread before replying; the message is in its own inbox.
+  email-get:
+    - match: { message_id: scenario-msg-tomas-workshop }
+      return:
+        message:
+          id: scenario-msg-tomas-workshop
+          threadId: scenario-thr-tomas-workshop
+          subject: Tomorrow's workshop
+          from: [{ name: Tomas Reyes, email: tomas.reyes@example.test }]
+          to: [{ email: curia@example.test }]
+          cc: []
+          body: >
+            Hi, thanks for sending the agenda for tomorrow's strategy workshop. Should I bring
+            printed copies of the deck, or will slides be shared on screen? Thanks, Tomas
+          date: 1791878700
+          unread: false
+          folders: [INBOX]
+          attachments: []
+  delegate:
+    - match: {}
+      return: { agent: ceo-inbox, response: Done. }
+  # The reply's stubbed result echoes the cc the coordinator chose, as the handler does.
+  email-reply:
+    - match: { cc: principal }
+      return: { message_id: scenario-out-14e, to: tomas.reyes@example.test, subject: "Re: Tomorrow's workshop", cc: principal@example.test }
+    - match: {}
+      return: { message_id: scenario-out-14e, to: tomas.reyes@example.test, subject: "Re: Tomorrow's workshop", cc: "" }
+  memory-store:
+    - match: {}
+      return: { stored: true, action: created, node_id: 6c3f8d2e-4a5b-4c7d-9e0f-1a2b3c4d5e6f, sensitivity: internal }
+expected_behaviors:
+  - id: replies_on_thread
+    weight: critical
+    description: Calls email-reply on the message the principal named.
+    check:
+      called: email-reply
+      with: { reply_to_message_id: scenario-msg-tomas-workshop }
+  - id: cc_principal_by_alias
+    weight: critical
+    description: Copies the principal by passing "principal" in email-reply's cc.
+    check:
+      called: email-reply
+      contains: { cc: principal }
+  - id: no_new_thread
+    weight: important
+    description: Does not start a new thread with email-send.
+    check:
+      not_called: [email-send]
+  - id: answers_the_question
+    weight: important
+    description: The reply body tells Tomas no printouts are needed because the slides will be on screen.
+failure_modes:
+  - Types the principal's address from the contact block into cc instead of "principal"
+  - Leaves cc out, which replies to the thread's participants without the principal
+  - Sends a new email with email-send instead of replying on the thread

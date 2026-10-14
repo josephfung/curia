@@ -439,6 +439,12 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-08T17:20:23.923Z"
     },
+    "reply cc principal by alias": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T19:52:58.881Z"
+    },
     "reply-shaped non-principal": {
       "unstubbed": 0,
       "runs": 5,

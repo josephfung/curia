@@ -107,7 +107,7 @@ export function formatPrincipalContactDetailsBlock(
     'These are all of the principal\'s verified addresses, and the list is complete: an address that is not listed here is not theirs.',
     // The send skills resolve the alias server-side (#2033), so a send to the
     // principal never needs an address typed from this list.
-    'To send to the principal with email-send, signal-send, sms-send or slack-send, pass "principal" as the recipient. To pick a labelled address, add its label as a hint, as in principal#personal.',
+    'To send to the principal with email-send, signal-send, sms-send or slack-send, pass "principal" as the recipient; to copy them on an email-reply, put "principal" in its cc. To pick a labelled address, add its label as a hint, as in principal#personal.',
     'When a tool needs a literal address, copy one exactly as it is written here. A label in parentheses is a note, not an address.',
   ];
   if (primaryIdentity) {

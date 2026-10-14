@@ -3,6 +3,8 @@ import { EmailReplyHandler } from './handler.js';
 import type { ToolContext } from '../../../../src/skills/types.js';
 import type { OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
 import pino from 'pino';
+import { ContactService } from '../../../../src/contacts/contact-service.js';
+import { resolveRecipientReference } from '../../../../src/skills/_shared/recipient-reference.js';
 
 function makeLogger() {
   return pino({ level: 'silent' });
@@ -532,6 +534,128 @@ describe('EmailReplyHandler', () => {
 
       expect(result.success).toBe(true);
       expect(ctx.outboundGateway!.send).toHaveBeenCalled();
+    });
+  });
+
+  // #2131: cc takes addresses and contact references mixed, resolved as email-send does.
+  describe('cc references (#2131)', () => {
+    let contacts: ContactService;
+    let principalId: string;
+    let danaId: string;
+
+    beforeEach(async () => {
+      contacts = ContactService.createInMemory();
+      const principal = await contacts.createContact({ displayName: 'Pat Principal', source: 'ceo_stated', tier: 'known' });
+      principalId = principal.id;
+      await contacts.linkIdentity({ contactId: principalId, channel: 'email', channelIdentifier: 'pat@work.example', source: 'ceo_stated', label: 'work' });
+      await contacts.linkIdentity({ contactId: principalId, channel: 'email', channelIdentifier: 'pat@home.example', source: 'ceo_stated', label: 'personal' });
+      await contacts.updateContactFields(principalId, { primaryEmail: 'pat@work.example' });
+      const dana = await contacts.createContact({ displayName: 'Dana Lee', source: 'ceo_stated', tier: 'known' });
+      danaId = dana.id;
+      await contacts.linkIdentity({ contactId: danaId, channel: 'email', channelIdentifier: 'dana@example.com', source: 'ceo_stated' });
+    });
+
+    /** A ctx whose gateway resolves references with the real resolver. */
+    function ctxWithResolver(input: Record<string, unknown>): ToolContext {
+      const ctx = makeCtx(input);
+      (ctx.outboundGateway as unknown as Record<string, unknown>).resolveRecipientReference = vi.fn(
+        (channel: string, value: string, fields: { field: string }) =>
+          resolveRecipientReference(value, channel, fields, { contactService: contacts, principalContactId: principalId }),
+      );
+      return ctx;
+    }
+
+    function sentCc(ctx: ToolContext): unknown {
+      const send = ctx.outboundGateway!.send as unknown as ReturnType<typeof vi.fn>;
+      return (send.mock.calls[0]![0] as { cc?: string[] }).cc;
+    }
+
+    it('copies the principal\'s primary address for cc: "principal"', async () => {
+      const ctx = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: 'principal' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(sentCc(ctx)).toEqual(['pat@work.example']);
+      if (result.success) expect((result.data as { cc: string }).cc).toBe('pat@work.example');
+    });
+
+    it('picks the labelled address for principal#<label>', async () => {
+      const ctx = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: 'principal#personal' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(sentCc(ctx)).toEqual(['pat@home.example']);
+    });
+
+    it('resolves a contact UUID to its verified address, mixed with literal addresses', async () => {
+      const ctx = ctxWithResolver({
+        reply_to_message_id: 'nylas-msg-1',
+        body: 'Thanks!',
+        cc: `bob@vendor.example, ${danaId}, principal`,
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(sentCc(ctx)).toEqual(['bob@vendor.example', 'dana@example.com', 'pat@work.example']);
+    });
+
+    it('does not add a resolved address that is already listed', async () => {
+      const ctx = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: 'PAT@work.example, principal' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(sentCc(ctx)).toEqual(['PAT@work.example']);
+    });
+
+    it.each([
+      ['a name', 'Pat Principal'],
+      ['a role', 'the principal'],
+      ['a template token', '${principal_email}'],
+      ['a half address', 'pat@'],
+    ])('refuses %s before any fetch or send, naming "principal"', async (_label, entry) => {
+      const ctx = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: `bob@vendor.example, ${entry}` });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('"principal"');
+        expect(result.error).toMatch(/Nothing was sent/);
+      }
+      expect(ctx.outboundGateway!.getEmailMessage).not.toHaveBeenCalled();
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+
+    it('refuses a reference that does not resolve, and sends nothing', async () => {
+      const ctx = ctxWithResolver({
+        reply_to_message_id: 'nylas-msg-1',
+        body: 'Thanks!',
+        cc: '00000000-0000-4000-8000-000000000000',
+      });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toMatch(/No contact has ID/);
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+
+    it('keeps literal addresses, reply-all and sender-only as before, without resolving', async () => {
+      const literal = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: 'bob@vendor.example, carol@vendor.example' });
+      expect((await handler.execute(literal)).success).toBe(true);
+      expect(sentCc(literal)).toEqual(['bob@vendor.example', 'carol@vendor.example']);
+
+      const senderOnly = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: '' });
+      expect((await handler.execute(senderOnly)).success).toBe(true);
+      expect(sentCc(senderOnly)).toBeUndefined();
+
+      const replyAll = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!' });
+      (replyAll.outboundGateway!.getEmailMessage as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        from: [{ email: 'alice@example.com' }],
+        to: [{ email: 'principal@ignored.example' }],
+        cc: [{ email: 'dave@example.com' }],
+        subject: 'Test subject',
+        body: '',
+        date: 0,
+      });
+      expect((await handler.execute(replyAll)).success).toBe(true);
+      expect(sentCc(replyAll)).toEqual(['principal@ignored.example', 'dave@example.com']);
+
+      for (const ctx of [literal, senderOnly, replyAll]) {
+        expect(ctx.outboundGateway!.resolveRecipientReference).not.toHaveBeenCalled();
+      }
     });
   });
 });

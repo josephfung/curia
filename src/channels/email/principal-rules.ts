@@ -82,6 +82,10 @@ function parseEmailReplyRecipients(input: Record<string, unknown>): string[] | n
  * Fetch the original message and derive To+CC the same way the email-reply
  * handler will send. Returns null on missing id, gateway error, or unmodeled
  * input (fail closed).
+ *
+ * An explicit cc entry may be a contact reference ("principal", a contact UUID;
+ * #2131). It is returned as written: the execution layer swaps in the address it
+ * resolved before the gates, as it does for email-send.
  */
 export async function resolveEmailReplyRecipients(
   input: Record<string, unknown>,

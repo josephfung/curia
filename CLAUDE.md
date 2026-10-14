@@ -205,8 +205,8 @@ phone, etc.) loaded from `contact_channel_identities` at startup. They are
 authoritative and labelled as such in the block.
 
 To **send** to the principal, agents pass the reserved alias `principal` as the
-recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`; the skill looks
-the address up from those verified identities (#2033,
+recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`, or in `email-reply`'s
+`cc`; the skill looks the address up from those verified identities (#2033, #2131,
 [ADR-047](docs/adr/047-send-skills-address-recipients-by-reference.md)). A model with
 the right address in context still mistypes it, so no prompt or task payload should
 ask an agent to copy the principal's address into a send skill. The block's values are

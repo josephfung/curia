@@ -6,6 +6,7 @@ Amended: 2026-10-07 — no raw-address path; agent-entered contacts (#2041)
 Amended: 2026-10-08 — agent-entered identifiers are verified by provenance (#2061)
 Amended: 2026-10-08 — the principal's mailbox drafts address recipients by reference; a raw address needs a source (#2053)
 Amended: 2026-10-09 — `email-reply` verifies a recipient only when mail auth passes and the address is not ours (#2071)
+Amended: 2026-10-14 — `email-reply`'s `cc` resolves references beside literal addresses (#2131)
 
 ## Context
 
@@ -38,7 +39,7 @@ Alternatives considered:
 
 ### Send skills take a reference
 
-`email-send` (`to`, `cc`), `signal-send`, `sms-send` and `slack-send` (`recipient`) take a contact reference: a contact UUID, or the reserved alias `principal`. The model chooses the person, and the gateway reads the address from that contact's identities. The resolver is `src/skills/_shared/recipient-reference.ts`, exposed as `OutboundGateway.resolveRecipientReference`.
+`email-send` (`to`, `cc`), `signal-send`, `sms-send` and `slack-send` (`recipient`) take a contact reference (so does `email-reply`'s `cc`, beside literal addresses; see below): a contact UUID, or the reserved alias `principal`. The model chooses the person, and the gateway reads the address from that contact's identities. The resolver is `src/skills/_shared/recipient-reference.ts`, exposed as `OutboundGateway.resolveRecipientReference`.
 
 - **Only verified, active identities on the skill's channel count,** and only in a shape that channel can send to. A Signal ACI UUID or an Enterprise Grid `W…` Slack id is skipped rather than chosen. `sms` matches `sms` identities only, not the CRM `phone` channel, which is the same rule the gateway uses to recognise the principal on SMS.
 - **A blocked contact is refused.** The gateway checks the To recipient's tier, not each cc, so the resolver refuses first.
@@ -75,6 +76,16 @@ The send skills take references only. `to_address`, `cc_addresses`, `recipient_n
 A call that still passes a retired input is refused, not ignored. A dropped `cc_addresses` would send to fewer people than asked and report success. The pre-gate check refuses it, the handler refuses it, and the Gate C parsers treat it as an unparsed recipient key and fail closed. The message names the input, the reference input that replaced it, and `contact-create`. A blank value (`""`, `[]`, null) is not present: models fill unused optional inputs with one.
 
 `send-draft` is unchanged. It sends a draft's envelope as stored, behind its principal-origin gate (ADR-017). Once `email-draft-save` addresses drafts by reference, every draft it sends was addressed by reference or by a person in their own mail client. The principal's mailbox drafts follow their own rule, below.
+
+### `email-reply`'s cc takes references beside addresses (#2131)
+
+`email-reply`'s To is the original sender, read from the thread, so only its `cc` is the agent's. The contact block tells every agent to name the principal as `"principal"`, and models carried that into `cc`, where it went out as a literal cc line (2 of 10 runs of one deployment's agent). `cc` now takes both, entry by entry:
+
+- An entry that parses as a reference (`principal`, `principal#<label>`, a contact UUID) resolves through the same resolver as `email-send`, in the pre-gate check, Gate C, the approval display and the handler.
+- An entry with an email address's shape is sent as written. A reply's cc names thread participants who are often not contacts, and requiring a contact for each would turn every reply-all-with-edits into several calls.
+- Anything else is refused before the gates with a message that names `"principal"`, and nothing is sent.
+
+This is the overloaded field rejected above for the send skills, kept narrow: `email-reply` never had a reference-only field, and the shapes cannot collide (see `parseRecipientReference`). The literal path is no worse than before. `RECIPIENT_REFERENCE_SKILLS` marks such an input with `addresses`, and a literal address there does not count toward the per-send reference cap.
 
 ### Drafts in the principal's mailbox (#2053)
 
