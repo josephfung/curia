@@ -212,6 +212,36 @@ describe('ScanGrantRecommendationsHandler principal tasks (#2129)', () => {
     });
   });
 
+  it('reads every page of existing tasks before filing, so a task past page one still counts', async () => {
+    // Both contacts already have a recommendation; only the second is pending without a
+    // visible task on page one. Its task sits on page two.
+    const other = makeContact('44444444-4444-4444-8444-444444444444', 'Omar Haddad');
+    const pagedRecId = '66666666-6666-4666-8666-666666666666';
+    const svc = serviceCreating([makeRec(recId, contact.id), makeRec(pagedRecId, other.id)], [contact, other]);
+    const fullPage = Array.from({ length: 500 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      priority: 50,
+      dueAt: null,
+      tags: ['grant-recommendation', 'contacts', i === 0 ? `grant-rec:${recId}` : `grant-rec:other-${i}`],
+    }));
+    const taskRepo = makeTaskRepo();
+    taskRepo.listTasks
+      .mockReset()
+      .mockResolvedValueOnce(fullPage)
+      .mockResolvedValueOnce([{ id: 'x', priority: 50, dueAt: null, tags: [`grant-rec:${pagedRecId}`] }]);
+
+    const result = await new ScanGrantRecommendationsHandler().execute(makeCtx(svc, taskRepo));
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(taskRepo.listTasks).toHaveBeenCalledTimes(2);
+    expect(taskRepo.listTasks.mock.calls[1]![0]).toMatchObject({
+      cursor: { priority: 50, dueAt: null, id: fullPage[499]!.id },
+    });
+    expect(result.data).toMatchObject({ tasks_filed: 0 });
+    expect(taskRepo.createTask).not.toHaveBeenCalled();
+  });
+
   it('counts a failed filing and keeps filing the rest', async () => {
     const other = makeContact('44444444-4444-4444-8444-444444444444', 'Omar Haddad');
     const svc = serviceCreating([makeRec('66666666-6666-4666-8666-666666666666', other.id)], [contact, other]);

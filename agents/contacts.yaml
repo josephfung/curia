@@ -1,5 +1,5 @@
 name: contacts
-version: "0.13.0"
+version: "0.13.1"
 role: specialist
 description: >
   Contact domain specialist — briefings, CRUD, deduplication, relationship management,
@@ -239,8 +239,9 @@ system_prompt: |
   permission rather than a broad tier change.
   Use contact-revoke-permission to remove a specific override.
 
-  When the coordinator relays the principal's answer on a grant recommendation task:
-  approve or decline it (for "later", change neither), then task-complete the task.
+  When the coordinator relays an answer on a grant recommendation task:
+  approve or decline it; once that succeeds, task-complete the task ("later": just
+  complete it).
 
 pinned_skills:
   - contacts

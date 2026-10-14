@@ -20,6 +20,7 @@
 
 import type { ToolHandler, ToolContext, ToolResult } from '../../../../src/skills/types.js';
 import type { TaskOriginator } from '../../../../src/contacts/types.js';
+import type { TaskListCursor } from '../../../../src/db/task-repo.js';
 
 const CANDIDATE_PERMISSION = 'schedule_meetings';
 
@@ -27,10 +28,10 @@ const CANDIDATE_PERMISSION = 'schedule_meetings';
 export const GRANT_REC_TASK_TAG = 'grant-recommendation';
 const GRANT_REC_ID_TAG_PREFIX = 'grant-rec:';
 
-// Upper bound on the grant-recommendation tasks loaded to find which pending
-// recommendations already have one. The cadence ceiling caps new ones at 10 a
-// week, so this is years of history; past it a recommendation may be re-filed.
-const EXISTING_TASK_FETCH_LIMIT = 1000;
+// Page size for loading every grant-recommendation task. All pages are read
+// (keyset cursor) before anything is filed: a task missed on a cut-off page
+// would re-file a recommendation the principal already answered.
+const EXISTING_TASK_PAGE_SIZE = 500;
 
 /** The per-recommendation tag, so a task can be matched to its recommendation. */
 export function grantRecTag(recommendationId: string): string {
@@ -226,16 +227,17 @@ export class ScanGrantRecommendationsHandler implements ToolHandler {
     try {
       // Every status, not just open: a closed task means the principal answered or
       // deferred, and a deferral must not resurface the recommendation weekly.
-      const existingTasks = await taskRepo.listTasks({ tag: GRANT_REC_TASK_TAG, limit: EXISTING_TASK_FETCH_LIMIT });
-      if (existingTasks.length >= EXISTING_TASK_FETCH_LIMIT) {
-        ctx.log.warn(
-          { count: existingTasks.length, limit: EXISTING_TASK_FETCH_LIMIT },
-          'scan-grant-recommendations: task fetch hit limit — an older recommendation may be re-filed',
-        );
+      taggedRecIds = new Set();
+      let cursor: TaskListCursor | undefined;
+      for (;;) {
+        const page = await taskRepo.listTasks({ tag: GRANT_REC_TASK_TAG, limit: EXISTING_TASK_PAGE_SIZE, cursor });
+        for (const t of page) {
+          for (const tag of t.tags) if (tag.startsWith(GRANT_REC_ID_TAG_PREFIX)) taggedRecIds.add(tag);
+        }
+        const last = page[page.length - 1];
+        if (page.length < EXISTING_TASK_PAGE_SIZE || !last) break;
+        cursor = { priority: last.priority, dueAt: last.dueAt, id: last.id };
       }
-      taggedRecIds = new Set(
-        existingTasks.flatMap(t => t.tags.filter(tag => tag.startsWith(GRANT_REC_ID_TAG_PREFIX))),
-      );
     } catch (err) {
       // The recommendations are already written; without the task list we cannot tell
       // which are already filed, so file none rather than duplicate. The next run retries.

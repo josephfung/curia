@@ -74,7 +74,7 @@ tool_stubs:
       return:
         task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d
         title: "Review possible duplicate: Alice Smith / A. Smith"
-        status: open
+        status: waiting
         owner: ceo
         priority: 3
         tags: [dedup, contacts]
@@ -127,6 +127,15 @@ expected_behaviors:
       called: task-update
       with: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, owner: ceo }
       contains: { progress_note: "Smith" }
+  # Parking is what the prompt asks for, but owner ceo and the note are what deliver the
+  # question (an open task with a fresh note is disposed, and the backlog line counts it),
+  # so this is important, not critical.
+  - id: parks_waiting
+    weight: important
+    description: Parks the handed-over task as waiting.
+    check:
+      called: task-update
+      with: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, owner: ceo, status: waiting }
   - id: no_wake_set
     weight: important
     description: Hands the task over without a wake; the answer comes back by delegation.

@@ -1,7 +1,7 @@
 {
   "name": "approve-grant-recommendation",
   "description": "Approve a pending grant recommendation. Marks the recommendation as approved and immediately grants the underlying permission to the contact. Use when the principal says yes to a suggested grant ('yes, grant Dana scheduling access', 'approve that recommendation'). recommendation_id must be the UUID from the recommendation. The id is in the recommendation's task (task-list tag grant-recommendation): the part of its grant-rec:<uuid> tag after the colon. Once this succeeds, task-complete that task with the outcome; if it fails, leave the task open.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "sensitivity": "elevated",
   "action_risk": "critical",
   "inputs": {
@@ -11,7 +11,8 @@
     "recommendation_id": "string",
     "contact_id": "string",
     "permission": "string",
-    "status": "string"
+    "status": "string",
+    "already_resolved": "boolean? (true when it was already approved: nothing changed; close its task)"
   },
   "permissions": [],
   "secrets": [],
