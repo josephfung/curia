@@ -1,0 +1,125 @@
+# contacts specialist (#2025). Rules: agents/contacts.yaml, "Contact Deduplication" — "When
+# you have a dedup review task" step 6 (pair excluded: contact-dedup-exclude with both IDs)
+# and "Closing a dedup task" (task-complete with a note; with no task id in the brief, find
+# it with task-list tag "dedup"; context-bridge-release only for an entry in an [ACTIVE
+# OUTBOUND CONTEXT] block, and a delegated brief carries none).
+name: contacts dedup excluded closes the task
+description: >
+  The coordinator relays the principal's answer to an earlier dedup question: Nora Quinn
+  and N. Quinn are different people, don't merge them. The brief gives no task id. The
+  specialist should record the exclusion for the pair with contact-dedup-exclude, find the
+  review task (task-list with tag dedup) and complete it with a short note, and must not
+  merge. No [ACTIVE OUTBOUND CONTEXT] block is present, so there is nothing to release.
+tags: [specialist-contacts, contacts, dedup]
+agent: contacts
+seed:
+  contacts:
+    - key: nora
+      display_name: Nora Quinn
+      tier: known
+      role: General Counsel
+      channel: email
+      identifier: nora.quinn@ridgeway.example.test
+    - key: nquinn
+      display_name: N. Quinn
+      tier: unknown
+      channel: email
+      identifier: nquinn@quinnstudio.example.test
+inbound:
+  from: delegate
+  content: >-
+    The principal answered your duplicate question about Nora Quinn and N. Quinn: they are
+    different people — don't merge them.
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        count: 2
+        displayTimezone: America/Toronto
+        tasks:
+          - task_id: 8e1f2a3b-4c5d-4e6f-8a7b-9c0d1e2f3a4b
+            title: "Review possible duplicate: Nora Quinn / N. Quinn"
+            description: "Possible duplicate contacts detected by the dedup skill scan.\n\nContact A ID: {{contact:nora}}  (Nora Quinn)\nContact B ID: {{contact:nquinn}}  (N. Quinn)\n\nMatch type: fuzzy\nReason: similar name\nScore: 0.940"
+            status: waiting
+            owner: curia
+            priority: 3
+            tags: [dedup, contacts]
+          - task_id: 9f2a3b4c-5d6e-4f70-9b8c-0d1e2f3a4b5c
+            title: "Review possible duplicate: Omar Haddad / O. Haddad"
+            description: "Possible duplicate contacts detected by the dedup skill scan."
+            status: open
+            owner: curia
+            priority: 3
+            tags: [dedup, contacts]
+  contact-dedup-exclude:
+    - match: {}
+      return: { contact_a_id: "{{contact:nora}}", contact_b_id: "{{contact:nquinn}}", created: true }
+  task-complete:
+    - match: { task_id: 8e1f2a3b-4c5d-4e6f-8a7b-9c0d1e2f3a4b }
+      return:
+        task_id: 8e1f2a3b-4c5d-4e6f-8a7b-9c0d1e2f3a4b
+        title: "Review possible duplicate: Nora Quinn / N. Quinn"
+        status: done
+        completed_at: "2026-10-01T12:05:00-04:00"
+        displayTimezone: America/Toronto
+    - match: {}
+      return: { task_id: 9f2a3b4c-5d6e-4f70-9b8c-0d1e2f3a4b5c, title: "Review possible duplicate: Omar Haddad / O. Haddad", status: done, completed_at: "2026-10-01T12:05:00-04:00", displayTimezone: America/Toronto }
+  # The wrong paths, available: merging anyway, and releasing an entry it cannot see.
+  contact-merge:
+    - match: {}
+      return:
+        primary_contact_id: "{{contact:nora}}"
+        secondary_contact_id: "{{contact:nquinn}}"
+        golden_record: { display_name: Nora Quinn, role: General Counsel, notes: null, tier: known, identity_count: 2, auth_override_count: 0 }
+        dry_run: false
+  context-bridge-release:
+    - match: {}
+      return: { released: true }
+expected_behaviors:
+  - id: records_exclusion
+    weight: critical
+    description: Records the exclusion for Nora Quinn and N. Quinn.
+    check:
+      any_of:
+        - called: contact-dedup-exclude
+          with: { contact_a_id: "{{contact:nora}}", contact_b_id: "{{contact:nquinn}}" }
+        - called: contact-dedup-exclude
+          with: { contact_a_id: "{{contact:nquinn}}", contact_b_id: "{{contact:nora}}" }
+  - id: no_merge
+    weight: critical
+    description: Does not merge the pair.
+    check:
+      not_called: [contact-merge]
+  - id: completes_task
+    weight: critical
+    description: Completes the Nora Quinn review task.
+    check:
+      called: task-complete
+      with: { task_id: 8e1f2a3b-4c5d-4e6f-8a7b-9c0d1e2f3a4b }
+  - id: leaves_other_task
+    weight: critical
+    description: Leaves the unrelated Omar Haddad review task alone.
+    check:
+      not_called: [task-complete]
+      with: { task_id: 9f2a3b4c-5d6e-4f70-9b8c-0d1e2f3a4b5c }
+  - id: finds_task_by_tag
+    weight: important
+    description: Finds the review task with task-list filtered on the dedup tag.
+    check:
+      called: task-list
+      with: { tag: dedup }
+  - id: no_release
+    weight: important
+    description: Releases no outbound-context entry; none is visible in a delegated brief.
+    check:
+      not_called: [context-bridge-release]
+  - id: reports_outcome
+    weight: important
+    description: >
+      The reply confirms the two were marked as different people and will not be proposed
+      as duplicates again, and that the review is closed. It does not ask the principal
+      anything further about the pair.
+failure_modes:
+  - Merges the two anyway
+  - Records the exclusion but leaves the review task open
+  - Completes the wrong review task

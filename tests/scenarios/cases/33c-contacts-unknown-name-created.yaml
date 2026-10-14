@@ -1,0 +1,66 @@
+# contacts specialist (#2025). Rule: agents/contacts.yaml, "Briefing Pattern" step 1 (zero
+# results: contact-create with the name only, include it in <resolved_entities> and say it
+# was newly created from a name only). Also "Contact Lookup Best Practices": look up before
+# creating.
+name: contacts unknown name is created
+description: >
+  The coordinator asks for a briefing on Priya Raman before the principal emails her about
+  a speaking slot. Nobody by that name is on file. The specialist should look her up, find
+  nothing, create her with the name only (no guessed email or role), and return a short
+  briefing that says she was newly created from a name only, followed by a
+  <resolved_entities> block carrying the new contact ID.
+tags: [specialist-contacts, contacts, briefing]
+agent: contacts
+inbound:
+  from: delegate
+  content: "Brief me on Priya Raman — the principal is about to email her about a speaking slot at the October summit."
+tool_stubs:
+  contact-create:
+    - match: {}
+      return:
+        contact_id: 7a1e2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b
+        display_name: Priya Raman
+        role: null
+        kg_node_id: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f
+        identities_added: 0
+  # The new contact exists only in the stub, so its context reads are answered here.
+  entity-context:
+    - match: {}
+      return:
+        entities:
+          - contactId: 7a1e2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b
+            name: Priya Raman
+            tier: unknown
+            facts: []
+            relationships: []
+            connectedAccounts: []
+  calendar-list-events:
+    - match: {}
+      return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
+expected_behaviors:
+  - id: looks_up_before_creating
+    weight: critical
+    description: Runs contact-lookup before contact-create.
+    check:
+      order: [contact-lookup, contact-create]
+  - id: creates_name_only
+    weight: critical
+    description: Creates Priya with her name and no guessed email, phone or role.
+    check:
+      called: contact-create
+      with: { email: null, phone: null, role: null }
+      max: 1
+  - id: resolved_entities_new_contact
+    weight: critical
+    description: >
+      The reply ends with a <resolved_entities> block whose contact entry carries the ID
+      contact-create returned (7a1e2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b).
+  - id: says_newly_created
+    weight: important
+    description: >
+      The reply says Priya was not on file and was just created from her name only, so the
+      record should be enriched (for example with her email) when details are known.
+failure_modes:
+  - Creates Priya with an invented email address
+  - Says nothing is known and returns no contact ID
+  - Creates her without looking first

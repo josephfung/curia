@@ -1,0 +1,51 @@
+# contacts specialist (#2025). Rules: agents/contacts.yaml, "Tier & Permission Grants"
+# ("treat X as trusted" is contact-set-tier, not a per-capability grant) and the
+# <resolved_entities> rule under "Briefing Pattern" (the block goes in CRUD confirmations
+# too, not only briefings).
+name: contacts tier change to trusted
+description: >
+  The coordinator relays the principal's instruction to treat Rosa Delgado as trusted from
+  now on. Rosa is on file at the known tier. The specialist should look her up, set her
+  tier to trusted with contact-set-tier (not grant individual permissions), and confirm,
+  with a <resolved_entities> block carrying her contact ID.
+tags: [specialist-contacts, contacts, tiers]
+agent: contacts
+seed:
+  contacts:
+    - key: rosa
+      display_name: Rosa Delgado
+      tier: known
+      role: Chief of Staff
+      channel: email
+      identifier: rosa.delgado@harbor.example.test
+inbound:
+  from: delegate
+  content: "The principal says: treat Rosa Delgado as trusted from now on."
+tool_stubs:
+  contact-set-tier:
+    - match: {}
+      return: { contact_id: "{{contact:rosa}}", display_name: Rosa Delgado, tier: trusted }
+  # The wrong path, available: per-capability grants instead of the tier.
+  contact-grant-permission:
+    - match: {}
+      return: { contact_id: "{{contact:rosa}}", granted: true }
+expected_behaviors:
+  - id: sets_tier_trusted
+    weight: critical
+    description: Sets Rosa's tier to trusted with contact-set-tier, on her contact ID.
+    check:
+      called: contact-set-tier
+      with: { contact_id: "{{contact:rosa}}", tier: trusted }
+  - id: no_permission_grants
+    weight: important
+    description: Grants no individual permissions; the instruction is a tier change.
+    check:
+      not_called: [contact-grant-permission]
+  - id: confirms_with_resolved_entities
+    weight: important
+    description: >
+      The reply confirms Rosa is now trusted and ends with a <resolved_entities> block
+      carrying her contact ID.
+failure_modes:
+  - Grants permissions one by one instead of changing the tier
+  - Confirms without a <resolved_entities> block

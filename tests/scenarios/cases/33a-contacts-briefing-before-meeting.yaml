@@ -1,0 +1,84 @@
+# contacts specialist (#2025). Rules: agents/contacts.yaml, "Briefing Pattern" (steps 1-5
+# and "Briefing response format") and "Contact Lookup Best Practices" (look the person up
+# before saying anything about them). Ports the specialist half of smoke
+# briefing-contact.yaml: the coordinator asks for a "brief me" before scheduling.
+name: contacts briefing before a meeting
+description: >
+  The coordinator asks the contacts specialist to brief it on Sarah Johnson, because the
+  principal wants to schedule a 30-minute meeting with her next week. Sarah is on file as
+  VP Finance. Stored memory says she prefers morning meetings, and the calendar shows two recent
+  meetings with her. The specialist should look her up first, then gather her context
+  (entity-context, memory-query, calendar-list-events), and return a briefing followed by a
+  <resolved_entities> block with her contact ID.
+tags: [specialist-contacts, contacts, briefing]
+agent: contacts
+seed:
+  contacts:
+    - key: sarah
+      display_name: Sarah Johnson
+      tier: known
+      role: VP Finance
+      channel: email
+      identifier: sarah.johnson@acme.example.test
+inbound:
+  from: delegate
+  content: "Brief me on Sarah Johnson — the principal wants to schedule a 30-minute meeting with her next week."
+tool_stubs:
+  # The wrong path, available: a second Sarah Johnson.
+  contact-create:
+    - match: {}
+      return: { contact_id: 5e4d3c2b-1a09-4f8e-9d7c-6b5a49382716, display_name: Sarah Johnson, role: null, kg_node_id: null, identities_added: 0 }
+  memory-query:
+    - match: {}
+      return:
+        count: 1
+        results:
+          - id: 3b0c8f1e-2a44-4c6e-9d1a-5f7e0b2c9a11
+            type: fact
+            label: Sarah Johnson prefers morning meetings, before 11am, and never on Fridays
+            properties: { field: meeting_preference, value: "mornings before 11am; no Fridays" }
+            confidence: 0.85
+            decay_class: slow_decay
+            sensitivity: internal
+            last_confirmed_at: "2026-09-02T14:00:00.000Z"
+            score: 0.82
+  calendar-list-events:
+    - match: {}
+      return:
+        displayTimezone: "{{timezone}}"
+        count: 2
+        events:
+          - { id: evt-scen-sj-1, title: Q3 budget review with Sarah Johnson, location: Zoom, startTime: "{{time:today-20 09:30}}", endTime: "{{time:today-20 10:15}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: sarah.johnson@acme.example.test, name: Sarah Johnson, status: yes }] }
+          - { id: evt-scen-sj-2, title: Acme partnership sync, location: Acme HQ, startTime: "{{time:today-47 10:00}}", endTime: "{{time:today-47 11:00}}", status: confirmed, busy: true, calendarId: cal-principal-work, participants: [{ email: sarah.johnson@acme.example.test, name: Sarah Johnson, status: yes }] }
+expected_behaviors:
+  - id: looks_up_first
+    weight: critical
+    description: Looks Sarah up with contact-lookup before gathering any other context about her.
+    check:
+      order: [contact-lookup, entity-context]
+  - id: reads_meeting_history
+    weight: critical
+    description: Reads the recent meetings with Sarah from the calendar.
+    check:
+      called: calendar-list-events
+  - id: queries_memory
+    weight: important
+    description: Queries stored memory for context about Sarah.
+    check:
+      called: memory-query
+  - id: creates_nothing
+    weight: important
+    description: Creates no new contact; Sarah is already on file.
+    check:
+      not_called: [contact-create]
+  - id: briefing_with_resolved_entities
+    weight: critical
+    description: >
+      The reply is a briefing on Sarah for scheduling (her role, the morning-meeting
+      preference, the recent meetings with their titles or dates), followed by a
+      <resolved_entities> block whose contact entry carries Sarah Johnson's contact ID as
+      contact-lookup returned it.
+failure_modes:
+  - Answers from nothing, or says Sarah is unknown, without looking her up
+  - Leaves out the <resolved_entities> block, or puts an ID in it that no tool returned
+  - Creates a second Sarah Johnson

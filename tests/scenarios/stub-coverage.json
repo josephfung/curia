@@ -97,11 +97,59 @@
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-08T17:20:23.923Z"
     },
+    "contacts ambiguous name with a wrong role": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:17:13.149Z"
+    },
+    "contacts briefing before a meeting": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:17:13.149Z"
+    },
+    "contacts conflicting email is flagged": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T10:21:22.240Z"
+    },
+    "contacts dedup excluded closes the task": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:17:13.149Z"
+    },
+    "contacts dedup review previews without merging": {
+      "unstubbed": 0,
+      "runs": 10,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:27:12.481Z"
+    },
     "contacts delegate failure": {
       "unstubbed": 0,
       "runs": 5,
       "model": "deepseek/deepseek-v4.1-flash",
       "recordedAt": "2026-10-10T23:42:52.184Z"
+    },
+    "contacts tier change to trusted": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:17:13.149Z"
+    },
+    "contacts unknown name is created": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:17:13.149Z"
+    },
+    "contacts weekly dedup scan reports counts": {
+      "unstubbed": 0,
+      "runs": 5,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "recordedAt": "2026-10-14T00:17:13.149Z"
     },
     "debrief detection schedules external meetings only": {
       "unstubbed": 0,
