@@ -1749,6 +1749,51 @@ missed, a job id as thread id), coordinator 6, meeting-debrief 1. So `bullpen-cl
 
 Spend for all of this PR's runs, judge included: about $4.80 estimated.
 
+### 2026-10-14 — prompt trim final phase: specialists (#2025, curia-deploy#276)
+
+The coordinator's prompt is unchanged. Four core specialists were trimmed, each against cases
+written and baselined on main's prompt first. The A/B per agent is in the plan's final-phase
+notes.
+
+| Agent | Always-on tokens | Budget | Cases |
+|---|---|---|---|
+| ceo-inbox | 16,416 → 13,653 | 14,100 | 30a–p |
+| calendar | 7,187 → 5,984 | 6,200 | 31a–l |
+| meeting-debrief | 4,670 → 3,635 | 3,800 | 32a–h |
+| contacts | 4,831 → 3,788 | 3,900 | 33a–h |
+
+All runs: `deepseek/deepseek-v4.1-flash`, gpt-4o judge, 0 live web searches.
+
+**Scenario gate, full (`eee20d1f`):** 77 cases run, and 15 more on demand
+(`release_gate: false`); 38 minutes, $2.87 (judge $1.50). 76 pass on behavior. The gate failed on four counts:
+- `reply-shaped principal no context` (04a) `asks_what_it_refers_to` 3/5: the judge rated two
+  replies PARTIAL for listing what was checked. Every reply asked what the message referred
+  to, and the coordinator's prompt is main's.
+- `bullpen mention stays on thread` (06) timed out once on the #2126 loop (PR 10: main 3/40).
+- 22 one refused `bullpen` `get_thread` (`thread_id: "recent"`), as in PR 10's gate.
+- 30c one refused `task-update` on a made-up task ID.
+
+22 and 30c now stub those calls with the handler's error, and passed 5/5 each with 0
+refused calls.
+
+**Smoke, full suite (`eee20d1f`, beside the gate):** 43 of 47 ($1.02). Pre-Meeting Prep
+Brief, Cancellation or Change Request, Cold Compose — Two Candidate Addresses and Natural
+Language Deadlines failed, each with at least one 180s timeout. Natural Language
+Deadlines misses on main too (PR 10 above). A/B of the other three, 3 alternating rounds a
+side, first attempts:
+
+| Case | main | branch |
+|---|---|---|
+| Cancellation or Change Request | 0/3 (3 timeouts) | 1/3 (2 timeouts) |
+| Cold Compose — Two Candidate Addresses | 1/3 (2 timeouts) | 2/3 (1 missed `lists-both-candidates`) |
+| Pre-Meeting Prep Brief | 2/3 (one 78%) | 2/3 (1 timeout) |
+
+The slow rounds are the coordinator's own web and contacts work: a passing Cancellation run
+spent 113s of its first turn on `web-fetch`, `web-browser` and four searches.
+
+Spend: the core specialists about $14.30, the gate and smoke $3.89, the re-checks $0.95.
+curia-deploy#276's agents and roster about $18.80.
+
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 
 `report-agent-context --agent coordinator` on production. #2024 (`f8392d02`,
