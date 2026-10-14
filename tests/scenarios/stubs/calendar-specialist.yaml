@@ -90,21 +90,23 @@ memory-store:
   - agent: calendar
     match: {}
     return: { stored: true, action: created, node_id: 0e5d6c7b-1a2b-4c3d-8e9f-0000000000c2, sensitivity: internal }
-# A reply missing a required field gets the handler's error, so a malformed call can be
-# corrected (see case 06). `null` matches an absent argument.
-bullpen:
+# Bullpen writes succeed. A reply missing a required field gets the handler's error, so a
+# malformed call can be corrected (see case 06). `null` matches an absent argument.
+bullpen-post:
   - agent: calendar
-    match: { action: reply, thread_id: null }
+    match: {}
+    return: { thread_id: scenario-thread-new, message_id: scenario-bullpen-post-1, deduplicated: false }
+bullpen-reply:
+  - agent: calendar
+    match: { thread_id: null }
     error: "Missing required field: 'thread_id'"
   - agent: calendar
-    match: { action: reply, content: null }
+    match: { content: null }
     error: "Missing required field: 'content'"
   - agent: calendar
-    match: { action: reply }
+    match: {}
     return: { thread_id: scenario-thread, message_id: scenario-bullpen-reply-1 }
+bullpen-close:
   - agent: calendar
-    match: { action: post }
-    return: { thread_id: scenario-thread-new, message_id: scenario-bullpen-post-1, deduplicated: false }
-  - agent: calendar
-    match: { action: close }
+    match: {}
     return: { thread_id: scenario-thread, status: closed }

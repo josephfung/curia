@@ -47,26 +47,32 @@ inbound:
       2. {{day:next-thursday}} at 1:00 PM ET (10:00 AM PT their time) - hold placed
     Rules: loaded 0 active (0 total); applied: none
 tool_stubs:
-  bullpen:
-    # The handler's own validation errors (skills/bullpen/handler.ts), matched first, so a
-    # post or reply missing a required field is refused as production refuses it.
-    - match: { action: post, topic: null }
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
       error: "Missing required field: 'topic'"
-    - match: { action: post, participants: null }
+    - match: { participants: null }
       error: "Missing required field: 'participants' (non-empty string array)"
-    - match: { action: post, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: post, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: reply, thread_id: null }
+    - match: {}
+      return: { thread_id: "{{thread:consult}}", message_id: 7a1b2c3d-30d0-4e5f-8a9b-000000000003 }
+  bullpen-reply:
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: get_thread, thread_id: null }
+    - match: {}
+      return: { thread_id: "{{thread:consult}}", message_id: 7a1b2c3d-30d0-4e5f-8a9b-000000000003 }
+  bullpen-read:
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: get_thread }
+    - match: {}
       return:
         thread:
           id: "{{thread:consult}}"
@@ -89,8 +95,9 @@ tool_stubs:
                 1. {{day:next-tuesday}} at 2:00 PM ET (11:00 AM PT their time) - hold placed
                 2. {{day:next-thursday}} at 1:00 PM ET (10:00 AM PT their time) - hold placed
               Rules: loaded 0 active (0 total); applied: none
+  bullpen-close:
     - match: {}
-      return: { thread_id: "{{thread:consult}}", message_id: 7a1b2c3d-30d0-4e5f-8a9b-000000000003 }
+      return: { thread_id: "{{thread:consult}}", status: closed }
   ceo-inbox-read:
     - match: { message_id: 18f3c2a9e1d7b450 }
       return:
@@ -168,8 +175,7 @@ expected_behaviors:
     weight: important
     description: Does not open another consult thread.
     check:
-      not_called: [bullpen]
-      with: { action: post }
+      not_called: [bullpen-post]
 failure_modes:
   - Drafts without calling memory-query, or calls it after drafting
   - Paraphrases or reformats the slot strings, or converts the time zones itself

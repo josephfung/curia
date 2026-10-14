@@ -73,36 +73,40 @@ tool_stubs:
   contact-register:
     - match: {}
       return: { contact_id: "{{contact:priya}}", display_name: Priya Raman, contact_confidence: 0.9, created: false, verified: true }
-  bullpen:
-    # The handler's own validation errors (skills/bullpen/handler.ts), matched first, so a
-    # post or reply missing a required field is refused as production refuses it.
-    - match: { action: post, topic: null }
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
       error: "Missing required field: 'topic'"
-    - match: { action: post, participants: null }
+    - match: { participants: null }
       error: "Missing required field: 'participants' (non-empty string array)"
-    - match: { action: post, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: post, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: reply, thread_id: null }
-      error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
-      error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
-      error: "Missing required field: 'content'"
-    - match: { action: get_thread, thread_id: null }
-      error: "Missing required field: 'thread_id'"
-    - match: { action: post }
+    - match: {}
       return: { thread_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-reply:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
     - match: {}
       return: { thread_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000003 }
+  bullpen-read:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+  bullpen-close:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30c0-4e5f-8a9b-000000000001, status: closed }
 expected_behaviors:
   - id: consults_calendar
     weight: critical
     description: Posts a CONSULT REQUEST on the bullpen with the calendar specialist as a participant.
     check:
-      called: bullpen
-      with: { action: post }
+      called: bullpen-post
       contains: { participants: calendar, content: CONSULT REQUEST }
   - id: no_blind_draft
     weight: critical
@@ -135,8 +139,8 @@ expected_behaviors:
     weight: important
     description: Passes the email's message id as the bullpen post's source_message_id.
     check:
-      called: bullpen
-      with: { action: post, source_message_id: msg-30c-sched }
+      called: bullpen-post
+      with: { source_message_id: msg-30c-sched }
   - id: no_drafted_label_while_parked
     weight: important
     description: Does not apply the ✍️ Drafted label to the parked email (no draft exists).

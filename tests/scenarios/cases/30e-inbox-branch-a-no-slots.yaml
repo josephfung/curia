@@ -42,26 +42,32 @@ inbound:
       - {{day:next-monday+7}} at 10:00 AM ET - earliest available
       - {{day:next-monday+8}} at 2:00 PM ET - also available
 tool_stubs:
-  bullpen:
-    # The handler's own validation errors (skills/bullpen/handler.ts), matched first, so a
-    # post or reply missing a required field is refused as production refuses it.
-    - match: { action: post, topic: null }
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
       error: "Missing required field: 'topic'"
-    - match: { action: post, participants: null }
+    - match: { participants: null }
       error: "Missing required field: 'participants' (non-empty string array)"
-    - match: { action: post, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: post, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: reply, thread_id: null }
+    - match: {}
+      return: { thread_id: "{{thread:consult}}", message_id: 7a1b2c3d-30e0-4e5f-8a9b-000000000003 }
+  bullpen-reply:
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: get_thread, thread_id: null }
+    - match: {}
+      return: { thread_id: "{{thread:consult}}", message_id: 7a1b2c3d-30e0-4e5f-8a9b-000000000003 }
+  bullpen-read:
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: get_thread }
+    - match: {}
       return:
         thread:
           id: "{{thread:consult}}"
@@ -83,8 +89,9 @@ tool_stubs:
               Nearest:
                 - {{day:next-monday+7}} at 10:00 AM ET - earliest available
                 - {{day:next-monday+8}} at 2:00 PM ET - also available
+  bullpen-close:
     - match: {}
-      return: { thread_id: "{{thread:consult}}", message_id: 7a1b2c3d-30e0-4e5f-8a9b-000000000003 }
+      return: { thread_id: "{{thread:consult}}", status: closed }
   ceo-inbox-read:
     - match: { message_id: 18f3f6d2b4a0e783 }
       return:

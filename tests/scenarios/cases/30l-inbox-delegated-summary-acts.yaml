@@ -89,27 +89,34 @@ tool_stubs:
   task-create:
     - match: {}
       return: { task_id: 0e5d6c7b-1a2b-4c3d-8e9f-000000000001, title: (created), status: open, owner: curia, priority: 3, tags: [], created_at: "2026-10-01T12:00:00-04:00", displayTimezone: America/Toronto }
-  bullpen:
-    # The handler's own validation errors (skills/bullpen/handler.ts), matched first, so a
-    # post or reply missing a required field is refused as production refuses it.
-    - match: { action: post, topic: null }
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
       error: "Missing required field: 'topic'"
-    - match: { action: post, participants: null }
+    - match: { participants: null }
       error: "Missing required field: 'participants' (non-empty string array)"
-    - match: { action: post, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: post, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: reply, thread_id: null }
-      error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
-      error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
-      error: "Missing required field: 'content'"
-    - match: { action: get_thread, thread_id: null }
-      error: "Missing required field: 'thread_id'"
     - match: {}
       return: { thread_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000ff, message_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000fe, deduplicated: false }
+  bullpen-reply:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000ff, message_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000fe, deduplicated: false }
+  bullpen-read:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+  bullpen-close:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000ff, status: closed }
 expected_behaviors:
   - id: reads_the_board_message
     weight: critical
@@ -127,7 +134,7 @@ expected_behaviors:
     weight: important
     description: Drafts, archives, labels and files nothing; the request was to read and report.
     check:
-      not_called: [ceo-inbox-draft-reply, ceo-inbox-draft-compose, ceo-inbox-archive, ceo-inbox-label, ceo-inbox-update-folders, bullpen]
+      not_called: [ceo-inbox-draft-reply, ceo-inbox-draft-compose, ceo-inbox-archive, ceo-inbox-label, ceo-inbox-update-folders, bullpen-post, bullpen-reply]
   - id: surfaces_conflict
     weight: important
     description: Notes the 14-versus-16-month runway discrepancy as something needing the principal's answer.

@@ -48,9 +48,15 @@ tool_stubs:
   contact-register:
     - match: {}
       return: { contact_id: 6c1d2e3f-4a5b-4c6d-8e7f-30f000000001, display_name: Product Weekly, contact_confidence: 0.5, created: true, verified: true }
-  bullpen:
+  bullpen-post:
     - match: {}
       return: { thread_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-reply:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-close:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000001, status: closed }
 expected_behaviors:
   - id: completes_drain_task
     weight: critical

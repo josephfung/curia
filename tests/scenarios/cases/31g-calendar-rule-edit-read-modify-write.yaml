@@ -67,7 +67,7 @@ expected_behaviors:
     weight: critical
     description: Does not search for free time, place holds, or open a bullpen thread.
     check:
-      not_called: [calendar-find-free-time, calendar-create-hold, bullpen]
+      not_called: [calendar-find-free-time, calendar-create-hold, bullpen-post, bullpen-reply]
 failure_modes:
   - Stores only the edited rule, dropping the other two
   - Reactivates the paused rule while rewriting the array

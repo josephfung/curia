@@ -46,27 +46,34 @@ tool_stubs:
             folders: [INBOX, UNREAD]
             attachments: []
             snippet: Are we still on for Thursday?
-  bullpen:
-    # The handler's own validation errors (skills/bullpen/handler.ts), matched first, so a
-    # post or reply missing a required field is refused as production refuses it.
-    - match: { action: post, topic: null }
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
       error: "Missing required field: 'topic'"
-    - match: { action: post, participants: null }
+    - match: { participants: null }
       error: "Missing required field: 'participants' (non-empty string array)"
-    - match: { action: post, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: post, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: reply, thread_id: null }
-      error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
-      error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
-      error: "Missing required field: 'content'"
-    - match: { action: get_thread, thread_id: null }
-      error: "Missing required field: 'thread_id'"
     - match: {}
       return: { thread_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000ff, message_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000fe, deduplicated: false }
+  bullpen-reply:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000ff, message_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000fe, deduplicated: false }
+  bullpen-read:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+  bullpen-close:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-3000-4e5f-8a9b-0000000000ff, status: closed }
 expected_behaviors:
   - id: runs_both_in_order
     weight: critical
@@ -77,7 +84,7 @@ expected_behaviors:
     weight: critical
     description: Lists no unread mail and archives, labels, marks, drafts or escalates nothing.
     check:
-      not_called: [ceo-inbox-list, ceo-inbox-archive, ceo-inbox-label, ceo-inbox-mark-read, ceo-inbox-update-folders, ceo-inbox-draft-reply, ceo-inbox-draft-compose, bullpen]
+      not_called: [ceo-inbox-list, ceo-inbox-archive, ceo-inbox-label, ceo-inbox-mark-read, ceo-inbox-update-folders, ceo-inbox-draft-reply, ceo-inbox-draft-compose, bullpen-post, bullpen-reply]
   - id: reports
     weight: important
     description: Reports the run with scheduler-report.

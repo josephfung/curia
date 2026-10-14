@@ -52,9 +52,9 @@ tool_stubs:
           - { start: "{{time:next-monday+1 09:00}}", end: "{{time:next-monday+1 12:00}}" }
           - { start: "{{time:next-monday+3 13:00}}", end: "{{time:next-monday+3 17:00}}" }
         displayTimezone: "{{timezone}}"
-  bullpen:
+  bullpen-read:
     - agent: calendar
-      match: { action: get_thread }
+      match: {}
       return:
         thread:
           id: "{{thread:consult}}"
@@ -97,9 +97,8 @@ expected_behaviors:
     weight: critical
     description: Replies on the consult thread with a CONSULT REPLY whose Result is confirmed.
     check:
-      called: bullpen
+      called: bullpen-reply
       success: true
-      with: { action: reply }
       contains: { content: "Result: confirmed" }
   - id: confirmed_reply_shape
     weight: important

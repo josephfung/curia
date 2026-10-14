@@ -84,7 +84,7 @@ expected_behaviors:
     weight: critical
     description: Posts nothing to the bullpen.
     check:
-      not_called: [bullpen]
+      not_called: [bullpen-post, bullpen-reply]
   - id: no_prompted_guard
     weight: critical
     description: Does not store the prompted guard.

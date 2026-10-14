@@ -78,8 +78,7 @@ expected_behaviors:
     weight: critical
     description: Posts the debrief prompt exactly once; the failed guard write does not trigger a second post.
     check:
-      called: bullpen
-      with: { action: post }
+      called: bullpen-post
       success: true
       min: 1
       max: 1

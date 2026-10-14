@@ -88,8 +88,7 @@ expected_behaviors:
     weight: critical
     description: Opens exactly one bullpen thread, to the coordinator.
     check:
-      called: bullpen
-      with: { action: post }
+      called: bullpen-post
       contains: { participants: coordinator }
       success: true
       min: 1

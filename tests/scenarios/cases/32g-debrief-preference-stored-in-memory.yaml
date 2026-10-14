@@ -48,7 +48,7 @@ expected_behaviors:
     weight: critical
     description: Runs no detection or lifecycle work (no calendar scan, task or bullpen post).
     check:
-      not_called: [calendar-list-events, task-create, bullpen]
+      not_called: [calendar-list-events, task-create, bullpen-post, bullpen-reply]
   - id: confirms
     weight: important
     description: Confirms that debriefs for the weekly Northwind Ventures check-in will be skipped from now on.

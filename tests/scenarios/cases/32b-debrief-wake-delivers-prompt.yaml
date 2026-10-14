@@ -85,8 +85,7 @@ expected_behaviors:
     weight: critical
     description: Opens exactly one bullpen thread, with the coordinator as a participant.
     check:
-      called: bullpen
-      with: { action: post }
+      called: bullpen-post
       contains: { participants: coordinator }
       success: true
       min: 1
@@ -102,7 +101,7 @@ expected_behaviors:
     weight: important
     description: The bullpen post comes before the guard write and the task update.
     check:
-      order: [bullpen, config-store, task-update]
+      order: [bullpen-post, config-store, task-update]
   - id: hands_to_principal
     weight: critical
     description: Updates the task to owner ceo with a wake_at for the reminder.

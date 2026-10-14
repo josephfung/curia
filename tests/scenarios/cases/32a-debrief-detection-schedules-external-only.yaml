@@ -218,7 +218,7 @@ expected_behaviors:
     weight: critical
     description: Posts nothing to the bullpen and drafts nothing; a detection run prompts no one.
     check:
-      not_called: [bullpen, email-draft-save]
+      not_called: [bullpen-post, bullpen-reply, email-draft-save]
   - id: report_counts
     weight: nice-to-have
     description: >

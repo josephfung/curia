@@ -64,26 +64,27 @@ config-store:
   - agent: meeting-debrief
     match: { action: store }
     return: { stored: true, namespace: debrief }
-# The real tool's input checks, in its order (skills/bullpen/handler.ts): a post needs a
-# topic, participants and content; a reply needs content.
-bullpen:
+# The real tools' input checks, in their order (skills/bullpen/tools/bullpen-post and
+# bullpen-reply): a post needs a topic, participants and content; a reply needs content.
+bullpen-post:
   - agent: meeting-debrief
-    match: { action: post, topic: null }
+    match: { topic: null }
     error: "Missing required field: 'topic'"
   - agent: meeting-debrief
-    match: { action: post, participants: null }
+    match: { participants: null }
     error: "Missing required field: 'participants' (non-empty string array)"
   - agent: meeting-debrief
-    match: { action: post, content: null }
+    match: { content: null }
     error: "Missing required field: 'content'"
   - agent: meeting-debrief
-    match: { action: post }
+    match: {}
     return: { thread_id: 3c9d0e1f-0000-4000-8000-00000000d0b1, message_id: 3c9d0e1f-0000-4000-8000-00000000d0b2 }
+bullpen-reply:
   - agent: meeting-debrief
-    match: { action: reply, content: null }
+    match: { content: null }
     error: "Missing required field: 'content'"
   - agent: meeting-debrief
-    match: { action: reply }
+    match: {}
     return: { thread_id: 3c9d0e1f-0000-4000-8000-00000000d0b1, message_id: 3c9d0e1f-0000-4000-8000-00000000d0b3 }
 scheduler-report:
   - agent: meeting-debrief

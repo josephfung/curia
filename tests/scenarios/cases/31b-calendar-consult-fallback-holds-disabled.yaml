@@ -82,9 +82,9 @@ tool_stubs:
         display: "(not held)"
         displayTimezone: "{{timezone}}"
         reason: holds disabled
-  bullpen:
+  bullpen-read:
     - agent: calendar
-      match: { action: get_thread }
+      match: {}
       return:
         thread:
           id: "{{thread:consult}}"
@@ -106,9 +106,8 @@ expected_behaviors:
     weight: critical
     description: Replies on the consult thread with a CONSULT REPLY whose Result is ok.
     check:
-      called: bullpen
+      called: bullpen-reply
       success: true
-      with: { action: reply }
       contains: { content: "Result: ok" }
   - id: no_slot_marked_held
     weight: critical

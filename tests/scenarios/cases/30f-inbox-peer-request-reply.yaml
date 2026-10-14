@@ -118,26 +118,32 @@ tool_stubs:
         date: 1791790000
         labels: [INBOX]
         attachments: []
-  bullpen:
-    # The handler's own validation errors (skills/bullpen/handler.ts), matched first, so a
-    # post or reply missing a required field is refused as production refuses it.
-    - match: { action: post, topic: null }
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
       error: "Missing required field: 'topic'"
-    - match: { action: post, participants: null }
+    - match: { participants: null }
       error: "Missing required field: 'participants' (non-empty string array)"
-    - match: { action: post, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: post, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: reply, thread_id: null }
+    - match: {}
+      return: { thread_id: "{{thread:peer}}", message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000003 }
+  bullpen-reply:
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: get_thread, thread_id: null }
+    - match: {}
+      return: { thread_id: "{{thread:peer}}", message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000003 }
+  bullpen-read:
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: get_thread }
+    - match: {}
       return:
         thread:
           id: "{{thread:peer}}"
@@ -153,15 +159,15 @@ tool_stubs:
               Need: has Alice Chen (alice.chen@acmecorp.example.test) emailed the principal about the Acme pilot in the last 7 days? One line per email: date and subject.
               Scope: the principal's inbox, last 7 days
               Constraints: do not quote message bodies; the answer goes into an internal debrief note
+  bullpen-close:
     - match: {}
-      return: { thread_id: "{{thread:peer}}", message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000003 }
+      return: { thread_id: "{{thread:peer}}", status: closed }
 expected_behaviors:
   - id: replies_on_thread
     weight: critical
-    description: Replies on the thread with bullpen action reply, in the PEER REPLY shape.
+    description: Replies on the thread with bullpen-reply, in the PEER REPLY shape.
     check:
-      called: bullpen
-      with: { action: reply }
+      called: bullpen-reply
       contains: { content: PEER REPLY }
   - id: no_triage
     weight: critical
@@ -172,21 +178,19 @@ expected_behaviors:
     weight: important
     description: The thread reply lists both Alice Chen emails (success criteria; kickoff date).
     check:
-      called: bullpen
-      with: { action: reply }
+      called: bullpen-reply
       contains: { content: kickoff }
   - id: keeps_constraint
     weight: important
     description: The thread reply does not quote message bodies (no churn figure).
     check:
-      not_called: [bullpen]
+      not_called: [bullpen-post, bullpen-reply]
       contains: { content: "4.2%" }
   - id: no_new_thread
     weight: important
     description: Answers on the existing thread rather than opening a new one.
     check:
-      not_called: [bullpen]
-      with: { action: post }
+      not_called: [bullpen-post]
 failure_modes:
   - Starts an inbox triage instead of answering
   - Answers in its final response instead of on the thread

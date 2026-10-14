@@ -94,26 +94,32 @@ tool_stubs:
   ceo-inbox-draft-reply:
     - match: { reply_to_message_id: msg-30n-sched }
       return: { draft_id: draft-30n-1, subject: "Re: Q4 partnership — 30 min next week?", to: [{ name: Priya Raman, email: priya.raman@lumenworks.example.test }], cc: [], already_exists: false }
-  bullpen:
-    # The handler's own validation errors (skills/bullpen/handler.ts), matched first.
-    - match: { action: post, topic: null }
+    # The handler's own validation errors (skills/_shared/bullpen.ts and skills/bullpen/tools/), matched first.
+  bullpen-post:
+    - match: { topic: null }
       error: "Missing required field: 'topic'"
-    - match: { action: post, participants: null }
+    - match: { participants: null }
       error: "Missing required field: 'participants' (non-empty string array)"
-    - match: { action: post, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: post, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: reply, thread_id: null }
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b1, message_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b2, deduplicated: false }
+  bullpen-reply:
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
-    - match: { action: reply, content: null }
+    - match: { content: null }
       error: "Missing required field: 'content'"
-    - match: { action: reply, content: "" }
+    - match: { content: "" }
       error: "Missing required field: 'content'"
-    - match: { action: get_thread, thread_id: null }
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b1, message_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b2, deduplicated: false }
+  bullpen-read:
+    - match: { thread_id: null }
       error: "Missing required field: 'thread_id'"
     # The consult thread: the request, and no reply.
-    - match: { action: get_thread }
+    - match: {}
       return:
         thread:
           id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b1
@@ -136,8 +142,9 @@ tool_stubs:
                 1. {{day:next-tuesday}} at 2:30 PM ET - hold placed
                 2. {{day:next-wednesday}} at 3:00 PM ET - hold placed
               Rules: loaded 0 active (0 total); applied: none
+  bullpen-close:
     - match: {}
-      return: { thread_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b1, message_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b2, deduplicated: false }
+      return: { thread_id: 7a1b2c3d-30d0-4e5f-8a9b-0000000003b1, status: closed }
 expected_behaviors:
   - id: first_slot_verbatim
     weight: critical

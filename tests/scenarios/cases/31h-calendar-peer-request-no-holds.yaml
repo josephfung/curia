@@ -57,9 +57,9 @@ tool_stubs:
         freeWindows:
           - { start: "{{time:next-monday+3 14:00}}", end: "{{time:next-monday+3 17:00}}" }
         displayTimezone: "{{timezone}}"
-  bullpen:
+  bullpen-read:
     - agent: calendar
-      match: { action: get_thread }
+      match: {}
       return:
         thread:
           id: "{{thread:peer}}"
@@ -76,9 +76,8 @@ expected_behaviors:
     weight: critical
     description: Answers on the thread with a bullpen reply in the PEER REPLY shape.
     check:
-      called: bullpen
+      called: bullpen-reply
       success: true
-      with: { action: reply }
       contains: { content: "PEER REPLY" }
   - id: no_scheduling_writes
     weight: critical
@@ -100,7 +99,7 @@ expected_behaviors:
     weight: nice-to-have
     description: Does not close the asker's thread (no close_after on the reply).
     check:
-      not_called: [bullpen]
+      not_called: [bullpen-reply]
       with: { close_after: true }
 failure_modes:
   - Places a hold on Thursday afternoon for the Acme follow-up

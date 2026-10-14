@@ -127,7 +127,7 @@ expected_behaviors:
     weight: critical
     description: Does not ask the coordinator over the bullpen to send the email; the principal did not say to send it.
     check:
-      not_called: [bullpen]
+      not_called: [bullpen-post, bullpen-reply]
   - id: records_child_tasks
     weight: critical
     description: Records the follow-up actions as child tasks of the Acme debrief task.

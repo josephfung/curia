@@ -57,9 +57,9 @@ tool_stubs:
         releasedHolds: []
         releaseWarnings: []
         warnings: []
-  bullpen:
+  bullpen-read:
     - agent: calendar
-      match: { action: get_thread }
+      match: {}
       return:
         thread:
           id: "{{thread:invite}}"
@@ -92,9 +92,8 @@ expected_behaviors:
     weight: critical
     description: Replies on the consult thread with a CONSULT REPLY whose Result is invite_responded.
     check:
-      called: bullpen
+      called: bullpen-reply
       success: true
-      with: { action: reply }
       contains: { content: "invite_responded" }
   - id: passes_hold_criteria
     weight: nice-to-have

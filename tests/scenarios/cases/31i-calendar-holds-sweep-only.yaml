@@ -49,7 +49,7 @@ expected_behaviors:
     weight: critical
     description: Posts nothing to the bullpen and makes no calendar or memory write.
     check:
-      not_called: [bullpen, calendar-create-hold, calendar-create-event, calendar-update-event, calendar-delete-event, calendar-respond-to-invite, memory-store]
+      not_called: [bullpen-post, bullpen-reply, calendar-create-hold, calendar-create-event, calendar-update-event, calendar-delete-event, calendar-respond-to-invite, memory-store]
   - id: report_has_counts
     weight: important
     description: The report's context carries the expired count.
