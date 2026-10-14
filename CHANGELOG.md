@@ -24,6 +24,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Backlog line** — principal turns carry counts of pending approvals, decay warnings and principal-owned tasks. (#1954, spec 02)
 - **`agent.task` (public API)** — optional `principalBacklog` carries those counts; never part of `content`. (#1954)
 - **Scenario case 20** — the coordinator raises the oldest waiting item after handling the request. (#1954)
+- **Scenario cases 20b–20c, 33i–33j** — principal answers to contacts' tasks route back; the grant scan files nothing itself. (#2129)
 - **Smoke `timeout_seconds`** — a case can lengthen its per-turn wait; six multi-specialist cases now wait 300s. (#1954)
 - **`agent.response` (public API)** — optional `channelId` names the channel of the task it answers. (#2091)
 - **Scenario cases 17a–17b** — scheduled jobs send the principal one message when asked, otherwise none. (#2091)
@@ -223,6 +224,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Fixed
 
 - **`email-reply`** — `cc` resolves `"principal"` and contact IDs; non-address entries are refused, nothing sent. (#2131)
+- **contacts dedup reviews and grant recommendations** — now reach the principal as tasks they own; answers route back. (#2129)
 - **calendar unregistered calendars** — reported in plain text; the output sanitizer stripped the old tag. (#2025)
 - **Drive sharing** — the principal always gets edit access; others get a role fitting the content.
 - **Smoke case Speaking Engagement Intake** — gives Curia a fictional invitation to read, so it stops researching SaaStr online. (#2087)

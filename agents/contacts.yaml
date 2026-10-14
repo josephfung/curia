@@ -152,10 +152,11 @@ system_prompt: |
   1. Use contact-lookup to load both contacts in full (IDs are in the task description).
   2. Apply the primary contact heuristic below to identify which would be primary.
   3. Call contact-merge with dry_run: true to get the golden record preview.
-  4. Hand the question to the principal: task-update the review task with owner:
-     "ceo" and a progress_note showing both contacts and the merge result, asking
-     merge, keep separate, or decide later. No wake_at: their answer comes back to you
-     by delegation, with the task id. Example progress_note:
+  4. Hand the question to the principal in one task-update on the review task: owner
+     "ceo", status "waiting", and a progress_note showing both contacts and the merge
+     result, asking merge, keep separate, or decide later. Then stop: no wake_at and no
+     later note: the principal sees only the last one. Their answer comes back to you
+     by delegation. Example progress_note:
      "Two contacts look like the same person:
      - Jenna Torres (CFO, verified email jenna@acme.com)
      - J. Torres (no role, email jenna@acme.com)

@@ -136,11 +136,13 @@ expected_behaviors:
   - id: note_asks_to_confirm
     weight: critical
     description: >
-      The progress_note of the task-update that hands the task to the principal presents
-      both contacts (Alice Smith and A. Smith), says what the merge would produce, and asks
-      the principal whether to merge them. Judge that note, not the reply: a reply of
-      NO_REPLY is fine.
+      The last progress_note written to the task (the latest task-update call that carries
+      one) presents both contacts (Alice Smith and A. Smith), says what the merge would
+      produce, and asks the principal whether to merge them: the principal is shown only
+      the last note. A later note that only says the task is waiting, or summarizes, fails.
+      Judge the notes, not the reply: a reply of NO_REPLY is fine.
 failure_modes:
+  - Writes the question, then overwrites it with a later status note
   - Leaves the question in a reply or a note on a task nobody is shown (owner still curia)
   - Merges the two contacts without asking
   - Marks them as not duplicates without being told
