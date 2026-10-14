@@ -86,6 +86,17 @@ bullpen-reply:
   - agent: meeting-debrief
     match: {}
     return: { thread_id: 3c9d0e1f-0000-4000-8000-00000000d0b1, message_id: 3c9d0e1f-0000-4000-8000-00000000d0b3 }
+# The prompt thread the guard in 32d and 32e names: the request to the coordinator, and
+# no answer from the principal yet.
+bullpen-read:
+  - agent: meeting-debrief
+    match: { thread_id: 3c9d0e1f-0000-4000-8000-00000000d0a1 }
+    return:
+      thread_id: 3c9d0e1f-0000-4000-8000-00000000d0a1
+      thread: { id: 3c9d0e1f-0000-4000-8000-00000000d0a1, topic: "Debrief prompt: Acme partnership review", status: open, participants: [meeting-debrief, coordinator] }
+      messages:
+        - sender: meeting-debrief
+          content: "@coordinator Please send the principal a debrief prompt for Acme partnership review."
 scheduler-report:
   - agent: meeting-debrief
     match: {}
