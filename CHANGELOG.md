@@ -15,6 +15,9 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Added
 
+- **Specialist scenario cases** — `agent:` and `from: delegate` fire tasks straight at specialists; 44 cases cover four. (#2025)
+- **Scenario `--overlay`** — runs a deployment's agents and cases over core, as its image layers them. (#2025)
+- **`measureAgentContext`** — the agent budget measurement, shared so deployments can budget their own agents. (#2025)
 - **Scenario case 06b** — a bullpen thread asking the coordinator to Signal the principal gets that send. (#1954)
 - **Scenario task wakes** — `from: task-wake` fires a parked task's wake; case 22 checks it resumes from progress. (#1954)
 - **Agent YAML `delegate_when` (public API)** — optional routing line shown in the specialist roster instead of `description`. (#1954)
@@ -92,6 +95,8 @@ bus event types) are noted explicitly even in the `0.x` range.
 ### Changed
 
 - **`tool.json` (public API): `bullpen` split** — now `bullpen-post`, `-reply`, `-read`, `-close`; each schema requires its own fields. (#2126)
+- **Specialist prompts** — calendar, meeting-debrief, contacts and ceo-inbox trimmed 17–27% per ADR-046; all budgeted. (#2025)
+- **ceo-inbox task wakes** — consult-timeout, drain and follow-up steps arrive with the wake, not the prompt. (#2025)
 - **Injected prompt blocks** — bullpen rule names requested sends; security and reply-shaped guidance say what to do. (#1954)
 - **`tasks` and `documents` skills** — wake-only guidance moved onto the task wake; always-on SKILL.md text 6.2k → 3.7k chars. (#1954)
 - **Specialist roster** — diagnostics, meeting-debrief and setup-wizard say when to delegate to them; 2.7k → 1.9k chars. (#1954)
@@ -214,6 +219,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Fixed
 
+- **calendar unregistered calendars** — reported in plain text; the output sanitizer stripped the old tag. (#2025)
 - **Drive sharing** — the principal always gets edit access; others get a role fitting the content.
 - **Smoke case Speaking Engagement Intake** — gives Curia a fictional invitation to read, so it stops researching SaaStr online. (#2087)
 - **Scenario 06 bullpen stub** — a reply missing `content` or `thread_id` gets the handler's error, not "posted". (#2098)

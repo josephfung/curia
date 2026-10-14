@@ -27,8 +27,8 @@ log.
 | 7: backlog line for proactive surfacing | Merged (2026-10-11, #2107) | 8,652 | ~3,703 / 3,800 |
 | 8: routing-oriented roster | Merged (2026-10-12, #2109) | 8,652 (unchanged; roster 2,719 → 1,883) | ~3,703 / 3,800 |
 | 9: wake-only SKILL.md content | Merged (2026-10-13, #2122) | 8,652 (unchanged; SKILL.md 6,157 → 3,715) | ~3,092 / 3,200 |
-| 10: negation pass on the injected blocks | In review (2026-10-13) | 8,652 (unchanged; injected blocks only) | ~3,092 / 3,200 |
-| Final phase | Not started | — | — |
+| 10: negation pass on the injected blocks | Merged (2026-10-13, #2124) | 8,652 (unchanged; injected blocks only) | ~3,092 / 3,200 |
+| Final phase | In progress (2026-10-13; #2025, curia-deploy#276) | — (specialists only) | — |
 
 **PR 1 (2026-10-07).** Deleted Data protection, Reporting's second paragraph, "Decide,
 don't drop", Addresses and accounts, Low-trust senders, the roster pointer, "When a
@@ -321,6 +321,22 @@ Behavior (baseline log): 06b passed 15 of 15, 06 looped on a content-less reply 
 runs against main's 2 of 10, and the red team's external cohort scored 167 of 174 against
 main's 164.
 
+**Final phase (2026-10-14, #2025 and curia-deploy#276).**
+- **Specialist cases came first.**
+  - The scenario runner can fire a task straight at a specialist (`agent:` with a `delegate`, `bullpen`, `scheduler` or `task-wake` inbound).
+  - Each agent got its cases before any cut: ceo-inbox 30a–p, calendar 31a–l, meeting-debrief 32a–h, contacts 33a–h.
+  - Each case was baselined on main's prompt, and the cuts were A/B'd against main's YAML through `--overlay`.
+
+| Agent | `system_prompt` chars | Always-on tokens | Notes |
+|---|---:|---:|---|
+| ceo-inbox | 60,090 → 49,037 | 16,416 → 13,653 | The task-wake steps ride on the wake (rung 2). Branch A stayed: on the wake it raised the #2126 loop |
+| calendar | 28,727 → 23,897 | 7,187 → 5,984 | Two cuts reverted for call patterns; the unregistered-calendar flag is plain text |
+| meeting-debrief | 18,627 → 14,498 | 4,670 → 3,635 | Detection improved (fewer re-created tasks) |
+| contacts | 15,595 → 11,423 | 4,831 → 3,788 | Only dead or repeated text; every rewrite of a live section was reverted |
+
+- **The custom agents** (social-media, writing-scout, t2125-expense-tracker, essay-editor, security-triage) and their roster lines are in curia-deploy#276, run on this runner over the deployment's `custom/`.
+- **The #2126 loop gates nine cases.** Specialists hit the content-less bullpen reply loop more often than the coordinator does (calendar 26 of 100 runs on main). Nine cases that end in a bullpen reply run on demand until #2126 lands.
+
 ### Lessons so far
 
 These apply to every later PR and to the final phase. They are also posted on #2025 and
@@ -379,6 +395,27 @@ curia-deploy#276.
     as deleting the never-ask bullet above it, and the note went missing in 2 of 10 runs. The
     sentence that triggers an action is load-bearing in its exact words; change it only with
     its own A/B.
+14. **A roster line thinner than the description makes the coordinator do the groundwork.**
+    curia-deploy's first `delegate_when` lines for essay-editor and writing-scout dropped
+    what those agents load for themselves. The coordinator then gathered the writing
+    mandate and preferences itself before delegating, in up to 6 of 10 runs. Saying "it
+    loads X itself" or "a short brief is enough" removed it. A line that only said "not for
+    requests" stopped the coordinator delegating questions the agent does answer.
+15. **Where injected guidance sits can matter as much as what it says.** ceo-inbox's
+    consult-reply steps, word for word, raised the #2126 loop:
+    - in the pending-thread block, which is rebuilt before every model call: 8 of 30 runs
+      against 1 of 30;
+    - in the wake message: 4 of 22 against 0 of 25 the same day.
+    Its task-wake steps, moved the same way, were level. A/B each placement separately.
+16. **On specialists, only removing dead or repeated text was neutral.** For contacts,
+    calendar and t2125, every rewrite of a live section changed which tools the model called
+    while pass rates held:
+    - contacts: identity-status updates went from 10/10 to 5/10, retry tasks appeared, and
+      one run tried a Signal send;
+    - calendar: no-op hold calls appeared;
+    - t2125: Drive searches went from 2 of 10 runs to 10 of 10 after a *stale* section
+      was cut.
+    Compare call counts over 10 runs, not only behaviors.
 
 ## Goal
 
