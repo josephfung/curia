@@ -121,6 +121,7 @@ import type { ErrorType } from '../errors/types.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
   addressOrReferenceError,
+  emptyRecipientListError,
   findRetiredRecipientField,
   formatResolvedRecipient,
   parseRecipientReference,
@@ -1007,7 +1008,14 @@ export class ExecutionLayer {
 
     for (const field of skill.references) {
       const takesAddresses = skill.addresses?.includes(field) ?? false;
-      for (const entry of entriesOf(input[field])) {
+      const value = input[field];
+      // `cc: ","` is not `cc: ""` (sender-only on email-reply). Refuse it here so no
+      // approval is filed for a reply the handler would refuse (#2131).
+      if (takesAddresses && typeof value === 'string' && value.trim() && entriesOf(value).length === 0) {
+        skillLogger.info({ toolName, field }, 'send recipient refused: an explicit list with no entries (#2131)');
+        return { ok: false, error: emptyRecipientListError(field) };
+      }
+      for (const entry of entriesOf(value)) {
         if (resolved.has(entry.trim())) continue;
         const parsed = parseRecipientReference(entry);
         const isReference = parsed !== null;

@@ -279,6 +279,17 @@ export function addressOrReferenceError(value: string, channel: string, field: s
   );
 }
 
+/**
+ * Refusal for an explicit list with no entries (`cc: ","`). It is not read as
+ * `cc: ""`: on email-reply that means sender-only, which the agent did not ask for.
+ */
+export function emptyRecipientListError(field: string): string {
+  return (
+    `${field} has no entries. Pass addresses, contact IDs or "${PRINCIPAL_RECIPIENT_ALIAS}", ` +
+    `or "" for no ${field}. Nothing was sent.`
+  );
+}
+
 /** The contact's designated primary for the channel, if it has one. */
 function primaryFor(contact: Contact, channel: string): string | null {
   if (channel === 'email') return contact.primaryEmail;

@@ -28,6 +28,7 @@ import { emailAccountIdFromInput, replyToMessageIdFromInput } from '../../../../
 import { UnknownEmailAccountError, type OutboundGateway } from '../../../../src/skills/outbound-gateway.js';
 import {
   addressOrReferenceError,
+  emptyRecipientListError,
   isSendableIdentifier,
   parseRecipientReference,
 } from '../../../../src/skills/_shared/recipient-reference.js';
@@ -56,12 +57,22 @@ async function resolveCcList(
   raw: string,
   log: ToolContext['log'],
 ): Promise<{ cc: string } | { error: string }> {
+  const entries = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  // A stray empty segment beside real entries (a trailing comma) is harmless; a
+  // list with none at all is not sender-only, which is `cc: ""`.
+  if (entries.length === 0) return { error: emptyRecipientListError('cc') };
   const addresses: string[] = [];
-  for (const entry of raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)) {
+  // Literal addresses and resolved references share one list, so a person named
+  // twice (`principal, <their address>`, in either order) is copied once.
+  const add = (address: string): void => {
+    const key = address.toLowerCase();
+    if (!addresses.some((addr) => addr.toLowerCase() === key)) addresses.push(address);
+  };
+  for (const entry of entries) {
     const shapeError = addressOrReferenceError(entry, 'email', 'cc');
     if (shapeError) return { error: shapeError };
     if (parseRecipientReference(entry) === null) {
-      addresses.push(entry);
+      add(entry);
       continue;
     }
     const resolved = await gateway.resolveRecipientReference('email', entry, { field: 'cc' });
@@ -71,9 +82,7 @@ async function resolveCcList(
       log.warn({ field: 'cc' }, 'email-reply: verified email identity is not a valid address — refusing (#2131)');
       return { error: "The cc contact's verified email identity is not a valid address, so nothing was sent. It needs correcting in Contacts." };
     }
-    // A reference that names an address already listed adds nothing.
-    const key = resolved.identifier.toLowerCase();
-    if (!addresses.some((addr) => addr.toLowerCase() === key)) addresses.push(resolved.identifier);
+    add(resolved.identifier);
   }
   return { cc: addresses.join(', ') };
 }

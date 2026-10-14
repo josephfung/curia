@@ -672,6 +672,22 @@ describe('email-reply cc by reference (#2131)', () => {
     expect(h.nylasSend).not.toHaveBeenCalled();
   });
 
+  it('an explicit cc with no entries is refused before the gates, not read as sender-only', async () => {
+    const h = await harness();
+    const request = vi.fn().mockResolvedValue({ created: true, shortRef: 'r-0', notificationSent: true });
+    const result = await layer(h, 65, { approvalTrigger: { request } as never }).invoke(
+      'email-reply',
+      { reply_to_message_id: 'thread-msg-1', body: 'Yes.', cc: ',' },
+      undefined,
+      origin,
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toMatch(/cc has no entries/);
+    expect(request).not.toHaveBeenCalled();
+    expect(h.nylasGetMessage).not.toHaveBeenCalled();
+    expect(h.nylasSend).not.toHaveBeenCalled();
+  });
+
   it('literal thread participants do not count toward the reference cap', async () => {
     const h = await harness();
     const many = Array.from({ length: 30 }, (_, i) => `p${i}@thread.example`);

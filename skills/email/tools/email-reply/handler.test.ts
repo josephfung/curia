@@ -603,6 +603,32 @@ describe('EmailReplyHandler', () => {
       expect(sentCc(ctx)).toEqual(['PAT@work.example']);
     });
 
+    it('dedupes a literal address that a reference already resolved to, in either order', async () => {
+      const ctx = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: 'principal, PAT@work.example' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(sentCc(ctx)).toEqual(['pat@work.example']);
+    });
+
+    it('refuses an explicit cc with no entries, rather than replying sender-only', async () => {
+      const ctx = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: ' , ,' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toMatch(/cc has no entries/);
+        expect(result.error).toContain('"principal"');
+      }
+      expect(ctx.outboundGateway!.getEmailMessage).not.toHaveBeenCalled();
+      expect(ctx.outboundGateway!.send).not.toHaveBeenCalled();
+    });
+
+    it('tolerates a stray empty segment beside real entries', async () => {
+      const ctx = ctxWithResolver({ reply_to_message_id: 'nylas-msg-1', body: 'Thanks!', cc: 'bob@vendor.example,, principal,' });
+      const result = await handler.execute(ctx);
+      expect(result.success).toBe(true);
+      expect(sentCc(ctx)).toEqual(['bob@vendor.example', 'pat@work.example']);
+    });
+
     it.each([
       ['a name', 'Pat Principal'],
       ['a role', 'the principal'],
