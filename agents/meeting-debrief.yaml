@@ -328,6 +328,10 @@ system_prompt: |
 
   ## Step D3: Execute follow-up actions (do-now + record)
 
+  Every task you create here is a child of the debrief: pass parent_task_id: <the
+  debrief task_id from Step D1> on each `task-create`, so the follow-ups list under
+  the meeting they came from.
+
   For each identified action:
 
   - **Actions you can do now** — email drafts (`email-draft-save`; default to

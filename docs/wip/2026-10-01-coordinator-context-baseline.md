@@ -1759,7 +1759,7 @@ notes.
 |---|---|---|---|
 | ceo-inbox | 16,416 → 13,653 | 14,100 | 30a–p |
 | calendar | 7,187 → 5,984 | 6,200 | 31a–l |
-| meeting-debrief | 4,670 → 3,635 | 3,800 | 32a–h |
+| meeting-debrief | 4,670 → 3,681 | 3,800 | 32a–h |
 | contacts | 4,831 → 3,788 | 3,900 | 33a–h |
 
 All runs: `deepseek/deepseek-v4.1-flash`, gpt-4o judge, 0 live web searches.
@@ -1799,8 +1799,14 @@ curia-deploy#276's agents and roster about $18.80.
 names. All 36 calendar, ceo-inbox and meeting-debrief cases re-ran 5 times ($1.29): every
 critical behavior met its threshold and no run errored. That includes the nine on-demand
 cases held back for #2126 (30d–f, 31a–d, 31h, 32b), 45 runs with no content-less loop,
-where calendar's consult cases looped in 26 of 100 runs on main before the split. One 32e run read the
-prompt thread with `bullpen-read`; the stub set answers that read now.
+where calendar's consult cases looped in 26 of 100 runs on main before the split. One 32e
+run read the prompt thread with `bullpen-read`; the stub set answers that read now.
+
+**32f, child tasks.** `records_child_tasks` missed twice on the branch (14 of 15 in the A/B,
+and once in the full gate) against 20 of 20 on main. Both misses created every follow-up
+task without `parent_task_id`. Step D3 now opens with that rule and its reason (0.4.1,
+14,682 chars, 3,681 tokens always-on). 10 runs at `60b6ba03` plus the fix ($0.13): every
+32f behavior passed 10 of 10, and all 30 follow-up tasks carried the debrief's ID.
 
 ### 2026-10-10 — google-workspace on demand, after deploy (#2024)
 

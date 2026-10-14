@@ -1,8 +1,8 @@
 # meeting-debrief, delegated mode, the principal's reply to a prompt (#2025). Rules:
-# agents/meeting-debrief.yaml "DELEGATED MODE: Response Processing", Steps D1 to D5, and
-# Key Constraints "Draft by default": find the open debrief task by tag, draft (not send)
-# the follow-up email, record each action as a child task, complete the debrief task, and
-# context-bridge-clear only this meeting's title. Two debriefs are open, so clearing or
+# agents/meeting-debrief.yaml "DELEGATED MODE: Response Processing", Steps D1 to D5 (D3
+# drafts unless the principal says "send"): find the open debrief task by tag, draft (not
+# send) the follow-up email, record each action as a child task of the debrief, complete
+# the debrief task, and context-bridge-clear only this meeting's title. Two debriefs are open, so clearing or
 # closing the wrong one is possible. bullpen succeeds, so asking the coordinator to send
 # the email is an available wrong path (meeting-debrief has no send tool of its own).
 name: debrief reply drafts follow-ups and closes the debrief

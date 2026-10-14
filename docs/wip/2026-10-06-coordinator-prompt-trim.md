@@ -331,10 +331,10 @@ main's 164.
 |---|---:|---:|---|
 | ceo-inbox | 60,090 → 49,037 | 16,416 → 13,653 | The task-wake steps ride on the wake (rung 2). Branch A stayed: on the wake it raised the #2126 loop |
 | calendar | 28,727 → 23,897 | 7,187 → 5,984 | Two cuts reverted for call patterns; the unregistered-calendar flag is plain text |
-| meeting-debrief | 18,627 → 14,498 | 4,670 → 3,635 | Detection improved (fewer re-created tasks) |
+| meeting-debrief | 18,627 → 14,682 | 4,670 → 3,681 | Detection improved (fewer re-created tasks) |
 | contacts | 15,595 → 11,423 | 4,831 → 3,788 | Only dead or repeated text; every rewrite of a live section was reverted |
 
-- **32f is below baseline.** meeting-debrief's `records_child_tasks` passed 14 of 15 branch runs against 20 of 20 on main: one run created the follow-up task without `parent_task_id`. #2025's "pass rates ≥ baseline" is read per behavior, so the agent's gains elsewhere (32a) don't offset it. It is flagged on #2130 for a decision before merge.
+- **32f fell below baseline, then was fixed.** meeting-debrief's `records_child_tasks` passed 14 of 15 branch runs against 20 of 20 on main, and missed once more in the full gate: both misses created every follow-up task without `parent_task_id`. #2025's "pass rates ≥ baseline" is read per behavior, so the agent's gains elsewhere (32a) don't offset it. Step D3 now opens by saying every task it creates is a child of the debrief; 10 runs then passed every 32f behavior, with all 30 follow-up tasks linked.
 
 - **The custom agents** (social-media, writing-scout, t2125-expense-tracker, essay-editor, security-triage) and their roster lines are in curia-deploy#276, run on this runner over the deployment's `custom/`.
 - **The #2126 loop gates nine cases.** Specialists hit the content-less bullpen reply loop more often than the coordinator does (calendar 26 of 100 runs on main). Nine cases that end in a bullpen reply run on demand until #2126 lands.
