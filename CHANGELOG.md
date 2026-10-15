@@ -61,6 +61,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 - **Outbound identity gate** — blocks an unconfirmed-name hedge, attendance cue or honorific; `filter.identityGate` selects enforce, shadow or off. (#1818)
 - **Calendar identity guard** — a read against the wrong identity fails closed as `IDENTITY_MISMATCH` instead of returning an empty success. (#1853, #1854)
 - **Dependency floors** — override floors raised for `undici`, `ip-address`, `vite`, `sharp`, `source-map-js`, `fast-copy`, `fast-uri`, `hono`, `@hono/node-server`, `shell-quote`, `smol-toml`, `js-yaml` and `brace-expansion`, clearing a HIGH WebSocket DoS (`undici`), a HIGH DoS (`source-map-js`) and a set of upstream-only advisories. (#1933, #1934, #1949, #2032, #2125)
+- **Dev toolchain** — promptfoo 0.124.1, a `basic-ftp` floor and skipping `jks-js` clear eight dev-only advisories, two critical. (#2140)
 
 ### Fixed
 

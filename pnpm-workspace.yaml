@@ -259,15 +259,25 @@ overrides:
   # pino-pretty (dev, and via @livekit/rtc-node in prod) resolved 4.0.3. Patched in 4.1.0 on
   # the 4.x line that pino-pretty depends on (2.2.0 / 3.1.0 on older lines, not in our tree).
   fast-copy: '>=4.1.0'
+  # HIGH advisory from pnpm audit, 2026-10-15:
+  # GHSA-c475-qrg2-pj4r (HIGH, <=6.2.0): quadratic-time DoS in Client.list(); 6.2.1 still
+  # carries upstream-only GHSA-5rfr-xx34-2xxv (MED), hence 6.2.2. Dev-only:
+  # promptfoo -> proxy-agent -> pac-proxy-agent -> get-uri, whose latest (8.0.1) still
+  # pins ^5.3.1, so only an override moves it across the major. 6.0's one breaking change
+  # refuses separate FTP transfer hosts by default (bounce-attack hardening); get-uri
+  # calls only access/list/lastMod/downloadTo/close, which are unchanged.
+  'get-uri>basic-ftp': '>=6.2.2'
   #
-  # Advisories deliberately left WITHOUT a clearing override (re-check before assuming
-  # they were missed — the adm-zip entry that used to sit here was fixed by 0.6.1, and
-  # uuid GHSA-qmq6-f8pr-cx5x was withdrawn upstream on 2026-05-05):
-  #   - extract-zip GHSA-7pqw-9j4j-h8q3 and GHSA-jmr9-qjv8-65gv (symlink archive entries ->
-  #     arbitrary file write, both HIGH). Affect <=2.0.1, the latest publish, so there is
-  #     nothing to pin to. Dev-only, reached via promptfoo -> @openai/codex-security, and
-  #     the prod image installs with --prod, so this never ships to production.
-  # This stays as an accepted warning until upstream ships a fix.
+  # No advisory is currently left without a clearing override. The extract-zip pair that
+  # used to sit here (GHSA-7pqw-9j4j-h8q3, GHSA-jmr9-qjv8-65gv; no fixed release) left the
+  # tree with promptfoo 0.124.1, whose @openai/codex-security is an optional peer and whose
+  # 0.2.x line uses yauzl instead. Re-check before assuming one was missed.
+
+# node-forge GHSA-86w9-cpqp-85rv (HIGH, <=1.4.0, the latest publish, so nothing to pin
+# to) reaches the tree only through jks-js, an optional promptfoo dependency for Java
+# keystore client certificates. Nothing here configures a JKS keystore, so skip it.
+ignoredOptionalDependencies:
+  - jks-js
 
 # esbuild requires a postinstall step to download the platform binary.
 # Both versions (used by vite and tsup) are approved here.
