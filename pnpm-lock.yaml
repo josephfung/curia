@@ -66,8 +66,8 @@ importers:
         specifier: ^3.0.1
         version: 3.0.1(undici@8.11.2)
       '@slack/web-api':
-        specifier: ^8.1.1
-        version: 8.1.1
+        specifier: ^8.2.0
+        version: 8.2.0
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -2448,12 +2448,12 @@ packages:
     peerDependencies:
       undici: '>=8.11.2'
 
-  '@slack/types@3.1.0':
-    resolution: {integrity: sha512-bTzqrO3lxJ5iWedo1eJKNAs1koyEhaTwKLJUkD3KETnPeQvD978AAE4jvWstUws8Gbbc4JR6iYE6F7XjE8UGmw==}
+  '@slack/types@3.2.0':
+    resolution: {integrity: sha512-IN4gdtlzQt8UJoj+1v+qAHeR4TxHO0KMlIs841SFfDQAcFFnsrWaGsEAE4goxVt8O/JOAFaGGdrFTzhNBop/Fg==}
     engines: {node: '>= 20', npm: '>=9.6.4'}
 
-  '@slack/web-api@8.1.1':
-    resolution: {integrity: sha512-am/z/LLbEC7gNQp6FpaGT0l4XnWqcXetpwdgZHzS7Nbb96q9R9QwWA3lo0ZXGuAHDkct0MvFnouzuc2Y4XNmow==}
+  '@slack/web-api@8.2.0':
+    resolution: {integrity: sha512-bIW8/8BLD/HLuHLIA2LfA7AhSokzui4swCbMJuwoRJxn/kzHVla6YEKLvN1nCFHK/DfX7g+4Wj3ess/ZSh/tWQ==}
     engines: {node: '>= 20', npm: '>=9.6.4'}
 
   '@smithy/config-resolver@4.7.2':
@@ -8642,17 +8642,17 @@ snapshots:
   '@slack/socket-mode@3.0.1(undici@8.11.2)':
     dependencies:
       '@slack/logger': 5.0.0
-      '@slack/web-api': 8.1.1
+      '@slack/web-api': 8.2.0
       '@types/node': 24.19.0
       eventemitter3: 5.0.4
       undici: 8.11.2
 
-  '@slack/types@3.1.0': {}
+  '@slack/types@3.2.0': {}
 
-  '@slack/web-api@8.1.1':
+  '@slack/web-api@8.2.0':
     dependencies:
       '@slack/logger': 5.0.0
-      '@slack/types': 3.1.0
+      '@slack/types': 3.2.0
       '@types/node': 24.19.0
       '@types/retry': 0.12.5
       eventemitter3: 5.0.4
@@ -11885,7 +11885,7 @@ snapshots:
       '@opencode-ai/sdk': 1.18.31
       '@playwright/browser-chromium': 1.63.0
       '@rollup/rollup-linux-x64-gnu': 4.63.4
-      '@slack/web-api': 8.1.1
+      '@slack/web-api': 8.2.0
       '@smithy/node-http-handler': 4.12.1
       '@swc/core': 1.16.2
       '@swc/core-darwin-arm64': 1.16.2
