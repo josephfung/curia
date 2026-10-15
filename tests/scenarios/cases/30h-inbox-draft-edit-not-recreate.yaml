@@ -1,0 +1,114 @@
+# ceo-inbox, delegated fix to an existing draft (#2025). Rule: agents/ceo-inbox.yaml,
+# "Working with existing drafts (find → read → edit)": find the draft in DRAFTS, read it
+# by draft_id, fix it with ceo-inbox-draft-edit passing only what changes (`remove` for a
+# recipient coming off, `add_cc` by contact ID for one going on); do not recreate it.
+#
+# Composing a new draft and replying on the thread both succeed (ceo-inbox-mailroom), so
+# recreating is available.
+name: inbox fixes a draft in place instead of recreating it
+description: >
+  The coordinator relays the principal's request: the draft to Marcus Bell about the
+  offsite agenda has Dana Ortiz on CC by mistake; take her off and add Lee Park (contact
+  ID given) instead, changing nothing else. ceo-inbox finds the draft in the Drafts
+  folder, edits it with ceo-inbox-draft-edit (removing Dana, adding Lee by contact ID) and
+  does not create a new draft.
+tags: [specialist-ceo-inbox, ceo-inbox, delegated-mode, drafts]
+agent: ceo-inbox
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  contacts:
+    - key: lee
+      display_name: Lee Park
+      channel: email
+      identifier: lee.park@northfield.example.test
+inbound:
+  from: delegate
+  content: >
+    The principal asked: the draft I have to Marcus Bell about the offsite agenda has Dana
+    Ortiz on CC by mistake. Take her off and add Lee Park (contact ID {{contact:lee}})
+    instead. Don't change anything else in it.
+tool_stubs:
+  ceo-inbox-list:
+    - match: {}
+      return:
+        folder: DRAFTS
+        count: 2
+        drafts:
+          - id: draft-30h-offsite
+            threadId: thr-30h-offsite
+            subject: Offsite agenda
+            to: [{ name: Marcus Bell, email: marcus.bell@northfield.example.test }]
+            cc: [{ name: Dana Ortiz, email: dana.ortiz@northfield.example.test }]
+            snippet: Here's the agenda I have in mind for the November offsite...
+            date: 1791800000
+          - id: draft-30h-other
+            threadId: thr-30h-other
+            subject: Board dinner RSVP
+            to: [{ name: Ruth Alder, email: ruth.alder@example.test }]
+            cc: []
+            snippet: Thanks for the invitation, I'd be glad to join...
+            date: 1791700000
+  ceo-inbox-search:
+    - match: {}
+      return:
+        folder: DRAFTS
+        count: 1
+        drafts:
+          - id: draft-30h-offsite
+            threadId: thr-30h-offsite
+            subject: Offsite agenda
+            to: [{ name: Marcus Bell, email: marcus.bell@northfield.example.test }]
+            cc: [{ name: Dana Ortiz, email: dana.ortiz@northfield.example.test }]
+            snippet: Here's the agenda I have in mind for the November offsite...
+            date: 1791800000
+  ceo-inbox-read:
+    - match: { draft_id: draft-30h-offsite }
+      return:
+        id: draft-30h-offsite
+        threadId: thr-30h-offsite
+        to: [{ name: Marcus Bell, email: marcus.bell@northfield.example.test }]
+        cc: [{ name: Dana Ortiz, email: dana.ortiz@northfield.example.test }]
+        bcc: []
+        subject: Offsite agenda
+        body_plain: "Marcus,\n\nHere's the agenda I have in mind for the November offsite: strategy review in the morning, team sessions after lunch, dinner at 7.\n\nThoughts?"
+        date: 1791800000
+        is_draft: true
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+  ceo-inbox-draft-edit:
+    - match: { draft_id: draft-30h-offsite }
+      return: { draft_id: draft-30h-offsite, subject: Offsite agenda, to: [{ name: Marcus Bell, email: marcus.bell@northfield.example.test }], cc: [{ name: Lee Park, email: lee.park@northfield.example.test }] }
+expected_behaviors:
+  - id: edits_the_draft
+    weight: critical
+    description: Fixes the offsite draft with ceo-inbox-draft-edit.
+    check:
+      called: ceo-inbox-draft-edit
+      with: { draft_id: draft-30h-offsite }
+  - id: no_recreate
+    weight: critical
+    description: Creates no new draft (no compose, no reply draft).
+    check:
+      not_called: [ceo-inbox-draft-compose, ceo-inbox-draft-reply]
+  - id: removes_dana
+    weight: critical
+    description: Takes Dana Ortiz off with `remove`.
+    check:
+      called: ceo-inbox-draft-edit
+      contains: { remove: dana }
+  - id: adds_lee_by_id
+    weight: important
+    description: Adds Lee Park by contact ID on the CC line.
+    check:
+      called: ceo-inbox-draft-edit
+      contains: { add_cc: "{{contact:lee}}" }
+  - id: leaves_other_draft
+    weight: important
+    description: Does not touch the unrelated board-dinner draft.
+    check:
+      not_called: [ceo-inbox-draft-edit]
+      with: { draft_id: draft-30h-other }
+failure_modes:
+  - Composes a fresh draft to Marcus instead of editing the existing one
+  - Rewrites the whole recipient list or the body
+  - Edits the wrong draft

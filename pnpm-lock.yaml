@@ -9,12 +9,12 @@ overrides:
   fast-uri: '>=4.2.1'
   vite: '>=8.3.3'
   qs: '>=6.16.0'
-  ip-address: '>=10.7.2'
+  ip-address: '>=10.7.4'
   uuid: ^11.1.1
   ws: '>=8.21.0'
   form-data: '>=4.0.6'
   esbuild: '>=0.28.1'
-  undici: '>=8.10.2'
+  undici: '>=8.11.2'
   '@opentelemetry/core': '>=2.8.0'
   onnxruntime-web>protobufjs: '>=7.6.5 <8'
   adm-zip: '>=0.6.1'
@@ -64,7 +64,7 @@ importers:
         version: 1.31.0(@cfworker/json-schema@4.1.1)(zod@4.6.5)
       '@slack/socket-mode':
         specifier: ^3.0.1
-        version: 3.0.1(undici@8.10.2)
+        version: 3.0.1(undici@8.11.2)
       '@slack/web-api':
         specifier: ^8.1.1
         version: 8.1.1
@@ -124,7 +124,7 @@ importers:
         version: 8.4.0
       openai:
         specifier: ^7.25.0
-        version: 7.25.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.21.3)(zod@4.6.5)
+        version: 7.25.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
       openredaction:
         specifier: ^1.1.5
         version: 1.1.5(express@5.2.1)(pdf-parse@2.4.5)(react@19.3.0)
@@ -2440,7 +2440,7 @@ packages:
     resolution: {integrity: sha512-7L4adgnJtQvQgo5cfIwqHG1QuR8mdZQ/WdMScNDp6uK644ZqnHDAa4rR+vZYfZFdJ5+obCqZQ66Dad8kcwJ4Jg==}
     engines: {node: '>=20', npm: '>=9.6.4'}
     peerDependencies:
-      undici: '>=8.10.2'
+      undici: '>=8.11.2'
 
   '@slack/types@3.1.0':
     resolution: {integrity: sha512-bTzqrO3lxJ5iWedo1eJKNAs1koyEhaTwKLJUkD3KETnPeQvD978AAE4jvWstUws8Gbbc4JR6iYE6F7XjE8UGmw==}
@@ -4221,12 +4221,8 @@ packages:
       react-devtools-core:
         optional: true
 
-  ip-address@10.7.2:
-    resolution: {integrity: sha512-7H/2gFSIitxc0hG3nOI1glS8QLo/EHBFFLk8vEUjXY/xu0AdL8jZ9U1IzO2PUm0d2D/ofQcAifb0g6OBkt8U7w==}
-    engines: {node: '>= 12'}
-
-  ip-address@10.7.3:
-    resolution: {integrity: sha512-A1kdq/tSb5QjvKvAMgIoEvDBIgL7qaqVP/jkvSwYYRZ9iEzvPpopxp2wQfu3SuZRHtpHNxMn8Fs0bS+gf5Xmwg==}
+  ip-address@10.7.4:
+    resolution: {integrity: sha512-DWBMKyeM25D70nrIiTkgQth59/G+naKOTep6huF9j+GmeK3DMD60Zvxg5d5qQnz+38AHgou6ean2LECX+lrKDg==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -4974,7 +4970,7 @@ packages:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
-      undici: '>=8.10.2'
+      undici: '>=8.11.2'
       ws: '>=8.21.0'
       zod: ^3.25 || ^4.0
     peerDependenciesMeta:
@@ -6029,8 +6025,8 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
-  undici@8.10.2:
-    resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
+  undici@8.11.2:
+    resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.3.0:
@@ -6350,7 +6346,7 @@ snapshots:
       '@ai-sdk/provider': 3.0.16
       '@standard-schema/spec': 1.1.0
       eventsource-parser: 3.1.1
-      undici: 8.10.2
+      undici: 8.11.2
       zod: 4.6.5
 
   '@ai-sdk/provider@3.0.16':
@@ -6421,7 +6417,7 @@ snapshots:
     dependencies:
       '@types/json-schema': 7.0.15
       js-yaml: 5.4.2
-      undici: 8.10.2
+      undici: 8.11.2
 
   '@aws-sdk/checksums@3.1001.0':
     dependencies:
@@ -7413,7 +7409,7 @@ snapshots:
     dependencies:
       '@lukeed/ms': 2.0.2
       fastify-plugin: 6.0.0
-      ip-address: 10.7.2
+      ip-address: 10.7.4
       toad-cache: 3.7.4
 
   '@fastify/send@4.1.1':
@@ -8614,13 +8610,13 @@ snapshots:
     dependencies:
       '@types/node': 24.19.0
 
-  '@slack/socket-mode@3.0.1(undici@8.10.2)':
+  '@slack/socket-mode@3.0.1(undici@8.11.2)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.1.1
       '@types/node': 24.19.0
       eventemitter3: 5.0.4
-      undici: 8.10.2
+      undici: 8.11.2
 
   '@slack/types@3.1.0': {}
 
@@ -9950,7 +9946,7 @@ snapshots:
     dependencies:
       debug: 4.4.3
       express: 5.2.1
-      ip-address: 10.7.3
+      ip-address: 10.7.4
     transitivePeerDependencies:
       - supports-color
 
@@ -10617,9 +10613,7 @@ snapshots:
       - utf-8-validate
     optional: true
 
-  ip-address@10.7.2: {}
-
-  ip-address@10.7.3: {}
+  ip-address@10.7.4: {}
 
   ipaddr.js@1.9.1: {}
 
@@ -11350,12 +11344,12 @@ snapshots:
       zod: 4.6.5
     optional: true
 
-  openai@7.25.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.21.3)(zod@4.6.5):
+  openai@7.25.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.83
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.3
-      undici: 8.10.2
+      undici: 8.11.2
       ws: 8.21.3
       zod: 4.6.5
 
@@ -11762,7 +11756,7 @@ snapshots:
       mathjs: 15.2.0
       minimatch: 10.2.6
       nunjucks: 3.2.4(chokidar@5.0.0)
-      openai: 7.25.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.10.2)(ws@8.21.3)(zod@4.6.5)
+      openai: 7.25.0(@aws-sdk/credential-provider-node@3.972.83)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.3)(undici@8.11.2)(ws@8.21.3)(zod@4.6.5)
       opener: 1.5.2
       ora: 9.4.1
       parse5: 8.0.1
@@ -11780,7 +11774,7 @@ snapshots:
       socket.io-client: 4.8.3
       text-extensions: 3.1.0
       tsx: 4.23.15
-      undici: 8.10.2
+      undici: 8.11.2
       winston: 3.19.0
       ws: 8.21.3
       zod: 4.6.5
@@ -12426,7 +12420,7 @@ snapshots:
 
   socks@2.8.10:
     dependencies:
-      ip-address: 10.7.3
+      ip-address: 10.7.4
       smart-buffer: 4.2.0
 
   sonic-boom@4.2.1:
@@ -12707,7 +12701,7 @@ snapshots:
   undici-types@8.3.0:
     optional: true
 
-  undici@8.10.2: {}
+  undici@8.11.2: {}
 
   unicorn-magic@0.3.0: {}
 

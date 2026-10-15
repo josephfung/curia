@@ -40,7 +40,7 @@ tool_stubs:
   behavioral-preferences-update:
     - match: {}
       return: { updated: true }
-  bullpen:
+  bullpen-post:
     - match: {}
       return: { posted: true, thread_id: "00000000-0000-4000-8000-0000000021b1" }
 expected_behaviors:

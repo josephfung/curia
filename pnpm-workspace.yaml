@@ -168,10 +168,13 @@ overrides:
   #   - GHSA-rpw4-54j3-4h4q / CVE-2026-101913: Address6.isLinkLocal() matches fe80::/64, not fe80::/10
   #   - GHSA-2vr4-cq9g-pvrc / CVE-2026-101910: no classifier recognizes NAT64 local-use 64:ff9b:1::/48
   # Stopping at 10.5.1 would still admit <=10.7.0. Two later MED advisories are fixed
-  # in 10.7.1; the floor is 10.7.2, which socks had already resolved:
+  # in 10.7.1:
   #   - GHSA-j6r3-76f7-8jcv: isInSubnet() compares mixed-family addresses as one space
   #   - GHSA-h3mg-xc3c-68pw: Address6 builds an unbounded parse diagnostic
-  ip-address: '>=10.7.2'
+  # Raised off >=10.7.2 (#2125): one more MED advisory, published only on the upstream
+  # repo, covers <=10.7.3. Not a backstop: the tree resolved 10.7.2 and 10.7.3.
+  #   - GHSA-rxp7-6hxx-x8q5: Address6 matches a zone identifier in quadratic time (DoS)
+  ip-address: '>=10.7.4'
   uuid: '^11.1.1'
   # Security pins for v0.35 release gate (HIGH CVEs flagged by Trivy image scan):
   ws: '>=8.21.0'         # CVE-2026-48779
@@ -181,8 +184,12 @@ overrides:
   # whole 8.x line, and 8.0.0-8.10.1 carry twelve advisories the 7.x floor says nothing
   # about — GHSA-4cwx-7wf7-3272, GHSA-38rv-x7px-6hhq, GHSA-hm92-r4w5-c3mj,
   # GHSA-vmh5-mc38-953g, GHSA-vxpw-j846-p89q (HIGH) and seven MED/LOW. The last of them
-  # (GHSA-3wwx-pv8p-q78v, <8.10.2) sets the floor. Constrain the line you resolve into.
-  undici: '>=8.10.2'
+  # (GHSA-3wwx-pv8p-q78v, <8.10.2) set the old floor. Constrain the line you resolve into.
+  # Raised off >=8.10.2 (#2125), which admitted 8.11.0-8.11.1. Backstop only, since the
+  # tree resolved 8.10.2. Published upstream only:
+  #   - GHSA-qq8j-7v2v-3rwp / CVE-2026-109855 (HIGH, >=8.11.0 <8.11.2): WebSocket
+  #     client DoS via a failed HTTP/2 handshake
+  undici: '>=8.11.2'
   # Scorecard vulnerability pins (GHSA alerts flagged in code-scanning #155):
   '@opentelemetry/core': '>=2.8.0'          # GHSA-8988-4f7v-96qf (unbounded baggage header memory allocation)
   # Targeted to onnxruntime-web only, so the 7.x line is what this constrains. >=7.6.3

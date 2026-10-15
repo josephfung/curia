@@ -139,6 +139,11 @@ Controls how long the coordinator waits for a delegated specialist's reply befor
 ```yaml
 delegate:
   defaultTimeoutMs: 450000   # 450 seconds — pooled p99 before 2026-09-20, rounded up
+  lateDelivery:
+    enabled: true
+    ttlMinutes: 60            # how long to keep waiting for the abandoned specialist
+    sweepIntervalMinutes: 5   # restart recovery from audit_log + expiry of dead handles
+    maxResultChars: 8000      # cap on the result text copied into the review task note
 ```
 
 Sized to the pooled p99 (444s) of 1,550 delegate runs before 2026-09-20, the clean baseline confirmed after the provider regression (#1873, #1857). Override in `config/local.yaml` to match the deployment's model latency profile. The value is validated at startup; non-numeric or non-positive values cause a hard startup failure. A value below 450000 logs a startup warning: specialists with no duration hint will time out healthy runs.
@@ -146,6 +151,8 @@ Sized to the pooled p99 (444s) of 1,550 delegate runs before 2026-09-20, the cle
 This is the **fallback**, used when the runtime resolves no expected duration for the delegation. The runtime resolves the wait window in priority order: a scheduled task's `expectedDurationSeconds`, then the target agent's `expected_duration_seconds` (both plus bounded headroom), then this default. The coordinator LLM is not a source — `timeout_ms` is not in the `delegate` input schema, and the runtime discards any value the model emits (#1797).
 
 Startup logs at info the name of every registered specialist that omits `expected_duration_seconds`. That line is an inventory: those agents inherit the floor on purpose. Core agents whose clean-baseline p99 sits near or above the old 240s wait declare one: `calendar` 300, `ceo-inbox` 240, `research-analyst` 240, `meeting-debrief` 210. `writing-scout` (480) and `social-media` (320) live in the deployment repo and need the same field there. The computed wait is clamped at 895s; runs past that ceiling are late-delivery-only ([ADR-044](../adr/044-delegate-wait-clamp-ceiling.md)).
+
+`lateDelivery` (#1799) covers that case: a timed-out wait does not stop the specialist, so a handle keeps its eventual result from being orphaned — the result is correlated back to the delegation, recorded on the escalation review task (truncated to `maxResultChars`), and audited. Curia stops waiting for the result after `ttlMinutes`; every `sweepIntervalMinutes` a sweep expires dead handles and, after a restart, recovers open ones from `audit_log`.
 
 ---
 
@@ -229,7 +236,7 @@ An explicit `context_bridge` entry never expires sooner than a bare one on the s
 
 Per-registration, the resolved window and the rule that chose it are logged at `debug` (`ttlSource`: `agent`, `task-wake`, `explicit-tier`, or `channel-default`). Prod runs at `LOG_LEVEL=info`, so **these per-send lines do not appear by default** — raise the level to see them.
 
-Expired entries are cleaned up automatically by the background scheduler. The coordinator can also release entries manually via the `context-bridge-release` skill.
+Expired entries are cleaned up automatically by the background scheduler. Agents can also release entries manually via the `context-bridge-release` skill — an unhinted entry or one they own (#1972).
 
 **Tuning guidance:**
 - Add a channel to `channelDefaultExpiryHours` if its recipients commonly reply later than `defaultExpiryHours` allows.
@@ -263,11 +270,37 @@ Changes take effect on restart.
 
 ---
 
+### `filter.identityGate`
+
+```yaml
+filter:
+  identityGate: enforce   # enforce (default) | shadow | off
+```
+
+The identity gate (#1818) checks a non-principal send for an unconfirmed-name hedge, or an unresolved name next to an invitation or attendance cue. `enforce` blocks the send, `shadow` logs the block and sends anyway, `off` skips the check. The rest of `filter` configures the outbound LLM judge (`filter.llmJudge`).
+
+---
+
+### `audit.llmCallArchive`
+
+```yaml
+audit:
+  llmCallArchive:
+    enabled: true            # kill-switch for new archive writes
+    hotRetentionDays: 90     # older rows are deleted by the nightly decay pass
+    includeReasoning: true   # false keeps the reasoning token count, drops the text
+```
+
+`llm_call_archive` stores redacted full prompts and responses keyed to `llm.call` rows (spec 10, #1383). Reasoning text can be most of a row, so `includeReasoning: false` (#2042) shrinks the archive without turning it off.
+
+---
+
 ## Skill, agent, and channel registry
 
-Skills, agents, and channels are not enabled simply by existing on disk — they are tracked in three registry tables (`tool_registry`, `agent_registry`, `channel_registry`) with an explicit **install → enable** lifecycle.
+Tools, skills, agents, and channels are not enabled simply by existing on disk — they are tracked in registry tables (`tool_registry`, `skill_registry` for bundles, `agent_registry`, `channel_registry`) with an explicit **install → enable** lifecycle.
 
-- **Disabled by default.** A newly added tool, skill, or agent is registered at startup but starts **disabled**. It must be enabled before it can be loaded. Toggleable channels (`email`, `signal`, `slack`, `sms`, `voice`) follow the same rule: seeding credentials does **not** install or enable them — use **Settings → Channels** (install, then enable, then restart).
+- **Disabled by default.** A newly added tool, skill, or agent is registered at startup but starts **disabled**. It must be enabled before it can be loaded. Exceptions: the core set in `config/registry-defaults.yaml`, and member tools of an enabled bundle.
+- **Bundle expansion (#1974).** Listing a tool in an enabled bundle's SKILL.md `tools:` enrolls it on the next boot, so `registry-defaults.yaml` `tools:` lists standalone tools only. A member gated by `install.requires_secrets` enrolls on the first boot after its keys exist. A member can't be uninstalled while its bundle is enabled — the next boot would re-enroll it — so disable it instead. See the [ADR-022](../adr/022-skill-agent-registry.md) amendment. Toggleable channels (`email`, `signal`, `slack`, `sms`, `voice`) follow the same rule: seeding credentials does **not** install or enable them — use **Settings → Channels** (install, then enable, then restart).
 - **Restart-based enforcement.** Enabled items are loaded/registered at startup; disabled items are skipped. Changing enable state takes effect on the next restart.
 - **Secret gating (`install.requires_secrets`).** A skill manifest may declare `install: { requires_secrets: [...] }` — vault secret keys that must already exist before the registry will install or enable the skill. `RegistryService` rejects install/enable until every declared key is present in the vault. (`web-search` declares `["tavily_api_key"]`.)
 - **Always-on channels.** The `http` and `cli` channels have `isToggleable: false` — they always start and cannot be disabled, an operator-lockout safeguard. `email`, `signal`, `slack`, `sms`, and `voice` are toggleable and require explicit install→enable; outbound egress is gated on the same registry state as inbound adapters.
@@ -276,6 +309,7 @@ Lifecycle is driven via the registry HTTP API (or the admin UI):
 
 ```
 GET    /api/registry/tools
+GET    /api/registry/skills
 GET    /api/registry/agents
 POST   /api/registry/:kind/:name/install
 POST   /api/registry/:kind/:name/enable
@@ -365,13 +399,15 @@ without writing any TypeScript. At startup, Curia connects to each configured
 server, discovers its tools via `tools/list`, and registers them in the skill
 registry alongside local skills.
 
-The file does not exist by default — its absence means no MCP servers are
-configured. Create it when you add the first server.
+Core ships the file with one server, `google-workspace` (stdio, the
+`workspace-mcp` launcher restricted to Drive, Docs and Sheets, #1957).
+Deployment overlays replace the file wholesale, so they must carry that entry
+too. An absent file means no MCP servers are configured.
 
 ```yaml
 servers:
   - name: gdrive
-    transport: stdio          # "stdio" spawns a local process; "sse" connects to a remote SSE endpoint
+    transport: stdio          # "stdio" spawns a local process; "sse" connects to a hosted endpoint over StreamableHTTP
     command: npx
     args: ["-y", "@modelcontextprotocol/server-gdrive"]
     action_risk: low          # required — none | low | medium | high | critical
@@ -390,9 +426,12 @@ missing MCP server won't take Curia down. The failed server's tools will be
 unavailable until restart. Search logs for `ERROR Failed to connect to MCP server`
 to diagnose.
 
-After adding a server, pin its tools in `agents/coordinator.yaml` under
-`pinned_skills` so the coordinator's LLM can call them. Tool names come from
-the server's `tools/list` response — check the startup logs to confirm.
+Each server's tools project as one skill named after the server (ADR-032).
+Agents reach it with `skill-activate` (e.g. skill `google-workspace`) rather
+than a pin: a pin puts every tool definition on every call (#2024).
+`tests/unit/agents/prompt-budget.test.ts` forbids MCP pins on the coordinator
+and the budgeted specialists (`allowMcpPins: false`). Tool names come from the
+server's `tools/list` response — check the startup logs to confirm.
 
 See [google-drive.md](google-drive.md) for a full walkthrough of the Google
 Drive integration (service account setup, folder sharing, credential wiring).

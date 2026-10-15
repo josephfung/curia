@@ -509,9 +509,18 @@ export interface ResolvedSender {
 export async function resolveSender(
   scenario: ScenarioCase,
   stack: TestModeStack,
-): Promise<ResolvedSender | 'bullpen' | 'scheduler'> {
+): Promise<ResolvedSender | 'bullpen' | 'scheduler' | 'task-wake' | { delegate: ResolvedSender }> {
   const { from, channel } = scenario.inbound;
-  if (from === 'bullpen' || from === 'scheduler') return from;
+  if (from === 'bullpen' || from === 'scheduler' || from === 'task-wake') return from;
+  // A delegated task has no channel sender: the coordinator sends it. What carries over is
+  // the requester the coordinator was serving, as the originator the delegate handler
+  // forwards (#2025).
+  if (from === 'delegate') {
+    const requester = scenario.inbound.requester ?? 'principal';
+    const resolved = await resolveSender({ ...scenario, inbound: { ...scenario.inbound, from: requester } }, stack);
+    if (typeof resolved === 'string' || 'delegate' in resolved) throw new Error(`unreachable: requester '${requester}'`);
+    return { delegate: resolved };
+  }
 
   if (from === 'principal') {
     const channelId = channel ?? 'cli';

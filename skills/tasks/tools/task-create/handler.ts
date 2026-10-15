@@ -184,13 +184,15 @@ export class TaskCreateHandler implements ToolHandler {
     }
 
     // Past-due milestones at creation should run immediately, not be silently skipped (#1299).
+    // The note is what the immediate wake reads, so it says what to do; the tasks SKILL.md
+    // no longer does (prompt trim PR 9). task-complete refuses the shortcut for five minutes.
     let pastDueNote: string | undefined;
     let extraTags = input.tags ?? [];
     if (dueAt && dueAt.getTime() < Date.now()) {
       if (!wakeAt) {
         wakeAt = new Date();
       }
-      pastDueNote = 'Milestone was past at creation — running immediately instead of auto-completing.';
+      pastDueNote = 'Its due date had already passed at creation: do its work now, or escalate if you cannot. Complete it only once the work is done.';
       if (!extraTags.includes('past-due-at-creation')) {
         extraTags = [...extraTags, 'past-due-at-creation'];
       }

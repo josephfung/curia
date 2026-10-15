@@ -1,5 +1,5 @@
 // The head of the sender-context block: who is talking, and whether they are the
-// principal (prompt trim PR 4, docs/wip/2026-10-06-coordinator-prompt-trim.md).
+// principal (prompt trim PR 4, #1954).
 //
 // The coordinator used to work the audience out from a "How to determine the audience"
 // paragraph in agents/coordinator.yaml: look for "(principal)" on this line, treat cli as

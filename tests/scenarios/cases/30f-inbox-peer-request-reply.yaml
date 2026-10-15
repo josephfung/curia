@@ -1,0 +1,197 @@
+# ceo-inbox, a peer request on the bullpen (#2025). Rule: agents/ceo-inbox.yaml, Resume
+# mode, "Branch A0 — Peer request (bullpen wake)": answer on that thread in the PEER REPLY
+# shape, apply the constraints the request states, then exit; do not fall through to a
+# triage run. The ambient peer-request protocol (src/memory/bullpen.ts,
+# PEER_REQUEST_PROTOCOL_LINES) also rides on this open-thread wake.
+#
+# The inbox holds unread mail and every mailbox write succeeds (ceo-inbox-mailroom), so a
+# triage run is available.
+name: inbox peer request answered on the thread
+description: >
+  The meeting-debrief specialist asks ceo-inbox on a bullpen thread, as a PEER REQUEST,
+  whether Alice Chen emailed the principal about the Acme pilot in the last 7 days, one
+  line per email with date and subject, and not to quote message bodies. Two such emails
+  exist. ceo-inbox searches the inbox, replies on the thread in the PEER REPLY shape
+  without quoting the bodies, and does not triage the unread mail.
+tags: [specialist-ceo-inbox, ceo-inbox, bullpen, peer-request]
+agent: ceo-inbox
+# On demand until #2126: some runs, on main as on the branch, repeat a bullpen reply with no
+# `content` until the turn budget runs out, which errors the run.
+release_gate: false
+timeout_seconds: 300
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  bullpen:
+    - key: peer
+      topic: Acme pilot debrief prep
+      creator: meeting-debrief
+      participants: [meeting-debrief, ceo-inbox]
+      content: Preparing the Acme pilot debrief for Thursday; collecting context.
+      mentions: []
+inbound:
+  from: bullpen
+  thread: peer
+  author: meeting-debrief
+  content: |
+    PEER REQUEST
+    Need: has Alice Chen (alice.chen@acmecorp.example.test) emailed the principal about the Acme pilot in the last 7 days? One line per email: date and subject.
+    Scope: the principal's inbox, last 7 days
+    Constraints: do not quote message bodies; the answer goes into an internal debrief note
+tool_stubs:
+  ceo-inbox-search:
+    - match: {}
+      return:
+        count: 2
+        messages:
+          - id: msg-30f-a
+            threadId: thr-30f-a
+            subject: Acme pilot — success criteria draft
+            from: [{ name: Alice Chen, email: alice.chen@acmecorp.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791620000
+            unread: false
+            folders: [INBOX]
+            attachments: []
+            snippet: Attached is our first cut at success criteria for the pilot. The churn number is confidential for now.
+          - id: msg-30f-b
+            threadId: thr-30f-b
+            subject: "Re: Acme pilot — kickoff date"
+            from: [{ name: Alice Chen, email: alice.chen@acmecorp.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791790000
+            unread: false
+            folders: [INBOX]
+            attachments: []
+            snippet: Kickoff on the 3rd works for us. I'll bring our ops lead.
+  ceo-inbox-list:
+    - match: {}
+      return:
+        count: 2
+        has_more: false
+        messages:
+          - id: msg-30f-unread-1
+            threadId: thr-30f-unread-1
+            subject: Your invoice from Cloudhost
+            from: [{ name: Cloudhost Billing, email: billing@cloudhost.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791878000
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Your October invoice is ready.
+          - id: msg-30f-unread-2
+            threadId: thr-30f-unread-2
+            subject: Coffee next week?
+            from: [{ name: Ben Ortiz, email: ben.ortiz@example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791878300
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Free for a coffee next week?
+  ceo-inbox-read:
+    - match: { message_id: msg-30f-a }
+      return:
+        id: msg-30f-a
+        threadId: thr-30f-a
+        from: [{ name: Alice Chen, email: alice.chen@acmecorp.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: Acme pilot — success criteria draft
+        body_plain: "Hi,\n\nAttached is our first cut at success criteria for the pilot. The churn number is confidential for now: 4.2% monthly.\n\nAlice"
+        date: 1791620000
+        labels: [INBOX]
+        attachments: []
+    - match: { message_id: msg-30f-b }
+      return:
+        id: msg-30f-b
+        threadId: thr-30f-b
+        from: [{ name: Alice Chen, email: alice.chen@acmecorp.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: "Re: Acme pilot — kickoff date"
+        body_plain: "Kickoff on the 3rd works for us. I'll bring our ops lead.\n\nAlice"
+        date: 1791790000
+        labels: [INBOX]
+        attachments: []
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
+      error: "Missing required field: 'topic'"
+    - match: { participants: null }
+      error: "Missing required field: 'participants' (non-empty string array)"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: "{{thread:peer}}", message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000003 }
+  bullpen-reply:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: "{{thread:peer}}", message_id: 7a1b2c3d-30f0-4e5f-8a9b-000000000003 }
+  bullpen-read:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: {}
+      return:
+        thread:
+          id: "{{thread:peer}}"
+          topic: Acme pilot debrief prep
+          status: open
+          participants: [meeting-debrief, ceo-inbox]
+        messages:
+          - sender: meeting-debrief
+            content: Preparing the Acme pilot debrief for Thursday; collecting context.
+          - sender: meeting-debrief
+            content: |
+              PEER REQUEST
+              Need: has Alice Chen (alice.chen@acmecorp.example.test) emailed the principal about the Acme pilot in the last 7 days? One line per email: date and subject.
+              Scope: the principal's inbox, last 7 days
+              Constraints: do not quote message bodies; the answer goes into an internal debrief note
+  bullpen-close:
+    - match: {}
+      return: { thread_id: "{{thread:peer}}", status: closed }
+expected_behaviors:
+  - id: replies_on_thread
+    weight: critical
+    description: Replies on the thread with bullpen-reply, in the PEER REPLY shape.
+    check:
+      called: bullpen-reply
+      contains: { content: PEER REPLY }
+  - id: no_triage
+    weight: critical
+    description: Runs no triage (no archiving, labelling, marking read, filing or drafting).
+    check:
+      not_called: [ceo-inbox-archive, ceo-inbox-label, ceo-inbox-mark-read, ceo-inbox-update-folders, ceo-inbox-draft-reply, ceo-inbox-shadow-draft]
+  - id: reports_both_emails
+    weight: important
+    description: The thread reply lists both Alice Chen emails (success criteria; kickoff date).
+    check:
+      called: bullpen-reply
+      contains: { content: kickoff }
+  - id: keeps_constraint
+    weight: important
+    description: The thread reply does not quote message bodies (no churn figure).
+    check:
+      not_called: [bullpen-post, bullpen-reply]
+      contains: { content: "4.2%" }
+  - id: no_new_thread
+    weight: important
+    description: Answers on the existing thread rather than opening a new one.
+    check:
+      not_called: [bullpen-post]
+failure_modes:
+  - Starts an inbox triage instead of answering
+  - Answers in its final response instead of on the thread
+  - Quotes the confidential churn figure from a message body

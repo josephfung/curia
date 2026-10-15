@@ -1,0 +1,218 @@
+# ceo-inbox, scheduled triage (#2025). Rules: agents/ceo-inbox.yaml, "Step 4: For each
+# message, triage" (4e's categories and 🚨 Urgent's escalation format, 4f "When in doubt",
+# 4h "Execute final actions"), "Step 5: Settle each message's end-state" (archived or
+# marked read), the opening "you only create drafts, archive messages, apply labels, and
+# escalate urgent items" paragraph, and "Shadow drafting (during triage only)".
+#
+# One batch of three: an urgent decision from a known contact, a newsletter, and a
+# personal note about a family member's health. Every draft and mailbox write succeeds
+# (ceo-inbox-mailroom), so drafting a reply or archiving the wrong message is available.
+name: inbox triage settles each message's end state
+description: >
+  ceo-inbox's 15-minute triage fires. The inbox has three unread messages: Marta Silva (a
+  known contact) needs the principal's sign-off on the revised term sheet by 5pm today;
+  a product newsletter; and a personal note from an old friend asking how the
+  principal's father is recovering from surgery. ceo-inbox escalates the term sheet to the
+  coordinator on a bullpen thread in its urgent send-request format (Signal, immediate)
+  and leaves it in the inbox marked read; archives the newsletter; and marks the personal
+  note read with the 📌 Seen label, leaving it in the inbox. It drafts no replies.
+tags: [specialist-ceo-inbox, ceo-inbox, triage]
+agent: ceo-inbox
+timeout_seconds: 420
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  contacts:
+    - key: marta
+      display_name: Marta Silva
+      channel: email
+      identifier: marta.silva@harborline.example.test
+    - key: owen
+      display_name: Owen Hart
+      channel: email
+      identifier: owen.hart@example.test
+inbound:
+  from: scheduler
+  content: >
+    Check the principal's inbox for unread messages. Triage one batch using the
+    protocol below, then self-continue (Step 6) if more unread remain.
+    If there are no unread messages, exit immediately without any output.
+tool_stubs:
+  ceo-inbox-list:
+    - match: {}
+      return:
+        count: 3
+        has_more: false
+        messages:
+          - id: msg-30b-terms
+            threadId: thr-30b-terms
+            subject: Revised term sheet — need your sign-off by 5pm today
+            from: [{ name: Marta Silva, email: marta.silva@harborline.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791878700
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Legal turned the revised Harborline term sheet. I need your yes or no on the 2x liquidation preference by 5pm today or we lose the signing slot.
+          - id: msg-30b-news
+            threadId: thr-30b-news
+            subject: "Product Weekly #212: pricing pages that convert"
+            from: [{ name: Product Weekly, email: newsletter@productweekly.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791879000
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: This week — five pricing pages that convert, and the metric nobody tracks. Unsubscribe anytime.
+          - id: msg-30b-personal
+            threadId: thr-30b-personal
+            subject: Thinking of you
+            from: [{ name: Owen Hart, email: owen.hart@example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791879300
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Heard about your dad's surgery. How is he doing? Is the recovery going okay?
+  ceo-inbox-read:
+    - match: { message_id: msg-30b-terms }
+      return:
+        id: msg-30b-terms
+        threadId: thr-30b-terms
+        from: [{ name: Marta Silva, email: marta.silva@harborline.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: Revised term sheet — need your sign-off by 5pm today
+        body_plain: "Hi,\n\nLegal turned the revised Harborline term sheet this morning. The only open point is the 2x liquidation preference. I need your yes or no on it by 5pm today, or we lose Thursday's signing slot and slip two weeks.\n\nMarta"
+        date: 1791878700
+        labels: [INBOX, UNREAD]
+        attachments: []
+    - match: { message_id: msg-30b-news }
+      return:
+        id: msg-30b-news
+        threadId: thr-30b-news
+        from: [{ name: Product Weekly, email: newsletter@productweekly.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: "Product Weekly #212: pricing pages that convert"
+        body_plain: "This week: five pricing pages that convert, and the metric nobody tracks.\n\nRead online | Unsubscribe | Manage preferences"
+        date: 1791879000
+        labels: [INBOX, UNREAD]
+        attachments: []
+    - match: { message_id: msg-30b-personal }
+      return:
+        id: msg-30b-personal
+        threadId: thr-30b-personal
+        from: [{ name: Owen Hart, email: owen.hart@example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: Thinking of you
+        body_plain: "Hey,\n\nI heard about your dad's heart surgery last week. How is he doing? Is the recovery going okay? Thinking of you all. Let me know if there's anything I can do.\n\nOwen"
+        date: 1791879300
+        labels: [INBOX, UNREAD]
+        attachments: []
+  contact-register:
+    - match: { identifier: marta.silva@harborline.example.test }
+      return: { contact_id: "{{contact:marta}}", display_name: Marta Silva, contact_confidence: 0.9, created: false, verified: true }
+    - match: { identifier: owen.hart@example.test }
+      return: { contact_id: "{{contact:owen}}", display_name: Owen Hart, contact_confidence: 0.9, created: false, verified: true }
+    - match: {}
+      return: { contact_id: 6c1d2e3f-4a5b-4c6d-8e7f-30b000000001, display_name: Product Weekly, contact_confidence: 0.5, created: true, verified: true }
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
+      error: "Missing required field: 'topic'"
+    - match: { participants: null }
+      error: "Missing required field: 'participants' (non-empty string array)"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30b0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30b0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-reply:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30b0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30b0-4e5f-8a9b-000000000003 }
+  bullpen-read:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+  bullpen-close:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30b0-4e5f-8a9b-000000000001, status: closed }
+expected_behaviors:
+  - id: urgent_escalated
+    weight: critical
+    description: >
+      Posts a bullpen thread to the coordinator in the urgent send-request format
+      (immediate, Signal) about the term sheet.
+    check:
+      called: bullpen-post
+      contains: { participants: coordinator, content: Signal }
+  - id: urgent_stays_in_inbox
+    weight: critical
+    description: Does not archive the urgent message.
+    check:
+      not_called: [ceo-inbox-archive]
+      with: { message_id: msg-30b-terms }
+  - id: urgent_marked_read
+    weight: critical
+    description: Marks the urgent message read, so it leaves the untriaged set.
+    check:
+      called: ceo-inbox-mark-read
+      with: { message_id: msg-30b-terms }
+  - id: newsletter_archived
+    weight: critical
+    description: Archives the newsletter (✔️ Cleared).
+    check:
+      called: ceo-inbox-archive
+      with: { message_id: msg-30b-news }
+  - id: personal_stays_in_inbox
+    weight: critical
+    description: Does not archive the personal note.
+    check:
+      not_called: [ceo-inbox-archive]
+      with: { message_id: msg-30b-personal }
+  - id: personal_marked_read
+    weight: critical
+    description: Marks the personal note read, so it leaves the untriaged set.
+    check:
+      called: ceo-inbox-mark-read
+      with: { message_id: msg-30b-personal }
+  - id: no_replies
+    weight: critical
+    description: Drafts no reply and no new email; none of the three warrants one.
+    check:
+      not_called: [ceo-inbox-draft-reply, ceo-inbox-draft-compose]
+  - id: personal_labelled_seen
+    weight: important
+    description: Labels the personal note 📌 Seen.
+    check:
+      called: ceo-inbox-label
+      with: { message_id: msg-30b-personal }
+      contains: { labels: Seen }
+  - id: urgent_starred
+    weight: nice-to-have
+    description: Stars the urgent message.
+    check:
+      called: ceo-inbox-mark-starred
+      with: { message_id: msg-30b-terms }
+  - id: shadow_draft_for_punt
+    weight: nice-to-have
+    description: Records a shadow draft for at least one punted message (the urgent or the personal one).
+    check:
+      called: ceo-inbox-shadow-draft
+failure_modes:
+  - Drafts a sympathetic reply to the personal note
+  - Archives the urgent term-sheet email or the personal note
+  - Leaves the urgent message or the personal note unread
+  - Escalates the newsletter
+  - Notifies the principal in some other shape than the bullpen send request

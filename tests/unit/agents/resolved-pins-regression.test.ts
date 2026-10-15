@@ -86,7 +86,6 @@ function resolveAgent(agentFile: string): string[] {
     'entity-context',
     'config-store',
     'date-resolve',
-    'bullpen',
     'delegate',
     'request-clarification',
     'file-parse',

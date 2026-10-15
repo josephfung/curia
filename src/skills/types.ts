@@ -307,8 +307,10 @@ export interface ToolContext {
    *  Provides a narrow surface (register + release) for managing outbound context bridge entries.
    *  Pre-scoped with conversationId by the execution layer. */
   outboundContext?: import('../dispatch/outbound-context.js').OutboundContextCapability;
-  /** Configurable fallback timeout for specialist delegations when no timeout_ms is supplied.
-   *  Sourced from config.delegate.defaultTimeoutMs. Relevant to the delegate skill only. */
+  /** Configurable fallback timeout for specialist delegations when the runtime injects no
+   *  valid timeout_ms (the model cannot supply one since #1797; the runtime derives it from
+   *  expected durations). Sourced from config.delegate.defaultTimeoutMs. Relevant to the
+   *  delegate skill only. */
   defaultDelegateTimeoutMs?: number;
   /** Resumable / plan-adaptive ceiling defaults from tasks.resumableCeilings (#1266). */
   resumableCeilings?: import('../config.js').ResumableCeilingsConfig;

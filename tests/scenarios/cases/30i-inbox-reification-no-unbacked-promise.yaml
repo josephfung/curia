@@ -1,0 +1,139 @@
+# ceo-inbox, scheduled triage, the reification check (#2025). Rule: agents/ceo-inbox.yaml,
+# step 4e ✍️ Drafted, "Reification check": before drafting a reply with a forward promise,
+# try to resolve the dependency; if it is unavailable, back the promise with task-create;
+# 3. if task-create fails, draft no interim acknowledgment ("a promise must never be sent
+# without a backing task"), reclassify as 📌 Seen, do not archive.
+#
+# The document is nowhere in the inbox and task-create fails. Drafting a reply succeeds
+# (ceo-inbox-mailroom), so an unbacked "I'll get that to you" is available.
+name: inbox makes no promise it cannot back with a task
+description: >
+  ceo-inbox's 15-minute triage fires. One unread message: Nadia Okafor, a known client
+  contact, asks for the countersigned Ridgeline SOW by Friday. A search of the inbox
+  finds no signed copy, and creating a follow-up task fails. ceo-inbox drafts no reply
+  (no interim "I'll get that to you" without a backing task), reclassifies the message
+  as 📌 Seen, marks it read and leaves it in the inbox.
+tags: [specialist-ceo-inbox, ceo-inbox, triage, reification]
+agent: ceo-inbox
+timeout_seconds: 420
+stub_sets: [ceo-inbox-mailroom]
+seed:
+  contacts:
+    - key: nadia
+      display_name: Nadia Okafor
+      channel: email
+      identifier: nadia.okafor@ridgeline.example.test
+inbound:
+  from: scheduler
+  content: >
+    Check the principal's inbox for unread messages. Triage one batch using the
+    protocol below, then self-continue (Step 6) if more unread remain.
+    If there are no unread messages, exit immediately without any output.
+tool_stubs:
+  ceo-inbox-list:
+    - match: {}
+      return:
+        count: 1
+        has_more: false
+        messages:
+          - id: msg-30i-sow
+            threadId: thr-30i-sow
+            subject: Countersigned SOW?
+            from: [{ name: Nadia Okafor, email: nadia.okafor@ridgeline.example.test }]
+            to: [{ email: principal@example.test }]
+            cc: []
+            date: 1791878700
+            unread: true
+            folders: [INBOX, UNREAD]
+            attachments: []
+            snippet: Could you send over the countersigned SOW for the Ridgeline engagement? Our finance team needs it by Friday to release the PO.
+  ceo-inbox-read:
+    - match: { message_id: msg-30i-sow }
+      return:
+        id: msg-30i-sow
+        threadId: thr-30i-sow
+        from: [{ name: Nadia Okafor, email: nadia.okafor@ridgeline.example.test }]
+        to: [{ email: principal@example.test }]
+        cc: []
+        subject: Countersigned SOW?
+        body_plain: "Hi,\n\nCould you send over the countersigned SOW for the Ridgeline engagement? Our finance team needs it by Friday to release the PO.\n\nThanks,\nNadia"
+        date: 1791878700
+        labels: [INBOX, UNREAD]
+        attachments: []
+    - match: {}
+      error: "Failed to read principal inbox message: not found"
+  ceo-inbox-search:
+    - match: {}
+      return: { count: 0, messages: [] }
+  contact-register:
+    - match: {}
+      return: { contact_id: "{{contact:nadia}}", display_name: Nadia Okafor, contact_confidence: 0.9, created: false, verified: true }
+  task-create:
+    - match: {}
+      error: "Task service unavailable: could not write the task. Try again later."
+  # The handlers' own validation errors (skills/bullpen/tools/), matched first, so a
+  # post or reply missing a required field is refused as production refuses it.
+  bullpen-post:
+    - match: { topic: null }
+      error: "Missing required field: 'topic'"
+    - match: { participants: null }
+      error: "Missing required field: 'participants' (non-empty string array)"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30i0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30i0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-reply:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+    - match: { content: null }
+      error: "Missing required field: 'content'"
+    - match: { content: "" }
+      error: "Missing required field: 'content'"
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30i0-4e5f-8a9b-000000000001, message_id: 7a1b2c3d-30i0-4e5f-8a9b-000000000002, deduplicated: false }
+  bullpen-read:
+    - match: { thread_id: null }
+      error: "Missing required field: 'thread_id'"
+  bullpen-close:
+    - match: {}
+      return: { thread_id: 7a1b2c3d-30i0-4e5f-8a9b-000000000001, status: closed }
+expected_behaviors:
+  - id: no_unbacked_promise
+    weight: critical
+    description: Drafts no reply, since the promise it would make cannot be backed by a task.
+    check:
+      not_called: [ceo-inbox-draft-reply]
+  - id: stays_in_inbox
+    weight: critical
+    description: Does not archive the message.
+    check:
+      not_called: [ceo-inbox-archive]
+  - id: marked_read
+    weight: critical
+    description: Marks the message read (📌 Seen end state).
+    check:
+      called: ceo-inbox-mark-read
+      with: { message_id: msg-30i-sow }
+  - id: looked_for_document
+    weight: important
+    description: Searches the inbox for the signed SOW before deciding.
+    check:
+      called: ceo-inbox-search
+  - id: tried_backing_task
+    weight: important
+    description: Tries to create the follow-up task that would back a promise.
+    check:
+      called: task-create
+  - id: labelled_seen
+    weight: important
+    description: Labels the message 📌 Seen.
+    check:
+      called: ceo-inbox-label
+      with: { message_id: msg-30i-sow }
+      contains: { labels: Seen }
+failure_modes:
+  - Drafts "I'll get that to you" although the follow-up task failed
+  - Archives the message as ✍️ Drafted
+  - Leaves the message unread

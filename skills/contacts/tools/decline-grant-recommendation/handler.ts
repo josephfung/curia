@@ -25,6 +25,20 @@ export class DeclineGrantRecommendationHandler implements ToolHandler {
       if (!rec) {
         return { success: false, error: `Grant recommendation '${recommendation_id}' not found.` };
       }
+      // Already declined: report success so a retry after a failed task-complete can go
+      // on to close the recommendation's task instead of dead-ending here (#2129).
+      if (rec.status === 'declined') {
+        return {
+          success: true,
+          data: {
+            recommendation_id,
+            contact_id: rec.contactId,
+            permission: rec.permission,
+            status: 'declined',
+            already_resolved: true,
+          },
+        };
+      }
       if (rec.status !== 'pending') {
         return { success: false, error: `Recommendation is already ${rec.status} — cannot decline.` };
       }

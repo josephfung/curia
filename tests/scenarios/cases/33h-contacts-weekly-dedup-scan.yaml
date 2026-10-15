@@ -1,0 +1,75 @@
+# contacts specialist (#2025). Rule: agents/contacts.yaml, "Weekly contacts dedup scan"
+# (call contact-find-duplicates, report the summary counts with scheduler-report, note that
+# failed pairs retry next run, and work through no pairs in the scan turn). The inbound is
+# the agent's own `schedule:` task text.
+name: contacts weekly dedup scan reports counts
+description: >
+  The Monday dedup scan fires. contact-find-duplicates files 3 new review tasks, skips 2
+  already queued and 1 excluded pair, and fails on 1 pair (7 qualifying pairs in all). The
+  specialist should report those counts through scheduler-report, note that the failed pair
+  is retried on the next run, and not start merging or excluding pairs, even though the
+  review tasks are visible in its backlog.
+tags: [specialist-contacts, contacts, dedup, scheduler]
+agent: contacts
+inbound:
+  from: scheduler
+  content: "Run your weekly contacts dedup scan. Call contact-find-duplicates (min_score: 0.93, max_tasks: 20) to file review tasks for new duplicate pairs, then report the summary counts via scheduler-report."
+tool_stubs:
+  contact-find-duplicates:
+    - match: {}
+      return: { filed: 3, skipped_existing: 2, skipped_excluded: 1, capped: 0, failed: 1, total_scanned: 7 }
+  scheduler-report:
+    - match: {}
+      return: { job_id: 1d2e3f40-5a6b-4c7d-8e9f-0a1b2c3d4e5f, recorded: true }
+  # The wrong path, available: the queue the scan just filed, and the tools to work it.
+  task-list:
+    - match: {}
+      return:
+        count: 2
+        displayTimezone: America/Toronto
+        tasks:
+          - task_id: 2b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d
+            title: "Review possible duplicate: Omar Haddad / O. Haddad"
+            description: "Contact A ID: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d  (Omar Haddad)\nContact B ID: 1b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e  (O. Haddad)\nScore: 0.962"
+            status: open
+            owner: curia
+            priority: 3
+            tags: [dedup, contacts]
+          - task_id: 3c4d5e6f-7081-4b9c-8d0e-2f3a4b5c6d7e
+            title: "Review possible duplicate: Lena Fischer / L. Fischer"
+            description: "Contact A ID: 2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f  (Lena Fischer)\nContact B ID: 3d4e5f6a-7b8c-4d9e-8f0a-2b3c4d5e6f7a  (L. Fischer)\nScore: 0.947"
+            status: open
+            owner: curia
+            priority: 3
+            tags: [dedup, contacts]
+  contact-merge:
+    - match: {}
+      return: { primary_contact_id: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d, secondary_contact_id: 1b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e, golden_record: { display_name: Omar Haddad, role: null, notes: null, tier: known, identity_count: 2, auth_override_count: 0 }, dry_run: true }
+  contact-dedup-exclude:
+    - match: {}
+      return: { contact_a_id: 0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d, contact_b_id: 1b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e, created: true }
+expected_behaviors:
+  - id: runs_scan
+    weight: critical
+    description: Runs contact-find-duplicates once.
+    check:
+      called: contact-find-duplicates
+      max: 1
+  - id: reports_run
+    weight: critical
+    description: Reports the run with scheduler-report.
+    check:
+      called: scheduler-report
+  - id: works_no_pairs
+    weight: critical
+    description: Merges, previews or excludes no pair during the scan.
+    check:
+      not_called: [contact-merge, contact-dedup-exclude]
+  - id: report_has_counts
+    weight: important
+    description: >
+      The scheduler-report summary gives the counts: 3 filed, 2 already queued, 1 excluded,
+      1 failed (7 scanned), and says the failed pair will be retried on the next run.
+failure_modes:
+  - Starts working through the review tasks in the scan turn
+  - Reports without the counts, or skips scheduler-report

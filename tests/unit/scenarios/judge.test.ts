@@ -37,10 +37,10 @@ describe('parseJudgeResponse', () => {
 
 describe('formatJudgeInput', () => {
   const scenario: ScenarioCase = {
-    name: 'paused', description: 'Delegate returns paused.', tags: [], delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
+    name: 'paused', description: 'Delegate returns paused.', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: 'How is the research going?' },
-    toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
+    toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: ['Blames an API outage'],
   };
   const run: ScenarioRun = {
     runIndex: 0, inboundContent: 'How is the research going?', refs: {}, durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [],
@@ -75,10 +75,10 @@ describe('formatJudgeInput', () => {
 
 describe('formatJudgeInput with real delegation (#2027)', () => {
   const scenario: ScenarioCase = {
-    name: 'real', description: 'Calendar really runs.', tags: [], delegation: 'real', releaseGate: true, sourceFile: 'x.yaml',
+    name: 'real', description: 'Calendar really runs.', tags: [], agent: 'coordinator', delegation: 'real', releaseGate: true, sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: "What's on tomorrow?" },
-    toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],
+    toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   };
   const base: ScenarioRun = {
     runIndex: 0, inboundContent: "What's on tomorrow?", refs: {}, durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [],
@@ -120,10 +120,10 @@ describe('extractJsonObject', () => {
 
 describe('judgeRun', () => {
   const scenario = {
-    name: 'x', description: '', tags: [], delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
+    name: 'x', description: '', tags: [], agent: 'coordinator', delegation: 'stubbed', releaseGate: true, sourceFile: 'x.yaml',
     seed: { contacts: [], outboundContext: [], bullpen: [] },
     inbound: { from: 'principal', content: 'hi' },
-    toolStubs: {}, explicitStubTools: [], expectedBehaviors: behaviors, failureModes: [],
+    toolStubs: {}, explicitStubTools: [], ownStubTools: [], expectedBehaviors: behaviors, failureModes: [],
   } as ScenarioCase;
   const run: ScenarioRun = { runIndex: 0, inboundContent: 'hi', refs: {}, toolCalls: [], reply: 'ok', durationMs: 1, unstubbedCalls: 0, usage: emptyBreakdown(), providerRetries: [] };
   const error = (type: string) => ({ type: 'error' as const, error: { type, source: 'openrouter', message: 'x', retryable: false, context: {}, timestamp: new Date() } });

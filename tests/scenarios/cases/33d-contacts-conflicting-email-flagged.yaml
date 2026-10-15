@@ -1,0 +1,82 @@
+# contacts specialist (#2025). Rule: agents/contacts.yaml, "Contact CRUD" (a different email
+# than what's on file is flagged in the response, not silently overwritten; new details for
+# an existing contact go through contact-link-identity) and "Identity Status". Ports the
+# specialist half of smoke conflicting-contact.yaml: the principal states the update
+# directly, so applying it is fine, but the address on file must not vanish unmentioned.
+name: contacts conflicting email is flagged
+description: >
+  The coordinator relays the principal's update: Leah Moreno's new email is
+  leah.moreno@horizongroup.example.test, she moved from Apex Dynamics last month, and
+  anything sent to her should go to the new address. Her Apex address is on file. The
+  specialist should look her up, notice the Apex address already on file, keep it on the
+  record (it may mark it defunct, or ask whether to retire it), and say in its reply what
+  is on file and what it did. Recording the new address is fine, since the principal
+  stated it.
+tags: [specialist-contacts, contacts, conflict]
+agent: contacts
+timeout_seconds: 300
+seed:
+  contacts:
+    - key: leah
+      display_name: Leah Moreno
+      tier: known
+      role: VP Sales
+      channel: email
+      identifier: leah.moreno@apexdynamics.example.test
+inbound:
+  from: delegate
+  content: >-
+    The principal says: Leah Moreno's new email is leah.moreno@horizongroup.example.test.
+    She moved over from Apex Dynamics to Horizon Group last month. Make sure anything we
+    send her goes to the new address.
+tool_stubs:
+  calendar-list-events:
+    - match: {}
+      return: { events: [], count: 0, displayTimezone: "{{timezone}}" }
+  memory-store:
+    - match: {}
+      return: { action: created, stored: true }
+  contact-link-identity:
+    - match: {}
+      return: { identity_id: 5d6e7f80-91a2-4b3c-8d4e-5f6a7b8c9d0e, verified: true, already_linked: false }
+  contact-update:
+    - match: {}
+      return: { contact_id: "{{contact:leah}}", updated_fields: [organization] }
+  # Some runs also record a role for her new job (1 of 20 on main's prompt).
+  contact-set-role:
+    - match: {}
+      return: { contact_id: "{{contact:leah}}", role: VP Sales }
+  contact-set-identity-status:
+    - match: {}
+      return: { identity_id: 6e7f8091-a2b3-4c4d-9e5f-6a7b8c9d0e1f, status: defunct }
+  # The wrong path, available: dropping the old address from the record.
+  contact-unlink-identity:
+    - match: {}
+      return: { unlinked: true }
+expected_behaviors:
+  - id: looks_up
+    weight: critical
+    description: Looks Leah up before changing anything.
+    check:
+      order: [contact-lookup, contact-link-identity]
+  - id: keeps_old_address
+    weight: critical
+    description: Does not remove the Apex address from Leah's record.
+    check:
+      not_called: [contact-unlink-identity]
+  - id: flags_conflict
+    weight: critical
+    description: >
+      The reply points out that a different address (her Apex Dynamics email) was already
+      on file, and says what was done with it or asks whether to retire it. Applying the
+      new address without mentioning the old one fails.
+  - id: records_new_address
+    weight: nice-to-have
+    description: Links the new Horizon Group address to Leah's contact.
+    check:
+      called: contact-link-identity
+      contains: { identifier: horizongroup }
+failure_modes:
+  - Replaces the Apex address without mentioning it
+  - Unlinks the old address from the contact
+  - Creates a second Leah Moreno for the new address

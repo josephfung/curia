@@ -72,7 +72,7 @@ describe('createTurnCapture', () => {
     const call = (agentId: string, toolName: string) => createToolInvoke({
       agentId, conversationId: 'thread-1', toolName, input: {}, taskEventId: 'task-1', parentEventId: 'task-1',
     });
-    await bus.publish('agent', call('coordinator', 'bullpen'));
+    await bus.publish('agent', call('coordinator', 'bullpen-reply'));
     await bus.publish('agent', call('ceo-inbox', 'ceo-inbox-draft-reply'));
     await respond(bus, 'thread-1', 'the coordinator');
     await respond(bus, 'thread-1', 'drafted', { agentId: 'ceo-inbox' });

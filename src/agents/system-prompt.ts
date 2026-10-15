@@ -254,7 +254,7 @@ export function formatTaskTailBlocks(task: {
     } else if (parseSchedulerRunJobId(task.conversationId)) {
       fence +=
         ' Record the outcome of this run by calling `scheduler-report` with a summary — `job_id` is derived automatically; do not pass one. ' +
-        'This is the only way to report a scheduled run; do not use `bullpen` to report, and do not treat any id in the task payload as a bullpen `thread_id`. ' +
+        'This is the only way to report a scheduled run; do not use the bullpen to report, and do not treat any id in the task payload as a bullpen `thread_id`. ' +
         'If you find no work matching the task description, call `scheduler-report` with a one-line summary stating that no work was found, then exit.';
     }
     tail += fence;

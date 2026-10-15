@@ -17,7 +17,7 @@
 //     ./node_modules/.bin/tsx scripts/report-agent-context.ts \
 //     --agent coordinator --days 30 --format markdown'
 //
-// Append each capture to docs/wip/2026-10-01-coordinator-context-baseline.md.
+// What each number means: docs/dev/adding-an-agent.md, "Measuring an agent's context".
 //
 // Safety: every statement this script sends is a single SELECT. The CLI also
 // sets the session to default_transaction_read_only before those SELECTs.

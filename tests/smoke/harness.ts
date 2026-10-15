@@ -299,24 +299,28 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Curia
   }
 
   /**
-   * Test mode gives the tool layer no bullpen service, so the bullpen tool is refused. A
+   * Test mode gives the tool layer no bullpen service, so the bullpen tools are refused. A
    * woken agent's first step is usually reading the thread it was woken on, and its
    * natural last step a reply there, and a refusal of either sends it chasing a broken
    * tool layer. Serve both for this case's thread, through the real service on the
-   * database copy, in the shapes the bullpen handler returns. The reply wakes no one
-   * (see caseOnlyBus above). Any other bullpen call stays refused unless a case stubs it.
+   * database copy, in the shapes the bullpen-read and bullpen-reply handlers return. The
+   * reply wakes no one (see caseOnlyBus above). Any other bullpen call stays refused
+   * unless a case stubs it.
    */
   function answerOnThread(target: CaseTarget, thread: TargetThread): void {
-    stubs.answer('bullpen', async (input, agentId) => {
-      // Only the targeted agent's calls: a reply is posted as it, so another agent's
-      // (one it delegated to, say) must not be credited to it. Those stay refused.
-      if (input['thread_id'] !== thread.threadId || agentId !== target.agent) return undefined;
-      if (input['action'] === 'get_thread') {
-        const loaded = await stack.bullpenService.getThread(thread.threadId);
-        if (!loaded) return { success: false, error: `No bullpen thread with ID ${thread.threadId} exists` };
-        return { success: true, data: { thread_id: thread.threadId, thread: loaded.thread, messages: loaded.messages } };
-      }
-      if (input['action'] === 'reply' && typeof input['content'] === 'string' && input['content'] !== '') {
+    // Only the targeted agent's calls: a reply is posted as it, so another agent's
+    // (one it delegated to, say) must not be credited to it. Those stay refused.
+    const onThread = (input: Record<string, unknown>, agentId: string | undefined): boolean =>
+      input['thread_id'] === thread.threadId && agentId === target.agent;
+    stubs.answer('bullpen-read', async (input, agentId) => {
+      if (!onThread(input, agentId)) return undefined;
+      const loaded = await stack.bullpenService.getThread(thread.threadId);
+      if (!loaded) return { success: false, error: `No bullpen thread with ID ${thread.threadId} exists` };
+      return { success: true, data: { thread_id: thread.threadId, thread: loaded.thread, messages: loaded.messages } };
+    });
+    stubs.answer('bullpen-reply', async (input, agentId) => {
+      if (!onThread(input, agentId)) return undefined;
+      if (typeof input['content'] === 'string' && input['content'] !== '') {
         const closeAfter = input['close_after'] === true;
         try {
           const message = await stack.bullpenService.postMessage(thread.threadId, target.agent, input['content'], [], closeAfter);

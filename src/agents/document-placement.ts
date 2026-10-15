@@ -486,7 +486,10 @@ export function formatProjectsCatalogBlock(
   return lines.join('\n');
 }
 
-/** Short placement policy blurb for harness injection — must match skills/documents/SKILL.md. */
+/**
+ * Placement policy injected on task wakes. The full order lives only here and in
+ * doc-place's recommendation; skills/documents/SKILL.md says only to call doc-place first.
+ */
 export function formatPlacementGuidanceBlock(): string {
   return [
     '## Document Placement',

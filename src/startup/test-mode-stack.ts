@@ -230,6 +230,17 @@ export interface TestModeStackOptions {
   /** Override for fixtures. Default <repo>/agents and <repo>/skills. */
   agentsDir?: string;
   skillsDir?: string;
+  /**
+   * Override for <repo>/config: the YAML config, registry defaults and MCP servers. The
+   * scenario suite's --overlay points it at core's config with a deployment's local.yaml
+   * and skills.yaml laid over it, as that deployment's image does.
+   */
+  configDir?: string;
+  /**
+   * MCP tools/list snapshot directories searched before core's tests/fixtures/mcp: a
+   * deployment's own servers, for the scenario suite's --overlay.
+   */
+  mcpSnapshotDirs?: string[];
 }
 
 export interface TestModeStack {
@@ -398,6 +409,7 @@ async function productionEnabledNames(
   discovery: { tools: ToolDiscovery[]; skills: SkillDiscovery[] },
   vault: SecretsService | undefined,
   calendarConfigured: boolean,
+  configDir: string,
   logger: Logger,
 ): Promise<{ tool: Set<string>; skill: Set<string>; agent: Set<string> }> {
   const toolRepo = new DryRunRegistryRepo(new RegistryRepo(pool, 'tool_registry'));
@@ -416,7 +428,7 @@ async function productionEnabledNames(
     secrets: vault,
     // Production's condition for building the calendar client, without building one.
     unavailableCapabilities: new Set(calendarConfigured ? [] : ['nylasCalendarClient']),
-    defaults: loadRegistryDefaults(path.join(REPO_ROOT, 'config', 'registry-defaults.yaml')),
+    defaults: loadRegistryDefaults(path.join(configDir, 'registry-defaults.yaml')),
     logger,
   });
   const enabled = async (repo: DryRunRegistryRepo): Promise<Set<string>> =>
@@ -499,7 +511,8 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
   let signalPhoneNumber = config.signalPhoneNumber;
   const llmMode = options.llm ?? 'live';
   const warnings: string[] = [];
-  const yamlConfig = options.yamlConfig ?? loadYamlConfig(path.join(REPO_ROOT, 'config'));
+  const configDir = options.configDir ?? path.join(REPO_ROOT, 'config');
+  const yamlConfig = options.yamlConfig ?? loadYamlConfig(configDir);
   const logger = options.logger ?? createLogger('error');
   const agentsDir = options.agentsDir ?? path.join(REPO_ROOT, 'agents');
   const skillsDir = options.skillsDir ?? path.join(REPO_ROOT, 'skills');
@@ -661,7 +674,7 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     };
     const enabled = (options.enablement ?? 'registry') === 'registry'
       ? await productionEnabledNames(
-        pool, discovered, { tools: toolDiscovery, skills: skillDiscovery }, vault, calendarConfigured, logger,
+        pool, discovered, { tools: toolDiscovery, skills: skillDiscovery }, vault, calendarConfigured, configDir, logger,
       )
       : { tool: discovered.tools, skill: discovered.skills, agent: discovered.agents };
 
@@ -671,8 +684,9 @@ export async function createTestModeStack(options: TestModeStackOptions = {}): P
     loadSkillsFromDiscovery(skillDiscovery, skillRegistry, logger, enabled.skill);
     // Boot's order: MCP tools after local ones, projected before synthetic singletons.
     const snapshotMcp = registerSnapshotMcpServers({
-      configDir: path.join(REPO_ROOT, 'config'),
+      configDir,
       snapshotDir: MCP_SNAPSHOT_DIR,
+      ...(options.mcpSnapshotDirs ? { extraSnapshotDirs: options.mcpSnapshotDirs } : {}),
       toolRegistry,
       skillRegistry,
       skillsDir,

@@ -120,6 +120,8 @@ import { splitCommaSeparatedAddresses } from '../contacts/principal-carveout-par
 import type { ErrorType } from '../errors/types.js';
 import {
   RECIPIENT_REFERENCE_SKILLS,
+  addressOrReferenceError,
+  emptyRecipientListError,
   findRetiredRecipientField,
   formatResolvedRecipient,
   parseRecipientReference,
@@ -960,7 +962,8 @@ export class ExecutionLayer {
    *   cc list would send to fewer people than the agent asked for.
    * - Every entry in a reference input (`to`, `cc`, `recipient`) must be a contact
    *   UUID or "principal". An address or a template token there is refused with the
-   *   resolver's message, before any lookup.
+   *   resolver's message, before any lookup. An input listed in `addresses`
+   *   (email-reply's cc, #2131) also passes a well-formed address through unresolved.
    * - References resolve through the same resolver the skill uses, including a
    *   `#label` hint (`principal#personal`, #2047), so the gate sees the address the
    *   skill will send to.
@@ -993,17 +996,37 @@ export class ExecutionLayer {
     }
 
     // Each reference costs a contact read before any gate. Bound the fan-out from a
-    // long list; the handler's own length cap runs later.
-    const referenceCount = new Set(skill.references.flatMap((field) => entriesOf(input[field]))).size;
+    // long list; the handler's own length cap runs later. A literal address in an
+    // input that takes one (email-reply's cc) costs no read and is not counted.
+    const referenceCount = new Set(skill.references.flatMap((field) =>
+      entriesOf(input[field]).filter((entry) =>
+        !skill.addresses?.includes(field) || parseRecipientReference(entry) !== null),
+    )).size;
     if (referenceCount > MAX_SEND_REFERENCES) {
       return { ok: false, error: `Too many recipients (${referenceCount}); the limit is ${MAX_SEND_REFERENCES}. Nothing was sent.` };
     }
 
     for (const field of skill.references) {
-      for (const entry of entriesOf(input[field])) {
+      const takesAddresses = skill.addresses?.includes(field) ?? false;
+      const value = input[field];
+      // `cc: ","` is not `cc: ""` (sender-only on email-reply). Refuse it here so no
+      // approval is filed for a reply the handler would refuse (#2131).
+      if (takesAddresses && typeof value === 'string' && value.trim() && entriesOf(value).length === 0) {
+        skillLogger.info({ toolName, field }, 'send recipient refused: an explicit list with no entries (#2131)');
+        return { ok: false, error: emptyRecipientListError(field) };
+      }
+      for (const entry of entriesOf(value)) {
         if (resolved.has(entry.trim())) continue;
         const parsed = parseRecipientReference(entry);
         const isReference = parsed !== null;
+        // An address in an input that takes one is sent as written (#2131). Anything
+        // else there that is not a reference is refused before any gate.
+        if (!isReference && takesAddresses) {
+          const error = addressOrReferenceError(entry, skill.channel, field);
+          if (error === null) continue;
+          skillLogger.info({ toolName, field }, 'send recipient refused: neither an address nor a reference (#2131)');
+          return { ok: false, error };
+        }
         if (isReference && !this.contactService) continue;
         const result = await resolveRecipientReference(entry, skill.channel, { field }, {
           // Never called for a reference without a contact service (skipped above);
@@ -1837,6 +1860,16 @@ export class ExecutionLayer {
                 }
                 recipients = resolved.recipients;
                 resolutionFailed = resolved.resolutionFailed;
+                // email-reply's cc may hold references (#2131). Compare the addresses
+                // the handler will send to, as the sync path does for email-send.
+                if (recipients !== null) {
+                  const normalized = this.substituteResolvedRecipients(recipients, sendRecipients);
+                  if (!normalized.ok) {
+                    skillLogger.info({ toolName }, 'autonomy gate: Gate C refused an unresolved recipient reference (#2131)');
+                    return { success: false, error: this.wrapSkillError(normalized.error) };
+                  }
+                  recipients = normalized.recipients;
+                }
                 isPrincipalSoleRecipient = resolvePrincipalIsSoleRecipientFromSkillInput(
                   toolName,
                   input,

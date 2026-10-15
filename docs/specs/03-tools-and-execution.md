@@ -27,7 +27,7 @@ skills/
   "version": "1.0.0",
   "sensitivity": "elevated",
   "action_risk": "medium",
-  "inputs": { "to": "string", "subject": "string", "body": "string", "cc": "string?" },
+  "inputs": { "to": "string (contact ID or \"principal\")", "subject": "string", "body": "string", "cc": "string? (contact IDs or \"principal\")" },
   "outputs": { "messageId": "string", "threadId": "string" },
   "permissions": [],
   "secrets": [],
@@ -43,6 +43,7 @@ skills/
 - `install.requires_secrets` (optional): vault secret keys that must already exist before the skill can be **installed or enabled** in the registry. `RegistryService` rejects install/enable until every listed key is present in the vault. This is the install/enable gate, distinct from the runtime `secrets` allowlist above. Example: `web-search` declares `"install": { "requires_secrets": ["tavily_api_key"] }`. (An `uninstall` block is parsed but currently inert.)
 - `skip_secret_redaction` (optional, boolean): opts the skill's output out of **only** the broad generic-long-hex secret scrub in output sanitization — the structured credential patterns (API keys, JWT/Bearer, AWS) still apply, as do tag-stripping and truncation. Gated at startup to skills that declare the `secretCapture` capability. Exists so a skill whose output legitimately carries a high-entropy capability token (e.g. the secret-capture one-time link) can relay it to the LLM intact. Default false.
 - `provenance_source` (optional, boolean): the skill's successful output is source text for identifier provenance. The runtime indexes the identifiers in it under the task's root conversation, and contact skills verify an agent-entered address only when a person's message or such a result contains it, or the principal approved the write (#2061, ADR-047). Only for skills whose output is data they read, never model-written text. Default false.
+- `optional_capabilities` (optional): capability names the skill uses when the deployment has them and can do without (#2024). A missing required capability refuses the call; a missing optional one is simply not injected, so the handler checks for it. A name may not appear in both lists. `skill-activate` declares `taskRepo` here.
 
 **Privilege access** — skills declare which privileged services they need via `"capabilities": [...]` in `tool.json`. The loader validates names against a fixed allowlist (`VALID_CAPABILITIES` in `src/skills/loader.ts`) at startup and rejects unknown names. The manifest is frozen after loading. The execution layer injects only declared services into `ToolContext` — skills cannot self-escalate at runtime. Universal services (`contactService`, `entityContextAssembler`, `agentPersona`) are available to all skills without declaration. Three secret-related capabilities: `secretCapture` (grants `ctx.secretCapture` to mint one-time vault capture links), `secretResolver` (grants `ctx.resolveSecretRef` to resolve a `user.*` secret by reference at runtime — additionally hard-allowlisted to `web-browser` in the execution layer), and `userSecretIndex` (grants `ctx.listUserSecretNames` to list `user.*` key names only — hard-allowlisted to `list-user-secrets`; never values, never system/channel keys). See the `capabilities` section in `docs/dev/adding-a-tool.md` for the full capability reference.
 
@@ -68,6 +69,10 @@ interface ToolContext {
   listUserSecretNames?: () => Promise<string[]>; // capability-gated by `userSecretIndex` — `user.*` key names only; hard-allowlisted to list-user-secrets
   appOrigin?: string;            // available to all skills — public origin used to build capture-link URLs
   httpPort?: number;             // available to all skills — local HTTP port, dev fallback origin for capture-link URLs
+  signal?: AbortSignal;          // every invocation — aborted at the manifest timeout; pass to network calls (#2083)
+  deadline?: number;             // every invocation — epoch ms of the timeout; with `signal`, satisfies CallBudget (#2083)
+  resolveRecipientReference?: (channel, value, fields) => Promise<RecipientResolution>; // contact reference → verified address, for draft-only tools without outboundGateway; fails closed (#2053, ADR-047)
+  selfEmails?: readonly string[]; // every mailbox Curia owns — email-reply drops them from reply-all CC (#1815)
   // ...plus service-specific fields injected per-skill by name (bus, entityMemory, etc.)
 }
 
@@ -88,7 +93,7 @@ The framework acts as an MCP client connecting to external MCP servers:
 # config/skills.yaml
 mcp_servers:
   - name: google-workspace
-    transport: http
+    transport: sse
     url: https://mcp-server.example.com/mcp
     headers:
       Authorization: "Bearer <token>"
@@ -103,7 +108,7 @@ mcp_servers:
         masked: true
 ```
 
-Supported transports: `stdio` (local subprocess) and `http` (StreamableHTTP — the current MCP SDK recommended transport for hosted servers). The deprecated `sse` transport has been migrated.
+Supported transports: `stdio` (local subprocess) and `sse` (a hosted endpoint). Despite its name, `sse` connects with StreamableHTTP — the current MCP SDK recommended transport; the deprecated SSE client is no longer used.
 
 **MCP credential management.** MCP servers may declare required secrets via a `secrets:` block (`McpSecretDeclaration[]` — `key`, `label`, `masked`). The web console's **Settings → MCP Skills** page presents credential fields for each declaration, writes values to the encrypted vault, and gates enable/disable on whether all required secrets resolve. This mirrors the Channels registry pattern. Internally, `McpRegistryService` (`mcp_server_registry` table, `reconcileMcpRegistry` bootstrap step) tracks install/enable state for each MCP server. `loadMcpServers` filters to enabled servers only.
 
@@ -197,7 +202,8 @@ Tools, skills, and agents are not enabled merely by existing on disk — they ar
 - **`skill_registry`** — the collection/bundle layer (calendar, task-management, imported Anthropic skills). Created fresh in migration `076_create_skill_registry.sql` (#1489); bundle rows are cross-referenced against on-disk `SKILL.md` discovery.
 - **`agent_registry`** — agents.
 
-- **Disabled by default.** A newly added tool, skill, or agent is registered at startup but starts **disabled**.
+- **Disabled by default.** A newly added tool, skill, or agent is registered at startup but starts **disabled** — except core defaults from `config/registry-defaults.yaml` and member tools of an enabled bundle.
+- **Bundle expansion (#1974).** An enabled bundle owns its members: listing a tool in its SKILL.md `tools:` enrolls the tool (enabled) on the next boot, so `registry-defaults.yaml` `tools:` lists standalone tools only. A member gated by `install.requires_secrets` (or a capability whose integration this boot did not build) gets no row until the first boot after its gate clears. Uninstalling a member is refused while its bundle is enabled, since the next boot would re-enroll it; disable it instead. A disabled bundle is never expanded. See the [ADR-022](../adr/022-skill-agent-registry.md) amendment.
 - **Restart-based enforcement.** Enabled items are loaded/registered at startup; disabled items are skipped. Changing enable state takes effect on the next restart — there is no live reload.
 - **Secret gating.** `RegistryService` enforces `install.requires_secrets`: install/enable is rejected until every declared vault secret key exists in the vault. `web-search` is the first consumer (`requires_secrets: ["tavily_api_key"]`).
 
@@ -276,15 +282,16 @@ All skill results are sanitized before being included in the agent's LLM context
 
 #### Timeout safety: handlers must be at-most-once
 
-Skill timeouts are enforced via `Promise.race` against the handler. On timeout, the in-flight handler is **not** cancelled — any side effects it has already committed (DB writes, bus publishes, outbound sends) persist, and the caller sees a `<skill_error>Skill 'X' timed out after Yms</skill_error>` result.
+Skill timeouts are enforced via `Promise.race` against the handler. On timeout, the layer aborts `ctx.signal`, but the in-flight handler is **not** stopped — any side effects it has already committed (DB writes, bus publishes, outbound sends) persist, and the caller sees a `<skill_error>Skill 'X' timed out after Yms</skill_error>` result.
 
 This means a "timed out" result is **not the same as "no work happened"**. Callers cannot safely retry on timeout unless the skill is genuinely idempotent (e.g. accepts an idempotency key, or only reads).
 
 Skill handlers should be designed so that a timeout leaves no half-committed visible state:
 
-- If the skill's purpose is to **create a thing** (a thread, a draft, a message), persist that thing as the first awaited step, then make every downstream step fire-and-forget. `bullpen` follows this pattern: `openThread()` (synchronous, awaited) followed by `bus.publish(agent.discuss)` (fire-and-forget, with a `.catch` for logging) — agents see the new thread via pending-thread context injection even if the publish never fires.
+- If the skill's purpose is to **create a thing** (a thread, a draft, a message), persist that thing as the first awaited step, then make every downstream step fire-and-forget. `bullpen-post` follows this pattern: `openThread()` (synchronous, awaited) followed by `bus.publish(agent.discuss)` (fire-and-forget, with a `.catch` for logging) — agents see the new thread via pending-thread context injection even if the publish never fires.
 - If the skill's purpose is to **deliver a side effect that cannot be made fire-and-forget** (a wire-level send), the timeout must be set comfortably above the channel's p99 latency, and callers must be instructed not to retry.
 - Skills that internally `await` long-running infrastructure (e.g. an LLM call as part of `infraLlm`) must propagate timeouts so the skill's own timeout is the effective deadline.
+- Pass `ctx.signal` to every network call so a timed-out request is cancelled, and check it before a write: a read-modify-write that finishes late can otherwise undo a newer call's write (#2083). `ctx.deadline` gives the remaining budget; `src/util/call-budget.ts` has helpers.
 
 ---
 
@@ -317,10 +324,10 @@ The framework ships with these skills (in `skills/` as part of core):
 - `sms-send` — outbound SMS via the Telnyx office DID
 - Calendar skills (`calendar-list-calendars`, `calendar-list-events`, `calendar-create-event`, etc.) — Nylas calendar CRUD
 - Contact skills (`contact-create`, `contact-lookup`, `contact-merge`, etc.) — contact management and KG linking
-- `config-store` — generic namespaced key-value store for persistent agent configuration; backs `company`, `meeting_links`, `travel_preferences`, `loyalty_programs`, `writing_config`, and any future per-agent config needs
+- `config-store` — generic namespaced key-value store for persistent agent configuration; backs `company`, `meeting_links`, `travel_preferences`, `loyalty_programs`, `writing_config`, and any future per-agent config needs. It owns the principal's own standing settings (company, meeting links, travel preferences, loyalty programs); memory owns facts about people, organizations and things. Config values are permanent and looked up by exact key, whereas memory facts can decay and a `memory-query` search finds a config value only through an embedding of its bare key label. Keeping everything in memory, or merging the two tools, was rejected for those reasons (#1954).
 - `entity-context` — assemble full context for a list of contacts/entities
 - `get-autonomy` / `set-autonomy` — read and write the global autonomy score (CEO only)
-- `bullpen` — inter-agent discussion threads; `post`/`reply` persist the thread/message synchronously and fire-and-forget the `agent.discuss` publish so a slow subscriber can't push the handler past its timeout (see *Timeout safety* above)
+- `bullpen` bundle — inter-agent discussion threads, one tool per action so each schema marks its own fields required (#2126): `bullpen-post`, `bullpen-reply` (optionally `close_after`), `bullpen-read`, `bullpen-close`. Post and reply persist the thread/message synchronously and fire-and-forget the `agent.discuss` publish so a slow subscriber can't push the handler past its timeout (see *Timeout safety* above)
 - `image-generate` — generate an image from a text prompt via DALL-E 3; returns a temporary CDN URL (~1hr TTL)
 - `setup-status` — read-only (`action_risk: none`); returns the setup catalog (`skills/setup/tools/setup-status/catalog.yaml`) with each task's live-derived status (`done` / `pending` / `deferred`). The catalog is owned by the skill bundle, not core.
 - `setup-defer` — write (`action_risk: low`); persists or clears a setup task deferral in config-store (`setup_wizard/deferrals`). Pinned to `setup-wizard`.
@@ -332,11 +339,11 @@ The framework ships with these skills (in `skills/` as part of core):
 
 ## Recommended MCP Servers
 
-These are not bundled but documented as recommended integrations:
+Apart from Google Workspace, these are not bundled but documented as recommended integrations:
 
 | Server | Purpose | Link |
 |---|---|---|
-| **Google Workspace** | Drive, Docs, Sheets, Gmail read/search/write | [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) |
+| **Google Workspace** | Drive, Docs, Sheets only (#1957). **Shipped** in `config/skills.yaml` (stdio), version pinned in the image via `scripts/workspace-mcp.pin` (#2010); agents load it on demand with `skill-activate` (#2024) | [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) |
 | **Filesystem** | Scoped file access (read/write/search) | [modelcontextprotocol/servers/filesystem](https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem) |
 | **GitHub** | Repo management, issues, PRs | [modelcontextprotocol/servers/github](https://github.com/modelcontextprotocol/servers/tree/main/src/github) |
 | **Brave Search** | Web search for research agents | [modelcontextprotocol/servers/brave-search](https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search) |

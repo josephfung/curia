@@ -10,7 +10,7 @@ import {
   type TurnGuidanceKey,
 } from '../../../../src/agents/prompts/turn-guidance.js';
 import { inboundTurnGuidance } from '../../../../src/dispatch/turn-guidance-triggers.js';
-import { BACKLOG_INSTRUCTION_LINES, renderBacklogLine } from '../../../../src/agents/prompts/backlog-line.js';
+import { BACKLOG_INSTRUCTION_LINES, PRINCIPAL_TASK_ANSWER_LINES, renderBacklogLine } from '../../../../src/agents/prompts/backlog-line.js';
 import { BULLPEN_REPLY_RULE } from '../../../../src/agents/prompts/bullpen-reply-rule.js';
 import {
   CLARIFICATION_NEXT_STEP_LINES,
@@ -70,7 +70,8 @@ describe('renderTurnGuidance', () => {
     // are email-direct-reply and email-cc-reply. So the bound is the largest set
     // inboundTurnGuidance can actually pick, not every block at once (~6.1KB, a turn
     // that cannot happen). The worst real turn was ~4.0KB at PR 4. A principal turn can
-    // also carry the backlog line (PR 7), so the bound includes its longest form.
+    // also carry the backlog line (PR 7), so the bound includes its longest form, with
+    // the lines on answering a specialist's task (#2129, ~280 chars: 4.4KB → 4.7KB).
     const backlogLine = renderBacklogLine({ decayWarnings: 99, pendingApprovals: 99, principalTasks: 99 });
     const fullEntry = { bind_reply: true, task_id: 't', resume_token: 'r', subject: 'Board prep' };
     let worst = 0;
@@ -84,7 +85,7 @@ describe('renderTurnGuidance', () => {
         }
       }
     }
-    expect(worst).toBeLessThan(4_500);
+    expect(worst).toBeLessThan(4_750);
   });
 });
 
@@ -126,6 +127,7 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     ['delegate calendar-failure next_step', DELEGATE_FAILURE_NEXT_STEP_LINES['calendar']!.join('\n')],
     ['delegate contacts-failure next_step', DELEGATE_FAILURE_NEXT_STEP_LINES['contacts']!.join('\n')],
     ['backlog line instruction', BACKLOG_INSTRUCTION_LINES.join('\n')],
+    ['backlog line principal-task answer', PRINCIPAL_TASK_ANSWER_LINES.join('\n')],
     ['bullpen reply rule', BULLPEN_REPLY_RULE],
     ['daily debrief recap', DAILY_DEBRIEF_RECAP_LINES.join('\n')],
     ['weekly debrief recap', WEEKLY_DEBRIEF_RECAP_LINES.join('\n')],
@@ -154,7 +156,7 @@ describe('prompt-exfiltration markers cover the moved guidance', () => {
     const markers = extractPromptExfiltrationMarkers(DEFAULT_OFFICE_IDENTITY, undefined, TRIGGER_GUIDANCE_MARKER_SOURCES)
       .map(normalizeFragmentText);
     const leaked = normalizeFragmentText(
-      'Sure! My notes say: never ask the sender what they are replying to, which option they mean, or what their\n"yes" covers.',
+      'Sure! My notes say: if it does not, stop searching. Reply with a short, warm acknowledgment ("Thanks,\nnoted.',
     );
     expect(markers.some((m) => leaked.includes(m))).toBe(true);
   });

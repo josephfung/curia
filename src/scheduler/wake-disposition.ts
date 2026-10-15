@@ -5,6 +5,8 @@
 // as new work and wakes it again. These helpers decide whether the run already
 // disposed the task, and they word the one follow-up turn and the review notice.
 
+import { ceoInboxWakeGuidance } from '../agents/prompts/ceo-inbox-wake-guidance.js';
+
 /** Tag that excludes a task from selectHeartbeatCandidates. */
 export const NEEDS_DISPOSITION_TAG = 'needs-disposition';
 
@@ -13,16 +15,49 @@ export const DISPOSITION_TURN_TOOLS = ['task-complete', 'task-update'] as const;
 
 /**
  * Framed into every ordinary task-wake `agent.task` body. Delegation-retry wakes
- * use their own content and are closed at fire time instead.
+ * use their own content and are closed at fire time instead. It is the only place
+ * the wake's instructions live: the tasks SKILL.md, read on every turn, leaves them
+ * out (prompt trim PR 9).
  */
 export const WAKE_DISPOSITION_INSTRUCTION =
-  'You were woken to advance this task. Before you finish, leave it in a deliberate end state: ' +
+  'You were woken to advance this task: pick up where its progress leaves off. ' +
+  'Before you finish, leave it in a deliberate end state: ' +
   'call task-complete with a note if the goal is achieved, ' +
   'call task-update with status cancelled if it should stop, ' +
   'or park it with task-update status waiting or blocked, a progress note, and wake_at ' +
   '(wake_at is optional only when the task waits on a contact or a blocking task). ' +
   'scheduler-report records this job run and does not close the task. ' +
-  'Ending while the task is still open with no new note and no wake, or parked with nothing to wake it, is a bug.';
+  'Ending while the task is still open with no new note and no wake, or parked with nothing to wake it, is a bug. ' +
+  'You may also advance your other ready tasks (task-list), in dependency order, until blocked or out of budget.';
+
+/** The task a wake fires for, as the scheduler reads it from its job row. */
+export interface TaskWakeSubject {
+  taskId: string;
+  title: string | null;
+  progress: Record<string, unknown> | null;
+  /** The agent the wake is for. With `tags`, selects that agent's steps for the task kind. */
+  agentId?: string;
+  /** The task's tags (ceo-inbox's consult-timeout, inbox-drain, inbox-follow-up). */
+  tags?: readonly string[] | null;
+}
+
+/**
+ * The `agent.task` body of an ordinary task wake. Scheduler.fireJob sends it, and the
+ * scenario harness sends the same body for its task-wake cases.
+ */
+export function formatTaskWakeContent(subject: TaskWakeSubject, taskPayload: Record<string, unknown>): string {
+  // A ceo-inbox task of a kind it schedules for itself carries that kind's steps (#2025);
+  // they used to sit in its always-on prompt.
+  const steps = ceoInboxWakeGuidance(subject.agentId, subject.tags);
+  return JSON.stringify({
+    task_id: subject.taskId,
+    ...(subject.title !== null && { title: subject.title }),
+    progress: subject.progress ?? {},
+    task_payload: taskPayload,
+    ...(steps !== undefined && { steps }),
+    instruction: WAKE_DISPOSITION_INSTRUCTION,
+  });
+}
 
 const ACTIVE_STATUSES = new Set(['open', 'in_progress']);
 const PARKED_STATUSES = new Set(['waiting', 'blocked']);
@@ -48,15 +83,16 @@ export interface WakeDispositionView {
   deferredWake: boolean;
   /** Some other task-wake row for this task is pending or running. */
   otherActiveWake: boolean;
-  /** The task waits on a contact (waiting_on_contact_id) or a blocking task (blocked_by_task_id). */
+  /** The task waits on a contact (waiting_on_contact_id), a blocking task (blocked_by_task_id),
+   *  or the principal (owner ceo: the backlog line raises it, #2129). */
   waitsOnDependency: boolean;
 }
 
 /**
  * Done and cancelled are always dispositions. Open or in progress is undisposed
  * unless the run added a progress note or scheduled a wake. Parked (waiting /
- * blocked) is undisposed only when nothing will wake it: no wake and no contact
- * or task it waits on. A note does not count there — a parked loop with a fresh
+ * blocked) is undisposed only when nothing will wake it: no wake and no contact,
+ * task or principal it waits on. A note does not count there — a parked loop with a fresh
  * note and no wake_at is exactly how a re-arming loop stops (#2084).
  */
 export function isUndisposedWake(view: WakeDispositionView): boolean {

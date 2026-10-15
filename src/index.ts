@@ -744,7 +744,8 @@ async function main(): Promise<void> {
   //   - principalContact.id  → PiiRedactor bypass (structural UUID match, tamper-proof)
   //   - principalEmail        → outbound content filter allow-list, principal notifiers,
   //                             email adapter, approval notifications
-  //   - principalIdentities   → runtime prompt injection + outbound recipient check
+  //   - principalIdentities   → runtime prompt injection + outbound recipient check,
+  //                             Drive grants to the principal raised to writer
   //
   // A missing principal is NOT fatal here: the readiness check below converts it into
   // setup-required mode so the operator can finish onboarding via the web UI. That keeps
@@ -753,7 +754,7 @@ async function main(): Promise<void> {
   //
   // principalIdentities is a shared mutable array (never reassigned) so console / agent
   // identity writes can hot-reload it in place (#1514) — OutboundGateway, ExecutionLayer,
-  // and AgentRuntime all hold a reference to this same array.
+  // AgentRuntime and the MCP tool handlers all hold a reference to this same array.
   //
   // principalEmail is a mutable holder (never replaced) for the same reason: OutboundContentFilter,
   // EmailAdapter, notifiers, and ApprovalTrigger read `.current` at use time so binding an
@@ -1230,7 +1231,9 @@ async function main(): Promise<void> {
   let mcpProjectedTools = new Map<string, string[]>();
   let mcpServerStatuses = new Map<string, McpServerLoadStatus>();
   try {
-    const mcpLoad = await loadMcpServers(configDir, toolRegistry, logger, secretsService, enabledMcpServers);
+    const mcpLoad = await loadMcpServers(
+      configDir, toolRegistry, logger, secretsService, enabledMcpServers, principalIdentities,
+    );
     mcpSessions = mcpLoad.sessions;
     mcpProjectedTools = mcpLoad.projectedTools;
     mcpServerStatuses = mcpLoad.serverStatuses;

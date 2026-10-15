@@ -6,6 +6,7 @@ import { SkillRegistry } from '../../../src/skills/skill-registry.js';
 import { ToolRegistry } from '../../../src/skills/registry.js';
 import { resolvePinnedSkills, appendSkillInstructions, reportScheduledPinGaps, collectPinnedByBundle } from '../../../src/skills/pin-resolution.js';
 import { registerSyntheticSingletonSkills } from '../../../src/skills/skill-loader.js';
+import { discoverToolManifests } from '../../../src/skills/loader.js';
 import type { ToolManifest } from '../../../src/skills/types.js';
 
 function toolManifest(name: string, action_risk: ToolManifest['action_risk'] = 'none'): ToolManifest {
@@ -77,7 +78,20 @@ describe('on-disk skills/tasks + skills/documents', () => {
     expect(parsed.tools).toEqual([...TASK_TOOLS]);
     expect(parsed.instructions).toContain('## Task Management');
     expect(parsed.instructions).toContain('task-complete');
-    expect(parsed.instructions).toContain('does not close the task');
+  });
+
+  // Prompt trim PR 9: text only a wake needs rides on the wake, not in the SKILL.md every
+  // turn reads. Each row names where the rule now lives.
+  it.each([
+    ['tasks', 'does not close the task', 'WAKE_DISPOSITION_INSTRUCTION (src/scheduler/wake-disposition.ts)'],
+    ['tasks', 'Pick up where', 'WAKE_DISPOSITION_INSTRUCTION'],
+    ['tasks', 'past at creation', "task-create's seeded progress note and task-complete's refusal (#1299)"],
+    ['documents', 'ttl_days', "doc-write's description"],
+    ['documents', 'collision_short_id', 'the Projects Catalog block injected on task wakes'],
+    ['documents', 'On resume', 'the Workspace Manifest block injected on task wakes'],
+  ])('%s SKILL.md does not restate "%s" (lives in %s)', (skill, phrase) => {
+    const raw = readFileSync(resolve(import.meta.dirname, `../../../skills/${skill}/SKILL.md`), 'utf-8');
+    expect(parseSkillMd(raw).instructions).not.toContain(phrase);
   });
 
   it('documents SKILL.md declares document_workspace and doc tools', () => {
@@ -421,6 +435,45 @@ describe('on-disk contacts bundle guards', () => {
     const parsed = parseSkillMd(raw);
     expect(parsed.tools).not.toContain('entity-context');
     expect(parsed.tools).toEqual(expect.arrayContaining(['contact-lookup', 'contact-grant-permission']));
+  });
+});
+
+describe('on-disk bullpen bundle (#2126)', () => {
+  const skillsDir = resolve(import.meta.dirname, '../../../skills');
+  const parsed = parseSkillMd(readFileSync(resolve(skillsDir, 'bullpen/SKILL.md'), 'utf-8'));
+  const tools = new ToolRegistry();
+  for (const disc of discoverToolManifests(skillsDir)) {
+    if (disc.manifest && disc.manifest.name.startsWith('bullpen')) tools.register(disc.manifest, noopHandler);
+  }
+  const skills = new SkillRegistry();
+  skills.register(
+    { name: parsed.name, description: parsed.description, tools: parsed.tools ?? [], instructions: parsed.instructions },
+    resolve(skillsDir, 'bullpen'),
+  );
+  registerSyntheticSingletonSkills(tools, skills);
+
+  it('has no SKILL.md body, so the bundle adds nothing to the always-on prompt', () => {
+    expect(parsed.instructions).toBe('');
+  });
+
+  it('resolves an existing `- bullpen` pin to the four tools, and nothing named bullpen', () => {
+    const resolution = resolvePinnedSkills(['bullpen'], skills, tools);
+    expect(resolution.unresolvedPins).toEqual([]);
+    expect([...resolution.toolNames].sort()).toEqual(['bullpen-close', 'bullpen-post', 'bullpen-read', 'bullpen-reply']);
+    expect(tools.get('bullpen')).toBeUndefined();
+  });
+
+  it('marks each tool\'s own fields required, so a reply requires content', () => {
+    const required = Object.fromEntries(
+      tools.toToolDefinitions(['bullpen-post', 'bullpen-reply', 'bullpen-read', 'bullpen-close'])
+        .map(def => [def.name, [...(def.input_schema.required ?? [])].sort()]),
+    );
+    expect(required).toEqual({
+      'bullpen-post': ['content', 'participants', 'topic'],
+      'bullpen-reply': ['content', 'thread_id'],
+      'bullpen-read': ['thread_id'],
+      'bullpen-close': ['thread_id'],
+    });
   });
 });
 

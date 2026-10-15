@@ -3,7 +3,7 @@
 // Every mistake that would otherwise surface mid-run (an unknown check, a placeholder
 // for a contact the case never seeds, a sender that does not exist) is a load error
 // here, so a paid run never starts on a broken case.
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { hasBacklog, type PrincipalBacklogCounts } from '../../src/agents/prompts/backlog-line.js';
@@ -12,12 +12,14 @@ import { LIVE_SEARCH_TOOL } from '../shared/live-search.js';
 import { leafChecks } from './assertions.js';
 import {
   ANY_AGENT,
+  COORDINATOR,
   type BehaviorCheck,
   type BehaviorWeight,
   type DelegationMode,
   type ExpectedBehavior,
   type ScenarioCase,
   type ScenarioInbound,
+  type ScenarioWakeTask,
   type SeedBullpenThread,
   type SeedContact,
   type SeedOutboundEntry,
@@ -57,15 +59,18 @@ function onlyKeys(raw: Raw, allowed: readonly string[], file: string, where: str
   }
 }
 
-const CASE_KEYS = ['name', 'description', 'tags', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
+const CASE_KEYS = ['name', 'description', 'tags', 'agent', 'delegation', 'release_gate', 'runs', 'timeout_seconds', 'known_failure', 'stub_sets', 'live_search', 'seed', 'inbound', 'tool_stubs', 'expected_behaviors', 'failure_modes'] as const;
 const SEED_KEYS = ['contacts', 'outbound_context', 'bullpen', 'backlog'] as const;
 const BACKLOG_KEYS = ['decay_warnings', 'pending_approvals', 'principal_tasks'] as const;
 const CONTACT_KEYS = ['key', 'display_name', 'tier', 'kind', 'role', 'channel', 'identifier'] as const;
 const ENTRY_KEYS = ['key', 'channel', 'agent', 'content', 'expected_reply', 'delegation_hint', 'metadata', 'sent_minutes_ago', 'expires_in_hours', 'resume'] as const;
 const RESUME_KEYS = ['agent', 'original_task', 'context'] as const;
 const THREAD_KEYS = ['key', 'topic', 'creator', 'participants', 'content', 'mentions'] as const;
-const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'email'] as const;
+const INBOUND_KEYS = ['from', 'channel', 'content', 'thread', 'author', 'requester', 'email', 'task'] as const;
 const EMAIL_KEYS = ['nylas_message_id', 'account', 'auto_generated', 'auto_generated_signals'] as const;
+const WAKE_TASK_KEYS = ['id', 'title', 'intent', 'notes', 'tags'] as const;
+const WAKE_NOTE_KEYS = ['at', 'note'] as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STUB_KEYS = ['match', 'agent', 'return', 'error'] as const;
 const BEHAVIOR_KEYS = ['id', 'weight', 'description', 'check'] as const;
 const CHECK_KEYS: Record<string, readonly string[]> = {
@@ -366,17 +371,51 @@ function parseBacklog(raw: Raw, file: string): PrincipalBacklogCounts | undefine
   return counts;
 }
 
+function parseWakeTask(raw: unknown, file: string): ScenarioWakeTask {
+  if (!isObject(raw)) throw new CaseError(file, `inbound.task must be a mapping`);
+  onlyKeys(raw, WAKE_TASK_KEYS, file, 'inbound.task');
+  const id = str(raw, 'id', file, 'inbound.task');
+  if (!UUID.test(id)) throw new CaseError(file, `inbound.task: 'id' must be a UUID`);
+  const notes = list(raw, 'notes', file).map((n, i) => {
+    onlyKeys(n, WAKE_NOTE_KEYS, file, `inbound.task.notes[${i}]`);
+    return { at: str(n, 'at', file, `inbound.task.notes[${i}]`), note: str(n, 'note', file, `inbound.task.notes[${i}]`) };
+  });
+  if (notes.length === 0) throw new CaseError(file, `inbound.task: 'notes' must list the progress the wake resumes from`);
+  const tags = strList(raw, 'tags', file, 'inbound.task');
+  return {
+    id,
+    title: str(raw, 'title', file, 'inbound.task'),
+    intent: str(raw, 'intent', file, 'inbound.task'),
+    notes,
+    ...(tags.length > 0 ? { tags } : {}),
+  };
+}
+
 function parseInbound(raw: unknown, file: string): ScenarioInbound {
   if (!isObject(raw)) throw new CaseError(file, `'inbound' must be a mapping`);
   onlyKeys(raw, INBOUND_KEYS, file, 'inbound');
   const email = raw['email'];
   if (email !== undefined && !isObject(email)) throw new CaseError(file, `inbound.email must be a mapping`);
   if (email) onlyKeys(email, EMAIL_KEYS, file, 'inbound.email');
+  const from = str(raw, 'from', file, 'inbound');
+  // A task wake's body is built from its task when the run starts, so it has no content.
+  const taskWake = from === 'task-wake';
+  if (taskWake && raw['content'] !== undefined) {
+    throw new CaseError(file, `inbound from task-wake takes 'task', not 'content' (the body is built from the task)`);
+  }
+  if (!taskWake && raw['task'] !== undefined) throw new CaseError(file, `inbound.task is only for 'from: task-wake'`);
+  const author = optStr(raw, 'author', file, 'inbound');
+  if (author !== undefined && from !== 'bullpen') throw new CaseError(file, `inbound.author is only for 'from: bullpen'`);
+  const requester = optStr(raw, 'requester', file, 'inbound');
+  if (requester !== undefined && from !== 'delegate') throw new CaseError(file, `inbound.requester is only for 'from: delegate'`);
   return {
-    from: str(raw, 'from', file, 'inbound'),
+    from,
     channel: optStr(raw, 'channel', file, 'inbound'),
-    content: str(raw, 'content', file, 'inbound'),
+    content: taskWake ? '' : str(raw, 'content', file, 'inbound'),
     thread: optStr(raw, 'thread', file, 'inbound'),
+    ...(author !== undefined ? { author } : {}),
+    ...(from === 'delegate' ? { requester: requester ?? 'principal' } : {}),
+    ...(taskWake ? { task: parseWakeTask(raw['task'], file) } : {}),
     ...(email
       ? {
           email: {
@@ -464,6 +503,11 @@ export const DEFAULT_STUBS_DIR = path.join(import.meta.dirname, 'stubs');
 export interface LoadOptions {
   /** Override for tests. */
   stubsDir?: string;
+  /**
+   * More stub-set directories, searched before `stubsDir`: a deployment overlay's own sets
+   * (`--overlay`), which may also replace a core set of the same name.
+   */
+  extraStubsDirs?: string[];
 }
 
 /**
@@ -476,7 +520,7 @@ function mergeStubSets(
   raw: Raw,
   own: Record<string, ToolStub[]>,
   file: string,
-  stubsDir: string,
+  stubsDirs: string[],
   liveSearch: boolean,
 ): { stubs: Record<string, ToolStub[]>; explicit: string[] } {
   // `defaults` always applies, last: an empty office for reads test mode cannot serve.
@@ -485,7 +529,8 @@ function mergeStubSets(
   const explicit = new Set(Object.keys(own));
   for (const name of names) {
     if (!/^[a-z0-9-]+$/.test(name)) throw new CaseError(file, `stub set name '${name}' must be kebab-case`);
-    const setFile = path.join(stubsDir, `${name}.yaml`);
+    const setFile = stubsDirs.map(dir => path.join(dir, `${name}.yaml`)).find(f => existsSync(f))
+      ?? path.join(stubsDirs[stubsDirs.length - 1]!, `${name}.yaml`);
     let setRaw: unknown;
     try {
       setRaw = yaml.load(readFileSync(setFile, 'utf-8'));
@@ -547,11 +592,16 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     throw new CaseError(file, `'delegation' must be one of ${DELEGATION_MODES.join(', ')}`);
   }
   const liveSearch = optBool(raw, 'live_search', file, 'case') === true;
-  const stubSets = mergeStubSets(raw, parseStubs(raw['tool_stubs'], file), file, options.stubsDir ?? DEFAULT_STUBS_DIR, liveSearch);
+  const stubsDirs = [...(options.extraStubsDirs ?? []), options.stubsDir ?? DEFAULT_STUBS_DIR];
+  const ownStubs = parseStubs(raw['tool_stubs'], file);
+  const stubSets = mergeStubSets(raw, ownStubs, file, stubsDirs, liveSearch);
+  const agent = optStr(raw, 'agent', file, 'case') ?? COORDINATOR;
+  if (agent.trim() === '' || agent === ANY_AGENT) throw new CaseError(file, `'agent' must name one agent`);
   const scenario: ScenarioCase = {
     name: str(raw, 'name', file, 'case'),
     description: optStr(raw, 'description', file, 'case') ?? '',
     tags: strList(raw, 'tags', file, 'case'),
+    agent,
     delegation,
     releaseGate: optBool(raw, 'release_gate', file, 'case') ?? true,
     ...(runs !== undefined ? { runs } : {}),
@@ -561,6 +611,7 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
     inbound: parseInbound(raw['inbound'], file),
     toolStubs: stubSets.stubs,
     explicitStubTools: stubSets.explicit,
+    ownStubTools: Object.keys(ownStubs).sort(),
     ...(liveSearch ? { liveSearch: true as const } : {}),
     expectedBehaviors: parseBehaviors(raw, file),
     failureModes: strList(raw, 'failure_modes', file, 'case'),
@@ -579,13 +630,18 @@ export function loadScenarioCase(file: string, options: LoadOptions = {}): Scena
  */
 function validateDelegation(scenario: ScenarioCase, file: string): void {
   const real = scenario.delegation === 'real';
+  if (real && scenario.agent !== COORDINATOR) {
+    // The coordinator is the agent that delegates; a case aimed at a specialist runs it alone.
+    throw new CaseError(file, `delegation: real starts from the coordinator; a case for '${scenario.agent}' stubs delegation`);
+  }
   if (real && scenario.toolStubs['delegate']) {
     throw new CaseError(file, `delegation: real runs the specialist; remove the 'delegate' stubs`);
   }
   if (real) return;
+  // Only the case's agent runs, so a stub or check scoped to any other could never see a call.
   for (const [tool, stubs] of Object.entries(scenario.toolStubs)) {
-    if (stubs.some(s => s.agent !== undefined && s.agent !== 'coordinator')) {
-      throw new CaseError(file, `tool_stubs.${tool}: a stub scoped to a specialist needs delegation: real`);
+    if (stubs.some(s => s.agent !== undefined && s.agent !== scenario.agent)) {
+      throw new CaseError(file, `tool_stubs.${tool}: a stub scoped to another agent than '${scenario.agent}' needs delegation: real`);
     }
   }
   for (const b of scenario.expectedBehaviors) {
@@ -593,7 +649,7 @@ function validateDelegation(scenario: ScenarioCase, file: string): void {
       if (check.kind === 'briefed') {
         throw new CaseError(file, `behavior '${b.id}': a 'briefed' check needs delegation: real`);
       }
-      if ('agent' in check && check.agent !== undefined && check.agent !== 'coordinator') {
+      if ('agent' in check && check.agent !== undefined && check.agent !== scenario.agent) {
         throw new CaseError(file, `behavior '${b.id}': a check on agent '${check.agent}' needs delegation: real`);
       }
     }
@@ -655,18 +711,45 @@ function validateReferences(scenario: ScenarioCase, file: string): void {
   }
 
   const { from, thread, channel } = scenario.inbound;
+  const toSpecialist = scenario.agent !== COORDINATOR;
+  // The Dispatcher hands a channel inbound to the coordinator; a specialist hears from the
+  // coordinator, a thread, its schedule, or a task of its own waking.
+  if (toSpecialist && !['delegate', 'bullpen', 'scheduler', 'task-wake'].includes(from)) {
+    throw new CaseError(file, `a case for '${scenario.agent}' takes inbound from delegate, bullpen, scheduler or task-wake (got '${from}')`);
+  }
+  if (!toSpecialist && from === 'delegate') {
+    throw new CaseError(file, `inbound from delegate fires a specialist; set the case's 'agent'`);
+  }
   if (from === 'bullpen') {
     if (!thread || !keys.get('thread')!.has(thread)) {
       throw new CaseError(file, `inbound from bullpen needs 'thread' naming a seeded thread`);
     }
-  } else if (from === 'scheduler') {
+    const seeded = scenario.seed.bullpen.find(t => t.key === thread)!;
+    if (!seeded.participants.includes(scenario.agent)) {
+      throw new CaseError(file, `inbound thread '${thread}' must have '${scenario.agent}' as a participant`);
+    }
+    const author = scenario.inbound.author ?? seeded.creatorAgentId;
+    if (!seeded.participants.includes(author) || author === scenario.agent) {
+      throw new CaseError(file, `inbound.author '${author}' must be another participant of thread '${thread}'`);
+    }
+  } else if (from === 'delegate') {
+    const requester = scenario.inbound.requester ?? 'principal';
+    if (requester !== 'principal') {
+      const contact = scenario.seed.contacts.find(c => c.key === requester);
+      if (!contact) throw new CaseError(file, `inbound.requester '${requester}' is not principal or a seeded contact`);
+      if (channel && channel !== contact.channel) {
+        throw new CaseError(file, `inbound.channel '${channel}' differs from contact '${requester}' channel '${contact.channel}'`);
+      }
+    }
+    if (thread) throw new CaseError(file, `inbound from delegate takes no thread`);
+  } else if (from === 'scheduler' || from === 'task-wake') {
     // A scheduled job has no sender, channel choice, thread or email envelope.
     if (channel || thread || scenario.inbound.email) {
-      throw new CaseError(file, `inbound from scheduler takes only 'content' (the job's task)`);
+      throw new CaseError(file, `inbound from ${from} takes no channel, thread or email`);
     }
   } else if (from !== 'principal') {
     const contact = scenario.seed.contacts.find(c => c.key === from);
-    if (!contact) throw new CaseError(file, `inbound.from '${from}' is not principal, bullpen, scheduler or a seeded contact`);
+    if (!contact) throw new CaseError(file, `inbound.from '${from}' is not principal, bullpen, scheduler, task-wake, delegate or a seeded contact`);
     if (channel && channel !== contact.channel) {
       throw new CaseError(file, `inbound.channel '${channel}' differs from contact '${from}' channel '${contact.channel}'`);
     }

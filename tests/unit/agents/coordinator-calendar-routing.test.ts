@@ -182,7 +182,6 @@ describe('coordinator principal-calendar routing (#1853)', () => {
       'entity-context',
       'config-store',
       'date-resolve',
-      'bullpen',
       'delegate',
       'request-clarification',
       'file-parse',

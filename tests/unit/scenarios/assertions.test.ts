@@ -29,7 +29,7 @@ describe('evaluateCheck: called', () => {
 
   it('misses on the wrong arguments or no call', () => {
     expect(evaluateCheck({ kind: 'called', tool: 'delegate', with: { agent: 'calendar' } }, r, ctx).rating).toBe('MISS');
-    expect(evaluateCheck({ kind: 'called', tool: 'bullpen' }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'called', tool: 'bullpen-reply' }, r, ctx).rating).toBe('MISS');
   });
 
   it('can require the call to have succeeded', () => {
@@ -205,6 +205,23 @@ describe('real delegation checks (#2027)', () => {
     expect(evaluateCheck({ kind: 'briefed', agent: 'ceo-inbox', contains: ['x'] }, r, ctx).justification).toMatch(/no real ceo-inbox run/);
     // A stubbed-delegation run has no specialist runs at all.
     expect(evaluateCheck({ kind: 'briefed', agent: 'calendar', contains: ['x'] }, run([]), ctx).rating).toBe('MISS');
+  });
+});
+
+describe('a case aimed at a specialist reads its calls by default (#2025)', () => {
+  const r = run([
+    { agentId: 'ceo-inbox', name: 'config-store', input: { action: 'retrieve' }, disposition: 'stubbed', result: { success: true, data: {} } },
+  ], null);
+  const inbox = { ...ctx, caseAgent: 'ceo-inbox' };
+
+  it('scores the case agent\'s calls without naming it', () => {
+    expect(evaluateCheck({ kind: 'called', tool: 'config-store', with: { action: 'retrieve' } }, r, inbox).rating).toBe('PASS');
+    expect(evaluateCheck({ kind: 'called', tool: 'config-store' }, r, ctx).rating).toBe('MISS');
+    expect(evaluateCheck({ kind: 'called', tool: 'config-store', agent: 'ceo-inbox' }, r, ctx).rating).toBe('PASS');
+  });
+
+  it('names the agent when it produced no reply', () => {
+    expect(evaluateCheck({ kind: 'reply', is: 'not_no_reply' }, r, inbox).justification).toBe('ceo-inbox produced no reply');
   });
 });
 
