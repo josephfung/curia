@@ -56,7 +56,7 @@
     "@livekit/rtc-node": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "@slack/socket-mode": "^3.0.1",
-    "@slack/web-api": "^8.1.1",
+    "@slack/web-api": "^8.2.0",
     "ajv": "^8.20.0",
     "chokidar": "^5.0.0",
     "chrono-node": "^2.10.1",
