@@ -54,6 +54,7 @@ bus event types) are noted explicitly even in the `0.x` range.
 
 ### Security
 
+- **`undici`, `qs`** — floors raised to 8.12.2 and 6.16.1, clearing four HIGH and five MED upstream advisories.
 - **Outbound disclosure gate (Stage 2.5)** — now runs in production; principal-directed sends and trusted recipients skip it. (#1870)
 - **Recipient spoofing** — a mistyped recipient fails closed instead of reaching whoever owns the address, and an agent-entered address is verified only when it appears in a real message or page. (#2033, #2061)
 - **Sender verification** — a sender-written `Authentication-Results` header no longer counts as a pass. (#2071)
