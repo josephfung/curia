@@ -98,6 +98,8 @@ The scheduler runs inside the main process and checks for due jobs every 30 seco
 
 The claim `UPDATE` is the mutual-exclusion primitive across overlapping polls and multiple scheduler processes. A row lock on the read would release when the `SELECT` returned, before the claim, so the poll does not use `FOR UPDATE SKIP LOCKED`. The `next_run_at <= now()` predicate on the cron claim is what stops a stale poll from firing a second copy after the first claim already advanced the schedule (#1124, #1159, #1160).
 
+Polls are deliberately allowed to overlap. Firing is serial within one poll, but a new poll starts every 30 seconds whether or not the last one has finished, and that overlap is what keeps fire lateness low (prod baseline before #1160: p90 45.8s on the `*/15` ceo-inbox job). An `isPolling` guard that skipped a poll while another ran would drain a busy batch one run at a time, pushing lateness toward minutes. It is a regression, not a fix — the in-flight cap is the bound.
+
 ---
 
 ## Persistent Tasks

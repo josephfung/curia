@@ -6,7 +6,7 @@
 // new trigger guidance here, and to the source list in
 // tests/unit/agents/prompts/trigger-guidance.test.ts, which checks each one yields markers.
 
-import { BACKLOG_INSTRUCTION_LINES } from './backlog-line.js';
+import { BACKLOG_INSTRUCTION_LINES, PRINCIPAL_TASK_ANSWER_LINES } from './backlog-line.js';
 import { BULLPEN_REPLY_RULE } from './bullpen-reply-rule.js';
 import { CEO_INBOX_WAKE_GUIDANCE } from './ceo-inbox-wake-guidance.js';
 import { DAILY_DEBRIEF_RECAP_LINES, WEEKLY_DEBRIEF_RECAP_LINES } from './debrief-recap-instruction.js';
@@ -23,6 +23,7 @@ import { TURN_GUIDANCE_TEXTS } from './turn-guidance.js';
 export const TRIGGER_GUIDANCE_MARKER_SOURCES: readonly string[] = [
   ...TURN_GUIDANCE_TEXTS,
   BACKLOG_INSTRUCTION_LINES.join('\n'),
+  PRINCIPAL_TASK_ANSWER_LINES.join('\n'),
   CLARIFICATION_NEXT_STEP_LINES.join('\n'),
   PAUSED_NEXT_STEP_LINES.join('\n'),
   DRAFT_EMAIL_NEXT_STEP_LINES.join('\n'),

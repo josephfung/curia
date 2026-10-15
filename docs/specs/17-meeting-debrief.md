@@ -169,7 +169,7 @@ When the meeting-debrief agent sends a prompt via Signal, the CEO's response arr
 **Lifecycle:**
 - **Created** atomically with the outbound send (via `context_bridge` param on send skills)
 - **Expires** after configurable TTL (default 48 hours)
-- **Released** explicitly by the coordinator (via `context-bridge-release` skill) when conversation completes
+- **Released** when the conversation completes: by the platform when the coordinator routes the reply with `delegate` `outbound_entry_id` and meeting-debrief returns (unless it calls `context-bridge-keep-open`), or explicitly by its owner via `context-bridge-release` (#1972)
 - **Read** by the dispatcher on every **dispatcher-routed principal** inbound (`liveTurn`) — active entries injected into the coordinator's task (voice uses `VoiceRuntime`'s parallel path)
 
 **Security properties preserved:**
@@ -331,9 +331,9 @@ These are out of scope for this feature but identified during design:
 |---|---|
 | `src/db/migrations/042_create_outbound_context.sql` | Dedicated table for context bridge entries |
 | `src/dispatch/outbound-context.ts` | `OutboundContextService` + `ScopedOutboundContext`: register, query active, release, cleanup |
-| `skills/context-bridge-release/` | Coordinator-only skill to mark entries as released |
+| `skills/context-bridge/tools/context-bridge-release/` | Skill to mark entries as released (coordinator-only until #1972; now any agent, for unhinted or owned entries) |
 | `src/dispatch/context-bridge-parse.ts` | Shared helper module to normalize `context_bridge` JSON inputs |
-| Updates to `skills/signal-send/`, `skills/email-send/`, `skills/email-reply/` | Unconditional registration on success; honor optional `context_bridge` param |
+| Updates to `skills/signal-send/`, `skills/email/tools/email-send/`, `skills/email/tools/email-reply/` | Unconditional registration on success; honor optional `context_bridge` param |
 | Update to `src/dispatch/dispatcher.ts` | Read path queries `outbound_context` for `[ACTIVE OUTBOUND CONTEXT]` injection |
 | Update to `agents/coordinator.yaml` | Delegation-hint guidance for outbound context entries |
 

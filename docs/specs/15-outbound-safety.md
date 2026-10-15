@@ -113,9 +113,10 @@ response is cut, so a note written into a send skill's body (an `email-reply` on
 thread) would go to its recipients: the Stage 1 `principal-note-markup` rule blocks any send
 to someone other than the principal that carries a note tag, and tells the agent the note
 belongs in its final response. Stage 2 is the
-backstop for a note written without the tag: on the production judge it blocked a
-postscript or a labelled note to the principal every time, and an aside woven into the body
-never (PR 5 in the [baseline log](../wip/2026-10-01-coordinator-context-baseline.md)).
+backstop for a note written without the tag: probed directly on the production judge
+(`google/gemini-3.1-flash-lite`, temperature 0, 13 trials per draft, #1954 PR 5), it blocked
+a postscript or a labelled note to the principal 13 of 13 times and an aside woven into the
+body 0 of 13, while clean replies passed 13 of 13. The tag remains the real guard.
 
 The content-filter rewrite prompt (#1355) offers `NO_REPLY` alongside rewrite. Returning it
 abandons delivery: no send, no salvage draft, no further retry. An `llm-judge-audience-leak`
