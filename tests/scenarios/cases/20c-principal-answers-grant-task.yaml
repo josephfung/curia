@@ -1,0 +1,110 @@
+# Case 20c (#2129): the principal declines a grant recommendation the weekly scan filed as a
+# task they own. The coordinator should pass the answer to the contacts specialist with the
+# task id (contacts declines the recommendation and closes the task), and not act on it
+# itself. Rule: the backlog line on a principal turn when they own an open task
+# (PRINCIPAL_TASK_ANSWER_LINES, src/agents/prompts/backlog-line.ts), and the coordinator
+# prompt's People section (trust and permissions go to the contacts specialist).
+#
+# `seed.backlog` counts the two tasks; task-list is stubbed to show them.
+name: principal answers grant task routes to contacts
+description: >
+  Two grant recommendation tasks wait on the principal: formal scheduling access for Dana
+  Whitfield and for Omar Haddad. The principal says "Don't give Omar scheduling access."
+  The coordinator should find Omar's task and delegate the decline to the contacts
+  specialist with that task's id, then confirm. It must not touch Dana's task, close
+  either task itself, or change Omar's permissions some other way.
+tags: [proactive, backlog, routing, contacts]
+seed:
+  backlog:
+    principal_tasks: 2
+inbound:
+  from: principal
+  content: Don't give Omar scheduling access.
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        count: 2
+        displayTimezone: America/Toronto
+        tasks:
+          - task_id: 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+            title: "Grant Dana Whitfield scheduling access?"
+            status: open
+            owner: ceo
+            priority: 50
+            due_at: null
+            tags: [grant-recommendation, contacts, "grant-rec:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"]
+            age: 1 day
+            last_progress_note: "Should Dana Whitfield get formal scheduling access? Dana confirms most of the principal's board meetings and coordinates the calendar weekly. Waiting on the principal to approve or decline; their answer goes to the contacts specialist with this task's ID."
+            next_wake_at: null
+            source_agent_id: contacts
+            blocked_by_task_id: null
+            parent_task_id: null
+          - task_id: 8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a
+            title: "Grant Omar Haddad scheduling access?"
+            status: open
+            owner: ceo
+            priority: 50
+            due_at: null
+            tags: [grant-recommendation, contacts, "grant-rec:6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e"]
+            age: 1 day
+            last_progress_note: "Should Omar Haddad get formal scheduling access? Omar books the principal's monthly partner reviews. Waiting on the principal to approve or decline; their answer goes to the contacts specialist with this task's ID."
+            next_wake_at: null
+            source_agent_id: contacts
+            blocked_by_task_id: null
+            parent_task_id: null
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: Declined the scheduling-access recommendation for Omar Haddad; it won't be suggested again. Closed the task.
+  # Remembering the answer is fine; stubbed so the call is not a harness refusal.
+  memory-store:
+    - match: {}
+      return: { action: created, stored: true }
+  behavioral-preferences-update:
+    - match: {}
+      return: { preferences: ["Do not give Omar Haddad scheduling access."], summary: Added one preference., changes: appended 1 entry }
+  # The wrong paths, available: closing or editing a task itself.
+  task-complete:
+    - match: {}
+      return: { task_id: 8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a, title: "Grant Omar Haddad scheduling access?", status: done, completed_at: "2026-10-15T09:05:00-04:00", displayTimezone: America/Toronto }
+  task-update:
+    - match: {}
+      return: { task_id: 8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a, title: "Grant Omar Haddad scheduling access?", status: cancelled, owner: ceo, priority: 50, tags: [grant-recommendation, contacts], updated_at: "2026-10-15T09:05:00-04:00", displayTimezone: America/Toronto }
+expected_behaviors:
+  - id: routes_to_contacts
+    weight: critical
+    description: Delegates to the contacts specialist, with Omar's task id in the brief.
+    check:
+      called: delegate
+      with: { agent: contacts }
+      contains: { task: 8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a }
+  - id: leaves_dana
+    weight: critical
+    description: Does not pass Dana's task to contacts; she was not mentioned.
+    check:
+      not_called: [delegate]
+      contains: { task: 7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f }
+  - id: leaves_tasks_to_contacts
+    weight: critical
+    description: Does not complete or edit a task itself; contacts closes it.
+    check:
+      not_called: [task-complete, task-update]
+  - id: brief_carries_answer
+    weight: important
+    description: The delegate brief says the principal declined scheduling access for Omar Haddad.
+  - id: confirms_plainly
+    weight: important
+    description: >
+      The reply tells the principal Omar won't get scheduling access (as contacts
+      reported). It may mention Dana's pending question in a clause; it does not answer it.
+  - id: names_no_internals
+    weight: important
+    description: The reply names no tool, agent or system identifier, and no task id.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Says "Done" without delegating
+  - Delegates without the task id, or with Dana's
+  - Cancels the task itself, leaving the recommendation pending

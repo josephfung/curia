@@ -1,0 +1,96 @@
+# Case 20b (#2129): the principal answers a question the contacts specialist handed them on
+# a task they own (a dedup review). The coordinator should pass the answer to contacts with
+# the task id, and not close or change the task itself. Rule: the backlog line on a principal
+# turn when they own an open task (PRINCIPAL_TASK_ANSWER_LINES,
+# src/agents/prompts/backlog-line.ts), and the coordinator prompt's People section (any
+# change to a contact goes to the contacts specialist).
+#
+# `seed.backlog` counts the one task; task-list is stubbed to show it.
+name: principal answers dedup task routes to contacts
+description: >
+  Earlier, the contacts specialist handed the principal a duplicate-contacts question on a
+  task they own: Jenna Torres (CFO) and J. Torres look like the same person, merge them?
+  The principal now answers "Yes, merge the two Jenna Torres contacts." The coordinator
+  should find the task and delegate the answer to the contacts specialist with the task id,
+  then confirm. It must not close or edit the task itself, and must not tell the principal
+  it merged anything before contacts reports it.
+tags: [proactive, backlog, routing, contacts]
+seed:
+  backlog:
+    principal_tasks: 1
+inbound:
+  from: principal
+  content: Yes, merge the two Jenna Torres contacts.
+tool_stubs:
+  task-list:
+    - match: {}
+      return:
+        count: 1
+        displayTimezone: America/Toronto
+        tasks:
+          - task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d
+            title: "Review possible duplicate: Jenna Torres / J. Torres"
+            status: open
+            owner: ceo
+            priority: 50
+            due_at: null
+            tags: [dedup, contacts]
+            age: 2 days
+            last_progress_note: >-
+              Two contacts look like the same person: Jenna Torres (CFO, verified email
+              jenna@acme.example.test) and J. Torres (no role, email jenna@acme.example.test).
+              I'd merge them into Jenna Torres (CFO). Merge, keep separate, or decide later?
+            next_wake_at: null
+            source_agent_id: contacts
+            blocked_by_task_id: null
+            parent_task_id: null
+  delegate:
+    - match: { agent: contacts }
+      return:
+        agent: contacts
+        response: >-
+          Merged J. Torres into Jenna Torres (CFO); both email records now sit on one
+          contact. Closed the review task.
+  # The wrong paths, available: closing or editing the task itself.
+  task-complete:
+    - match: {}
+      return: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, title: "Review possible duplicate: Jenna Torres / J. Torres", status: done, completed_at: "2026-10-14T12:05:00-04:00", displayTimezone: America/Toronto }
+  task-update:
+    - match: {}
+      return: { task_id: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d, title: "Review possible duplicate: Jenna Torres / J. Torres", status: open, owner: curia, priority: 50, tags: [dedup, contacts], updated_at: "2026-10-14T12:05:00-04:00", displayTimezone: America/Toronto }
+expected_behaviors:
+  - id: routes_to_contacts
+    weight: critical
+    description: Delegates to the contacts specialist, with the task id in the brief.
+    check:
+      called: delegate
+      with: { agent: contacts }
+      contains: { task: 4c2d9e1a-7b3f-4a5e-9c8d-1e2f3a4b5c6d }
+  - id: leaves_task_to_contacts
+    weight: critical
+    description: Does not complete or edit the task itself; contacts closes it.
+    check:
+      not_called: [task-complete, task-update]
+  - id: brief_carries_answer
+    weight: important
+    description: The delegate brief says the principal confirmed the merge of Jenna Torres and J. Torres.
+  - id: one_delegation
+    weight: important
+    description: Delegates exactly once.
+    check:
+      called: delegate
+      max: 1
+  - id: confirms_plainly
+    weight: important
+    description: >
+      The reply tells the principal the two contacts were merged, as contacts reported. First
+      person ("I merged them") is right: the coordinator owns its specialists' work.
+  - id: names_no_internals
+    weight: important
+    description: The reply names no tool, agent or system identifier, and no task id.
+    check:
+      reply_excludes_internal_names: true
+failure_modes:
+  - Says "Done" without delegating
+  - Delegates without the task id, so contacts cannot close the review
+  - Completes the task itself, leaving the contacts unmerged

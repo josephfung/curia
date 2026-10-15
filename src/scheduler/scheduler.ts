@@ -1488,7 +1488,10 @@ export class Scheduler {
         `SELECT t.status,
                 t.progress,
                 t.title,
-                (t.waiting_on_contact_id IS NOT NULL OR t.blocked_by_task_id IS NOT NULL) AS waits_on_dependency,
+                -- A task handed to the principal (owner ceo) waits on them: the backlog line
+                -- raises it and their answer comes back by delegation, not a wake (#2129).
+                (t.waiting_on_contact_id IS NOT NULL OR t.blocked_by_task_id IS NOT NULL
+                   OR t.owner = 'ceo') AS waits_on_dependency,
                 (sj.deferred_wake_at IS NOT NULL) AS deferred_wake,
                 EXISTS (
                   SELECT 1 FROM scheduled_jobs w

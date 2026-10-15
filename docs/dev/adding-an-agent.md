@@ -123,7 +123,7 @@ When to delegate to this agent, for the model. It is the agent's line in the coo
 
 Keep it to two or three sentences. `tests/unit/agents/prompt-budget.test.ts` holds the roster over the core agents to a budget. Without this field the roster shows `description`.
 
-A roster line suits a specialist the coordinator uses rarely or for one narrow job, such as setup-wizard, diagnostics or meeting-debrief. Routing the coordinator applies on most turns, such as the principal's calendar and inbox, belongs in the coordinator's own prompt: moved into roster lines, those routes changed what it did on everyday requests (prompt trim PR 8, `docs/wip/2026-10-06-coordinator-prompt-trim.md`). Add a scenario case for the route when you add the line.
+A roster line suits a specialist the coordinator uses rarely or for one narrow job, such as setup-wizard, diagnostics or meeting-debrief. Routing the coordinator applies on most turns, such as the principal's calendar and inbox, belongs in the coordinator's own prompt: moved into roster lines, those routes changed what it did on everyday requests (#1954, lesson 11 in [Changing an agent's prompt](#changing-an-agents-prompt)). Add a scenario case for the route when you add the line.
 
 ### `model` (required)
 
@@ -344,9 +344,63 @@ Agent YAML files are validated at startup against a JSON Schema generated from t
 
 ---
 
+## Changing an agent's prompt
+
+Decide *where* a rule goes before writing it: code enforcement, then injection with its trigger, then a tool description, then a lazy playbook, and the always-on prompt last ([ADR-046](../adr/046-agent-behavior-fix-placement.md)). These practices come from the 2026-10 coordinator and specialist prompt trim (#1954, #2025).
+
+### Principles
+
+1. **One rule, one place.** Before adding text anywhere, delete every other statement of it.
+2. **Say what to do.** Write positive instructions. Don't quote examples of unwanted output — `not "I can use the web-fetch tool"` puts the tool name into the context. Drop capitals and labels like "(mandatory)". Pointing the model at a place for a note worked; the prohibition "add no note" did not (#1990).
+3. **One voice.** Address the agent in the second person, the same voice as every code-owned block (identity, security, contact blocks, turn guidance, tool descriptions). First person appears only inside quoted speech: "You speak in the first person singular ('I checked your calendar')". "You" then means the agent everywhere, including in messages people send it.
+4. **Policy in the YAML, personality in the identity block.** The YAML says who gets what information, keeps internals out, and says whose instructions count. Warmth, formality, length, directness and how readily to ask questions belong to the office identity, which the principal edits in the console's Personality settings. YAML text that sets any of these overrides the principal's own settings.
+5. **Move text to turn guidance only when it has a trigger.** Turn guidance rides in the uncached user message, so moving text that applies on every turn there costs more, not less.
+6. **Move the test with the rule.** Replace unit tests that pin prompt text with tests of the mechanism that now carries the rule. Guard a deletion with the "does not restate" table in `tests/unit/agents/loader.test.ts`; each row names where the rule now lives.
+7. **A/B every cut on the same day** against `origin/main`'s prompt with `pnpm scenarios` (see `tests/scenarios/README.md`), and **lower the budget** in `tests/unit/agents/prompt-budget.test.ts` when the prompt shrinks.
+
+### Lessons
+
+1. **Rules outlive their causes.** `git log -S` a rule's first line and check whether a later code change already handles the cause.
+2. **Prompts and pin comments drift from the toolset.** Cross-check every tool a prompt names against the agent's resolved pins.
+3. **"Enforced in code" means reading the enforcement point.** Where enforcement is partial, keep one clause rather than the paragraph.
+4. **Specs quote prompt text.** Grep `docs/specs/` before deleting.
+5. **A full-suite miss is not a regression until the A/B says so.** Budget a targeted A/B (about 30 minutes, under $2) into the PR rather than reading a single red run.
+6. **Size the verification to the change.** A full A/B is for prompt cuts. A moved heading or a lazily loaded reference needs the unit tests and one full-suite run. Stub a case's whole read surface at once, not one tool per failed run.
+7. **Examples are instructions.** Check a prompt's examples against the behavior checks — "I'll check with my research team" was offered as good phrasing and is exactly what scenario 10's `no_team_voice` check fails.
+8. **A clause that reads as redundant can be the anchor at its trigger.** Delete a restatement only when the general rule reaches that trigger, and let the A/B decide.
+9. **When merging lists, keep catch-alls as catch-alls.** Folding "contacts CRUD belongs to the contacts specialist" into a list of named operations left renames and identity links without a route.
+10. **A tighter paragraph can change how the model acts on a result, not just what it decides.** When a rewrite misses, look at the calls after the decision too.
+11. **Core routes stay in the coordinator's prompt; the roster suits narrow specialists.** See [`delegate_when`](#delegate_when-optional).
+12. **Rewrite the prohibition, not the instruction beside it.** The sentence that triggers an action is load-bearing in its exact words; change it only with its own A/B.
+13. **A roster line thinner than the description makes the coordinator do the groundwork.** Say what the specialist loads for itself ("a short brief is enough").
+14. **Where injected guidance sits can matter as much as what it says.** The same words in a block rebuilt before every model call and in a wake message behaved differently. A/B each placement separately.
+15. **On specialists, only removing dead or repeated text was neutral.** Rewrites of live sections changed which tools the model called while pass rates held. Compare call counts over 10 runs, not only behaviors.
+
+### Measuring an agent's context
+
+`scripts/report-agent-context.ts` is a read-only report of an agent's per-call context and tool usage, from `llm.call` and the call archive. In production, `DATABASE_URL` is already in the app container; don't use `pnpm run`, which expects a `.env`:
+
+```bash
+ssh -p 2222 <host> 'docker exec curia-curia-1 \
+  ./node_modules/.bin/tsx scripts/report-agent-context.ts \
+  --agent coordinator --days 30 --format markdown'
+```
+
+Pass `--since` / `--until` for a window other than the 30 days ending now. What the numbers mean:
+
+- **System-string chars** — every `role=system` message in the archived prompt: the YAML plus the blocks injected on that call. Not the same as the `context.budget` `system_prompt` tier.
+- **Tool-definition bytes** — `octet_length` of the stored `tool_definitions`. Source bytes sum each tool object; json-framing is the array punctuation. Percentiles do not sum across rows.
+- **Source split** — a tool on disk under `skills/**/tool.json` (or a pinned bundle member) is `local`; when the agent pins exactly one MCP server, every other tool is charged to it.
+- **Provider input tokens** — `llm.call` `inputTokens`, p50 and p95.
+- **Context budget tiers** — estimated tokens of each injected block where included, and how often it was dropped.
+- **Pinned tools with zero calls** — expanded pins plus MCP tools offered in the window, minus that agent's `tool.invoke` / `skill.invoke` rows.
+- **Modal tool count** — the most common tool-list size; later calls in a task grow when `skill-activate` adds tools.
+
+---
+
 ## Testing Your Agent
 
-There's no agent unit test runner (agents are inherently integration-heavy). Instead:
+Behavior is tested with the two suites in the release gate: `pnpm scenarios` scores agent decisions against stubbed tools (cases can target a specialist with `agent:`; see `tests/scenarios/README.md`), and `pnpm smoke` runs end-to-end turns against a fixture office (see [smoke-tests.md](smoke-tests.md)). Add a case when you add a route or a behavior. For hands-on checks:
 
 1. Start Curia with `docker compose up`
 2. Send a message on the CLI channel: `pnpm cli "your test message"`

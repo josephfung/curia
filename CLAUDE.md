@@ -116,7 +116,7 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 - `src/bus/events.ts` — event type registry (discriminated union), source of truth
 - `src/bus/permissions.ts` — layer-to-event authorization map (security boundary)
 - `agents/*.yaml` — agent configuration files
-- `skills/*/tool.json` — skill manifests
+- `skills/<bundle>/tools/<tool>/tool.json` — tool manifests in a bundle (most tools); `skills/<tool>/tool.json` for standalone tools
 - `config/default.yaml` — base configuration
 
 ## Adding Things
@@ -131,7 +131,7 @@ When you need to pin a transitive dependency (e.g. to clear a CVE), add it to th
 7. Write tests (include never-principal fields in `extractRecipients` tests)
 
 ### New Tool
-1. Create `skills/<name>/tool.json` (manifest) + `handler.ts`
+1. Create `tool.json` (manifest) + `handler.ts` — inside a bundle at `skills/<bundle>/tools/<name>/` and listed in that bundle's `SKILL.md`, or standalone at `skills/<name>/`. A tool listed in an enabled bundle's `SKILL.md` is enrolled in the registry on the next boot; a standalone tool starts disabled unless `config/registry-defaults.yaml` `tools:` lists it (#1974)
 2. Declare permissions and secrets in the manifest
 3. Write `handler.test.ts`
 4. **Pin it to at least one agent.** Prefer pinning a **skill bundle** (`pinned_skills: [calendar]`) so the agent gets the whole toolset + any SKILL.md instructions. For singleton tools still living at `skills/<tool>/`, pin the tool name (auto-wrapped as a singleton skill). A tool that isn't reachable via any pinned skill is invisible unless discovery surfaces it. Exception: pure infrastructure tools invoked by the system (e.g. `extract-facts`, `extract-relationships`, `scheduler-report`) intentionally have no agent owner.
@@ -172,7 +172,7 @@ When adding a new agent, ensure it receives the autonomy block via the runtime i
 
 ### Fixing agent behavior
 
-Don't append a paragraph to `system_prompt`. Put the rule on the highest rung that works: code enforcement → injection with its trigger → tool description → lazy playbook → always-on prompt. See [ADR-046](docs/adr/046-agent-behavior-fix-placement.md). `tests/unit/agents/prompt-budget.test.ts` fails CI when the coordinator's always-on prompt or local tool definitions grow past budget. Prefer a behavioral test (scenario, smoke, or a unit test of the code) over one that pins prompt text.
+Don't append a paragraph to `system_prompt`. Put the rule on the highest rung that works: code enforcement → injection with its trigger → tool description → lazy playbook → always-on prompt. See [ADR-046](docs/adr/046-agent-behavior-fix-placement.md). `tests/unit/agents/prompt-budget.test.ts` fails CI when a budgeted agent's always-on prompt or local tool definitions grow past budget — the coordinator plus calendar, ceo-inbox, contacts and meeting-debrief (#2025). Prefer a behavioral test (scenario, smoke, or a unit test of the code) over one that pins prompt text.
 
 ### Setup wizard — keep the catalog current
 
@@ -205,8 +205,8 @@ phone, etc.) loaded from `contact_channel_identities` at startup. They are
 authoritative and labelled as such in the block.
 
 To **send** to the principal, agents pass the reserved alias `principal` as the
-recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`; the skill looks
-the address up from those verified identities (#2033,
+recipient of `email-send`, `signal-send`, `sms-send` or `slack-send`, or in `email-reply`'s
+`cc`; the skill looks the address up from those verified identities (#2033, #2131,
 [ADR-047](docs/adr/047-send-skills-address-recipients-by-reference.md)). A model with
 the right address in context still mistypes it, so no prompt or task payload should
 ask an agent to copy the principal's address into a send skill. The block's values are

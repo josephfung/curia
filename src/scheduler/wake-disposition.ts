@@ -83,15 +83,16 @@ export interface WakeDispositionView {
   deferredWake: boolean;
   /** Some other task-wake row for this task is pending or running. */
   otherActiveWake: boolean;
-  /** The task waits on a contact (waiting_on_contact_id) or a blocking task (blocked_by_task_id). */
+  /** The task waits on a contact (waiting_on_contact_id), a blocking task (blocked_by_task_id),
+   *  or the principal (owner ceo: the backlog line raises it, #2129). */
   waitsOnDependency: boolean;
 }
 
 /**
  * Done and cancelled are always dispositions. Open or in progress is undisposed
  * unless the run added a progress note or scheduled a wake. Parked (waiting /
- * blocked) is undisposed only when nothing will wake it: no wake and no contact
- * or task it waits on. A note does not count there — a parked loop with a fresh
+ * blocked) is undisposed only when nothing will wake it: no wake and no contact,
+ * task or principal it waits on. A note does not count there — a parked loop with a fresh
  * note and no wake_at is exactly how a re-arming loop stops (#2084).
  */
 export function isUndisposedWake(view: WakeDispositionView): boolean {

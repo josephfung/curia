@@ -355,7 +355,7 @@ The Coordinator's system prompt does not restate these controls. The gates above
 them whenever a skill exports data, and the model learns about a held or blocked export
 from the tool result (ADR-046, rung 1). The security block's data-export trust threshold
 still applies to requests from other senders. The prompt used to carry four directive lines
-here; the 2026-10 prompt trim removed them (`docs/wip/2026-10-06-coordinator-prompt-trim.md`).
+here; the 2026-10 prompt trim (#1954) removed them.
 
 ### Audit Trail for All Exports
 

@@ -250,7 +250,7 @@ Restart Curia (`pnpm local`), then **install and enable the email channel** in t
 
 ### OpenAI (Embeddings)
 
-OpenAI's embedding model (`text-embedding-3-small`) powers entity memory and semantic search in the knowledge graph. Without it, KG lookups are exact-match only and smoke tests are unavailable.
+OpenAI's embedding model (`text-embedding-3-small`) powers entity memory and semantic search in the knowledge graph. Without it, KG lookups are exact-match only. The smoke tests no longer need it (#1956). Both behavior suites (`pnpm smoke`, `pnpm scenarios`) need `openrouter_api_key` in the vault for their judge; scenarios also need a valid `openai_api_key` for embeddings (see [smoke-tests.md](smoke-tests.md) and `tests/scenarios/README.md`).
 
 Get an API key from [platform.openai.com](https://platform.openai.com) and seed it into the vault:
 
